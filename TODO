@@ -1,0 +1,8 @@
+* track tombstones
+* replace all unwrap with Result
+* support write, currently blocked on adding write support to parquet crate
+* make all IO async
+* handle commitInfo action
+* handle dataChange field
+* raise error if delta log is not valid
+* use list api to find transaction logs to apply
