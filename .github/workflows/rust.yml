@@ -16,7 +16,7 @@ jobs:
     - name: Install minimal nightly with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
-        profile: minimal
+        profile: default
         toolchain: nightly
         override: true
     - name: Build
