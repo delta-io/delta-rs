@@ -6,11 +6,10 @@ use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 
 use std::collections::HashMap;
-use std::error::Error;
 use std::fmt;
 use std::io::{prelude::*, BufReader, Cursor};
 
-use thiserror::Error;
+use thiserror;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -453,83 +452,56 @@ impl fmt::Display for DeltaTableMetaData {
     }
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum ApplyLogError {
+    #[error("End of transaction log")]
     EndOfLog,
-    InvalidJSON(String),
-    Unknown(String),
-}
-
-impl Error for ApplyLogError {}
-
-impl fmt::Display for ApplyLogError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            ApplyLogError::EndOfLog => write!(f, "End of transaction log"),
-            ApplyLogError::InvalidJSON(s) => write!(f, "{}", s),
-            ApplyLogError::Unknown(s) => write!(f, "{}", s),
-        }
-    }
+    #[error("Invalid JSON in log record")]
+    InvalidJSON {
+        #[from]
+        source: serde_json::error::Error,
+    },
+    #[error("Failed to read log content")]
+    Storage { source: StorageError },
+    #[error("Failed to read line from log record")]
+    IO {
+        #[from]
+        source: std::io::Error,
+    },
 }
 
 impl From<StorageError> for ApplyLogError {
     fn from(error: StorageError) -> Self {
         match error {
             StorageError::NotFound => ApplyLogError::EndOfLog,
-            StorageError::Unknown(s) => ApplyLogError::Unknown(format!("Storage error: {}", s)),
+            _ => ApplyLogError::Storage { source: error },
         }
     }
 }
 
-impl From<serde_json::error::Error> for ApplyLogError {
-    fn from(error: serde_json::error::Error) -> Self {
-        ApplyLogError::InvalidJSON(format!("Invalid json log record: {}", error))
-    }
-}
-
-impl From<std::io::Error> for ApplyLogError {
-    fn from(error: std::io::Error) -> Self {
-        ApplyLogError::Unknown(format!("failed to read line from log record: {:#?}", error))
-    }
-}
-
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum LoadCheckpointError {
+    #[error("Checkpoint file not found")]
     NotFound,
-    InvalidJSON(String),
-    Unknown(String),
-}
-
-impl Error for LoadCheckpointError {}
-
-impl fmt::Display for LoadCheckpointError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            LoadCheckpointError::NotFound => write!(f, "no checkpoint found"),
-            LoadCheckpointError::InvalidJSON(s) => write!(f, "{}", s),
-            LoadCheckpointError::Unknown(s) => write!(f, "{}", s),
-        }
-    }
+    #[error("Invalid JSON in checkpoint")]
+    InvalidJSON {
+        #[from]
+        source: serde_json::error::Error,
+    },
+    #[error("Failed to read checkpoint content")]
+    Storage { source: StorageError },
 }
 
 impl From<StorageError> for LoadCheckpointError {
     fn from(error: StorageError) -> Self {
         match error {
             StorageError::NotFound => LoadCheckpointError::NotFound,
-            StorageError::Unknown(s) => {
-                LoadCheckpointError::Unknown(format!("unknown storage error: {}", s))
-            }
+            _ => LoadCheckpointError::Storage { source: error },
         }
     }
 }
 
-impl From<serde_json::error::Error> for LoadCheckpointError {
-    fn from(error: serde_json::error::Error) -> Self {
-        LoadCheckpointError::InvalidJSON(format!("Invalid checkpoint: {}", error))
-    }
-}
-
-#[derive(Error, Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum DeltaTableError {
     #[error("Failed to apply transaction log: {}", .source)]
     ApplyLog {
