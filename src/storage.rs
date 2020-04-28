@@ -1,8 +1,9 @@
-use std::{fmt, fs};
-use std::error::Error;
+use std::fs;
 
 use rusoto_core::{Region, RusotoError};
 use rusoto_s3::{GetObjectRequest, S3Client, S3};
+
+use thiserror;
 
 use tokio::io::AsyncReadExt;
 use tokio::runtime;
@@ -59,21 +60,16 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, &'static str> {
     }
 }
 
-#[derive(Debug)]
+#[derive(thiserror::Error, Debug)]
 pub enum StorageError {
+    #[error("Object not found")]
     NotFound,
-    Unknown(String),
-}
-
-impl Error for StorageError {}
-
-impl fmt::Display for StorageError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        match self {
-            StorageError::NotFound => write!(f, "Object not found"),
-            StorageError::Unknown(s) => write!(f, "Unkown error: {}", s),
-        }
-    }
+    #[error("Failed to read local object content")]
+    IO { source: std::io::Error },
+    #[error("Failed to read S3 object content")]
+    S3 {
+        source: RusotoError<rusoto_s3::GetObjectError>,
+    },
 }
 
 impl From<std::io::Error> for StorageError {
@@ -83,7 +79,7 @@ impl From<std::io::Error> for StorageError {
                 return StorageError::NotFound;
             }
             _ => {
-                return StorageError::Unknown(format!("{:#?}", error));
+                return StorageError::IO { source: error };
             }
         }
     }
@@ -93,7 +89,7 @@ impl From<RusotoError<rusoto_s3::GetObjectError>> for StorageError {
     fn from(error: RusotoError<rusoto_s3::GetObjectError>) -> Self {
         match error {
             RusotoError::Service(rusoto_s3::GetObjectError::NoSuchKey(_)) => StorageError::NotFound,
-            _ => StorageError::Unknown(format!("{:#?}", error)),
+            _ => StorageError::S3 { source: error },
         }
     }
 }
