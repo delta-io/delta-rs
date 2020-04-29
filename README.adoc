@@ -1,0 +1,14 @@
+= Delta.rs
+
+An experimental interface to
+link:https://delta.io[Delta Lake]
+for Rust.
+
+
+== Development
+
+Delta.rs requires the nightly Rust compiler, which can be installed with the
+link:https://rustup.rs/[rustup]
+command.
+
+Running tests can be done with `cargo test`
