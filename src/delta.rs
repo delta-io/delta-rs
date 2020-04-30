@@ -2,6 +2,7 @@
 
 extern crate parquet;
 
+use parquet::errors::ParquetError;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 
@@ -15,7 +16,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::storage::{
-    parse_uri, FileStorageBackend, S3StorageBackend, StorageBackend, StorageError, Uri,
+    parse_uri, FileStorageBackend, S3StorageBackend, StorageBackend, StorageError, Uri, UriError,
 };
 
 type GUID = String;
@@ -514,6 +515,24 @@ pub enum DeltaTableError {
         #[from]
         source: LoadCheckpointError,
     },
+
+    #[error("Failed to read delta log object: {}", .source)]
+    StorageError {
+        #[from]
+        source: StorageError,
+    },
+
+    #[error("Failed to read checkpoint: {}", .source)]
+    ParquetError {
+        #[from]
+        source: ParquetError,
+    },
+
+    #[error("Invalid table path: {}", .source)]
+    UriError {
+        #[from]
+        source: UriError,
+    },
 }
 
 pub struct DeltaTable {
@@ -631,13 +650,13 @@ impl DeltaTable {
 
                 // process acttions from checkpoint
                 for f in &checkpoint_data_paths {
-                    let obj = self.storage.get_obj(&f).unwrap();
-                    let preader = SerializedFileReader::new(Cursor::new(obj)).unwrap();
+                    let obj = self.storage.get_obj(&f)?;
+                    let preader = SerializedFileReader::new(Cursor::new(obj))?;
                     let schema = preader.metadata().file_metadata().schema();
                     if !schema.is_group() {
                         panic!("invalid checkpoint data file");
                     }
-                    let mut iter = preader.get_row_iter(None).unwrap();
+                    let mut iter = preader.get_row_iter(None)?;
                     while let Some(record) = iter.next() {
                         self.process_action(&Action::from_parquet_record(&schema, &record));
                     }
@@ -719,7 +738,7 @@ impl fmt::Display for DeltaTable {
 
 pub fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError> {
     let storage_backend: Box<dyn StorageBackend>;
-    let uri = parse_uri(table_path).unwrap();
+    let uri = parse_uri(table_path)?;
     match uri {
         Uri::LocalPath(_) => storage_backend = Box::new(FileStorageBackend::new()),
         Uri::S3Object(_) => storage_backend = Box::new(S3StorageBackend::new()),

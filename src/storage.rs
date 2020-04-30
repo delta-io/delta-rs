@@ -14,6 +14,16 @@ pub struct S3Object<'a> {
     key: &'a str,
 }
 
+#[derive(thiserror::Error, Debug)]
+pub enum UriError {
+    #[error("Invalid URI scheme: {0}")]
+    InvalidScheme(String),
+    #[error("Object URI missing bucket")]
+    MissingObjectBucket,
+    #[error("Object URI missing key")]
+    MissingObjectKey,
+}
+
 #[derive(Debug)]
 pub enum Uri<'a> {
     LocalPath(&'a str),
@@ -36,7 +46,7 @@ impl<'a> Uri<'a> {
     }
 }
 
-pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, &'static str> {
+pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
     let parts: Vec<&'a str> = path.split("://").collect();
 
     if parts.len() == 1 {
@@ -46,16 +56,25 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, &'static str> {
     match parts[0] {
         "s3" => {
             let mut path_parts = parts[1].splitn(2, "/");
-            let bucket = path_parts.next().unwrap();
-            let key = path_parts.next().unwrap();
-
+            let bucket = match path_parts.next() {
+                Some(x) => x,
+                None => {
+                    return Err(UriError::MissingObjectBucket);
+                }
+            };
+            let key = match path_parts.next() {
+                Some(x) => x,
+                None => {
+                    return Err(UriError::MissingObjectKey);
+                }
+            };
             return Ok(Uri::S3Object(S3Object { bucket, key }));
         }
         "file" => {
             return Ok(Uri::LocalPath(parts[1]));
         }
         _ => {
-            panic!("invalid uri scheme: {}", parts[0]);
+            return Err(UriError::InvalidScheme(String::from(parts[0])));
         }
     }
 }
