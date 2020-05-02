@@ -1,3 +1,5 @@
+// Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
+
 #![allow(non_snake_case, non_camel_case_types)]
 
 extern crate parquet;
@@ -6,18 +8,18 @@ use parquet::errors::ParquetError;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 
+use regex::Regex;
 use std::collections::HashMap;
 use std::fmt;
-use std::io::{prelude::*, BufReader, Cursor};
+use std::io::{BufRead, BufReader, Cursor};
 
 use thiserror;
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use super::storage::{
-    parse_uri, FileStorageBackend, S3StorageBackend, StorageBackend, StorageError, Uri, UriError,
-};
+use super::storage;
+use super::storage::{StorageBackend, StorageError, UriError};
 
 type GUID = String;
 type DeltaDataTypeLong = i64;
@@ -25,7 +27,7 @@ type DeltaVersionType = DeltaDataTypeLong;
 type DeltaDataTypeInt = i32;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
-pub struct LastCheckPoint {
+pub struct CheckPoint {
     version: DeltaVersionType, // 20 digits decimals
     size: DeltaDataTypeLong,
     parts: Option<u32>, // 10 digits decimals
@@ -509,30 +511,33 @@ pub enum DeltaTableError {
         #[from]
         source: ApplyLogError,
     },
-
     #[error("Failed to load checkpoint: {}", .source)]
     LoadCheckpoint {
         #[from]
         source: LoadCheckpointError,
     },
-
     #[error("Failed to read delta log object: {}", .source)]
     StorageError {
         #[from]
         source: StorageError,
     },
-
     #[error("Failed to read checkpoint: {}", .source)]
     ParquetError {
         #[from]
         source: ParquetError,
     },
-
     #[error("Invalid table path: {}", .source)]
     UriError {
         #[from]
         source: UriError,
     },
+    #[error("Invalid JSON in log record: {}", .source)]
+    InvalidJSON {
+        #[from]
+        source: serde_json::error::Error,
+    },
+    #[error("Invalid table version: {0}")]
+    InvalidVersion(DeltaVersionType),
 }
 
 pub struct DeltaTable {
@@ -550,21 +555,20 @@ pub struct DeltaTable {
     app_transaction_version: HashMap<String, DeltaVersionType>,
     commit_infos: Vec<Value>,
     current_metadata: Option<DeltaTableMetaData>,
-    last_check_point: Option<LastCheckPoint>,
+    last_check_point: Option<CheckPoint>,
+    log_path: String,
 }
 
 impl DeltaTable {
     fn version_to_log_path(&self, version: DeltaVersionType) -> String {
-        return format!("{}/_delta_log/{:020}.json", self.table_path, version);
+        return format!("{}/{:020}.json", self.log_path, version);
     }
 
-    fn get_checkpoint_data_paths(
-        checkpoint_prefix: &str,
-        checkpoint_parts: Option<u32>,
-    ) -> Vec<String> {
+    fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<String> {
+        let checkpoint_prefix = format!("{}/{:020}", self.log_path, check_point.version);
         let mut checkpoint_data_paths = Vec::new();
 
-        match checkpoint_parts {
+        match check_point.parts {
             None => {
                 checkpoint_data_paths.push(format!("{}.checkpoint.parquet", checkpoint_prefix));
             }
@@ -583,16 +587,13 @@ impl DeltaTable {
         return checkpoint_data_paths;
     }
 
-    fn load_last_checkpoint(
-        &self,
-        delta_log_dir: &str,
-    ) -> Result<LastCheckPoint, LoadCheckpointError> {
-        let last_checkpoint_path = format!("{}/_last_checkpoint", delta_log_dir);
+    fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
+        let last_checkpoint_path = format!("{}/_last_checkpoint", self.log_path);
         let data = self.storage.get_obj(&last_checkpoint_path)?;
         return Ok(serde_json::from_slice(&data)?);
     }
 
-    fn process_action(&mut self, action: &Action) {
+    fn process_action(&mut self, action: &Action) -> Result<(), serde_json::error::Error> {
         // FIXME: support dataChange field
         match action {
             Action::add(v) => {
@@ -611,7 +612,7 @@ impl DeltaTable {
                     name: v.name.clone(),
                     description: v.description.clone(),
                     format: v.format.clone(),
-                    schema: serde_json::from_str(&v.schemaString).unwrap(),
+                    schema: serde_json::from_str(&v.schemaString)?,
                     partitionColumns: v.partitionColumns.clone(),
                     configuration: v.configuration.clone(),
                 });
@@ -625,43 +626,108 @@ impl DeltaTable {
                 self.commit_infos.push(v.clone());
             }
         }
+
+        Ok(())
+    }
+
+    fn find_check_point_before_version(
+        &self,
+        version: DeltaVersionType,
+    ) -> Result<Option<CheckPoint>, DeltaTableError> {
+        let mut cp: Option<CheckPoint> = None;
+        let re_checkpoint = Regex::new(r"^*/_delta_log/(\d{20})\.checkpoint\.parquet$").unwrap();
+        let re_checkpoint_parts =
+            Regex::new(r"^*/_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap();
+
+        for key in self.storage.list_objs(&self.log_path)? {
+            match re_checkpoint.captures(&key) {
+                Some(captures) => {
+                    let curr_ver_str = captures.get(1).unwrap().as_str();
+                    let curr_ver: DeltaVersionType = curr_ver_str.parse().unwrap();
+                    if curr_ver > version {
+                        // skip checkpoints newer than max version
+                        continue;
+                    }
+                    if cp.is_none() || curr_ver > cp.unwrap().version {
+                        cp = Some(CheckPoint {
+                            version: curr_ver,
+                            size: 0,
+                            parts: None,
+                        });
+                    }
+                    continue;
+                }
+                None => {}
+            }
+
+            match re_checkpoint_parts.captures(&key) {
+                Some(captures) => {
+                    let curr_ver_str = captures.get(1).unwrap().as_str();
+                    let curr_ver: DeltaVersionType = curr_ver_str.parse().unwrap();
+                    if curr_ver > version {
+                        // skip checkpoints newer than max version
+                        continue;
+                    }
+                    if cp.is_none() || curr_ver > cp.unwrap().version {
+                        let parts_str = captures.get(2).unwrap().as_str();
+                        let parts = parts_str.parse().unwrap();
+                        cp = Some(CheckPoint {
+                            version: curr_ver,
+                            size: 0,
+                            parts: Some(parts),
+                        });
+                    }
+                    continue;
+                }
+                None => {}
+            }
+        }
+
+        return Ok(cp);
+    }
+
+    fn apply_log_from_bufread<R: BufRead>(
+        &mut self,
+        reader: BufReader<R>,
+    ) -> Result<(), ApplyLogError> {
+        for line in reader.lines() {
+            let action: Action = serde_json::from_str(line?.as_str())?;
+            self.process_action(&action)?;
+        }
+        return Ok(());
     }
 
     fn apply_log(&mut self, version: DeltaVersionType) -> Result<(), ApplyLogError> {
         let log_path = self.version_to_log_path(version);
         let commit_log_bytes = self.storage.get_obj(&log_path)?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
-        for line in reader.lines() {
-            let action: Action = serde_json::from_str(line?.as_str())?;
-            self.process_action(&action);
+        return self.apply_log_from_bufread(reader);
+    }
+
+    fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
+        let checkpoint_data_paths = self.get_checkpoint_data_paths(&check_point);
+        // process actions from checkpoint
+        for f in &checkpoint_data_paths {
+            let obj = self.storage.get_obj(&f)?;
+            let preader = SerializedFileReader::new(Cursor::new(obj))?;
+            let schema = preader.metadata().file_metadata().schema();
+            if !schema.is_group() {
+                panic!("invalid checkpoint data file");
+            }
+            let mut iter = preader.get_row_iter(None)?;
+            while let Some(record) = iter.next() {
+                self.process_action(&Action::from_parquet_record(&schema, &record))?;
+            }
         }
-        return Ok(());
+
+        Ok(())
     }
 
     pub fn load(&mut self) -> Result<(), DeltaTableError> {
-        let delta_log_dir = format!("{}/_delta_log", self.table_path);
-        match self.load_last_checkpoint(&delta_log_dir) {
+        match self.get_last_checkpoint() {
             Ok(last_check_point) => {
                 self.last_check_point = Some(last_check_point);
-                let checkpoint_data_paths = Self::get_checkpoint_data_paths(
-                    &format!("{}/{:020}", delta_log_dir, last_check_point.version),
-                    last_check_point.parts,
-                );
-
-                // process acttions from checkpoint
-                for f in &checkpoint_data_paths {
-                    let obj = self.storage.get_obj(&f)?;
-                    let preader = SerializedFileReader::new(Cursor::new(obj))?;
-                    let schema = preader.metadata().file_metadata().schema();
-                    if !schema.is_group() {
-                        panic!("invalid checkpoint data file");
-                    }
-                    let mut iter = preader.get_row_iter(None)?;
-                    while let Some(record) = iter.next() {
-                        self.process_action(&Action::from_parquet_record(&schema, &record));
-                    }
-                }
-
+                self.restore_checkpoint(last_check_point)?;
                 self.version = last_check_point.version;
             }
             Err(LoadCheckpointError::NotFound) => {
@@ -696,11 +762,53 @@ impl DeltaTable {
         return Ok(());
     }
 
+    pub fn load_version(&mut self, version: DeltaVersionType) -> Result<(), DeltaTableError> {
+        let last_log_reader;
+        let log_path = self.version_to_log_path(version);
+        // check if version is valid
+        match self.storage.get_obj(&log_path) {
+            Ok(commit_log_bytes) => {
+                last_log_reader = BufReader::new(Cursor::new(commit_log_bytes));
+            }
+            Err(StorageError::NotFound) => {
+                return Err(DeltaTableError::InvalidVersion(version));
+            }
+            Err(e) => {
+                return Err(DeltaTableError::from(e));
+            }
+        }
+        self.version = version;
+
+        if version > 0 {
+            let mut next_version;
+            let max_version = version - 1;
+            // 1. find latest checkpoint below version
+            match self.find_check_point_before_version(version)? {
+                Some(check_point) => {
+                    self.restore_checkpoint(check_point)?;
+                    next_version = check_point.version;
+                }
+                None => {
+                    next_version = 0;
+                }
+            }
+
+            // 2. apply all logs starting from checkpoint
+            while next_version <= max_version {
+                self.apply_log(next_version)?;
+                next_version += 1;
+            }
+        }
+
+        self.apply_log_from_bufread(last_log_reader)?;
+        return Ok(());
+    }
+
     pub fn new(
         table_path: &str,
         storage_backend: Box<dyn StorageBackend>,
     ) -> Result<Self, DeltaTableError> {
-        let mut table = Self {
+        Ok(Self {
             version: 0,
             files: Vec::new(),
             storage: storage_backend,
@@ -712,9 +820,8 @@ impl DeltaTable {
             commit_infos: Vec::new(),
             app_transaction_version: HashMap::new(),
             last_check_point: None,
-        };
-        table.load()?;
-        Ok(table)
+            log_path: format!("{}/_delta_log", table_path),
+        })
     }
 }
 
@@ -737,12 +844,20 @@ impl fmt::Display for DeltaTable {
 }
 
 pub fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError> {
-    let storage_backend: Box<dyn StorageBackend>;
-    let uri = parse_uri(table_path)?;
-    match uri {
-        Uri::LocalPath(_) => storage_backend = Box::new(FileStorageBackend::new()),
-        Uri::S3Object(_) => storage_backend = Box::new(S3StorageBackend::new()),
-    }
+    let storage_backend = storage::get_backend_for_uri(table_path)?;
+    let mut table = DeltaTable::new(table_path, storage_backend)?;
+    table.load()?;
 
-    DeltaTable::new(table_path, storage_backend)
+    Ok(table)
+}
+
+pub fn open_table_with_version(
+    table_path: &str,
+    version: DeltaVersionType,
+) -> Result<DeltaTable, DeltaTableError> {
+    let storage_backend = storage::get_backend_for_uri(table_path)?;
+    let mut table = DeltaTable::new(table_path, storage_backend)?;
+    table.load_version(version)?;
+
+    Ok(table)
 }
