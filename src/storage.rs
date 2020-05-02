@@ -1,7 +1,7 @@
 use std::fs;
 
 use rusoto_core::{Region, RusotoError};
-use rusoto_s3::{GetObjectRequest, S3Client, S3};
+use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
 
 use thiserror;
 
@@ -89,6 +89,11 @@ pub enum StorageError {
     S3 {
         source: RusotoError<rusoto_s3::GetObjectError>,
     },
+    #[error("Invalid object URI")]
+    Uri {
+        #[from]
+        source: UriError,
+    },
 }
 
 impl From<std::io::Error> for StorageError {
@@ -115,6 +120,7 @@ impl From<RusotoError<rusoto_s3::GetObjectError>> for StorageError {
 
 pub trait StorageBackend {
     fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
+    fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = String>>, StorageError>;
 }
 
 pub struct FileStorageBackend {}
@@ -129,6 +135,13 @@ impl StorageBackend for FileStorageBackend {
     fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
         fs::read(path).map_err(|e| StorageError::from(e))
     }
+
+    fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = String>>, StorageError> {
+        let readdir = fs::read_dir(path)?;
+        Ok(Box::new(readdir.into_iter().map(|entry| {
+            String::from(entry.unwrap().path().to_str().unwrap())
+        })))
+    }
 }
 
 pub struct S3StorageBackend {
@@ -140,26 +153,29 @@ impl S3StorageBackend {
         let client = S3Client::new(Region::UsEast2);
         Self { client }
     }
+
+    fn gen_tokio_rt() -> runtime::Runtime {
+        runtime::Builder::new()
+            .enable_time()
+            .enable_io()
+            .basic_scheduler()
+            .build()
+            .unwrap()
+    }
 }
 
 impl StorageBackend for S3StorageBackend {
     fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
         debug!("fetching s3 object: {}...", path);
 
-        let uri = parse_uri(path).unwrap().as_s3object();
+        let uri = parse_uri(path)?.as_s3object();
         let get_req = GetObjectRequest {
             bucket: uri.bucket.to_string(),
             key: uri.key.to_string(),
             ..Default::default()
         };
 
-        let mut rt = runtime::Builder::new()
-            .enable_time()
-            .enable_io()
-            .basic_scheduler()
-            .build()
-            .unwrap();
-
+        let mut rt = Self::gen_tokio_rt();
         let result = rt.block_on(self.client.get_object(get_req))?;
 
         debug!("streaming data from {}...", path);
@@ -170,6 +186,69 @@ impl StorageBackend for S3StorageBackend {
 
         debug!("s3 object fetched: {}", path);
         Ok(buf)
+    }
+
+    fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = String>>, StorageError> {
+        let uri = parse_uri(path)?.as_s3object();
+
+        struct ListContext {
+            client: rusoto_s3::S3Client,
+            obj_iter: std::vec::IntoIter<rusoto_s3::Object>,
+            continuation_token: Option<String>,
+            rt: runtime::Runtime,
+            bucket: String,
+            key: String,
+        }
+        let mut ctx = ListContext {
+            obj_iter: Vec::new().into_iter(),
+            continuation_token: Some(String::from("initial_run")),
+            rt: Self::gen_tokio_rt(),
+            bucket: uri.bucket.to_string(),
+            key: uri.key.to_string(),
+            client: self.client.clone(),
+        };
+
+        fn next_key(ctx: &mut ListContext) -> Option<String> {
+            return match ctx.obj_iter.next() {
+                Some(obj) => {
+                    return Some(obj.key.unwrap());
+                }
+                None => match &ctx.continuation_token {
+                    Some(token) => {
+                        let tk_opt = if token != "initial_run" {
+                            Some(token.clone())
+                        } else {
+                            None
+                        };
+                        let list_req = ListObjectsV2Request {
+                            bucket: ctx.bucket.clone(),
+                            prefix: Some(ctx.key.clone()),
+                            continuation_token: tk_opt,
+                            ..Default::default()
+                        };
+                        // TODO: log list objects error
+                        let result = ctx.rt.block_on(ctx.client.list_objects_v2(list_req)).ok()?;
+                        ctx.continuation_token = result.next_continuation_token;
+                        ctx.obj_iter = match result.contents {
+                            Some(objs) => objs.into_iter(),
+                            None => Vec::new().into_iter(),
+                        };
+
+                        return next_key(ctx);
+                    }
+                    None => None,
+                },
+            };
+        }
+
+        Ok(Box::new(std::iter::from_fn(move || next_key(&mut ctx))))
+    }
+}
+
+pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, UriError> {
+    match parse_uri(uri)? {
+        Uri::LocalPath(_) => Ok(Box::new(FileStorageBackend::new())),
+        Uri::S3Object(_) => Ok(Box::new(S3StorageBackend::new())),
     }
 }
 
