@@ -11,7 +11,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-# parquet = "1.0.0-SNAPSHOT"
+arrow = { git = "https://github.com/apache/arrow" }
 parquet = { git = "https://github.com/apache/arrow" }
 rusoto_core = "0.43"
 rusoto_s3 = "0.43"
@@ -21,3 +21,4 @@ futures = "0.3.1"
 bytes = "0.5.3"
 log = "*"
 regex = "1"
+rust-dataframe = { git = "https://github.com/nevi-me/rust-dataframe" }
