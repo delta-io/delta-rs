@@ -13,13 +13,22 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
-    - name: Cache Rust dependencies
+    # the whole target dir is over 400MB cache limit, so we have to split up
+    # the cache step to avoid caching deps dir
+    - name: Cache Rust build
       uses: actions/cache@v1.0.1
       with:
         path: target/debug/build
-        key: ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
+        key: ${{ runner.OS }}-target-build-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
-          ${{ runner.OS }}-build-
+          ${{ runner.OS }}-target-build-
+    - name: Cache Rust incremental build
+      uses: actions/cache@v1.0.1
+      with:
+        path: target/debug/incremental
+        key: ${{ runner.OS }}-target-incremental-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.OS }}-target-incremental-
     - name: Install minimal nightly with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
