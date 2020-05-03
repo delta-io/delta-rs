@@ -1,0 +1,4 @@
+.bundle/
+vendor/
+Gemfile.lock
+lib/**/*.so
