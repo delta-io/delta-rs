@@ -538,10 +538,14 @@ pub enum DeltaTableError {
     },
     #[error("Invalid table version: {0}")]
     InvalidVersion(DeltaVersionType),
+    #[error("Corrupted table, cannot read data file {}: {}", .path, .source)]
+    MissingDataFile {
+        source: std::io::Error,
+        path: String,
+    },
 }
 
 pub struct DeltaTable {
-    pub files: Vec<String>,
     pub version: DeltaVersionType,
     pub tombstones: Vec<String>, // files that were recently deleted
     pub min_reader_version: i32,
@@ -552,6 +556,7 @@ pub struct DeltaTable {
     table_path: String,
     storage: Box<dyn StorageBackend>,
 
+    files: Vec<String>,
     app_transaction_version: HashMap<String, DeltaVersionType>,
     commit_infos: Vec<Value>,
     current_metadata: Option<DeltaTableMetaData>,
@@ -612,7 +617,7 @@ impl DeltaTable {
                     name: v.name.clone(),
                     description: v.description.clone(),
                     format: v.format.clone(),
-                    schema: serde_json::from_str(&v.schemaString)?,
+                    schema: v.get_schema()?,
                     partitionColumns: v.partitionColumns.clone(),
                     configuration: v.configuration.clone(),
                 });
@@ -802,6 +807,10 @@ impl DeltaTable {
 
         self.apply_log_from_bufread(last_log_reader)?;
         return Ok(());
+    }
+
+    pub fn get_files(&self) -> &Vec<String> {
+        &self.files
     }
 
     pub fn new(
