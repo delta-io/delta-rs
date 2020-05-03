@@ -1,5 +1,8 @@
 = Delta.rs
 
+image:https://github.com/reiseburo/delta.rs/workflows/build/badge.svg[Build Status,link=https://github.com/reiseburo/delta.rs/actions]
+
+
 An experimental interface to
 link:https://delta.io[Delta Lake]
 for Rust.

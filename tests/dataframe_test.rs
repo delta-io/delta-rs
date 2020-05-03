@@ -14,7 +14,7 @@ fn dataframe_from_delta_table() {
             .chunks()
             .iter()
             .map(|chunk| UInt64Array::from(chunk.data()).value_slice(0, 1)[0])
-            .collect::<Vec<u64>>()[..],
-        vec![5u64, 7u64, 9u64][..],
+            .collect::<Vec<u64>>(),
+        vec![5u64, 7u64, 9u64],
     );
 }

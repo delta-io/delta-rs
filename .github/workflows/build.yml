@@ -1,4 +1,4 @@
-name: Rust
+name: build
 
 on:
   push:
@@ -13,6 +13,13 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
+    - name: Cache Rust dependencies
+      uses: actions/cache@v1.0.1
+      with:
+        path: target
+        key: ${{ runner.OS }}-build-${{ hashFiles('**/Cargo.lock') }}
+        restore-keys: |
+          ${{ runner.OS }}-build-
     - name: Install minimal nightly with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
