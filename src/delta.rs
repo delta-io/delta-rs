@@ -21,10 +21,10 @@ use serde_json::Value;
 use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
 
-type GUID = String;
-type DeltaDataTypeLong = i64;
-type DeltaVersionType = DeltaDataTypeLong;
-type DeltaDataTypeInt = i32;
+pub type GUID = String;
+pub type DeltaDataTypeLong = i64;
+pub type DeltaVersionType = DeltaDataTypeLong;
+pub type DeltaDataTypeInt = i32;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
 pub struct CheckPoint {
@@ -550,10 +550,10 @@ pub struct DeltaTable {
     pub tombstones: Vec<String>, // files that were recently deleted
     pub min_reader_version: i32,
     pub min_writer_version: i32,
+    pub table_path: String,
 
     // metadata
     // application_transactions
-    table_path: String,
     storage: Box<dyn StorageBackend>,
 
     files: Vec<String>,
