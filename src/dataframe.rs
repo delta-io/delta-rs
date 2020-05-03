@@ -13,16 +13,21 @@ use crate::delta;
 use crate::DeltaTableError;
 
 pub trait DeltaDataframe {
+    fn from_loaded_delta_table(table: delta::DeltaTable) -> Result<DataFrame, DeltaTableError>;
     fn from_delta_table(path: &str) -> Result<DataFrame, DeltaTableError>;
+    fn from_delta_table_with_version(
+        path: &str,
+        version: delta::DeltaVersionType,
+    ) -> Result<DataFrame, DeltaTableError>;
 }
 
 impl DeltaDataframe for DataFrame {
-    fn from_delta_table(path: &str) -> Result<DataFrame, DeltaTableError> {
-        let delta_table = delta::open_table(path)?;
-
+    fn from_loaded_delta_table(
+        delta_table: delta::DeltaTable,
+    ) -> Result<DataFrame, DeltaTableError> {
         let mut batches = vec![];
         let mut schema = None;
-        let table_path = Path::new(path);
+        let table_path = Path::new(&delta_table.table_path);
 
         for fname in delta_table.get_files() {
             let fpath = table_path.join(fname);
@@ -52,5 +57,18 @@ impl DeltaDataframe for DataFrame {
         Ok(Self::from_table(
             rust_dataframe::table::Table::from_record_batches(schema.unwrap().clone(), batches),
         ))
+    }
+
+    fn from_delta_table(path: &str) -> Result<DataFrame, DeltaTableError> {
+        let delta_table = delta::open_table(path)?;
+        return Self::from_loaded_delta_table(delta_table);
+    }
+
+    fn from_delta_table_with_version(
+        path: &str,
+        version: delta::DeltaVersionType,
+    ) -> Result<DataFrame, DeltaTableError> {
+        let delta_table = delta::open_table_with_version(path, version)?;
+        return Self::from_loaded_delta_table(delta_table);
     }
 }
