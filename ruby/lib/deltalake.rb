@@ -1,5 +1,5 @@
 require 'helix_runtime'
-require 'deltalake/native'
+require 'delta-ruby/native'
 
 module Deltalake
   def self.open_table(table_path)
