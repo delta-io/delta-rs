@@ -8,7 +8,5 @@ describe Deltalake do
     end
 
     subject(:table) { Deltalake.open_table(table_path) }
-
-    its(:version) { should eq 4 }
   end
 end
