@@ -8,7 +8,7 @@ link:https://delta.io[Delta Lake]
 for Rust.
 
 This library is intended to be used with
-link:https://github.com/rajasekarv/native_spark[native_spark]
+link:https://github.com/rajasekarv/vega[vega]
 or used within the another program to access Delta tables.
 
 
