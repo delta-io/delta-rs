@@ -1,0 +1,14 @@
+[package]
+name = "delta-ruby"
+version = "0.1.0"
+authors = ["R Tyler Croy <rtyler@brokenco.de>"]
+
+[lib]
+
+crate-type = ["cdylib"]
+
+[dependencies]
+helix = "*"
+
+[dependencies.delta]
+path = "../rust"

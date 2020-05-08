@@ -1,28 +1,5 @@
-[package]
-name = "delta"
-version = "0.1.0"
-authors = ["Qingping Hou <qph@scribd.com>"]
-edition = "2018"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
-
-[dependencies]
-anyhow = "1.0"
-thiserror = "1.0"
-serde = { version = "1.0", features = ["derive"] }
-serde_json = "1.0"
-arrow = { git = "https://github.com/apache/arrow" }
-parquet = { git = "https://github.com/apache/arrow" }
-rusoto_core = "0.43"
-rusoto_s3 = "0.43"
-tokio = "0.2.10"
-tokio-io = "0.2.0-alpha.6"
-futures = "0.3.1"
-bytes = "0.5.3"
-log = "*"
-regex = "1"
-
-rust-dataframe = { git = "https://github.com/nevi-me/rust-dataframe" }
-
-datafusion = { git = "https://github.com/apache/arrow" }
-crossbeam = "*"
+[workspace]
+members = [
+    "ruby",
+    "rust"
+]
