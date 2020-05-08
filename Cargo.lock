@@ -557,9 +557,10 @@ dependencies = [
 ]
 
 [[package]]
-name = "deltalake"
+name = "delta-ruby"
 version = "0.1.0"
 dependencies = [
+ "delta",
  "helix",
 ]
 
