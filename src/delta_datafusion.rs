@@ -6,7 +6,7 @@ use std::thread;
 use arrow::datatypes::{DataType, Field, Schema, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use arrow::record_batch::RecordBatchReader;
-use crossbeam::channel::{unbounded, Receiver, Sender};
+use crossbeam::channel::{unbounded, Receiver, SendError, Sender};
 use datafusion;
 use datafusion::datasource::{ScanResult, TableProvider};
 use datafusion::error::ExecutionError;
@@ -79,7 +79,10 @@ impl ParquetPartition {
 
                             Err(e) => {
                                 response_tx
-                                    .send(Err(ExecutionError::General(format!("{:?}", e))))
+                                    .send(Err(ExecutionError::General(format!(
+                                        "record batch: {:#?}",
+                                        e
+                                    ))))
                                     .unwrap();
                             }
                         }
@@ -88,7 +91,10 @@ impl ParquetPartition {
 
                 Err(e) => {
                     response_tx
-                        .send(Err(ExecutionError::General(format!("{:?}", e))))
+                        .send(Err(ExecutionError::General(format!(
+                            "new file error: {:#?}",
+                            e
+                        ))))
                         .unwrap();
                 }
             }
@@ -129,12 +135,8 @@ impl BatchIterator for ParquetIterator {
                     e
                 ))),
             },
-            // FIXME: look into what's causing the send error
-            _ => Ok(None),
-            // e @ _ => Err(ExecutionError::General(format!(
-            //     "Error sending request for next batch: {:#?}",
-            //     e
-            // ))),
+            // SendError means receiver exited and disconnected
+            Err(SendError(())) => Ok(None),
         }
     }
 }
