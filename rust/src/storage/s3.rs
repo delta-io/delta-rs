@@ -1,3 +1,4 @@
+use std::fmt;
 use tokio::io::AsyncReadExt;
 use tokio::runtime;
 
@@ -10,6 +11,12 @@ use super::{parse_uri, StorageBackend, StorageError};
 pub struct S3Object<'a> {
     pub bucket: &'a str,
     pub key: &'a str,
+}
+
+impl<'a> fmt::Display for S3Object<'a> {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        write!(f, "s3://{}/{}", self.bucket, self.key)
+    }
 }
 
 pub struct S3StorageBackend {
@@ -36,7 +43,7 @@ impl StorageBackend for S3StorageBackend {
     fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
         debug!("fetching s3 object: {}...", path);
 
-        let uri = parse_uri(path)?.as_s3object();
+        let uri = parse_uri(path)?.as_s3object()?;
         let get_req = GetObjectRequest {
             bucket: uri.bucket.to_string(),
             key: uri.key.to_string(),
@@ -48,7 +55,9 @@ impl StorageBackend for S3StorageBackend {
 
         debug!("streaming data from {}...", path);
         let mut buf = Vec::new();
-        let stream = result.body.unwrap();
+        let stream = result
+            .body
+            .ok_or(StorageError::S3MissingObjectBody(path.to_string()))?;
         rt.block_on(stream.into_async_read().read_to_end(&mut buf))
             .unwrap();
 
@@ -57,7 +66,7 @@ impl StorageBackend for S3StorageBackend {
     }
 
     fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = String>>, StorageError> {
-        let uri = parse_uri(path)?.as_s3object();
+        let uri = parse_uri(path)?.as_s3object()?;
 
         struct ListContext {
             client: rusoto_s3::S3Client,

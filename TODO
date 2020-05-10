@@ -1,8 +1,5 @@
-* check crc
-* replace all unwrap with Result
 * make all IO async
 * handle commitInfo action
-* handle dataChange field
 * use list api to find transaction logs to apply
 * time travel by time
 * prefetch log content in parallel
