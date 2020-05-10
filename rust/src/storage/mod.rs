@@ -13,6 +13,10 @@ pub enum UriError {
     MissingObjectBucket,
     #[error("Object URI missing key")]
     MissingObjectKey,
+    #[error("Expected S3 URI, found: {0}")]
+    ExpectedS3Uri(String),
+    #[error("Expected local path URI, found: {0}")]
+    ExpectedSLocalPathUri(String),
 }
 
 #[derive(Debug)]
@@ -22,17 +26,17 @@ pub enum Uri<'a> {
 }
 
 impl<'a> Uri<'a> {
-    pub fn as_s3object(self) -> s3::S3Object<'a> {
+    pub fn as_s3object(self) -> Result<s3::S3Object<'a>, UriError> {
         match self {
-            Uri::S3Object(x) => x,
-            _ => panic!("Not a S3 Object"),
+            Uri::S3Object(x) => Ok(x),
+            Uri::LocalPath(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
         }
     }
 
-    pub fn as_localpath(self) -> &'a str {
+    pub fn as_localpath(self) -> Result<&'a str, UriError> {
         match self {
-            Uri::LocalPath(x) => x,
-            _ => panic!("Not a S3 Object"),
+            Uri::LocalPath(x) => Ok(x),
+            Uri::S3Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
         }
     }
 }
@@ -80,6 +84,8 @@ pub enum StorageError {
     S3 {
         source: RusotoError<rusoto_s3::GetObjectError>,
     },
+    #[error("S3 Object missing body content: {0}")]
+    S3MissingObjectBody(String),
     #[error("Invalid object URI")]
     Uri {
         #[from]
@@ -128,17 +134,17 @@ mod tests {
     #[test]
     fn test_parse_uri_local_file() {
         let uri = parse_uri("foo/bar").unwrap();
-        assert_eq!(uri.as_localpath(), "foo/bar");
+        assert_eq!(uri.as_localpath().unwrap(), "foo/bar");
 
         let uri2 = parse_uri("file:///foo/bar").unwrap();
-        assert_eq!(uri2.as_localpath(), "/foo/bar");
+        assert_eq!(uri2.as_localpath().unwrap(), "/foo/bar");
     }
 
     #[test]
     fn test_parse_object_uri() {
         let uri = parse_uri("s3://foo/bar").unwrap();
         assert_eq!(
-            uri.as_s3object(),
+            uri.as_s3object().unwrap(),
             s3::S3Object {
                 bucket: "foo",
                 key: "bar",

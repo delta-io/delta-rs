@@ -168,13 +168,31 @@ impl Schema {
 fn populate_hashmap_from_parquet_map(
     map: &mut HashMap<String, String>,
     pmap: &parquet::record::Map,
-) {
+) -> Result<(), &'static str> {
     let keys = pmap.get_keys();
     let values = pmap.get_values();
     for j in 0..pmap.len() {
-        map.entry(keys.get_string(j).unwrap().clone())
-            .or_insert(values.get_string(j).unwrap().clone());
+        map.entry(
+            keys.get_string(j)
+                .map_err(|_| "key for HashMap in parquet has to be a string")?
+                .clone(),
+        )
+        .or_insert(
+            values
+                .get_string(j)
+                .map_err(|_| "value for HashMap in parquet has to be a string")?
+                .clone(),
+        );
     }
+
+    Ok(())
+}
+
+fn gen_action_type_error(action: &str, field: &str, expected_type: &str) -> DeltaTableError {
+    DeltaTableError::InvalidAction(format!(
+        "type for {} in {} action should be {}",
+        field, action, expected_type
+    ))
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -200,7 +218,7 @@ pub struct ActionAdd {
 }
 
 impl ActionAdd {
-    fn from_parquet_record(record: &parquet::record::Row) -> Self {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, DeltaTableError> {
         let mut re = Self {
             ..Default::default()
         };
@@ -208,27 +226,53 @@ impl ActionAdd {
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
                 "path" => {
-                    re.path = record.get_string(i).unwrap().clone();
+                    re.path = record
+                        .get_string(i)
+                        .map_err(|_| gen_action_type_error("add", "path", "string"))?
+                        .clone();
                 }
                 "size" => {
-                    re.size = record.get_long(i).unwrap();
+                    re.size = record
+                        .get_long(i)
+                        .map_err(|_| gen_action_type_error("add", "size", "long"))?;
                 }
                 "modificationTime" => {
-                    re.modificationTime = record.get_long(i).unwrap();
+                    re.modificationTime = record
+                        .get_long(i)
+                        .map_err(|_| gen_action_type_error("add", "modificationTime", "long"))?;
                 }
                 "dataChange" => {
-                    re.dataChange = record.get_bool(i).unwrap();
+                    re.dataChange = record
+                        .get_bool(i)
+                        .map_err(|_| gen_action_type_error("add", "dataChange", "bool"))?;
                 }
                 "partitionValues" => {
-                    let parquetMap = record.get_map(i).unwrap();
-                    let key = parquetMap.get_keys().get_string(0).unwrap().clone();
-                    let value = parquetMap.get_values().get_string(0).unwrap().clone();
+                    let parquetMap = record
+                        .get_map(i)
+                        .map_err(|_| gen_action_type_error("add", "partitionValues", "map"))?;
+                    let key = parquetMap
+                        .get_keys()
+                        .get_string(0)
+                        .map_err(|_| gen_action_type_error("add", "partitionValues.key", "string"))?
+                        .clone();
+                    let value = parquetMap
+                        .get_values()
+                        .get_string(0)
+                        .map_err(|_| {
+                            gen_action_type_error("add", "partitionValues.value", "string")
+                        })?
+                        .clone();
                     re.partitionValues.entry(key).or_insert(value);
                 }
                 "tags" => match record.get_map(i) {
                     Ok(tags_map) => {
                         let mut tags = HashMap::new();
-                        populate_hashmap_from_parquet_map(&mut tags, tags_map);
+                        populate_hashmap_from_parquet_map(&mut tags, tags_map).map_err(|estr| {
+                            DeltaTableError::InvalidAction(format!(
+                                "Invalid tags for add action: {}",
+                                estr,
+                            ))
+                        })?;
                         re.tags = Some(tags);
                     }
                     _ => {
@@ -236,15 +280,23 @@ impl ActionAdd {
                     }
                 },
                 "stats" => {
-                    re.stats = Some(record.get_string(i).unwrap().clone());
+                    re.stats = Some(
+                        record
+                            .get_string(i)
+                            .map_err(|_| gen_action_type_error("add", "stats", "string"))?
+                            .clone(),
+                    );
                 }
                 _ => {
-                    panic!("invalid add record field: {}", name);
+                    return Err(DeltaTableError::InvalidAction(format!(
+                        "Unexpected field name for add action: {}",
+                        name,
+                    )));
                 }
             }
         }
 
-        return re;
+        return Ok(re);
     }
 }
 
@@ -269,7 +321,7 @@ pub struct ActionMetaData {
 }
 
 impl ActionMetaData {
-    fn from_parquet_record(record: &parquet::record::Row) -> Self {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, DeltaTableError> {
         let mut re = Self {
             ..Default::default()
         };
@@ -277,7 +329,10 @@ impl ActionMetaData {
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
                 "id" => {
-                    re.id = record.get_string(i).unwrap().clone();
+                    re.id = record
+                        .get_string(i)
+                        .map_err(|_| gen_action_type_error("metaData", "id", "string"))?
+                        .clone();
                 }
                 "name" => match record.get_string(i) {
                     Ok(s) => re.name = Some(s.clone()),
@@ -288,29 +343,69 @@ impl ActionMetaData {
                     _ => re.description = None,
                 },
                 "partitionColumns" => {
-                    let columns_list = record.get_list(i).unwrap();
+                    let columns_list = record.get_list(i).map_err(|_| {
+                        gen_action_type_error("metaData", "partitionColumns", "list")
+                    })?;
                     for j in 0..columns_list.len() {
-                        re.partitionColumns
-                            .push(columns_list.get_string(j).unwrap().clone());
+                        re.partitionColumns.push(
+                            columns_list
+                                .get_string(j)
+                                .map_err(|_| {
+                                    gen_action_type_error(
+                                        "metaData",
+                                        "partitionColumns.value",
+                                        "string",
+                                    )
+                                })?
+                                .clone(),
+                        );
                     }
                 }
                 "schemaString" => {
-                    re.schemaString = record.get_string(i).unwrap().clone();
+                    re.schemaString = record
+                        .get_string(i)
+                        .map_err(|_| gen_action_type_error("metaData", "schemaString", "string"))?
+                        .clone();
                 }
                 "createdTime" => {
-                    re.createdTime = record.get_long(i).unwrap();
+                    re.createdTime = record
+                        .get_long(i)
+                        .map_err(|_| gen_action_type_error("metaData", "createdTime", "long"))?;
                 }
                 "configuration" => {
-                    let configuration_map = record.get_map(i).unwrap();
-                    populate_hashmap_from_parquet_map(&mut re.configuration, configuration_map);
+                    let configuration_map = record
+                        .get_map(i)
+                        .map_err(|_| gen_action_type_error("metaData", "configuration", "map"))?;
+                    populate_hashmap_from_parquet_map(&mut re.configuration, configuration_map)
+                        .map_err(|estr| {
+                            DeltaTableError::InvalidAction(format!(
+                                "Invalid configuration for metaData action: {}",
+                                estr,
+                            ))
+                        })?;
                 }
                 "format" => {
-                    let format_record = record.get_group(i).unwrap();
-                    re.format.provider = format_record.get_string(0).unwrap().clone();
+                    let format_record = record
+                        .get_group(i)
+                        .map_err(|_| gen_action_type_error("metaData", "format", "struct"))?;
+
+                    re.format.provider = format_record
+                        .get_string(0)
+                        .map_err(|_| {
+                            gen_action_type_error("metaData", "format.provider", "string")
+                        })?
+                        .clone();
                     match record.get_map(1) {
                         Ok(options_map) => {
                             let mut options = HashMap::new();
-                            populate_hashmap_from_parquet_map(&mut options, options_map);
+                            populate_hashmap_from_parquet_map(&mut options, options_map).map_err(
+                                |estr| {
+                                    DeltaTableError::InvalidAction(format!(
+                                        "Invalid format.options for metaData action: {}",
+                                        estr,
+                                    ))
+                                },
+                            )?;
                             re.format.options = Some(options);
                         }
                         _ => {
@@ -319,12 +414,15 @@ impl ActionMetaData {
                     }
                 }
                 _ => {
-                    panic!("invalid protocol record field: {}", name);
+                    return Err(DeltaTableError::InvalidAction(format!(
+                        "Unexpected field name for metaData action: {}",
+                        name,
+                    )));
                 }
             }
         }
 
-        return re;
+        return Ok(re);
     }
 
     fn get_schema(&self) -> Result<Schema, serde_json::error::Error> {
@@ -340,7 +438,7 @@ pub struct ActionRemove {
 }
 
 impl ActionRemove {
-    fn from_parquet_record(record: &parquet::record::Row) -> Self {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, DeltaTableError> {
         let mut re = Self {
             ..Default::default()
         };
@@ -348,21 +446,31 @@ impl ActionRemove {
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
                 "path" => {
-                    re.path = record.get_string(i).unwrap().clone();
+                    re.path = record
+                        .get_string(i)
+                        .map_err(|_| gen_action_type_error("remove", "path", "string"))?
+                        .clone();
                 }
                 "dataChange" => {
-                    re.dataChange = record.get_bool(i).unwrap();
+                    re.dataChange = record
+                        .get_bool(i)
+                        .map_err(|_| gen_action_type_error("remove", "dataChange", "bool"))?;
                 }
                 "deletionTimestamp" => {
-                    re.deletionTimestamp = record.get_long(i).unwrap();
+                    re.deletionTimestamp = record.get_long(i).map_err(|_| {
+                        gen_action_type_error("remove", "deletionTimestamp", "long")
+                    })?;
                 }
                 _ => {
-                    panic!("invalid remove record field: {}", name);
+                    return Err(DeltaTableError::InvalidAction(format!(
+                        "Unexpected field name for remove action: {}",
+                        name,
+                    )));
                 }
             }
         }
 
-        return re;
+        return Ok(re);
     }
 }
 
@@ -375,7 +483,7 @@ pub struct ActionTxn {
 }
 
 impl ActionTxn {
-    fn from_parquet_record(record: &parquet::record::Row) -> Self {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, DeltaTableError> {
         let mut re = Self {
             ..Default::default()
         };
@@ -383,21 +491,31 @@ impl ActionTxn {
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
                 "appId" => {
-                    re.appId = record.get_string(i).unwrap().clone();
+                    re.appId = record
+                        .get_string(i)
+                        .map_err(|_| gen_action_type_error("txn", "appId", "string"))?
+                        .clone();
                 }
                 "version" => {
-                    re.version = record.get_long(i).unwrap();
+                    re.version = record
+                        .get_long(i)
+                        .map_err(|_| gen_action_type_error("txn", "version", "long"))?;
                 }
                 "lastUpdated" => {
-                    re.lastUpdated = record.get_long(i).unwrap();
+                    re.lastUpdated = record
+                        .get_long(i)
+                        .map_err(|_| gen_action_type_error("txn", "lastUpdated", "long"))?;
                 }
                 _ => {
-                    panic!("invalid txn record field: {}", name);
+                    return Err(DeltaTableError::InvalidAction(format!(
+                        "Unexpected field name for txn action: {}",
+                        name,
+                    )));
                 }
             }
         }
 
-        return re;
+        return Ok(re);
     }
 }
 
@@ -408,7 +526,7 @@ pub struct ActionProtocol {
 }
 
 impl ActionProtocol {
-    fn from_parquet_record(record: &parquet::record::Row) -> Self {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, DeltaTableError> {
         let mut re = Self {
             ..Default::default()
         };
@@ -416,18 +534,25 @@ impl ActionProtocol {
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
                 "minReaderVersion" => {
-                    re.minReaderVersion = record.get_int(i).unwrap();
+                    re.minReaderVersion = record.get_int(i).map_err(|_| {
+                        gen_action_type_error("protocol", "minReaderVersion", "int")
+                    })?;
                 }
                 "minWriterVersion" => {
-                    re.minWriterVersion = record.get_int(i).unwrap();
+                    re.minWriterVersion = record.get_int(i).map_err(|_| {
+                        gen_action_type_error("protocol", "minWriterVersion", "int")
+                    })?;
                 }
                 _ => {
-                    panic!("invalid protocol record");
+                    return Err(DeltaTableError::InvalidAction(format!(
+                        "Unexpected field name for protocol action: {}",
+                        name,
+                    )));
                 }
             }
         }
 
-        return re;
+        return Ok(re);
     }
 }
 
@@ -445,7 +570,8 @@ impl Action {
     fn from_parquet_record(
         schema: &parquet::schema::types::Type,
         record: &parquet::record::Row,
-    ) -> Self {
+    ) -> Result<Self, DeltaTableError> {
+        // find column that's not none
         let (col_idx, col_data) = {
             let mut col_idx = None;
             let mut col_data = None;
@@ -460,39 +586,36 @@ impl Action {
                     }
                 }
             }
-            match col_data {
-                Some(group) => (col_idx.unwrap(), group),
-                None => {
-                    panic!("FIXME: invalid record");
+
+            match (col_idx, col_data) {
+                (Some(idx), Some(group)) => (idx, group),
+                _ => {
+                    return Err(DeltaTableError::InvalidAction(
+                        "Parquet action row only contains null columns".to_string(),
+                    ));
                 }
             }
         };
 
         let fields = schema.get_fields();
         let field = &fields[col_idx];
-        match field.get_basic_info().name() {
-            "add" => {
-                return Action::add(ActionAdd::from_parquet_record(col_data));
-            }
-            "metaData" => {
-                return Action::metaData(ActionMetaData::from_parquet_record(col_data));
-            }
-            "remove" => {
-                return Action::remove(ActionRemove::from_parquet_record(col_data));
-            }
-            "txn" => {
-                return Action::txn(ActionTxn::from_parquet_record(col_data));
-            }
-            "protocol" => {
-                return Action::protocol(ActionProtocol::from_parquet_record(col_data));
-            }
+
+        return Ok(match field.get_basic_info().name() {
+            "add" => Action::add(ActionAdd::from_parquet_record(col_data)?),
+            "metaData" => Action::metaData(ActionMetaData::from_parquet_record(col_data)?),
+            "remove" => Action::remove(ActionRemove::from_parquet_record(col_data)?),
+            "txn" => Action::txn(ActionTxn::from_parquet_record(col_data)?),
+            "protocol" => Action::protocol(ActionProtocol::from_parquet_record(col_data)?),
             "commitInfo" => {
-                panic!("FIXME: implement commitInfo");
+                unimplemented!("FIXME: support commitInfo");
             }
-            _ => {
-                panic!("FIXME: invalid action: {:#?}", field);
+            name @ _ => {
+                return Err(DeltaTableError::InvalidAction(format!(
+                    "Unexpected action from checkpoint: {}",
+                    name,
+                )));
             }
-        }
+        });
     }
 }
 
@@ -611,6 +734,8 @@ pub enum DeltaTableError {
         source: std::io::Error,
         path: String,
     },
+    #[error("Invalid action record found in log: {0}")]
+    InvalidAction(String),
 }
 
 pub struct DeltaTable {
@@ -787,11 +912,13 @@ impl DeltaTable {
             let preader = SerializedFileReader::new(Cursor::new(obj))?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
-                panic!("invalid checkpoint data file");
+                return Err(DeltaTableError::InvalidAction(format!(
+                    "Action record in checkpoint should be a struct"
+                )));
             }
             let mut iter = preader.get_row_iter(None)?;
             while let Some(record) = iter.next() {
-                self.process_action(&Action::from_parquet_record(&schema, &record))?;
+                self.process_action(&Action::from_parquet_record(&schema, &record)?)?;
             }
         }
 
@@ -825,9 +952,7 @@ impl DeltaTable {
                         ApplyLogError::EndOfLog => {
                             self.version -= 1;
                         }
-                        _ => {
-                            panic!("Apply error: {:#?}", e);
-                        }
+                        _ => return Err(DeltaTableError::from(e)),
                     }
                     break;
                 }
@@ -933,11 +1058,14 @@ impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(f, "DeltaTable({})\n", self.table_path)?;
         write!(f, "\tversion: {}\n", self.version)?;
-        write!(
-            f,
-            "\tmetadata: {}\n",
-            self.current_metadata.as_ref().unwrap()
-        )?;
+        match self.current_metadata.as_ref() {
+            Some(metadata) => {
+                write!(f, "\tmetadata: {}\n", metadata)?;
+            }
+            None => {
+                write!(f, "\tmetadata: None\n")?;
+            }
+        }
         write!(
             f,
             "\tmin_version: read={}, write={}\n",
