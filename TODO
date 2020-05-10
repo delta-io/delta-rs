@@ -1,7 +1,5 @@
-* track tombstones
 * check crc
 * replace all unwrap with Result
-* support write, currently blocked on adding write support to parquet crate
 * make all IO async
 * handle commitInfo action
 * handle dataChange field

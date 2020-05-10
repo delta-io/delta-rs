@@ -178,22 +178,25 @@ fn populate_hashmap_from_parquet_map(
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
-struct ActionAdd {
+pub struct ActionAdd {
     // A relative path, from the root of the table, to a file that should be added to the table
-    path: String,
+    pub path: String,
     // The size of this file in bytes
-    size: DeltaDataTypeLong,
+    pub size: DeltaDataTypeLong,
     // A map from partition column to value for this file
-    partitionValues: HashMap<String, String>,
+    pub partitionValues: HashMap<String, String>,
     // The time this file was created, as milliseconds since the epoch
-    modificationTime: DeltaDataTypeLong,
+    pub modificationTime: DeltaDataTypeLong,
     // When false the file must already be present in the table or the records in the added file
     // must be contained in one or more remove actions in the same version
-    dataChange: bool,
+    //
+    // streaming queries that are tailing the transaction log can use this flag to skip actions
+    // that would not affect the final results.
+    pub dataChange: bool,
     // Contains statistics (e.g., count, min/max values for columns) about the data in this file
-    stats: Option<String>,
+    pub stats: Option<String>,
     // Map containing metadata about this file
-    tags: Option<HashMap<String, String>>,
+    pub tags: Option<HashMap<String, String>>,
 }
 
 impl ActionAdd {
@@ -246,23 +249,23 @@ impl ActionAdd {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
-struct ActionMetaData {
+pub struct ActionMetaData {
     // Unique identifier for this table
-    id: GUID,
+    pub id: GUID,
     // User-provided identifier for this table
-    name: Option<String>,
+    pub name: Option<String>,
     // User-provided description for this table
-    description: Option<String>,
+    pub description: Option<String>,
     // Specification of the encoding for the files stored in the table
-    format: Format,
+    pub format: Format,
     // Schema of the table
-    schemaString: String,
+    pub schemaString: String,
     // An array containing the names of columns by which the data should be partitioned
-    partitionColumns: Vec<String>,
+    pub partitionColumns: Vec<String>,
     // NOTE: this field is undocumented
-    configuration: HashMap<String, String>,
+    pub configuration: HashMap<String, String>,
     // NOTE: this field is undocumented
-    createdTime: DeltaDataTypeLong,
+    pub createdTime: DeltaDataTypeLong,
 }
 
 impl ActionMetaData {
@@ -329,11 +332,11 @@ impl ActionMetaData {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug, Default)]
-struct ActionRemove {
-    path: String,
-    deletionTimestamp: DeltaDataTypeLong,
-    dataChange: bool,
+#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+pub struct ActionRemove {
+    pub path: String,
+    pub deletionTimestamp: DeltaDataTypeLong,
+    pub dataChange: bool,
 }
 
 impl ActionRemove {
@@ -364,11 +367,11 @@ impl ActionRemove {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
-struct ActionTxn {
-    appId: String,
-    version: DeltaVersionType,
+pub struct ActionTxn {
+    pub appId: String,
+    pub version: DeltaVersionType,
     // NOTE: undocumented field
-    lastUpdated: DeltaDataTypeLong,
+    pub lastUpdated: DeltaDataTypeLong,
 }
 
 impl ActionTxn {
@@ -399,9 +402,9 @@ impl ActionTxn {
 }
 
 #[derive(Serialize, Deserialize, Debug, Default)]
-struct ActionProtocol {
-    minReaderVersion: DeltaDataTypeInt,
-    minWriterVersion: DeltaDataTypeInt,
+pub struct ActionProtocol {
+    pub minReaderVersion: DeltaDataTypeInt,
+    pub minWriterVersion: DeltaDataTypeInt,
 }
 
 impl ActionProtocol {
@@ -612,7 +615,9 @@ pub enum DeltaTableError {
 
 pub struct DeltaTable {
     pub version: DeltaVersionType,
-    pub tombstones: Vec<String>, // files that were recently deleted
+    // A remove action should remain in the state of the table as a tombstone until it has expired
+    // vacuum operation is responsible for providing the retention threshold
+    pub tombstones: Vec<ActionRemove>,
     pub min_reader_version: i32,
     pub min_writer_version: i32,
     pub table_path: String,
@@ -664,13 +669,13 @@ impl DeltaTable {
     }
 
     fn process_action(&mut self, action: &Action) -> Result<(), serde_json::error::Error> {
-        // FIXME: support dataChange field
         match action {
             Action::add(v) => {
                 self.files.push(v.path.clone());
             }
             Action::remove(v) => {
                 self.files.retain(|e| *e != v.path);
+                self.tombstones.push(v.clone());
             }
             Action::protocol(v) => {
                 self.min_reader_version = v.minReaderVersion;
@@ -890,6 +895,10 @@ impl DeltaTable {
                     .unwrap()
             })
             .collect()
+    }
+
+    pub fn get_tombstones(&self) -> &Vec<ActionRemove> {
+        &self.tombstones
     }
 
     pub fn schema(&self) -> Option<&Schema> {
