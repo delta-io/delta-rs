@@ -17,8 +17,11 @@ impl StorageBackend for FileStorageBackend {
 
     fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = String>>, StorageError> {
         let readdir = fs::read_dir(path)?;
-        Ok(Box::new(readdir.into_iter().map(|entry| {
-            String::from(entry.unwrap().path().to_str().unwrap())
-        })))
+        Ok(Box::new(
+            readdir
+                .into_iter()
+                .filter_map(Result::ok)
+                .map(|entry| String::from(entry.path().to_str().unwrap())),
+        ))
     }
 }
