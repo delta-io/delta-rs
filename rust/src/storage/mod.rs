@@ -1,3 +1,4 @@
+use chrono::{DateTime, Utc};
 use rusoto_core::RusotoError;
 use rusoto_s3;
 use thiserror;
@@ -81,8 +82,12 @@ pub enum StorageError {
     #[error("Failed to read local object content")]
     IO { source: std::io::Error },
     #[error("Failed to read S3 object content")]
-    S3 {
+    S3Get {
         source: RusotoError<rusoto_s3::GetObjectError>,
+    },
+    #[error("Failed to read S3 object metadata")]
+    S3Head {
+        source: RusotoError<rusoto_s3::HeadObjectError>,
     },
     #[error("S3 Object missing body content: {0}")]
     S3MissingObjectBody(String),
@@ -110,14 +115,33 @@ impl From<RusotoError<rusoto_s3::GetObjectError>> for StorageError {
     fn from(error: RusotoError<rusoto_s3::GetObjectError>) -> Self {
         match error {
             RusotoError::Service(rusoto_s3::GetObjectError::NoSuchKey(_)) => StorageError::NotFound,
-            _ => StorageError::S3 { source: error },
+            _ => StorageError::S3Get { source: error },
         }
     }
 }
 
+impl From<RusotoError<rusoto_s3::HeadObjectError>> for StorageError {
+    fn from(error: RusotoError<rusoto_s3::HeadObjectError>) -> Self {
+        match error {
+            RusotoError::Service(rusoto_s3::HeadObjectError::NoSuchKey(_)) => {
+                StorageError::NotFound
+            }
+            _ => StorageError::S3Head { source: error },
+        }
+    }
+}
+
+pub struct ObjectMeta {
+    pub path: String,
+    // The timestamp of a commit comes from the remote storage `lastModifiedTime`, and can be
+    // adjusted for clock skew.
+    pub modified: DateTime<Utc>,
+}
+
 pub trait StorageBackend {
+    fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError>;
     fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
-    fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = String>>, StorageError>;
+    fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = ObjectMeta>>, StorageError>;
 }
 
 pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, UriError> {

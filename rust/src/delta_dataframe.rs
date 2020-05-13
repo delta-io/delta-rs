@@ -17,7 +17,7 @@ pub trait DeltaDataframe {
     fn from_delta_table(path: &str) -> Result<DataFrame, DeltaTableError>;
     fn from_delta_table_with_version(
         path: &str,
-        version: delta::DeltaVersionType,
+        version: delta::DeltaDataTypeVersion,
     ) -> Result<DataFrame, DeltaTableError>;
 }
 
@@ -66,7 +66,7 @@ impl DeltaDataframe for DataFrame {
 
     fn from_delta_table_with_version(
         path: &str,
-        version: delta::DeltaVersionType,
+        version: delta::DeltaDataTypeVersion,
     ) -> Result<DataFrame, DeltaTableError> {
         let delta_table = delta::open_table_with_version(path, version)?;
         return Self::from_loaded_delta_table(delta_table);
