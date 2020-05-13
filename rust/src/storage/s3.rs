@@ -2,10 +2,11 @@ use std::fmt;
 use tokio::io::AsyncReadExt;
 use tokio::runtime;
 
+use chrono::{DateTime, FixedOffset, Utc};
 use rusoto_core::Region;
-use rusoto_s3::{GetObjectRequest, ListObjectsV2Request, S3Client, S3};
+use rusoto_s3::{GetObjectRequest, HeadObjectRequest, ListObjectsV2Request, S3Client, S3};
 
-use super::{parse_uri, StorageBackend, StorageError};
+use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
 
 #[derive(Debug, PartialEq)]
 pub struct S3Object<'a> {
@@ -40,6 +41,25 @@ impl S3StorageBackend {
 }
 
 impl StorageBackend for S3StorageBackend {
+    fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
+        let uri = parse_uri(path)?.as_s3object()?;
+
+        let mut rt = Self::gen_tokio_rt();
+        let result = rt.block_on(self.client.head_object(HeadObjectRequest {
+            bucket: uri.bucket.to_string(),
+            key: uri.key.to_string(),
+            ..Default::default()
+        }))?;
+
+        Ok(ObjectMeta {
+            path: path.to_string(),
+            modified: DateTime::<Utc>::from(
+                DateTime::<FixedOffset>::parse_from_rfc2822(&result.last_modified.unwrap())
+                    .unwrap(),
+            ),
+        })
+    }
+
     fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
         debug!("fetching s3 object: {}...", path);
 
@@ -65,7 +85,7 @@ impl StorageBackend for S3StorageBackend {
         Ok(buf)
     }
 
-    fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = String>>, StorageError> {
+    fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = ObjectMeta>>, StorageError> {
         let uri = parse_uri(path)?.as_s3object()?;
 
         struct ListContext {
@@ -85,10 +105,18 @@ impl StorageBackend for S3StorageBackend {
             client: self.client.clone(),
         };
 
-        fn next_key(ctx: &mut ListContext) -> Option<String> {
+        fn next_meta(ctx: &mut ListContext) -> Option<ObjectMeta> {
             return match ctx.obj_iter.next() {
                 Some(obj) => {
-                    return Some(obj.key.unwrap());
+                    return Some(ObjectMeta {
+                        path: obj.key.unwrap(),
+                        modified: DateTime::<Utc>::from(
+                            DateTime::<FixedOffset>::parse_from_rfc2822(
+                                &obj.last_modified.unwrap(),
+                            )
+                            .unwrap(),
+                        ),
+                    });
                 }
                 None => match &ctx.continuation_token {
                     Some(token) => {
@@ -111,13 +139,13 @@ impl StorageBackend for S3StorageBackend {
                             None => Vec::new().into_iter(),
                         };
 
-                        return next_key(ctx);
+                        return next_meta(ctx);
                     }
                     None => None,
                 },
             };
         }
 
-        Ok(Box::new(std::iter::from_fn(move || next_key(&mut ctx))))
+        Ok(Box::new(std::iter::from_fn(move || next_meta(&mut ctx))))
     }
 }

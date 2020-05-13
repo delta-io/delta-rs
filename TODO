@@ -1,5 +1,4 @@
 * make all IO async
 * handle commitInfo action
 * use list api to find transaction logs to apply
-* time travel by time
 * prefetch log content in parallel
