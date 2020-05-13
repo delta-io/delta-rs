@@ -540,6 +540,7 @@ dependencies = [
  "anyhow",
  "arrow",
  "bytes 0.5.4",
+ "chrono",
  "crossbeam",
  "datafusion",
  "futures",
@@ -554,6 +555,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-io",
+ "utime",
 ]
 
 [[package]]
@@ -2901,6 +2903,17 @@ name = "utf8parse"
 version = "0.2.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "936e4b492acfd135421d8dca4b1aa80a7bfc26e702ef3af710e0752684df5372"
+
+[[package]]
+name = "utime"
+version = "0.2.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "055058552ca15c566082fc61da433ae678f78986a6f16957e33162d1b218792a"
+dependencies = [
+ "kernel32-sys",
+ "libc",
+ "winapi 0.2.8",
+]
 
 [[package]]
 name = "uuid"

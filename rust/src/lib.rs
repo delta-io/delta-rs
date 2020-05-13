@@ -2,7 +2,9 @@
 extern crate log;
 
 extern crate arrow;
+extern crate chrono;
 extern crate datafusion;
+extern crate parquet;
 extern crate rust_dataframe;
 
 mod delta;
