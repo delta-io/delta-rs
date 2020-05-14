@@ -1,7 +1,5 @@
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 
-#![allow(non_snake_case, non_camel_case_types)]
-
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
@@ -11,48 +9,22 @@ use chrono;
 use chrono::{DateTime, FixedOffset, Utc};
 use parquet::errors::ParquetError;
 use parquet::file::reader::{FileReader, SerializedFileReader};
-use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror;
 
+use super::action;
+use super::action::Action;
+use super::schema::*;
 use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
-
-pub type GUID = String;
-pub type DeltaDataTypeLong = i64;
-pub type DeltaDataTypeVersion = DeltaDataTypeLong;
-pub type DeltaDataTypeTimestamp = DeltaDataTypeLong;
-pub type DeltaDataTypeInt = i32;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
 pub struct CheckPoint {
     version: DeltaDataTypeVersion, // 20 digits decimals
     size: DeltaDataTypeLong,
     parts: Option<u32>, // 10 digits decimals
-}
-
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
-pub struct Format {
-    // Name of the encoding for files in this table
-    provider: String,
-    // A map containing configuration options for the format
-    options: Option<HashMap<String, String>>,
-}
-
-// https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct SchemaTypeStruct {
-    // type field is alwsy the string "struct", so we are ignoring it here
-    r#type: String,
-    fields: Vec<SchemaField>,
-}
-
-impl SchemaTypeStruct {
-    pub fn get_fields(&self) -> &Vec<SchemaField> {
-        &self.fields
-    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -94,582 +66,16 @@ pub enum DeltaTableError {
         source: std::io::Error,
         path: String,
     },
-    #[error("Invalid action record found in log: {0}")]
-    InvalidAction(String),
     #[error("Invalid datetime string: {}", .source)]
     InvalidDateTimeSTring {
         #[from]
         source: chrono::ParseError,
     },
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SchemaField {
-    // Name of this (possibly nested) column
-    name: String,
-    // String containing the name of a primitive type, a struct definition, an array definition or
-    // a map definition
-    r#type: SchemaDataType,
-    // Boolean denoting whether this field can be null
-    nullable: bool,
-    // A JSON map containing information about this column. Keys prefixed with Delta are reserved
-    // for the implementation.
-    metadata: HashMap<String, String>,
-}
-
-impl SchemaField {
-    pub fn get_name(&self) -> &str {
-        &self.name
-    }
-
-    pub fn get_type(&self) -> &SchemaDataType {
-        &self.r#type
-    }
-
-    pub fn is_nullable(&self) -> bool {
-        self.nullable
-    }
-
-    pub fn get_metadata(&self) -> &HashMap<String, String> {
-        &self.metadata
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SchemaTypeArray {
-    // type field is alwsy the string "array", so we are ignoring it here
-    r#type: String,
-    // The type of element stored in this array represented as a string containing the name of a
-    // primitive type, a struct definition, an array definition or a map definition
-    elementType: Box<SchemaDataType>,
-    // Boolean denoting whether this array can contain one or more null values
-    containsNull: bool,
-}
-
-impl SchemaTypeArray {
-    pub fn get_element_type(&self) -> &SchemaDataType {
-        &self.elementType
-    }
-
-    pub fn does_contain_null(&self) -> bool {
-        self.containsNull
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct SchemaTypeMap {
-    r#type: String,
-    // The type of element used for the key of this map, represented as a string containing the
-    // name of a primitive type, a struct definition, an array definition or a map definition
-    keyType: Box<SchemaDataType>,
-    // The type of element used for the key of this map, represented as a string containing the
-    // name of a primitive type, a struct definition, an array definition or a map definition
-    valueType: Box<SchemaDataType>,
-}
-
-impl SchemaTypeMap {
-    pub fn get_key_type(&self) -> &SchemaDataType {
-        &self.keyType
-    }
-
-    pub fn get_value_type(&self) -> &SchemaDataType {
-        &self.valueType
-    }
-}
-
-/*
- * List of primitive types:
- *   string: utf8
- *   long  // undocumented, i64?
- *   integer: i32
- *   short: i16
- *   byte: i8
- *   float: f32
- *   double: f64
- *   boolean: bool
- *   binary: a sequence of binary data
- *   date: A calendar date, represented as a year-month-day triple without a timezone
- *   timestamp: Microsecond precision timestamp without a timezone
- */
-#[derive(Serialize, Deserialize, Debug)]
-#[serde(untagged)]
-pub enum SchemaDataType {
-    primitive(String),
-    r#struct(SchemaTypeStruct),
-    array(SchemaTypeArray),
-    map(SchemaTypeMap),
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-pub struct Schema {
-    r#type: String,
-    fields: Vec<SchemaField>,
-}
-
-impl Schema {
-    pub fn get_fields(&self) -> &Vec<SchemaField> {
-        &self.fields
-    }
-}
-
-fn populate_hashmap_from_parquet_map(
-    map: &mut HashMap<String, String>,
-    pmap: &parquet::record::Map,
-) -> Result<(), &'static str> {
-    let keys = pmap.get_keys();
-    let values = pmap.get_values();
-    for j in 0..pmap.len() {
-        map.entry(
-            keys.get_string(j)
-                .map_err(|_| "key for HashMap in parquet has to be a string")?
-                .clone(),
-        )
-        .or_insert(
-            values
-                .get_string(j)
-                .map_err(|_| "value for HashMap in parquet has to be a string")?
-                .clone(),
-        );
-    }
-
-    Ok(())
-}
-
-fn gen_action_type_error(action: &str, field: &str, expected_type: &str) -> DeltaTableError {
-    DeltaTableError::InvalidAction(format!(
-        "type for {} in {} action should be {}",
-        field, action, expected_type
-    ))
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct ActionAdd {
-    // A relative path, from the root of the table, to a file that should be added to the table
-    pub path: String,
-    // The size of this file in bytes
-    pub size: DeltaDataTypeLong,
-    // A map from partition column to value for this file
-    pub partitionValues: HashMap<String, String>,
-    // The time this file was created, as milliseconds since the epoch
-    pub modificationTime: DeltaDataTypeTimestamp,
-    // When false the file must already be present in the table or the records in the added file
-    // must be contained in one or more remove actions in the same version
-    //
-    // streaming queries that are tailing the transaction log can use this flag to skip actions
-    // that would not affect the final results.
-    pub dataChange: bool,
-    // Contains statistics (e.g., count, min/max values for columns) about the data in this file
-    pub stats: Option<String>,
-    // Map containing metadata about this file
-    pub tags: Option<HashMap<String, String>>,
-}
-
-impl ActionAdd {
-    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, DeltaTableError> {
-        let mut re = Self {
-            ..Default::default()
-        };
-
-        for (i, (name, _)) in record.get_column_iter().enumerate() {
-            match name.as_str() {
-                "path" => {
-                    re.path = record
-                        .get_string(i)
-                        .map_err(|_| gen_action_type_error("add", "path", "string"))?
-                        .clone();
-                }
-                "size" => {
-                    re.size = record
-                        .get_long(i)
-                        .map_err(|_| gen_action_type_error("add", "size", "long"))?;
-                }
-                "modificationTime" => {
-                    re.modificationTime = record
-                        .get_long(i)
-                        .map_err(|_| gen_action_type_error("add", "modificationTime", "long"))?;
-                }
-                "dataChange" => {
-                    re.dataChange = record
-                        .get_bool(i)
-                        .map_err(|_| gen_action_type_error("add", "dataChange", "bool"))?;
-                }
-                "partitionValues" => {
-                    let parquetMap = record
-                        .get_map(i)
-                        .map_err(|_| gen_action_type_error("add", "partitionValues", "map"))?;
-                    for i in 0..parquetMap.len() {
-                        let key = parquetMap
-                            .get_keys()
-                            .get_string(i)
-                            .map_err(|_| {
-                                gen_action_type_error("add", "partitionValues.key", "string")
-                            })?
-                            .clone();
-                        let value = parquetMap
-                            .get_values()
-                            .get_string(i)
-                            .map_err(|_| {
-                                gen_action_type_error("add", "partitionValues.value", "string")
-                            })?
-                            .clone();
-                        re.partitionValues.entry(key).or_insert(value);
-                    }
-                }
-                "tags" => match record.get_map(i) {
-                    Ok(tags_map) => {
-                        let mut tags = HashMap::new();
-                        populate_hashmap_from_parquet_map(&mut tags, tags_map).map_err(|estr| {
-                            DeltaTableError::InvalidAction(format!(
-                                "Invalid tags for add action: {}",
-                                estr,
-                            ))
-                        })?;
-                        re.tags = Some(tags);
-                    }
-                    _ => {
-                        re.tags = None;
-                    }
-                },
-                "stats" => match record.get_string(i) {
-                    Ok(stats) => {
-                        re.stats = Some(stats.clone());
-                    }
-                    _ => {
-                        re.stats = None;
-                    }
-                },
-                _ => {
-                    return Err(DeltaTableError::InvalidAction(format!(
-                        "Unexpected field name for add action: {}",
-                        name,
-                    )));
-                }
-            }
-        }
-
-        return Ok(re);
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct ActionMetaData {
-    // Unique identifier for this table
-    pub id: GUID,
-    // User-provided identifier for this table
-    pub name: Option<String>,
-    // User-provided description for this table
-    pub description: Option<String>,
-    // Specification of the encoding for the files stored in the table
-    pub format: Format,
-    // Schema of the table
-    pub schemaString: String,
-    // An array containing the names of columns by which the data should be partitioned
-    pub partitionColumns: Vec<String>,
-    // NOTE: this field is undocumented
-    pub configuration: HashMap<String, String>,
-    // NOTE: this field is undocumented
-    pub createdTime: DeltaDataTypeTimestamp,
-}
-
-impl ActionMetaData {
-    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, DeltaTableError> {
-        let mut re = Self {
-            ..Default::default()
-        };
-
-        for (i, (name, _)) in record.get_column_iter().enumerate() {
-            match name.as_str() {
-                "id" => {
-                    re.id = record
-                        .get_string(i)
-                        .map_err(|_| gen_action_type_error("metaData", "id", "string"))?
-                        .clone();
-                }
-                "name" => match record.get_string(i) {
-                    Ok(s) => re.name = Some(s.clone()),
-                    _ => re.name = None,
-                },
-                "description" => match record.get_string(i) {
-                    Ok(s) => re.description = Some(s.clone()),
-                    _ => re.description = None,
-                },
-                "partitionColumns" => {
-                    let columns_list = record.get_list(i).map_err(|_| {
-                        gen_action_type_error("metaData", "partitionColumns", "list")
-                    })?;
-                    for j in 0..columns_list.len() {
-                        re.partitionColumns.push(
-                            columns_list
-                                .get_string(j)
-                                .map_err(|_| {
-                                    gen_action_type_error(
-                                        "metaData",
-                                        "partitionColumns.value",
-                                        "string",
-                                    )
-                                })?
-                                .clone(),
-                        );
-                    }
-                }
-                "schemaString" => {
-                    re.schemaString = record
-                        .get_string(i)
-                        .map_err(|_| gen_action_type_error("metaData", "schemaString", "string"))?
-                        .clone();
-                }
-                "createdTime" => {
-                    re.createdTime = record
-                        .get_long(i)
-                        .map_err(|_| gen_action_type_error("metaData", "createdTime", "long"))?;
-                }
-                "configuration" => {
-                    let configuration_map = record
-                        .get_map(i)
-                        .map_err(|_| gen_action_type_error("metaData", "configuration", "map"))?;
-                    populate_hashmap_from_parquet_map(&mut re.configuration, configuration_map)
-                        .map_err(|estr| {
-                            DeltaTableError::InvalidAction(format!(
-                                "Invalid configuration for metaData action: {}",
-                                estr,
-                            ))
-                        })?;
-                }
-                "format" => {
-                    let format_record = record
-                        .get_group(i)
-                        .map_err(|_| gen_action_type_error("metaData", "format", "struct"))?;
-
-                    re.format.provider = format_record
-                        .get_string(0)
-                        .map_err(|_| {
-                            gen_action_type_error("metaData", "format.provider", "string")
-                        })?
-                        .clone();
-                    match record.get_map(1) {
-                        Ok(options_map) => {
-                            let mut options = HashMap::new();
-                            populate_hashmap_from_parquet_map(&mut options, options_map).map_err(
-                                |estr| {
-                                    DeltaTableError::InvalidAction(format!(
-                                        "Invalid format.options for metaData action: {}",
-                                        estr,
-                                    ))
-                                },
-                            )?;
-                            re.format.options = Some(options);
-                        }
-                        _ => {
-                            re.format.options = None;
-                        }
-                    }
-                }
-                _ => {
-                    return Err(DeltaTableError::InvalidAction(format!(
-                        "Unexpected field name for metaData action: {}",
-                        name,
-                    )));
-                }
-            }
-        }
-
-        return Ok(re);
-    }
-
-    fn get_schema(&self) -> Result<Schema, serde_json::error::Error> {
-        serde_json::from_str(&self.schemaString)
-    }
-}
-
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
-pub struct ActionRemove {
-    pub path: String,
-    pub deletionTimestamp: DeltaDataTypeTimestamp,
-    pub dataChange: bool,
-}
-
-impl ActionRemove {
-    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, DeltaTableError> {
-        let mut re = Self {
-            ..Default::default()
-        };
-
-        for (i, (name, _)) in record.get_column_iter().enumerate() {
-            match name.as_str() {
-                "path" => {
-                    re.path = record
-                        .get_string(i)
-                        .map_err(|_| gen_action_type_error("remove", "path", "string"))?
-                        .clone();
-                }
-                "dataChange" => {
-                    re.dataChange = record
-                        .get_bool(i)
-                        .map_err(|_| gen_action_type_error("remove", "dataChange", "bool"))?;
-                }
-                "deletionTimestamp" => {
-                    re.deletionTimestamp = record.get_long(i).map_err(|_| {
-                        gen_action_type_error("remove", "deletionTimestamp", "long")
-                    })?;
-                }
-                _ => {
-                    return Err(DeltaTableError::InvalidAction(format!(
-                        "Unexpected field name for remove action: {}",
-                        name,
-                    )));
-                }
-            }
-        }
-
-        return Ok(re);
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct ActionTxn {
-    // A unique identifier for the application performing the transaction
-    pub appId: String,
-    // An application-specific numeric identifier for this transaction
-    pub version: DeltaDataTypeVersion,
-    // NOTE: undocumented field
-    pub lastUpdated: DeltaDataTypeTimestamp,
-}
-
-impl ActionTxn {
-    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, DeltaTableError> {
-        let mut re = Self {
-            ..Default::default()
-        };
-
-        for (i, (name, _)) in record.get_column_iter().enumerate() {
-            match name.as_str() {
-                "appId" => {
-                    re.appId = record
-                        .get_string(i)
-                        .map_err(|_| gen_action_type_error("txn", "appId", "string"))?
-                        .clone();
-                }
-                "version" => {
-                    re.version = record
-                        .get_long(i)
-                        .map_err(|_| gen_action_type_error("txn", "version", "long"))?;
-                }
-                "lastUpdated" => {
-                    re.lastUpdated = record
-                        .get_long(i)
-                        .map_err(|_| gen_action_type_error("txn", "lastUpdated", "long"))?;
-                }
-                _ => {
-                    return Err(DeltaTableError::InvalidAction(format!(
-                        "Unexpected field name for txn action: {}",
-                        name,
-                    )));
-                }
-            }
-        }
-
-        return Ok(re);
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Default)]
-pub struct ActionProtocol {
-    pub minReaderVersion: DeltaDataTypeInt,
-    pub minWriterVersion: DeltaDataTypeInt,
-}
-
-impl ActionProtocol {
-    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, DeltaTableError> {
-        let mut re = Self {
-            ..Default::default()
-        };
-
-        for (i, (name, _)) in record.get_column_iter().enumerate() {
-            match name.as_str() {
-                "minReaderVersion" => {
-                    re.minReaderVersion = record.get_int(i).map_err(|_| {
-                        gen_action_type_error("protocol", "minReaderVersion", "int")
-                    })?;
-                }
-                "minWriterVersion" => {
-                    re.minWriterVersion = record.get_int(i).map_err(|_| {
-                        gen_action_type_error("protocol", "minWriterVersion", "int")
-                    })?;
-                }
-                _ => {
-                    return Err(DeltaTableError::InvalidAction(format!(
-                        "Unexpected field name for protocol action: {}",
-                        name,
-                    )));
-                }
-            }
-        }
-
-        return Ok(re);
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug)]
-enum Action {
-    metaData(ActionMetaData),
-    add(ActionAdd),
-    remove(ActionRemove),
-    txn(ActionTxn),
-    protocol(ActionProtocol),
-    commitInfo(Value),
-}
-
-impl Action {
-    fn from_parquet_record(
-        schema: &parquet::schema::types::Type,
-        record: &parquet::record::Row,
-    ) -> Result<Self, DeltaTableError> {
-        // find column that's not none
-        let (col_idx, col_data) = {
-            let mut col_idx = None;
-            let mut col_data = None;
-            for i in 0..record.len() {
-                match record.get_group(i) {
-                    Ok(group) => {
-                        col_idx = Some(i);
-                        col_data = Some(group);
-                    }
-                    _ => {
-                        continue;
-                    }
-                }
-            }
-
-            match (col_idx, col_data) {
-                (Some(idx), Some(group)) => (idx, group),
-                _ => {
-                    return Err(DeltaTableError::InvalidAction(
-                        "Parquet action row only contains null columns".to_string(),
-                    ));
-                }
-            }
-        };
-
-        let fields = schema.get_fields();
-        let field = &fields[col_idx];
-
-        return Ok(match field.get_basic_info().name() {
-            "add" => Action::add(ActionAdd::from_parquet_record(col_data)?),
-            "metaData" => Action::metaData(ActionMetaData::from_parquet_record(col_data)?),
-            "remove" => Action::remove(ActionRemove::from_parquet_record(col_data)?),
-            "txn" => Action::txn(ActionTxn::from_parquet_record(col_data)?),
-            "protocol" => Action::protocol(ActionProtocol::from_parquet_record(col_data)?),
-            "commitInfo" => {
-                unimplemented!("FIXME: support commitInfo");
-            }
-            name @ _ => {
-                return Err(DeltaTableError::InvalidAction(format!(
-                    "Unexpected action from checkpoint: {}",
-                    name,
-                )));
-            }
-        });
-    }
+    #[error("Invalid action record found in log: {}", .source)]
+    InvalidAction {
+        #[from]
+        source: action::ActionError,
+    },
 }
 
 pub struct DeltaTableMetaData {
@@ -680,11 +86,11 @@ pub struct DeltaTableMetaData {
     // User-provided description for this table
     pub description: Option<String>,
     // Specification of the encoding for the files stored in the table
-    pub format: Format,
+    pub format: action::Format,
     // Schema of the table
     pub schema: Schema,
     // An array containing the names of columns by which the data should be partitioned
-    pub partitionColumns: Vec<String>,
+    pub partition_columns: Vec<String>,
     // NOTE: this field is undocumented
     pub configuration: HashMap<String, String>,
 }
@@ -694,7 +100,7 @@ impl fmt::Display for DeltaTableMetaData {
         write!(
             f,
             "GUID={}, name={:?}, description={:?}, partitionColumns={:?}, configuration={:?}",
-            self.id, self.name, self.description, self.partitionColumns, self.configuration
+            self.id, self.name, self.description, self.partition_columns, self.configuration
         )
     }
 }
@@ -752,7 +158,7 @@ pub struct DeltaTable {
     pub version: DeltaDataTypeVersion,
     // A remove action should remain in the state of the table as a tombstone until it has expired
     // vacuum operation is responsible for providing the retention threshold
-    pub tombstones: Vec<ActionRemove>,
+    pub tombstones: Vec<action::Remove>,
     pub min_reader_version: i32,
     pub min_writer_version: i32,
     pub table_path: String,
@@ -824,7 +230,7 @@ impl DeltaTable {
                     description: v.description.clone(),
                     format: v.format.clone(),
                     schema: v.get_schema()?,
-                    partitionColumns: v.partitionColumns.clone(),
+                    partition_columns: v.partitionColumns.clone(),
                     configuration: v.configuration.clone(),
                 });
             }
@@ -923,8 +329,8 @@ impl DeltaTable {
             let preader = SerializedFileReader::new(Cursor::new(obj))?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
-                return Err(DeltaTableError::InvalidAction(format!(
-                    "Action record in checkpoint should be a struct"
+                return Err(DeltaTableError::from(action::ActionError::Generic(
+                    "Action record in checkpoint should be a struct".to_string(),
                 )));
             }
             let mut iter = preader.get_row_iter(None)?;
@@ -1086,7 +492,7 @@ impl DeltaTable {
             .collect()
     }
 
-    pub fn get_tombstones(&self) -> &Vec<ActionRemove> {
+    pub fn get_tombstones(&self) -> &Vec<action::Remove> {
         &self.tombstones
     }
 

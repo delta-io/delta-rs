@@ -9,7 +9,7 @@ use parquet::file::reader::FileReader;
 use parquet::file::reader::SerializedFileReader;
 use rust_dataframe::dataframe::DataFrame;
 
-use crate::delta;
+use crate as delta;
 use crate::DeltaTableError;
 
 pub trait DeltaDataframe {
