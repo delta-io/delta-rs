@@ -16,6 +16,7 @@ use parquet::file::reader::FileReader;
 use parquet::file::reader::SerializedFileReader;
 
 use crate::delta;
+use crate::schema;
 
 struct ParquetPartition {
     iterator: Arc<Mutex<dyn BatchIterator>>,
@@ -143,7 +144,7 @@ impl BatchIterator for ParquetIterator {
 
 impl TableProvider for delta::DeltaTable {
     fn schema(&self) -> Arc<Schema> {
-        Arc::new(<Schema as From<&delta::Schema>>::from(
+        Arc::new(<Schema as From<&schema::Schema>>::from(
             delta::DeltaTable::schema(&self).unwrap(),
         ))
     }
@@ -182,28 +183,28 @@ impl TableProvider for delta::DeltaTable {
     }
 }
 
-impl From<&delta::Schema> for Schema {
-    fn from(s: &delta::Schema) -> Self {
+impl From<&schema::Schema> for Schema {
+    fn from(s: &schema::Schema) -> Self {
         let fields = s
             .get_fields()
             .iter()
-            .map(|field| <Field as From<&delta::SchemaField>>::from(field))
+            .map(|field| <Field as From<&schema::SchemaField>>::from(field))
             .collect();
 
         Schema::new(fields)
     }
 }
 
-impl From<&delta::SchemaField> for Field {
-    fn from(f: &delta::SchemaField) -> Self {
+impl From<&schema::SchemaField> for Field {
+    fn from(f: &schema::SchemaField) -> Self {
         Field::new(f.get_name(), DataType::from(f.get_type()), f.is_nullable())
     }
 }
 
-impl From<&delta::SchemaDataType> for DataType {
-    fn from(t: &delta::SchemaDataType) -> Self {
+impl From<&schema::SchemaDataType> for DataType {
+    fn from(t: &schema::SchemaDataType) -> Self {
         match t {
-            delta::SchemaDataType::primitive(p) => {
+            schema::SchemaDataType::primitive(p) => {
                 match p.as_str() {
                     "string" => DataType::Utf8,
                     "long" => DataType::Int64, // undocumented type
@@ -228,22 +229,22 @@ impl From<&delta::SchemaDataType> for DataType {
                     }
                 }
             }
-            delta::SchemaDataType::r#struct(s) => DataType::Struct(
+            schema::SchemaDataType::r#struct(s) => DataType::Struct(
                 s.get_fields()
                     .iter()
-                    .map(|f| <Field as From<&delta::SchemaField>>::from(f))
+                    .map(|f| <Field as From<&schema::SchemaField>>::from(f))
                     .collect(),
             ),
-            delta::SchemaDataType::array(a) => {
-                DataType::List(Box::new(<DataType as From<&delta::SchemaDataType>>::from(
+            schema::SchemaDataType::array(a) => {
+                DataType::List(Box::new(<DataType as From<&schema::SchemaDataType>>::from(
                     a.get_element_type(),
                 )))
             }
-            delta::SchemaDataType::map(m) => DataType::Dictionary(
-                Box::new(<DataType as From<&delta::SchemaDataType>>::from(
+            schema::SchemaDataType::map(m) => DataType::Dictionary(
+                Box::new(<DataType as From<&schema::SchemaDataType>>::from(
                     m.get_key_type(),
                 )),
-                Box::new(<DataType as From<&delta::SchemaDataType>>::from(
+                Box::new(<DataType as From<&schema::SchemaDataType>>::from(
                     m.get_value_type(),
                 )),
             ),
