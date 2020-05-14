@@ -297,19 +297,23 @@ impl ActionAdd {
                     let parquetMap = record
                         .get_map(i)
                         .map_err(|_| gen_action_type_error("add", "partitionValues", "map"))?;
-                    let key = parquetMap
-                        .get_keys()
-                        .get_string(0)
-                        .map_err(|_| gen_action_type_error("add", "partitionValues.key", "string"))?
-                        .clone();
-                    let value = parquetMap
-                        .get_values()
-                        .get_string(0)
-                        .map_err(|_| {
-                            gen_action_type_error("add", "partitionValues.value", "string")
-                        })?
-                        .clone();
-                    re.partitionValues.entry(key).or_insert(value);
+                    for i in 0..parquetMap.len() {
+                        let key = parquetMap
+                            .get_keys()
+                            .get_string(i)
+                            .map_err(|_| {
+                                gen_action_type_error("add", "partitionValues.key", "string")
+                            })?
+                            .clone();
+                        let value = parquetMap
+                            .get_values()
+                            .get_string(i)
+                            .map_err(|_| {
+                                gen_action_type_error("add", "partitionValues.value", "string")
+                            })?
+                            .clone();
+                        re.partitionValues.entry(key).or_insert(value);
+                    }
                 }
                 "tags" => match record.get_map(i) {
                     Ok(tags_map) => {
