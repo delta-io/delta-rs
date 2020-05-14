@@ -330,14 +330,14 @@ impl ActionAdd {
                         re.tags = None;
                     }
                 },
-                "stats" => {
-                    re.stats = Some(
-                        record
-                            .get_string(i)
-                            .map_err(|_| gen_action_type_error("add", "stats", "string"))?
-                            .clone(),
-                    );
-                }
+                "stats" => match record.get_string(i) {
+                    Ok(stats) => {
+                        re.stats = Some(stats.clone());
+                    }
+                    _ => {
+                        re.stats = None;
+                    }
+                },
                 _ => {
                     return Err(DeltaTableError::InvalidAction(format!(
                         "Unexpected field name for add action: {}",
