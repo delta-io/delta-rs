@@ -5,7 +5,6 @@ use std::sync::Arc;
 
 use arrow::record_batch::RecordBatchReader;
 use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
-use parquet::file::reader::FileReader;
 use parquet::file::reader::SerializedFileReader;
 use rust_dataframe::dataframe::DataFrame;
 
@@ -37,11 +36,6 @@ impl DeltaDataframe for DataFrame {
             })?;
 
             let file_reader = SerializedFileReader::new(file)?;
-            if file_reader.metadata().num_row_groups() == 0 {
-                // skip empty parquet files
-                continue;
-            }
-
             let mut arrow_reader = ParquetFileArrowReader::new(Rc::new(file_reader));
 
             if schema.is_none() {
