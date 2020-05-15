@@ -12,7 +12,6 @@ use datafusion::datasource::{ScanResult, TableProvider};
 use datafusion::error::ExecutionError;
 use datafusion::execution::physical_plan::{BatchIterator, Partition};
 use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
-use parquet::file::reader::FileReader;
 use parquet::file::reader::SerializedFileReader;
 
 use crate::delta;
@@ -47,45 +46,37 @@ impl ParquetPartition {
             let file = File::open(&filename).unwrap();
             match SerializedFileReader::new(file) {
                 Ok(file_reader) => {
-                    if file_reader.metadata().num_row_groups() == 0 {
-                        // skip empty parquet files
-                        response_tx.send(Ok(None)).unwrap();
-                    } else {
-                        let file_reader = Rc::new(file_reader);
-                        let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
+                    let file_reader = Rc::new(file_reader);
+                    let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
 
-                        match arrow_reader.get_record_reader_by_columns(projection, batch_size) {
-                            Ok(mut batch_reader) => {
-                                while let Ok(_) = request_rx.recv() {
-                                    match batch_reader.next_batch() {
-                                        Ok(Some(batch)) => {
-                                            response_tx.send(Ok(Some(batch))).unwrap();
-                                        }
-                                        Ok(None) => {
-                                            response_tx.send(Ok(None)).unwrap();
-                                            break;
-                                        }
-                                        Err(e) => {
-                                            response_tx
-                                                .send(Err(ExecutionError::General(format!(
-                                                    "{:?}",
-                                                    e
-                                                ))))
-                                                .unwrap();
-                                            break;
-                                        }
+                    match arrow_reader.get_record_reader_by_columns(projection, batch_size) {
+                        Ok(mut batch_reader) => {
+                            while let Ok(_) = request_rx.recv() {
+                                match batch_reader.next_batch() {
+                                    Ok(Some(batch)) => {
+                                        response_tx.send(Ok(Some(batch))).unwrap();
+                                    }
+                                    Ok(None) => {
+                                        response_tx.send(Ok(None)).unwrap();
+                                        break;
+                                    }
+                                    Err(e) => {
+                                        response_tx
+                                            .send(Err(ExecutionError::General(format!("{:?}", e))))
+                                            .unwrap();
+                                        break;
                                     }
                                 }
                             }
+                        }
 
-                            Err(e) => {
-                                response_tx
-                                    .send(Err(ExecutionError::General(format!(
-                                        "record batch: {:#?}",
-                                        e
-                                    ))))
-                                    .unwrap();
-                            }
+                        Err(e) => {
+                            response_tx
+                                .send(Err(ExecutionError::General(format!(
+                                    "record batch: {:#?}",
+                                    e
+                                ))))
+                                .unwrap();
                         }
                     }
                 }
