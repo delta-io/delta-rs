@@ -247,7 +247,7 @@ impl DeltaTable {
         Ok(())
     }
 
-    fn find_check_point_before_version(
+    fn find_latest_check_point_for_version(
         &self,
         version: DeltaDataTypeVersion,
     ) -> Result<Option<CheckPoint>, DeltaTableError> {
@@ -383,7 +383,7 @@ impl DeltaTable {
             Ok(last_check_point) => {
                 self.last_check_point = Some(last_check_point);
                 self.restore_checkpoint(last_check_point)?;
-                self.version = last_check_point.version;
+                self.version = last_check_point.version + 1;
             }
             Err(LoadCheckpointError::NotFound) => {
                 // no checkpoint, start with version 0
@@ -416,13 +416,10 @@ impl DeltaTable {
     }
 
     pub fn load_version(&mut self, version: DeltaDataTypeVersion) -> Result<(), DeltaTableError> {
-        let last_log_reader;
-        let log_path = self.version_to_log_path(version);
         // check if version is valid
-        match self.storage.get_obj(&log_path) {
-            Ok(commit_log_bytes) => {
-                last_log_reader = BufReader::new(Cursor::new(commit_log_bytes));
-            }
+        let log_path = self.version_to_log_path(version);
+        match self.storage.head_obj(&log_path) {
+            Ok(_) => {}
             Err(StorageError::NotFound) => {
                 return Err(DeltaTableError::InvalidVersion(version));
             }
@@ -432,29 +429,26 @@ impl DeltaTable {
         }
         self.version = version;
 
-        if version > 0 {
-            let mut next_version;
-            let max_version = version - 1;
-            // 1. find latest checkpoint below version
-            match self.find_check_point_before_version(version)? {
-                Some(check_point) => {
-                    self.restore_checkpoint(check_point)?;
-                    next_version = check_point.version;
-                }
-                None => {
-                    next_version = 0;
-                }
+        let mut next_version;
+        // 1. find latest checkpoint below version
+        match self.find_latest_check_point_for_version(version)? {
+            Some(check_point) => {
+                self.restore_checkpoint(check_point)?;
+                next_version = check_point.version + 1;
             }
-
-            // 2. apply all logs starting from checkpoint
-            while next_version <= max_version {
-                self.apply_log(next_version)?;
-                next_version += 1;
+            None => {
+                // no checkpoint found, start from the beginning
+                next_version = 0;
             }
         }
 
-        self.apply_log_from_bufread(last_log_reader)?;
-        return Ok(());
+        // 2. apply all logs starting from checkpoint
+        while next_version <= self.version {
+            self.apply_log(next_version)?;
+            next_version += 1;
+        }
+
+        Ok(())
     }
 
     fn get_version_timestamp(
