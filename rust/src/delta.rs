@@ -573,6 +573,12 @@ impl fmt::Display for DeltaTable {
     }
 }
 
+impl std::fmt::Debug for DeltaTable {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(f, "DeltaTable <{}>", self.table_path)
+    }
+}
+
 pub fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError> {
     let storage_backend = storage::get_backend_for_uri(table_path)?;
     let mut table = DeltaTable::new(table_path, storage_backend)?;
