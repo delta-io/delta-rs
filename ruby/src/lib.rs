@@ -12,8 +12,7 @@ ruby! {
     class Table {
         struct {
             table_path: String,
-            // TODO
-            // actual: Arc<DeltaTable>,
+            actual: Arc<DeltaTable>,
         }
 
         def initialize(helix, table_path: String) {
@@ -25,9 +24,20 @@ ruby! {
             Table {
                 helix,
                 table_path,
-                // TODO
-                // actual,
+                actual,
             }
+        }
+
+        def table_path(&self) -> String {
+            self.table_path.clone()
+        }
+
+        def version(&self) -> i64 {
+            self.actual.version
+        }
+
+        def files(&self) -> Vec<String> {
+            self.actual.get_files().to_vec()
         }
     }
 }
