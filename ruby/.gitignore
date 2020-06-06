@@ -2,3 +2,4 @@
 vendor/
 Gemfile.lock
 lib/**/*.so
+target/
