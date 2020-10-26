@@ -138,7 +138,7 @@ pub struct ObjectMeta {
     pub modified: DateTime<Utc>,
 }
 
-pub trait StorageBackend {
+pub trait StorageBackend: Send {
     fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError>;
     fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
     fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = ObjectMeta>>, StorageError>;
