@@ -1,21 +1,21 @@
-#[macro_use]
-extern crate pyo3;
 extern crate delta;
+extern crate pyo3;
+
+use std::path::Path;
 
 use pyo3::prelude::*;
-use pyo3::wrap_pyfunction;
 
 #[pyclass]
-struct DeltaTable {
+struct RawDeltaTable {
     _table: delta::DeltaTable,
 }
 
 #[pymethods]
-impl DeltaTable {
+impl RawDeltaTable {
     #[new]
-    fn new(table_path: &str) -> Self {
+    fn new(table_path: &str) -> PyResult<Self> {
         let table = delta::open_table(&table_path).unwrap();
-        DeltaTable { _table: table }
+        Ok(RawDeltaTable { _table: table })
     }
 
     pub fn table_path(&self) -> PyResult<&str> {
@@ -26,13 +26,28 @@ impl DeltaTable {
         Ok(self._table.version)
     }
 
-    pub fn files(&self) -> PyResult<Vec<String>> {
-        Ok(self._table.get_files().to_vec())
+    #[args(full_path = "false")]
+    pub fn files(&self, full_path: bool) -> PyResult<Vec<String>> {
+        let list = self._table.get_files().to_vec();
+        if full_path {
+            Ok(list
+                .iter()
+                .map(|fpath| {
+                    Path::new(&self._table.table_path)
+                        .join(fpath)
+                        .to_string_lossy()
+                        .into_owned()
+                })
+                .collect())
+        } else {
+            Ok(list)
+        }
     }
 }
 
 #[pymodule]
-fn delta(py: Python, m: &PyModule) -> PyResult<()> {
-    m.add_class::<DeltaTable>()?;
+// module name need to match project name
+fn deltalake(_py: Python, m: &PyModule) -> PyResult<()> {
+    m.add_class::<RawDeltaTable>()?;
     Ok(())
 }

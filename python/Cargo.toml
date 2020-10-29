@@ -4,7 +4,7 @@ version = "0.1.0"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 
 [lib]
-name = "delta"
+name = "deltalake"
 crate-type = ["cdylib"]
 
 [dependencies.pyo3]
@@ -13,3 +13,6 @@ features = ["extension-module"]
 
 [dependencies.delta]
 path = "../rust"
+
+[package.metadata.maturin]
+requires-dist = ["pyarrow>2"]
