@@ -29,14 +29,14 @@ pub enum Uri<'a> {
 }
 
 impl<'a> Uri<'a> {
-    pub fn as_s3object(self) -> Result<s3::S3Object<'a>, UriError> {
+    pub fn into_s3object(self) -> Result<s3::S3Object<'a>, UriError> {
         match self {
             Uri::S3Object(x) => Ok(x),
             Uri::LocalPath(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
         }
     }
 
-    pub fn as_localpath(self) -> Result<&'a str, UriError> {
+    pub fn into_localpath(self) -> Result<&'a str, UriError> {
         match self {
             Uri::LocalPath(x) => Ok(x),
             Uri::S3Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
@@ -53,7 +53,7 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
 
     match parts[0] {
         "s3" => {
-            let mut path_parts = parts[1].splitn(2, "/");
+            let mut path_parts = parts[1].splitn(2, '/');
             let bucket = match path_parts.next() {
                 Some(x) => x,
                 None => {
@@ -66,14 +66,11 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
                     return Err(UriError::MissingObjectKey);
                 }
             };
-            return Ok(Uri::S3Object(s3::S3Object { bucket, key }));
+
+            Ok(Uri::S3Object(s3::S3Object { bucket, key }))
         }
-        "file" => {
-            return Ok(Uri::LocalPath(parts[1]));
-        }
-        _ => {
-            return Err(UriError::InvalidScheme(String::from(parts[0])));
-        }
+        "file" => Ok(Uri::LocalPath(parts[1])),
+        _ => Err(UriError::InvalidScheme(String::from(parts[0]))),
     }
 }
 
@@ -103,12 +100,8 @@ pub enum StorageError {
 impl From<std::io::Error> for StorageError {
     fn from(error: std::io::Error) -> Self {
         match error.kind() {
-            std::io::ErrorKind::NotFound => {
-                return StorageError::NotFound;
-            }
-            _ => {
-                return StorageError::IO { source: error };
-            }
+            std::io::ErrorKind::NotFound => StorageError::NotFound,
+            _ => StorageError::IO { source: error },
         }
     }
 }
@@ -160,17 +153,17 @@ mod tests {
     #[test]
     fn test_parse_uri_local_file() {
         let uri = parse_uri("foo/bar").unwrap();
-        assert_eq!(uri.as_localpath().unwrap(), "foo/bar");
+        assert_eq!(uri.into_localpath().unwrap(), "foo/bar");
 
         let uri2 = parse_uri("file:///foo/bar").unwrap();
-        assert_eq!(uri2.as_localpath().unwrap(), "/foo/bar");
+        assert_eq!(uri2.into_localpath().unwrap(), "/foo/bar");
     }
 
     #[test]
     fn test_parse_object_uri() {
         let uri = parse_uri("s3://foo/bar").unwrap();
         assert_eq!(
-            uri.as_s3object().unwrap(),
+            uri.into_s3object().unwrap(),
             s3::S3Object {
                 bucket: "foo",
                 key: "bar",

@@ -42,9 +42,15 @@ impl S3StorageBackend {
     }
 }
 
+impl Default for S3StorageBackend {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl StorageBackend for S3StorageBackend {
     fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
-        let uri = parse_uri(path)?.as_s3object()?;
+        let uri = parse_uri(path)?.into_s3object()?;
 
         let mut rt = Self::gen_tokio_rt();
         let result = rt.block_on(self.client.head_object(HeadObjectRequest {
@@ -65,7 +71,7 @@ impl StorageBackend for S3StorageBackend {
     fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
         debug!("fetching s3 object: {}...", path);
 
-        let uri = parse_uri(path)?.as_s3object()?;
+        let uri = parse_uri(path)?.into_s3object()?;
         let get_req = GetObjectRequest {
             bucket: uri.bucket.to_string(),
             key: uri.key.to_string(),
@@ -79,7 +85,7 @@ impl StorageBackend for S3StorageBackend {
         let mut buf = Vec::new();
         let stream = result
             .body
-            .ok_or(StorageError::S3MissingObjectBody(path.to_string()))?;
+            .ok_or_else(|| StorageError::S3MissingObjectBody(path.to_string()))?;
         rt.block_on(stream.into_async_read().read_to_end(&mut buf))
             .unwrap();
 
@@ -88,7 +94,7 @@ impl StorageBackend for S3StorageBackend {
     }
 
     fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = ObjectMeta>>, StorageError> {
-        let uri = parse_uri(path)?.as_s3object()?;
+        let uri = parse_uri(path)?.into_s3object()?;
 
         struct ListContext {
             client: rusoto_s3::S3Client,
@@ -108,18 +114,14 @@ impl StorageBackend for S3StorageBackend {
         };
 
         fn next_meta(ctx: &mut ListContext) -> Option<ObjectMeta> {
-            return match ctx.obj_iter.next() {
-                Some(obj) => {
-                    return Some(ObjectMeta {
-                        path: obj.key.unwrap(),
-                        modified: DateTime::<Utc>::from(
-                            DateTime::<FixedOffset>::parse_from_rfc2822(
-                                &obj.last_modified.unwrap(),
-                            )
+            match ctx.obj_iter.next() {
+                Some(obj) => Some(ObjectMeta {
+                    path: obj.key.unwrap(),
+                    modified: DateTime::<Utc>::from(
+                        DateTime::<FixedOffset>::parse_from_rfc2822(&obj.last_modified.unwrap())
                             .unwrap(),
-                        ),
-                    });
-                }
+                    ),
+                }),
                 None => match &ctx.continuation_token {
                     Some(token) => {
                         let tk_opt = if token != "initial_run" {
@@ -141,11 +143,11 @@ impl StorageBackend for S3StorageBackend {
                             None => Vec::new().into_iter(),
                         };
 
-                        return next_meta(ctx);
+                        next_meta(ctx)
                     }
                     None => None,
                 },
-            };
+            }
         }
 
         Ok(Box::new(std::iter::from_fn(move || next_meta(&mut ctx))))
