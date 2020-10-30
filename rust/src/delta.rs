@@ -1,5 +1,6 @@
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 
+use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
@@ -201,13 +202,14 @@ impl DeltaTable {
             }
         }
 
-        return checkpoint_data_paths;
+        checkpoint_data_paths
     }
 
     fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
         let last_checkpoint_path = format!("{}/_last_checkpoint", self.log_path);
         let data = self.storage.get_obj(&last_checkpoint_path)?;
-        return Ok(serde_json::from_slice(&data)?);
+
+        Ok(serde_json::from_slice(&data)?)
     }
 
     fn process_action(&mut self, action: &Action) -> Result<(), serde_json::error::Error> {
@@ -257,50 +259,44 @@ impl DeltaTable {
             Regex::new(r"^*/_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap();
 
         for obj_meta in self.storage.list_objs(&self.log_path)? {
-            match re_checkpoint.captures(&obj_meta.path) {
-                Some(captures) => {
-                    let curr_ver_str = captures.get(1).unwrap().as_str();
-                    let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
-                    if curr_ver > version {
-                        // skip checkpoints newer than max version
-                        continue;
-                    }
-                    if cp.is_none() || curr_ver > cp.unwrap().version {
-                        cp = Some(CheckPoint {
-                            version: curr_ver,
-                            size: 0,
-                            parts: None,
-                        });
-                    }
+            if let Some(captures) = re_checkpoint.captures(&obj_meta.path) {
+                let curr_ver_str = captures.get(1).unwrap().as_str();
+                let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
+                if curr_ver > version {
+                    // skip checkpoints newer than max version
                     continue;
                 }
-                None => {}
+                if cp.is_none() || curr_ver > cp.unwrap().version {
+                    cp = Some(CheckPoint {
+                        version: curr_ver,
+                        size: 0,
+                        parts: None,
+                    });
+                }
+                continue;
             }
 
-            match re_checkpoint_parts.captures(&obj_meta.path) {
-                Some(captures) => {
-                    let curr_ver_str = captures.get(1).unwrap().as_str();
-                    let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
-                    if curr_ver > version {
-                        // skip checkpoints newer than max version
-                        continue;
-                    }
-                    if cp.is_none() || curr_ver > cp.unwrap().version {
-                        let parts_str = captures.get(2).unwrap().as_str();
-                        let parts = parts_str.parse().unwrap();
-                        cp = Some(CheckPoint {
-                            version: curr_ver,
-                            size: 0,
-                            parts: Some(parts),
-                        });
-                    }
+            if let Some(captures) = re_checkpoint_parts.captures(&obj_meta.path) {
+                let curr_ver_str = captures.get(1).unwrap().as_str();
+                let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
+                if curr_ver > version {
+                    // skip checkpoints newer than max version
                     continue;
                 }
-                None => {}
+                if cp.is_none() || curr_ver > cp.unwrap().version {
+                    let parts_str = captures.get(2).unwrap().as_str();
+                    let parts = parts_str.parse().unwrap();
+                    cp = Some(CheckPoint {
+                        version: curr_ver,
+                        size: 0,
+                        parts: Some(parts),
+                    });
+                }
+                continue;
             }
         }
 
-        return Ok(cp);
+        Ok(cp)
     }
 
     fn apply_log_from_bufread<R: BufRead>(
@@ -311,14 +307,16 @@ impl DeltaTable {
             let action: Action = serde_json::from_str(line?.as_str())?;
             self.process_action(&action)?;
         }
-        return Ok(());
+
+        Ok(())
     }
 
     fn apply_log(&mut self, version: DeltaDataTypeVersion) -> Result<(), ApplyLogError> {
         let log_path = self.version_to_log_path(version);
         let commit_log_bytes = self.storage.get_obj(&log_path)?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
-        return self.apply_log_from_bufread(reader);
+
+        self.apply_log_from_bufread(reader)
     }
 
     fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
@@ -333,8 +331,7 @@ impl DeltaTable {
                     "Action record in checkpoint should be a struct".to_string(),
                 )));
             }
-            let mut iter = preader.get_row_iter(None)?;
-            while let Some(record) = iter.next() {
+            for record in preader.get_row_iter(None)? {
                 self.process_action(&Action::from_parquet_record(&schema, &record)?)?;
             }
         }
@@ -412,7 +409,7 @@ impl DeltaTable {
             }
         }
 
-        return Ok(());
+        Ok(())
     }
 
     pub fn load_version(&mut self, version: DeltaDataTypeVersion) -> Result<(), DeltaTableError> {
@@ -456,7 +453,7 @@ impl DeltaTable {
         version: DeltaDataTypeVersion,
     ) -> Result<i64, DeltaTableError> {
         match self.version_timestamp.get(&version) {
-            Some(ts) => Ok(ts.clone()),
+            Some(ts) => Ok(*ts),
             None => {
                 let meta = self.storage.head_obj(&self.version_to_log_path(version))?;
                 let ts = meta.modified.timestamp();
@@ -534,13 +531,17 @@ impl DeltaTable {
             version = pivot;
             let pts = self.get_version_timestamp(pivot)?;
 
-            if pts == target_ts {
-                break;
-            } else if pts < target_ts {
-                min_version = pivot + 1;
-            } else {
-                max_version = pivot - 1;
-                version = max_version
+            match pts.cmp(&target_ts) {
+                Ordering::Equal => {
+                    break;
+                }
+                Ordering::Less => {
+                    min_version = pivot + 1;
+                }
+                Ordering::Greater => {
+                    max_version = pivot - 1;
+                    version = max_version
+                }
             }
         }
 
@@ -554,22 +555,22 @@ impl DeltaTable {
 
 impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "DeltaTable({})\n", self.table_path)?;
-        write!(f, "\tversion: {}\n", self.version)?;
+        writeln!(f, "DeltaTable({})", self.table_path)?;
+        writeln!(f, "\tversion: {}", self.version)?;
         match self.current_metadata.as_ref() {
             Some(metadata) => {
-                write!(f, "\tmetadata: {}\n", metadata)?;
+                writeln!(f, "\tmetadata: {}", metadata)?;
             }
             None => {
-                write!(f, "\tmetadata: None\n")?;
+                writeln!(f, "\tmetadata: None")?;
             }
         }
-        write!(
+        writeln!(
             f,
-            "\tmin_version: read={}, write={}\n",
+            "\tmin_version: read={}, write={}",
             self.min_reader_version, self.min_writer_version
         )?;
-        write!(f, "\tfiles count: {}\n", self.files.len())
+        writeln!(f, "\tfiles count: {}", self.files.len())
     }
 }
 

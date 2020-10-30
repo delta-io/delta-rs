@@ -154,7 +154,7 @@ impl Add {
             }
         }
 
-        return Ok(re);
+        Ok(re)
     }
 }
 
@@ -288,7 +288,7 @@ impl MetaData {
             }
         }
 
-        return Ok(re);
+        Ok(re)
     }
 
     pub fn get_schema(&self) -> Result<Schema, serde_json::error::Error> {
@@ -336,7 +336,7 @@ impl Remove {
             }
         }
 
-        return Ok(re);
+        Ok(re)
     }
 }
 
@@ -383,7 +383,7 @@ impl Txn {
             }
         }
 
-        return Ok(re);
+        Ok(re)
     }
 }
 
@@ -420,7 +420,7 @@ impl Protocol {
             }
         }
 
-        return Ok(re);
+        Ok(re)
     }
 }
 
@@ -468,7 +468,7 @@ impl Action {
         let fields = schema.get_fields();
         let field = &fields[col_idx];
 
-        return Ok(match field.get_basic_info().name() {
+        Ok(match field.get_basic_info().name() {
             "add" => Action::add(Add::from_parquet_record(col_data)?),
             "metaData" => Action::metaData(MetaData::from_parquet_record(col_data)?),
             "remove" => Action::remove(Remove::from_parquet_record(col_data)?),
@@ -477,13 +477,13 @@ impl Action {
             "commitInfo" => {
                 unimplemented!("FIXME: support commitInfo");
             }
-            name @ _ => {
+            name => {
                 return Err(ActionError::InvalidField(format!(
                     "Unexpected action from checkpoint: {}",
                     name,
                 )));
             }
-        });
+        })
     }
 }
 

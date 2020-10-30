@@ -27,6 +27,8 @@ crossbeam = "*"
 rusoto_core = "0.43"
 rusoto_s3 = "0.43"
 datafusion = { version = "2", optional = true }
+# NOTE: disable rust-dataframe integration since it currently doesn't have a
+# version published in crates.io
 # rust-dataframe = {version = "0.*", optional = true }
 
 [features]
