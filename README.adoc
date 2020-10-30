@@ -7,7 +7,14 @@ An experimental interface to
 link:https://delta.io[Delta Lake]
 for Rust.
 
-This library is intended to be used either directly within Rust (see link:https://github.com/rajasekarv/vega[vega], etc)  or act as the basis for native bindings in other languages such as Python, Ruby, or Golang.
+This library provides low level access to Delta tables and is intended to be
+used with data processing frameworks like
+link:https://github.com/apache/arrow/rust/datafusion[datafusion],
+link:https://github.com/ballista-compute/ballista[ballista],
+link:https://github.com/nevi-me/rust-dataframe[rust-dataframe],
+link:https://github.com/rajasekarv/vega[vega], etc.
+
+It can also act as the basis for native bindings in other languages such as Python, Ruby or Golang.
 
 **This project is still very early and only _read_ operations are supported at the moment**.
 

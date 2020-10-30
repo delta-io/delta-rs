@@ -2,9 +2,13 @@ name: build
 
 on:
   push:
-    branches: [ master ]
+    branches: [ main ]
   pull_request:
-    branches: [ master ]
+    branches: [ main ]
+
+defaults:
+  run:
+    working-directory: ./rust
 
 jobs:
   build:
@@ -35,6 +39,6 @@ jobs:
         toolchain: nightly
         override: true
     - name: Build
-      run: cargo build --verbose
+      run: cargo build --verbose --features datafusion
     - name: Run tests
-      run: cargo test --verbose
+      run: cargo test --verbose --features datafusion

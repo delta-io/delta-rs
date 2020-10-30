@@ -34,3 +34,15 @@ Convert DeltaTable into PyArrow Table and Pandas Dataframe:
 1   7
 2   9
 ```
+
+
+Develop
+-------
+
+[maturin](https://github.com/PyO3/maturin) is used to build the python package.
+
+To install development version of the package into your current Python environment:
+
+```bash
+$ maturin develop
+```

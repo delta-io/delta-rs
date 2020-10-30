@@ -1,6 +1,8 @@
+extern crate rusoto_core;
+extern crate rusoto_s3;
+
+use self::rusoto_core::RusotoError;
 use chrono::{DateTime, Utc};
-use rusoto_core::RusotoError;
-use rusoto_s3;
 use thiserror;
 
 pub mod file;
