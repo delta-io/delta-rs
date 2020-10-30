@@ -2,9 +2,9 @@
 
 #[macro_use]
 extern crate helix;
-extern crate delta;
+extern crate deltalake;
 
-use delta::DeltaTable;
+use deltalake::DeltaTable;
 use std::sync::Arc;
 
 
@@ -18,7 +18,7 @@ ruby! {
         def initialize(helix, table_path: String) {
             println!("initializing with {}", table_path);
 
-            let table = delta::open_table(&table_path).unwrap();
+            let table = deltalake::open_table(&table_path).unwrap();
             let actual = Arc::new(table);
 
             Table {

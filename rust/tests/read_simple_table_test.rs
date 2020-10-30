@@ -1,5 +1,5 @@
 extern crate chrono;
-extern crate delta;
+extern crate deltalake;
 extern crate utime;
 
 use std::path::Path;
@@ -8,7 +8,7 @@ use self::chrono::{DateTime, FixedOffset, Utc};
 
 #[test]
 fn read_simple_table() {
-    let table = delta::open_table("./tests/data/simple_table").unwrap();
+    let table = deltalake::open_table("./tests/data/simple_table").unwrap();
     assert_eq!(table.version, 4);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -26,7 +26,7 @@ fn read_simple_table() {
     assert_eq!(tombstones.len(), 31);
     assert_eq!(
         tombstones[0],
-        delta::action::Remove {
+        deltalake::action::Remove {
             path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
             deletionTimestamp: 1587968596250,
             dataChange: true
@@ -36,7 +36,7 @@ fn read_simple_table() {
 
 #[test]
 fn read_simple_table_with_version() {
-    let mut table = delta::open_table_with_version("./tests/data/simple_table", 0).unwrap();
+    let mut table = deltalake::open_table_with_version("./tests/data/simple_table", 0).unwrap();
     assert_eq!(table.version, 0);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -52,7 +52,7 @@ fn read_simple_table_with_version() {
         ],
     );
 
-    table = delta::open_table_with_version("./tests/data/simple_table", 2).unwrap();
+    table = deltalake::open_table_with_version("./tests/data/simple_table", 2).unwrap();
     assert_eq!(table.version, 2);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -68,7 +68,7 @@ fn read_simple_table_with_version() {
         ]
     );
 
-    table = delta::open_table_with_version("./tests/data/simple_table", 3).unwrap();
+    table = deltalake::open_table_with_version("./tests/data/simple_table", 3).unwrap();
     assert_eq!(table.version, 3);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -108,35 +108,35 @@ fn time_travel_by_ds() {
     }
 
     let mut table =
-        delta::open_table_with_ds("./tests/data/simple_table", "2020-05-01T00:47:31-07:00")
+        deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-01T00:47:31-07:00")
             .unwrap();
     assert_eq!(table.version, 0);
 
-    table = delta::open_table_with_ds("./tests/data/simple_table", "2020-05-02T22:47:31-07:00")
+    table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-02T22:47:31-07:00")
         .unwrap();
     assert_eq!(table.version, 1);
 
-    table = delta::open_table_with_ds("./tests/data/simple_table", "2020-05-02T23:47:31-07:00")
+    table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-02T23:47:31-07:00")
         .unwrap();
     assert_eq!(table.version, 1);
 
-    table = delta::open_table_with_ds("./tests/data/simple_table", "2020-05-03T22:47:31-07:00")
+    table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-03T22:47:31-07:00")
         .unwrap();
     assert_eq!(table.version, 2);
 
-    table = delta::open_table_with_ds("./tests/data/simple_table", "2020-05-04T22:47:31-07:00")
+    table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-04T22:47:31-07:00")
         .unwrap();
     assert_eq!(table.version, 3);
 
-    table = delta::open_table_with_ds("./tests/data/simple_table", "2020-05-05T21:47:31-07:00")
+    table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-05T21:47:31-07:00")
         .unwrap();
     assert_eq!(table.version, 3);
 
-    table = delta::open_table_with_ds("./tests/data/simple_table", "2020-05-05T22:47:31-07:00")
+    table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-05T22:47:31-07:00")
         .unwrap();
     assert_eq!(table.version, 4);
 
-    table = delta::open_table_with_ds("./tests/data/simple_table", "2020-05-25T22:47:31-07:00")
+    table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-25T22:47:31-07:00")
         .unwrap();
     assert_eq!(table.version, 4);
 }

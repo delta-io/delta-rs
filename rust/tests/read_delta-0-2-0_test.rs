@@ -1,8 +1,8 @@
-extern crate delta;
+extern crate deltalake;
 
 #[test]
 fn read_delta_2_0_table_without_version() {
-    let table = delta::open_table("./tests/data/delta-0.2.0").unwrap();
+    let table = deltalake::open_table("./tests/data/delta-0.2.0").unwrap();
     assert_eq!(table.version, 3);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -18,7 +18,7 @@ fn read_delta_2_0_table_without_version() {
     assert_eq!(tombstones.len(), 4);
     assert_eq!(
         tombstones[0],
-        delta::action::Remove {
+        deltalake::action::Remove {
             path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
             deletionTimestamp: 1564524298213,
             dataChange: false,
@@ -28,7 +28,7 @@ fn read_delta_2_0_table_without_version() {
 
 #[test]
 fn read_delta_2_0_table_with_version() {
-    let mut table = delta::open_table_with_version("./tests/data/delta-0.2.0", 0).unwrap();
+    let mut table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 0).unwrap();
     assert_eq!(table.version, 0);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -40,7 +40,7 @@ fn read_delta_2_0_table_with_version() {
         ],
     );
 
-    table = delta::open_table_with_version("./tests/data/delta-0.2.0", 2).unwrap();
+    table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 2).unwrap();
     assert_eq!(table.version, 2);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -52,7 +52,7 @@ fn read_delta_2_0_table_with_version() {
         ]
     );
 
-    table = delta::open_table_with_version("./tests/data/delta-0.2.0", 3).unwrap();
+    table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 3).unwrap();
     assert_eq!(table.version, 3);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
