@@ -1,4 +1,4 @@
-extern crate delta;
+extern crate deltalake;
 extern crate pyo3;
 
 use std::path::Path;
@@ -7,14 +7,14 @@ use pyo3::prelude::*;
 
 #[pyclass]
 struct RawDeltaTable {
-    _table: delta::DeltaTable,
+    _table: deltalake::DeltaTable,
 }
 
 #[pymethods]
 impl RawDeltaTable {
     #[new]
     fn new(table_path: &str) -> PyResult<Self> {
-        let table = delta::open_table(&table_path).unwrap();
+        let table = deltalake::open_table(&table_path).unwrap();
         Ok(RawDeltaTable { _table: table })
     }
 

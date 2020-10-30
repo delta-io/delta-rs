@@ -1,5 +1,5 @@
 extern crate anyhow;
-extern crate delta;
+extern crate deltalake;
 
 use std::env;
 
@@ -11,7 +11,7 @@ fn main() -> anyhow::Result<()> {
     }
     let table_path = &args[1];
 
-    let table = delta::open_table(table_path)?;
+    let table = deltalake::open_table(table_path)?;
 
     println!("{}", table);
     println!("{:#?}", table.get_files());

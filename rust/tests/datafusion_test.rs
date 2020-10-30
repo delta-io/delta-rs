@@ -1,7 +1,7 @@
 extern crate arrow;
 #[cfg(feature = "datafusion-ext")]
 extern crate datafusion;
-extern crate delta;
+extern crate deltalake;
 
 #[cfg(feature = "datafusion-ext")]
 use self::arrow::array::UInt64Array;
@@ -12,7 +12,7 @@ use self::datafusion::execution::context::ExecutionContext;
 #[cfg(feature = "datafusion-ext")]
 fn test_datafusion_simple_query() {
     let mut ctx = ExecutionContext::new();
-    let table = delta::open_table("./tests/data/simple_table").unwrap();
+    let table = deltalake::open_table("./tests/data/simple_table").unwrap();
     ctx.register_table("demo", Box::new(table));
 
     let sql = "SELECT id FROM demo WHERE id > 5";
