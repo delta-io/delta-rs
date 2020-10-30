@@ -1,3 +1,5 @@
+extern crate rust_dataframe;
+
 use std::fs::File;
 use std::path::Path;
 use std::rc::Rc;

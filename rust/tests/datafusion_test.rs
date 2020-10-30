@@ -1,7 +1,15 @@
-use arrow::array::UInt64Array;
-use datafusion::execution::context::ExecutionContext;
+extern crate arrow;
+#[cfg(feature = "datafusion-ext")]
+extern crate datafusion;
+extern crate delta;
+
+#[cfg(feature = "datafusion-ext")]
+use self::arrow::array::UInt64Array;
+#[cfg(feature = "datafusion-ext")]
+use self::datafusion::execution::context::ExecutionContext;
 
 #[test]
+#[cfg(feature = "datafusion-ext")]
 fn test_datafusion_simple_query() {
     let mut ctx = ExecutionContext::new();
     let table = delta::open_table("./tests/data/simple_table").unwrap();

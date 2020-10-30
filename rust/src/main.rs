@@ -1,5 +1,6 @@
-use anyhow;
-use delta;
+extern crate anyhow;
+extern crate delta;
+
 use std::env;
 
 fn main() -> anyhow::Result<()> {

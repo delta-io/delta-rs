@@ -1,4 +1,4 @@
-use delta;
+extern crate delta;
 
 #[test]
 fn read_delta_2_0_table_without_version() {
