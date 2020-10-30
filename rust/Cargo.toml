@@ -1,13 +1,11 @@
 [package]
-name = "delta"
+name = "deltalake"
 version = "0.1.1"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta.rs"
 license = "Apache-2.0"
 keywords = ["deltalake", "delta", "datalake"]
 description = "Native Delta Lake implementation in Rust"
-
-# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
 anyhow = "1.0"

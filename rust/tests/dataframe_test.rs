@@ -1,12 +1,12 @@
 extern crate arrow;
-extern crate delta;
+extern crate deltalake;
 #[cfg(feature = "rust-dataframe-ext")]
 extern crate rust_dataframe;
 
 #[cfg(feature = "rust-dataframe-ext")]
 use self::arrow::array::UInt64Array;
 #[cfg(feature = "rust-dataframe-ext")]
-use self::delta::DeltaDataframe;
+use self::deltalake::DeltaDataframe;
 #[cfg(feature = "rust-dataframe-ext")]
 use self::rust_dataframe::dataframe::DataFrame;
 

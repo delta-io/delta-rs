@@ -1,5 +1,5 @@
 [package]
-name = "delta-python"
+name = "deltalake-python"
 version = "0.1.0"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta.rs"
@@ -14,7 +14,7 @@ crate-type = ["cdylib"]
 version = "0.12.*"
 features = ["extension-module"]
 
-[dependencies.delta]
+[dependencies.deltalake]
 path = "../rust"
 version = "0.*"
 
