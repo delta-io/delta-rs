@@ -2,17 +2,33 @@
 name = "delta-python"
 version = "0.1.0"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
+homepage = "https://github.com/delta-io/delta.rs"
+license = "Apache-2.0"
+description = "Python binding for delta.rs"
 
 [lib]
 name = "deltalake"
 crate-type = ["cdylib"]
 
 [dependencies.pyo3]
-version = "0.12.3"
+version = "0.12.*"
 features = ["extension-module"]
 
 [dependencies.delta]
 path = "../rust"
+version = "0.*"
 
 [package.metadata.maturin]
-requires-dist = ["pyarrow>2"]
+classifier = [
+    "Development Status :: 3 - Alpha ",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3 :: Only"
+]
+project-url = ["Repo, https://github.com/delta-io/delta.rs"]
+requires-dist = [
+    "pyarrow>2",
+    "pandas; extra =='pandas'",
+    "pytest; extra == 'devel'",
+    "pytest-mock; extra == 'devel'"
+]
+provides-extra = ["pandas", "devel"]

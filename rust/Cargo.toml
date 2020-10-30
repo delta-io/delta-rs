@@ -1,8 +1,11 @@
 [package]
 name = "delta"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
-edition = "2018"
+homepage = "https://github.com/delta-io/delta.rs"
+license = "Apache-2.0"
+keywords = ["deltalake", "delta", "datalake"]
+description = "Native Delta Lake implementation in Rust"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
@@ -11,22 +14,24 @@ anyhow = "1.0"
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-arrow  = { git = "https://github.com/apache/arrow" }
-parquet = { git = "https://github.com/apache/arrow" }
-rusoto_core = "0.43"
-rusoto_s3 = "0.43"
+arrow  = "2"
+parquet = "2"
 tokio = "0.2.10"
 tokio-io = "0.2.0-alpha.6"
 futures = "0.3.1"
 bytes = "0.5.3"
 log = "*"
 regex = "1"
-chrono = "0.*"
-
-rust-dataframe = { git = "https://github.com/nevi-me/rust-dataframe" }
-
-datafusion = { git = "https://github.com/apache/arrow" }
+chrono = "0"
 crossbeam = "*"
+rusoto_core = "0.43"
+rusoto_s3 = "0.43"
+datafusion = { version = "2", optional = true }
+# rust-dataframe = {version = "0.*", optional = true }
+
+[features]
+rust-dataframe-ext = []
+datafusion-ext = ["datafusion"]
 
 [dev-dependencies]
-utime = "0.*"
+utime = "0.3"

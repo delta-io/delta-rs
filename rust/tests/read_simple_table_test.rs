@@ -1,10 +1,10 @@
+extern crate chrono;
+extern crate delta;
 extern crate utime;
 
 use std::path::Path;
 
-use chrono::{DateTime, FixedOffset, Utc};
-
-use delta;
+use self::chrono::{DateTime, FixedOffset, Utc};
 
 #[test]
 fn read_simple_table() {
@@ -102,7 +102,7 @@ fn time_travel_by_ds() {
         ("00000000000000000004.json", "2020-05-05T22:47:31-07:00"),
     ];
     for (fname, ds) in log_mtime_pair {
-        let ts = ds_to_ts(ds) as u64;
+        let ts = ds_to_ts(ds);
         let path = format!("{}/{}", log_dir, fname);
         utime::set_file_times(Path::new(&path), ts, ts).unwrap();
     }
