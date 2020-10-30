@@ -7,15 +7,26 @@ An experimental interface to
 link:https://delta.io[Delta Lake]
 for Rust.
 
-This library is intended to be used with
-link:https://github.com/rajasekarv/vega[vega]
-or used within the another program to access Delta tables.
+This library is intended to be used either directly within Rust (see link:https://github.com/rajasekarv/vega[vega], etc)  or act as the basis for native bindings in other languages such as Python, Ruby, or Golang.
 
+**This project is still very early and only _read_ operations are supported at the moment**.
 
-== Development
+== Get Involved
 
-Delta.rs requires the nightly Rust compiler, which can be installed with the
+Join link:https://join.slack.com/t/delta-users/shared_invite/enQtODQ5ODM5OTAxMjAwLWY4NGI5ZmQ3Y2JmMjZjYjc1MDkwNTA5YTQ4MzhjOWY1MmVjNTM2OGZhNTExNmM5MzQ0YzEzZjIwMjc0OGI0OGM[#delta-rs in the Delta Lake Slack workspace]
+
+=== Development
+
+Delta.rs requires the **nightly** Rust compiler, which can be installed with the
 link:https://rustup.rs/[rustup]
 command.
 
 Running tests can be done with `cargo test`
+
+=== Python
+
+The `python/` directory contains an early prototype of a Python library built on top of Delta.rs
+
+=== Ruby
+
+The `ruby/` directory contains an early prototype of a Ruby library built on top of Delta.rs
