@@ -11,9 +11,6 @@ extern crate serde;
 extern crate serde_json;
 extern crate thiserror;
 
-#[cfg(feature = "rust-dataframe-ext")]
-extern crate rust_dataframe;
-
 pub mod action;
 mod delta;
 mod schema;
@@ -26,7 +23,5 @@ mod delta_datafusion;
 mod delta_dataframe;
 
 pub use self::delta::*;
-#[cfg(feature = "rust-dataframe-ext")]
-pub use self::delta_dataframe::*;
 pub use self::schema::*;
 pub use self::storage::*;

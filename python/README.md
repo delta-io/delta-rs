@@ -1,7 +1,8 @@
-Delta-python
-============
+Deltalake-python
+================
 
-Native [Delta Lake](https://delta.io/) binding for Python.
+Native [Delta Lake](https://delta.io/) binding for Python based on
+[delta.rs](https://github.com/delta-io/delta.rs).
 
 
 Usage
@@ -33,6 +34,24 @@ Convert DeltaTable into PyArrow Table and Pandas Dataframe:
    id
 1   7
 2   9
+```
+
+Time travel:
+
+```
+>>> from deltalake import DeltaTable
+>>> dt = DeltaTable("../rust/tests/data/simple_table")
+>>> dt.load_version(2)
+>>> dt.to_pyarrow_table().to_pandas()
+   id
+0   5
+1   7
+2   9
+3   5
+4   6
+5   7
+6   8
+7   9
 ```
 
 

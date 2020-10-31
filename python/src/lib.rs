@@ -1,9 +1,17 @@
 extern crate deltalake;
 extern crate pyo3;
 
-use std::path::Path;
-
+use self::pyo3::create_exception;
+use self::pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+
+create_exception!(deltalake, PyDeltaTableError, PyException);
+
+impl PyDeltaTableError {
+    fn new(err: deltalake::DeltaTableError) -> pyo3::PyErr {
+        PyDeltaTableError::new_err(err.to_string())
+    }
+}
 
 #[pyclass]
 struct RawDeltaTable {
@@ -14,7 +22,7 @@ struct RawDeltaTable {
 impl RawDeltaTable {
     #[new]
     fn new(table_path: &str) -> PyResult<Self> {
-        let table = deltalake::open_table(&table_path).unwrap();
+        let table = deltalake::open_table(&table_path).map_err(PyDeltaTableError::new)?;
         Ok(RawDeltaTable { _table: table })
     }
 
@@ -26,28 +34,26 @@ impl RawDeltaTable {
         Ok(self._table.version)
     }
 
-    #[args(full_path = "false")]
-    pub fn files(&self, full_path: bool) -> PyResult<Vec<String>> {
-        let list = self._table.get_files().to_vec();
-        if full_path {
-            Ok(list
-                .iter()
-                .map(|fpath| {
-                    Path::new(&self._table.table_path)
-                        .join(fpath)
-                        .to_string_lossy()
-                        .into_owned()
-                })
-                .collect())
-        } else {
-            Ok(list)
-        }
+    pub fn load_version(&mut self, version: deltalake::DeltaDataTypeVersion) -> PyResult<()> {
+        Ok(self
+            ._table
+            .load_version(version)
+            .map_err(PyDeltaTableError::new)?)
+    }
+
+    pub fn files(&self) -> PyResult<Vec<String>> {
+        Ok(self._table.get_files().to_vec())
+    }
+
+    pub fn file_paths(&self) -> PyResult<Vec<String>> {
+        Ok(self._table.get_file_paths())
     }
 }
 
 #[pymodule]
 // module name need to match project name
-fn deltalake(_py: Python, m: &PyModule) -> PyResult<()> {
+fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<RawDeltaTable>()?;
+    m.add("DeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())
 }
