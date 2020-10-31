@@ -21,17 +21,17 @@ bytes = "0.5.3"
 log = "0"
 regex = "1"
 chrono = "0"
-crossbeam = "0"
 rusoto_core = "0.43"
 rusoto_s3 = "0.43"
 datafusion = { version = "2", optional = true }
+crossbeam = { version = "0", optional = true }
 # NOTE: disable rust-dataframe integration since it currently doesn't have a
 # version published in crates.io
 # rust-dataframe = {version = "0.*", optional = true }
 
 [features]
 rust-dataframe-ext = []
-datafusion-ext = ["datafusion"]
+datafusion-ext = ["datafusion", "crossbeam"]
 
 [dev-dependencies]
 utime = "0.3"
