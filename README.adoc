@@ -10,7 +10,7 @@ for Rust.
 
 This library provides low level access to Delta tables and is intended to be
 used with data processing frameworks like
-link:https://github.com/apache/arrow/rust/datafusion[datafusion],
+link:https://github.com/apache/arrow/tree/master/rust/datafusion[datafusion],
 link:https://github.com/ballista-compute/ballista[ballista],
 link:https://github.com/nevi-me/rust-dataframe[rust-dataframe],
 link:https://github.com/rajasekarv/vega[vega], etc.
