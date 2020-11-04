@@ -3,7 +3,6 @@ extern crate rusoto_s3;
 
 use self::rusoto_core::RusotoError;
 use chrono::{DateTime, Utc};
-use thiserror;
 
 pub mod file;
 pub mod s3;
@@ -133,7 +132,7 @@ pub struct ObjectMeta {
     pub modified: DateTime<Utc>,
 }
 
-pub trait StorageBackend: Send {
+pub trait StorageBackend: Send + Sync {
     fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError>;
     fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
     fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = ObjectMeta>>, StorageError>;

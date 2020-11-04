@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 extern crate deltalake;
 extern crate pyo3;
 
@@ -8,7 +10,7 @@ use pyo3::prelude::*;
 create_exception!(deltalake, PyDeltaTableError, PyException);
 
 impl PyDeltaTableError {
-    fn new(err: deltalake::DeltaTableError) -> pyo3::PyErr {
+    fn from_raw(err: deltalake::DeltaTableError) -> pyo3::PyErr {
         PyDeltaTableError::new_err(err.to_string())
     }
 }
@@ -22,7 +24,7 @@ struct RawDeltaTable {
 impl RawDeltaTable {
     #[new]
     fn new(table_path: &str) -> PyResult<Self> {
-        let table = deltalake::open_table(&table_path).map_err(PyDeltaTableError::new)?;
+        let table = deltalake::open_table(&table_path).map_err(PyDeltaTableError::from_raw)?;
         Ok(RawDeltaTable { _table: table })
     }
 
@@ -38,7 +40,7 @@ impl RawDeltaTable {
         Ok(self
             ._table
             .load_version(version)
-            .map_err(PyDeltaTableError::new)?)
+            .map_err(PyDeltaTableError::from_raw)?)
     }
 
     pub fn files(&self) -> PyResult<Vec<String>> {
