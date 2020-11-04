@@ -76,6 +76,25 @@ dependencies = [
  "indexmap",
  "lazy_static",
  "num",
+ "rand",
+ "regex",
+ "serde",
+ "serde_derive",
+ "serde_json",
+]
+
+[[package]]
+name = "arrow"
+version = "3.0.0-SNAPSHOT"
+source = "git+https://github.com/apache/arrow.git?rev=c02ed530f989c4e0343ca6ab494c17e7796ed9c1#c02ed530f989c4e0343ca6ab494c17e7796ed9c1"
+dependencies = [
+ "chrono",
+ "csv",
+ "flatbuffers",
+ "hex",
+ "indexmap",
+ "lazy_static",
+ "num",
  "prettytable-rs",
  "rand",
  "regex",
@@ -447,18 +466,18 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "2.0.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e043c8784b795dc2dc5f5267f97f5dcbb62d26e5e49a790c5cb8519546b8dd3a"
+version = "3.0.0-SNAPSHOT"
+source = "git+https://github.com/apache/arrow.git?rev=c02ed530f989c4e0343ca6ab494c17e7796ed9c1#c02ed530f989c4e0343ca6ab494c17e7796ed9c1"
 dependencies = [
- "arrow",
+ "arrow 3.0.0-SNAPSHOT",
  "async-trait",
  "chrono",
  "clap",
  "crossbeam",
  "fnv",
+ "futures",
  "num_cpus",
- "parquet",
+ "parquet 3.0.0-SNAPSHOT",
  "paste",
  "rustyline",
  "sqlparser",
@@ -470,14 +489,14 @@ name = "deltalake"
 version = "0.1.1"
 dependencies = [
  "anyhow",
- "arrow",
+ "arrow 3.0.0-SNAPSHOT",
  "bytes 0.5.6",
  "chrono",
  "crossbeam",
  "datafusion",
  "futures",
  "log",
- "parquet",
+ "parquet 2.0.0",
  "regex",
  "rusoto_core",
  "rusoto_s3",
@@ -1405,7 +1424,26 @@ version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "63bfa03025e71790395361efbcb84f1a9184ead1e608ef16971373dfe94a896e"
 dependencies = [
- "arrow",
+ "arrow 2.0.0",
+ "brotli",
+ "byteorder",
+ "chrono",
+ "flate2",
+ "lz4",
+ "num-bigint",
+ "parquet-format",
+ "snap",
+ "thrift",
+ "zstd",
+]
+
+[[package]]
+name = "parquet"
+version = "3.0.0-SNAPSHOT"
+source = "git+https://github.com/apache/arrow.git?rev=c02ed530f989c4e0343ca6ab494c17e7796ed9c1#c02ed530f989c4e0343ca6ab494c17e7796ed9c1"
+dependencies = [
+ "arrow 3.0.0-SNAPSHOT",
+ "base64",
  "brotli",
  "byteorder",
  "chrono",
