@@ -5,7 +5,6 @@ use std::collections::HashMap;
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use thiserror;
 
 use super::schema::*;
 
