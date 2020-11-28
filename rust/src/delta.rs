@@ -8,7 +8,10 @@ use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, Utc};
 use parquet::errors::ParquetError;
-use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::file::{
+    reader::{FileReader, SerializedFileReader},
+    serialized_reader::SliceableCursor,
+};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -322,7 +325,7 @@ impl DeltaTable {
         // process actions from checkpoint
         for f in &checkpoint_data_paths {
             let obj = self.storage.get_obj(&f)?;
-            let preader = SerializedFileReader::new(Cursor::new(obj))?;
+            let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
                 return Err(DeltaTableError::from(action::ActionError::Generic(
