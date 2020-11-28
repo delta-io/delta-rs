@@ -39,8 +39,8 @@ jobs:
         toolchain: nightly
         override: true
     - name: Check
-      run: cargo clippy --features datafusion-ext
+      run: cargo clippy --features azure,datafusion-ext,s3
     - name: Build
-      run: cargo build --features datafusion-ext
+      run: cargo build --features azure,datafusion-ext,s3
     - name: Run tests
-      run: cargo test --verbose --features datafusion-ext
+      run: cargo test --verbose --features azure,datafusion-ext,s3
