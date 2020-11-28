@@ -29,3 +29,10 @@ DeltaTable(./tests/data/delta-0.2.0)
         min_version: read=1, write=2
         files count: 3
 ```
+
+Features
+--------
+
+- `s3` - enable the S3 storage backend to read Delta Tables from AWS S3.
+- `azure` - enable the Azure storage backend to read Delta Tables from Azure Data Lake Storage Gen2 accounts.
+- `datafusion-ext` - enable the `datafusion::datasource::TableProvider` implementation for Delta Tables in this crate, allowing them to be used for DataFusion queries.
