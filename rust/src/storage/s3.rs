@@ -2,11 +2,11 @@ extern crate tokio;
 
 use std::fmt;
 
-use self::tokio::io::AsyncReadExt;
-use self::tokio::runtime;
-use super::rusoto_core::Region;
-use super::rusoto_s3::{GetObjectRequest, HeadObjectRequest, ListObjectsV2Request, S3Client, S3};
 use chrono::{DateTime, FixedOffset, Utc};
+use log::debug;
+use rusoto_core::Region;
+use rusoto_s3::{GetObjectRequest, HeadObjectRequest, ListObjectsV2Request, S3Client, S3};
+use tokio::{io::AsyncReadExt, runtime};
 
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
 
