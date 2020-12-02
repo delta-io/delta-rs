@@ -1,8 +1,10 @@
 extern crate deltalake;
 
-#[test]
-fn read_delta_2_0_table_without_version() {
-    let table = deltalake::open_table("./tests/data/delta-0.2.0").unwrap();
+#[tokio::test]
+async fn read_delta_2_0_table_without_version() {
+    let table = deltalake::open_table("./tests/data/delta-0.2.0")
+        .await
+        .unwrap();
     assert_eq!(table.version, 3);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -26,9 +28,11 @@ fn read_delta_2_0_table_without_version() {
     );
 }
 
-#[test]
-fn read_delta_2_0_table_with_version() {
-    let mut table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 0).unwrap();
+#[tokio::test]
+async fn read_delta_2_0_table_with_version() {
+    let mut table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 0)
+        .await
+        .unwrap();
     assert_eq!(table.version, 0);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -40,7 +44,9 @@ fn read_delta_2_0_table_with_version() {
         ],
     );
 
-    table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 2).unwrap();
+    table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 2)
+        .await
+        .unwrap();
     assert_eq!(table.version, 2);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -52,7 +58,9 @@ fn read_delta_2_0_table_with_version() {
         ]
     );
 
-    table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 3).unwrap();
+    table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 3)
+        .await
+        .unwrap();
     assert_eq!(table.version, 3);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);

@@ -3,13 +3,12 @@
 //! This module is gated behind the "azure" feature. Its usage also requires
 //! the `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_KEY` environment variables
 //! to be set to the name and key of the Azure Storage Account, respectively.
-use std::{env, fmt};
+use std::{env, fmt, pin::Pin};
 
-use azure_core::{errors::AzureError, prelude::*};
+use azure_core::prelude::*;
 use azure_storage::{client, key_client::KeyClient, Blob, ClientEndpoint, Container};
-use futures::stream::StreamExt;
+use futures::stream::{Stream, TryStreamExt};
 use log::debug;
-use tokio::runtime;
 
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
 
@@ -72,15 +71,6 @@ impl ADLSGen2Backend {
         };
         Self { client }
     }
-
-    fn gen_tokio_rt() -> runtime::Runtime {
-        runtime::Builder::new()
-            .enable_time()
-            .enable_io()
-            .basic_scheduler()
-            .build()
-            .unwrap()
-    }
 }
 
 impl Default for ADLSGen2Backend {
@@ -89,75 +79,73 @@ impl Default for ADLSGen2Backend {
     }
 }
 
+#[async_trait::async_trait]
 impl StorageBackend for ADLSGen2Backend {
-    fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
+    async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
+        let path = path.to_string();
         debug!("Getting properties for {}", path);
-        let properties = Self::gen_tokio_rt().block_on(
-            self.client
-                .get_blob_properties()
-                .with_container_name(obj.file_system)
-                .with_blob_name(obj.path)
-                .finalize(),
-        )?;
-        Ok(ObjectMeta {
-            path: path.to_string(),
-            modified: properties
-                .blob
-                .last_modified
-                .expect("Last-Modified should never be None for committed blobs"),
-        })
+        let properties = self
+            .client
+            .get_blob_properties()
+            .with_container_name(obj.file_system)
+            .with_blob_name(obj.path)
+            .finalize()
+            .await
+            .unwrap();
+        let modified = properties
+            .blob
+            .last_modified
+            .expect("Last-Modified should never be None for committed blobs");
+        Ok(ObjectMeta { path, modified })
     }
 
-    fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
+    async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
         debug!("Loading {}", path);
-        let blob = Self::gen_tokio_rt().block_on(
-            self.client
-                .get_blob()
-                .with_container_name(obj.file_system)
-                .with_blob_name(obj.path)
-                .finalize(),
-        )?;
-
-        Ok(blob.data)
+        Ok(self
+            .client
+            .get_blob()
+            .with_container_name(obj.file_system)
+            .with_blob_name(obj.path)
+            .finalize()
+            .await?
+            .data)
     }
 
-    fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = ObjectMeta>>, StorageError> {
-        let obj = parse_uri(path)?.into_adlsgen2_object()?;
+    async fn list_objs<'a>(
+        &'a self,
+        path: &'a str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>
+    {
         debug!("Listing objects under {}", path);
-        let vec: Result<Vec<ObjectMeta>, AzureError> = Self::gen_tokio_rt().block_on(async {
-            let mut objects = vec![];
-            let mut stream = Box::pin(
-                self.client
-                    .list_blobs()
-                    .with_container_name(obj.file_system)
-                    .with_prefix(obj.path)
-                    .stream(),
-            );
-            while let Some(res) = stream.next().await {
-                let response = res?;
-                response
-                    .incomplete_vector
-                    .vector
-                    .into_iter()
-                    .for_each(|blob| {
+        let obj = parse_uri(path)?.into_adlsgen2_object()?;
+        let account_name = self.client.account().clone();
+        let stream = self
+            .client
+            .list_blobs()
+            .with_container_name(obj.file_system)
+            .with_prefix(obj.path)
+            .stream()
+            .map_ok(move |response| {
+                futures::stream::iter(response.incomplete_vector.vector.into_iter().map(
+                    move |blob| {
                         let object = ADLSGen2Object {
-                            account_name: &self.client.account(),
+                            account_name,
                             file_system: &blob.container_name,
                             path: &blob.name,
                         };
-                        objects.push(ObjectMeta {
+                        Ok(ObjectMeta {
                             path: object.to_string(),
                             modified: blob
                                 .last_modified
                                 .expect("Last-Modified should never be None for committed blobs"),
                         })
-                    });
-            }
-            Ok(objects)
-        });
+                    },
+                ))
+            })
+            .try_flatten();
 
-        Ok(Box::new(vec?.into_iter()))
+        Ok(Box::pin(stream))
     }
 }
