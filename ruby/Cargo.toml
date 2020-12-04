@@ -9,6 +9,7 @@ crate-type = ["cdylib"]
 
 [dependencies]
 helix = "*"
+tokio = "0.2"
 
 [dependencies.deltalake]
 path = "../rust"

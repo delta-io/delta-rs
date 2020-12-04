@@ -11,7 +11,9 @@ mod datafusion {
     #[tokio::test]
     async fn test_datafusion_simple_query() -> Result<()> {
         let mut ctx = ExecutionContext::new();
-        let table = deltalake::open_table("./tests/data/simple_table").unwrap();
+        let table = deltalake::open_table("./tests/data/simple_table")
+            .await
+            .unwrap();
         ctx.register_table("demo", Box::new(table));
 
         let plan = ctx.create_logical_plan("SELECT id FROM demo WHERE id > 5")?;

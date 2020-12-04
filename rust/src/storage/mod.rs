@@ -1,4 +1,7 @@
+use std::pin::Pin;
+
 use chrono::{DateTime, Utc};
+use futures::Stream;
 
 #[cfg(feature = "azure")]
 use azure_core::errors::AzureError;
@@ -156,6 +159,11 @@ pub enum StorageError {
         source: RusotoError<rusoto_s3::HeadObjectError>,
     },
     #[cfg(feature = "s3")]
+    #[error("Failed to list S3 objects")]
+    S3List {
+        source: RusotoError<rusoto_s3::ListObjectsV2Error>,
+    },
+    #[cfg(feature = "s3")]
     #[error("S3 Object missing body content: {0}")]
     S3MissingObjectBody(String),
 
@@ -201,6 +209,18 @@ impl From<RusotoError<rusoto_s3::HeadObjectError>> for StorageError {
     }
 }
 
+#[cfg(feature = "s3")]
+impl From<RusotoError<rusoto_s3::ListObjectsV2Error>> for StorageError {
+    fn from(error: RusotoError<rusoto_s3::ListObjectsV2Error>) -> Self {
+        match error {
+            RusotoError::Service(rusoto_s3::ListObjectsV2Error::NoSuchBucket(_)) => {
+                StorageError::NotFound
+            }
+            _ => StorageError::S3List { source: error },
+        }
+    }
+}
+
 #[cfg(feature = "azure")]
 impl From<AzureError> for StorageError {
     fn from(error: AzureError) -> Self {
@@ -220,10 +240,14 @@ pub struct ObjectMeta {
     pub modified: DateTime<Utc>,
 }
 
+#[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync {
-    fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError>;
-    fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
-    fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = ObjectMeta>>, StorageError>;
+    async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError>;
+    async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
+    async fn list_objs<'a>(
+        &'a self,
+        path: &'a str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>;
 }
 
 pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, UriError> {

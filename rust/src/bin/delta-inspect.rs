@@ -3,7 +3,8 @@ extern crate deltalake;
 
 use clap::{App, AppSettings, Arg};
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let matches = App::new("Delta table inspector")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Utility to help inspect Delta talebs")
@@ -40,11 +41,11 @@ fn main() -> anyhow::Result<()> {
             let table_path = files_matches.value_of("path").unwrap();
 
             let table = match files_matches.value_of_t::<i64>("version") {
-                Ok(v) => deltalake::open_table_with_version(table_path, v)?,
+                Ok(v) => deltalake::open_table_with_version(table_path, v).await?,
                 Err(clap::Error {
                     kind: clap::ErrorKind::ArgumentNotFound,
                     ..
-                }) => deltalake::open_table(table_path)?,
+                }) => deltalake::open_table(table_path).await?,
                 Err(e) => e.exit(),
             };
 
@@ -58,7 +59,7 @@ fn main() -> anyhow::Result<()> {
         }
         Some(("info", info_matches)) => {
             let table_path = info_matches.value_of("path").unwrap();
-            let table = deltalake::open_table(table_path)?;
+            let table = deltalake::open_table(table_path).await?;
             println!("{}", table);
         }
         _ => unreachable!(),

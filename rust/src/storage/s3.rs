@@ -1,12 +1,13 @@
 extern crate tokio;
 
-use std::fmt;
+use std::{fmt, pin::Pin};
 
 use chrono::{DateTime, FixedOffset, Utc};
+use futures::Stream;
 use log::debug;
 use rusoto_core::Region;
 use rusoto_s3::{GetObjectRequest, HeadObjectRequest, ListObjectsV2Request, S3Client, S3};
-use tokio::{io::AsyncReadExt, runtime};
+use tokio::io::AsyncReadExt;
 
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
 
@@ -31,15 +32,6 @@ impl S3StorageBackend {
         let client = S3Client::new(Region::UsEast2);
         Self { client }
     }
-
-    fn gen_tokio_rt() -> runtime::Runtime {
-        runtime::Builder::new()
-            .enable_time()
-            .enable_io()
-            .basic_scheduler()
-            .build()
-            .unwrap()
-    }
 }
 
 impl Default for S3StorageBackend {
@@ -48,16 +40,19 @@ impl Default for S3StorageBackend {
     }
 }
 
+#[async_trait::async_trait]
 impl StorageBackend for S3StorageBackend {
-    fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
+    async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
         let uri = parse_uri(path)?.into_s3object()?;
 
-        let mut rt = Self::gen_tokio_rt();
-        let result = rt.block_on(self.client.head_object(HeadObjectRequest {
-            bucket: uri.bucket.to_string(),
-            key: uri.key.to_string(),
-            ..Default::default()
-        }))?;
+        let result = self
+            .client
+            .head_object(HeadObjectRequest {
+                bucket: uri.bucket.to_string(),
+                key: uri.key.to_string(),
+                ..Default::default()
+            })
+            .await?;
 
         Ok(ObjectMeta {
             path: path.to_string(),
@@ -68,7 +63,7 @@ impl StorageBackend for S3StorageBackend {
         })
     }
 
-    fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
+    async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
         debug!("fetching s3 object: {}...", path);
 
         let uri = parse_uri(path)?.into_s3object()?;
@@ -78,50 +73,61 @@ impl StorageBackend for S3StorageBackend {
             ..Default::default()
         };
 
-        let mut rt = Self::gen_tokio_rt();
-        let result = rt.block_on(self.client.get_object(get_req))?;
+        let result = self.client.get_object(get_req).await?;
 
         debug!("streaming data from {}...", path);
         let mut buf = Vec::new();
         let stream = result
             .body
             .ok_or_else(|| StorageError::S3MissingObjectBody(path.to_string()))?;
-        rt.block_on(stream.into_async_read().read_to_end(&mut buf))
+        stream
+            .into_async_read()
+            .read_to_end(&mut buf)
+            .await
             .unwrap();
 
         debug!("s3 object fetched: {}", path);
         Ok(buf)
     }
 
-    fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = ObjectMeta>>, StorageError> {
+    async fn list_objs<'a>(
+        &'a self,
+        path: &'a str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>
+    {
         let uri = parse_uri(path)?.into_s3object()?;
 
         struct ListContext {
             client: rusoto_s3::S3Client,
             obj_iter: std::vec::IntoIter<rusoto_s3::Object>,
             continuation_token: Option<String>,
-            rt: runtime::Runtime,
             bucket: String,
             key: String,
         }
-        let mut ctx = ListContext {
+        let ctx = ListContext {
             obj_iter: Vec::new().into_iter(),
             continuation_token: Some(String::from("initial_run")),
-            rt: Self::gen_tokio_rt(),
             bucket: uri.bucket.to_string(),
             key: uri.key.to_string(),
             client: self.client.clone(),
         };
 
-        fn next_meta(ctx: &mut ListContext) -> Option<ObjectMeta> {
+        async fn next_meta(
+            mut ctx: ListContext,
+        ) -> Option<(Result<ObjectMeta, StorageError>, ListContext)> {
             match ctx.obj_iter.next() {
-                Some(obj) => Some(ObjectMeta {
-                    path: obj.key.unwrap(),
-                    modified: DateTime::<Utc>::from(
-                        DateTime::<FixedOffset>::parse_from_rfc2822(&obj.last_modified.unwrap())
+                Some(obj) => Some((
+                    Ok(ObjectMeta {
+                        path: obj.key.unwrap(),
+                        modified: DateTime::<Utc>::from(
+                            DateTime::<FixedOffset>::parse_from_rfc2822(
+                                &obj.last_modified.unwrap(),
+                            )
                             .unwrap(),
-                    ),
-                }),
+                        ),
+                    }),
+                    ctx,
+                )),
                 None => match &ctx.continuation_token {
                     Some(token) => {
                         let tk_opt = if token != "initial_run" {
@@ -135,21 +141,37 @@ impl StorageBackend for S3StorageBackend {
                             continuation_token: tk_opt,
                             ..Default::default()
                         };
-                        // TODO: log list objects error
-                        let result = ctx.rt.block_on(ctx.client.list_objects_v2(list_req)).ok()?;
+                        let result = match ctx.client.list_objects_v2(list_req).await {
+                            Ok(res) => res,
+                            Err(e) => {
+                                return Some((Err(e.into()), ctx));
+                            }
+                        };
                         ctx.continuation_token = result.next_continuation_token;
                         ctx.obj_iter = match result.contents {
                             Some(objs) => objs.into_iter(),
                             None => Vec::new().into_iter(),
                         };
-
-                        next_meta(ctx)
+                        ctx.obj_iter.next().map(|obj| {
+                            (
+                                Ok(ObjectMeta {
+                                    path: obj.key.unwrap(),
+                                    modified: DateTime::<Utc>::from(
+                                        DateTime::<FixedOffset>::parse_from_rfc2822(
+                                            &obj.last_modified.unwrap(),
+                                        )
+                                        .unwrap(),
+                                    ),
+                                }),
+                                ctx,
+                            )
+                        })
                     }
                     None => None,
                 },
             }
         }
 
-        Ok(Box::new(std::iter::from_fn(move || next_meta(&mut ctx))))
+        Ok(Box::pin(futures::stream::unfold(ctx, next_meta)))
     }
 }

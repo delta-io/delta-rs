@@ -1,11 +1,12 @@
 #[cfg(feature = "azure")]
 mod azure {
-    #[test]
-    fn test_azure_simple() {
+    #[tokio::test]
+    async fn test_azure_simple() {
         std::env::set_var("AZURE_STORAGE_ACCOUNT", "deltarstests");
         std::env::set_var("AZURE_STORAGE_SAS", "?sv=2019-12-12&ss=b&srt=co&sp=rl&se=2050-12-31T23:59:59Z&st=2020-11-30T10:19:31Z&spr=https&sig=%2FVV88TK0pwkY%2FoF3qXwweisDs63gfzdBlHAhB1zsED8%3D");
         let table =
             deltalake::open_table("abfss://simple@deltarstests.dfs.core.windows.net/simple/table")
+                .await
                 .unwrap();
         println!("{}", table);
         assert_eq!(table.version, 4);
