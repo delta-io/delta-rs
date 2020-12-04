@@ -119,7 +119,7 @@ impl StorageBackend for ADLSGen2Backend {
     {
         debug!("Listing objects under {}", path);
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
-        let account_name = self.client.account().clone();
+        let account_name = self.client.account();
         let stream = self
             .client
             .list_blobs()
