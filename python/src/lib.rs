@@ -13,10 +13,15 @@ impl PyDeltaTableError {
     fn from_raw(err: deltalake::DeltaTableError) -> pyo3::PyErr {
         PyDeltaTableError::new_err(err.to_string())
     }
+
+    fn from_tokio(err: tokio::io::Error) -> pyo3::PyErr {
+        PyDeltaTableError::new_err(err.to_string())
+    }
 }
 
 #[pyclass]
 struct RawDeltaTable {
+    _rt: tokio::runtime::Runtime,
     _table: deltalake::DeltaTable,
 }
 
@@ -24,8 +29,14 @@ struct RawDeltaTable {
 impl RawDeltaTable {
     #[new]
     fn new(table_path: &str) -> PyResult<Self> {
-        let table = deltalake::open_table(&table_path).map_err(PyDeltaTableError::from_raw)?;
-        Ok(RawDeltaTable { _table: table })
+        let mut rt = tokio::runtime::Runtime::new().map_err(PyDeltaTableError::from_tokio)?;
+        let table = rt
+            .block_on(deltalake::open_table(&table_path))
+            .map_err(PyDeltaTableError::from_raw)?;
+        Ok(RawDeltaTable {
+            _rt: rt,
+            _table: table,
+        })
     }
 
     pub fn table_path(&self) -> PyResult<&str> {
@@ -38,8 +49,8 @@ impl RawDeltaTable {
 
     pub fn load_version(&mut self, version: deltalake::DeltaDataTypeVersion) -> PyResult<()> {
         Ok(self
-            ._table
-            .load_version(version)
+            ._rt
+            .block_on(self._table.load_version(version))
             .map_err(PyDeltaTableError::from_raw)?)
     }
 

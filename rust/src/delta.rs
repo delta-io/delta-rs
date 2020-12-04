@@ -7,6 +7,7 @@ use std::io::{BufRead, BufReader, Cursor};
 use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, Utc};
+use futures::StreamExt;
 use parquet::errors::ParquetError;
 use parquet::file::{
     reader::{FileReader, SerializedFileReader},
@@ -206,9 +207,9 @@ impl DeltaTable {
         checkpoint_data_paths
     }
 
-    fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
+    async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
         let last_checkpoint_path = format!("{}/_last_checkpoint", self.log_path);
-        let data = self.storage.get_obj(&last_checkpoint_path)?;
+        let data = self.storage.get_obj(&last_checkpoint_path).await?;
 
         Ok(serde_json::from_slice(&data)?)
     }
@@ -250,7 +251,7 @@ impl DeltaTable {
         Ok(())
     }
 
-    fn find_latest_check_point_for_version(
+    async fn find_latest_check_point_for_version(
         &self,
         version: DeltaDataTypeVersion,
     ) -> Result<Option<CheckPoint>, DeltaTableError> {
@@ -259,7 +260,11 @@ impl DeltaTable {
         let re_checkpoint_parts =
             Regex::new(r"^*/_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap();
 
-        for obj_meta in self.storage.list_objs(&self.log_path)? {
+        let mut stream = self.storage.list_objs(&self.log_path).await?;
+
+        while let Some(obj_meta) = stream.next().await {
+            // Exit early if any objects can't be listed.
+            let obj_meta = obj_meta?;
             if let Some(captures) = re_checkpoint.captures(&obj_meta.path) {
                 let curr_ver_str = captures.get(1).unwrap().as_str();
                 let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
@@ -312,19 +317,19 @@ impl DeltaTable {
         Ok(())
     }
 
-    fn apply_log(&mut self, version: DeltaDataTypeVersion) -> Result<(), ApplyLogError> {
+    async fn apply_log(&mut self, version: DeltaDataTypeVersion) -> Result<(), ApplyLogError> {
         let log_path = self.version_to_log_path(version);
-        let commit_log_bytes = self.storage.get_obj(&log_path)?;
+        let commit_log_bytes = self.storage.get_obj(&log_path).await?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
         self.apply_log_from_bufread(reader)
     }
 
-    fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
+    async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
         let checkpoint_data_paths = self.get_checkpoint_data_paths(&check_point);
         // process actions from checkpoint
         for f in &checkpoint_data_paths {
-            let obj = self.storage.get_obj(&f)?;
+            let obj = self.storage.get_obj(&f).await?;
             let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
@@ -340,8 +345,8 @@ impl DeltaTable {
         Ok(())
     }
 
-    fn get_latest_version(&mut self) -> Result<DeltaDataTypeVersion, DeltaTableError> {
-        let mut version = match self.get_last_checkpoint() {
+    async fn get_latest_version(&mut self) -> Result<DeltaDataTypeVersion, DeltaTableError> {
+        let mut version = match self.get_last_checkpoint().await {
             Ok(last_check_point) => last_check_point.version,
             Err(LoadCheckpointError::NotFound) => {
                 // no checkpoint, start with version 0
@@ -354,7 +359,11 @@ impl DeltaTable {
 
         // scan logs after checkpoint
         loop {
-            match self.storage.head_obj(&self.version_to_log_path(version)) {
+            match self
+                .storage
+                .head_obj(&self.version_to_log_path(version))
+                .await
+            {
                 Ok(meta) => {
                     // also cache timestamp for version
                     self.version_timestamp
@@ -376,11 +385,11 @@ impl DeltaTable {
         Ok(version)
     }
 
-    pub fn load(&mut self) -> Result<(), DeltaTableError> {
-        match self.get_last_checkpoint() {
+    pub async fn load(&mut self) -> Result<(), DeltaTableError> {
+        match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
                 self.last_check_point = Some(last_check_point);
-                self.restore_checkpoint(last_check_point)?;
+                self.restore_checkpoint(last_check_point).await?;
                 self.version = last_check_point.version + 1;
             }
             Err(LoadCheckpointError::NotFound) => {
@@ -394,7 +403,7 @@ impl DeltaTable {
 
         // replay logs after checkpoint
         loop {
-            match self.apply_log(self.version) {
+            match self.apply_log(self.version).await {
                 Ok(_) => {
                     self.version += 1;
                 }
@@ -413,10 +422,13 @@ impl DeltaTable {
         Ok(())
     }
 
-    pub fn load_version(&mut self, version: DeltaDataTypeVersion) -> Result<(), DeltaTableError> {
+    pub async fn load_version(
+        &mut self,
+        version: DeltaDataTypeVersion,
+    ) -> Result<(), DeltaTableError> {
         // check if version is valid
         let log_path = self.version_to_log_path(version);
-        match self.storage.head_obj(&log_path) {
+        match self.storage.head_obj(&log_path).await {
             Ok(_) => {}
             Err(StorageError::NotFound) => {
                 return Err(DeltaTableError::InvalidVersion(version));
@@ -429,9 +441,9 @@ impl DeltaTable {
 
         let mut next_version;
         // 1. find latest checkpoint below version
-        match self.find_latest_check_point_for_version(version)? {
+        match self.find_latest_check_point_for_version(version).await? {
             Some(check_point) => {
-                self.restore_checkpoint(check_point)?;
+                self.restore_checkpoint(check_point).await?;
                 next_version = check_point.version + 1;
             }
             None => {
@@ -442,21 +454,24 @@ impl DeltaTable {
 
         // 2. apply all logs starting from checkpoint
         while next_version <= self.version {
-            self.apply_log(next_version)?;
+            self.apply_log(next_version).await?;
             next_version += 1;
         }
 
         Ok(())
     }
 
-    fn get_version_timestamp(
+    async fn get_version_timestamp(
         &mut self,
         version: DeltaDataTypeVersion,
     ) -> Result<i64, DeltaTableError> {
         match self.version_timestamp.get(&version) {
             Some(ts) => Ok(*ts),
             None => {
-                let meta = self.storage.head_obj(&self.version_to_log_path(version))?;
+                let meta = self
+                    .storage
+                    .head_obj(&self.version_to_log_path(version))
+                    .await?;
                 let ts = meta.modified.timestamp();
                 // also cache timestamp for version
                 self.version_timestamp.insert(version, ts);
@@ -520,9 +535,12 @@ impl DeltaTable {
         })
     }
 
-    pub fn load_with_datetime(&mut self, datetime: DateTime<Utc>) -> Result<(), DeltaTableError> {
+    pub async fn load_with_datetime(
+        &mut self,
+        datetime: DateTime<Utc>,
+    ) -> Result<(), DeltaTableError> {
         let mut min_version = 0;
-        let mut max_version = self.get_latest_version()?;
+        let mut max_version = self.get_latest_version().await?;
         let mut version = min_version;
         let target_ts = datetime.timestamp();
 
@@ -530,7 +548,7 @@ impl DeltaTable {
         while min_version <= max_version {
             let pivot = (max_version + min_version) / 2;
             version = pivot;
-            let pts = self.get_version_timestamp(pivot)?;
+            let pts = self.get_version_timestamp(pivot).await?;
 
             match pts.cmp(&target_ts) {
                 Ordering::Equal => {
@@ -550,7 +568,7 @@ impl DeltaTable {
             version = 0;
         }
 
-        self.load_version(version)
+        self.load_version(version).await
     }
 }
 
@@ -581,30 +599,30 @@ impl std::fmt::Debug for DeltaTable {
     }
 }
 
-pub fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError> {
+pub async fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError> {
     let storage_backend = storage::get_backend_for_uri(table_path)?;
     let mut table = DeltaTable::new(table_path, storage_backend)?;
-    table.load()?;
+    table.load().await?;
 
     Ok(table)
 }
 
-pub fn open_table_with_version(
+pub async fn open_table_with_version(
     table_path: &str,
     version: DeltaDataTypeVersion,
 ) -> Result<DeltaTable, DeltaTableError> {
     let storage_backend = storage::get_backend_for_uri(table_path)?;
     let mut table = DeltaTable::new(table_path, storage_backend)?;
-    table.load_version(version)?;
+    table.load_version(version).await?;
 
     Ok(table)
 }
 
-pub fn open_table_with_ds(table_path: &str, ds: &str) -> Result<DeltaTable, DeltaTableError> {
+pub async fn open_table_with_ds(table_path: &str, ds: &str) -> Result<DeltaTable, DeltaTableError> {
     let datetime = DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds)?);
     let storage_backend = storage::get_backend_for_uri(table_path)?;
     let mut table = DeltaTable::new(table_path, storage_backend)?;
-    table.load_with_datetime(datetime)?;
+    table.load_with_datetime(datetime).await?;
 
     Ok(table)
 }

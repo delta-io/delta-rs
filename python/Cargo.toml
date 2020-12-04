@@ -11,6 +11,9 @@ readme = "README.md"
 name = "deltalake"
 crate-type = ["cdylib"]
 
+[dependencies]
+tokio = "0.2"
+
 [dependencies.pyo3]
 version = "0.12.*"
 features = ["extension-module"]

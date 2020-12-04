@@ -1,6 +1,8 @@
-use std::fs;
+use std::pin::Pin;
 
 use chrono::DateTime;
+use futures::{Stream, TryStreamExt};
+use tokio::fs;
 
 use super::{ObjectMeta, StorageBackend, StorageError};
 
@@ -13,9 +15,10 @@ impl FileStorageBackend {
     }
 }
 
+#[async_trait::async_trait]
 impl StorageBackend for FileStorageBackend {
-    fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
-        let attr = fs::metadata(path)?;
+    async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
+        let attr = fs::metadata(path).await?;
 
         Ok(ObjectMeta {
             path: path.to_string(),
@@ -23,18 +26,21 @@ impl StorageBackend for FileStorageBackend {
         })
     }
 
-    fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
-        fs::read(path).map_err(StorageError::from)
+    async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
+        fs::read(path).await.map_err(StorageError::from)
     }
 
-    fn list_objs(&self, path: &str) -> Result<Box<dyn Iterator<Item = ObjectMeta>>, StorageError> {
-        let readdir = fs::read_dir(path)?;
-
-        Ok(Box::new(readdir.filter_map(Result::ok).map(|entry| {
-            ObjectMeta {
+    async fn list_objs<'a>(
+        &'a self,
+        path: &'a str,
+    ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>
+    {
+        let readdir = fs::read_dir(path).await?;
+        Ok(Box::pin(readdir.err_into().and_then(|entry| async move {
+            Ok(ObjectMeta {
                 path: String::from(entry.path().to_str().unwrap()),
-                modified: DateTime::from(entry.metadata().unwrap().modified().unwrap()),
-            }
+                modified: DateTime::from(entry.metadata().await.unwrap().modified().unwrap()),
+            })
         })))
     }
 }

@@ -6,9 +6,11 @@ use std::path::Path;
 
 use self::chrono::{DateTime, FixedOffset, Utc};
 
-#[test]
-fn read_simple_table() {
-    let table = deltalake::open_table("./tests/data/simple_table").unwrap();
+#[tokio::test]
+async fn read_simple_table() {
+    let table = deltalake::open_table("./tests/data/simple_table")
+        .await
+        .unwrap();
     assert_eq!(table.version, 4);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -34,9 +36,11 @@ fn read_simple_table() {
     );
 }
 
-#[test]
-fn read_simple_table_with_version() {
-    let mut table = deltalake::open_table_with_version("./tests/data/simple_table", 0).unwrap();
+#[tokio::test]
+async fn read_simple_table_with_version() {
+    let mut table = deltalake::open_table_with_version("./tests/data/simple_table", 0)
+        .await
+        .unwrap();
     assert_eq!(table.version, 0);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -52,7 +56,9 @@ fn read_simple_table_with_version() {
         ],
     );
 
-    table = deltalake::open_table_with_version("./tests/data/simple_table", 2).unwrap();
+    table = deltalake::open_table_with_version("./tests/data/simple_table", 2)
+        .await
+        .unwrap();
     assert_eq!(table.version, 2);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -68,7 +74,9 @@ fn read_simple_table_with_version() {
         ]
     );
 
-    table = deltalake::open_table_with_version("./tests/data/simple_table", 3).unwrap();
+    table = deltalake::open_table_with_version("./tests/data/simple_table", 3)
+        .await
+        .unwrap();
     assert_eq!(table.version, 3);
     assert_eq!(table.min_writer_version, 2);
     assert_eq!(table.min_reader_version, 1);
@@ -90,8 +98,8 @@ fn ds_to_ts(ds: &str) -> i64 {
     DateTime::<Utc>::from(fixed_dt).timestamp()
 }
 
-#[test]
-fn time_travel_by_ds() {
+#[tokio::test]
+async fn time_travel_by_ds() {
     // git does not preserve mtime, so we need to manually set it in the test
     let log_dir = "./tests/data/simple_table/_delta_log";
     let log_mtime_pair = vec![
@@ -109,34 +117,42 @@ fn time_travel_by_ds() {
 
     let mut table =
         deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-01T00:47:31-07:00")
+            .await
             .unwrap();
     assert_eq!(table.version, 0);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-02T22:47:31-07:00")
+        .await
         .unwrap();
     assert_eq!(table.version, 1);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-02T23:47:31-07:00")
+        .await
         .unwrap();
     assert_eq!(table.version, 1);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-03T22:47:31-07:00")
+        .await
         .unwrap();
     assert_eq!(table.version, 2);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-04T22:47:31-07:00")
+        .await
         .unwrap();
     assert_eq!(table.version, 3);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-05T21:47:31-07:00")
+        .await
         .unwrap();
     assert_eq!(table.version, 3);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-05T22:47:31-07:00")
+        .await
         .unwrap();
     assert_eq!(table.version, 4);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-25T22:47:31-07:00")
+        .await
         .unwrap();
     assert_eq!(table.version, 4);
 }

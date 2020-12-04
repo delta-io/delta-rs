@@ -100,9 +100,9 @@ dependencies = [
 
 [[package]]
 name = "async-trait"
-version = "0.1.41"
+version = "0.1.42"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "b246867b8b3b6ae56035f1eb1ed557c1d8eae97f0d53696138a50fa0e3a3b8c0"
+checksum = "8d3a45e77e34375a7923b1e8febb049bb011f064714a8e17a1a616fef01da13d"
 dependencies = [
  "proc-macro2",
  "quote",
@@ -129,7 +129,7 @@ checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 [[package]]
 name = "azure_core"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=85e37c2a3765af88873ed9cbd7ac072e920a6127#85e37c2a3765af88873ed9cbd7ac072e920a6127"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=bc74cad7cc5f9226cf39c4abae0d902a85765e74#bc74cad7cc5f9226cf39c4abae0d902a85765e74"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -156,7 +156,7 @@ dependencies = [
 [[package]]
 name = "azure_storage"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=85e37c2a3765af88873ed9cbd7ac072e920a6127#85e37c2a3765af88873ed9cbd7ac072e920a6127"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=bc74cad7cc5f9226cf39c4abae0d902a85765e74#bc74cad7cc5f9226cf39c4abae0d902a85765e74"
 dependencies = [
  "RustyXML",
  "azure_core",
@@ -629,6 +629,7 @@ version = "0.1.1"
 dependencies = [
  "anyhow",
  "arrow",
+ "async-trait",
  "azure_core",
  "azure_storage",
  "bytes 0.5.6",
@@ -657,6 +658,7 @@ version = "0.1.0"
 dependencies = [
  "deltalake",
  "pyo3",
+ "tokio",
 ]
 
 [[package]]
@@ -665,6 +667,7 @@ version = "0.1.0"
 dependencies = [
  "deltalake",
  "helix",
+ "tokio",
 ]
 
 [[package]]
@@ -2798,9 +2801,9 @@ checksum = "cda74da7e1a664f795bb1f8a87ec406fb89a02522cf6e50620d016add6dbbf5c"
 
 [[package]]
 name = "tokio"
-version = "0.2.22"
+version = "0.2.23"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5d34ca54d84bf2b5b4d7d31e901a8464f7b60ac145a284fba25ceb801f2ddccd"
+checksum = "a6d7ad61edd59bfcc7e80dababf0f4aed2e6d5e0ba1659356ae889752dfc12ff"
 dependencies = [
  "bytes 0.5.6",
  "fnv",
@@ -2833,9 +2836,9 @@ dependencies = [
 
 [[package]]
 name = "tokio-macros"
-version = "0.2.5"
+version = "0.2.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0c3acc6aa564495a0f2e1d59fab677cd7f81a19994cfc7f3ad0e64301560389"
+checksum = "e44da00bfc73a25f814cd8d7e57a68a5c31b74b3152a0a1d1f590c97ed06265a"
 dependencies = [
  "proc-macro2",
  "quote",
