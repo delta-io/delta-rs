@@ -91,8 +91,7 @@ impl StorageBackend for ADLSGen2Backend {
             .with_container_name(obj.file_system)
             .with_blob_name(obj.path)
             .finalize()
-            .await
-            .unwrap();
+            .await?;
         let modified = properties
             .blob
             .last_modified
