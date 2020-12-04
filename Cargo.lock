@@ -658,6 +658,7 @@ version = "0.1.0"
 dependencies = [
  "deltalake",
  "pyo3",
+ "tokio",
 ]
 
 [[package]]
@@ -666,6 +667,7 @@ version = "0.1.0"
 dependencies = [
  "deltalake",
  "helix",
+ "tokio",
 ]
 
 [[package]]
