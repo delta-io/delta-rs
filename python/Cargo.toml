@@ -21,6 +21,7 @@ features = ["extension-module"]
 [dependencies.deltalake]
 path = "../rust"
 version = "0.*"
+features = ["s3", "azure"]
 
 [package.metadata.maturin]
 classifier = [
