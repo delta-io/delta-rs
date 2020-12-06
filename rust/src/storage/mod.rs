@@ -1,3 +1,4 @@
+use std::fmt::Debug;
 use std::pin::Pin;
 
 use chrono::{DateTime, Utc};
@@ -241,7 +242,7 @@ pub struct ObjectMeta {
 }
 
 #[async_trait::async_trait]
-pub trait StorageBackend: Send + Sync {
+pub trait StorageBackend: Send + Sync + Debug {
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError>;
     async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
     async fn list_objs<'a>(
