@@ -6,7 +6,7 @@ use tokio::fs;
 
 use super::{ObjectMeta, StorageBackend, StorageError};
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub struct FileStorageBackend {}
 
 impl FileStorageBackend {

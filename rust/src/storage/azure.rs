@@ -38,6 +38,7 @@ impl<'a> fmt::Display for ADLSGen2Object<'a> {
 /// A storage backend backed by an Azure Data Lake Storage Gen2 account.
 ///
 /// This uses the `dfs.core.windows.net` endpoint.
+#[derive(Debug)]
 pub struct ADLSGen2Backend {
     client: KeyClient,
 }

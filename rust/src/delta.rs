@@ -79,6 +79,8 @@ pub enum DeltaTableError {
         #[from]
         source: action::ActionError,
     },
+    #[error("Not a Delta table")]
+    NotATable,
 }
 
 pub struct DeltaTableMetaData {
@@ -411,8 +413,15 @@ impl DeltaTable {
                     match e {
                         ApplyLogError::EndOfLog => {
                             self.version -= 1;
+                            if self.version == -1 {
+                                // no snapshot found, no 0 version found.  this is not a delta
+                                // table, possibly an empty directroy.
+                                return Err(DeltaTableError::NotATable);
+                            }
                         }
-                        _ => return Err(DeltaTableError::from(e)),
+                        _ => {
+                            return Err(DeltaTableError::from(e));
+                        }
                     }
                     break;
                 }
