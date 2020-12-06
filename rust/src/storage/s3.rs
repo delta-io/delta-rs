@@ -40,6 +40,12 @@ impl Default for S3StorageBackend {
     }
 }
 
+impl std::fmt::Debug for S3StorageBackend {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(fmt, "S3StorageBackend")
+    }
+}
+
 #[async_trait::async_trait]
 impl StorageBackend for S3StorageBackend {
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
