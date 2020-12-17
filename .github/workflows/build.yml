@@ -32,11 +32,11 @@ jobs:
         key: ${{ runner.OS }}-target-incremental-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ${{ runner.OS }}-target-incremental-
-    - name: Install minimal nightly with clippy and rustfmt
+    - name: Install minimal stable with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
         profile: default
-        toolchain: nightly
+        toolchain: stable
         override: true
     - name: Check
       run: cargo clippy --features azure,datafusion-ext,s3
