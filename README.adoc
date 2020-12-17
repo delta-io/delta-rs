@@ -25,7 +25,7 @@ Join link:https://join.slack.com/t/delta-users/shared_invite/enQtODQ5ODM5OTAxMjA
 
 === Development
 
-Delta.rs requires the **nightly** Rust compiler, which can be installed with the
+Delta.rs requires the Rust compiler, which can be installed with the
 link:https://rustup.rs/[rustup]
 command.
 
