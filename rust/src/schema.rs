@@ -72,7 +72,7 @@ impl SchemaTypeArray {
         &self.elementType
     }
 
-    pub fn does_contain_null(&self) -> bool {
+    pub fn contains_null(&self) -> bool {
         self.containsNull
     }
 }

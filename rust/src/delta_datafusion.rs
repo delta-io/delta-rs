@@ -1,14 +1,13 @@
-extern crate crossbeam;
-extern crate datafusion;
-
+use std::any::Any;
 use std::sync::Arc;
 
-use self::datafusion::datasource::TableProvider;
-use self::datafusion::physical_plan::parquet::ParquetExec;
-use self::datafusion::physical_plan::ExecutionPlan;
 use arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
+use datafusion::datasource::datasource::Statistics;
+use datafusion::datasource::TableProvider;
+use datafusion::physical_plan::parquet::ParquetExec;
+use datafusion::physical_plan::ExecutionPlan;
 
 use crate::delta;
 use crate::schema;
@@ -36,6 +35,16 @@ impl TableProvider for delta::DeltaTable {
             batch_size,
         )))
     }
+
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn statistics(&self) -> Statistics {
+        // TODO: proxy delta table stats after https://github.com/delta-io/delta.rs/issues/45 has
+        // been completed
+        Statistics::default()
+    }
 }
 
 impl From<&schema::Schema> for ArrowSchema {
@@ -56,6 +65,16 @@ impl From<&schema::SchemaField> for ArrowField {
             f.get_name(),
             ArrowDataType::from(f.get_type()),
             f.is_nullable(),
+        )
+    }
+}
+
+impl From<&schema::SchemaTypeArray> for ArrowField {
+    fn from(a: &schema::SchemaTypeArray) -> Self {
+        ArrowField::new(
+            "",
+            ArrowDataType::from(a.get_element_type()),
+            a.contains_null(),
         )
     }
 }
@@ -95,7 +114,7 @@ impl From<&schema::SchemaDataType> for ArrowDataType {
                     .collect(),
             ),
             schema::SchemaDataType::array(a) => ArrowDataType::List(Box::new(
-                <ArrowDataType as From<&schema::SchemaDataType>>::from(a.get_element_type()),
+                <ArrowField as From<&schema::SchemaTypeArray>>::from(a),
             )),
             schema::SchemaDataType::map(m) => ArrowDataType::Dictionary(
                 Box::new(<ArrowDataType as From<&schema::SchemaDataType>>::from(
