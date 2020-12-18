@@ -16,12 +16,10 @@ mod datafusion {
             .unwrap();
         ctx.register_table("demo", Box::new(table));
 
-        let plan = ctx.create_logical_plan("SELECT id FROM demo WHERE id > 5")?;
-        let plan = ctx.optimize(&plan)?;
-        let plan = ctx.create_physical_plan(&plan)?;
-        let results = ctx.collect(plan).await?;
-
-        let results = results
+        let results = ctx
+            .sql("SELECT id FROM demo WHERE id > 5")?
+            .collect()
+            .await?
             .iter()
             .filter(|batch| batch.num_rows() > 0)
             .flat_map(|batch| {
