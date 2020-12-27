@@ -1,8 +1,18 @@
 Deltalake-python
 ================
 
+[![PyPI](https://img.shields.io/pypi/v/deltalake.svg?style=flat-square)](https://pypi.org/project/deltalake/)
+
 Native [Delta Lake](https://delta.io/) binding for Python based on
-[delta.rs](https://github.com/delta-io/delta.rs).
+[delta-rs](https://github.com/delta-io/delta-rs).
+
+
+Installation
+------------
+
+```bash
+pip install deltalake
+```
 
 
 Usage

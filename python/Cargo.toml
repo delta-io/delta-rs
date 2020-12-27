@@ -1,10 +1,10 @@
 [package]
 name = "deltalake-python"
-version = "0.1.0"
+version = "0.1.1"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
-homepage = "https://github.com/delta-io/delta.rs"
+homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
-description = "Python binding for delta.rs"
+description = "Python binding for delta-rs"
 readme = "README.md"
 
 [lib]
