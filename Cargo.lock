@@ -92,7 +92,7 @@ checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
 [[package]]
 name = "arrow"
 version = "3.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow.git#6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b"
+source = "git+https://github.com/apache/arrow.git?rev=6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b#6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b"
 dependencies = [
  "cfg_aliases",
  "chrono",
@@ -630,7 +630,7 @@ dependencies = [
 [[package]]
 name = "datafusion"
 version = "3.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow.git#6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b"
+source = "git+https://github.com/apache/arrow.git?rev=6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b#6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b"
 dependencies = [
  "ahash 0.6.2",
  "arrow",
@@ -1790,7 +1790,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "3.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow.git#6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b"
+source = "git+https://github.com/apache/arrow.git?rev=6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b#6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b"
 dependencies = [
  "arrow",
  "base64 0.12.3",

@@ -65,3 +65,17 @@ To install development version of the package into your current Python environme
 ```bash
 $ maturin develop
 ```
+
+Build manylinux wheels
+----------------------
+
+```bash
+docker run -e PKG_CONFIG_PATH=/usr/local/lib64/pkgconfig -it -v `pwd`:/io apache/arrow-dev:amd64-centos-6.10-python-manylinux2010 bash
+curl https://sh.rustup.rs -sSf | sh -s -- -y
+source $HOME/.cargo/env
+rustup default stable
+cargo install --git https://github.com/PyO3/maturin.git --rev 98636cea89c328b3eba4ebb548124f75c8018200 maturin
+cd /io/python
+export PATH=/opt/python/cp37-cp37m/bin:/opt/python/cp38-cp38/bin:$PATH
+maturin publish -b pyo3 --target x86_64-unknown-linux-gnu --no-sdist
+```
