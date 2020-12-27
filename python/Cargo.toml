@@ -24,12 +24,13 @@ version = "0.*"
 features = ["s3", "azure"]
 
 [package.metadata.maturin]
+name = "deltalake"
 classifier = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3 :: Only"
 ]
-project-url = ["Repo, https://github.com/delta-io/delta.rs"]
+project-url = { Repo = "https://github.com/delta-io/delta-rs" }
 requires-dist = [
     "pyarrow>=2",
     "pandas; extra =='pandas'",

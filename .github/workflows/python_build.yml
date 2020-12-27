@@ -35,9 +35,6 @@ jobs:
 
     - uses: actions/setup-python@v2
       with:
-        python-version: 3.7
-    - uses: actions/setup-python@v2
-      with:
         python-version: 3.8
 
     - name: Setup virtualenv
@@ -48,11 +45,11 @@ jobs:
     - name: 'Install Python devel headers'
       run: sudo apt install -y python3-dev
 
-    - name: Install minimal nightly with clippy and rustfmt
+    - name: Install minimal stable with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
         profile: default
-        toolchain: nightly
+        toolchain: stable
         override: true
     - name: Check
       run: cargo clippy
@@ -61,8 +58,9 @@ jobs:
     # - name: Run Rust tests
     #   run: cargo test
 
-    - name: 'Install Python build Dependencies'
-      run: pip install maturin
+    - name: Install maturin
+      run: |
+        cargo install --git https://github.com/PyO3/maturin.git --rev 98636cea89c328b3eba4ebb548124f75c8018200 maturin
 
     - name: Run Python tests
       run: |
@@ -71,5 +69,5 @@ jobs:
         maturin build --manylinux off
         ls -lh ../target/wheels
         PY_MINOR_VER=$(python -V | cut -d. -f 2)
-        pip install $(printf ../target/wheels/deltalake_python-*-cp3${PY_MINOR_VER}-*.whl)'[devel,pandas]'
+        pip install $(printf ../target/wheels/deltalake-*-cp3${PY_MINOR_VER}-*.whl)'[devel,pandas]'
         py.test tests
