@@ -28,11 +28,11 @@ jobs:
         key: ruby-${{ runner.OS }}-target-incremental-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ruby-${{ runner.OS }}-target-incremental-
-    - name: Install minimal nightly with clippy and rustfmt
+    - name: Install minimal stable with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
         profile: default
-        toolchain: nightly
+        toolchain: stable
         override: true
     - name: 'Set up Ruby'
       uses: actions/setup-ruby@v1

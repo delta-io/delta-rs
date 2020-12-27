@@ -1,0 +1,115 @@
+name: Release to PyPI
+
+on:
+  push:
+    tags: [ 'python-v*' ]
+
+defaults:
+  run:
+    working-directory: ./python
+
+jobs:
+  validate-release-tag:
+    name: Validate git tag
+    runs-on: ubuntu-20.04
+    steps:
+      - uses: actions/checkout@v2
+      - run: |
+          PUSHED_TAG=${GITHUB_REF##*/}
+          CURR_VER=$( grep version Cargo.toml | head -n 1 | awk '{print $3}' | tr -d '"' )
+          if [[ "${PUSHED_TAG}" != "python-v${CURR_VER}" ]]; then
+            echo "Cargo metadata has version set to ${CURR_VER}, but got pushed tag ${PUSHED_TAG}."
+            exit 1
+          fi
+
+  release-github-pypi:
+    needs: validate-release-tag
+    name: PyPI release
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - macOS-10.15
+          - macOS-11.0
+          - windows-2019
+        include:
+          - target: x86_64-apple-darwin
+            os: macOS-10.15
+          - target: x86_64-apple-darwin
+            os: macOS-11.0
+          - target: x86_64-pc-windows-msvc
+            os: windows-2019
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v2
+
+      - uses: actions-rs/toolchain@v1
+        with:
+          profile: minimal
+          toolchain: stable
+          override: true
+          target: ${{ matrix.target }}
+
+      - name: Install matruin
+        run: |
+          cargo install --git https://github.com/PyO3/maturin.git --rev 98636cea89c328b3eba4ebb548124f75c8018200 maturin
+
+      - uses: actions/setup-python@v2
+        with:
+          python-version: 3.6
+      - uses: actions/setup-python@v2
+        with:
+          python-version: 3.7
+      - uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
+      - uses: actions/setup-python@v2
+        with:
+          python-version: 3.9
+
+      - name: Publish to pypi (without sdist)
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: maturin publish -b pyo3 --target ${{ matrix.target }} --no-sdist
+
+  release-github-pypi-manylinux:
+    needs: validate-release-tag
+    name: PyPI release manylinux
+    runs-on: ubuntu-20.04
+    # we use arrow manylinux image instead of quay.io/pypa/manylinux2014_x86_64:2020-12-25-6634688
+    # for the openssl support.
+    # for unkonwn reason, upstream manylinux container deletes openssl
+    # installations at the end of the build.
+    container: apache/arrow-dev:amd64-centos-6.10-python-manylinux2010
+    steps:
+      # actions/checkout@v2 is a node action, which runs on a fairly new
+      # version of node. however, manylinux environment's glibc is too old for
+      # that version of the node. so we will have to use v1 instead, which is a
+      # docker based action.
+      - uses: actions/checkout@v1
+
+      # actions-rs/toolchain@v1 is a node action, which runs on a fairly new
+      # version of node. however, manylinux environment's glibc is too old for
+      # that version of the node. so we will have to install rust manually here.
+      - name: Install Rust
+        run: |
+          curl https://sh.rustup.rs -sSf | sh -s -- -y
+          $HOME/.cargo/bin/rustup default stable
+          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+      - name: Install matruin
+        run: |
+          cargo install --git https://github.com/PyO3/maturin.git --rev 98636cea89c328b3eba4ebb548124f75c8018200 maturin
+
+      - name: Enable manylinux Python targets
+        run: |
+            echo "/opt/python/cp36-cp36m/bin" >> $GITHUB_PATH
+            echo "/opt/python/cp37-cp37m/bin" >> $GITHUB_PATH
+            echo "/opt/python/cp38-cp38/bin" >> $GITHUB_PATH
+            echo "/opt/python/cp39-cp39/bin" >> $GITHUB_PATH
+      - name: Publish manylinux to pypi (without sdist)
+        env:
+          # manually set pkg config path for openssl link
+          PKG_CONFIG_PATH: /usr/local/lib64/pkgconfig
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        run: maturin publish -b pyo3 --target x86_64-unknown-linux-gnu --no-sdist

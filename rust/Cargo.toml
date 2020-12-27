@@ -30,9 +30,10 @@ azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional 
 rusoto_core = { version = "0.43", optional = true }
 rusoto_s3 = { version = "0.43", optional = true }
 
-arrow  = { git = "https://github.com/apache/arrow.git", branch = "master" }
-datafusion = { git = "https://github.com/apache/arrow.git", branch = "master", optional = true }
-parquet = { git = "https://github.com/apache/arrow.git", branch = "master" }
+# Cannot use branch constraint due to https://github.com/PyO3/maturin/issues/389
+arrow  = { git = "https://github.com/apache/arrow.git", rev = "6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b" }
+datafusion = { git = "https://github.com/apache/arrow.git", rev = "6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b", optional = true }
+parquet = { git = "https://github.com/apache/arrow.git", rev = "6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b" }
 crossbeam = { version = "0", optional = true }
 cfg-if = "1"
 async-trait = "0.1"
