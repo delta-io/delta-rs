@@ -14,7 +14,8 @@ jobs:
     runs-on: ubuntu-20.04
     steps:
       - uses: actions/checkout@v2
-      - run: |
+      - name: compare git tag with cargo metadata
+        run: |
           PUSHED_TAG=${GITHUB_REF##*/}
           CURR_VER=$( grep version Cargo.toml | head -n 1 | awk '{print $3}' | tr -d '"' )
           if [[ "${PUSHED_TAG}" != "python-v${CURR_VER}" ]]; then
@@ -112,4 +113,4 @@ jobs:
           # manually set pkg config path for openssl link
           PKG_CONFIG_PATH: /usr/local/lib64/pkgconfig
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        run: maturin publish -b pyo3 --target x86_64-unknown-linux-gnu --no-sdist
+        run: maturin publish -b pyo3 --target x86_64-unknown-linux-gnu
