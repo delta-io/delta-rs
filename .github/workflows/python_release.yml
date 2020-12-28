@@ -31,13 +31,10 @@ jobs:
       matrix:
         os:
           - macOS-10.15
-          - macOS-11.0
           - windows-2019
         include:
           - target: x86_64-apple-darwin
             os: macOS-10.15
-          - target: x86_64-apple-darwin
-            os: macOS-11.0
           - target: x86_64-pc-windows-msvc
             os: windows-2019
     runs-on: ${{ matrix.os }}
@@ -113,4 +110,5 @@ jobs:
           # manually set pkg config path for openssl link
           PKG_CONFIG_PATH: /usr/local/lib64/pkgconfig
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        # linux build uploads sdist to update projection description on PyPI
         run: maturin publish -b pyo3 --target x86_64-unknown-linux-gnu
