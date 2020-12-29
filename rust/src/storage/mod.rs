@@ -146,21 +146,21 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
 pub enum StorageError {
     #[error("Object not found")]
     NotFound,
-    #[error("Failed to read local object content")]
+    #[error("Failed to read local object content: {source}")]
     IO { source: std::io::Error },
 
     #[cfg(feature = "s3")]
-    #[error("Failed to read S3 object content")]
+    #[error("Failed to read S3 object content: {source}")]
     S3Get {
         source: RusotoError<rusoto_s3::GetObjectError>,
     },
     #[cfg(feature = "s3")]
-    #[error("Failed to read S3 object metadata")]
+    #[error("Failed to read S3 object metadata: {source}")]
     S3Head {
         source: RusotoError<rusoto_s3::HeadObjectError>,
     },
     #[cfg(feature = "s3")]
-    #[error("Failed to list S3 objects")]
+    #[error("Failed to list S3 objects: {source}")]
     S3List {
         source: RusotoError<rusoto_s3::ListObjectsV2Error>,
     },

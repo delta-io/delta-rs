@@ -141,12 +141,12 @@ impl From<StorageError> for ApplyLogError {
 pub enum LoadCheckpointError {
     #[error("Checkpoint file not found")]
     NotFound,
-    #[error("Invalid JSON in checkpoint")]
+    #[error("Invalid JSON in checkpoint: {source}")]
     InvalidJSON {
         #[from]
         source: serde_json::error::Error,
     },
-    #[error("Failed to read checkpoint content")]
+    #[error("Failed to read checkpoint content: {source}")]
     Storage { source: StorageError },
 }
 
