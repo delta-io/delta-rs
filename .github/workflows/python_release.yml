@@ -74,11 +74,7 @@ jobs:
     needs: validate-release-tag
     name: PyPI release manylinux
     runs-on: ubuntu-20.04
-    # we use arrow manylinux image instead of quay.io/pypa/manylinux2014_x86_64:2020-12-25-6634688
-    # for the openssl support.
-    # for unkonwn reason, upstream manylinux container deletes openssl
-    # installations at the end of the build.
-    container: apache/arrow-dev:amd64-centos-6.10-python-manylinux2010
+    container: pypa/manylinux2010_x86_64:2020-12-25-719135c
     steps:
       # actions/checkout@v2 is a node action, which runs on a fairly new
       # version of node. however, manylinux environment's glibc is too old for
@@ -107,8 +103,6 @@ jobs:
             echo "/opt/python/cp39-cp39/bin" >> $GITHUB_PATH
       - name: Publish manylinux to pypi (without sdist)
         env:
-          # manually set pkg config path for openssl link
-          PKG_CONFIG_PATH: /usr/local/lib64/pkgconfig
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         # linux build uploads sdist to update projection description on PyPI
         run: maturin publish -b pyo3 --target x86_64-unknown-linux-gnu

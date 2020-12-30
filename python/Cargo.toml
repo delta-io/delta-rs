@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "0.1.1"
+version = "0.1.2"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
@@ -13,6 +13,9 @@ crate-type = ["cdylib"]
 
 [dependencies]
 tokio = "0.2"
+# reqwest is pulled in by azure sdk
+# for better portability statically link openssl into binary wheel
+reqwest = { version = "0.10", features = ["native-tls-vendored"] }
 
 [dependencies.pyo3]
 version = "0.12.*"
