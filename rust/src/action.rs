@@ -48,6 +48,67 @@ fn gen_action_type_error(action: &str, field: &str, expected_type: &str) -> Acti
     ))
 }
 
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ColumnValueStat {
+    Column(HashMap<String, ColumnValueStat>),
+    Value(serde_json::Value),
+}
+
+impl ColumnValueStat {
+    pub fn as_column(&self) -> Option<&HashMap<String, ColumnValueStat>> {
+        match self {
+            ColumnValueStat::Column(m) => Some(m),
+            _ => None,
+        }
+    }
+
+    pub fn as_value(&self) -> Option<&serde_json::Value> {
+        match self {
+            ColumnValueStat::Value(v) => Some(v),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[serde(untagged)]
+pub enum ColumnCountStat {
+    Column(HashMap<String, ColumnCountStat>),
+    Value(DeltaDataTypeLong),
+}
+
+impl ColumnCountStat {
+    pub fn as_column(&self) -> Option<&HashMap<String, ColumnCountStat>> {
+        match self {
+            ColumnCountStat::Column(m) => Some(m),
+            _ => None,
+        }
+    }
+
+    pub fn as_value(&self) -> Option<DeltaDataTypeLong> {
+        match self {
+            ColumnCountStat::Value(v) => Some(*v),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Serialize, Deserialize, Debug, Default)]
+pub struct Stats {
+    // number of records in this file
+    pub numRecords: DeltaDataTypeLong,
+
+    // start of per column stats
+
+    // A value samller than all values present in the file for all columns
+    pub minValues: HashMap<String, ColumnValueStat>,
+    // A value larger than all values present in the file for all columns
+    pub maxValues: HashMap<String, ColumnValueStat>,
+    // The number of null values for all column
+    pub nullCount: HashMap<String, ColumnCountStat>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Add {
     // A relative path, from the root of the table, to a file that should be added to the table
@@ -154,6 +215,12 @@ impl Add {
         }
 
         Ok(re)
+    }
+
+    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+        self.stats
+            .as_ref()
+            .map_or(Ok(None), |s| Ok(serde_json::from_str(s)?))
     }
 }
 
@@ -504,5 +571,73 @@ mod tests {
 
         assert_eq!(add_action.partitionValues.len(), 0);
         assert_eq!(add_action.stats, None);
+    }
+
+    #[test]
+    fn test_load_table_stats() {
+        let action = Add {
+            stats: Some(
+                serde_json::json!({
+                    "numRecords": 22,
+                    "minValues": {"a": 1, "nested": {"b": 2, "c": "a"}},
+                    "maxValues": {"a": 10, "nested": {"b": 20, "c": "z"}},
+                    "nullCount": {"a": 1, "nested": {"b": 0, "c": 1}},
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        let stats = action.get_stats().unwrap().unwrap();
+
+        assert_eq!(stats.numRecords, 22);
+
+        assert_eq!(
+            stats.minValues["a"].as_value().unwrap(),
+            &serde_json::json!(1)
+        );
+        assert_eq!(
+            stats.minValues["nested"].as_column().unwrap()["b"]
+                .as_value()
+                .unwrap(),
+            &serde_json::json!(2)
+        );
+        assert_eq!(
+            stats.minValues["nested"].as_column().unwrap()["c"]
+                .as_value()
+                .unwrap(),
+            &serde_json::json!("a")
+        );
+
+        assert_eq!(
+            stats.maxValues["a"].as_value().unwrap(),
+            &serde_json::json!(10)
+        );
+        assert_eq!(
+            stats.maxValues["nested"].as_column().unwrap()["b"]
+                .as_value()
+                .unwrap(),
+            &serde_json::json!(20)
+        );
+        assert_eq!(
+            stats.maxValues["nested"].as_column().unwrap()["c"]
+                .as_value()
+                .unwrap(),
+            &serde_json::json!("z")
+        );
+
+        assert_eq!(stats.nullCount["a"].as_value().unwrap(), 1);
+        assert_eq!(
+            stats.nullCount["nested"].as_column().unwrap()["b"]
+                .as_value()
+                .unwrap(),
+            0
+        );
+        assert_eq!(
+            stats.nullCount["nested"].as_column().unwrap()["c"]
+                .as_value()
+                .unwrap(),
+            1
+        );
     }
 }
