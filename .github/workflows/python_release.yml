@@ -74,7 +74,7 @@ jobs:
     needs: validate-release-tag
     name: PyPI release manylinux
     runs-on: ubuntu-20.04
-    container: pypa/manylinux2010_x86_64:2020-12-25-719135c
+    container: quay.io/pypa/manylinux2010_x86_64:2020-12-31-4928808
     steps:
       # actions/checkout@v2 is a node action, which runs on a fairly new
       # version of node. however, manylinux environment's glibc is too old for
