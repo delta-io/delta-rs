@@ -29,7 +29,7 @@ pub struct S3StorageBackend {
 
 impl S3StorageBackend {
     pub fn new() -> Self {
-        let client = S3Client::new(Region::UsEast2);
+        let client = S3Client::new(Region::default());
         Self { client }
     }
 }
