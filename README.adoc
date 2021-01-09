@@ -1,4 +1,4 @@
-= Delta.rs
+= delta-rs
 
 image:https://github.com/reiseburo/delta.rs/workflows/build/badge.svg[Build Status,link=https://github.com/reiseburo/delta.rs/actions]
 image:https://img.shields.io/crates/v/deltalake.svg?style=flat-square[Crate,link=https://crates.io/crates/deltalake]
