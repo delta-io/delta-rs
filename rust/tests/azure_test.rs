@@ -1,11 +1,19 @@
 #[cfg(feature = "azure")]
 mod azure {
+    /*
+     * The storage account used below resides in @rtyler's personal Azure account
+     *
+     * Should there be test failures, or if you need more files uploaded into this account, let him
+     * know
+     */
     #[tokio::test]
     async fn test_azure_simple() {
-        std::env::set_var("AZURE_STORAGE_ACCOUNT", "deltarstests");
-        std::env::set_var("AZURE_STORAGE_SAS", "?sv=2019-12-12&ss=b&srt=co&sp=rl&se=2050-12-31T23:59:59Z&st=2020-11-30T10:19:31Z&spr=https&sig=%2FVV88TK0pwkY%2FoF3qXwweisDs63gfzdBlHAhB1zsED8%3D");
+        std::env::set_var("AZURE_STORAGE_ACCOUNT", "deltars");
+        // Expires January 2026
+        std::env::set_var("AZURE_STORAGE_SAS", "?sv=2019-12-12&ss=b&srt=co&sp=rl&se=2026-01-06T06:45:33Z&st=2021-01-09T22:45:33Z&spr=https&sig=X9QtnFSA9UyMq3s4%2Fu2obCYeybdHsd2wVpbyvoTjECM%3D");
+        // https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri
         let table =
-            deltalake::open_table("abfss://simple@deltarstests.dfs.core.windows.net/simple/table")
+            deltalake::open_table("abfss://simple@deltars.dfs.core.windows.net/")
                 .await
                 .unwrap();
         println!("{}", table);
