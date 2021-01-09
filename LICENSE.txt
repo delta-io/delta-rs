@@ -1,4 +1,4 @@
-Copyright (2020) The Delta Lake Project Authors.  All rights reserved.
+Copyright (2020) QP Hou and a number of other contributors.  All rights reserved.
 
 
                                  Apache License
