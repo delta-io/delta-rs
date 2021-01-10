@@ -5,6 +5,8 @@ use clap::{App, AppSettings, Arg};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    env_logger::init();
+
     let matches = App::new("Delta table inspector")
         .version(env!("CARGO_PKG_VERSION"))
         .about("Utility to help inspect Delta talebs")
