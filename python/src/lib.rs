@@ -3,8 +3,8 @@
 extern crate deltalake;
 extern crate pyo3;
 
-use self::pyo3::create_exception;
-use self::pyo3::exceptions::PyException;
+use pyo3::create_exception;
+use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
@@ -66,6 +66,7 @@ impl RawDeltaTable {
 #[pymodule]
 // module name need to match project name
 fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
+    env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add_class::<RawDeltaTable>()?;
     m.add("DeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())

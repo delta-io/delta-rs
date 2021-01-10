@@ -16,6 +16,7 @@ tokio = "0.2"
 # reqwest is pulled in by azure sdk
 # for better portability statically link openssl into binary wheel
 reqwest = { version = "0.10", features = ["native-tls-vendored"] }
+env_logger = "0"
 
 [dependencies.pyo3]
 version = "0.12.*"
