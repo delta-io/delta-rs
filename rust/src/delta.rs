@@ -96,7 +96,7 @@ pub struct DeltaTableMetaData {
     pub schema: Schema,
     // An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
-    // NOTE: this field is undocumented
+    // table properties
     pub configuration: HashMap<String, String>,
 }
 

@@ -2,6 +2,7 @@
 
 use std::collections::HashMap;
 
+use log::debug;
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -206,10 +207,10 @@ impl Add {
                     }
                 },
                 _ => {
-                    return Err(ActionError::InvalidField(format!(
-                        "Unexpected field name for add action: {}",
-                        name,
-                    )));
+                    debug!(
+                        "Unexpected field name `{}` for add action: {:?}",
+                        name, record
+                    );
                 }
             }
         }
@@ -346,10 +347,10 @@ impl MetaData {
                     }
                 }
                 _ => {
-                    return Err(ActionError::InvalidField(format!(
-                        "Unexpected field name for metaData action: {}",
-                        name,
-                    )));
+                    debug!(
+                        "Unexpected field name `{}` for metaData action: {:?}",
+                        name, record
+                    );
                 }
             }
         }
@@ -394,10 +395,10 @@ impl Remove {
                     })?;
                 }
                 _ => {
-                    return Err(ActionError::InvalidField(format!(
-                        "Unexpected field name for remove action: {}",
-                        name,
-                    )));
+                    debug!(
+                        "Unexpected field name `{}` for remove action: {:?}",
+                        name, record
+                    );
                 }
             }
         }
@@ -441,10 +442,10 @@ impl Txn {
                         .map_err(|_| gen_action_type_error("txn", "lastUpdated", "long"))?;
                 }
                 _ => {
-                    return Err(ActionError::InvalidField(format!(
-                        "Unexpected field name for txn action: {}",
-                        name,
-                    )));
+                    debug!(
+                        "Unexpected field name `{}` for txn action: {:?}",
+                        name, record
+                    );
                 }
             }
         }
@@ -478,10 +479,10 @@ impl Protocol {
                     })?;
                 }
                 _ => {
-                    return Err(ActionError::InvalidField(format!(
-                        "Unexpected field name for protocol action: {}",
-                        name,
-                    )));
+                    debug!(
+                        "Unexpected field name `{}` for protocol action: {:?}",
+                        name, record
+                    );
                 }
             }
         }
