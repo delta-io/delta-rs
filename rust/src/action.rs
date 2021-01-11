@@ -133,6 +133,15 @@ pub struct Add {
     pub size: DeltaDataTypeLong,
     // A map from partition column to value for this file
     pub partitionValues: HashMap<String, String>,
+    // Partition values stored in raw parquet struct format. In this struct, the column names
+    // correspond to the partition columns and the values are stored in their corresponding data
+    // type. This is a required field when the table is partitioned and the table property
+    // delta.checkpoint.writeStatsAsStruct is set to true. If the table is not partitioned, this
+    // column can be omitted.
+    //
+    // This field is only available in add action records read from checkpoints
+    #[serde(skip_serializing, skip_deserializing)]
+    pub partitionValues_parsed: Option<parquet::record::Row>,
     // The time this file was created, as milliseconds since the epoch
     pub modificationTime: DeltaDataTypeTimestamp,
     // When false the file must already be present in the table or the records in the added file
@@ -144,7 +153,10 @@ pub struct Add {
     // Contains statistics (e.g., count, min/max values for columns) about the data in this file
     pub stats: Option<String>,
     // Contains statistics (e.g., count, min/max values for columns) about the data in this file in
-    // raw parquet format. This field is only available in add action records read from checkpoints
+    // raw parquet format. This field needs to be written when statistics are available and the
+    // table property: delta.checkpoint.writeStatsAsStruct is set to true.
+    //
+    // This field is only available in add action records read from checkpoints
     #[serde(skip_serializing, skip_deserializing)]
     pub stats_parsed: Option<parquet::record::Row>,
     // Map containing metadata about this file
@@ -201,6 +213,16 @@ impl Add {
                             .clone();
                         re.partitionValues.entry(key).or_insert(value);
                     }
+                }
+                "partitionValues_parsed" => {
+                    re.partitionValues_parsed = Some(
+                        record
+                            .get_group(i)
+                            .map_err(|_| {
+                                gen_action_type_error("add", "partitionValues_parsed", "struct")
+                            })?
+                            .clone(),
+                    );
                 }
                 "tags" => match record.get_map(i) {
                     Ok(tags_map) => {
