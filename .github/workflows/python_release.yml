@@ -63,7 +63,7 @@ jobs:
 
       - name: Install matruin
         run: |
-          pip install maturin==0.90
+          pip install maturin==0.9.0
 
       - name: Publish to pypi (without sdist)
         env:
@@ -91,16 +91,17 @@ jobs:
           $HOME/.cargo/bin/rustup default stable
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: Install matruin
-        run: |
-          pip install maturin==0.90
-
       - name: Enable manylinux Python targets
         run: |
             echo "/opt/python/cp36-cp36m/bin" >> $GITHUB_PATH
             echo "/opt/python/cp37-cp37m/bin" >> $GITHUB_PATH
             echo "/opt/python/cp38-cp38/bin" >> $GITHUB_PATH
             echo "/opt/python/cp39-cp39/bin" >> $GITHUB_PATH
+
+      - name: Install matruin
+        run: |
+          pip install maturin==0.9.0
+
       - name: Publish manylinux to pypi (without sdist)
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
