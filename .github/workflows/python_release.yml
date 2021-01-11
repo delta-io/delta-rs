@@ -48,10 +48,6 @@ jobs:
           override: true
           target: ${{ matrix.target }}
 
-      - name: Install matruin
-        run: |
-          cargo install --git https://github.com/PyO3/maturin.git --rev 98636cea89c328b3eba4ebb548124f75c8018200 maturin
-
       - uses: actions/setup-python@v2
         with:
           python-version: 3.6
@@ -64,6 +60,10 @@ jobs:
       - uses: actions/setup-python@v2
         with:
           python-version: 3.9
+
+      - name: Install matruin
+        run: |
+          pip install maturin==0.90
 
       - name: Publish to pypi (without sdist)
         env:
@@ -93,7 +93,7 @@ jobs:
 
       - name: Install matruin
         run: |
-          cargo install --git https://github.com/PyO3/maturin.git --rev 98636cea89c328b3eba4ebb548124f75c8018200 maturin
+          pip install maturin==0.90
 
       - name: Enable manylinux Python targets
         run: |
