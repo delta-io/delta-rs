@@ -109,6 +109,22 @@ pub struct Stats {
     pub nullCount: HashMap<String, ColumnCountStat>,
 }
 
+// file stats parsed from raw parquet format
+#[derive(Debug, Default)]
+pub struct StatsParsed {
+    // number of records in this file
+    pub numRecords: DeltaDataTypeLong,
+
+    // start of per column stats
+
+    // A value samller than all values present in the file for all columns
+    pub minValues: HashMap<String, parquet::record::Field>,
+    // A value larger than all values present in the file for all columns
+    pub maxValues: HashMap<String, parquet::record::Field>,
+    // The number of null values for all column
+    pub nullCount: HashMap<String, DeltaDataTypeLong>,
+}
+
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Add {
     // A relative path, from the root of the table, to a file that should be added to the table
@@ -127,6 +143,10 @@ pub struct Add {
     pub dataChange: bool,
     // Contains statistics (e.g., count, min/max values for columns) about the data in this file
     pub stats: Option<String>,
+    // Contains statistics (e.g., count, min/max values for columns) about the data in this file in
+    // raw parquet format. This field is only available in add action records read from checkpoints
+    #[serde(skip_serializing, skip_deserializing)]
+    pub stats_parsed: Option<parquet::record::Row>,
     // Map containing metadata about this file
     pub tags: Option<HashMap<String, String>>,
 }
@@ -205,6 +225,14 @@ impl Add {
                         re.stats = None;
                     }
                 },
+                "stats_parsed" => match record.get_group(i) {
+                    Ok(stats_parsed) => {
+                        re.stats_parsed = Some(stats_parsed.clone());
+                    }
+                    _ => {
+                        re.stats_parsed = None;
+                    }
+                },
                 _ => {
                     log::warn!(
                         "Unexpected field name `{}` for add action: {:?}",
@@ -222,6 +250,72 @@ impl Add {
         self.stats
             .as_ref()
             .map_or(Ok(None), |s| Ok(serde_json::from_str(s)?))
+    }
+
+    pub fn get_stats_parsed(&self) -> Result<Option<StatsParsed>, parquet::errors::ParquetError> {
+        self.stats_parsed.as_ref().map_or(Ok(None), |record| {
+            let mut stats = StatsParsed::default();
+
+            for (i, (name, _)) in record.get_column_iter().enumerate() {
+                match name.as_str() {
+                    "numRecords" => match record.get_long(i) {
+                        Ok(v) => {
+                            stats.numRecords = v;
+                        }
+                        _ => {
+                            log::error!("Expect type of stats_parsed field numRecords to be long, got: {}", record);
+                        }
+                    }
+                    "minValues" => match record.get_group(i) {
+                        Ok(row) => {
+                            for (name, field) in  row.get_column_iter() {
+                                stats.minValues.insert(name.clone(), field.clone());
+                            }
+                        }
+                        _ => {
+                            log::error!("Expect type of stats_parsed field minRecords to be struct, got: {}", record);
+                        }
+                    }
+                    "maxValues" => match record.get_group(i) {
+                        Ok(row) => {
+                            for (name, field) in  row.get_column_iter() {
+                                stats.maxValues.insert(name.clone(), field.clone());
+                            }
+                        }
+                        _ => {
+                            log::error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
+                        }
+                    }
+                    "nullCount" => match record.get_group(i) {
+                        Ok(row) => {
+                            for (i, (name, _)) in  row.get_column_iter().enumerate() {
+                                match row.get_long(i) {
+                                    Ok(v) => {
+                                        stats.nullCount.insert(name.clone(), v);
+                                    }
+                                    _ => {
+                                        log::error!("Expect type of stats_parsed.nullRecords value to be struct, got: {}", row);
+                                    }
+                                }
+                            }
+                        }
+                        _ => {
+                            log::error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
+                        }
+                    }
+                    _ => {
+                        log::warn!(
+                            "Unexpected field name `{}` for stats_parsed: {:?}",
+                            name,
+                            record,
+                        );
+                    }
+
+                }
+            }
+
+            Ok(Some(stats))
+        })
     }
 }
 
