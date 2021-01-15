@@ -3,10 +3,10 @@ from typing import List
 import pyarrow
 from pyarrow.dataset import dataset
 
-from .deltalake import RawDeltaTable
+from .deltalake import RawDeltaTable, rust_core_version
 
 
-class DeltaTable():
+class DeltaTable:
     def __init__(self, table_path: str):
         self._table = RawDeltaTable(table_path)
 
