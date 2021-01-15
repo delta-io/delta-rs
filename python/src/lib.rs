@@ -63,10 +63,17 @@ impl RawDeltaTable {
     }
 }
 
+#[pyfunction]
+fn rust_core_version() -> &'static str {
+    deltalake::crate_version()
+}
+
 #[pymodule]
 // module name need to match project name
 fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
+
+    m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add("DeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())
