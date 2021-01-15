@@ -51,15 +51,6 @@ jobs:
       - uses: actions/setup-python@v2
         with:
           python-version: 3.6
-      - uses: actions/setup-python@v2
-        with:
-          python-version: 3.7
-      - uses: actions/setup-python@v2
-        with:
-          python-version: 3.8
-      - uses: actions/setup-python@v2
-        with:
-          python-version: 3.9
 
       - name: Install matruin
         run: |
@@ -94,9 +85,6 @@ jobs:
       - name: Enable manylinux Python targets
         run: |
             echo "/opt/python/cp36-cp36m/bin" >> $GITHUB_PATH
-            echo "/opt/python/cp37-cp37m/bin" >> $GITHUB_PATH
-            echo "/opt/python/cp38-cp38/bin" >> $GITHUB_PATH
-            echo "/opt/python/cp39-cp39/bin" >> $GITHUB_PATH
 
       - name: Install matruin
         run: |

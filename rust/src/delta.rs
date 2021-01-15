@@ -635,3 +635,8 @@ pub async fn open_table_with_ds(table_path: &str, ds: &str) -> Result<DeltaTable
 
     Ok(table)
 }
+
+/// Returns rust create version, can be use used in language bindings to expose Rust core version
+pub fn crate_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}

@@ -33,9 +33,14 @@ jobs:
         restore-keys: |
           python-${{ runner.OS }}-target-incremental-
 
-    - uses: actions/setup-python@v2
+    - name: Format Python code with Black
+      uses: actions/setup-python@v2
       with:
-        python-version: 3.8
+        python-version: 3.6
+
+    - uses: psf/black@stable
+      with:
+        black_args: ". --check"
 
     - name: Setup virtualenv
       run: |
@@ -69,5 +74,5 @@ jobs:
         maturin build --manylinux off
         ls -lh ../target/wheels
         PY_MINOR_VER=$(python -V | cut -d. -f 2)
-        pip install $(printf ../target/wheels/deltalake-*-cp3${PY_MINOR_VER}-*.whl)'[devel,pandas]'
+        pip install $(printf ../target/wheels/deltalake-*-cp36-abi3-*.whl)'[devel,pandas]'
         py.test tests
