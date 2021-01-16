@@ -24,6 +24,12 @@ It can also act as the basis for native bindings in other languages such as Pyth
 
 Join link:https://join.slack.com/t/delta-users/shared_invite/enQtODQ5ODM5OTAxMjAwLWY4NGI5ZmQ3Y2JmMjZjYjc1MDkwNTA5YTQ4MzhjOWY1MmVjNTM2OGZhNTExNmM5MzQ0YzEzZjIwMjc0OGI0OGM[#delta-rs in the Delta Lake Slack workspace]
 
+=== Development Meeting
+
+We have a standing development sync meeting for those that are interested. The meeting is held every two weeks at **9am PST** on Tuesday mornings. The direct meeting URL is shared in the Slack channel above :point_up: before the meeting.
+
+These meetings are also link:https://www.youtube.com/channel/UCSKhDO79MNcX4pIIRFD0UVg[streamed live via YouTube] if you just want to listen in.
+
 === Development
 
 Delta.rs requires the Rust compiler, which can be installed with the
@@ -34,8 +40,8 @@ Running tests can be done with `cargo test`
 
 === Python
 
-The `python/` directory contains an early prototype of a Python library built on top of Delta.rs
+The `python/` directory contains an early prototype of a Python library built on top of delta-rs
 
 === Ruby
 
-The `ruby/` directory contains an early prototype of a Ruby library built on top of Delta.rs
+The `ruby/` directory contains an early prototype of a Ruby library built on top of delta-rs
