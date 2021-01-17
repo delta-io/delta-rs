@@ -63,9 +63,9 @@ jobs:
     # - name: Run Rust tests
     #   run: cargo test
 
-    - name: Install maturin
+    - name: Install matruin
       run: |
-        cargo install --git https://github.com/PyO3/maturin.git --rev 98636cea89c328b3eba4ebb548124f75c8018200 maturin
+        pip install maturin==0.9.0
 
     - name: Run Python tests
       run: |
