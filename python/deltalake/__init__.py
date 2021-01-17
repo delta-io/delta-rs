@@ -29,11 +29,11 @@ class DeltaTable:
         # Decide based on the first file, if the file is on cloud storage or local
         if paths[0].netloc:
             keys = [curr_file.path for curr_file in paths]
-            return dataset.dataset(
+            return dataset(
                 keys, filesystem=paths[0].scheme + "://" + paths[0].netloc
             )
         else:
-            return dataset.dataset(self._table.file_paths(), format="parquet")
+            return dataset(self._table.file_paths(), format="parquet")
 
     def to_pyarrow_table(self) -> pyarrow.Table:
         return self.to_pyarrow_dataset().to_table()
