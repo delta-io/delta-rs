@@ -12,11 +12,9 @@ mod azure {
         // Expires January 2026
         std::env::set_var("AZURE_STORAGE_SAS", "?sv=2019-12-12&ss=b&srt=co&sp=rl&se=2026-01-06T06:45:33Z&st=2021-01-09T22:45:33Z&spr=https&sig=X9QtnFSA9UyMq3s4%2Fu2obCYeybdHsd2wVpbyvoTjECM%3D");
         // https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri
-        let table =
-            deltalake::open_table("abfss://simple@deltars.dfs.core.windows.net/")
-                .await
-                .unwrap();
-        println!("{}", table);
+        let table = deltalake::open_table("abfss://simple@deltars.dfs.core.windows.net/")
+            .await
+            .unwrap();
         assert_eq!(table.version, 4);
         assert_eq!(table.min_writer_version, 2);
         assert_eq!(table.min_reader_version, 1);

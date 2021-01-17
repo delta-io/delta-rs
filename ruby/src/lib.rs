@@ -17,7 +17,7 @@ ruby! {
         def initialize(helix, table_path: String) {
             println!("initializing with {}", table_path);
 
-            let mut rt = tokio::runtime::Runtime::new().unwrap();
+            let rt = tokio::runtime::Runtime::new().unwrap();
             let table = rt.block_on(deltalake::open_table(&table_path)).unwrap();
             let actual = Arc::new(table);
 

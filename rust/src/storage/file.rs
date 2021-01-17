@@ -4,6 +4,7 @@ use std::path::Path;
 use chrono::DateTime;
 use futures::{Stream, TryStreamExt};
 use tokio::fs;
+use tokio_stream::wrappers::ReadDirStream;
 
 use super::{ObjectMeta, StorageBackend, StorageError};
 
@@ -49,7 +50,8 @@ impl StorageBackend for FileStorageBackend {
         path: &'a str,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>
     {
-        let readdir = fs::read_dir(path).await?;
+        let readdir = ReadDirStream::new(fs::read_dir(path).await?);
+
         Ok(Box::pin(readdir.err_into().and_then(|entry| async move {
             Ok(ObjectMeta {
                 path: String::from(entry.path().to_str().unwrap()),
