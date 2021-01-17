@@ -12,11 +12,11 @@ name = "deltalake"
 crate-type = ["cdylib"]
 
 [dependencies]
-tokio = "0.2"
-# reqwest is pulled in by azure sdk
-# for better portability statically link openssl into binary wheel
-reqwest = { version = "0.10", features = ["native-tls-vendored"] }
+tokio = { version = "1", features = ["rt-multi-thread"] }
 env_logger = "0"
+# reqwest is pulled in by azure sdk, but not used by python binding itself
+# for binary wheel best practice, statically link openssl
+reqwest = { version = "*", features = ["native-tls-vendored"] }
 
 [dependencies.pyo3]
 version = "0.13.*"
@@ -39,6 +39,7 @@ requires-dist = [
     "pyarrow>=2",
     "pandas; extra =='pandas'",
     "pytest; extra == 'devel'",
-    "pytest-mock; extra == 'devel'"
+    "pytest-mock; extra == 'devel'",
+    "pytest-timeout; extra == 'devel'",
 ]
 provides-extra = ["pandas", "devel"]
