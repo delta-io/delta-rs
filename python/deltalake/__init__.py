@@ -24,12 +24,12 @@ class DeltaTable:
         self._table.load_version(version)
 
     def to_pyarrow_dataset(self) -> pyarrow.dataset.Dataset:
-        paths = [urlparse(curr_file) for curr_file in self._table.file_paths()] 
+        paths = [urlparse(curr_file) for curr_file in self._table.file_paths()]
 
         # Decide based on the first file, if the file is on cloud storage or local
         if paths[0].netloc:
             keys = [curr_file.path for curr_file in paths]
-            return dataset.dataset(keys, filesystem = paths[0].scheme + '://' + paths[0].netloc)
+            return dataset.dataset(keys, filesystem=paths[0].scheme + '://' + paths[0].netloc)
         else:
             return dataset.dataset(self._table.file_paths(), format="parquet")
 
