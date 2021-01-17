@@ -80,6 +80,9 @@ To install development version of the package into your current Python environme
 $ maturin develop
 ```
 
+Code are formatted with https://github.com/psf/black.
+
+
 Build manylinux wheels
 ----------------------
 
