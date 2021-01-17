@@ -29,7 +29,9 @@ class DeltaTable:
         # Decide based on the first file, if the file is on cloud storage or local
         if paths[0].netloc:
             keys = [curr_file.path for curr_file in paths]
-            return dataset.dataset(keys, filesystem=paths[0].scheme + '://' + paths[0].netloc)
+            return dataset.dataset(
+                keys, filesystem=paths[0].scheme + "://" + paths[0].netloc
+            )
         else:
             return dataset.dataset(self._table.file_paths(), format="parquet")
 
