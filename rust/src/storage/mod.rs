@@ -6,6 +6,8 @@ use futures::Stream;
 
 #[cfg(feature = "azure")]
 use azure_core::errors::AzureError;
+#[cfg(feature = "azure")]
+use std::error::Error;
 
 #[cfg(feature = "s3")]
 use rusoto_core::RusotoError;
@@ -48,6 +50,9 @@ pub enum UriError {
     #[cfg(feature = "azure")]
     #[error("Object URI missing path")]
     MissingObjectPath,
+    #[cfg(feature = "azure")]
+    #[error("Container mismatch, expected: {expected}, got: {got}")]
+    ContainerMismatch { expected: String, got: String },
 }
 
 #[derive(Debug)]
@@ -126,12 +131,14 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
         "abfss" => {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "azure")] {
+                    // URI scheme: abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>/<file_name>
                     let mut parts = parts[1].splitn(2, '@');
                     let file_system = parts.next().ok_or(UriError::MissingObjectFileSystem)?;
                     let mut parts = parts.next().map(|x| x.splitn(2, '.')).ok_or(UriError::MissingObjectAccountAndPath)?;
                     let account_name = parts.next().ok_or(UriError::MissingObjectAccountName)?;
                     let mut paths = parts.next().map(|x| x.splitn(2, '/')).ok_or(UriError::MissingObjectPath)?;
-                    let path = paths.nth(1).ok_or(UriError::MissingObjectPath)?;
+                    // assume root when uri ends without `/`
+                    let path = paths.nth(1).unwrap_or("");
                     Ok(Uri::ADLSGen2Object(azure::ADLSGen2Object { account_name, file_system, path }))
                 } else {
                     Err(UriError::InvalidScheme(String::from(parts[0])))
@@ -171,6 +178,14 @@ pub enum StorageError {
     #[cfg(feature = "azure")]
     #[error("Error interacting with Azure: {source}")]
     Azure { source: AzureError },
+    #[cfg(feature = "azure")]
+    #[error("Generic error: {source}")]
+    AzureGeneric {
+        source: Box<dyn Error + Sync + std::marker::Send>,
+    },
+    #[cfg(feature = "azure")]
+    #[error("Azure config error: {0}")]
+    AzureConfig(String),
 
     #[error("Invalid object URI")]
     Uri {
@@ -259,13 +274,13 @@ pub trait StorageBackend: Send + Sync + Debug {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>;
 }
 
-pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, UriError> {
+pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, StorageError> {
     match parse_uri(uri)? {
         Uri::LocalPath(_) => Ok(Box::new(file::FileStorageBackend::new())),
         #[cfg(feature = "s3")]
         Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new())),
         #[cfg(feature = "azure")]
-        Uri::ADLSGen2Object(_) => Ok(Box::new(azure::ADLSGen2Backend::new())),
+        Uri::ADLSGen2Object(obj) => Ok(Box::new(azure::ADLSGen2Backend::new(obj.file_system)?)),
     }
 }
 
