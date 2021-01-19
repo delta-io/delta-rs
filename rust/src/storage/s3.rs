@@ -1,7 +1,6 @@
 extern crate tokio;
 
 use std::{fmt, pin::Pin};
-use std::borrow::Cow;
 
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::Stream;
@@ -15,7 +14,7 @@ use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
 #[derive(Debug, PartialEq)]
 pub struct S3Object<'a> {
     pub bucket: &'a str,
-    pub key: Cow<'a, str>,
+    pub key: &'a str,
 }
 
 impl<'a> fmt::Display for S3Object<'a> {

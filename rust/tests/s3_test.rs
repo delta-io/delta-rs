@@ -47,7 +47,7 @@ mod s3 {
     }
 
     #[tokio::test]
-    async fn test_s3_simple_with_redundant_slash() {
+    async fn test_s3_simple_with_trailing_slash() {
         setup();
         let table =
             deltalake::open_table("s3://deltars/simple/")

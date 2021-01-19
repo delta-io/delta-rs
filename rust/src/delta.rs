@@ -539,7 +539,7 @@ impl DeltaTable {
             commit_infos: Vec::new(),
             app_transaction_version: HashMap::new(),
             last_check_point: None,
-            log_path: format!("{}/_delta_log", table_path),
+            log_path: format!("{}/_delta_log", table_path.trim_end_matches("/")),
             version_timestamp: HashMap::new(),
         })
     }
