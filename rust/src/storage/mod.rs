@@ -7,8 +7,10 @@ use futures::Stream;
 #[cfg(feature = "azure")]
 use azure_core::errors::AzureError;
 
-#[cfg(feature = "s3")]
-use rusoto_core::RusotoError;
+#[cfg(feature = "s3")] use {
+    rusoto_core::RusotoError,
+    std::borrow::Cow
+};
 
 #[cfg(feature = "azure")]
 pub mod azure;
@@ -109,12 +111,24 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
                             return Err(UriError::MissingObjectBucket);
                         }
                     };
-                    let key = match path_parts.next() {
+                    let raw_key = match path_parts.next() {
                         Some(x) => x,
                         None => {
                             return Err(UriError::MissingObjectKey);
                         }
                     };
+
+                    let key = match raw_key.contains('/') {
+                        false => Cow::Borrowed(raw_key),
+                        true => {
+                            let key_cleaned = raw_key.split('/')
+                                                     .filter(|p| !p.is_empty())
+                                                     .collect::<Vec<& str>>()
+                                                     .join("/");
+                            Cow::Owned(key_cleaned)
+                        }
+                    };
+
 
                     Ok(Uri::S3Object(s3::S3Object { bucket, key }))
                 } else {
@@ -282,7 +296,33 @@ mod tests {
             uri.into_s3object().unwrap(),
             s3::S3Object {
                 bucket: "foo",
-                key: "bar",
+                key: Cow::Borrowed("bar"),
+            }
+        );
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn test_parse_s3_object_uri_redundant_slash() {
+        let uri = parse_uri("s3://foo///bar").unwrap();
+        assert_eq!(
+            uri.into_s3object().unwrap(),
+            s3::S3Object {
+                bucket: "foo",
+                key: Cow::Borrowed("bar"),
+            }
+        );
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn test_parse_s3_object_uri_trailing_slash() {
+        let uri = parse_uri("s3://foo/bar/").unwrap();
+        assert_eq!(
+            uri.into_s3object().unwrap(),
+            s3::S3Object {
+                bucket: "foo",
+                key: Cow::Borrowed("bar"),
             }
         );
     }
