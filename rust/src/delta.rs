@@ -527,19 +527,20 @@ impl DeltaTable {
         table_path: &str,
         storage_backend: Box<dyn StorageBackend>,
     ) -> Result<Self, DeltaTableError> {
+        let table_path_normalized = table_path.trim_end_matches('/');
         Ok(Self {
             version: 0,
             files: Vec::new(),
             storage: storage_backend,
             tombstones: Vec::new(),
-            table_path: table_path.to_string(),
+            table_path: table_path_normalized.to_string(),
             min_reader_version: 0,
             min_writer_version: 0,
             current_metadata: None,
             commit_infos: Vec::new(),
             app_transaction_version: HashMap::new(),
             last_check_point: None,
-            log_path: format!("{}/_delta_log", table_path.trim_end_matches('/')),
+            log_path: format!("{}/_delta_log", table_path_normalized),
             version_timestamp: HashMap::new(),
         })
     }
