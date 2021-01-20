@@ -47,6 +47,19 @@ mod s3 {
     }
 
     #[tokio::test]
+    async fn test_s3_simple_with_trailing_slash() {
+        setup();
+        let table =
+            deltalake::open_table("s3://deltars/simple/")
+                .await
+                .unwrap();
+        println!("{}", table);
+        assert_eq!(table.version, 4);
+        assert_eq!(table.min_writer_version, 2);
+        assert_eq!(table.min_reader_version, 1);
+    }
+
+    #[tokio::test]
     async fn test_s3_simple_golden() {
         setup();
 
