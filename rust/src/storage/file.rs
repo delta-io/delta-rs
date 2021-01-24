@@ -1,8 +1,10 @@
 use std::pin::Pin;
+use std::path::Path;
 
 use chrono::DateTime;
 use futures::{Stream, TryStreamExt};
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 
 use super::{ObjectMeta, StorageBackend, StorageError};
 
@@ -17,6 +19,19 @@ impl FileStorageBackend {
 
 #[async_trait::async_trait]
 impl StorageBackend for FileStorageBackend {
+    fn join_path(
+        &self,
+        path: &str,
+        path_to_join: &str,
+    ) -> String {
+        let new_path = Path::new(path);
+        new_path
+            .join(path_to_join)
+            .into_os_string()
+            .into_string()
+            .unwrap()
+    }
+
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
         let attr = fs::metadata(path).await?;
 
@@ -42,5 +57,24 @@ impl StorageBackend for FileStorageBackend {
                 modified: DateTime::from(entry.metadata().await.unwrap().modified().unwrap()),
             })
         })))
+    }
+
+    async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
+        let dir = std::path::Path::new(path);
+        let dir = dir.parent().unwrap();
+
+        fs::create_dir_all(dir).await.map_err(|err| StorageError::IO{ source: err })?;
+
+        // use `OpenOptions` with `create_new` to create the file handle.
+        // this will force ErrorKind::AlreadyExists if the file already exists.
+        let mut f = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)
+            .await?;
+    
+        f.write(obj_bytes).await?;
+
+        Ok(())
     }
 }

@@ -6,9 +6,10 @@
 use std::{env, fmt, pin::Pin};
 
 use azure_core::prelude::*;
-use azure_storage::{client, key_client::KeyClient, Blob, ClientEndpoint, Container};
+use azure_storage::{Blob, ClientEndpoint, Container, blob, client, key_client::KeyClient};
 use futures::stream::{Stream, TryStreamExt};
 use log::debug;
+use parquet::file::properties;
 
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
 
@@ -147,5 +148,9 @@ impl StorageBackend for ADLSGen2Backend {
             .try_flatten();
 
         Ok(Box::pin(stream))
+    }
+
+    async fn put_obj(&self, _path: &str, _obj_bytes: &[u8]) -> Result<(), StorageError> {
+        unimplemented!("put_obj not implemented for azure");
     }
 }

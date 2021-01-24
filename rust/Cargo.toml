@@ -22,6 +22,7 @@ log = "0"
 env_logger = "0"
 regex = "1"
 chrono = "0"
+uuid = { version = "0.8", features = ["serde", "v4"] }
 
 # Azure
 azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "bc74cad7cc5f9226cf39c4abae0d902a85765e74" }

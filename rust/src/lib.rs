@@ -12,6 +12,7 @@ extern crate thiserror;
 
 pub mod action;
 mod delta;
+mod delta_arrow;
 mod schema;
 mod storage;
 

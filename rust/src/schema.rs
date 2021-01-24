@@ -11,7 +11,7 @@ pub type DeltaDataTypeTimestamp = DeltaDataTypeLong;
 pub type DeltaDataTypeInt = i32;
 
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct SchemaTypeStruct {
     // type field is alwsy the string "struct", so we are ignoring it here
     r#type: String,
@@ -24,7 +24,7 @@ impl SchemaTypeStruct {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SchemaField {
     // Name of this (possibly nested) column
     name: String,
@@ -56,7 +56,7 @@ impl SchemaField {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SchemaTypeArray {
     // type field is alwsy the string "array", so we are ignoring it here
     r#type: String,
@@ -77,7 +77,7 @@ impl SchemaTypeArray {
     }
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SchemaTypeMap {
     r#type: String,
     // The type of element used for the key of this map, represented as a string containing the
@@ -112,7 +112,7 @@ impl SchemaTypeMap {
  *   date: A calendar date, represented as a year-month-day triple without a timezone
  *   timestamp: Microsecond precision timestamp without a timezone
  */
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum SchemaDataType {
     primitive(String),
@@ -121,7 +121,7 @@ pub enum SchemaDataType {
     map(SchemaTypeMap),
 }
 
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Schema {
     r#type: String,
     fields: Vec<SchemaField>,

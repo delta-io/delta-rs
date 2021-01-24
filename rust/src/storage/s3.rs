@@ -1,6 +1,6 @@
 extern crate tokio;
 
-use std::{fmt, pin::Pin};
+use std::{fmt, pin::Pin, unimplemented};
 
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::Stream;
@@ -179,5 +179,9 @@ impl StorageBackend for S3StorageBackend {
         }
 
         Ok(Box::pin(futures::stream::unfold(ctx, next_meta)))
+    }
+
+    async fn put_obj(&self, _path: &str, _obj_bytes: &[u8]) -> Result<(), StorageError> {
+        unimplemented!("put_obj not implemented for s3");
     }
 }

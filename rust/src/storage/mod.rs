@@ -146,6 +146,8 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
 pub enum StorageError {
     #[error("Object not found")]
     NotFound,
+    #[error("Object exists already")]
+    AlreadyExists,
     #[error("Failed to read local object content: {source}")]
     IO { source: std::io::Error },
 
@@ -183,6 +185,7 @@ impl From<std::io::Error> for StorageError {
     fn from(error: std::io::Error) -> Self {
         match error.kind() {
             std::io::ErrorKind::NotFound => StorageError::NotFound,
+            std::io::ErrorKind::AlreadyExists => StorageError::AlreadyExists,
             _ => StorageError::IO { source: error },
         }
     }
@@ -243,12 +246,21 @@ pub struct ObjectMeta {
 
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + Debug {
+    fn join_path(
+        &self,
+        path: &str,
+        path_to_join: &str,
+    ) -> String {
+        let normalized_path = path.trim_end_matches('/');
+        format!("{}/{}", normalized_path, path_to_join)
+    }
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError>;
     async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>;
+    async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError>;
 }
 
 pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, UriError> {
