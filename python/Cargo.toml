@@ -25,7 +25,7 @@ features = ["extension-module", "abi3", "abi3-py36"]
 [dependencies.deltalake]
 path = "../rust"
 version = "0.*"
-features = ["s3", "azure"]
+features = ["s3", "azure", "simd"]
 
 [package.metadata.maturin]
 name = "deltalake"
