@@ -14,7 +14,7 @@ anyhow = "1.0"
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "1", features = ["fs", "macros"] }
+tokio = { version = "1", features = ["fs", "macros", "rt"] }
 tokio-stream = { version = "0", features = ["fs"] }
 futures = "0.3"
 bytes = "0.5"
@@ -33,9 +33,9 @@ rusoto_core = { version = "0.46", optional = true }
 rusoto_s3 = { version = "0.46", optional = true }
 
 # Cannot use branch constraint due to https://github.com/PyO3/maturin/issues/389
-arrow  = { git = "https://github.com/apache/arrow.git", rev = "6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b" }
-datafusion = { git = "https://github.com/apache/arrow.git", rev = "6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b", optional = true }
-parquet = { git = "https://github.com/apache/arrow.git", rev = "6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b" }
+arrow  = { git = "https://github.com/apache/arrow.git", rev = "e10d6062b64430874381f508191895f22d0d825f" }
+datafusion = { git = "https://github.com/apache/arrow.git", rev = "e10d6062b64430874381f508191895f22d0d825f", optional = true }
+parquet = { git = "https://github.com/apache/arrow.git", rev = "e10d6062b64430874381f508191895f22d0d825f" }
 crossbeam = { version = "0", optional = true }
 cfg-if = "1"
 async-trait = "0.1"
