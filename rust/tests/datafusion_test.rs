@@ -1,12 +1,10 @@
 #[cfg(feature = "datafusion-ext")]
 mod datafusion {
-    extern crate arrow;
-    extern crate datafusion;
-    extern crate deltalake;
+    use std::sync::Arc;
 
-    use self::arrow::array::UInt64Array;
-    use self::datafusion::error::Result;
-    use self::datafusion::execution::context::ExecutionContext;
+    use arrow::array::*;
+    use datafusion::error::Result;
+    use datafusion::execution::context::ExecutionContext;
 
     #[tokio::test]
     async fn test_datafusion_simple_query() -> Result<()> {
@@ -16,21 +14,22 @@ mod datafusion {
             .unwrap();
         ctx.register_table("demo", Box::new(table));
 
-        let results = ctx
+        let batches = ctx
             .sql("SELECT id FROM demo WHERE id > 5")?
             .collect()
-            .await?
-            .iter()
-            .filter(|batch| batch.num_rows() > 0)
-            .flat_map(|batch| {
-                UInt64Array::from(batch.column(0).data())
-                    .value_slice(0, 1)
-                    .iter()
-                    .map(|v| *v)
-                    .collect::<Vec<_>>()
-            })
-            .collect::<Vec<u64>>();
-        assert_eq!(results, vec![7u64, 9u64]);
+            .await?;
+
+        assert_eq!(batches.len(), 2);
+
+        assert_eq!(
+            batches[0].column(0).as_ref(),
+            Arc::new(Int64Array::from(vec![7])).as_ref(),
+        );
+
+        assert_eq!(
+            batches[1].column(0).as_ref(),
+            Arc::new(Int64Array::from(vec![9])).as_ref(),
+        );
 
         Ok(())
     }
