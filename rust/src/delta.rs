@@ -183,11 +183,13 @@ pub struct DeltaTable {
 
 impl DeltaTable {
     fn version_to_log_path(&self, version: DeltaDataTypeVersion) -> String {
-        return format!("{}/{:020}.json", self.log_path, version);
+        let version = format!("{:020}.json", version);
+        self.storage.join_path(&self.log_path, &version)
     }
 
     fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<String> {
-        let checkpoint_prefix = format!("{}/{:020}", self.log_path, check_point.version);
+        let checkpoint_prefix_pattern = format!("{:020}", check_point.version);
+        let checkpoint_prefix = self.storage.join_path(&self.log_path, &checkpoint_prefix_pattern);
         let mut checkpoint_data_paths = Vec::new();
 
         match check_point.parts {
@@ -210,7 +212,9 @@ impl DeltaTable {
     }
 
     async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
-        let last_checkpoint_path = format!("{}/_last_checkpoint", self.log_path);
+        let last_checkpoint_path = self
+            .storage
+            .join_path(&self.log_path, "_last_checkpoint");
         let data = self.storage.get_obj(&last_checkpoint_path).await?;
 
         Ok(serde_json::from_slice(&data)?)
@@ -258,9 +262,15 @@ impl DeltaTable {
         version: DeltaDataTypeVersion,
     ) -> Result<Option<CheckPoint>, DeltaTableError> {
         let mut cp: Option<CheckPoint> = None;
-        let re_checkpoint = Regex::new(r"^*/_delta_log/(\d{20})\.checkpoint\.parquet$").unwrap();
-        let re_checkpoint_parts =
-            Regex::new(r"^*/_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap();
+        let root = self.storage.join_path(r"^*", "_delta_log");
+        let regex_checkpoint = self
+            .storage
+            .join_path(&root, r"(\d{20})\.checkpoint\.parquet$");
+        let regex_checkpoint_parts = self
+            .storage
+            .join_path(&root, r"(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$");
+        let re_checkpoint = Regex::new(&regex_checkpoint).unwrap();
+        let re_checkpoint_parts = Regex::new(&regex_checkpoint_parts).unwrap();
 
         let mut stream = self.storage.list_objs(&self.log_path).await?;
 
@@ -527,20 +537,20 @@ impl DeltaTable {
         table_path: &str,
         storage_backend: Box<dyn StorageBackend>,
     ) -> Result<Self, DeltaTableError> {
-        let table_path_normalized = table_path.trim_end_matches('/');
+        let log_path_normalized = storage_backend.join_path(table_path, "_delta_log");
         Ok(Self {
             version: 0,
             files: Vec::new(),
             storage: storage_backend,
             tombstones: Vec::new(),
-            table_path: table_path_normalized.to_string(),
+            table_path: table_path.to_string(),
             min_reader_version: 0,
             min_writer_version: 0,
             current_metadata: None,
             commit_infos: Vec::new(),
             app_transaction_version: HashMap::new(),
             last_check_point: None,
-            log_path: format!("{}/_delta_log", table_path_normalized),
+            log_path: log_path_normalized,
             version_timestamp: HashMap::new(),
         })
     }
