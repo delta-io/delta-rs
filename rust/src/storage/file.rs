@@ -1,4 +1,5 @@
 use std::pin::Pin;
+use std::path::Path;
 
 use chrono::DateTime;
 use futures::{Stream, TryStreamExt};
@@ -17,6 +18,19 @@ impl FileStorageBackend {
 
 #[async_trait::async_trait]
 impl StorageBackend for FileStorageBackend {
+    fn join_path(
+        &self,
+        path: &str,
+        path_to_join: &str,
+    ) -> String {
+        let new_path = Path::new(path);
+        new_path
+            .join(path_to_join)
+            .into_os_string()
+            .into_string()
+            .unwrap()
+    }
+
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
         let attr = fs::metadata(path).await?;
 

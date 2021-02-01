@@ -243,6 +243,14 @@ pub struct ObjectMeta {
 
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + Debug {
+    fn join_path(
+        &self,
+        path: &str,
+        path_to_join: &str,
+    ) -> String {
+        let normalized_path = path.trim_end_matches('/');
+        format!("{}/{}", normalized_path, path_to_join)
+    }
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError>;
     async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
     async fn list_objs<'a>(
