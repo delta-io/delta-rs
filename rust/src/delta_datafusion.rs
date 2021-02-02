@@ -1,9 +1,7 @@
 use std::any::Any;
 use std::sync::Arc;
 
-use arrow::datatypes::{
-    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
-};
+use arrow::datatypes::Schema as ArrowSchema;
 use datafusion::datasource::datasource::Statistics;
 use datafusion::datasource::TableProvider;
 use datafusion::physical_plan::parquet::ParquetExec;
