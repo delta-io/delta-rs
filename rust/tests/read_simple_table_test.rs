@@ -111,8 +111,7 @@ async fn time_travel_by_ds() {
     ];
     for (fname, ds) in log_mtime_pair {
         let ts = ds_to_ts(ds);
-        let path = format!("{}/{}", log_dir, fname);
-        utime::set_file_times(Path::new(&path), ts, ts).unwrap();
+        utime::set_file_times(Path::new(log_dir).join(fname), ts, ts).unwrap();
     }
 
     let mut table =
