@@ -4,7 +4,6 @@ use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
-use std::path::Path;
 
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::StreamExt;
@@ -542,12 +541,7 @@ impl DeltaTable {
         self.files
             .iter()
             .map(|fname| {
-                let table_path = Path::new(&self.table_path);
-                table_path
-                    .join(fname)
-                    .into_os_string()
-                    .into_string()
-                    .unwrap()
+                self.storage.join_path(&self.table_path, fname)
             })
             .collect()
     }
