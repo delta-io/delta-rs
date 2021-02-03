@@ -740,11 +740,11 @@ impl<'a> DeltaTransaction<'a> {
     }
 
     async fn try_commit_loop(&mut self, actions: &[Action]) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
-        let mut attempt_number = 0;
+        let max_retries = max_retry_commit_attempts();
+        let mut attempt_number: u32 = 0;
 
         loop {
-            // TODO: max attempts must be a config
-            if attempt_number > 5 {
+            if attempt_number > max_retries {
                 return Err(DeltaTransactionError::CommitRetriesExceeded);
             }
 
@@ -783,6 +783,10 @@ impl<'a> DeltaTransaction<'a> {
         self.delta_table.update().await?;
         Ok(self.delta_table.version + 1)
     }
+}
+
+fn max_retry_commit_attempts() -> u32 {
+    std::env::var("DELTA_MAX_RETRY_COMMIT_ATTEMPTS").map_or(10000000, |s| s.parse::<u32>().unwrap())
 }
 
 pub async fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError> {
