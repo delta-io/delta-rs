@@ -1,11 +1,15 @@
 use std::any::Any;
+use std::fs::File;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema as ArrowSchema;
 use datafusion::datasource::datasource::Statistics;
 use datafusion::datasource::TableProvider;
-use datafusion::physical_plan::parquet::ParquetExec;
+use datafusion::logical_plan::{combine_filters, Expr};
+use datafusion::physical_plan::parquet::{ParquetExec, ParquetPartition, RowGroupPredicateBuilder};
 use datafusion::physical_plan::ExecutionPlan;
+use parquet::arrow::ParquetFileArrowReader;
+use parquet::file::reader::SerializedFileReader;
 
 use crate::delta;
 use crate::schema;
@@ -21,15 +25,47 @@ impl TableProvider for delta::DeltaTable {
         &self,
         projection: &Option<Vec<usize>>,
         batch_size: usize,
+        filters: &[Expr],
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         let schema =
             <ArrowSchema as From<&schema::Schema>>::from(delta::DeltaTable::schema(&self).unwrap());
         let filenames = self.get_file_paths();
 
+        let partitions = filenames
+            .into_iter()
+            .map(|fname| {
+                let mut num_rows = 0;
+                let mut total_byte_size = 0;
+
+                let file = File::open(&fname)?;
+                let file_reader = Arc::new(SerializedFileReader::new(file)?);
+                let mut arrow_reader = ParquetFileArrowReader::new(file_reader);
+                let meta_data = arrow_reader.get_metadata();
+                // collect all the unique schemas in this data set
+                for i in 0..meta_data.num_row_groups() {
+                    let row_group_meta = meta_data.row_group(i);
+                    num_rows += row_group_meta.num_rows();
+                    total_byte_size += row_group_meta.total_byte_size();
+                }
+                let statistics = Statistics {
+                    num_rows: Some(num_rows as usize),
+                    total_byte_size: Some(total_byte_size as usize),
+                    column_statistics: None,
+                };
+
+                Ok(ParquetPartition::new(vec![fname], statistics))
+            })
+            .collect::<datafusion::error::Result<_>>()?;
+
+        let predicate_builder = combine_filters(filters).and_then(|predicate_expr| {
+            RowGroupPredicateBuilder::try_new(&predicate_expr, schema.clone()).ok()
+        });
+
         Ok(Arc::new(ParquetExec::new(
-            filenames,
+            partitions,
             schema,
             projection.clone(),
+            predicate_builder,
             batch_size,
         )))
     }

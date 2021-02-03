@@ -3,15 +3,19 @@
 //! This module is gated behind the "azure" feature. Its usage also requires
 //! the `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_KEY` environment variables
 //! to be set to the name and key of the Azure Storage Account, respectively.
+use std::error::Error;
+use std::sync::Arc;
 use std::{env, fmt, pin::Pin};
 
+use azure_core::errors::AzureError;
 use azure_core::prelude::*;
-use azure_storage::{Blob, ClientEndpoint, Container, blob, client, key_client::KeyClient};
+use azure_storage::clients::{
+    AsBlobClient, AsContainerClient, AsStorageClient, ContainerClient, StorageAccountClient,
+};
 use futures::stream::{Stream, TryStreamExt};
 use log::debug;
-use parquet::file::properties;
 
-use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
+use super::{parse_uri, ObjectMeta, StorageBackend, StorageError, UriError};
 
 /// An object on an Azure Data Lake Storage Gen2 account.
 #[derive(Debug, PartialEq)]
@@ -41,7 +45,8 @@ impl<'a> fmt::Display for ADLSGen2Object<'a> {
 /// This uses the `dfs.core.windows.net` endpoint.
 #[derive(Debug)]
 pub struct ADLSGen2Backend {
-    client: KeyClient,
+    account: String,
+    container_client: Arc<ContainerClient>,
 }
 
 impl ADLSGen2Backend {
@@ -55,62 +60,92 @@ impl ADLSGen2Backend {
     ///
     /// and will panic if both are unset. This also implies that the backend is
     /// only valid for a single Storage Account.
-    pub fn new() -> Self {
-        let account_name =
-            env::var("AZURE_STORAGE_ACCOUNT").expect("AZURE_STORAGE_ACCOUNT must be set");
-        let client = match env::var("AZURE_STORAGE_SAS") {
-            Ok(sas) => {
-                debug!("Authenticating to Azure using SAS token");
-                client::with_azure_sas(&account_name, &sas)
-            }
-            Err(_) => match env::var("AZURE_STORAGE_KEY") {
-                Ok(key) => {
-                    debug!("Authenticating to Azure using access key");
-                    client::with_access_key(&account_name, &key)
-                }
-                _ => panic!("Either AZURE_STORAGE_SAS or AZURE_STORAGE_KEY must be set"),
-            },
+    pub fn new(container: &str) -> Result<Self, StorageError> {
+        let http_client: Arc<Box<dyn HttpClient>> = Arc::new(Box::new(reqwest::Client::new()));
+
+        let account_name = env::var("AZURE_STORAGE_ACCOUNT").map_err(|_| {
+            StorageError::AzureConfig("AZURE_STORAGE_ACCOUNT must be set".to_string())
+        })?;
+
+        let storage_account_client = if let Ok(sas) = env::var("AZURE_STORAGE_SAS") {
+            debug!("Authenticating to Azure using SAS token");
+            StorageAccountClient::new_sas_token(http_client.clone(), &account_name, &sas)
+        } else if let Ok(key) = env::var("AZURE_STORAGE_KEY") {
+            debug!("Authenticating to Azure using access key");
+            StorageAccountClient::new_access_key(http_client.clone(), &account_name, &key)
+        } else {
+            return Err(StorageError::AzureConfig(
+                "Either AZURE_STORAGE_SAS or AZURE_STORAGE_KEY must be set".to_string(),
+            ));
         };
-        Self { client }
+
+        Ok(Self {
+            account: account_name,
+            container_client: storage_account_client
+                .as_storage_client()
+                .as_container_client(container),
+        })
+    }
+
+    fn validate_container<'a>(&self, obj: &ADLSGen2Object<'a>) -> Result<(), StorageError> {
+        if obj.file_system != self.container_client.container_name() {
+            Err(StorageError::Uri {
+                source: UriError::ContainerMismatch {
+                    expected: self.container_client.container_name().to_string(),
+                    got: obj.file_system.to_string(),
+                },
+            })
+        } else {
+            Ok(())
+        }
     }
 }
 
-impl Default for ADLSGen2Backend {
-    fn default() -> Self {
-        Self::new()
+fn to_storage_err(err: Box<dyn Error + Sync + std::marker::Send>) -> StorageError {
+    match err.downcast_ref::<AzureError>() {
+        Some(AzureError::UnexpectedHTTPResult(e)) if e.status_code().as_u16() == 404 => {
+            StorageError::NotFound
+        }
+        _ => StorageError::AzureGeneric { source: err },
     }
 }
 
 #[async_trait::async_trait]
 impl StorageBackend for ADLSGen2Backend {
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
-        let obj = parse_uri(path)?.into_adlsgen2_object()?;
-        let path = path.to_string();
         debug!("Getting properties for {}", path);
+        let obj = parse_uri(path)?.into_adlsgen2_object()?;
+        self.validate_container(&obj)?;
+
         let properties = self
-            .client
-            .get_blob_properties()
-            .with_container_name(obj.file_system)
-            .with_blob_name(obj.path)
-            .finalize()
-            .await?;
+            .container_client
+            .as_blob_client(obj.path)
+            .get_properties()
+            .execute()
+            .await
+            .map_err(to_storage_err)?;
         let modified = properties
             .blob
             .last_modified
             .expect("Last-Modified should never be None for committed blobs");
-        Ok(ObjectMeta { path, modified })
+        Ok(ObjectMeta {
+            path: path.to_string(),
+            modified,
+        })
     }
 
     async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
-        let obj = parse_uri(path)?.into_adlsgen2_object()?;
         debug!("Loading {}", path);
+        let obj = parse_uri(path)?.into_adlsgen2_object()?;
+        self.validate_container(&obj)?;
+
         Ok(self
-            .client
-            .get_blob()
-            .with_container_name(obj.file_system)
-            .with_blob_name(obj.path)
-            .finalize()
-            .await?
+            .container_client
+            .as_blob_client(obj.path)
+            .get()
+            .execute()
+            .await
+            .map_err(to_storage_err)?
             .data)
     }
 
@@ -121,18 +156,18 @@ impl StorageBackend for ADLSGen2Backend {
     {
         debug!("Listing objects under {}", path);
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
-        let account_name = self.client.account();
+        self.validate_container(&obj)?;
+
         let stream = self
-            .client
+            .container_client
             .list_blobs()
-            .with_container_name(obj.file_system)
-            .with_prefix(obj.path)
+            .prefix(obj.path)
             .stream()
             .map_ok(move |response| {
                 futures::stream::iter(response.incomplete_vector.vector.into_iter().map(
                     move |blob| {
                         let object = ADLSGen2Object {
-                            account_name,
+                            account_name: &self.account,
                             file_system: &blob.container_name,
                             path: &blob.name,
                         };
@@ -145,6 +180,7 @@ impl StorageBackend for ADLSGen2Backend {
                     },
                 ))
             })
+            .map_err(to_storage_err)
             .try_flatten();
 
         Ok(Box::pin(stream))

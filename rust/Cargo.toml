@@ -14,8 +14,8 @@ anyhow = "1.0"
 thiserror = "1.0"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
-tokio = { version = "0.2", features = ["fs", "macros", "stream"] }
-tokio-io = ">=0.2.0-alpha.6,<0.3"
+tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
+tokio-stream = { version = "0", features = ["fs"] }
 futures = "0.3"
 bytes = "0.5"
 log = "0"
@@ -25,17 +25,18 @@ chrono = "0"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 
 # Azure
-azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "bc74cad7cc5f9226cf39c4abae0d902a85765e74" }
-azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "bc74cad7cc5f9226cf39c4abae0d902a85765e74" }
+reqwest = { version = "0", optional = true }
+azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "536da42ebefd411feff8ba6a0965865e2741267e" }
+azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "536da42ebefd411feff8ba6a0965865e2741267e", features = ["blob", "account", "adls_gen2"] }
 
 # S3
-rusoto_core = { version = "0.43", optional = true }
-rusoto_s3 = { version = "0.43", optional = true }
+rusoto_core = { version = "0.46", optional = true }
+rusoto_s3 = { version = "0.46", optional = true }
 
 # Cannot use branch constraint due to https://github.com/PyO3/maturin/issues/389
-arrow  = { git = "https://github.com/apache/arrow.git", rev = "6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b" }
-datafusion = { git = "https://github.com/apache/arrow.git", rev = "6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b", optional = true }
-parquet = { git = "https://github.com/apache/arrow.git", rev = "6c3547347e9d95f7d0c77d5949cb8fcf6983ca9b" }
+arrow  = { git = "https://github.com/apache/arrow.git", rev = "05b36567bd8216bec71b796fe3bb6811c71abbec" }
+datafusion = { git = "https://github.com/apache/arrow.git", rev = "05b36567bd8216bec71b796fe3bb6811c71abbec", optional = true }
+parquet = { git = "https://github.com/apache/arrow.git", rev = "05b36567bd8216bec71b796fe3bb6811c71abbec" }
 crossbeam = { version = "0", optional = true }
 cfg-if = "1"
 async-trait = "0.1"
@@ -46,7 +47,7 @@ async-trait = "0.1"
 [features]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion", "crossbeam"]
-azure = ["azure_core", "azure_storage"]
+azure = ["azure_core", "azure_storage", "reqwest"]
 s3 = ["rusoto_core", "rusoto_s3"]
 
 [dev-dependencies]
