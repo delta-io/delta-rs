@@ -139,7 +139,6 @@ impl DeltaWriter {
         let cursor = InMemoryWriteableCursor::default();
         let mut writer = ArrowWriter::try_new(cursor.clone(), arrow_schema_ref.clone(), Some(writer_properties)).unwrap();
 
-        // TODO: Handle errors
         writer.write(batch)?;
         writer.close()?;
 
