@@ -17,7 +17,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
 use super::action;
-use super::action::Action;
+use super::action::{Action, DeltaOperation};
 use super::schema::*;
 use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
@@ -715,8 +715,13 @@ impl<'a> DeltaTransaction<'a> {
         DeltaTransaction { delta_table,}
     }
 
-    pub async fn commit_all(&mut self, actions: &[Action]) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+    pub async fn commit_all(&mut self, actions: &[Action], _operation: Option<DeltaOperation>) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+        // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action), but leaving it unused for now.
+        // `CommitInfo` is a fairly dynamic data structure so we should work out the data structure approach separately.
+
         // TODO: calculate isolation level to use when checking for conflicts.
+        // Leaving conflict checking unimplemented for now to get the "single writer" implementation off the ground.
+        // Leaving some commmented code in place as a guidepost for the future.
 
         // let no_data_changed = actions.iter().all(|a| match a {
         //     Action::add(x) => !x.dataChange,

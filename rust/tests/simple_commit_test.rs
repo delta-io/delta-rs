@@ -44,7 +44,7 @@ async fn test_two_commits() {
     ];
 
     let mut tx1 = table.create_transaction();
-    let version = tx1.commit_all(tx1_actions.as_slice()).await.unwrap();
+    let version = tx1.commit_all(tx1_actions.as_slice(), None).await.unwrap();
 
     assert_eq!(1, version);
     assert_eq!(version, table.version);
@@ -76,7 +76,7 @@ async fn test_two_commits() {
     ];
 
     let mut tx2 = table.create_transaction();
-    let version = tx2.commit_all(tx2_actions.as_slice()).await.unwrap();
+    let version = tx2.commit_all(tx2_actions.as_slice(), None).await.unwrap();
 
     assert_eq!(2, version);
     assert_eq!(version, table.version);

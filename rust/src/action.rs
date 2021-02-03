@@ -762,3 +762,18 @@ mod tests {
         );
     }
 }
+
+pub enum SaveMode {
+    Append,
+    Overwrite,
+    ErrorIfExists,
+    Ignore,
+}
+
+pub enum DeltaOperation {
+    Write { 
+        mode: SaveMode,
+        partitionBy: Option<Vec<String>>,
+        predicate: Option<String>,
+    }
+}
