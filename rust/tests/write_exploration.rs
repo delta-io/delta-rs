@@ -50,40 +50,28 @@ pub enum DeltaWriterError {
     },
 
     #[error("Storage interaction failed: {source}")]
-    Storage { source: StorageError },
+    Storage { 
+        #[from]
+        source: StorageError 
+    },
 
     #[error("DeltaTable interaction failed: {source}")]
-    DeltaTable { source: DeltaTableError },
+    DeltaTable { 
+        #[from]
+        source: DeltaTableError 
+    },
 
     #[error("Arrow interaction failed: {source}")]
-    Arrow { source: ArrowError },
+    Arrow { 
+        #[from]
+        source: ArrowError 
+    },
 
     #[error("Parquet write failed: {source}")]
-    Parquet { source: ParquetError },
-}
-
-impl From<StorageError> for DeltaWriterError {
-    fn from(error: StorageError) -> Self {
-        DeltaWriterError::Storage { source: error }
-    }
-}
-
-impl From<DeltaTableError> for DeltaWriterError {
-    fn from(error: DeltaTableError) -> Self {
-        DeltaWriterError::DeltaTable { source: error }
-    }
-}
-
-impl From<ArrowError> for DeltaWriterError {
-    fn from(error: ArrowError) -> Self {
-        DeltaWriterError::Arrow { source: error }
-    }
-}
-
-impl From<ParquetError> for DeltaWriterError {
-    fn from(error: ParquetError) -> Self {
-        DeltaWriterError::Parquet { source: error }
-    }
+    Parquet { 
+        #[from]
+        source: ParquetError 
+    },
 }
 
 pub struct DeltaWriter {
@@ -344,7 +332,7 @@ async fn smoke_test() {
 
     // start a transaction
     let metadata = delta_table.get_metadata().unwrap().clone();
-    let mut transaction = delta_table.create_transaction();
+    let mut transaction = delta_table.create_transaction(None);
 
     // test data set #1 - inserts
     let json_rows =  vec![
@@ -381,7 +369,7 @@ async fn smoke_test() {
 
     // start a transaction
     let metadata = delta_table.get_metadata().unwrap().clone();
-    let mut transaction = delta_table.create_transaction();
+    let mut transaction = delta_table.create_transaction(None);
 
     // test data set #2 - updates
     let json_rows = vec![

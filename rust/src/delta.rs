@@ -546,17 +546,6 @@ impl DeltaTable {
             .collect()
     }
 
-    pub fn get_partition_cols(&self) -> Result<&Vec<String>, DeltaTableError> {
-        match &self.current_metadata {
-            Some(m) => {
-                Ok(&m.partition_columns)
-            }
-            None => {
-                Err(DeltaTableError::NoMetadata)
-            }
-        }
-    }
-
     pub fn get_metadata(&self) -> Result<&DeltaTableMetaData, DeltaTableError> {
         match &self.current_metadata {
             Some(m) => {
@@ -583,8 +572,8 @@ impl DeltaTable {
         }
     }
 
-    pub fn create_transaction(&mut self) -> DeltaTransaction {
-        DeltaTransaction::new(self)
+    pub fn create_transaction(&mut self, options: Option<DeltaTransactionOptions>) -> DeltaTransaction {
+        DeltaTransaction::new(self, options)
     }
 
     pub fn new(
@@ -688,7 +677,16 @@ pub enum DeltaTransactionError {
     Storage { source: StorageError },
 
     #[error("DeltaTable interaction failed: {source}")]
-    DeltaTable { source: DeltaTableError },
+    DeltaTable { 
+        #[from]
+        source: DeltaTableError,
+    },
+
+    #[error("Action serialization failed: {source}")]
+    ActionSerializationFailed {
+        #[from]
+        source: serde_json::Error, 
+    }
 }
 
 impl From<StorageError> for DeltaTransactionError {
@@ -700,19 +698,25 @@ impl From<StorageError> for DeltaTransactionError {
     }
 }
 
-impl From<DeltaTableError> for DeltaTransactionError {
-    fn from(error: DeltaTableError) -> Self {
-        DeltaTransactionError::DeltaTable { source: error }
-    }
+pub struct DeltaTransactionOptions {
+    max_retry_commit_attempts: u32,
 }
+
+const DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS: u32 = 10000000;
 
 pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
+    options: DeltaTransactionOptions,
 }
 
 impl<'a> DeltaTransaction<'a> {
-    pub fn new(delta_table: &'a mut DeltaTable) -> Self {
-        DeltaTransaction { delta_table,}
+    pub fn new(delta_table: &'a mut DeltaTable, options: Option<DeltaTransactionOptions>) -> Self {
+        DeltaTransaction { 
+            delta_table,
+            options: options.map_or_else(|| DeltaTransactionOptions { 
+                max_retry_commit_attempts: DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS 
+            }, |o| o),
+        }
     }
 
     pub async fn commit_all(&mut self, actions: &[Action], _operation: Option<DeltaOperation>) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
@@ -736,41 +740,46 @@ impl<'a> DeltaTransaction<'a> {
 
         // TODO: create a CommitInfo action and prepend it to actions.
 
-        // try to commit in a loop in case other writers write the next version first
-        let version = self.try_commit_loop(actions).await?;
+        // Serialize all actions that are part of this log entry.
+        let mut jsons = Vec::<String>::new();
 
+        for action in actions {
+            let json = serde_json::to_string(action)?;
+            jsons.push(json);
+        }
+        
+        let log_entry = jsons.join("\n");
+        let log_entry = log_entry.as_bytes();
+
+        // try to commit in a loop in case other writers write the next version first
+        let version = self.try_commit_loop(log_entry).await?;
+
+        // NOTE: since we have the log entry in memory already, 
+        // we could optimize this further by merging the log entry instead of updating from storage.
         self.delta_table.update().await?;
 
         Ok(version)
     }
 
-    async fn try_commit_loop(&mut self, actions: &[Action]) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
-        let max_retries = max_retry_commit_attempts();
+    async fn try_commit_loop(&mut self, log_entry: &[u8]) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         let mut attempt_number: u32 = 0;
 
         loop {
-            if attempt_number > max_retries {
-                return Err(DeltaTransactionError::CommitRetriesExceeded);
-            }
-
-            let commit_result = self.try_commit(actions).await;
+            let commit_result = self.try_commit(log_entry).await;
 
             if commit_result.is_ok() {
                 return commit_result;
             }
 
             attempt_number += 1;
+
+            if attempt_number > self.options.max_retry_commit_attempts + 1 {
+                return Err(DeltaTransactionError::CommitRetriesExceeded);
+            }
         }
     }
 
-    async fn try_commit(&mut self, actions: &[Action]) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
-        // Serialize all actions that are part of this log entry.
-        let jsons: Vec<String> = actions.iter()
-            .map(|a| {
-                serde_json::to_string(a).unwrap()
-            }).collect();
-        let log_entry = jsons.join("\n");
-
+    async fn try_commit(&mut self, log_entry: &[u8]) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         // get the next delta table version and the log path where it should be written
         let attempt_version = self.next_attempt_version().await?;
         let path = self.delta_table.version_to_log_path(attempt_version);
@@ -778,7 +787,7 @@ impl<'a> DeltaTransaction<'a> {
         // write the log file bytes to storage
         // rely on storage to fail if the file already exists -
         // storage must be atomic and fail if file already exists
-        self.delta_table.storage.put_obj(path.as_str(), log_entry.as_bytes()).await?;
+        self.delta_table.storage.put_obj(path.as_str(), log_entry).await?;
 
         // return the newly committed version
         Ok(attempt_version)
@@ -788,10 +797,6 @@ impl<'a> DeltaTransaction<'a> {
         self.delta_table.update().await?;
         Ok(self.delta_table.version + 1)
     }
-}
-
-fn max_retry_commit_attempts() -> u32 {
-    std::env::var("DELTA_MAX_RETRY_COMMIT_ATTEMPTS").map_or(10000000, |s| s.parse::<u32>().unwrap())
 }
 
 pub async fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError> {

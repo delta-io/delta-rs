@@ -63,9 +63,10 @@ impl StorageBackend for FileStorageBackend {
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
         let dir = std::path::Path::new(path);
-        let dir = dir.parent().unwrap();
 
-        fs::create_dir_all(dir).await.map_err(|err| StorageError::IO{ source: err })?;
+        if let Some(d) = dir.parent() {
+            fs::create_dir_all(d).await.map_err(|err| StorageError::IO { source: err })?;
+        } 
 
         // use `OpenOptions` with `create_new` to create the file handle.
         // this will force ErrorKind::AlreadyExists if the file already exists.
