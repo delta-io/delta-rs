@@ -153,8 +153,8 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
 pub enum StorageError {
     #[error("Object not found")]
     NotFound,
-    #[error("Object exists already")]
-    AlreadyExists,
+    #[error("Object exists already at path: {0}")]
+    AlreadyExists(String),
     #[error("Failed to read local object content: {source}")]
     IO { source: std::io::Error },
 
@@ -200,7 +200,6 @@ impl From<std::io::Error> for StorageError {
     fn from(error: std::io::Error) -> Self {
         match error.kind() {
             std::io::ErrorKind::NotFound => StorageError::NotFound,
-            std::io::ErrorKind::AlreadyExists => StorageError::AlreadyExists,
             _ => StorageError::IO { source: error },
         }
     }

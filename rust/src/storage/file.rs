@@ -65,7 +65,7 @@ impl StorageBackend for FileStorageBackend {
         let dir = std::path::Path::new(path);
 
         if let Some(d) = dir.parent() {
-            fs::create_dir_all(d).await.map_err(|err| StorageError::IO { source: err })?;
+            fs::create_dir_all(d).await?;
         } 
 
         // use `OpenOptions` with `create_new` to create the file handle.
@@ -74,7 +74,10 @@ impl StorageBackend for FileStorageBackend {
             .create_new(true)
             .write(true)
             .open(path)
-            .await?;
+            .await.map_err(|e| match e.kind() {
+                std::io::ErrorKind::AlreadyExists => StorageError::AlreadyExists(path.to_string()),
+                _ => StorageError::IO { source: e },
+            })?;
     
         f.write(obj_bytes).await?;
 
