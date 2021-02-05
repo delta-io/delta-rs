@@ -763,17 +763,27 @@ mod tests {
     }
 }
 
-pub enum SaveMode {
-    Append,
-    Overwrite,
-    ErrorIfExists,
-    Ignore,
-}
-
+/// Operation performed when creating a new log entry with one or more actions.
+/// This is a key element of the `CommitInfo` action and used for optimization when executing an operation that must do re-writes.
 pub enum DeltaOperation {
+    /// Represents a Delta `Write` operation.
+    /// Write operations will typically only include `Add` actions.
     Write { 
         mode: SaveMode,
         partitionBy: Option<Vec<String>>,
         predicate: Option<String>,
-    }
+    },
+    // TODO: Add more operations
+}
+
+/// The SaveMode used when performing a DeltaOperation
+pub enum SaveMode {
+    /// Files will be appended to the target location.
+    Append,
+    /// The target location will be overwritten.
+    Overwrite,
+    /// If files exist for the target, the operation must fail.
+    ErrorIfExists,
+    /// If files exist for the target, the operation must not proceed or change any data.
+    Ignore,
 }

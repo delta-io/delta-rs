@@ -662,6 +662,7 @@ impl std::fmt::Debug for DeltaTable {
     }
 }
 
+/// Error returned by the DeltaTransaction struct
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTransactionError {
     #[error("Transaction commit exceeded max retries. Last error: {inner}")]
@@ -689,6 +690,7 @@ pub enum DeltaTransactionError {
     }
 }
 
+/// Error that occurs when a single transaction commit attempt fails
 #[derive(thiserror::Error, Debug)]
 pub enum TransactionCommitAttemptError {
     #[error("Version already exists: {source}")]
@@ -713,18 +715,31 @@ impl From<StorageError> for TransactionCommitAttemptError {
     }
 }
 
+/// Options for customizing behavior of a `DeltaTransaction`
 pub struct DeltaTransactionOptions {
+    /// number of retry attempts allowed when committing a transaction
     max_retry_commit_attempts: u32,
+}
+
+impl DeltaTransactionOptions {
+    /// Creates a new `DeltaTransactionOptions`
+    pub fn new(max_retry_commit_attempts: u32) -> Self {
+        Self { max_retry_commit_attempts, }
+    }
 }
 
 const DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS: u32 = 10_000_000;
 
+/// Object representing a delta transaction
 pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
     options: DeltaTransactionOptions,
 }
 
 impl<'a> DeltaTransaction<'a> {
+    /// Creates a new delta transaction.
+    /// Holds a mutable reference to the delta table to prevent outside mutation while a transaction commit is in progress.
+    /// Transaction behavior may be customized by passing an instance of `DeltaTransactionOptions`.
     pub fn new(delta_table: &'a mut DeltaTable, options: Option<DeltaTransactionOptions>) -> Self {
         DeltaTransaction { 
             delta_table,
@@ -734,6 +749,8 @@ impl<'a> DeltaTransaction<'a> {
         }
     }
 
+    /// Commits the given actions to the delta log.
+    /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
     pub async fn commit_all(&mut self, actions: &[Action], _operation: Option<DeltaOperation>) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action), but leaving it unused for now.
         // `CommitInfo` is a fairly dynamic data structure so we should work out the data structure approach separately.
