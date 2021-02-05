@@ -702,7 +702,7 @@ pub struct DeltaTransactionOptions {
     max_retry_commit_attempts: u32,
 }
 
-const DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS: u32 = 10000000;
+const DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS: u32 = 10_000_000;
 
 pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
