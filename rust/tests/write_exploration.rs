@@ -356,7 +356,7 @@ async fn smoke_test() {
     let remove_path = add.path.clone();
 
     // commit the transaction
-    transaction.commit_all(&[Action::add(add)], None).await.unwrap();
+    transaction.commit_with(&[Action::add(add)], None).await.unwrap();
 
     //
     // ---
@@ -402,7 +402,7 @@ async fn smoke_test() {
     let remove = create_remove(remove_path);
 
     // commit the transaction
-    transaction.commit_all(&[Action::add(add), Action::remove(remove)], None).await.unwrap();
+    transaction.commit_with(&[Action::add(add), Action::remove(remove)], None).await.unwrap();
 
     // A notable thing to mention:
     // This implementation treats the DeltaTable instance as a single snapshot of the current log.

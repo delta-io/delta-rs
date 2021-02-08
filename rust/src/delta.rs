@@ -757,7 +757,7 @@ impl<'a> DeltaTransaction<'a> {
 
     /// Commits the given actions to the delta log.
     /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
-    pub async fn commit_all(&mut self, actions: &[Action], _operation: Option<DeltaOperation>) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+    pub async fn commit_with(&mut self, additional_actions: &[Action], _operation: Option<DeltaOperation>) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action), but leaving it unused for now.
         // `CommitInfo` is a fairly dynamic data structure so we should work out the data structure approach separately.
 
@@ -781,7 +781,7 @@ impl<'a> DeltaTransaction<'a> {
         // Serialize all actions that are part of this log entry.
         let mut jsons = Vec::<String>::new();
 
-        for action in actions {
+        for action in additional_actions {
             let json = serde_json::to_string(action)?;
             jsons.push(json);
         }
