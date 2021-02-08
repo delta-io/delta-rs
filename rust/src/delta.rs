@@ -30,6 +30,14 @@ pub struct CheckPoint {
     parts: Option<u32>, // 10 digits decimals
 }
 
+impl PartialEq for CheckPoint {
+    fn eq(&self, other: &Self) -> bool {
+        self.version == other.version
+    }
+}
+
+impl Eq for CheckPoint {}
+
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTableError {
     #[error("Failed to apply transaction log: {}", .source)]
@@ -424,10 +432,8 @@ impl DeltaTable {
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
-                let should_restore = self.last_check_point.is_none() || 
-                    self.last_check_point.unwrap().version != last_check_point.version;
-
-                if should_restore {
+                if self.last_check_point.is_none()
+                    || self.last_check_point == Some(last_check_point) {
                     self.last_check_point = Some(last_check_point);
                     self.restore_checkpoint(last_check_point).await?;
                     self.version = last_check_point.version + 1;
