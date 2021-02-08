@@ -6,6 +6,7 @@ use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
 
 use chrono::{DateTime, FixedOffset, Utc};
+use log::debug;
 use futures::StreamExt;
 use parquet::errors::ParquetError;
 use parquet::file::{
@@ -693,6 +694,7 @@ pub enum DeltaTransactionError {
 /// Error that occurs when a single transaction commit attempt fails
 #[derive(thiserror::Error, Debug)]
 pub enum TransactionCommitAttemptError {
+    // NOTE: it would be nice to add a `num_retries` prop to this error so we can identify how frequently we hit optimistic concurrency retries and look for optimization paths
     #[error("Version already exists: {source}")]
     VersionExists { source: StorageError },
 
@@ -715,6 +717,8 @@ impl From<StorageError> for TransactionCommitAttemptError {
     }
 }
 
+const DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS: u32 = 10_000_000;
+
 /// Options for customizing behavior of a `DeltaTransaction`
 pub struct DeltaTransactionOptions {
     /// number of retry attempts allowed when committing a transaction
@@ -728,7 +732,11 @@ impl DeltaTransactionOptions {
     }
 }
 
-const DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS: u32 = 10_000_000;
+impl Default for DeltaTransactionOptions {
+    fn default() -> Self { 
+        Self { max_retry_commit_attempts: DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS }
+    }
+}
 
 /// Object representing a delta transaction
 pub struct DeltaTransaction<'a> {
@@ -743,9 +751,7 @@ impl<'a> DeltaTransaction<'a> {
     pub fn new(delta_table: &'a mut DeltaTable, options: Option<DeltaTransactionOptions>) -> Self {
         DeltaTransaction { 
             delta_table,
-            options: options.map_or_else(|| DeltaTransactionOptions { 
-                max_retry_commit_attempts: DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS 
-            }, |o| o),
+            options: options.map_or_else(|| DeltaTransactionOptions::default(), |o| o),
         }
     }
 
@@ -799,14 +805,26 @@ impl<'a> DeltaTransaction<'a> {
         loop {
             let commit_result = self.try_commit(log_entry).await;
 
-            if commit_result.is_ok() {
-                return commit_result;
-            }
-
-            attempt_number += 1;
-
-            if attempt_number > self.options.max_retry_commit_attempts {
-                return commit_result;
+            match commit_result {
+                Ok(v) => { 
+                    return Ok(v); 
+                },
+                Err(e) => {
+                    match e {
+                        TransactionCommitAttemptError::VersionExists { .. } if attempt_number > self.options.max_retry_commit_attempts + 1 => {
+                            debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
+                            return Err(e);
+                        }
+                        TransactionCommitAttemptError::VersionExists { .. } => {
+                            attempt_number += 1;
+                            debug!("Transaction attempt failed. Incrementing attempt number to {} and retrying.", attempt_number);
+                        },
+                        // NOTE: Add other retryable errors as needed here
+                        _ => { 
+                            return Err(e); 
+                        }
+                    }
+                }
             }
         }
     }
