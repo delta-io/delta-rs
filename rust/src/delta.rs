@@ -757,7 +757,7 @@ impl<'a> DeltaTransaction<'a> {
     pub fn new(delta_table: &'a mut DeltaTable, options: Option<DeltaTransactionOptions>) -> Self {
         DeltaTransaction { 
             delta_table,
-            options: options.map_or_else(|| DeltaTransactionOptions::default(), |o| o),
+            options: options.map_or_else(DeltaTransactionOptions::default, |o| o),
         }
     }
 
