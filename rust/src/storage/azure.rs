@@ -185,4 +185,8 @@ impl StorageBackend for ADLSGen2Backend {
 
         Ok(Box::pin(stream))
     }
+
+    async fn put_obj(&self, _path: &str, _obj_bytes: &[u8]) -> Result<(), StorageError> {
+        unimplemented!("put_obj not implemented for azure");
+    }
 }

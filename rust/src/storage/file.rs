@@ -4,6 +4,7 @@ use std::path::Path;
 use chrono::DateTime;
 use futures::{Stream, TryStreamExt};
 use tokio::fs;
+use tokio::io::AsyncWriteExt;
 use tokio_stream::wrappers::ReadDirStream;
 
 use super::{ObjectMeta, StorageBackend, StorageError};
@@ -58,5 +59,28 @@ impl StorageBackend for FileStorageBackend {
                 modified: DateTime::from(entry.metadata().await.unwrap().modified().unwrap()),
             })
         })))
+    }
+
+    async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
+        let dir = std::path::Path::new(path);
+
+        if let Some(d) = dir.parent() {
+            fs::create_dir_all(d).await?;
+        } 
+
+        // use `OpenOptions` with `create_new` to create the file handle.
+        // this will force ErrorKind::AlreadyExists if the file already exists.
+        let mut f = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)
+            .await.map_err(|e| match e.kind() {
+                std::io::ErrorKind::AlreadyExists => StorageError::AlreadyExists(path.to_string()),
+                _ => StorageError::IO { source: e },
+            })?;
+    
+        f.write(obj_bytes).await?;
+
+        Ok(())
     }
 }
