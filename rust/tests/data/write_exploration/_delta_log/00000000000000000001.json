@@ -1,0 +1,1 @@
+{"add":{"path":"modified=2021-02-01/part-00000-860dfd2a-73bc-4f0c-894a-a4aebc49df95-c000.parquet","size":1086,"partitionValues":{"modified":"2021-02-01"},"modificationTime":1612802244057,"dataChange":true,"stats":"{\"numRecords\":8,\"minValues\":{},\"maxValues\":{},\"nullCount\":{}}","tags":null}}

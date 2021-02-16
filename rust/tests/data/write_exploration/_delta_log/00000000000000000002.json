@@ -1,0 +1,2 @@
+{"add":{"path":"modified=2021-02-02/part-00000-581f622b-158e-4ce8-ba0a-131550c7de09-c000.parquet","size":1043,"partitionValues":{"modified":"2021-02-02"},"modificationTime":1612802244059,"dataChange":true,"stats":"{\"numRecords\":3,\"minValues\":{},\"maxValues\":{},\"nullCount\":{}}","tags":null}}
+{"remove":{"path":"modified=2021-02-01/part-00000-860dfd2a-73bc-4f0c-894a-a4aebc49df95-c000.parquet","deletionTimestamp":1612802244059,"dataChange":true}}

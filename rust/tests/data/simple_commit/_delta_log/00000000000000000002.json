@@ -1,0 +1,2 @@
+{"add":{"path":"part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet","size":396,"partitionValues":{},"modificationTime":1564524296000,"dataChange":true,"stats":null,"tags":null}}
+{"add":{"path":"part-00001-4327c977-2734-4477-9507-7ccf67924649-c000.snappy.parquet","size":400,"partitionValues":{},"modificationTime":1564524296000,"dataChange":true,"stats":null,"tags":null}}
