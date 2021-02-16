@@ -52,3 +52,4 @@ s3 = ["rusoto_core", "rusoto_s3"]
 
 [dev-dependencies]
 utime = "0.3"
+serial_test = "*"
