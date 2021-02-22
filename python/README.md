@@ -69,6 +69,25 @@ Time travel:
 ```
 
 
+Schema
+
+Delta format:
+```
+>>> from deltalake import DeltaTable
+>>> dt = DeltaTable("../rust/tests/data/simple_table")
+>>> dt.schema()
+value: integer True 
+
+```
+Pyarrow format:
+```
+>>> from deltalake import DeltaTable
+>>> dt = DeltaTable("../rust/tests/data/simple_table")
+>>> dt.to_pyarrow_schema()
+value: int32
+
+```
+
 Develop
 -------
 

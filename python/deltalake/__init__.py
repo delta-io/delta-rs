@@ -1,10 +1,16 @@
-from typing import List
-
 import pyarrow
+
+from typing import List
 from pyarrow.dataset import dataset
 from urllib.parse import urlparse
 
 from .deltalake import RawDeltaTable, rust_core_version
+from deltalake.schema import (
+    DataType,
+    DeltaTableSchema,
+    DeltaTableField,
+    DeltaTableSchemaFormat,
+)
 
 
 class DeltaTable:
@@ -23,6 +29,21 @@ class DeltaTable:
     def load_version(self, version: int) -> None:
         self._table.load_version(version)
 
+    def schema(
+        self, format: DeltaTableSchemaFormat = DeltaTableSchemaFormat.DELTA
+    ) -> DeltaTableSchema:
+        fields = [
+            DeltaTableField(
+                name=field.name,
+                type=field.rtype,
+                metadata=field.metadata,
+                nullable=field.nullable,
+                format=format,
+            )
+            for field in self._table.schema(format=format.value).schema
+        ]
+        return DeltaTableSchema(fields=fields)
+
     def to_pyarrow_dataset(self) -> pyarrow.dataset.Dataset:
         file_paths = self._table.file_paths()
         paths = [urlparse(curr_file) for curr_file in file_paths]
@@ -36,3 +57,18 @@ class DeltaTable:
 
     def to_pyarrow_table(self) -> pyarrow.Table:
         return self.to_pyarrow_dataset().to_table()
+
+    def to_pyarrow_schema(self) -> pyarrow.Schema:
+        format = DeltaTableSchemaFormat.ARROW
+        delta_fields = [
+            DeltaTableField(
+                name=field.name,
+                type=field.rtype,
+                metadata=field.metadata,
+                nullable=field.nullable,
+                format=format,
+            )
+            for field in self._table.schema(format=format.value).schema
+        ]
+        arrow_fields = [pyarrow.field(field.name, field.type) for field in delta_fields]
+        return pyarrow.schema(arrow_fields)

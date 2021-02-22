@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
 
 pub type GUID = String;
 pub type DeltaDataTypeLong = i64;
@@ -13,7 +14,7 @@ pub type DeltaDataTypeInt = i32;
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct SchemaTypeStruct {
-    // type field is alwsy the string "struct", so we are ignoring it here
+    // type field is always the string "struct", so we are ignoring it here
     r#type: String,
     fields: Vec<SchemaField>,
 }
@@ -21,6 +22,11 @@ pub struct SchemaTypeStruct {
 impl SchemaTypeStruct {
     pub fn get_fields(&self) -> &Vec<SchemaField> {
         &self.fields
+    }
+
+    pub fn to_json(&self) -> Value {
+        let fields: Vec<Value> = self.fields.iter().map(|f| f.to_json()).collect();
+        json!({"name": self.r#type, "fields": fields})
     }
 }
 
@@ -54,11 +60,20 @@ impl SchemaField {
     pub fn get_metadata(&self) -> &HashMap<String, String> {
         &self.metadata
     }
+
+    pub fn to_json(&self) -> Value {
+        return json![{
+            "name": self.name,
+            "type": self.r#type.to_json(),
+            "nullable": self.nullable,
+            "metadata": self.metadata
+        }];
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SchemaTypeArray {
-    // type field is alwsy the string "array", so we are ignoring it here
+    // type field is always the string "array", so we are ignoring it here
     r#type: String,
     // The type of element stored in this array represented as a string containing the name of a
     // primitive type, a struct definition, an array definition or a map definition
@@ -74,6 +89,14 @@ impl SchemaTypeArray {
 
     pub fn contains_null(&self) -> bool {
         self.containsNull
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "name": self.r#type,
+            "containsNull": self.containsNull,
+            "elementType": self.elementType.to_json(),
+        })
     }
 }
 
@@ -95,6 +118,14 @@ impl SchemaTypeMap {
 
     pub fn get_value_type(&self) -> &SchemaDataType {
         &self.valueType
+    }
+
+    pub fn to_json(&self) -> Value {
+        json!({
+            "name": self.r#type,
+            "keyType": self.keyType.to_json(),
+            "valueType": self.valueType.to_json(),
+        })
     }
 }
 
@@ -119,6 +150,17 @@ pub enum SchemaDataType {
     r#struct(SchemaTypeStruct),
     array(SchemaTypeArray),
     map(SchemaTypeMap),
+}
+
+impl SchemaDataType {
+    pub fn to_json(&self) -> Value {
+        match self {
+            SchemaDataType::primitive(s) => json!({ "name": s }),
+            SchemaDataType::r#struct(s) => s.to_json(),
+            SchemaDataType::array(s) => s.to_json(),
+            SchemaDataType::map(s) => s.to_json(),
+        }
+    }
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]

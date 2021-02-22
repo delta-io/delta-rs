@@ -1,11 +1,14 @@
 #![deny(warnings)]
 
+extern crate arrow;
 extern crate deltalake;
 extern crate pyo3;
 
+use arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use std::collections::HashMap;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
 
@@ -27,6 +30,47 @@ fn rt() -> PyResult<tokio::runtime::Runtime> {
 #[pyclass]
 struct RawDeltaTable {
     _table: deltalake::DeltaTable,
+}
+
+#[pyclass]
+struct DeltaTableSchema {
+    #[pyo3(get)]
+    schema: Vec<SchemaField>,
+}
+
+#[pyclass]
+#[derive(Clone)]
+struct SchemaField {
+    #[pyo3(get)]
+    name: String,
+    #[pyo3(get)]
+    rtype: String,
+    #[pyo3(get)]
+    nullable: bool,
+    #[pyo3(get)]
+    metadata: HashMap<String, String>,
+}
+
+impl From<&deltalake::SchemaField> for SchemaField {
+    fn from(f: &deltalake::SchemaField) -> Self {
+        SchemaField {
+            name: f.get_name().to_string(),
+            rtype: f.get_type().to_json().to_string(),
+            nullable: f.is_nullable(),
+            metadata: f.get_metadata().clone(),
+        }
+    }
+}
+
+impl From<&ArrowField> for SchemaField {
+    fn from(f: &ArrowField) -> Self {
+        SchemaField {
+            name: f.name().to_string(),
+            rtype: f.data_type().to_json().to_string(),
+            nullable: f.is_nullable(),
+            metadata: HashMap::new(),
+        }
+    }
 }
 
 #[pymethods]
@@ -59,6 +103,28 @@ impl RawDeltaTable {
 
     pub fn file_paths(&self) -> PyResult<Vec<String>> {
         Ok(self._table.get_file_paths())
+    }
+
+    pub fn schema(&self, format: &str) -> PyResult<DeltaTableSchema> {
+        let schema = match &format[..] {
+            "ARROW" => {
+                <ArrowSchema as From<&deltalake::Schema>>::from(self._table.schema().unwrap())
+                    .fields()
+                    .iter()
+                    .map(SchemaField::from)
+                    .collect()
+            }
+            "DELTA" => self
+                ._table
+                .schema()
+                .unwrap()
+                .get_fields()
+                .iter()
+                .map(SchemaField::from)
+                .collect(),
+            _ => panic!("Unknown Format for the schema: {}", format),
+        };
+        Ok(DeltaTableSchema { schema })
     }
 }
 
