@@ -119,7 +119,10 @@ class DataType:
         if name == "int" or name == "float":
             return f'{name}{json_dict["type"]["bitWidth"]}'
         else:
-            return name
+            if name.startswith("decimal"):
+                return f'{name}({json_dict["type"]["precision"]},{json_dict["type"]["scale"]})'
+            else:
+                return name
 
 
 class MapType(DataType):
