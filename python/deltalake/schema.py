@@ -17,8 +17,12 @@ class DeltaTableField:
         metadata: Dict[str, str],
         format: DeltaTableSchemaFormat,
     ):
+        type = json.loads(type)
+        if format == DeltaTableSchemaFormat.ARROW:
+            self.type = DataType.from_arrow_json(json_dict=type)
+        else:
+            self.type = DataType.from_delta_json(json_dict=type)
         self.name = name
-        self.type = DataType.from_json(json_dict=json.loads(type), format=format)
         self.nullable = nullable
         self.metadata = metadata
 
@@ -41,57 +45,92 @@ class DeltaTableSchema:
 
 class DataType:
     @classmethod
-    def from_json(cls, json_dict: Dict[str, Any], format: DeltaTableSchemaFormat):
-        print(json_dict)
-        if json_dict["name"] == "map":
-            key_type = cls.from_json(json_dict=json_dict["keyType"], format=format)
-            value_type = cls.from_json(json_dict=json_dict["valueType"], format=format)
+    def from_delta_json(cls, json_dict: Dict[str, Any]):
+        name = json_dict["name"]
+        if name == "map":
+            key_type = json_dict["keyType"]
+            value_type = json_dict["valueType"]
+            key_type = cls.from_delta_json(json_dict=key_type)
+            value_type = cls.from_delta_json(json_dict=value_type)
             return MapType(
-                name=json_dict["name"],
+                name=name,
                 key_type=key_type,
                 value_type=value_type,
             )
-        if json_dict["name"] == "array":
-            element_type = cls.from_json(
-                json_dict=json_dict["elementType"], format=format
-            )
+        if name == "array":
+            field = json_dict["elementType"]
+            element_type = cls.from_delta_json(json_dict=field)
             return ArrayType(
-                name=json_dict["name"],
+                name=name,
                 element_type=element_type,
                 contains_null=json_dict["containsNull"],
             )
-        if json_dict["name"] == "struct":
+        if name == "struct":
+            fields = json_dict["fields"]
             fields = [
                 DeltaTableField(
                     name=field["name"],
                     type=json.dumps(field["type"]),
                     nullable=field["nullable"],
-                    format=format,
                     metadata=field["metadata"],
+                    format=DeltaTableSchemaFormat.DELTA,
                 )
-                for field in json_dict["fields"]
+                for field in fields
+            ]
+            return StructType(name=name, fields=fields)
+
+        return name
+
+    @classmethod
+    def from_arrow_json(cls, json_dict: Dict[str, Any]):
+        name = json_dict["type"]["name"]
+        if name == "dictionary":
+            key_type = json_dict["dictionary"]["indexType"]
+            value_type = json_dict["children"][0]
+            key_type = cls.from_arrow_json(json_dict=key_type)
+            value_type = cls.from_arrow_json(json_dict=value_type)
+            return MapType(
+                name=json_dict["name"],
+                key_type=key_type,
+                value_type=value_type,
+            )
+        if name == "list":
+            field = json_dict["children"][0]
+            element_type = cls.from_arrow_json(json_dict=field)
+            return ArrayType(
+                name=json_dict["name"],
+                element_type=element_type,
+                contains_null=json_dict["nullable"],
+            )
+        if name == "struct":
+            fields = json_dict["children"]
+            fields = [
+                DeltaTableField(
+                    name=field["name"],
+                    type=json.dumps(field["type"]),
+                    nullable=field["nullable"],
+                    metadata=field["metadata"],
+                    format=DeltaTableSchemaFormat.ARROW,
+                )
+                for field in fields
             ]
             return StructType(name=json_dict["name"], fields=fields)
 
-        return get_primitive(json=json_dict, format=format)
-
-
-def get_primitive(json: Dict[str, Any], format: DeltaTableSchemaFormat) -> str:
-    if format.ARROW:
-        if json["name"] == "int" or json["name"] == "float":
-            return f'{json["name"]}{json["bitWidth"]}'
-
-    return json["name"]
+        if name == "int" or name == "float":
+            return f'{name}{json_dict["type"]["bitWidth"]}'
+        else:
+            return name
 
 
 class MapType(DataType):
     def __init__(self, name: str, key_type: str, value_type: str):
         self.name = name
+        self.type = "map"
         self.key_type = key_type
         self.value_type = value_type
 
     def __str__(self):
-        return f"{self.name}: map<{self.key_type}, {self.value_type}>"
+        return f"{self.name}: {self.type}<{self.key_type}, {self.value_type}>"
 
     def __repr__(self):
         return self.__str__()
@@ -100,11 +139,12 @@ class MapType(DataType):
 class ArrayType(DataType):
     def __init__(self, name: str, element_type: DataType, contains_null: bool):
         self.name = name
+        self.type = "array"
         self.element_type = element_type
         self.contains_null = contains_null
 
     def __str__(self):
-        return f"{self.name} array<{self.element_type}> {self.contains_null}"
+        return f"{self.name} {self.type}<{self.element_type}> {self.contains_null}"
 
     def __repr__(self):
         return self.__str__()
@@ -113,10 +153,11 @@ class ArrayType(DataType):
 class StructType(DataType):
     def __init__(self, name: str, fields: List[DataType]):
         self.name = name
+        self.type = "struct"
         self.fields = fields
 
     def __str__(self):
-        return f"{self.name} {self.fields}"
+        return f"{self.name} {self.type}<{self.fields}>"
 
     def __repr__(self):
         return self.__str__()

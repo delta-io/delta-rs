@@ -66,7 +66,7 @@ impl From<&ArrowField> for SchemaField {
     fn from(f: &ArrowField) -> Self {
         SchemaField {
             name: f.name().to_string(),
-            rtype: f.data_type().to_json().to_string(),
+            rtype: f.to_json().to_string(),
             nullable: f.is_nullable(),
             metadata: HashMap::new(),
         }
