@@ -1,3 +1,4 @@
+use regex::Regex;
 use arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
@@ -39,6 +40,7 @@ impl From<&schema::SchemaDataType> for ArrowDataType {
     fn from(t: &schema::SchemaDataType) -> Self {
         match t {
             schema::SchemaDataType::primitive(p) => {
+                let decimal_regex = Regex::new(r"\((\d{1,2}),(\d{1,2})\)").unwrap();
                 match p.as_str() {
                     "string" => ArrowDataType::Utf8,
                     "long" => ArrowDataType::Int64, // undocumented type
@@ -49,6 +51,12 @@ impl From<&schema::SchemaDataType> for ArrowDataType {
                     "double" => ArrowDataType::Float64,
                     "boolean" => ArrowDataType::Boolean,
                     "binary" => ArrowDataType::Binary,
+                    decimal if decimal_regex.is_match(decimal) => {
+                        let extract = decimal_regex.captures(decimal).unwrap();
+                        let precision = extract.get(1).unwrap().as_str().parse::<usize>().unwrap();
+                        let scale = extract.get(2).unwrap().as_str().parse::<usize>().unwrap();
+                        ArrowDataType::Decimal(precision, scale)
+                    },
                     "date" => {
                         // A calendar date, represented as a year-month-day triple without a
                         // timezone.
