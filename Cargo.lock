@@ -634,10 +634,12 @@ dependencies = [
 name = "deltalake-python"
 version = "0.2.1"
 dependencies = [
+ "arrow",
  "deltalake",
  "env_logger",
  "pyo3",
  "reqwest",
+ "serde_json",
  "tokio",
 ]
 

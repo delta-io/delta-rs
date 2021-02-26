@@ -1,4 +1,6 @@
+from __future__ import annotations
 import json
+import os
 from typing import Dict, List, Any
 from enum import Enum
 
@@ -35,9 +37,7 @@ class DeltaTableSchema:
         self.fields = fields
 
     def __str__(self):
-        for field in self.fields:
-            print(field)
-        return ""
+        return os.linesep.join((str(field) for field in self.fields))
 
     def __repr__(self):
         return self.__str__()
@@ -45,7 +45,7 @@ class DeltaTableSchema:
 
 class DataType:
     @classmethod
-    def from_delta_json(cls, json_dict: Dict[str, Any]):
+    def from_delta_json(cls, json_dict: Dict[str, Any]) -> DataType:
         name = json_dict["name"]
         if name == "map":
             key_type = json_dict["keyType"]
@@ -82,7 +82,7 @@ class DataType:
         return name
 
     @classmethod
-    def from_arrow_json(cls, json_dict: Dict[str, Any]):
+    def from_arrow_json(cls, json_dict: Dict[str, Any]) -> DataType:
         name = json_dict["type"]["name"]
         if name == "dictionary":
             key_type = json_dict["dictionary"]["indexType"]

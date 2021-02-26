@@ -58,7 +58,7 @@ class DeltaTable:
     def to_pyarrow_table(self) -> pyarrow.Table:
         return self.to_pyarrow_dataset().to_table()
 
-    def to_pyarrow_schema(self) -> pyarrow.Schema:
+    def pyarrow_schema(self) -> pyarrow.Schema:
         format = DeltaTableSchemaFormat.ARROW
         delta_fields = [
             DeltaTableField(

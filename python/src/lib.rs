@@ -3,11 +3,13 @@
 extern crate arrow;
 extern crate deltalake;
 extern crate pyo3;
+extern crate serde_json;
 
 use arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use serde_json::{json, to_string};
 use std::collections::HashMap;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
@@ -53,9 +55,13 @@ struct SchemaField {
 
 impl From<&deltalake::SchemaField> for SchemaField {
     fn from(f: &deltalake::SchemaField) -> Self {
+        let json_type = match f.get_type() {
+            deltalake::SchemaDataType::primitive(p) => json![{ "name": p }].to_string(),
+            rtype => to_string(rtype).unwrap(),
+        };
         SchemaField {
             name: f.get_name().to_string(),
-            rtype: f.get_type().to_json().to_string(),
+            rtype: json_type,
             nullable: f.is_nullable(),
             metadata: f.get_metadata().clone(),
         }
@@ -106,23 +112,17 @@ impl RawDeltaTable {
     }
 
     pub fn schema(&self, format: &str) -> PyResult<DeltaTableSchema> {
-        let schema = match &format[..] {
-            "ARROW" => {
-                <ArrowSchema as From<&deltalake::Schema>>::from(self._table.schema().unwrap())
+        let schema = match self._table.schema() {
+            Some(s) => match &format[..] {
+                "ARROW" => <ArrowSchema as From<&deltalake::Schema>>::from(s)
                     .fields()
                     .iter()
                     .map(SchemaField::from)
-                    .collect()
-            }
-            "DELTA" => self
-                ._table
-                .schema()
-                .unwrap()
-                .get_fields()
-                .iter()
-                .map(SchemaField::from)
-                .collect(),
-            _ => panic!("Unknown Format for the schema: {}", format),
+                    .collect(),
+                "DELTA" => s.get_fields().iter().map(SchemaField::from).collect(),
+                _ => panic!("Unknown Format for the schema: {}", format),
+            },
+            None => vec![],
         };
         Ok(DeltaTableSchema { schema })
     }

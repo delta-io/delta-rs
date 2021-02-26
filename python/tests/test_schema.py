@@ -34,7 +34,7 @@ def test_table_schema_format_arrow():
 def test_table_schema_pyarrow():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    schema = dt.to_pyarrow_schema()
+    schema = dt.pyarrow_schema()
     field = schema.field(0)
     assert len(schema.types) == 1
     assert field.name == "id"
