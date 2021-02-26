@@ -1,4 +1,3 @@
-from __future__ import annotations
 import json
 import os
 from typing import Dict, List, Any
@@ -45,7 +44,7 @@ class DeltaTableSchema:
 
 class DataType:
     @classmethod
-    def from_delta_json(cls, json_dict: Dict[str, Any]) -> DataType:
+    def from_delta_json(cls, json_dict: Dict[str, Any]):
         name = json_dict["name"]
         if name == "map":
             key_type = json_dict["keyType"]
@@ -82,7 +81,7 @@ class DataType:
         return name
 
     @classmethod
-    def from_arrow_json(cls, json_dict: Dict[str, Any]) -> DataType:
+    def from_arrow_json(cls, json_dict: Dict[str, Any]):
         name = json_dict["type"]["name"]
         if name == "dictionary":
             key_type = json_dict["dictionary"]["indexType"]
