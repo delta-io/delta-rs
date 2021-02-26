@@ -615,6 +615,7 @@ dependencies = [
  "datafusion",
  "env_logger",
  "futures",
+ "lazy_static",
  "log",
  "parquet",
  "regex",
