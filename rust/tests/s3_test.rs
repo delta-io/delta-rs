@@ -1,3 +1,6 @@
+#[macro_use]
+extern crate serial_test;
+
 #[cfg(feature = "s3")]
 mod s3 {
     /*
@@ -13,6 +16,7 @@ mod s3 {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_s3_simple() {
         setup();
         let table =
@@ -47,6 +51,7 @@ mod s3 {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_s3_simple_with_trailing_slash() {
         setup();
         let table =
@@ -60,6 +65,7 @@ mod s3 {
     }
 
     #[tokio::test]
+    #[serial]
     async fn test_s3_simple_golden() {
         setup();
 
