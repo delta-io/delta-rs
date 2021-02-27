@@ -1,16 +1,12 @@
 #![deny(warnings)]
 
 extern crate arrow;
-extern crate deltalake;
 extern crate pyo3;
-extern crate serde_json;
 
-use arrow::datatypes::{Field as ArrowField, Schema as ArrowSchema};
+use arrow::datatypes::Schema as ArrowSchema;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use serde_json::{json, to_string};
-use std::collections::HashMap;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
 
@@ -32,51 +28,6 @@ fn rt() -> PyResult<tokio::runtime::Runtime> {
 #[pyclass]
 struct RawDeltaTable {
     _table: deltalake::DeltaTable,
-}
-
-#[pyclass]
-struct DeltaTableSchema {
-    #[pyo3(get)]
-    schema: Vec<SchemaField>,
-}
-
-#[pyclass]
-#[derive(Clone)]
-struct SchemaField {
-    #[pyo3(get)]
-    name: String,
-    #[pyo3(get)]
-    rtype: String,
-    #[pyo3(get)]
-    nullable: bool,
-    #[pyo3(get)]
-    metadata: HashMap<String, String>,
-}
-
-impl From<&deltalake::SchemaField> for SchemaField {
-    fn from(f: &deltalake::SchemaField) -> Self {
-        let json_type = match f.get_type() {
-            deltalake::SchemaDataType::primitive(p) => json![{ "name": p }].to_string(),
-            rtype => to_string(rtype).unwrap(),
-        };
-        SchemaField {
-            name: f.get_name().to_string(),
-            rtype: json_type,
-            nullable: f.is_nullable(),
-            metadata: f.get_metadata().clone(),
-        }
-    }
-}
-
-impl From<&ArrowField> for SchemaField {
-    fn from(f: &ArrowField) -> Self {
-        SchemaField {
-            name: f.name().to_string(),
-            rtype: f.to_json().to_string(),
-            nullable: f.is_nullable(),
-            metadata: HashMap::new(),
-        }
-    }
 }
 
 #[pymethods]
@@ -111,20 +62,24 @@ impl RawDeltaTable {
         Ok(self._table.get_file_paths())
     }
 
-    pub fn schema(&self, format: &str) -> PyResult<DeltaTableSchema> {
-        let schema = match self._table.schema() {
-            Some(s) => match &format[..] {
-                "ARROW" => <ArrowSchema as From<&deltalake::Schema>>::from(s)
-                    .fields()
-                    .iter()
-                    .map(SchemaField::from)
-                    .collect(),
-                "DELTA" => s.get_fields().iter().map(SchemaField::from).collect(),
-                _ => panic!("Unknown Format for the schema: {}", format),
-            },
-            None => vec![],
-        };
-        Ok(DeltaTableSchema { schema })
+    pub fn schema_json(&self) -> PyResult<String> {
+        let schema = self
+            ._table
+            .schema()
+            .ok_or_else(|| PyDeltaTableError::new_err("Table schema not found"))?;
+        Ok(serde_json::to_string(&schema)
+            .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))?)
+    }
+
+    pub fn arrow_schema_json(&self) -> PyResult<String> {
+        let schema = self
+            ._table
+            .schema()
+            .ok_or_else(|| PyDeltaTableError::new_err("Table schema not found"))?;
+        Ok(serde_json::to_string(
+            &<ArrowSchema as From<&deltalake::Schema>>::from(schema).to_json(),
+        )
+        .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))?)
     }
 }
 
