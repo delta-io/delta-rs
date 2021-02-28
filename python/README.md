@@ -68,6 +68,16 @@ Time travel:
 7   9
 ```
 
+Schema:
+
+```
+>>> from deltalake import DeltaTable
+>>> dt = DeltaTable("../rust/tests/data/simple_table")
+>>> dt.schema()
+Schema(Field(id: DataType(long) nullable(True) metadata({})))
+>>> dt.pyarrow_schema()
+id: int64
+```
 
 Develop
 -------

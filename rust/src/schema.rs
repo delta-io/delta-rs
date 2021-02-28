@@ -13,7 +13,7 @@ pub type DeltaDataTypeInt = i32;
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct SchemaTypeStruct {
-    // type field is alwsy the string "struct", so we are ignoring it here
+    // type field is always the string "struct", so we are ignoring it here
     r#type: String,
     fields: Vec<SchemaField>,
 }
@@ -58,7 +58,7 @@ impl SchemaField {
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SchemaTypeArray {
-    // type field is alwsy the string "array", so we are ignoring it here
+    // type field is always the string "array", so we are ignoring it here
     r#type: String,
     // The type of element stored in this array represented as a string containing the name of a
     // primitive type, a struct definition, an array definition or a map definition

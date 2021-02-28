@@ -17,6 +17,8 @@ env_logger = "0"
 # reqwest is pulled in by azure sdk, but not used by python binding itself
 # for binary wheel best practice, statically link openssl
 reqwest = { version = "*", features = ["native-tls-vendored"] }
+serde_json = "1.0"
+arrow  = { git = "https://github.com/apache/arrow.git", rev = "05b36567bd8216bec71b796fe3bb6811c71abbec" }
 
 [dependencies.pyo3]
 version = "0.13.*"
