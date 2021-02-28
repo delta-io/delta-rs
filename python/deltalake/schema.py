@@ -180,8 +180,8 @@ def pyarrow_datatype_from_dict(json_dict: Dict) -> pyarrow.DataType:
         return pyarrow.type_for_alias(f'{type_class}{type_info["bitWidth"]}[{unit}]')
     elif type_class.startswith("decimal"):
         type_info = json_dict["type"]
-        return pyarrow.type_for_alias(
-            f'{type_class}({type_info["precision"]},{type_info["scale"]})'
+        return pyarrow.decimal128(
+            precision=type_info["precision"], scale=type_info["scale"]
         )
     else:
         return pyarrow.type_for_alias(type_class)
