@@ -1,8 +1,9 @@
 #![deny(warnings)]
 
-extern crate deltalake;
+extern crate arrow;
 extern crate pyo3;
 
+use arrow::datatypes::Schema as ArrowSchema;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -59,6 +60,26 @@ impl RawDeltaTable {
 
     pub fn file_paths(&self) -> PyResult<Vec<String>> {
         Ok(self._table.get_file_paths())
+    }
+
+    pub fn schema_json(&self) -> PyResult<String> {
+        let schema = self
+            ._table
+            .schema()
+            .ok_or_else(|| PyDeltaTableError::new_err("Table schema not found"))?;
+        Ok(serde_json::to_string(&schema)
+            .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))?)
+    }
+
+    pub fn arrow_schema_json(&self) -> PyResult<String> {
+        let schema = self
+            ._table
+            .schema()
+            .ok_or_else(|| PyDeltaTableError::new_err("Table schema not found"))?;
+        Ok(serde_json::to_string(
+            &<ArrowSchema as From<&deltalake::Schema>>::from(schema).to_json(),
+        )
+        .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))?)
     }
 }
 
