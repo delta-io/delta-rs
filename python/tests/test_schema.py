@@ -48,6 +48,25 @@ def test_table_schema_pyarrow_020():
     assert field.metadata is None
 
 
+def test_schema_pyarrow_from_decimal_type():
+    field_name = "decimal_test"
+    metadata = {b"metadata_k": b"metadata_v"}
+    precision = 20
+    scale = 2
+    pyarrow_field = pyarrow_field_from_dict(
+        {
+            "name": field_name,
+            "nullable": False,
+            "metadata": metadata,
+            "type": {"name": "decimal", "precision": precision, "scale": scale},
+        }
+    )
+    assert pyarrow_field.name == field_name
+    assert pyarrow_field.type == pyarrow.decimal128(precision=precision, scale=scale)
+    assert dict(pyarrow_field.metadata) == metadata
+    assert pyarrow_field.nullable is False
+
+
 def test_schema_delta_types():
     field_name = "column1"
     metadata = {"metadata_k": "metadata_v"}
