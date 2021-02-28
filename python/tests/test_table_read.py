@@ -1,4 +1,3 @@
-import os
 from threading import Barrier, Thread
 
 import pytest
