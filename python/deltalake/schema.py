@@ -4,7 +4,10 @@ import json
 
 import pyarrow
 
+
 # TODO: implement this module in Rust land to avoid JSON serialization
+# https://github.com/delta-io/delta-rs/issues/95
+
 
 class DataType:
     def __init__(self, type_class: str):
