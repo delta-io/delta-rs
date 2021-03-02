@@ -65,8 +65,8 @@ impl RawDeltaTable {
     pub fn schema_json(&self) -> PyResult<String> {
         let schema = self
             ._table
-            .schema()
-            .ok_or_else(|| PyDeltaTableError::new_err("Table schema not found"))?;
+            .get_schema()
+            .map_err(PyDeltaTableError::from_raw)?;
         Ok(serde_json::to_string(&schema)
             .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))?)
     }
@@ -74,8 +74,8 @@ impl RawDeltaTable {
     pub fn arrow_schema_json(&self) -> PyResult<String> {
         let schema = self
             ._table
-            .schema()
-            .ok_or_else(|| PyDeltaTableError::new_err("Table schema not found"))?;
+            .get_schema()
+            .map_err(PyDeltaTableError::from_raw)?;
         Ok(serde_json::to_string(
             &<ArrowSchema as From<&deltalake::Schema>>::from(schema).to_json(),
         )

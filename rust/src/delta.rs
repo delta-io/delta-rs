@@ -89,8 +89,10 @@ pub enum DeltaTableError {
     },
     #[error("Not a Delta table")]
     NotATable,
-    #[error("No metadata")]
+    #[error("No metadata found, please make sure table is loaded.")]
     NoMetadata,
+    #[error("No schema found, please make sure table is loaded.")]
+    NoSchema,
 }
 
 #[derive(Clone)]
@@ -547,21 +549,14 @@ impl DeltaTable {
     pub fn get_file_paths(&self) -> Vec<String> {
         self.files
             .iter()
-            .map(|fname| {
-                self.storage.join_path(&self.table_path, fname)
-            })
+            .map(|fname| self.storage.join_path(&self.table_path, fname))
             .collect()
     }
 
     pub fn get_metadata(&self) -> Result<&DeltaTableMetaData, DeltaTableError> {
-        match &self.current_metadata {
-            Some(m) => {
-                Ok(&m)
-            }
-            None => {
-                Err(DeltaTableError::NoMetadata)
-            }
-        }
+        self.current_metadata
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)
     }
 
     pub fn get_tombstones(&self) -> &Vec<action::Remove> {
@@ -573,10 +568,11 @@ impl DeltaTable {
     }
 
     pub fn schema(&self) -> Option<&Schema> {
-        match &self.current_metadata {
-            Some(meta) => Some(&meta.schema),
-            None => None,
-        }
+        self.current_metadata.as_ref().map(|m| &m.schema)
+    }
+
+    pub fn get_schema(&self) -> Result<&Schema, DeltaTableError> {
+        self.schema().ok_or(DeltaTableError::NoSchema)
     }
 
     pub fn create_transaction(&mut self, options: Option<DeltaTransactionOptions>) -> DeltaTransaction {
