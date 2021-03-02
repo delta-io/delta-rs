@@ -1,5 +1,5 @@
-use std::pin::Pin;
 use std::path::Path;
+use std::pin::Pin;
 
 use chrono::DateTime;
 use futures::{Stream, TryStreamExt};
@@ -20,11 +20,7 @@ impl FileStorageBackend {
 
 #[async_trait::async_trait]
 impl StorageBackend for FileStorageBackend {
-    fn join_path(
-        &self,
-        path: &str,
-        path_to_join: &str,
-    ) -> String {
+    fn join_path(&self, path: &str, path_to_join: &str) -> String {
         let new_path = Path::new(path);
         new_path
             .join(path_to_join)
@@ -66,7 +62,7 @@ impl StorageBackend for FileStorageBackend {
 
         if let Some(d) = dir.parent() {
             fs::create_dir_all(d).await?;
-        } 
+        }
 
         // use `OpenOptions` with `create_new` to create the file handle.
         // this will force ErrorKind::AlreadyExists if the file already exists.
@@ -74,11 +70,12 @@ impl StorageBackend for FileStorageBackend {
             .create_new(true)
             .write(true)
             .open(path)
-            .await.map_err(|e| match e.kind() {
+            .await
+            .map_err(|e| match e.kind() {
                 std::io::ErrorKind::AlreadyExists => StorageError::AlreadyExists(path.to_string()),
                 _ => StorageError::IO { source: e },
             })?;
-    
+
         f.write(obj_bytes).await?;
 
         Ok(())

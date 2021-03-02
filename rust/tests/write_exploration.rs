@@ -3,26 +3,21 @@ extern crate deltalake;
 extern crate utime;
 
 use arrow::{
-    array::{Array, as_primitive_array}, 
+    array::{as_primitive_array, Array},
+    datatypes::Schema as ArrowSchema,
     // TODO: use for computing column stats
     // compute::kernels::aggregate,
     datatypes::*,
     error::ArrowError,
-    datatypes::Schema as ArrowSchema,
     json::reader::Decoder,
     record_batch::RecordBatch,
 };
 use deltalake::{
-    DeltaTableError, 
-    DeltaTableMetaData, 
-    Schema, 
-    StorageBackend, 
-    StorageError, 
-    UriError, 
-    action::{Add, Remove, Action, Stats},
+    action::{Action, Add, Remove, Stats},
+    DeltaTableError, DeltaTableMetaData, Schema, StorageBackend, StorageError, UriError,
 };
 use parquet::{
-    arrow::ArrowWriter, 
+    arrow::ArrowWriter,
     basic::Compression,
     errors::ParquetError,
     file::{properties::WriterProperties, writer::InMemoryWriteableCursor},
@@ -50,27 +45,27 @@ pub enum DeltaWriterError {
     },
 
     #[error("Storage interaction failed: {source}")]
-    Storage { 
+    Storage {
         #[from]
-        source: StorageError 
+        source: StorageError,
     },
 
     #[error("DeltaTable interaction failed: {source}")]
-    DeltaTable { 
+    DeltaTable {
         #[from]
-        source: DeltaTableError 
+        source: DeltaTableError,
     },
 
     #[error("Arrow interaction failed: {source}")]
-    Arrow { 
+    Arrow {
         #[from]
-        source: ArrowError 
+        source: ArrowError,
     },
 
     #[error("Parquet write failed: {source}")]
-    Parquet { 
+    Parquet {
         #[from]
-        source: ParquetError 
+        source: ParquetError,
     },
 }
 
@@ -93,13 +88,19 @@ impl DeltaWriter {
 
     // Ideally, we should separate the initialization of the cursor and the call to close to enable writing multiple record batches to the same file.
     // Keeping it simple for now and writing a single record batch to each file.
-    pub async fn write_record_batch(&self, metadata: &DeltaTableMetaData, record_batch: &RecordBatch) -> Result<Add, DeltaWriterError> {
+    pub async fn write_record_batch(
+        &self,
+        metadata: &DeltaTableMetaData,
+        record_batch: &RecordBatch,
+    ) -> Result<Add, DeltaWriterError> {
         let partition_values = extract_partition_values(metadata, record_batch)?;
 
         // TODO: lookup column stats
         // let column_stats = HashMap::new();
 
-        let cursor = self.write_to_parquet_buffer(metadata, &record_batch).await?;
+        let cursor = self
+            .write_to_parquet_buffer(metadata, &record_batch)
+            .await?;
 
         let path = self.next_data_path(metadata, &partition_values).unwrap();
 
@@ -108,14 +109,25 @@ impl DeltaWriter {
 
         let storage_path = format!("{}/{}", self.table_path, path);
 
-        self.storage.put_obj(storage_path.as_str(), obj_bytes.as_slice()).await?;
+        self.storage
+            .put_obj(storage_path.as_str(), obj_bytes.as_slice())
+            .await?;
 
-        create_add(&partition_values, path, obj_bytes.len() as i64, &record_batch)
+        create_add(
+            &partition_values,
+            path,
+            obj_bytes.len() as i64,
+            &record_batch,
+        )
     }
 
     // Ideally, we should separate the initialization of the cursor and the call to close to enable writing multiple record batches to the same file.
     // Keeping it simple for now and writing a single record batch to each file.
-    async fn write_to_parquet_buffer(&self, metadata: &DeltaTableMetaData, batch: &RecordBatch) -> Result<InMemoryWriteableCursor, DeltaWriterError> {
+    async fn write_to_parquet_buffer(
+        &self,
+        metadata: &DeltaTableMetaData,
+        batch: &RecordBatch,
+    ) -> Result<InMemoryWriteableCursor, DeltaWriterError> {
         let schema = &metadata.schema;
         let arrow_schema = <ArrowSchema as From<&Schema>>::from(schema);
         let arrow_schema_ref = Arc::new(arrow_schema);
@@ -125,7 +137,12 @@ impl DeltaWriter {
             .set_compression(Compression::SNAPPY)
             .build();
         let cursor = InMemoryWriteableCursor::default();
-        let mut writer = ArrowWriter::try_new(cursor.clone(), arrow_schema_ref.clone(), Some(writer_properties)).unwrap();
+        let mut writer = ArrowWriter::try_new(
+            cursor.clone(),
+            arrow_schema_ref.clone(),
+            Some(writer_properties),
+        )
+        .unwrap();
 
         writer.write(batch)?;
         writer.close()?;
@@ -134,7 +151,11 @@ impl DeltaWriter {
     }
 
     // TODO: parquet files have a 5 digit zero-padded prefix and a "c\d{3}" suffix that I have not been able to find documentation for yet.
-    fn next_data_path(&self, metadata: &DeltaTableMetaData, partition_values: &HashMap<String, String>) -> Result<String, DeltaWriterError> {
+    fn next_data_path(
+        &self,
+        metadata: &DeltaTableMetaData,
+        partition_values: &HashMap<String, String>,
+    ) -> Result<String, DeltaWriterError> {
         // TODO: what does 00000 mean?
         let first_part = "00000";
         let uuid_part = Uuid::new_v4();
@@ -152,7 +173,12 @@ impl DeltaWriter {
             let mut first = true;
 
             for k in partition_cols.iter() {
-                let partition_value = partition_values.get(k).ok_or(DeltaWriterError::MissingPartitionColumn{ col_name: k.to_string() })?;
+                let partition_value =
+                    partition_values
+                        .get(k)
+                        .ok_or(DeltaWriterError::MissingPartitionColumn {
+                            col_name: k.to_string(),
+                        })?;
 
                 if first {
                     first = false;
@@ -175,12 +201,12 @@ impl DeltaWriter {
 }
 
 pub struct InMemValueIter<'a> {
-    buffer: &'a[Value],
+    buffer: &'a [Value],
     current_index: usize,
 }
 
 impl<'a> InMemValueIter<'a> {
-    fn from_vec(v: &'a[Value]) -> Self {
+    fn from_vec(v: &'a [Value]) -> Self {
         Self {
             buffer: v,
             current_index: 0,
@@ -200,7 +226,10 @@ impl<'a> Iterator for InMemValueIter<'a> {
     }
 }
 
-pub fn record_batch_from_json_buffer(arrow_schema_ref: Arc<ArrowSchema>, json_buffer: &[Value]) -> Result<RecordBatch, DeltaWriterError> {
+pub fn record_batch_from_json_buffer(
+    arrow_schema_ref: Arc<ArrowSchema>,
+    json_buffer: &[Value],
+) -> Result<RecordBatch, DeltaWriterError> {
     let row_count = json_buffer.len();
     let mut value_ter = InMemValueIter::from_vec(json_buffer);
     let decoder = Decoder::new(arrow_schema_ref.clone(), row_count, None);
@@ -212,7 +241,10 @@ pub fn record_batch_from_json_buffer(arrow_schema_ref: Arc<ArrowSchema>, json_bu
     Ok(batch)
 }
 
-pub fn extract_partition_values(metadata: &DeltaTableMetaData, record_batch: &RecordBatch) -> Result<HashMap<String, String>, DeltaWriterError> {
+pub fn extract_partition_values(
+    metadata: &DeltaTableMetaData,
+    record_batch: &RecordBatch,
+) -> Result<HashMap<String, String>, DeltaWriterError> {
     let partition_cols = metadata.partition_columns.as_slice();
 
     let mut partition_values = HashMap::new();
@@ -221,7 +253,7 @@ pub fn extract_partition_values(metadata: &DeltaTableMetaData, record_batch: &Re
         let arrow_schema = record_batch.schema();
 
         let i = arrow_schema.index_of(col_name)?;
-        let col = record_batch.column(i); 
+        let col = record_batch.column(i);
 
         let partition_string = stringified_partition_value(col)?;
 
@@ -231,7 +263,12 @@ pub fn extract_partition_values(metadata: &DeltaTableMetaData, record_batch: &Re
     Ok(partition_values)
 }
 
-pub fn create_add(partition_values: &HashMap<String, String>, path: String, size: i64, record_batch: &RecordBatch) -> Result<Add, DeltaWriterError> {
+pub fn create_add(
+    partition_values: &HashMap<String, String>,
+    path: String,
+    size: i64,
+    record_batch: &RecordBatch,
+) -> Result<Add, DeltaWriterError> {
     let stats = Stats {
         numRecords: record_batch.num_rows() as i64,
         // TODO: calculate additional stats
@@ -242,10 +279,8 @@ pub fn create_add(partition_values: &HashMap<String, String>, path: String, size
     };
     let stats_string = serde_json::to_string(&stats).unwrap();
 
-    let modification_time = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap();
-    let modification_time= modification_time.as_millis() as i64;
+    let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+    let modification_time = modification_time.as_millis() as i64;
 
     let add = Add {
         path,
@@ -257,7 +292,7 @@ pub fn create_add(partition_values: &HashMap<String, String>, path: String, size
         modificationTime: modification_time,
         dataChange: true,
 
-        // TODO: calculate additional stats 
+        // TODO: calculate additional stats
         stats: Some(stats_string),
         stats_parsed: None,
         // ?
@@ -268,13 +303,11 @@ pub fn create_add(partition_values: &HashMap<String, String>, path: String, size
 }
 
 pub fn create_remove(path: String) -> Remove {
-    let deletion_timestamp = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .unwrap();
+    let deletion_timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let deletion_timestamp = deletion_timestamp.as_millis() as i64;
 
-    Remove { 
-        path, 
+    Remove {
+        path,
         deletionTimestamp: deletion_timestamp,
         dataChange: true,
     }
@@ -319,8 +352,12 @@ async fn smoke_test() {
     // NOTE: Test table is partitioned by `modified`
 
     // initialize table and writer
-    let mut delta_table = deltalake::open_table("./tests/data/write_exploration").await.unwrap();
-    let delta_writer = DeltaWriter::for_table_path(delta_table.table_path.clone()).await.unwrap();
+    let mut delta_table = deltalake::open_table("./tests/data/write_exploration")
+        .await
+        .unwrap();
+    let delta_writer = DeltaWriter::for_table_path(delta_table.table_path.clone())
+        .await
+        .unwrap();
 
     //
     // ---
@@ -335,7 +372,7 @@ async fn smoke_test() {
     let mut transaction = delta_table.create_transaction(None);
 
     // test data set #1 - inserts
-    let json_rows =  vec![
+    let json_rows = vec![
         json!({ "id": "A", "value": 42, "modified": "2021-02-01" }),
         json!({ "id": "B", "value": 44, "modified": "2021-02-01" }),
         json!({ "id": "C", "value": 46, "modified": "2021-02-01" }),
@@ -347,16 +384,23 @@ async fn smoke_test() {
     ];
 
     let arrow_schema_ref = Arc::new(<ArrowSchema as From<&Schema>>::from(&metadata.schema));
-    let record_batch = record_batch_from_json_buffer(arrow_schema_ref, json_rows.as_slice()).unwrap();
+    let record_batch =
+        record_batch_from_json_buffer(arrow_schema_ref, json_rows.as_slice()).unwrap();
 
     // write data and collect add
-    let add = delta_writer.write_record_batch(&metadata, &record_batch).await.unwrap();
+    let add = delta_writer
+        .write_record_batch(&metadata, &record_batch)
+        .await
+        .unwrap();
 
-    // HACK: cloning the add path to remove later in test. Ultimately, an "UpdateCommmand" will need to handle this differently 
+    // HACK: cloning the add path to remove later in test. Ultimately, an "UpdateCommmand" will need to handle this differently
     let remove_path = add.path.clone();
 
     // commit the transaction
-    transaction.commit_with(&[Action::add(add)], None).await.unwrap();
+    transaction
+        .commit_with(&[Action::add(add)], None)
+        .await
+        .unwrap();
 
     //
     // ---
@@ -379,7 +423,8 @@ async fn smoke_test() {
     ];
 
     let arrow_schema_ref = Arc::new(<ArrowSchema as From<&Schema>>::from(&metadata.schema));
-    let record_batch = record_batch_from_json_buffer(arrow_schema_ref, json_rows.as_slice()).unwrap();
+    let record_batch =
+        record_batch_from_json_buffer(arrow_schema_ref, json_rows.as_slice()).unwrap();
 
     // TODO: resolve diffs by rewriting previous add and also creating a remove of the previous add
     // See "UpdateCommand.scala" in reference implementation
@@ -396,13 +441,19 @@ async fn smoke_test() {
 
     // write data and collect add
     // TODO: update adds should re-write the original add contents changing only the modified records
-    let add = delta_writer.write_record_batch(&metadata, &record_batch).await.unwrap();
+    let add = delta_writer
+        .write_record_batch(&metadata, &record_batch)
+        .await
+        .unwrap();
 
     // TODO: removes should be calculated based on files containing a match for the update key.
     let remove = create_remove(remove_path);
 
     // commit the transaction
-    transaction.commit_with(&[Action::add(add), Action::remove(remove)], None).await.unwrap();
+    transaction
+        .commit_with(&[Action::add(add), Action::remove(remove)], None)
+        .await
+        .unwrap();
 
     // A notable thing to mention:
     // This implementation treats the DeltaTable instance as a single snapshot of the current log.
@@ -423,7 +474,7 @@ fn cleanup_log_dir() {
                     if extension == "json" && path.file_stem().unwrap() != "00000000000000000000" {
                         fs::remove_file(path).unwrap();
                     }
-                } 
+                }
             }
             _ => {}
         }

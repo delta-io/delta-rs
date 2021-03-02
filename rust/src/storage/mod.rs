@@ -260,11 +260,7 @@ pub struct ObjectMeta {
 
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + Debug {
-    fn join_path(
-        &self,
-        path: &str,
-        path_to_join: &str,
-    ) -> String {
+    fn join_path(&self, path: &str, path_to_join: &str) -> String {
         let normalized_path = path.trim_end_matches('/');
         format!("{}/{}", normalized_path, path_to_join)
     }

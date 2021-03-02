@@ -12,17 +12,17 @@ mod s3 {
     fn setup() {
         std::env::set_var("AWS_REGION", "us-west-2");
         std::env::set_var("AWS_ACCESS_KEY_ID", "AKIAX7EGEQ7FT6CLQGWH");
-        std::env::set_var("AWS_SECRET_ACCESS_KEY", "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");
+        std::env::set_var(
+            "AWS_SECRET_ACCESS_KEY",
+            "rC0r/cd/DbK5frcI06/2pED9OL3i3eHNEdzcsUWc",
+        );
     }
 
     #[tokio::test]
     #[serial]
     async fn test_s3_simple() {
         setup();
-        let table =
-            deltalake::open_table("s3://deltars/simple")
-                .await
-                .unwrap();
+        let table = deltalake::open_table("s3://deltars/simple").await.unwrap();
         println!("{}", table);
         assert_eq!(table.version, 4);
         assert_eq!(table.min_writer_version, 2);
@@ -54,10 +54,7 @@ mod s3 {
     #[serial]
     async fn test_s3_simple_with_trailing_slash() {
         setup();
-        let table =
-            deltalake::open_table("s3://deltars/simple/")
-                .await
-                .unwrap();
+        let table = deltalake::open_table("s3://deltars/simple/").await.unwrap();
         println!("{}", table);
         assert_eq!(table.version, 4);
         assert_eq!(table.min_writer_version, 2);
@@ -69,10 +66,9 @@ mod s3 {
     async fn test_s3_simple_golden() {
         setup();
 
-        let table =
-            deltalake::open_table("s3://deltars/golden/data-reader-array-primitives")
-                .await
-                .unwrap();
+        let table = deltalake::open_table("s3://deltars/golden/data-reader-array-primitives")
+            .await
+            .unwrap();
         println!("{}", table);
         assert_eq!(table.version, 0);
         assert_eq!(table.min_writer_version, 2);

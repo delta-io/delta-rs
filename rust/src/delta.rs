@@ -6,8 +6,8 @@ use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
 
 use chrono::{DateTime, FixedOffset, Utc};
-use log::debug;
 use futures::StreamExt;
+use log::debug;
 use parquet::errors::ParquetError;
 use parquet::file::{
     reader::{FileReader, SerializedFileReader},
@@ -202,7 +202,9 @@ impl DeltaTable {
 
     fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<String> {
         let checkpoint_prefix_pattern = format!("{:020}", check_point.version);
-        let checkpoint_prefix = self.storage.join_path(&self.log_path, &checkpoint_prefix_pattern);
+        let checkpoint_prefix = self
+            .storage
+            .join_path(&self.log_path, &checkpoint_prefix_pattern);
         let mut checkpoint_data_paths = Vec::new();
 
         match check_point.parts {
@@ -225,9 +227,7 @@ impl DeltaTable {
     }
 
     async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
-        let last_checkpoint_path = self
-            .storage
-            .join_path(&self.log_path, "_last_checkpoint");
+        let last_checkpoint_path = self.storage.join_path(&self.log_path, "_last_checkpoint");
         let data = self.storage.get_obj(&last_checkpoint_path).await?;
 
         Ok(serde_json::from_slice(&data)?)
@@ -435,7 +435,8 @@ impl DeltaTable {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
                 if self.last_check_point.is_none()
-                    || self.last_check_point == Some(last_check_point) {
+                    || self.last_check_point == Some(last_check_point)
+                {
                     self.last_check_point = Some(last_check_point);
                     self.restore_checkpoint(last_check_point).await?;
                     self.version = last_check_point.version + 1;
@@ -575,7 +576,10 @@ impl DeltaTable {
         self.schema().ok_or(DeltaTableError::NoSchema)
     }
 
-    pub fn create_transaction(&mut self, options: Option<DeltaTransactionOptions>) -> DeltaTransaction {
+    pub fn create_transaction(
+        &mut self,
+        options: Option<DeltaTransactionOptions>,
+    ) -> DeltaTransaction {
         DeltaTransaction::new(self, options)
     }
 
@@ -669,19 +673,19 @@ impl std::fmt::Debug for DeltaTable {
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTransactionError {
     #[error("Transaction commit exceeded max retries. Last error: {inner}")]
-    CommitRetriesExceeded { 
+    CommitRetriesExceeded {
         #[from]
-        inner: TransactionCommitAttemptError, 
+        inner: TransactionCommitAttemptError,
     },
 
     #[error("RecordBatch is missing partition column in Delta schema.")]
     MissingPartitionColumn,
 
     #[error("Storage interaction failed: {source}")]
-    Storage { source: StorageError, },
+    Storage { source: StorageError },
 
     #[error("DeltaTable interaction failed: {source}")]
-    DeltaTable { 
+    DeltaTable {
         #[from]
         source: DeltaTableError,
     },
@@ -689,8 +693,8 @@ pub enum DeltaTransactionError {
     #[error("Action serialization failed: {source}")]
     ActionSerializationFailed {
         #[from]
-        source: serde_json::Error, 
-    }
+        source: serde_json::Error,
+    },
 }
 
 /// Error that occurs when a single transaction commit attempt fails
@@ -707,13 +711,15 @@ pub enum TransactionCommitAttemptError {
     },
 
     #[error("Commit Failed due to StorageError: {source}")]
-    Storage { source: StorageError, }
+    Storage { source: StorageError },
 }
 
 impl From<StorageError> for TransactionCommitAttemptError {
     fn from(error: StorageError) -> Self {
         match error {
-            StorageError::AlreadyExists(_) => TransactionCommitAttemptError::VersionExists { source: error },
+            StorageError::AlreadyExists(_) => {
+                TransactionCommitAttemptError::VersionExists { source: error }
+            }
             _ => TransactionCommitAttemptError::Storage { source: error },
         }
     }
@@ -730,13 +736,17 @@ pub struct DeltaTransactionOptions {
 impl DeltaTransactionOptions {
     /// Creates a new `DeltaTransactionOptions`
     pub fn new(max_retry_commit_attempts: u32) -> Self {
-        Self { max_retry_commit_attempts, }
+        Self {
+            max_retry_commit_attempts,
+        }
     }
 }
 
 impl Default for DeltaTransactionOptions {
-    fn default() -> Self { 
-        Self { max_retry_commit_attempts: DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS }
+    fn default() -> Self {
+        Self {
+            max_retry_commit_attempts: DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS,
+        }
     }
 }
 
@@ -751,7 +761,7 @@ impl<'a> DeltaTransaction<'a> {
     /// Holds a mutable reference to the delta table to prevent outside mutation while a transaction commit is in progress.
     /// Transaction behavior may be customized by passing an instance of `DeltaTransactionOptions`.
     pub fn new(delta_table: &'a mut DeltaTable, options: Option<DeltaTransactionOptions>) -> Self {
-        DeltaTransaction { 
+        DeltaTransaction {
             delta_table,
             options: options.unwrap_or_else(DeltaTransactionOptions::default),
         }
@@ -759,7 +769,11 @@ impl<'a> DeltaTransaction<'a> {
 
     /// Commits the given actions to the delta log.
     /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
-    pub async fn commit_with(&mut self, additional_actions: &[Action], _operation: Option<DeltaOperation>) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+    pub async fn commit_with(
+        &mut self,
+        additional_actions: &[Action],
+        _operation: Option<DeltaOperation>,
+    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action), but leaving it unused for now.
         // `CommitInfo` is a fairly dynamic data structure so we should work out the data structure approach separately.
 
@@ -774,7 +788,7 @@ impl<'a> DeltaTransaction<'a> {
         // });
         // let isolation_level = if no_data_changed {
         //     IsolationLevel::SnapshotIsolation
-        // } else { 
+        // } else {
         //     IsolationLevel::Serializable
         // };
 
@@ -787,43 +801,48 @@ impl<'a> DeltaTransaction<'a> {
             let json = serde_json::to_string(action)?;
             jsons.push(json);
         }
-        
+
         let log_entry = jsons.join("\n");
         let log_entry = log_entry.as_bytes();
 
         // try to commit in a loop in case other writers write the next version first
         let version = self.try_commit_loop(log_entry).await?;
 
-        // NOTE: since we have the log entry in memory already, 
+        // NOTE: since we have the log entry in memory already,
         // we could optimize this further by merging the log entry instead of updating from storage.
         self.delta_table.update().await?;
 
         Ok(version)
     }
 
-    async fn try_commit_loop(&mut self, log_entry: &[u8]) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
+    async fn try_commit_loop(
+        &mut self,
+        log_entry: &[u8],
+    ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
         let mut attempt_number: u32 = 0;
 
         loop {
             let commit_result = self.try_commit(log_entry).await;
 
             match commit_result {
-                Ok(v) => { 
-                    return Ok(v); 
-                },
+                Ok(v) => {
+                    return Ok(v);
+                }
                 Err(e) => {
                     match e {
-                        TransactionCommitAttemptError::VersionExists { .. } if attempt_number > self.options.max_retry_commit_attempts + 1 => {
+                        TransactionCommitAttemptError::VersionExists { .. }
+                            if attempt_number > self.options.max_retry_commit_attempts + 1 =>
+                        {
                             debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
                             return Err(e);
                         }
                         TransactionCommitAttemptError::VersionExists { .. } => {
                             attempt_number += 1;
                             debug!("Transaction attempt failed. Incrementing attempt number to {} and retrying.", attempt_number);
-                        },
+                        }
                         // NOTE: Add other retryable errors as needed here
-                        _ => { 
-                            return Err(e); 
+                        _ => {
+                            return Err(e);
                         }
                     }
                 }
@@ -831,7 +850,10 @@ impl<'a> DeltaTransaction<'a> {
         }
     }
 
-    async fn try_commit(&mut self, log_entry: &[u8]) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
+    async fn try_commit(
+        &mut self,
+        log_entry: &[u8],
+    ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
         // get the next delta table version and the log path where it should be written
         let attempt_version = self.next_attempt_version().await?;
         let path = self.delta_table.version_to_log_path(attempt_version);
@@ -839,13 +861,18 @@ impl<'a> DeltaTransaction<'a> {
         // write the log file bytes to storage
         // rely on storage to fail if the file already exists -
         // storage must be atomic and fail if file already exists
-        self.delta_table.storage.put_obj(path.as_str(), log_entry).await?;
+        self.delta_table
+            .storage
+            .put_obj(path.as_str(), log_entry)
+            .await?;
 
         // return the newly committed version
         Ok(attempt_version)
     }
 
-    async fn next_attempt_version(&mut self) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
+    async fn next_attempt_version(
+        &mut self,
+    ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
         self.delta_table.update().await?;
         Ok(self.delta_table.version + 1)
     }

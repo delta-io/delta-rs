@@ -768,7 +768,7 @@ mod tests {
 pub enum DeltaOperation {
     /// Represents a Delta `Write` operation.
     /// Write operations will typically only include `Add` actions.
-    Write { 
+    Write {
         mode: SaveMode,
         partitionBy: Option<Vec<String>>,
         predicate: Option<String>,
