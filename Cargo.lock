@@ -624,6 +624,7 @@ dependencies = [
  "rusoto_s3",
  "serde",
  "serde_json",
+ "serial_test",
  "thiserror",
  "tokio",
  "tokio-stream",
@@ -633,7 +634,7 @@ dependencies = [
 
 [[package]]
 name = "deltalake-python"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "arrow",
  "deltalake",
@@ -2306,6 +2307,28 @@ dependencies = [
  "itoa",
  "ryu",
  "serde",
+]
+
+[[package]]
+name = "serial_test"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "e0bccbcf40c8938196944a3da0e133e031a33f4d6b72db3bda3cc556e361905d"
+dependencies = [
+ "lazy_static",
+ "parking_lot",
+ "serial_test_derive",
+]
+
+[[package]]
+name = "serial_test_derive"
+version = "0.5.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b2acd6defeddb41eb60bb468f8825d0cfd0c2a76bc03bfd235b6a1dc4f6a1ad5"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]

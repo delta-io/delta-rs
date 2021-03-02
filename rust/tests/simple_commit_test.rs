@@ -2,10 +2,10 @@ extern crate chrono;
 extern crate deltalake;
 extern crate utime;
 
-use std::{collections::HashMap};
 use deltalake::action;
-use std::path::PathBuf;
+use std::collections::HashMap;
 use std::fs;
+use std::path::PathBuf;
 
 #[tokio::test]
 async fn test_two_commits() {
@@ -20,7 +20,9 @@ async fn test_two_commits() {
 
     let tx1_actions = vec![
         action::Action::add(action::Add {
-            path: String::from("part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet"),
+            path: String::from(
+                "part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet",
+            ),
             size: 396,
             partitionValues: HashMap::new(),
             partitionValues_parsed: None,
@@ -31,7 +33,9 @@ async fn test_two_commits() {
             tags: None,
         }),
         action::Action::add(action::Add {
-            path: String::from("part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet"),
+            path: String::from(
+                "part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet",
+            ),
             size: 400,
             partitionValues: HashMap::new(),
             partitionValues_parsed: None,
@@ -52,7 +56,9 @@ async fn test_two_commits() {
 
     let tx2_actions = vec![
         action::Action::add(action::Add {
-            path: String::from("part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet"),
+            path: String::from(
+                "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet",
+            ),
             size: 396,
             partitionValues: HashMap::new(),
             partitionValues_parsed: None,
@@ -63,7 +69,9 @@ async fn test_two_commits() {
             tags: None,
         }),
         action::Action::add(action::Add {
-            path: String::from("part-00001-4327c977-2734-4477-9507-7ccf67924649-c000.snappy.parquet"),
+            path: String::from(
+                "part-00001-4327c977-2734-4477-9507-7ccf67924649-c000.snappy.parquet",
+            ),
             size: 400,
             partitionValues: HashMap::new(),
             partitionValues_parsed: None,
@@ -93,7 +101,9 @@ fn cleanup_log_dir() {
                 let file_path = d.path();
 
                 if let Some(extension) = file_path.extension() {
-                    if extension == "json" && file_path.file_stem().unwrap() != "00000000000000000000" {
+                    if extension == "json"
+                        && file_path.file_stem().unwrap() != "00000000000000000000"
+                    {
                         fs::remove_file(file_path).unwrap();
                     }
                 }

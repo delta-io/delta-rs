@@ -42,5 +42,7 @@ jobs:
       run: cargo clippy --features azure,datafusion-ext,s3
     - name: Build
       run: cargo build --features azure,datafusion-ext,s3
+    - name: Format
+      run: cargo fmt -- --check
     - name: Run tests
       run: cargo test --verbose --features azure,datafusion-ext,s3

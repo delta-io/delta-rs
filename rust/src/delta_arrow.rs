@@ -1,9 +1,9 @@
-use regex::Regex;
-use lazy_static::lazy_static;
+use crate::schema;
 use arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
-use crate::schema;
+use lazy_static::lazy_static;
+use regex::Regex;
 
 impl From<&schema::Schema> for ArrowSchema {
     fn from(s: &schema::Schema) -> Self {
@@ -42,7 +42,8 @@ impl From<&schema::SchemaDataType> for ArrowDataType {
         match t {
             schema::SchemaDataType::primitive(p) => {
                 lazy_static! {
-                    static ref DECIMAL_REGEX: Regex = Regex::new(r"\((\d{1,2}),(\d{1,2})\)").unwrap();
+                    static ref DECIMAL_REGEX: Regex =
+                        Regex::new(r"\((\d{1,2}),(\d{1,2})\)").unwrap();
                 }
                 match p.as_str() {
                     "string" => ArrowDataType::Utf8,
@@ -59,7 +60,7 @@ impl From<&schema::SchemaDataType> for ArrowDataType {
                         let precision = extract.get(1).unwrap().as_str().parse::<usize>().unwrap();
                         let scale = extract.get(2).unwrap().as_str().parse::<usize>().unwrap();
                         ArrowDataType::Decimal(precision, scale)
-                    },
+                    }
                     "date" => {
                         // A calendar date, represented as a year-month-day triple without a
                         // timezone.
