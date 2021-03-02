@@ -4,12 +4,12 @@ extern crate log;
 
 extern crate arrow;
 extern crate chrono;
+extern crate lazy_static;
 extern crate parquet;
 extern crate regex;
 extern crate serde;
 extern crate serde_json;
 extern crate thiserror;
-extern crate lazy_static;
 
 pub mod action;
 mod delta;
