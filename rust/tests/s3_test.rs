@@ -9,6 +9,8 @@ mod s3 {
      * Should there be test failures, or if you need more files uploaded into this account, let him
      * know
      */
+    use deltalake::StorageError;
+
     fn setup() {
         std::env::set_var("AWS_REGION", "us-west-2");
         std::env::set_var("AWS_ACCESS_KEY_ID", "AKIAX7EGEQ7FT6CLQGWH");
@@ -73,5 +75,17 @@ mod s3 {
         assert_eq!(table.version, 0);
         assert_eq!(table.min_writer_version, 2);
         assert_eq!(table.min_reader_version, 1);
+    }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_s3_head_obj() {
+        setup();
+
+        let key = "s3://deltars/missing";
+        let backend = deltalake::get_backend_for_uri(key).unwrap();
+        let err = backend.head_obj(key).await.err().unwrap();
+
+        assert!(matches!(err, StorageError::NotFound));
     }
 }
