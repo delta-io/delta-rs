@@ -222,6 +222,9 @@ impl From<RusotoError<rusoto_s3::HeadObjectError>> for StorageError {
             RusotoError::Service(rusoto_s3::HeadObjectError::NoSuchKey(_)) => {
                 StorageError::NotFound
             }
+            // rusoto tries to parse response body which is missing in HEAD request
+            // see https://github.com/rusoto/rusoto/issues/716
+            RusotoError::Unknown(r) if r.status == 404 => StorageError::NotFound,
             _ => StorageError::S3Head { source: error },
         }
     }
