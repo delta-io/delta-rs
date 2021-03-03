@@ -174,6 +174,11 @@ pub enum StorageError {
         source: RusotoError<rusoto_s3::ListObjectsV2Error>,
     },
     #[cfg(feature = "s3")]
+    #[error("Failed to put S3 object: {source}")]
+    S3Put {
+        source: RusotoError<rusoto_s3::PutObjectError>,
+    },
+    #[cfg(feature = "s3")]
     #[error("S3 Object missing body content: {0}")]
     S3MissingObjectBody(String),
 
@@ -224,6 +229,13 @@ impl From<RusotoError<rusoto_s3::HeadObjectError>> for StorageError {
             }
             _ => StorageError::S3Head { source: error },
         }
+    }
+}
+
+#[cfg(feature = "s3")]
+impl From<RusotoError<rusoto_s3::PutObjectError>> for StorageError {
+    fn from(error: RusotoError<rusoto_s3::PutObjectError>) -> Self {
+        StorageError::S3Put { source: error }
     }
 }
 
