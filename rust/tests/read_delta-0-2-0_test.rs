@@ -24,6 +24,10 @@ async fn read_delta_2_0_table_without_version() {
             path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
             deletionTimestamp: 1564524298213,
             dataChange: false,
+            extendedFileMetadata: None,
+            partitionValues: None,
+            tags: None,
+            size: None
         }
     );
 }
