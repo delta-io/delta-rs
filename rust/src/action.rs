@@ -196,23 +196,13 @@ impl Add {
                     let parquetMap = record
                         .get_map(i)
                         .map_err(|_| gen_action_type_error("add", "partitionValues", "map"))?;
-                    for i in 0..parquetMap.len() {
-                        let key = parquetMap
-                            .get_keys()
-                            .get_string(i)
-                            .map_err(|_| {
-                                gen_action_type_error("add", "partitionValues.key", "string")
-                            })?
-                            .clone();
-                        let value = parquetMap
-                            .get_values()
-                            .get_string(i)
-                            .map_err(|_| {
-                                gen_action_type_error("add", "partitionValues.value", "string")
-                            })?
-                            .clone();
-                        re.partitionValues.entry(key).or_insert(value);
-                    }
+                    populate_hashmap_from_parquet_map(&mut re.partitionValues, parquetMap)
+                        .map_err(|estr| {
+                            ActionError::InvalidField(format!(
+                                "Invalid partitionValues for add action: {}",
+                                estr,
+                            ))
+                        })?;
                 }
                 "partitionValues_parsed" => {
                     re.partitionValues_parsed = Some(
@@ -485,6 +475,10 @@ pub struct Remove {
     pub path: String,
     pub deletionTimestamp: DeltaDataTypeTimestamp,
     pub dataChange: bool,
+    pub extendedFileMetadata: Option<bool>,
+    pub partitionValues: Option<HashMap<String, String>>,
+    pub size: Option<DeltaDataTypeLong>,
+    pub tags: Option<HashMap<String, String>>,
 }
 
 impl Remove {
@@ -506,10 +500,54 @@ impl Remove {
                         .get_bool(i)
                         .map_err(|_| gen_action_type_error("remove", "dataChange", "bool"))?;
                 }
+                "extendedFileMetadata" => {
+                    re.extendedFileMetadata = Some(record.get_bool(i).map_err(|_| {
+                        gen_action_type_error("remove", "extendedFileMetadata", "bool")
+                    })?);
+                }
                 "deletionTimestamp" => {
                     re.deletionTimestamp = record.get_long(i).map_err(|_| {
                         gen_action_type_error("remove", "deletionTimestamp", "long")
                     })?;
+                }
+                "partitionValues" => match record.get_map(i) {
+                    Ok(_) => {
+                        let parquetMap = record.get_map(i).map_err(|_| {
+                            gen_action_type_error("remove", "partitionValues", "map")
+                        })?;
+                        let mut partitionValues = HashMap::new();
+                        populate_hashmap_from_parquet_map(&mut partitionValues, parquetMap)
+                            .map_err(|estr| {
+                                ActionError::InvalidField(format!(
+                                    "Invalid partitionValues for remove action: {}",
+                                    estr,
+                                ))
+                            })?;
+                        re.partitionValues = Some(partitionValues);
+                    }
+                    _ => re.partitionValues = None,
+                },
+                "tags" => match record.get_map(i) {
+                    Ok(tags_map) => {
+                        let mut tags = HashMap::new();
+                        populate_hashmap_from_parquet_map(&mut tags, tags_map).map_err(|estr| {
+                            ActionError::InvalidField(format!(
+                                "Invalid tags for remove action: {}",
+                                estr,
+                            ))
+                        })?;
+                        re.tags = Some(tags);
+                    }
+                    _ => {
+                        re.tags = None;
+                    }
+                },
+                "size" => {
+                    re.size = Some(
+                        record
+                            .get_long(i)
+                            .map_err(|_| gen_action_type_error("remove", "size", "long"))?,
+                    );
                 }
                 _ => {
                     log::warn!(
