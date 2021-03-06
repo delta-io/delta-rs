@@ -37,10 +37,7 @@ mod azure {
                     .to_string(),
                 deletionTimestamp: 1587968596250,
                 dataChange: true,
-                extendedFileMetadata: None,
-                size: None,
-                tags: None,
-                partitionValues: None
+                ..Default::default()
             }
         );
     }
