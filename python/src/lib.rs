@@ -7,10 +7,15 @@ use arrow::datatypes::Schema as ArrowSchema;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use std::convert::TryFrom;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
 
 impl PyDeltaTableError {
+    fn from_arrow(err: arrow::error::ArrowError) -> pyo3::PyErr {
+        PyDeltaTableError::new_err(err.to_string())
+    }
+
     fn from_raw(err: deltalake::DeltaTableError) -> pyo3::PyErr {
         PyDeltaTableError::new_err(err.to_string())
     }
@@ -77,7 +82,9 @@ impl RawDeltaTable {
             .get_schema()
             .map_err(PyDeltaTableError::from_raw)?;
         Ok(serde_json::to_string(
-            &<ArrowSchema as From<&deltalake::Schema>>::from(schema).to_json(),
+            &<ArrowSchema as TryFrom<&deltalake::Schema>>::try_from(schema)
+                .map_err(PyDeltaTableError::from_arrow)?
+                .to_json(),
         )
         .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))?)
     }
