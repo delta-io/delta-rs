@@ -1,4 +1,5 @@
 use std::any::Any;
+use std::convert::TryFrom;
 use std::fs::File;
 use std::sync::Arc;
 
@@ -16,9 +17,12 @@ use crate::schema;
 
 impl TableProvider for delta::DeltaTable {
     fn schema(&self) -> Arc<ArrowSchema> {
-        Arc::new(<ArrowSchema as From<&schema::Schema>>::from(
-            delta::DeltaTable::schema(&self).unwrap(),
-        ))
+        Arc::new(
+            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
+                delta::DeltaTable::schema(&self).unwrap(),
+            )
+            .unwrap(),
+        )
     }
 
     fn scan(
@@ -27,8 +31,9 @@ impl TableProvider for delta::DeltaTable {
         batch_size: usize,
         filters: &[Expr],
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        let schema =
-            <ArrowSchema as From<&schema::Schema>>::from(delta::DeltaTable::schema(&self).unwrap());
+        let schema = <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
+            delta::DeltaTable::schema(&self).unwrap(),
+        )?;
         let filenames = self.get_file_paths();
 
         let partitions = filenames

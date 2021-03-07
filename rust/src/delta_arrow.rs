@@ -2,43 +2,53 @@ use crate::schema;
 use arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
+use arrow::error::ArrowError;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::convert::TryFrom;
 
-impl From<&schema::Schema> for ArrowSchema {
-    fn from(s: &schema::Schema) -> Self {
+impl TryFrom<&schema::Schema> for ArrowSchema {
+    type Error = ArrowError;
+
+    fn try_from(s: &schema::Schema) -> Result<Self, ArrowError> {
         let fields = s
             .get_fields()
             .iter()
-            .map(|field| <ArrowField as From<&schema::SchemaField>>::from(field))
-            .collect();
+            .map(|field| <ArrowField as TryFrom<&schema::SchemaField>>::try_from(field))
+            .collect::<Result<Vec<ArrowField>, ArrowError>>()?;
 
-        ArrowSchema::new(fields)
+        Ok(ArrowSchema::new(fields))
     }
 }
 
-impl From<&schema::SchemaField> for ArrowField {
-    fn from(f: &schema::SchemaField) -> Self {
-        ArrowField::new(
+impl TryFrom<&schema::SchemaField> for ArrowField {
+    type Error = ArrowError;
+
+    fn try_from(f: &schema::SchemaField) -> Result<Self, ArrowError> {
+        Ok(ArrowField::new(
             f.get_name(),
-            ArrowDataType::from(f.get_type()),
+            ArrowDataType::try_from(f.get_type())?,
             f.is_nullable(),
-        )
+        ))
     }
 }
 
-impl From<&schema::SchemaTypeArray> for ArrowField {
-    fn from(a: &schema::SchemaTypeArray) -> Self {
-        ArrowField::new(
+impl TryFrom<&schema::SchemaTypeArray> for ArrowField {
+    type Error = ArrowError;
+
+    fn try_from(a: &schema::SchemaTypeArray) -> Result<Self, ArrowError> {
+        Ok(ArrowField::new(
             "",
-            ArrowDataType::from(a.get_element_type()),
+            ArrowDataType::try_from(a.get_element_type())?,
             a.contains_null(),
-        )
+        ))
     }
 }
 
-impl From<&schema::SchemaDataType> for ArrowDataType {
-    fn from(t: &schema::SchemaDataType) -> Self {
+impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
+    type Error = ArrowError;
+
+    fn try_from(t: &schema::SchemaDataType) -> Result<Self, ArrowError> {
         match t {
             schema::SchemaDataType::primitive(p) => {
                 lazy_static! {
@@ -46,52 +56,78 @@ impl From<&schema::SchemaDataType> for ArrowDataType {
                         Regex::new(r"\((\d{1,2}),(\d{1,2})\)").unwrap();
                 }
                 match p.as_str() {
-                    "string" => ArrowDataType::Utf8,
-                    "long" => ArrowDataType::Int64, // undocumented type
-                    "integer" => ArrowDataType::Int32,
-                    "short" => ArrowDataType::Int16,
-                    "byte" => ArrowDataType::Int8,
-                    "float" => ArrowDataType::Float32,
-                    "double" => ArrowDataType::Float64,
-                    "boolean" => ArrowDataType::Boolean,
-                    "binary" => ArrowDataType::Binary,
+                    "string" => Ok(ArrowDataType::Utf8),
+                    "long" => Ok(ArrowDataType::Int64), // undocumented type
+                    "integer" => Ok(ArrowDataType::Int32),
+                    "short" => Ok(ArrowDataType::Int16),
+                    "byte" => Ok(ArrowDataType::Int8),
+                    "float" => Ok(ArrowDataType::Float32),
+                    "double" => Ok(ArrowDataType::Float64),
+                    "boolean" => Ok(ArrowDataType::Boolean),
+                    "binary" => Ok(ArrowDataType::Binary),
                     decimal if DECIMAL_REGEX.is_match(decimal) => {
-                        let extract = DECIMAL_REGEX.captures(decimal).unwrap();
-                        let precision = extract.get(1).unwrap().as_str().parse::<usize>().unwrap();
-                        let scale = extract.get(2).unwrap().as_str().parse::<usize>().unwrap();
-                        ArrowDataType::Decimal(precision, scale)
+                        let extract = DECIMAL_REGEX.captures(decimal).ok_or_else(|| {
+                            ArrowError::SchemaError(format!(
+                                "Invalid decimal type for Arrow: {}",
+                                decimal.to_string()
+                            ))
+                        })?;
+                        let precision = extract
+                            .get(1)
+                            .and_then(|v| v.as_str().parse::<usize>().ok());
+                        let scale = extract
+                            .get(2)
+                            .and_then(|v| v.as_str().parse::<usize>().ok());
+                        match (precision, scale) {
+                            (Some(p), Some(s)) => Ok(ArrowDataType::Decimal(p, s)),
+                            _ => Err(ArrowError::SchemaError(format!(
+                                "Invalid precision or scale decimal type for Arrow: {}",
+                                decimal.to_string()
+                            ))),
+                        }
                     }
                     "date" => {
                         // A calendar date, represented as a year-month-day triple without a
                         // timezone.
-                        panic!("date is not supported in arrow");
+                        Err(ArrowError::SchemaError(
+                            "Invalid data type for Arrow: date".to_string(),
+                        ))
                     }
                     "timestamp" => {
                         // Microsecond precision timestamp without a timezone.
-                        ArrowDataType::Time64(TimeUnit::Microsecond)
+                        Ok(ArrowDataType::Time64(TimeUnit::Microsecond))
                     }
-                    s => {
-                        panic!("unexpected delta schema type: {}", s);
-                    }
+                    s => Err(ArrowError::SchemaError(format!(
+                        "Invalid data type for Arrow: {}",
+                        s.to_string()
+                    ))),
                 }
             }
-            schema::SchemaDataType::r#struct(s) => ArrowDataType::Struct(
+            schema::SchemaDataType::r#struct(s) => Ok(ArrowDataType::Struct(
                 s.get_fields()
                     .iter()
-                    .map(|f| <ArrowField as From<&schema::SchemaField>>::from(f))
-                    .collect(),
-            ),
-            schema::SchemaDataType::array(a) => ArrowDataType::List(Box::new(
-                <ArrowField as From<&schema::SchemaTypeArray>>::from(a),
+                    .map(|f| <ArrowField as TryFrom<&schema::SchemaField>>::try_from(f))
+                    .collect::<Result<Vec<ArrowField>, ArrowError>>()?,
             )),
-            schema::SchemaDataType::map(m) => ArrowDataType::Dictionary(
-                Box::new(<ArrowDataType as From<&schema::SchemaDataType>>::from(
-                    m.get_key_type(),
-                )),
-                Box::new(<ArrowDataType as From<&schema::SchemaDataType>>::from(
-                    m.get_value_type(),
-                )),
-            ),
+            schema::SchemaDataType::array(a) => {
+                Ok(ArrowDataType::List(Box::new(<ArrowField as TryFrom<
+                    &schema::SchemaTypeArray,
+                >>::try_from(
+                    a
+                )?)))
+            }
+            schema::SchemaDataType::map(m) => Ok(ArrowDataType::Dictionary(
+                Box::new(
+                    <ArrowDataType as TryFrom<&schema::SchemaDataType>>::try_from(
+                        m.get_key_type(),
+                    )?,
+                ),
+                Box::new(
+                    <ArrowDataType as TryFrom<&schema::SchemaDataType>>::try_from(
+                        m.get_value_type(),
+                    )?,
+                ),
+            )),
         }
     }
 }

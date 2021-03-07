@@ -5,6 +5,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
 
+use arrow::error::ArrowError;
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::StreamExt;
 use log::debug;
@@ -59,6 +60,11 @@ pub enum DeltaTableError {
     ParquetError {
         #[from]
         source: ParquetError,
+    },
+    #[error("Failed to convert into Arrow schema: {}", .source)]
+    ArrowError {
+        #[from]
+        source: ArrowError,
     },
     #[error("Invalid table path: {}", .source)]
     UriError {
