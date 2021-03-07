@@ -2,6 +2,8 @@ extern crate chrono;
 extern crate deltalake;
 extern crate utime;
 
+use std::convert::TryFrom;
+
 use arrow::{
     array::{as_primitive_array, Array},
     datatypes::Schema as ArrowSchema,
@@ -129,7 +131,7 @@ impl DeltaWriter {
         batch: &RecordBatch,
     ) -> Result<InMemoryWriteableCursor, DeltaWriterError> {
         let schema = &metadata.schema;
-        let arrow_schema = <ArrowSchema as From<&Schema>>::from(schema);
+        let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(schema).unwrap();
         let arrow_schema_ref = Arc::new(arrow_schema);
 
         let writer_properties = WriterProperties::builder()
@@ -385,7 +387,8 @@ async fn smoke_test() {
         json!({ "id": "H", "value": 56, "modified": "2021-02-01" }),
     ];
 
-    let arrow_schema_ref = Arc::new(<ArrowSchema as From<&Schema>>::from(&metadata.schema));
+    let arrow_schema_ref =
+        Arc::new(<ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema).unwrap());
     let record_batch =
         record_batch_from_json_buffer(arrow_schema_ref, json_rows.as_slice()).unwrap();
 
@@ -424,7 +427,8 @@ async fn smoke_test() {
         json!({ "id": "F", "value": 152, "modified": "2021-02-02" }),
     ];
 
-    let arrow_schema_ref = Arc::new(<ArrowSchema as From<&Schema>>::from(&metadata.schema));
+    let arrow_schema_ref =
+        Arc::new(<ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema).unwrap());
     let record_batch =
         record_batch_from_json_buffer(arrow_schema_ref, json_rows.as_slice()).unwrap();
 
