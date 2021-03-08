@@ -17,28 +17,14 @@ enum ContinuationToken {
     End,
 }
 
-fn err_s3_obj_missing_key() -> StorageError {
-    StorageError::S3Generic("S3 Object missing key attribute".to_string())
-}
-
-fn err_s3_obj_missing_modified() -> StorageError {
-    StorageError::S3Generic("S3 Object missing last modified attribute".to_string())
-}
-
-fn err_s3_obj_modified_time_parse(e: chrono::ParseError) -> StorageError {
-    StorageError::S3Generic(format!("Failed to parse S3 modified time: {}", e))
-}
-
 fn parse_obj_last_modified_time(
     last_modified: &Option<String>,
 ) -> Result<DateTime<Utc>, StorageError> {
     Ok(DateTime::<Utc>::from(
-        DateTime::<FixedOffset>::parse_from_rfc2822(
-            last_modified
-                .as_ref()
-                .ok_or_else(err_s3_obj_missing_modified)?,
-        )
-        .map_err(err_s3_obj_modified_time_parse)?,
+        DateTime::<FixedOffset>::parse_from_rfc2822(last_modified.as_ref().ok_or_else(|| {
+            StorageError::S3Generic("S3 Object missing last modified attribute".to_string())
+        })?)
+        .map_err(|e| StorageError::S3Generic(format!("Failed to parse S3 modified time: {}", e)))?,
     ))
 }
 
@@ -47,7 +33,9 @@ impl TryFrom<rusoto_s3::Object> for ObjectMeta {
 
     fn try_from(obj: rusoto_s3::Object) -> Result<Self, Self::Error> {
         Ok(ObjectMeta {
-            path: obj.key.ok_or_else(err_s3_obj_missing_key)?,
+            path: obj.key.ok_or_else(|| {
+                StorageError::S3Generic("S3 Object missing key attribute".to_string())
+            })?,
             modified: parse_obj_last_modified_time(&obj.last_modified)?,
         })
     }
