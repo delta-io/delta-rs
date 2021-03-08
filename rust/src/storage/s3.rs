@@ -12,11 +12,6 @@ use tokio::io::AsyncReadExt;
 
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
 
-enum ContinuationToken {
-    Value(Option<String>),
-    End,
-}
-
 fn parse_obj_last_modified_time(
     last_modified: &Option<String>,
 ) -> Result<DateTime<Utc>, StorageError> {
@@ -131,6 +126,17 @@ impl StorageBackend for S3StorageBackend {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>
     {
         let uri = parse_uri(path)?.into_s3object()?;
+
+        /// This enum is used to represent 3 states in our object metadata streaming logic:
+        /// * Value(None): the initial state, prior to performing any s3 list call.
+        /// * Value(Some(String)): s3 list call returned us a continuation token to be used in
+        /// subsequent list call after we got through the current page.
+        /// * End: previous s3 list call reached end of page, we should not perform more s3 list
+        /// call going forward.
+        enum ContinuationToken {
+            Value(Option<String>),
+            End,
+        }
 
         struct ListContext {
             client: rusoto_s3::S3Client,
