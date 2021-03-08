@@ -181,6 +181,9 @@ pub enum StorageError {
     #[cfg(feature = "s3")]
     #[error("S3 Object missing body content: {0}")]
     S3MissingObjectBody(String),
+    #[cfg(feature = "s3")]
+    #[error("S3 error: {0}")]
+    S3Generic(String),
 
     #[cfg(feature = "azure")]
     #[error("Error interacting with Azure: {source}")]
