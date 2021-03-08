@@ -1,5 +1,4 @@
-extern crate tokio;
-
+use std::convert::TryFrom;
 use std::{fmt, pin::Pin};
 
 use chrono::{DateTime, FixedOffset, Utc};
@@ -12,6 +11,47 @@ use rusoto_s3::{
 use tokio::io::AsyncReadExt;
 
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
+
+enum ContinuationToken {
+    Value(Option<String>),
+    End,
+}
+
+fn err_s3_obj_missing_key() -> StorageError {
+    StorageError::S3Generic("S3 Object missing key attribute".to_string())
+}
+
+fn err_s3_obj_missing_modified() -> StorageError {
+    StorageError::S3Generic("S3 Object missing last modified attribute".to_string())
+}
+
+fn err_s3_obj_modified_time_parse(e: chrono::ParseError) -> StorageError {
+    StorageError::S3Generic(format!("Failed to parse S3 modified time: {}", e))
+}
+
+fn parse_obj_last_modified_time(
+    last_modified: &Option<String>,
+) -> Result<DateTime<Utc>, StorageError> {
+    Ok(DateTime::<Utc>::from(
+        DateTime::<FixedOffset>::parse_from_rfc2822(
+            last_modified
+                .as_ref()
+                .ok_or_else(err_s3_obj_missing_modified)?,
+        )
+        .map_err(err_s3_obj_modified_time_parse)?,
+    ))
+}
+
+impl TryFrom<rusoto_s3::Object> for ObjectMeta {
+    type Error = StorageError;
+
+    fn try_from(obj: rusoto_s3::Object) -> Result<Self, Self::Error> {
+        Ok(ObjectMeta {
+            path: obj.key.ok_or_else(err_s3_obj_missing_key)?,
+            modified: parse_obj_last_modified_time(&obj.last_modified)?,
+        })
+    }
+}
 
 #[derive(Debug, PartialEq)]
 pub struct S3Object<'a> {
@@ -64,10 +104,7 @@ impl StorageBackend for S3StorageBackend {
 
         Ok(ObjectMeta {
             path: path.to_string(),
-            modified: DateTime::<Utc>::from(
-                DateTime::<FixedOffset>::parse_from_rfc2822(&result.last_modified.unwrap())
-                    .unwrap(),
-            ),
+            modified: parse_obj_last_modified_time(&result.last_modified)?,
         })
     }
 
@@ -92,7 +129,9 @@ impl StorageBackend for S3StorageBackend {
             .into_async_read()
             .read_to_end(&mut buf)
             .await
-            .unwrap();
+            .map_err(|e| {
+                StorageError::S3Generic(format!("Failed to read object content: {}", e))
+            })?;
 
         debug!("s3 object fetched: {}", path);
         Ok(buf)
@@ -108,13 +147,13 @@ impl StorageBackend for S3StorageBackend {
         struct ListContext {
             client: rusoto_s3::S3Client,
             obj_iter: std::vec::IntoIter<rusoto_s3::Object>,
-            continuation_token: Option<String>,
+            continuation_token: ContinuationToken,
             bucket: String,
             key: String,
         }
         let ctx = ListContext {
             obj_iter: Vec::new().into_iter(),
-            continuation_token: Some(String::from("initial_run")),
+            continuation_token: ContinuationToken::Value(None),
             bucket: uri.bucket.to_string(),
             key: uri.key.to_string(),
             client: self.client.clone(),
@@ -124,29 +163,14 @@ impl StorageBackend for S3StorageBackend {
             mut ctx: ListContext,
         ) -> Option<(Result<ObjectMeta, StorageError>, ListContext)> {
             match ctx.obj_iter.next() {
-                Some(obj) => Some((
-                    Ok(ObjectMeta {
-                        path: obj.key.unwrap(),
-                        modified: DateTime::<Utc>::from(
-                            DateTime::<FixedOffset>::parse_from_rfc2822(
-                                &obj.last_modified.unwrap(),
-                            )
-                            .unwrap(),
-                        ),
-                    }),
-                    ctx,
-                )),
+                Some(obj) => Some((ObjectMeta::try_from(obj), ctx)),
                 None => match &ctx.continuation_token {
-                    Some(token) => {
-                        let tk_opt = if token != "initial_run" {
-                            Some(token.clone())
-                        } else {
-                            None
-                        };
+                    ContinuationToken::End => None,
+                    ContinuationToken::Value(v) => {
                         let list_req = ListObjectsV2Request {
                             bucket: ctx.bucket.clone(),
                             prefix: Some(ctx.key.clone()),
-                            continuation_token: tk_opt,
+                            continuation_token: v.clone(),
                             ..Default::default()
                         };
                         let result = match ctx.client.list_objects_v2(list_req).await {
@@ -155,27 +179,15 @@ impl StorageBackend for S3StorageBackend {
                                 return Some((Err(e.into()), ctx));
                             }
                         };
-                        ctx.continuation_token = result.next_continuation_token;
-                        ctx.obj_iter = match result.contents {
-                            Some(objs) => objs.into_iter(),
-                            None => Vec::new().into_iter(),
-                        };
-                        ctx.obj_iter.next().map(|obj| {
-                            (
-                                Ok(ObjectMeta {
-                                    path: obj.key.unwrap(),
-                                    modified: DateTime::<Utc>::from(
-                                        DateTime::<FixedOffset>::parse_from_rfc2822(
-                                            &obj.last_modified.unwrap(),
-                                        )
-                                        .unwrap(),
-                                    ),
-                                }),
-                                ctx,
-                            )
-                        })
+                        ctx.continuation_token = result
+                            .next_continuation_token
+                            .map(|t| ContinuationToken::Value(Some(t)))
+                            .unwrap_or(ContinuationToken::End);
+                        ctx.obj_iter = result.contents.unwrap_or_else(Vec::new).into_iter();
+                        ctx.obj_iter
+                            .next()
+                            .map(|obj| (ObjectMeta::try_from(obj), ctx))
                     }
-                    None => None,
                 },
             }
         }
