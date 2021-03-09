@@ -132,8 +132,9 @@ class Field:
 
 
 class Schema:
-    def __init__(self, fields: List[Field]):
+    def __init__(self, fields: List[Field], json_value: Dict[str, Any]):
         self.fields = fields
+        self.json_value = json_value
 
     def __str__(self) -> str:
         field_strs = [str(f) for f in self.fields]
@@ -142,19 +143,22 @@ class Schema:
     def __repr__(self) -> str:
         return self.__str__()
 
+    def json(self) -> Dict[str, Any]:
+        return self.json_schema
 
-def schema_from_json(json_data: str) -> Schema:
-    return Schema(
-        [
+    @classmethod
+    def from_json(cls, json_data: str) -> "Schema":
+        json_value = json.loads(json_data)
+        fields = [
             Field(
                 name=field["name"],
                 type=DataType.from_dict(field),
                 nullable=field["nullable"],
                 metadata=field.get("metadata"),
             )
-            for field in json.loads(json_data)["fields"]
+            for field in json_value["fields"]
         ]
-    )
+        return cls(fields=fields, json_value=json_value)
 
 
 def pyarrow_datatype_from_dict(json_dict: Dict) -> pyarrow.DataType:
