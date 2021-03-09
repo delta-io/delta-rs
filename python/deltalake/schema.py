@@ -28,11 +28,13 @@ class DataType:
         if type_class == "map":
             key_type = json_dict["keyType"]
             value_type = json_dict["valueType"]
+            value_contains_null = json_dict["valueContainsNull"]
             key_type = cls.from_dict(json_dict=key_type)
             value_type = cls.from_dict(json_dict=value_type)
             return MapType(
                 key_type=key_type,
                 value_type=value_type,
+                value_contains_null=value_contains_null,
             )
         if type_class == "array":
             field = json_dict["elementType"]
@@ -58,16 +60,21 @@ class DataType:
 
 
 class MapType(DataType):
-    def __init__(self, key_type: str, value_type: str):
+    def __init__(self, key_type: str, value_type: str, value_contains_null: bool):
         super().__init__("map")
         self.key_type = key_type
         self.value_type = value_type
+        self.value_contains_null = value_contains_null
 
     def __eq__(self, other: "MapType") -> bool:
-        return self.key_type == other.key_type and self.value_type == other.value_type
+        return (
+            self.key_type == other.key_type
+            and self.value_type == other.value_type
+            and self.value_contains_null == other.value_contains_null
+        )
 
     def __str__(self) -> str:
-        return f"DataType(map<{self.key_type}, {self.value_type}>)"
+        return f"DataType(map<{self.key_type}, {self.value_type}, {self.value_contains_null})"
 
 
 class ArrayType(DataType):
