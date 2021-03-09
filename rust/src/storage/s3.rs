@@ -15,12 +15,37 @@ use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
 fn parse_obj_last_modified_time(
     last_modified: &Option<String>,
 ) -> Result<DateTime<Utc>, StorageError> {
-    Ok(DateTime::<Utc>::from(
-        DateTime::<FixedOffset>::parse_from_rfc2822(last_modified.as_ref().ok_or_else(|| {
-            StorageError::S3Generic("S3 Object missing last modified attribute".to_string())
-        })?)
-        .map_err(|e| StorageError::S3Generic(format!("Failed to parse S3 modified time: {}", e)))?,
-    ))
+    let dt_str = last_modified.as_ref().ok_or_else(|| {
+        StorageError::S3Generic("S3 Object missing last modified attribute".to_string())
+    })?;
+    // last modified time in object is returned in rfc3339 format
+    // https://docs.aws.amazon.com/AmazonS3/latest/API/API_Object.html
+    let dt = DateTime::<FixedOffset>::parse_from_rfc3339(dt_str).map_err(|e| {
+        StorageError::S3Generic(format!(
+            "Failed to parse S3 modified time as rfc3339: {}, got: {:?}",
+            e, last_modified,
+        ))
+    })?;
+
+    Ok(DateTime::<Utc>::from(dt))
+}
+
+fn parse_head_obj_last_modified_time(
+    last_modified: &Option<String>,
+) -> Result<DateTime<Utc>, StorageError> {
+    let dt_str = last_modified.as_ref().ok_or_else(|| {
+        StorageError::S3Generic("S3 Object missing last modified attribute".to_string())
+    })?;
+    // head object response sets last-modified time in rfc2822 format:
+    // https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html#API_HeadObject_ResponseSyntax
+    let dt = DateTime::<FixedOffset>::parse_from_rfc2822(dt_str).map_err(|e| {
+        StorageError::S3Generic(format!(
+            "Failed to parse S3 modified time as rfc2822: {}, got: {:?}",
+            e, last_modified,
+        ))
+    })?;
+
+    Ok(DateTime::<Utc>::from(dt))
 }
 
 impl TryFrom<rusoto_s3::Object> for ObjectMeta {
@@ -87,7 +112,7 @@ impl StorageBackend for S3StorageBackend {
 
         Ok(ObjectMeta {
             path: path.to_string(),
-            modified: parse_obj_last_modified_time(&result.last_modified)?,
+            modified: parse_head_obj_last_modified_time(&result.last_modified)?,
         })
     }
 
