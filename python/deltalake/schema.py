@@ -74,7 +74,7 @@ class MapType(DataType):
         )
 
     def __str__(self) -> str:
-        return f"DataType(map<{self.key_type}, {self.value_type}, {self.value_contains_null})"
+        return f"DataType(map<{self.key_type}, {self.value_type}, {self.value_contains_null}>)"
 
 
 class ArrayType(DataType):
