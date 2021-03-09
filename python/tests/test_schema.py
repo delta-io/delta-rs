@@ -110,7 +110,7 @@ def test_schema_delta_types():
     assert delta_field.name == field_name
     key_type = DataType("integer")
     value_type = DataType("integer")
-    assert delta_field.type == MapType(key_type, value_type)
+    assert delta_field.type == MapType(key_type, value_type, True)
     assert delta_field.metadata == metadata
     assert delta_field.nullable is False
 
