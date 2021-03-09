@@ -5,7 +5,7 @@ import pyarrow
 from pyarrow.dataset import dataset
 
 from .deltalake import RawDeltaTable
-from .schema import Schema, pyarrow_schema_from_json, schema_from_json
+from .schema import Schema, pyarrow_schema_from_json
 
 
 class DeltaTable:
@@ -25,7 +25,7 @@ class DeltaTable:
         self._table.load_version(version)
 
     def schema(self) -> Schema:
-        return schema_from_json(self._table.schema_json())
+        return Schema.from_json(self._table.schema_json())
 
     def pyarrow_schema(self) -> pyarrow.Schema:
         return pyarrow_schema_from_json(self._table.arrow_schema_json())
