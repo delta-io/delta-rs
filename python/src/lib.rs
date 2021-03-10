@@ -38,10 +38,14 @@ struct RawDeltaTable {
 #[pymethods]
 impl RawDeltaTable {
     #[new]
-    fn new(table_path: &str) -> PyResult<Self> {
-        let table = rt()?
-            .block_on(deltalake::open_table(&table_path))
-            .map_err(PyDeltaTableError::from_raw)?;
+    fn new(table_path: &str, version: Option<deltalake::DeltaDataTypeLong>) -> PyResult<Self> {
+        let table = match version {
+            None => rt()?.block_on(deltalake::open_table(table_path)),
+            Some(version) => {
+                rt()?.block_on(deltalake::open_table_with_version(table_path, version))
+            }
+        }
+        .map_err(PyDeltaTableError::from_raw)?;
         Ok(RawDeltaTable { _table: table })
     }
 

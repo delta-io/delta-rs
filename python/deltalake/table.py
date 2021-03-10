@@ -1,4 +1,4 @@
-from typing import List
+from typing import List, Optional
 from urllib.parse import urlparse
 
 import pyarrow
@@ -9,8 +9,8 @@ from .schema import Schema, pyarrow_schema_from_json
 
 
 class DeltaTable:
-    def __init__(self, table_path: str):
-        self._table = RawDeltaTable(table_path)
+    def __init__(self, table_path: str, version: Optional[int] = None):
+        self._table = RawDeltaTable(table_path, version=version)
 
     def version(self) -> int:
         return self._table.version()

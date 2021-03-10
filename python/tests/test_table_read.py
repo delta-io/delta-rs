@@ -11,7 +11,13 @@ def test_read_simple_table_to_dict():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
 
 
-class TestableThread(Thread):
+def test_read_simple_table_by_version_to_dict():
+    table_path = "../rust/tests/data/delta-0.2.0"
+    dt = DeltaTable(table_path, version=2)
+    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
+
+
+class ExcPassThroughThread(Thread):
     """Wrapper around `threading.Thread` that propagates exceptions."""
 
     def __init__(self, target, *args):
@@ -48,7 +54,7 @@ class TestableThread(Thread):
         thread before it has been started and attempts to do so raises the same
         exception.
         """
-        super(TestableThread, self).join(timeout)
+        super(ExcPassThroughThread, self).join(timeout)
         if self.exc:
             raise self.exc
 
@@ -87,7 +93,7 @@ def test_read_multiple_tables_from_s3_multi_threaded(s3cred):
             "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
         ]
 
-    threads = [TestableThread(target=read_table) for _ in range(thread_count)]
+    threads = [ExcPassThroughThread(target=read_table) for _ in range(thread_count)]
     for t in threads:
         t.start()
     for t in threads:
