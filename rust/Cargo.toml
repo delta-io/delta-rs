@@ -24,6 +24,7 @@ regex = "1"
 chrono = "0"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 lazy_static = "1.4.0"
+dynalock = "^0.1"
 
 # Azure
 reqwest = { version = "0", optional = true }

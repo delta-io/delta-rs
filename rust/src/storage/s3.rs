@@ -2,8 +2,12 @@ use std::convert::TryFrom;
 use std::{fmt, pin::Pin};
 
 use chrono::{DateTime, FixedOffset, Utc};
+use dynalock::dynamodb::{DynamoDbDriver, DynamoDbDriverInput, DynamoDbLockInput};
+use dynalock::error::DynaErrorKind;
+use dynalock::rusoto_dynamodb::DynamoDbClient;
+use dynalock::{DistLock, Locking};
 use futures::Stream;
-use log::debug;
+use log::{debug, warn};
 use rusoto_core::Region;
 use rusoto_s3::{
     GetObjectRequest, HeadObjectRequest, ListObjectsV2Request, PutObjectRequest, S3Client, S3,
@@ -11,6 +15,7 @@ use rusoto_s3::{
 use tokio::io::AsyncReadExt;
 
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
+use std::time::Duration;
 
 fn parse_obj_last_modified_time(
     last_modified: &Option<String>,
@@ -217,6 +222,27 @@ impl StorageBackend for S3StorageBackend {
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
         debug!("put s3 object: {}...", path);
 
+        let dynamo_input = DynamoDbDriverInput {
+            table_name: String::from("test_lock"),
+            partition_key_field_name: String::from("lock_id"),
+            partition_key_value: String::from(path),
+            ..Default::default()
+        };
+
+        let dynamo_client = DynamoDbClient::simple(dynalock::rusoto_core::Region::default());
+        let dynamo_driver = DynamoDbDriver::new(dynamo_client, &dynamo_input);
+        let mut d = DropLock {
+            lock: DistLock::new(dynamo_driver, Duration::from_secs(10)),
+        };
+
+        match d.lock.acquire_lock(&DynamoDbLockInput::default()) {
+            Err(err) if err.kind() == DynaErrorKind::LockAlreadyAcquired => {
+                return Err(StorageError::AlreadyExists(path.to_string()))
+            }
+            Err(err) => return Err(StorageError::S3Generic(err.to_string())),
+            Ok(_) => (),
+        }
+
         match self.head_obj(path).await {
             Ok(_) => return Err(StorageError::AlreadyExists(path.to_string())),
             Err(StorageError::NotFound) => (),
@@ -234,5 +260,17 @@ impl StorageBackend for S3StorageBackend {
         self.client.put_object(put_req).await?;
 
         Ok(())
+    }
+}
+
+struct DropLock {
+    lock: DistLock<DynamoDbDriver>,
+}
+
+impl Drop for DropLock {
+    fn drop(&mut self) {
+        self.lock
+            .release_lock(&DynamoDbLockInput::default())
+            .unwrap_or_else(|e| warn!("unable to release lock {}", e))
     }
 }
