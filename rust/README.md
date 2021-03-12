@@ -33,9 +33,9 @@ DeltaTable(./tests/data/delta-0.2.0)
         files count: 3
 ```
 
-Features
---------
+Optional cargo package features
+-----------------------
 
-- `s3` - enable the S3 storage backend to read Delta Tables from AWS S3.
-- `azure` - enable the Azure storage backend to read Delta Tables from Azure Data Lake Storage Gen2 accounts.
-- `datafusion-ext` - enable the `datafusion::datasource::TableProvider` implementation for Delta Tables in this crate, allowing them to be used for DataFusion queries.
+- `s3` - enable the S3 storage backend to work with Delta Tables in AWS S3.
+- `azure` - enable the Azure storage backend to work with Delta Tables in Azure Data Lake Storage Gen2 accounts.
+- `datafusion-ext` - enable the `datafusion::datasource::TableProvider` trait implementation for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow/tree/master/rust/datafusion).
