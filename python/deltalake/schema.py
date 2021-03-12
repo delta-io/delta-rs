@@ -144,7 +144,7 @@ class Schema:
         return self.__str__()
 
     def json(self) -> Dict[str, Any]:
-        return self.json_schema
+        return self.json_value
 
     @classmethod
     def from_json(cls, json_data: str) -> "Schema":
