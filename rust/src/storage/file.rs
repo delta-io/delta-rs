@@ -73,7 +73,7 @@ impl StorageBackend for FileStorageBackend {
             .await
             .map_err(|e| match e.kind() {
                 std::io::ErrorKind::AlreadyExists => StorageError::AlreadyExists(path.to_string()),
-                _ => StorageError::IO { source: e },
+                _ => StorageError::Io { source: e },
             })?;
 
         f.write(obj_bytes).await?;

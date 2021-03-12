@@ -72,7 +72,7 @@ pub enum DeltaTableError {
         source: UriError,
     },
     #[error("Invalid JSON in log record: {}", .source)]
-    InvalidJSON {
+    InvalidJson {
         #[from]
         source: serde_json::error::Error,
     },
@@ -134,14 +134,14 @@ pub enum ApplyLogError {
     #[error("End of transaction log")]
     EndOfLog,
     #[error("Invalid JSON in log record")]
-    InvalidJSON {
+    InvalidJson {
         #[from]
         source: serde_json::error::Error,
     },
     #[error("Failed to read log content")]
     Storage { source: StorageError },
     #[error("Failed to read line from log record")]
-    IO {
+    Io {
         #[from]
         source: std::io::Error,
     },
@@ -161,7 +161,7 @@ pub enum LoadCheckpointError {
     #[error("Checkpoint file not found")]
     NotFound,
     #[error("Invalid JSON in checkpoint: {source}")]
-    InvalidJSON {
+    InvalidJson {
         #[from]
         source: serde_json::error::Error,
     },
