@@ -16,7 +16,7 @@ def test_table_schema():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
     schema = dt.schema()
-    assert schema.json_value == {
+    assert schema.json() == {
         "fields": [{"metadata": {}, "name": "id", "nullable": True, "type": "long"}],
         "type": "struct",
     }
