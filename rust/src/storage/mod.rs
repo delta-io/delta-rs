@@ -156,7 +156,7 @@ pub enum StorageError {
     #[error("Object exists already at path: {0}")]
     AlreadyExists(String),
     #[error("Failed to read local object content: {source}")]
-    IO { source: std::io::Error },
+    Io { source: std::io::Error },
 
     #[cfg(feature = "s3")]
     #[error("Failed to read S3 object content: {source}")]
@@ -208,7 +208,7 @@ impl From<std::io::Error> for StorageError {
     fn from(error: std::io::Error) -> Self {
         match error.kind() {
             std::io::ErrorKind::NotFound => StorageError::NotFound,
-            _ => StorageError::IO { source: error },
+            _ => StorageError::Io { source: error },
         }
     }
 }

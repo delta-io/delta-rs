@@ -261,7 +261,7 @@ impl Add {
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         self.stats
             .as_ref()
-            .map_or(Ok(None), |s| Ok(serde_json::from_str(s)?))
+            .map_or(Ok(None), |s| serde_json::from_str(s))
     }
 
     pub fn get_stats_parsed(&self) -> Result<Option<StatsParsed>, parquet::errors::ParquetError> {

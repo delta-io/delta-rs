@@ -1,8 +1,7 @@
-#[macro_use]
-extern crate serial_test;
-
 #[cfg(feature = "s3")]
 mod s3 {
+    use serial_test::serial;
+
     /*
      * The S3 bucket used below resides in @rtyler's personal AWS account
      *
