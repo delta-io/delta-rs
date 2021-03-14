@@ -440,9 +440,7 @@ impl DeltaTable {
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
-                if self.last_check_point.is_none()
-                    || self.last_check_point == Some(last_check_point)
-                {
+                if self.last_check_point != Some(last_check_point) {
                     self.last_check_point = Some(last_check_point);
                     self.restore_checkpoint(last_check_point).await?;
                     self.version = last_check_point.version + 1;
