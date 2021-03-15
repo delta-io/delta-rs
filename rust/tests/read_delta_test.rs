@@ -34,13 +34,13 @@ async fn read_delta_2_0_table_without_version() {
 
 #[tokio::test]
 async fn read_delta_2_0_with_update() {
-
+    let path = "./tests/data/checkpoint-add/";
     let table_no_version =
-        deltalake::open_table("/home/data/study/delta/rust/update/v07")
+        deltalake::open_table(path)
             .await
             .unwrap();
     let mut updated_table = deltalake::open_table_with_version(
-        "/home/data/study/delta/rust/update/v07", 0)
+        path, 0)
         .await
         .unwrap();
     updated_table.update().await.unwrap();
