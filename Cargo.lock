@@ -605,6 +605,7 @@ dependencies = [
  "env_logger",
  "futures",
  "lazy_static",
+ "libc",
  "log",
  "parquet",
  "regex",
