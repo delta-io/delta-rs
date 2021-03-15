@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use chrono::DateTime;
@@ -10,16 +10,17 @@ use tokio::io::AsyncWriteExt;
 use tokio_stream::wrappers::ReadDirStream;
 
 use super::{ObjectMeta, StorageBackend, StorageError};
+use uuid::Uuid;
 
 #[derive(Default, Debug)]
 pub struct FileStorageBackend {
-    root: String,
+    root: PathBuf,
 }
 
 impl FileStorageBackend {
     pub fn new(root: &str) -> Self {
         Self {
-            root: String::from(root),
+            root: PathBuf::from(root),
         }
     }
 }
@@ -64,28 +65,28 @@ impl StorageBackend for FileStorageBackend {
     }
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
-        let dir = std::path::Path::new(path);
+        let tmp_file = self
+            .root
+            .join("_tmp_writes")
+            .join(Uuid::new_v4().to_string());
 
-        if let Some(d) = dir.parent() {
-            fs::create_dir_all(d).await?;
-        }
+        create_parent_dirs(&tmp_file).await?;
+        create_parent_dirs(Path::new(path)).await?;
 
-        // use `OpenOptions` with `create_new` to create the file handle.
-        // this will force ErrorKind::AlreadyExists if the file already exists.
-        let mut f = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(path)
-            .await
-            .map_err(|e| match e.kind() {
-                std::io::ErrorKind::AlreadyExists => StorageError::AlreadyExists(path.to_string()),
-                _ => StorageError::Io { source: e },
-            })?;
-
+        let mut f = fs::File::create(&tmp_file).await?;
         f.write(obj_bytes).await?;
+
+        rename(tmp_file.to_str().unwrap(), path)?;
 
         Ok(())
     }
+}
+
+async fn create_parent_dirs(p: &Path) -> std::io::Result<()> {
+    if let Some(d) = p.parent() {
+        fs::create_dir_all(d).await?;
+    }
+    Ok(())
 }
 
 #[cfg(target_os = "linux")]
