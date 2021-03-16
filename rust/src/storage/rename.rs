@@ -2,7 +2,7 @@ use crate::StorageError;
 use std::ffi::CString;
 
 #[cfg(target_os = "linux")]
-const RENAME_NOREPLACE: c_uint = 1;
+const RENAME_NOREPLACE: libc::c_uint = 1;
 
 #[cfg(target_os = "linux")]
 extern "C" {
