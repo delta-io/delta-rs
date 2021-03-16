@@ -27,12 +27,12 @@ use parquet::{
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
+use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
-use std::fs::File;
-use std::io::Write;
 
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaWriterError {
@@ -112,7 +112,6 @@ impl DeltaWriter {
         let obj_bytes = cursor.into_inner().unwrap();
 
         let storage_path = format!("{}/{}", self.table_path, path);
-
 
         // `storage.put_obj` is for log files
         if let Some(p) = PathBuf::from(&storage_path).parent() {
