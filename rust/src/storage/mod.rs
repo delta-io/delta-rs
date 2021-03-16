@@ -159,6 +159,8 @@ pub enum StorageError {
     Io { source: std::io::Error },
     #[error("File system not supported")]
     FileSystemNotSupported,
+    #[error("Generic error: {0}")]
+    Generic(String),
 
     #[cfg(feature = "s3")]
     #[error("Failed to read S3 object content: {source}")]

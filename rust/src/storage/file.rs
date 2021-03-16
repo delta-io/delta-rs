@@ -65,28 +65,15 @@ impl StorageBackend for FileStorageBackend {
     }
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
-        let tmp_file = self
-            .root
-            .join("_tmp_writes")
-            .join(Uuid::new_v4().to_string());
-
-        create_parent_dirs(&tmp_file).await?;
-        create_parent_dirs(Path::new(path)).await?;
+        let tmp_file = self.root.join(format!("{}.temporary", Uuid::new_v4().to_string()));
 
         let mut f = fs::File::create(&tmp_file).await?;
         f.write(obj_bytes).await?;
 
-        rename(tmp_file.to_str().unwrap(), path)?;
+        rename(tmp_file, PathBuf::from(path))?;
 
         Ok(())
     }
-}
-
-async fn create_parent_dirs(p: &Path) -> std::io::Result<()> {
-    if let Some(d) = p.parent() {
-        fs::create_dir_all(d).await?;
-    }
-    Ok(())
 }
 
 #[cfg(target_os = "linux")]
@@ -109,18 +96,18 @@ extern "C" {
     fn renamex_np(from: *const c_char, to: *const c_char, flags: c_uint) -> c_int;
 }
 
-fn rename(from: &str, to: &str) -> Result<(), StorageError> {
-    let from_s = CString::new(from).unwrap();
-    let to_s = CString::new(to).unwrap();
+fn rename<P: AsRef<Path>>(from: P, to: P) -> Result<(), StorageError> {
+    let from = path_to_cstring(from)?;
+    let to = path_to_cstring(to)?;
 
     unsafe {
         cfg_if::cfg_if! {
             if #[cfg(target_os = "linux")] {
-                if renameat2(0, from_s.as_ptr(), 0, to_s.as_ptr(), RENAME_NOREPLACE) == 0 {
+                if renameat2(0, from.as_ptr(), 0, to.as_ptr(), RENAME_NOREPLACE) == 0 {
                    return Ok(())
                 }
             } else if #[cfg(target_os = "macos")] {
-                if renamex_np(from_s.as_ptr(), to_s.as_ptr(), RENAME_EXCL) == 0 {
+                if renamex_np(from.as_ptr(), to.as_ptr(), RENAME_EXCL) == 0 {
                    return Ok(())
                 }
             } else {
@@ -129,7 +116,15 @@ fn rename(from: &str, to: &str) -> Result<(), StorageError> {
         }
     }
 
-    return Err(StorageError::AlreadyExists(to.to_string()));
+    let path = to.into_string().map_err(|e| StorageError::Generic(format!("{}", e)))?;
+    Err(StorageError::AlreadyExists(path))
+}
+
+fn path_to_cstring<P: AsRef<Path>>(p: P) -> Result<CString, StorageError> {
+    let as_str = p.as_ref().as_os_str().to_str()
+        .ok_or_else(|| StorageError::Generic(String::from("Unable to get &str from &Path")));
+    CString::new(as_str?)
+        .map_err(|e| StorageError::Generic(format!("{}", e)))
 }
 
 #[cfg(test)]
