@@ -11,7 +11,7 @@ extern "C" {
         oldpath: *const libc::c_char,
         newdirfd: libc::c_int,
         newpath: *const libc::c_char,
-        flags: c_uint,
+        flags: libc::c_uint,
     ) -> libc::c_int;
 }
 
