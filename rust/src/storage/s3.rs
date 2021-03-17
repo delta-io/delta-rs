@@ -4,13 +4,53 @@ use std::{fmt, pin::Pin};
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::Stream;
 use log::debug;
-use rusoto_core::Region;
+use rusoto_core::{Region, RusotoError};
 use rusoto_s3::{
     GetObjectRequest, HeadObjectRequest, ListObjectsV2Request, PutObjectRequest, S3Client, S3,
 };
 use tokio::io::AsyncReadExt;
 
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
+
+impl From<RusotoError<rusoto_s3::GetObjectError>> for StorageError {
+    fn from(error: RusotoError<rusoto_s3::GetObjectError>) -> Self {
+        match error {
+            RusotoError::Service(rusoto_s3::GetObjectError::NoSuchKey(_)) => StorageError::NotFound,
+            _ => StorageError::S3Get { source: error },
+        }
+    }
+}
+
+impl From<RusotoError<rusoto_s3::HeadObjectError>> for StorageError {
+    fn from(error: RusotoError<rusoto_s3::HeadObjectError>) -> Self {
+        match error {
+            RusotoError::Service(rusoto_s3::HeadObjectError::NoSuchKey(_)) => {
+                StorageError::NotFound
+            }
+            // rusoto tries to parse response body which is missing in HEAD request
+            // see https://github.com/rusoto/rusoto/issues/716
+            RusotoError::Unknown(r) if r.status == 404 => StorageError::NotFound,
+            _ => StorageError::S3Head { source: error },
+        }
+    }
+}
+
+impl From<RusotoError<rusoto_s3::PutObjectError>> for StorageError {
+    fn from(error: RusotoError<rusoto_s3::PutObjectError>) -> Self {
+        StorageError::S3Put { source: error }
+    }
+}
+
+impl From<RusotoError<rusoto_s3::ListObjectsV2Error>> for StorageError {
+    fn from(error: RusotoError<rusoto_s3::ListObjectsV2Error>) -> Self {
+        match error {
+            RusotoError::Service(rusoto_s3::ListObjectsV2Error::NoSuchBucket(_)) => {
+                StorageError::NotFound
+            }
+            _ => StorageError::S3List { source: error },
+        }
+    }
+}
 
 fn parse_obj_last_modified_time(
     last_modified: &Option<String>,

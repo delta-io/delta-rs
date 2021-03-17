@@ -9,9 +9,6 @@ use azure_core::errors::AzureError;
 #[cfg(feature = "azure")]
 use std::error::Error;
 
-#[cfg(feature = "s3")]
-use rusoto_core::RusotoError;
-
 #[cfg(feature = "azure")]
 pub mod azure;
 pub mod file;
@@ -161,22 +158,22 @@ pub enum StorageError {
     #[cfg(feature = "s3")]
     #[error("Failed to read S3 object content: {source}")]
     S3Get {
-        source: RusotoError<rusoto_s3::GetObjectError>,
+        source: rusoto_core::RusotoError<rusoto_s3::GetObjectError>,
     },
     #[cfg(feature = "s3")]
     #[error("Failed to read S3 object metadata: {source}")]
     S3Head {
-        source: RusotoError<rusoto_s3::HeadObjectError>,
+        source: rusoto_core::RusotoError<rusoto_s3::HeadObjectError>,
     },
     #[cfg(feature = "s3")]
     #[error("Failed to list S3 objects: {source}")]
     S3List {
-        source: RusotoError<rusoto_s3::ListObjectsV2Error>,
+        source: rusoto_core::RusotoError<rusoto_s3::ListObjectsV2Error>,
     },
     #[cfg(feature = "s3")]
     #[error("Failed to put S3 object: {source}")]
     S3Put {
-        source: RusotoError<rusoto_s3::PutObjectError>,
+        source: rusoto_core::RusotoError<rusoto_s3::PutObjectError>,
     },
     #[cfg(feature = "s3")]
     #[error("S3 Object missing body content: {0}")]
@@ -209,50 +206,6 @@ impl From<std::io::Error> for StorageError {
         match error.kind() {
             std::io::ErrorKind::NotFound => StorageError::NotFound,
             _ => StorageError::Io { source: error },
-        }
-    }
-}
-
-#[cfg(feature = "s3")]
-impl From<RusotoError<rusoto_s3::GetObjectError>> for StorageError {
-    fn from(error: RusotoError<rusoto_s3::GetObjectError>) -> Self {
-        match error {
-            RusotoError::Service(rusoto_s3::GetObjectError::NoSuchKey(_)) => StorageError::NotFound,
-            _ => StorageError::S3Get { source: error },
-        }
-    }
-}
-
-#[cfg(feature = "s3")]
-impl From<RusotoError<rusoto_s3::HeadObjectError>> for StorageError {
-    fn from(error: RusotoError<rusoto_s3::HeadObjectError>) -> Self {
-        match error {
-            RusotoError::Service(rusoto_s3::HeadObjectError::NoSuchKey(_)) => {
-                StorageError::NotFound
-            }
-            // rusoto tries to parse response body which is missing in HEAD request
-            // see https://github.com/rusoto/rusoto/issues/716
-            RusotoError::Unknown(r) if r.status == 404 => StorageError::NotFound,
-            _ => StorageError::S3Head { source: error },
-        }
-    }
-}
-
-#[cfg(feature = "s3")]
-impl From<RusotoError<rusoto_s3::PutObjectError>> for StorageError {
-    fn from(error: RusotoError<rusoto_s3::PutObjectError>) -> Self {
-        StorageError::S3Put { source: error }
-    }
-}
-
-#[cfg(feature = "s3")]
-impl From<RusotoError<rusoto_s3::ListObjectsV2Error>> for StorageError {
-    fn from(error: RusotoError<rusoto_s3::ListObjectsV2Error>) -> Self {
-        match error {
-            RusotoError::Service(rusoto_s3::ListObjectsV2Error::NoSuchBucket(_)) => {
-                StorageError::NotFound
-            }
-            _ => StorageError::S3List { source: error },
         }
     }
 }
