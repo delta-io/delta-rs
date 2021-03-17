@@ -18,10 +18,15 @@ pub struct FileStorageBackend {
 }
 
 impl FileStorageBackend {
-    pub fn new(root: &str) -> Self {
-        Self {
-            root: String::from(root),
-        }
+    pub fn new(root: &str) -> std::io::Result<Self> {
+        let abs_path = Path::new(root).canonicalize()?;
+
+        abs_path
+            .to_str()
+            .ok_or_else(|| custom_io_error(format!("unable to get absolute path of {}", root)))
+            .map(|abs_root| Self {
+                root: String::from(abs_root),
+            })
     }
 }
 
@@ -70,7 +75,7 @@ impl StorageBackend for FileStorageBackend {
 
         // run this in loop in case tmp file with tmp_file_name already exists
         loop {
-            let mut rf = fs::OpenOptions::new()
+            let rf = fs::OpenOptions::new()
                 .create_new(true)
                 .write(true)
                 .open(&tmp_path)
@@ -91,4 +96,8 @@ impl StorageBackend for FileStorageBackend {
 
         Ok(())
     }
+}
+
+fn custom_io_error(desc: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, desc)
 }

@@ -29,7 +29,9 @@ pub fn rename(from: &str, to: &str) -> Result<(), StorageError> {
             return Err(StorageError::AlreadyExists(String::from(to)));
         }
 
-        return Err(custom_io_error(format!("{}", e)));
+        return Err(StorageError::Io {
+            source: super::custom_io_error(format!("{}", e))
+        });
     }
 
     Ok(())
@@ -49,12 +51,6 @@ unsafe fn platform_specific_rename(from: *const libc::c_char, to: *const libc::c
 
 fn to_c_string(p: &str) -> Result<CString, StorageError> {
     CString::new(p).map_err(|e| StorageError::Generic(format!("{}", e)))
-}
-
-fn custom_io_error(desc: String) -> StorageError {
-    StorageError::Io {
-        source: std::io::Error::new(std::io::ErrorKind::Other, desc),
-    }
 }
 
 #[cfg(test)]
