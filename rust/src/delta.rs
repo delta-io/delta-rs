@@ -18,9 +18,11 @@ use parquet::file::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::convert::TryFrom;
 
 use super::action;
 use super::action::{Action, DeltaOperation};
+use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
@@ -100,6 +102,12 @@ pub enum DeltaTableError {
     NoMetadata,
     #[error("No schema found, please make sure table is loaded.")]
     NoSchema,
+    #[error("No partitions found, please make sure table is partitioned.")]
+    LoadPartitions,
+    #[error("This partition is not formatted with key=value: {}", .partition)]
+    PartitionError { partition: String },
+    #[error("Invalid operation filter found for the partition filter: {}.", .operation_filter)]
+    InvalidOperationFilter { operation_filter: String },
 }
 
 #[derive(Clone)]
@@ -559,6 +567,33 @@ impl DeltaTable {
                 Ok(ts)
             }
         }
+    }
+
+    pub fn get_files_by_partition(
+        &self,
+        filters: Vec<PartitionFilter<&str>>,
+    ) -> Result<Vec<String>, DeltaTableError> {
+        let partitions_number = match &self.current_metadata {
+            Some(metadata) if !metadata.partition_columns.is_empty() => {
+                metadata.partition_columns.len()
+            }
+            _ => return Err(DeltaTableError::LoadPartitions),
+        };
+        let files = self
+            .files
+            .iter()
+            .filter(|f| {
+                f.splitn(partitions_number + 1, self.storage.get_separator())
+                    .map(|p: &str| DeltaTablePartition::try_from(p).ok())
+                    .all(|p| match p {
+                        Some(p) => p.filters_accept_partition(&filters),
+                        _ => true,
+                    })
+            })
+            .cloned()
+            .collect();
+
+        Ok(files)
     }
 
     pub fn get_files(&self) -> &Vec<String> {
