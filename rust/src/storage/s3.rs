@@ -4,6 +4,7 @@ use std::{fmt, pin::Pin};
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::Stream;
 use log::debug;
+use rusoto_core::credential::ChainProvider;
 use rusoto_core::{Region, RusotoError};
 use rusoto_s3::{
     GetObjectRequest, HeadObjectRequest, ListObjectsV2Request, PutObjectRequest, S3Client, S3,
@@ -119,7 +120,11 @@ pub struct S3StorageBackend {
 
 impl S3StorageBackend {
     pub fn new() -> Self {
-        let client = S3Client::new(Region::default());
+        let client = S3Client::new_with(
+            rusoto_core::HttpClient::new().expect("failed to create request dispatcher"),
+            ChainProvider::new(),
+            Region::default(),
+        );
         Self { client }
     }
 }
