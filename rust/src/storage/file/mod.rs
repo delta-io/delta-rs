@@ -68,8 +68,24 @@ impl StorageBackend for FileStorageBackend {
         let tmp_file_name = format!("{}.temporary", Uuid::new_v4().to_string());
         let tmp_path = self.join_path(&self.root, &tmp_file_name);
 
-        let mut f = fs::File::create(&tmp_path).await?;
-        f.write(obj_bytes).await?;
+        // run this in loop in case tmp file with tmp_file_name already exists
+        loop {
+            let mut rf = fs::OpenOptions::new()
+                .create_new(true)
+                .write(true)
+                .open(&tmp_path)
+                .await;
+            match rf {
+                Ok(mut f) => {
+                    f.write(obj_bytes).await?;
+                    break;
+                },
+                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
+                    continue;
+                },
+                Err(e) => return Err(StorageError::Io { source: e }),
+            }
+        }
 
         rename::rename(&tmp_path, path)?;
 
