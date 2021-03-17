@@ -12,8 +12,6 @@ use std::error::Error;
 #[cfg(feature = "s3")]
 use rusoto_core::RusotoError;
 
-mod rename;
-
 #[cfg(feature = "azure")]
 pub mod azure;
 pub mod file;

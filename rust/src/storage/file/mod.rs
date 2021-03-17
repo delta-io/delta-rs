@@ -10,6 +10,8 @@ use tokio_stream::wrappers::ReadDirStream;
 use super::{ObjectMeta, StorageBackend, StorageError};
 use uuid::Uuid;
 
+mod rename;
+
 #[derive(Default, Debug)]
 pub struct FileStorageBackend {
     root: String,
@@ -69,7 +71,7 @@ impl StorageBackend for FileStorageBackend {
         let mut f = fs::File::create(&tmp_path).await?;
         f.write(obj_bytes).await?;
 
-        super::rename::rename(&tmp_path, path)?;
+        rename::rename(&tmp_path, path)?;
 
         Ok(())
     }
