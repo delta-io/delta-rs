@@ -32,7 +32,9 @@ azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional 
 
 # S3
 rusoto_core = { version = "0.46", optional = true }
+rusoto_credential = { version = "0.46", optional = true }
 rusoto_s3 = { version = "0.46", optional = true }
+rusoto_sts = { version = "0.46", optional = true }
 
 # Cannot use branch constraint due to https://github.com/PyO3/maturin/issues/389
 arrow  = { git = "https://github.com/apache/arrow.git", rev = "05b36567bd8216bec71b796fe3bb6811c71abbec" }

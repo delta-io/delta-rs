@@ -52,6 +52,28 @@ impl From<RusotoError<rusoto_s3::ListObjectsV2Error>> for StorageError {
     }
 }
 
+fn create_s3_client(region: Region) -> Result<S3Client, StorageError> {
+    let client = match std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE") {
+        Ok(_) => {
+            let provider = rusoto_sts::WebIdentityProvider::from_k8s_env();
+            let provider =
+                rusoto_credential::AutoRefreshingProvider::new(provider).map_err(|e| {
+                    StorageError::S3Generic(format!(
+                        "Failed to retrieve S3 credentials with message: {}",
+                        e.message
+                    ))
+                })?;
+
+            let dispatcher = rusoto_core::HttpClient::new().ok_or_else(|| {
+                StorageError::S3Generic("Failed to create request dispatcher".to_string())
+            })?;
+            S3Client::new_with(dispatcher, provider, region)
+        }
+        Err(_) => S3Client::new(region),
+    };
+    Ok(client)
+}
+
 fn parse_obj_last_modified_time(
     last_modified: &Option<String>,
 ) -> Result<DateTime<Utc>, StorageError> {
