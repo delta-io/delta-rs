@@ -23,14 +23,15 @@ pub fn rename(from: &str, to: &str) -> Result<(), StorageError> {
     };
 
     if ret != 0 {
+        std::fs::remove_file(from).unwrap_or(());
+
         let e = errno::errno();
         if let libc::EEXIST = e.0 {
-            std::fs::remove_file(from).unwrap_or(());
             return Err(StorageError::AlreadyExists(String::from(to)));
         }
 
         return Err(StorageError::Io {
-            source: super::custom_io_error(format!("{}", e))
+            source: super::custom_io_error(format!("{}", e)),
         });
     }
 

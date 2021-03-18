@@ -84,10 +84,10 @@ impl StorageBackend for FileStorageBackend {
                 Ok(mut f) => {
                     f.write(obj_bytes).await?;
                     break;
-                },
+                }
                 Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
                     continue;
-                },
+                }
                 Err(e) => return Err(StorageError::Io { source: e }),
             }
         }
