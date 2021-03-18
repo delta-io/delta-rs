@@ -4,10 +4,13 @@ use std::{fmt, pin::Pin};
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::Stream;
 use log::debug;
-use rusoto_core::{Region, RusotoError};
+use rusoto_core::credential::ChainProvider;
+use rusoto_core::{HttpClient, Region, RusotoError};
+use rusoto_credential::AutoRefreshingProvider;
 use rusoto_s3::{
     GetObjectRequest, HeadObjectRequest, ListObjectsV2Request, PutObjectRequest, S3Client, S3,
 };
+use rusoto_sts::WebIdentityProvider;
 use tokio::io::AsyncReadExt;
 
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
@@ -53,24 +56,23 @@ impl From<RusotoError<rusoto_s3::ListObjectsV2Error>> for StorageError {
 }
 
 fn create_s3_client(region: Region) -> Result<S3Client, StorageError> {
+    let dispatcher = HttpClient::new()
+        .map_err(|_| StorageError::S3Generic("Failed to create request dispatcher".to_string()))?;
+
     let client = match std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE") {
         Ok(_) => {
-            let provider = rusoto_sts::WebIdentityProvider::from_k8s_env();
-            let provider =
-                rusoto_credential::AutoRefreshingProvider::new(provider).map_err(|e| {
-                    StorageError::S3Generic(format!(
-                        "Failed to retrieve S3 credentials with message: {}",
-                        e.message
-                    ))
-                })?;
-
-            let dispatcher = rusoto_core::HttpClient::new().ok_or_else(|| {
-                StorageError::S3Generic("Failed to create request dispatcher".to_string())
+            let provider = WebIdentityProvider::from_k8s_env();
+            let provider = AutoRefreshingProvider::new(provider).map_err(|e| {
+                StorageError::S3Generic(format!(
+                    "Failed to retrieve S3 credentials with message: {}",
+                    e.message
+                ))
             })?;
             S3Client::new_with(dispatcher, provider, region)
         }
-        Err(_) => S3Client::new(region),
+        Err(_) => S3Client::new_with(dispatcher, ChainProvider::new(), region),
     };
+
     Ok(client)
 }
 
@@ -141,7 +143,7 @@ pub struct S3StorageBackend {
 
 impl S3StorageBackend {
     pub fn new() -> Self {
-        let client = S3Client::new(Region::default());
+        let client = create_s3_client(Region::default()).unwrap();
         Self { client }
     }
 }

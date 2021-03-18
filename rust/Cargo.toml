@@ -51,7 +51,7 @@ async-trait = "0.1"
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion", "crossbeam"]
 azure = ["azure_core", "azure_storage", "reqwest"]
-s3 = ["rusoto_core", "rusoto_s3"]
+s3 = ["rusoto_core", "rusoto_credential", "rusoto_s3", "rusoto_sts"]
 
 [dev-dependencies]
 utime = "0.3"
