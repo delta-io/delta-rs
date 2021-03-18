@@ -71,6 +71,8 @@ impl StorageBackend for FileStorageBackend {
     }
 }
 
+const CREATE_TEMPORARY_FILE_MAX_TRIES: i32 = 5;
+
 async fn create_tmp_file_with_retry(
     backend: &FileStorageBackend,
     path: &str,
@@ -78,7 +80,7 @@ async fn create_tmp_file_with_retry(
 ) -> Result<String, StorageError> {
     let mut i = 0;
 
-    while i < 5 {
+    while i < CREATE_TEMPORARY_FILE_MAX_TRIES {
         let tmp_file_name = format!("{}.temporary", Uuid::new_v4().to_string());
         let tmp_path = backend.join_path(&backend.root, &tmp_file_name);
         let rf = fs::OpenOptions::new()
