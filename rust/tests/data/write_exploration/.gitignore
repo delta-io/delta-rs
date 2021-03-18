@@ -2,4 +2,3 @@
 
 _delta_log/*.json
 !/_delta_log/00000000000000000000.json
-_tmp_writes/
