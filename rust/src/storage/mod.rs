@@ -297,7 +297,7 @@ pub trait StorageBackend: Send + Sync + Debug {
 
 pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, StorageError> {
     match parse_uri(uri)? {
-        Uri::LocalPath(root) => Ok(Box::new(file::FileStorageBackend::new(root)?)),
+        Uri::LocalPath(root) => Ok(Box::new(file::FileStorageBackend::new(root))),
         #[cfg(feature = "s3")]
         Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new())),
         #[cfg(feature = "azure")]

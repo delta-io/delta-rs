@@ -31,7 +31,7 @@ pub fn rename(from: &str, to: &str) -> Result<(), StorageError> {
         }
 
         return Err(StorageError::Io {
-            source: super::custom_io_error(format!("{}", e)),
+            source: custom_io_error(format!("{}", e)),
         });
     }
 
@@ -41,7 +41,7 @@ pub fn rename(from: &str, to: &str) -> Result<(), StorageError> {
 unsafe fn platform_specific_rename(from: *const libc::c_char, to: *const libc::c_char) -> i32 {
     cfg_if::cfg_if! {
         if #[cfg(target_os = "linux")] {
-            renameat2(0, from, 0, to, RENAME_NOREPLACE)
+            renameat2(libc::AT_FDCWD, from, libc::AT_FDCWD, to, RENAME_NOREPLACE)
         } else if #[cfg(target_os = "macos")] {
             libc::renamex_np(from, to, libc::RENAME_EXCL)
         } else {
@@ -52,6 +52,10 @@ unsafe fn platform_specific_rename(from: *const libc::c_char, to: *const libc::c
 
 fn to_c_string(p: &str) -> Result<CString, StorageError> {
     CString::new(p).map_err(|e| StorageError::Generic(format!("{}", e)))
+}
+
+fn custom_io_error(desc: String) -> std::io::Error {
+    std::io::Error::new(std::io::ErrorKind::Other, desc)
 }
 
 #[cfg(test)]
