@@ -100,7 +100,7 @@ async fn create_tmp_file_with_retry(
             }
         }
 
-        i = i + 1;
+        i += 1;
     }
 
     Err(StorageError::AlreadyExists(String::from(path)))
