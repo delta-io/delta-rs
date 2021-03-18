@@ -1,7 +1,7 @@
 extern crate deltalake;
 
-use std::collections::HashMap;
 use pretty_assertions::assert_eq;
+use std::collections::HashMap;
 
 #[tokio::test]
 async fn read_delta_2_0_table_without_version() {
@@ -35,17 +35,14 @@ async fn read_delta_2_0_table_without_version() {
 #[tokio::test]
 async fn read_delta_table_with_update() {
     let path = "./tests/data/simple_table_with_checkpoint/";
-    let table_newest_version =
-        deltalake::open_table(path)
-            .await
-            .unwrap();
-    let mut table_to_update = deltalake::open_table_with_version(
-        path, 0)
-        .await
-        .unwrap();
+    let table_newest_version = deltalake::open_table(path).await.unwrap();
+    let mut table_to_update = deltalake::open_table_with_version(path, 0).await.unwrap();
     table_to_update.update().await.unwrap();
 
-    assert_eq!(table_newest_version.get_files(), table_to_update.get_files());
+    assert_eq!(
+        table_newest_version.get_files(),
+        table_to_update.get_files()
+    );
 }
 
 #[tokio::test]

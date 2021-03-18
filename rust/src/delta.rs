@@ -270,7 +270,8 @@ impl DeltaTable {
                 });
             }
             Action::txn(v) => {
-                self.state.app_transaction_version
+                self.state
+                    .app_transaction_version
                     .entry(v.appId.clone())
                     .or_insert(v.version);
             }
@@ -559,7 +560,8 @@ impl DeltaTable {
     }
 
     pub fn get_file_paths(&self) -> Vec<String> {
-        self.state.files
+        self.state
+            .files
             .iter()
             .map(|fname| self.storage.join_path(&self.table_path, fname))
             .collect()
