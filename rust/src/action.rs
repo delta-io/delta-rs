@@ -803,6 +803,7 @@ mod tests {
 
 /// Operation performed when creating a new log entry with one or more actions.
 /// This is a key element of the `CommitInfo` action and used for optimization when executing an operation that must do re-writes.
+#[derive(Serialize, Deserialize, Debug)]
 pub enum DeltaOperation {
     /// Represents a Delta `Write` operation.
     /// Write operations will typically only include `Add` actions.
@@ -811,10 +812,17 @@ pub enum DeltaOperation {
         partitionBy: Option<Vec<String>>,
         predicate: Option<String>,
     },
+    /// Represents a Delta `StreamingUpdate` operation.
+    StreamingUpdate {
+        outputMode: OutputMode,
+        queryId: String,
+        epochId: i64,
+    },
     // TODO: Add more operations
 }
 
 /// The SaveMode used when performing a DeltaOperation
+#[derive(Serialize, Deserialize, Debug)]
 pub enum SaveMode {
     /// Files will be appended to the target location.
     Append,
@@ -824,4 +832,15 @@ pub enum SaveMode {
     ErrorIfExists,
     /// If files exist for the target, the operation must not proceed or change any data.
     Ignore,
+}
+
+/// The OutputMode used in streaming operations.
+#[derive(Serialize, Deserialize, Debug)]
+pub enum OutputMode {
+    /// Only new rows will be written when new data is available.
+    Append,
+    /// The full output (all rows) will be written whenever new data is available.
+    Complete,
+    /// Only rows with updates will be written when new or changed data is available.
+    Update,
 }
