@@ -65,30 +65,43 @@ impl StorageBackend for FileStorageBackend {
     }
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
-        let tmp_file_name = format!("{}.temporary", Uuid::new_v4().to_string());
-        let tmp_path = self.join_path(&self.root, &tmp_file_name);
+        let tmp_path = create_tmp_file_with_retry(self, path, obj_bytes).await?;
 
-        // run this in loop in case tmp file with tmp_file_name already exists
-        loop {
-            let rf = fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(&tmp_path)
-                .await;
-            match rf {
-                Ok(mut f) => {
-                    f.write(obj_bytes).await?;
-                    break;
+        rename::rename(&tmp_path, path)
+    }
+}
+
+async fn create_tmp_file_with_retry(
+    backend: &FileStorageBackend,
+    path: &str,
+    obj_bytes: &[u8],
+) -> Result<String, StorageError> {
+    let mut i = 0;
+
+    while i < 5 {
+        let tmp_file_name = format!("{}.temporary", Uuid::new_v4().to_string());
+        let tmp_path = backend.join_path(&backend.root, &tmp_file_name);
+        let rf = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(&tmp_path)
+            .await;
+
+        match rf {
+            Ok(mut f) => {
+                f.write(obj_bytes).await?;
+                return Ok(tmp_path);
+            }
+            Err(e) => {
+                std::fs::remove_file(&tmp_path).unwrap_or(());
+                if e.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(StorageError::Io { source: e });
                 }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => {
-                    continue;
-                }
-                Err(e) => return Err(StorageError::Io { source: e }),
             }
         }
 
-        rename::rename(&tmp_path, path)?;
-
-        Ok(())
+        i = i + 1;
     }
+
+    Err(StorageError::AlreadyExists(String::from(path)))
 }
