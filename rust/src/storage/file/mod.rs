@@ -8,13 +8,20 @@ use tokio::io::AsyncWriteExt;
 use tokio_stream::wrappers::ReadDirStream;
 
 use super::{ObjectMeta, StorageBackend, StorageError};
+use uuid::Uuid;
+
+mod rename;
 
 #[derive(Default, Debug)]
-pub struct FileStorageBackend {}
+pub struct FileStorageBackend {
+    root: String,
+}
 
 impl FileStorageBackend {
-    pub fn new() -> Self {
-        Self {}
+    pub fn new(root: &str) -> Self {
+        Self {
+            root: String::from(root),
+        }
     }
 }
 
@@ -58,26 +65,45 @@ impl StorageBackend for FileStorageBackend {
     }
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
-        let dir = std::path::Path::new(path);
+        let tmp_path = create_tmp_file_with_retry(self, path, obj_bytes).await?;
 
-        if let Some(d) = dir.parent() {
-            fs::create_dir_all(d).await?;
-        }
+        rename::rename(&tmp_path, path)
+    }
+}
 
-        // use `OpenOptions` with `create_new` to create the file handle.
-        // this will force ErrorKind::AlreadyExists if the file already exists.
-        let mut f = fs::OpenOptions::new()
+const CREATE_TEMPORARY_FILE_MAX_TRIES: i32 = 5;
+
+async fn create_tmp_file_with_retry(
+    backend: &FileStorageBackend,
+    path: &str,
+    obj_bytes: &[u8],
+) -> Result<String, StorageError> {
+    let mut i = 0;
+
+    while i < CREATE_TEMPORARY_FILE_MAX_TRIES {
+        let tmp_file_name = format!("{}.temporary", Uuid::new_v4().to_string());
+        let tmp_path = backend.join_path(&backend.root, &tmp_file_name);
+        let rf = fs::OpenOptions::new()
             .create_new(true)
             .write(true)
-            .open(path)
-            .await
-            .map_err(|e| match e.kind() {
-                std::io::ErrorKind::AlreadyExists => StorageError::AlreadyExists(path.to_string()),
-                _ => StorageError::Io { source: e },
-            })?;
+            .open(&tmp_path)
+            .await;
 
-        f.write(obj_bytes).await?;
+        match rf {
+            Ok(mut f) => {
+                f.write(obj_bytes).await?;
+                return Ok(tmp_path);
+            }
+            Err(e) => {
+                std::fs::remove_file(&tmp_path).unwrap_or(());
+                if e.kind() != std::io::ErrorKind::AlreadyExists {
+                    return Err(StorageError::Io { source: e });
+                }
+            }
+        }
 
-        Ok(())
+        i += 1;
     }
+
+    Err(StorageError::AlreadyExists(String::from(path)))
 }

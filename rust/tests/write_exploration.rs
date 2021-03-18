@@ -27,6 +27,8 @@ use parquet::{
 use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
+use std::fs::File;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -111,9 +113,13 @@ impl DeltaWriter {
 
         let storage_path = format!("{}/{}", self.table_path, path);
 
-        self.storage
-            .put_obj(storage_path.as_str(), obj_bytes.as_slice())
-            .await?;
+        // `storage.put_obj` is for log files
+        if let Some(p) = PathBuf::from(&storage_path).parent() {
+            fs::create_dir_all(p).unwrap();
+
+            let mut f = File::create(&storage_path).unwrap();
+            f.write_all(&obj_bytes).unwrap();
+        }
 
         create_add(
             &partition_values,

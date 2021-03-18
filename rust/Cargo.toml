@@ -9,6 +9,8 @@ description = "Native Delta Lake implementation in Rust"
 edition = "2018"
 
 [dependencies]
+libc = "0.2"
+errno = "0.2"
 clap = { version = ">=3.0.0-beta.2,<4", features = ["color"] }
 anyhow = "1"
 thiserror = "1"
