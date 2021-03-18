@@ -178,22 +178,28 @@ impl From<StorageError> for LoadCheckpointError {
     }
 }
 
-pub struct DeltaTable {
-    pub version: DeltaDataTypeVersion,
+#[derive(Default)]
+struct DeltaTableState {
     // A remove action should remain in the state of the table as a tombstone until it has expired
     // vacuum operation is responsible for providing the retention threshold
-    pub tombstones: Vec<action::Remove>,
+    tombstones: Vec<action::Remove>,
+    files: Vec<String>,
+    commit_infos: Vec<Value>,
+    app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
+}
+
+pub struct DeltaTable {
+    pub version: DeltaDataTypeVersion,
     pub min_reader_version: i32,
     pub min_writer_version: i32,
     pub table_path: String,
+
+    state: DeltaTableState,
 
     // metadata
     // application_transactions
     storage: Box<dyn StorageBackend>,
 
-    files: Vec<String>,
-    app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
-    commit_infos: Vec<Value>,
     current_metadata: Option<DeltaTableMetaData>,
     last_check_point: Option<CheckPoint>,
     log_path: String,
@@ -242,11 +248,11 @@ impl DeltaTable {
     fn process_action(&mut self, action: &Action) -> Result<(), serde_json::error::Error> {
         match action {
             Action::add(v) => {
-                self.files.push(v.path.clone());
+                self.state.files.push(v.path.clone());
             }
             Action::remove(v) => {
-                self.files.retain(|e| *e != v.path);
-                self.tombstones.push(v.clone());
+                self.state.files.retain(|e| *e != v.path);
+                self.state.tombstones.push(v.clone());
             }
             Action::protocol(v) => {
                 self.min_reader_version = v.minReaderVersion;
@@ -264,12 +270,12 @@ impl DeltaTable {
                 });
             }
             Action::txn(v) => {
-                self.app_transaction_version
+                self.state.app_transaction_version
                     .entry(v.appId.clone())
                     .or_insert(v.version);
             }
             Action::commitInfo(v) => {
-                self.commit_infos.push(v.clone());
+                self.state.commit_infos.push(v.clone());
             }
         }
 
@@ -359,6 +365,7 @@ impl DeltaTable {
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
         let checkpoint_data_paths = self.get_checkpoint_data_paths(&check_point);
         // process actions from checkpoint
+        self.state = DeltaTableState::default();
         for f in &checkpoint_data_paths {
             let obj = self.storage.get_obj(&f).await?;
             let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
@@ -548,11 +555,11 @@ impl DeltaTable {
     }
 
     pub fn get_files(&self) -> &Vec<String> {
-        &self.files
+        &self.state.files
     }
 
     pub fn get_file_paths(&self) -> Vec<String> {
-        self.files
+        self.state.files
             .iter()
             .map(|fname| self.storage.join_path(&self.table_path, fname))
             .collect()
@@ -565,11 +572,11 @@ impl DeltaTable {
     }
 
     pub fn get_tombstones(&self) -> &Vec<action::Remove> {
-        &self.tombstones
+        &self.state.tombstones
     }
 
     pub fn get_app_transaction_version(&self) -> &HashMap<String, DeltaDataTypeVersion> {
-        &self.app_transaction_version
+        &self.state.app_transaction_version
     }
 
     pub fn schema(&self) -> Option<&Schema> {
@@ -594,15 +601,12 @@ impl DeltaTable {
         let log_path_normalized = storage_backend.join_path(table_path, "_delta_log");
         Ok(Self {
             version: 0,
-            files: Vec::new(),
+            state: DeltaTableState::default(),
             storage: storage_backend,
-            tombstones: Vec::new(),
             table_path: table_path.to_string(),
             min_reader_version: 0,
             min_writer_version: 0,
             current_metadata: None,
-            commit_infos: Vec::new(),
-            app_transaction_version: HashMap::new(),
             last_check_point: None,
             log_path: log_path_normalized,
             version_timestamp: HashMap::new(),
@@ -663,7 +667,7 @@ impl fmt::Display for DeltaTable {
             "\tmin_version: read={}, write={}",
             self.min_reader_version, self.min_writer_version
         )?;
-        writeln!(f, "\tfiles count: {}", self.files.len())
+        writeln!(f, "\tfiles count: {}", self.state.files.len())
     }
 }
 
