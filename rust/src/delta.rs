@@ -186,12 +186,13 @@ struct DeltaTableState {
     files: Vec<String>,
     commit_infos: Vec<Value>,
     app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
+    min_reader_version: i32,
+    min_writer_version: i32,
+    current_metadata: Option<DeltaTableMetaData>,
 }
 
 pub struct DeltaTable {
     pub version: DeltaDataTypeVersion,
-    pub min_reader_version: i32,
-    pub min_writer_version: i32,
     pub table_path: String,
 
     state: DeltaTableState,
@@ -200,7 +201,6 @@ pub struct DeltaTable {
     // application_transactions
     storage: Box<dyn StorageBackend>,
 
-    current_metadata: Option<DeltaTableMetaData>,
     last_check_point: Option<CheckPoint>,
     log_path: String,
     version_timestamp: HashMap<DeltaDataTypeVersion, i64>,
@@ -245,21 +245,24 @@ impl DeltaTable {
         Ok(serde_json::from_slice(&data)?)
     }
 
-    fn process_action(&mut self, action: &Action) -> Result<(), serde_json::error::Error> {
+    fn process_action(
+        state: &mut DeltaTableState,
+        action: &Action,
+    ) -> Result<(), serde_json::error::Error> {
         match action {
             Action::add(v) => {
-                self.state.files.push(v.path.clone());
+                state.files.push(v.path.clone());
             }
             Action::remove(v) => {
-                self.state.files.retain(|e| *e != v.path);
-                self.state.tombstones.push(v.clone());
+                state.files.retain(|e| *e != v.path);
+                state.tombstones.push(v.clone());
             }
             Action::protocol(v) => {
-                self.min_reader_version = v.minReaderVersion;
-                self.min_writer_version = v.minWriterVersion;
+                state.min_reader_version = v.minReaderVersion;
+                state.min_writer_version = v.minWriterVersion;
             }
             Action::metaData(v) => {
-                self.current_metadata = Some(DeltaTableMetaData {
+                state.current_metadata = Some(DeltaTableMetaData {
                     id: v.id.clone(),
                     name: v.name.clone(),
                     description: v.description.clone(),
@@ -270,13 +273,13 @@ impl DeltaTable {
                 });
             }
             Action::txn(v) => {
-                self.state
+                state
                     .app_transaction_version
                     .entry(v.appId.clone())
                     .or_insert(v.version);
             }
             Action::commitInfo(v) => {
-                self.state.commit_infos.push(v.clone());
+                state.commit_infos.push(v.clone());
             }
         }
 
@@ -349,7 +352,7 @@ impl DeltaTable {
     ) -> Result<(), ApplyLogError> {
         for line in reader.lines() {
             let action: Action = serde_json::from_str(line?.as_str())?;
-            self.process_action(&action)?;
+            DeltaTable::process_action(&mut self.state, &action)?;
         }
 
         Ok(())
@@ -377,7 +380,10 @@ impl DeltaTable {
                 )));
             }
             for record in preader.get_row_iter(None)? {
-                self.process_action(&Action::from_parquet_record(&schema, &record)?)?;
+                DeltaTable::process_action(
+                    &mut self.state,
+                    &Action::from_parquet_record(&schema, &record)?,
+                )?;
             }
         }
 
@@ -568,7 +574,8 @@ impl DeltaTable {
     }
 
     pub fn get_metadata(&self) -> Result<&DeltaTableMetaData, DeltaTableError> {
-        self.current_metadata
+        self.state
+            .current_metadata
             .as_ref()
             .ok_or(DeltaTableError::NoMetadata)
     }
@@ -581,8 +588,16 @@ impl DeltaTable {
         &self.state.app_transaction_version
     }
 
+    pub fn get_min_reader_version(&self) -> i32 {
+        self.state.min_reader_version
+    }
+
+    pub fn get_min_writer_version(&self) -> i32 {
+        self.state.min_writer_version
+    }
+
     pub fn schema(&self) -> Option<&Schema> {
-        self.current_metadata.as_ref().map(|m| &m.schema)
+        self.state.current_metadata.as_ref().map(|m| &m.schema)
     }
 
     pub fn get_schema(&self) -> Result<&Schema, DeltaTableError> {
@@ -606,9 +621,6 @@ impl DeltaTable {
             state: DeltaTableState::default(),
             storage: storage_backend,
             table_path: table_path.to_string(),
-            min_reader_version: 0,
-            min_writer_version: 0,
-            current_metadata: None,
             last_check_point: None,
             log_path: log_path_normalized,
             version_timestamp: HashMap::new(),
@@ -656,7 +668,7 @@ impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "DeltaTable({})", self.table_path)?;
         writeln!(f, "\tversion: {}", self.version)?;
-        match self.current_metadata.as_ref() {
+        match self.state.current_metadata.as_ref() {
             Some(metadata) => {
                 writeln!(f, "\tmetadata: {}", metadata)?;
             }
@@ -667,7 +679,7 @@ impl fmt::Display for DeltaTable {
         writeln!(
             f,
             "\tmin_version: read={}, write={}",
-            self.min_reader_version, self.min_writer_version
+            self.state.min_reader_version, self.state.min_writer_version
         )?;
         writeln!(f, "\tfiles count: {}", self.state.files.len())
     }

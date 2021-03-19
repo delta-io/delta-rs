@@ -12,8 +12,8 @@ async fn read_simple_table() {
         .await
         .unwrap();
     assert_eq!(table.version, 4);
-    assert_eq!(table.min_writer_version, 2);
-    assert_eq!(table.min_reader_version, 1);
+    assert_eq!(table.get_min_writer_version(), 2);
+    assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
         &vec![
@@ -43,8 +43,8 @@ async fn read_simple_table_with_version() {
         .await
         .unwrap();
     assert_eq!(table.version, 0);
-    assert_eq!(table.min_writer_version, 2);
-    assert_eq!(table.min_reader_version, 1);
+    assert_eq!(table.get_min_writer_version(), 2);
+    assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
         &vec![
@@ -61,8 +61,8 @@ async fn read_simple_table_with_version() {
         .await
         .unwrap();
     assert_eq!(table.version, 2);
-    assert_eq!(table.min_writer_version, 2);
-    assert_eq!(table.min_reader_version, 1);
+    assert_eq!(table.get_min_writer_version(), 2);
+    assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
         &vec![
@@ -79,8 +79,8 @@ async fn read_simple_table_with_version() {
         .await
         .unwrap();
     assert_eq!(table.version, 3);
-    assert_eq!(table.min_writer_version, 2);
-    assert_eq!(table.min_reader_version, 1);
+    assert_eq!(table.get_min_writer_version(), 2);
+    assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
         &vec![
