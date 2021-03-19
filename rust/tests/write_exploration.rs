@@ -16,7 +16,7 @@ use arrow::{
 };
 use deltalake::{
     action::{Action, Add, Remove, Stats},
-    DeltaTableError, DeltaTableMetaData, Schema, StorageBackend, StorageError, UriError,
+    DeltaTableError, DeltaTableMetaData, Schema, StorageError, UriError,
 };
 use parquet::{
     arrow::ArrowWriter,
@@ -75,19 +75,13 @@ pub enum DeltaWriterError {
 
 pub struct DeltaWriter {
     table_path: String,
-    storage: Box<dyn StorageBackend>,
 }
 
 /// A writer that writes record batches in parquet format to a table location.
 /// This should be used along side a DeltaTransaction wrapping the same DeltaTable instance.
 impl DeltaWriter {
     pub async fn for_table_path(table_path: String) -> Result<DeltaWriter, DeltaWriterError> {
-        let storage = deltalake::get_backend_for_uri(table_path.as_str())?;
-
-        Ok(Self {
-            table_path,
-            storage,
-        })
+        Ok(Self { table_path })
     }
 
     // Ideally, we should separate the initialization of the cursor and the call to close to enable writing multiple record batches to the same file.
