@@ -300,3 +300,17 @@ impl StorageBackend for S3StorageBackend {
         Ok(())
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn join_multiple_paths() {
+        let backend = S3StorageBackend::new();
+        assert_eq!(&backend.join_paths(&["abc", "efg/", "123"]), "abc/efg/123",);
+        assert_eq!(&backend.join_paths(&["abc", "efg/"]), "abc/efg",);
+        assert_eq!(&backend.join_paths(&["foo"]), "foo",);
+        assert_eq!(&backend.join_paths(&[]), "",);
+    }
+}
