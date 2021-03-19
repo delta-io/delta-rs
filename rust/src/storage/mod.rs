@@ -235,16 +235,37 @@ pub struct ObjectMeta {
 
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + Debug {
+    /// Create a new path by appending `path_to_join` as a new component to `path`.
     fn join_path(&self, path: &str, path_to_join: &str) -> String {
         let normalized_path = path.trim_end_matches('/');
         format!("{}/{}", normalized_path, path_to_join)
     }
+
+    /// More efficient path join for multiple path components. Use this method if you need to
+    /// combine more than two path components.
+    fn join_paths(&self, paths: &[&str]) -> String {
+        paths
+            .iter()
+            .map(|s| s.trim_end_matches('/'))
+            .collect::<Vec<_>>()
+            .join("/")
+    }
+
+    /// Fetch object metadata without reading the actual content
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError>;
+
+    /// Fetch object content
     async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
+
+    /// Return a list of objects by `path` prefix in an async stream.
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>;
+
+    /// Create new object with `obj_bytes` as content.
+    ///
+    /// For a multi-writer safe backend, put_obj needs to implement create if not exists semantic.
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError>;
 }
 
