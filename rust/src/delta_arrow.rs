@@ -95,7 +95,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                     }
                     "timestamp" => {
                         // Microsecond precision timestamp without a timezone.
-                        Ok(ArrowDataType::Time64(TimeUnit::Microsecond))
+                        Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
                     }
                     s => Err(ArrowError::SchemaError(format!(
                         "Invalid data type for Arrow: {}",
