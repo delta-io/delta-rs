@@ -58,3 +58,4 @@ s3 = ["rusoto_core", "rusoto_credential", "rusoto_s3", "rusoto_sts"]
 [dev-dependencies]
 utime = "0.3"
 serial_test = "*"
+pretty_assertions = "0"
