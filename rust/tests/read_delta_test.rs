@@ -1,5 +1,6 @@
 extern crate deltalake;
 
+use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 
 #[tokio::test]
@@ -8,8 +9,8 @@ async fn read_delta_2_0_table_without_version() {
         .await
         .unwrap();
     assert_eq!(table.version, 3);
-    assert_eq!(table.min_writer_version, 2);
-    assert_eq!(table.min_reader_version, 1);
+    assert_eq!(table.get_min_writer_version(), 2);
+    assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
         &vec![
@@ -32,13 +33,26 @@ async fn read_delta_2_0_table_without_version() {
 }
 
 #[tokio::test]
+async fn read_delta_table_with_update() {
+    let path = "./tests/data/simple_table_with_checkpoint/";
+    let table_newest_version = deltalake::open_table(path).await.unwrap();
+    let mut table_to_update = deltalake::open_table_with_version(path, 0).await.unwrap();
+    table_to_update.update().await.unwrap();
+
+    assert_eq!(
+        table_newest_version.get_files(),
+        table_to_update.get_files()
+    );
+}
+
+#[tokio::test]
 async fn read_delta_2_0_table_with_version() {
     let mut table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 0)
         .await
         .unwrap();
     assert_eq!(table.version, 0);
-    assert_eq!(table.min_writer_version, 2);
-    assert_eq!(table.min_reader_version, 1);
+    assert_eq!(table.get_min_writer_version(), 2);
+    assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
         &vec![
@@ -51,8 +65,8 @@ async fn read_delta_2_0_table_with_version() {
         .await
         .unwrap();
     assert_eq!(table.version, 2);
-    assert_eq!(table.min_writer_version, 2);
-    assert_eq!(table.min_reader_version, 1);
+    assert_eq!(table.get_min_writer_version(), 2);
+    assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
         &vec![
@@ -65,8 +79,8 @@ async fn read_delta_2_0_table_with_version() {
         .await
         .unwrap();
     assert_eq!(table.version, 3);
-    assert_eq!(table.min_writer_version, 2);
-    assert_eq!(table.min_reader_version, 1);
+    assert_eq!(table.get_min_writer_version(), 2);
+    assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
         &vec![
@@ -83,8 +97,8 @@ async fn read_delta_8_0_table_without_version() {
         .await
         .unwrap();
     assert_eq!(table.version, 1);
-    assert_eq!(table.min_writer_version, 2);
-    assert_eq!(table.min_reader_version, 1);
+    assert_eq!(table.get_min_writer_version(), 2);
+    assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
         &vec![
