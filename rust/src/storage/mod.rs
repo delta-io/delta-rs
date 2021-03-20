@@ -15,7 +15,7 @@ pub mod file;
 #[cfg(feature = "s3")]
 pub mod s3;
 
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq)]
 pub enum UriError {
     #[error("Invalid URI scheme: {0}")]
     InvalidScheme(String),
@@ -203,6 +203,14 @@ pub enum StorageError {
         #[from]
         source: UriError,
     },
+}
+
+impl StorageError {
+    pub fn other_std_io_err(desc: String) -> Self {
+        Self::Io {
+            source: std::io::Error::new(std::io::ErrorKind::Other, desc),
+        }
+    }
 }
 
 impl From<std::io::Error> for StorageError {

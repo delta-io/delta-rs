@@ -59,3 +59,4 @@ s3 = ["rusoto_core", "rusoto_credential", "rusoto_s3", "rusoto_sts"]
 utime = "0.3"
 serial_test = "*"
 pretty_assertions = "0"
+tempdir = "0"
