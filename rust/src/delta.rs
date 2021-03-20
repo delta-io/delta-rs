@@ -8,6 +8,7 @@ use std::io::{BufRead, BufReader, Cursor};
 use arrow::error::ArrowError;
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::StreamExt;
+use lazy_static::lazy_static;
 use log::debug;
 use parquet::errors::ParquetError;
 use parquet::file::{
@@ -290,23 +291,22 @@ impl DeltaTable {
         &self,
         version: DeltaDataTypeVersion,
     ) -> Result<Option<CheckPoint>, DeltaTableError> {
-        let mut cp: Option<CheckPoint> = None;
-        let root = self.storage.join_path(r"^*", "_delta_log");
-        let regex_checkpoint = self
-            .storage
-            .join_path(&root, r"(\d{20})\.checkpoint\.parquet$");
-        let regex_checkpoint_parts = self
-            .storage
-            .join_path(&root, r"(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$");
-        let re_checkpoint = Regex::new(&regex_checkpoint).unwrap();
-        let re_checkpoint_parts = Regex::new(&regex_checkpoint_parts).unwrap();
+        lazy_static! {
+            static ref CHECKPOINT_REGEX: Regex =
+                Regex::new(r#"^*[/\\]_delta_log[/\\](\d{20})\.checkpoint\.parquet$"#).unwrap();
+            static ref CHECKPOINT_PARTS_REGEX: Regex = Regex::new(
+                r#"^*[/\\]_delta_log[/\\](\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$"#
+            )
+            .unwrap();
+        }
 
+        let mut cp: Option<CheckPoint> = None;
         let mut stream = self.storage.list_objs(&self.log_path).await?;
 
         while let Some(obj_meta) = stream.next().await {
             // Exit early if any objects can't be listed.
             let obj_meta = obj_meta?;
-            if let Some(captures) = re_checkpoint.captures(&obj_meta.path) {
+            if let Some(captures) = CHECKPOINT_REGEX.captures(&obj_meta.path) {
                 let curr_ver_str = captures.get(1).unwrap().as_str();
                 let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
                 if curr_ver > version {
@@ -323,7 +323,7 @@ impl DeltaTable {
                 continue;
             }
 
-            if let Some(captures) = re_checkpoint_parts.captures(&obj_meta.path) {
+            if let Some(captures) = CHECKPOINT_PARTS_REGEX.captures(&obj_meta.path) {
                 let curr_ver_str = captures.get(1).unwrap().as_str();
                 let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
                 if curr_ver > version {
