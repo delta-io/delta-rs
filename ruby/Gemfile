@@ -1,7 +1,9 @@
+# frozen_string_literal: true
+
 source 'https://rubygems.org'
 
-gem 'helix_runtime'
 gem 'colorize'
+gem 'rutie', '~> 0.0.3'
 
 group :development do
   gem 'rake', '~> 12.0'

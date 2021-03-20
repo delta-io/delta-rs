@@ -74,6 +74,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "ansi_term"
+version = "0.12.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d52a9bb7ec0cf484c551830a7ce27bd20d67eac647e1befb56b0be4ee39a55d2"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "anyhow"
 version = "1.0.38"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -351,7 +360,7 @@ version = "2.33.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "37e58ac78573c40708d45522f0d80fa2f01cc4f9b4e2bf749807255454312002"
 dependencies = [
- "ansi_term",
+ "ansi_term 0.11.0",
  "atty",
  "bitflags",
  "strsim 0.8.0",
@@ -515,12 +524,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "cstr-macro"
-version = "0.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "db53fddba18cdd35477a7213a3ef6acfbfa333c31b42ce019e544c4a1420a06f"
-
-[[package]]
 name = "csv"
 version = "1.1.6"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -609,6 +612,7 @@ dependencies = [
  "libc",
  "log",
  "parquet",
+ "pretty_assertions",
  "regex",
  "reqwest",
  "rusoto_core",
@@ -643,9 +647,16 @@ name = "deltalake-ruby"
 version = "0.1.0"
 dependencies = [
  "deltalake",
- "helix",
+ "lazy_static",
+ "rutie",
  "tokio",
 ]
+
+[[package]]
+name = "diff"
+version = "0.1.12"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0e25ea47919b1560c4e3b7fe0aaab9becf5b84a10325ddf7db0f0ba5e1026499"
 
 [[package]]
 name = "digest"
@@ -1020,17 +1031,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "helix"
-version = "0.7.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "49a017e3e798ad9386e0a0584e66fd6c04a80ccc1242eb8f689c62ce6f408240"
-dependencies = [
- "cstr-macro",
- "libc",
- "libcruby-sys",
-]
-
-[[package]]
 name = "hermit-abi"
 version = "0.1.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1283,15 +1283,6 @@ name = "libc"
 version = "0.2.88"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "03b07a082330a35e43f63177cc01689da34fbffa0105e1246cf0311472cac73a"
-
-[[package]]
-name = "libcruby-sys"
-version = "0.7.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "fef6028cdce0c8d55676fd1d66bb810facef8cade0dd71d28511d375e84da4c0"
-dependencies = [
- "libc",
-]
 
 [[package]]
 name = "lock_api"
@@ -1637,6 +1628,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "afb2e1c3ee07430c2cf76151675e583e0f19985fa6efae47d6848a3e2c824f85"
 
 [[package]]
+name = "output_vt100"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "53cdc5b785b7a58c5aad8216b3dfa114df64b0b06ae6e1501cef91df2fbdf8f9"
+dependencies = [
+ "winapi",
+]
+
+[[package]]
 name = "parking_lot"
 version = "0.11.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1763,6 +1763,18 @@ name = "ppv-lite86"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ac74c624d6b2d21f425f752262f42188365d7b8ff1aff74c82e45136510a4857"
+
+[[package]]
+name = "pretty_assertions"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f297542c27a7df8d45de2b0e620308ab883ad232d06c14b76ac3e144bda50184"
+dependencies = [
+ "ansi_term 0.12.1",
+ "ctor",
+ "diff",
+ "output_vt100",
+]
 
 [[package]]
 name = "prettytable-rs"
@@ -2249,6 +2261,16 @@ dependencies = [
  "unicode-width",
  "utf8parse",
  "winapi",
+]
+
+[[package]]
+name = "rutie"
+version = "0.8.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "678217ed742ca819057a79c0146703d1278afbb38896eb0283c410a6cab7c28c"
+dependencies = [
+ "lazy_static",
+ "libc",
 ]
 
 [[package]]
