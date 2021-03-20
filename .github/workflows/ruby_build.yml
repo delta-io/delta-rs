@@ -17,15 +17,15 @@ jobs:
     - name: Cache Rust build
       uses: actions/cache@v1.0.1
       with:
-        path: target/debug/build
-        key: ruby-${{ runner.OS }}-target-build-${{ hashFiles('**/Cargo.lock') }}
+        path: target/release/build
+        key: ruby-${{ runner.OS }}-target-release-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ruby-${{ runner.OS }}-target-build-
     - name: Cache Rust incremental build
       uses: actions/cache@v1.0.1
       with:
-        path: target/debug/incremental
-        key: ruby-${{ runner.OS }}-target-incremental-${{ hashFiles('**/Cargo.lock') }}
+        path: target/release/incremental
+        key: ruby-${{ runner.OS }}-target-release-incremental-${{ hashFiles('**/Cargo.lock') }}
         restore-keys: |
           ruby-${{ runner.OS }}-target-incremental-
     - name: Install minimal stable with clippy and rustfmt
@@ -34,6 +34,8 @@ jobs:
         profile: default
         toolchain: stable
         override: true
+    - name: Build Release for Ruby
+      run: cargo build --release
     - name: 'Set up Ruby'
       uses: actions/setup-ruby@v1
     - name: 'Install Ruby Dependencies'
