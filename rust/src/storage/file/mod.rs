@@ -12,8 +12,19 @@ use uuid::Uuid;
 
 mod rename;
 
-/// NOTE: The file storage backend is not multi-writer safe in Windows due to lack of support for
-/// native atomic file rename system call.
+/// Multi-writer support for different platforms:
+///
+/// * Modern Linux kernels are well supported. However because Linux implementation leverages
+/// `RENAME_NOREPLACE`, older versions of the kernel might not work depending on what filesystem is
+/// being used:
+///   *  ext4 requires >= Linux 3.15
+///   *  btrfs, shmem, and cif requires >= Linux 3.17
+///   *  xfs requires >= Linux 4.0
+///   *  ext2, minix, reiserfs, jfs, vfat, and bpf requires >= Linux 4.9
+/// * Darwin is supported but not fully tested.
+/// * Windows is not supported because we are not using native atomic file rename system call.
+/// Patches welcome.
+/// * Support for other platforms are not implemented at the moment.
 #[derive(Default, Debug)]
 pub struct FileStorageBackend {
     root: String,
