@@ -12,6 +12,8 @@ use uuid::Uuid;
 
 mod rename;
 
+/// NOTE: The file storage backend is not multi-writer safe in Windows due to lack of support for
+/// native atomic file rename system call.
 #[derive(Default, Debug)]
 pub struct FileStorageBackend {
     root: String,
@@ -74,7 +76,12 @@ impl StorageBackend for FileStorageBackend {
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
         let tmp_path = create_tmp_file_with_retry(self, path, obj_bytes).await?;
 
-        rename::rename(&tmp_path, path)
+        if let Err(e) = rename::atomic_rename(&tmp_path, path) {
+            fs::remove_file(tmp_path).await.unwrap_or(());
+            return Err(e);
+        }
+
+        Ok(())
     }
 }
 
@@ -118,6 +125,34 @@ async fn create_tmp_file_with_retry(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn put_obj() {
+        let tmp_dir = tempdir::TempDir::new("rename_test").unwrap();
+        let backend = FileStorageBackend::new(tmp_dir.path().to_str().unwrap());
+        let tmp_dir_path = tmp_dir.path();
+        let new_file_path = tmp_dir_path.join("new_file");
+
+        if let Err(e) = backend
+            .put_obj(new_file_path.to_str().unwrap(), b"hello")
+            .await
+        {
+            panic!(format!("Expect put_obj to return Ok, got Err: {:#?}", e));
+        }
+
+        // second try should result in already exists error
+        assert!(matches!(
+            backend.put_obj(new_file_path.to_str().unwrap(), b"hello").await,
+            Err(StorageError::AlreadyExists(s)) if s == new_file_path.to_str().unwrap(),
+        ));
+
+        // make sure rename failure doesn't leave any dangling temp file
+        let paths = std::fs::read_dir(tmp_dir_path)
+            .unwrap()
+            .map(|entry| entry.unwrap().path())
+            .collect::<Vec<_>>();
+        assert_eq!(paths, [new_file_path]);
+    }
 
     #[test]
     fn join_multiple_paths() {
