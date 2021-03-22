@@ -4,6 +4,7 @@ extern crate arrow;
 extern crate pyo3;
 
 use arrow::datatypes::Schema as ArrowSchema;
+use deltalake::partitions::PartitionFilter;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -28,6 +29,12 @@ impl PyDeltaTableError {
 #[inline]
 fn rt() -> PyResult<tokio::runtime::Runtime> {
     tokio::runtime::Runtime::new().map_err(PyDeltaTableError::from_tokio)
+}
+
+#[derive(FromPyObject)]
+enum PartitionFilterValue<'a> {
+    Single(&'a str),
+    Multiple(Vec<&'a str>),
 }
 
 #[pyclass]
@@ -63,8 +70,36 @@ impl RawDeltaTable {
             .map_err(PyDeltaTableError::from_raw)
     }
 
-    pub fn files(&self) -> PyResult<Vec<String>> {
-        Ok(self._table.get_files().to_vec())
+    pub fn files(
+        &self,
+        partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+    ) -> PyResult<Vec<String>> {
+        match partitions_filters {
+            Some(value) => {
+                let partition_filters: Result<
+                    Vec<PartitionFilter<&str>>,
+                    deltalake::DeltaTableError,
+                > = value
+                    .into_iter()
+                    .map(|filter| match filter {
+                        (key, op, PartitionFilterValue::Single(v)) => {
+                            PartitionFilter::try_from((key, op, v))
+                        }
+                        (key, op, PartitionFilterValue::Multiple(v)) => {
+                            PartitionFilter::try_from((key, op, v))
+                        }
+                    })
+                    .collect();
+                match partition_filters {
+                    Ok(filters) => Ok(self
+                        ._table
+                        .get_files_by_partitions(filters)
+                        .map_err(PyDeltaTableError::from_raw)?),
+                    Err(err) => Err(PyDeltaTableError::from_raw(err)),
+                }
+            }
+            _ => Ok(self._table.get_files().to_vec()),
+        }
     }
 
     pub fn file_paths(&self) -> PyResult<Vec<String>> {
