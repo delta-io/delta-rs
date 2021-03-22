@@ -40,7 +40,9 @@ impl FileStorageBackend {
 
 #[async_trait::async_trait]
 impl StorageBackend for FileStorageBackend {
-    fn get_separator(&self) -> char { std::path::MAIN_SEPARATOR }
+    fn get_separator(&self) -> char {
+        std::path::MAIN_SEPARATOR
+    }
 
     fn join_path(&self, path: &str, path_to_join: &str) -> String {
         let new_path = Path::new(path);

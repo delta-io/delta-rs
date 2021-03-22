@@ -29,11 +29,9 @@ impl<'a, T: std::fmt::Debug> TryFrom<(&'a str, &str, T)> for PartitionFilter<'a,
                 partition_key: key,
                 partition_value: PartitionValue::NotEqual(value),
             }),
-            (_, _, _) => {
-                return Err(DeltaTableError::InvalidPartitionFilter {
-                    partition_filter: format!("{:?}", filter),
-                })
-            }
+            (_, _, _) => Err(DeltaTableError::InvalidPartitionFilter {
+                partition_filter: format!("{:?}", filter),
+            }),
         }
     }
 }
@@ -51,11 +49,9 @@ impl<'a, T: std::fmt::Debug> TryFrom<(&'a str, &str, Vec<T>)> for PartitionFilte
                 partition_key: key,
                 partition_value: PartitionValue::NotIn(value),
             }),
-            (_, _, _) => {
-                return Err(DeltaTableError::InvalidPartitionFilter {
-                    partition_filter: format!("{:?}", filter),
-                })
-            }
+            (_, _, _) => Err(DeltaTableError::InvalidPartitionFilter {
+                partition_filter: format!("{:?}", filter),
+            }),
         }
     }
 }
@@ -80,7 +76,7 @@ impl<'a> DeltaTablePartition<'a> {
         }
     }
 
-    pub fn filters_accept_partition(&self, filters: &Vec<PartitionFilter<&'a str>>) -> bool {
+    pub fn filters_accept_partition(&self, filters: &[PartitionFilter<&'a str>]) -> bool {
         filters
             .iter()
             .all(|filter| self.filter_accept_partition(filter))
@@ -91,7 +87,7 @@ impl<'a> TryFrom<&'a str> for DeltaTablePartition<'a> {
     type Error = DeltaTableError;
 
     fn try_from(partition: &'a str) -> Result<Self, DeltaTableError> {
-        match partition.find("=") {
+        match partition.find('=') {
             Some(position) => Ok(DeltaTablePartition {
                 key: &partition[0..position],
                 value: &partition[position + 1..],
