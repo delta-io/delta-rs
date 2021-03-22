@@ -573,13 +573,14 @@ impl DeltaTable {
         &self,
         filters: Vec<PartitionFilter<&str>>,
     ) -> Result<Vec<String>, DeltaTableError> {
-        let partitions_number = match &self.current_metadata {
+        let partitions_number = match &self.state.current_metadata {
             Some(metadata) if !metadata.partition_columns.is_empty() => {
                 metadata.partition_columns.len()
             }
             _ => return Err(DeltaTableError::LoadPartitions),
         };
         let files = self
+            .state
             .files
             .iter()
             .filter(|f| {
