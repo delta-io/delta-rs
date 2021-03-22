@@ -17,7 +17,51 @@ def test_read_simple_table_by_version_to_dict():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
 
-class ExcPassThroughThread(Thread):
+def test_get_files_partitioned_table():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    partition_filters = [("day", "=", "3")]
+    assert dt.files_by_partitions(partition_filters=partition_filters) == [
+        "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet"
+    ]
+    partition_filters = [("day", "!=", "3")]
+    assert dt.files_by_partitions(partition_filters=partition_filters) == [
+        "year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet",
+        "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet",
+        "year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet",
+        "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
+        "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
+    ]
+    partition_filters = [("day", "in", ["3", "20"])]
+    assert dt.files_by_partitions(partition_filters=partition_filters) == [
+        "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet",
+        "year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet",
+    ]
+    partition_filters = [("day", "not in", ["3", "20"])]
+    assert dt.files_by_partitions(partition_filters=partition_filters) == [
+        "year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet",
+        "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet",
+        "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
+        "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
+    ]
+    partition_filters = [("day", "not in", ["3", "20"]), ("year", "=", "2021")]
+    assert dt.files_by_partitions(partition_filters=partition_filters) == [
+        "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
+        "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
+    ]
+    partition_filters = [("invalid_operation", "=>", "3")]
+    with pytest.raises(Exception):
+        assert dt.files_by_partitions(partition_filters=partition_filters)
+    partition_filters = [("invalid_operation", "=", ["3", "20"])]
+    with pytest.raises(Exception):
+        assert dt.files_by_partitions(partition_filters=partition_filters)
+    partition_filters = [("day", "=", 3)]
+    with pytest.raises(Exception):
+        assert dt.files_by_partitions(partition_filters=partition_filters)
+    # TODO: partition_filters = [("unknown_column", "=", "3")], not accepting unknown partition key
+
+
+class TestableThread(Thread):
     """Wrapper around `threading.Thread` that propagates exceptions."""
 
     def __init__(self, target, *args):
@@ -54,7 +98,7 @@ class ExcPassThroughThread(Thread):
         thread before it has been started and attempts to do so raises the same
         exception.
         """
-        super(ExcPassThroughThread, self).join(timeout)
+        super(TestableThread, self).join(timeout)
         if self.exc:
             raise self.exc
 
@@ -93,7 +137,7 @@ def test_read_multiple_tables_from_s3_multi_threaded(s3cred):
             "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
         ]
 
-    threads = [ExcPassThroughThread(target=read_table) for _ in range(thread_count)]
+    threads = [TestableThread(target=read_table) for _ in range(thread_count)]
     for t in threads:
         t.start()
     for t in threads:
