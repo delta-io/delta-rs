@@ -243,6 +243,8 @@ pub struct ObjectMeta {
 
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + Debug {
+    fn get_separator(&self) -> char { '/' }
+
     /// Create a new path by appending `path_to_join` as a new component to `path`.
     fn join_path(&self, path: &str, path_to_join: &str) -> String {
         let normalized_path = path.trim_end_matches('/');
