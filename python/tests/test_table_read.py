@@ -61,7 +61,7 @@ def test_get_files_partitioned_table():
     # TODO: partition_filters = [("unknown_column", "=", "3")], not accepting unknown partition key
 
 
-class TestableThread(Thread):
+class ExcPassThroughThread(Thread):
     """Wrapper around `threading.Thread` that propagates exceptions."""
 
     def __init__(self, target, *args):
@@ -98,7 +98,7 @@ class TestableThread(Thread):
         thread before it has been started and attempts to do so raises the same
         exception.
         """
-        super(TestableThread, self).join(timeout)
+        super(ExcPassThroughThread, self).join(timeout)
         if self.exc:
             raise self.exc
 
@@ -137,7 +137,7 @@ def test_read_multiple_tables_from_s3_multi_threaded(s3cred):
             "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
         ]
 
-    threads = [TestableThread(target=read_table) for _ in range(thread_count)]
+    threads = [ExcPassThroughThread(target=read_table) for _ in range(thread_count)]
     for t in threads:
         t.start()
     for t in threads:

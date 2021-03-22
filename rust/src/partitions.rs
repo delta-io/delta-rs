@@ -2,14 +2,65 @@ use std::convert::TryFrom;
 
 use crate::DeltaTableError;
 
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum PartitionValue<T> {
     Equal(T),
     NotEqual(T),
     In(Vec<T>),
     NotIn(Vec<T>),
 }
-#[derive(Clone, Debug, PartialEq)]
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartitionFilter<'a, T> {
+    pub partition_key: &'a str,
+    pub partition_value: PartitionValue<T>,
+}
+
+impl<'a, T: std::fmt::Debug> TryFrom<(&'a str, &str, T)> for PartitionFilter<'a, T> {
+    type Error = DeltaTableError;
+
+    fn try_from(filter: (&'a str, &str, T)) -> Result<Self, DeltaTableError> {
+        match filter {
+            (key, "=", value) if !key.is_empty() => Ok(PartitionFilter {
+                partition_key: key,
+                partition_value: PartitionValue::Equal(value),
+            }),
+            (key, "!=", value) if !key.is_empty() => Ok(PartitionFilter {
+                partition_key: key,
+                partition_value: PartitionValue::NotEqual(value),
+            }),
+            (_, _, _) => {
+                return Err(DeltaTableError::InvalidPartitionFilter {
+                    partition_filter: format!("{:?}", filter),
+                })
+            }
+        }
+    }
+}
+
+impl<'a, T: std::fmt::Debug> TryFrom<(&'a str, &str, Vec<T>)> for PartitionFilter<'a, T> {
+    type Error = DeltaTableError;
+
+    fn try_from(filter: (&'a str, &str, Vec<T>)) -> Result<Self, DeltaTableError> {
+        match filter {
+            (key, "in", value) if !key.is_empty() => Ok(PartitionFilter {
+                partition_key: key,
+                partition_value: PartitionValue::In(value),
+            }),
+            (key, "not in", value) if !key.is_empty() => Ok(PartitionFilter {
+                partition_key: key,
+                partition_value: PartitionValue::NotIn(value),
+            }),
+            (_, _, _) => {
+                return Err(DeltaTableError::InvalidPartitionFilter {
+                    partition_filter: format!("{:?}", filter),
+                })
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DeltaTablePartition<'a> {
     pub key: &'a str,
     pub value: &'a str,
@@ -50,32 +101,4 @@ impl<'a> TryFrom<&'a str> for DeltaTablePartition<'a> {
             }),
         }
     }
-}
-
-impl<'a, T> TryFrom<(&'a str, &str, T)> for PartitionFilter<'a, T> {
-    type Error = DeltaTableError;
-
-    fn try_from(filter: (&'a str, &str, T)) -> Result<Self, DeltaTableError> {
-        match filter {
-            (key, "=", value) => Ok(PartitionFilter {
-                partition_key: key,
-                partition_value: PartitionValue::Equal(value),
-            }),
-            (key, "!=", value) => Ok(PartitionFilter {
-                partition_key: key,
-                partition_value: PartitionValue::NotEqual(value),
-            }),
-            (_, op, _) => {
-                return Err(DeltaTableError::InvalidOperationFilter {
-                    operation_filter: op.to_string(),
-                })
-            }
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Eq)]
-pub struct PartitionFilter<'a, T> {
-    pub partition_key: &'a str,
-    pub partition_value: PartitionValue<T>,
 }

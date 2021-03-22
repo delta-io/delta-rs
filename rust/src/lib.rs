@@ -14,7 +14,7 @@ extern crate thiserror;
 pub mod action;
 mod delta;
 mod delta_arrow;
-mod partitions;
+pub mod partitions;
 mod schema;
 mod storage;
 

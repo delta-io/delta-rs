@@ -106,8 +106,8 @@ pub enum DeltaTableError {
     LoadPartitions,
     #[error("This partition is not formatted with key=value: {}", .partition)]
     PartitionError { partition: String },
-    #[error("Invalid operation filter found for the partition filter: {}.", .operation_filter)]
-    InvalidOperationFilter { operation_filter: String },
+    #[error("Invalid partition filter found: {}.", .partition_filter)]
+    InvalidPartitionFilter { partition_filter: String },
 }
 
 #[derive(Clone)]
@@ -569,7 +569,7 @@ impl DeltaTable {
         }
     }
 
-    pub fn get_files_by_partition(
+    pub fn get_files_by_partitions(
         &self,
         filters: Vec<PartitionFilter<&str>>,
     ) -> Result<Vec<String>, DeltaTableError> {
