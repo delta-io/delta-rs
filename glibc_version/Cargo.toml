@@ -1,0 +1,8 @@
+[package]
+name = "glibc_version"
+version = "0.1.0"
+authors = ["Qingping Hou <qph@scribd.com>"]
+edition = "2018"
+
+[dependencies]
+regex = "1"
