@@ -70,36 +70,33 @@ impl RawDeltaTable {
             .map_err(PyDeltaTableError::from_raw)
     }
 
-    pub fn files(
+    pub fn files_by_partitions(
         &self,
-        partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+        partitions_filters: Vec<(&str, &str, PartitionFilterValue)>,
     ) -> PyResult<Vec<String>> {
-        match partitions_filters {
-            Some(value) => {
-                let partition_filters: Result<
-                    Vec<PartitionFilter<&str>>,
-                    deltalake::DeltaTableError,
-                > = value
-                    .into_iter()
-                    .map(|filter| match filter {
-                        (key, op, PartitionFilterValue::Single(v)) => {
-                            PartitionFilter::try_from((key, op, v))
-                        }
-                        (key, op, PartitionFilterValue::Multiple(v)) => {
-                            PartitionFilter::try_from((key, op, v))
-                        }
-                    })
-                    .collect();
-                match partition_filters {
-                    Ok(filters) => Ok(self
-                        ._table
-                        .get_files_by_partitions(filters)
-                        .map_err(PyDeltaTableError::from_raw)?),
-                    Err(err) => Err(PyDeltaTableError::from_raw(err)),
-                }
-            }
-            _ => Ok(self._table.get_files().to_vec()),
+        let partition_filters: Result<Vec<PartitionFilter<&str>>, deltalake::DeltaTableError> =
+            partitions_filters
+                .into_iter()
+                .map(|filter| match filter {
+                    (key, op, PartitionFilterValue::Single(v)) => {
+                        PartitionFilter::try_from((key, op, v))
+                    }
+                    (key, op, PartitionFilterValue::Multiple(v)) => {
+                        PartitionFilter::try_from((key, op, v))
+                    }
+                })
+                .collect();
+        match partition_filters {
+            Ok(filters) => Ok(self
+                ._table
+                .get_files_by_partitions(&filters)
+                .map_err(PyDeltaTableError::from_raw)?),
+            Err(err) => Err(PyDeltaTableError::from_raw(err)),
         }
+    }
+
+    pub fn files(&self) -> PyResult<Vec<String>> {
+        Ok(self._table.get_files().to_vec())
     }
 
     pub fn file_paths(&self) -> PyResult<Vec<String>> {
