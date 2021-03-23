@@ -13,6 +13,14 @@ fn test_create_delta_table_partition() {
             value: year
         }
     );
+
+    let _wrong_path = "year=2021/month=";
+    assert!(matches!(
+        deltalake::DeltaTablePartition::try_from(_wrong_path).unwrap_err(),
+        deltalake::DeltaTableError::PartitionError {
+            partition: _wrong_path
+        },
+    ))
 }
 
 #[test]
