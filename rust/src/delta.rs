@@ -571,23 +571,28 @@ impl DeltaTable {
 
     pub fn get_files_by_partitions(
         &self,
-        filters: Vec<PartitionFilter<&str>>,
+        filters: &[PartitionFilter<&str>],
     ) -> Result<Vec<String>, DeltaTableError> {
-        let partitions_number = match &self.state.current_metadata {
-            Some(metadata) if !metadata.partition_columns.is_empty() => {
-                metadata.partition_columns.len()
-            }
+        let partitions_number = match &self
+            .state
+            .current_metadata
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .partition_columns
+        {
+            partitions if !partitions.is_empty() => partitions.len(),
             _ => return Err(DeltaTableError::LoadPartitions),
         };
+        let separator = "/";
         let files = self
             .state
             .files
             .iter()
             .filter(|f| {
-                f.splitn(partitions_number + 1, self.storage.get_separator())
+                f.splitn(partitions_number + 1, separator)
                     .map(|p: &str| DeltaTablePartition::try_from(p).ok())
                     .all(|p| match p {
-                        Some(p) => p.filters_accept_partition(&filters),
+                        Some(p) => p.match_filters(&filters),
                         _ => true,
                     })
             })

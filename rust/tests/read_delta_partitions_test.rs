@@ -16,7 +16,7 @@ fn test_create_delta_table_partition() {
 }
 
 #[test]
-fn test_filter_accept_partition() {
+fn test_match_filter() {
     let partition_2021 = deltalake::DeltaTablePartition {
         key: "year",
         value: "2021",
@@ -29,74 +29,63 @@ fn test_filter_accept_partition() {
         key: "year",
         value: "2019",
     };
-    let year_key = "year";
-    let month_key = "month";
-    let year_2020 = "2020";
-    let month_12 = "12";
 
     let partition_year_2020_filter = deltalake::PartitionFilter {
-        partition_key: year_key,
-        partition_value: deltalake::PartitionValue::Equal(year_2020),
+        key: "year",
+        value: deltalake::PartitionValue::Equal("2020"),
     };
     let partition_month_12_filter = deltalake::PartitionFilter {
-        partition_key: month_key,
-        partition_value: deltalake::PartitionValue::Equal(month_12),
+        key: "month",
+        value: deltalake::PartitionValue::Equal("12"),
     };
 
     assert_eq!(
-        partition_2021.filter_accept_partition(&partition_year_2020_filter),
+        partition_2021.match_filter(&partition_year_2020_filter),
         false
     );
     assert_eq!(
-        partition_2020.filter_accept_partition(&partition_year_2020_filter),
+        partition_2020.match_filter(&partition_year_2020_filter),
         true
     );
     assert_eq!(
-        partition_2019.filter_accept_partition(&partition_year_2020_filter),
+        partition_2019.match_filter(&partition_year_2020_filter),
         false
     );
     assert_eq!(
-        partition_2019.filter_accept_partition(&partition_month_12_filter),
+        partition_2019.match_filter(&partition_month_12_filter),
         true
     );
 }
 
 #[test]
-fn test_filters_accept_partition() {
+fn test_match_filters() {
     let partition_2021 = deltalake::DeltaTablePartition {
         key: "year",
         value: "2021",
     };
 
-    let year_key = "year";
-    let month_key = "month";
-    let month_12 = "12";
-    let year_2021 = "2021";
-    let year_2022 = "2022";
+    let valid_filters = vec![
+        deltalake::PartitionFilter {
+            key: "year",
+            value: deltalake::PartitionValue::Equal("2021"),
+        },
+        deltalake::PartitionFilter {
+            key: "month",
+            value: deltalake::PartitionValue::Equal("12"),
+        },
+    ];
 
-    let partition_year_2021_filter = deltalake::PartitionFilter {
-        partition_key: year_key,
-        partition_value: deltalake::PartitionValue::Equal(year_2021),
-    };
-    let partition_month_12_filter = deltalake::PartitionFilter {
-        partition_key: month_key,
-        partition_value: deltalake::PartitionValue::Equal(month_12),
-    };
-    let partition_year_22_filter = deltalake::PartitionFilter {
-        partition_key: year_key,
-        partition_value: deltalake::PartitionValue::Equal(year_2022),
-    };
+    let invalid_filters = vec![
+        deltalake::PartitionFilter {
+            key: "year",
+            value: deltalake::PartitionValue::Equal("2020"),
+        },
+        deltalake::PartitionFilter {
+            key: "month",
+            value: deltalake::PartitionValue::Equal("12"),
+        },
+    ];
 
-    assert_eq!(
-        partition_2021.filter_accept_partition(&partition_year_2021_filter),
-        true
-    );
-    assert_eq!(
-        partition_2021.filter_accept_partition(&partition_month_12_filter),
-        true
-    );
-    assert_eq!(
-        partition_2021.filter_accept_partition(&partition_year_22_filter),
-        false
-    );
+    assert_eq!(partition_2021.match_filters(&valid_filters), true);
+    assert_eq!(partition_2021.match_filters(&invalid_filters), false);
 }
