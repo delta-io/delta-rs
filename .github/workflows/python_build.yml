@@ -11,45 +11,18 @@ defaults:
     working-directory: ./python
 
 jobs:
-  build:
+  lint:
     runs-on: ubuntu-latest
-
     steps:
     - uses: actions/checkout@v2
-    # the whole target dir is over 400MB cache limit, so we have to split up
-    # the cache step to avoid caching deps dir
-    - name: Cache Rust build
-      uses: actions/cache@v1.0.1
-      with:
-        path: target/debug/build
-        key: python-${{ runner.OS }}-target-build-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          python-${{ runner.OS }}-target-build-
-    - name: Cache Rust incremental build
-      uses: actions/cache@v1.0.1
-      with:
-        path: target/debug/incremental
-        key: python-${{ runner.OS }}-target-incremental-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          python-${{ runner.OS }}-target-incremental-
-
-    - name: Format Python code with Black
+    - name: Setup Python
       uses: actions/setup-python@v2
       with:
         python-version: 3.6
-
-    - uses: psf/black@stable
+    - name: Format Python code with Black
+      uses: psf/black@stable
       with:
-        black_args: ". --check"
-
-    - name: Setup virtualenv
-      run: |
-        pip install virtualenv
-        virtualenv venv
-
-    - name: 'Install Python devel headers'
-      run: sudo apt install -y python3-dev
-
+        args: ". --check"
     - name: Install minimal stable with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
@@ -58,18 +31,37 @@ jobs:
         override: true
     - name: Check
       run: cargo clippy
-    - name: Build
-      run: cargo build
-    # - name: Run Rust tests
-    #   run: cargo test
+    - name: Format
+      run: cargo fmt -- --check
+
+  test:
+    runs-on: ubuntu-latest
+    # use the same environment we have for python release
+    container: quay.io/pypa/manylinux2010_x86_64:2020-12-31-4928808
+    steps:
+    # actions/checkout@v2 is a node action, which runs on a fairly new
+    # version of node. however, manylinux environment's glibc is too old for
+    # that version of the node. so we will have to use v1 instead, which is a
+    # docker based action.
+    - uses: actions/checkout@v1
+
+    # actions-rs/toolchain@v1 is a node action, which runs on a fairly new
+    # version of node. however, manylinux environment's glibc is too old for
+    # that version of the node. so we will have to install rust manually here.
+    - name: Install Rust
+      run: |
+        curl https://sh.rustup.rs -sSf | sh -s -- -y
+        $HOME/.cargo/bin/rustup default stable
+        echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+
+    - name: Enable manylinux Python targets
+      run: echo "/opt/python/cp36-cp36m/bin" >> $GITHUB_PATH
 
     - name: Install matruin
-      run: |
-        pip install maturin==0.9.0
+      run: pip install maturin==0.9.0
 
     - name: Run Python tests
       run: |
-        source venv/bin/activate
         # disable manylinux audit checks for test builds
         maturin build --manylinux off
         ls -lh ../target/wheels
