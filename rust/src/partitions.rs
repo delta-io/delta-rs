@@ -85,10 +85,11 @@ impl<'a> TryFrom<&'a str> for DeltaTablePartition<'a> {
     type Error = DeltaTableError;
 
     fn try_from(partition: &'a str) -> Result<Self, DeltaTableError> {
-        match partition.find('=') {
-            Some(position) => Ok(DeltaTablePartition {
-                key: &partition[0..position],
-                value: &partition[position + 1..],
+        let partition_splitted: Vec<&str> = partition.split('=').collect();
+        match partition_splitted {
+            partition_splitted if partition_splitted.len() == 2 => Ok(DeltaTablePartition {
+                key: &partition_splitted[0],
+                value: &partition_splitted[1],
             }),
             _ => Err(DeltaTableError::PartitionError {
                 partition: partition.to_string(),
