@@ -37,7 +37,7 @@ class DeltaTable:
         ("y", "in", ["a", "b", "c"])
         ("z", "not in", ["a","b"])
         """
-        return self._table.files(partition_filters)
+        return self._table.files_by_partitions(partition_filters)
 
     def file_paths(self) -> List[str]:
         return self._table.file_paths()
