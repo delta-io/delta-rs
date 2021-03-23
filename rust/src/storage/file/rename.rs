@@ -25,11 +25,9 @@ mod imp {
     }
 
     pub fn atomic_rename(from: &str, to: &str) -> Result<(), StorageError> {
-        let ret = unsafe {
-            let from = to_c_string(from)?;
-            let to = to_c_string(to)?;
-            platform_specific_rename(from.as_ptr(), to.as_ptr())
-        };
+        let cs_from = to_c_string(from)?;
+        let cs_to = to_c_string(to)?;
+        let ret = unsafe { platform_specific_rename(cs_from.as_ptr(), cs_to.as_ptr()) };
 
         if ret != 0 {
             let e = errno::errno();
