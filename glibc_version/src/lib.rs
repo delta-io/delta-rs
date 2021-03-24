@@ -1,3 +1,16 @@
+//! Crate to help rust projects discover GNU libc version at build time. Expected to be used in
+//! `build.rs`. Note that this crate is only expected to work under `cfg(target_env = "gnu")`, so
+//! please guard the usage under relevant configuration predicates.
+//!
+//! # Example
+//!
+//! ```
+//! let ver = glibc_version::get_version().unwrap();
+//! if ver.major >= 2 && ver.minor >= 28 {
+//!    println!("cargo:rustc-cfg=glibc_renameat2");
+//! }
+//! ```
+
 pub struct Version {
     pub major: usize,
     pub minor: usize,
