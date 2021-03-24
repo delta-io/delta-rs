@@ -27,7 +27,7 @@ class DeltaTable:
         The list of inner predicates is interpreted as a conjunction (AND), forming a more selective and multiple
         partition predicates.
         Each tuple has format: (key, op, value) and compares the key with the value.
-        The supported op are: =, !=, in and not in.
+        The supported op are: `=`, `!=`, `in`, and `not in`.
         If the op is in or not in, the value must be a collection such as a list, a set or a tuple.
         The supported type for value is str.
 
@@ -37,7 +37,12 @@ class DeltaTable:
         ("y", "in", ["a", "b", "c"])
         ("z", "not in", ["a","b"])
         """
-        return self._table.files_by_partitions(partition_filters)
+        try:
+            return self._table.files_by_partitions(partition_filters)
+        except TypeError:
+            raise ValueError(
+                "Only the type String is currently allowed inside the partition filters."
+            )
 
     def file_paths(self) -> List[str]:
         return self._table.file_paths()

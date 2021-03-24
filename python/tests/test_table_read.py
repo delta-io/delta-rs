@@ -50,14 +50,28 @@ def test_get_files_partitioned_table():
         "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
     ]
     partition_filters = [("invalid_operation", "=>", "3")]
-    with pytest.raises(Exception):
-        assert dt.files_by_partitions(partition_filters=partition_filters)
+    with pytest.raises(Exception) as exception:
+        dt.files_by_partitions(partition_filters=partition_filters)
+    assert (
+        str(exception.value)
+        == 'Invalid partition filter found: ("invalid_operation", "=>", "3").'
+    )
+
     partition_filters = [("invalid_operation", "=", ["3", "20"])]
-    with pytest.raises(Exception):
-        assert dt.files_by_partitions(partition_filters=partition_filters)
+    with pytest.raises(Exception) as exception:
+        dt.files_by_partitions(partition_filters=partition_filters)
+    assert (
+        str(exception.value)
+        == 'Invalid partition filter found: ("invalid_operation", "=", ["3", "20"]).'
+    )
+
     partition_filters = [("day", "=", 3)]
-    with pytest.raises(Exception):
-        assert dt.files_by_partitions(partition_filters=partition_filters)
+    with pytest.raises(Exception) as exception:
+        dt.files_by_partitions(partition_filters=partition_filters)
+    assert (
+        str(exception.value)
+        == "Only the type String is currently allowed inside the partition filters."
+    )
     # TODO: partition_filters = [("unknown_column", "=", "3")], not accepting unknown partition key
 
 
