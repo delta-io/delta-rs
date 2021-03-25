@@ -58,7 +58,7 @@ pub enum Uri<'a> {
     #[cfg(feature = "s3")]
     S3Object(s3::S3Object<'a>),
     #[cfg(feature = "azure")]
-    ADLSGen2Object(azure::ADLSGen2Object<'a>),
+    AdlsGen2Object(azure::AdlsGen2Object<'a>),
 }
 
 impl<'a> Uri<'a> {
@@ -67,15 +67,15 @@ impl<'a> Uri<'a> {
         match self {
             Uri::S3Object(x) => Ok(x),
             #[cfg(feature = "azure")]
-            Uri::ADLSGen2Object(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
+            Uri::AdlsGen2Object(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
             Uri::LocalPath(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
         }
     }
 
     #[cfg(feature = "azure")]
-    pub fn into_adlsgen2_object(self) -> Result<azure::ADLSGen2Object<'a>, UriError> {
+    pub fn into_adlsgen2_object(self) -> Result<azure::AdlsGen2Object<'a>, UriError> {
         match self {
-            Uri::ADLSGen2Object(x) => Ok(x),
+            Uri::AdlsGen2Object(x) => Ok(x),
             #[cfg(feature = "s3")]
             Uri::S3Object(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
             Uri::LocalPath(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
@@ -88,7 +88,7 @@ impl<'a> Uri<'a> {
             #[cfg(feature = "s3")]
             Uri::S3Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
             #[cfg(feature = "azure")]
-            Uri::ADLSGen2Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
+            Uri::AdlsGen2Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
         }
     }
 }
@@ -136,7 +136,7 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
                     let mut paths = parts.next().map(|x| x.splitn(2, '/')).ok_or(UriError::MissingObjectPath)?;
                     // assume root when uri ends without `/`
                     let path = paths.nth(1).unwrap_or("");
-                    Ok(Uri::ADLSGen2Object(azure::ADLSGen2Object { account_name, file_system, path }))
+                    Ok(Uri::AdlsGen2Object(azure::AdlsGen2Object { account_name, file_system, path }))
                 } else {
                     Err(UriError::InvalidScheme(String::from(parts[0])))
                 }
@@ -283,7 +283,7 @@ pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, Storage
         #[cfg(feature = "s3")]
         Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new())),
         #[cfg(feature = "azure")]
-        Uri::ADLSGen2Object(obj) => Ok(Box::new(azure::ADLSGen2Backend::new(obj.file_system)?)),
+        Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
     }
 }
 
@@ -319,7 +319,7 @@ mod tests {
         let uri = parse_uri("abfss://fs@sa.dfs.core.windows.net/foo").unwrap();
         assert_eq!(
             uri.into_adlsgen2_object().unwrap(),
-            azure::ADLSGen2Object {
+            azure::AdlsGen2Object {
                 account_name: "sa",
                 file_system: "fs",
                 path: "foo",

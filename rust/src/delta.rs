@@ -105,7 +105,7 @@ pub enum DeltaTableError {
 #[derive(Clone)]
 pub struct DeltaTableMetaData {
     // Unique identifier for this table
-    pub id: GUID,
+    pub id: Guid,
     // User-provided identifier for this table
     pub name: Option<String>,
     // User-provided description for this table

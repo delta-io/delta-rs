@@ -19,7 +19,7 @@ use super::{parse_uri, ObjectMeta, StorageBackend, StorageError, UriError};
 
 /// An object on an Azure Data Lake Storage Gen2 account.
 #[derive(Debug, PartialEq)]
-pub struct ADLSGen2Object<'a> {
+pub struct AdlsGen2Object<'a> {
     /// The storage account name.
     pub account_name: &'a str,
     /// The container, or filesystem, of the object.
@@ -28,7 +28,7 @@ pub struct ADLSGen2Object<'a> {
     pub path: &'a str,
 }
 
-impl<'a> fmt::Display for ADLSGen2Object<'a> {
+impl<'a> fmt::Display for AdlsGen2Object<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         // This URI syntax is documented at
         // https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri
@@ -44,13 +44,13 @@ impl<'a> fmt::Display for ADLSGen2Object<'a> {
 ///
 /// This uses the `dfs.core.windows.net` endpoint.
 #[derive(Debug)]
-pub struct ADLSGen2Backend {
+pub struct AdlsGen2Backend {
     account: String,
     container_client: Arc<ContainerClient>,
 }
 
-impl ADLSGen2Backend {
-    /// Create a new [`ADLSGen2Backend`].
+impl AdlsGen2Backend {
+    /// Create a new [`AdlsGen2Backend`].
     ///
     /// This currently requires the `AZURE_STORAGE_ACCOUNT` and one of the
     /// following environment variables to be set:
@@ -87,7 +87,7 @@ impl ADLSGen2Backend {
         })
     }
 
-    fn validate_container<'a>(&self, obj: &ADLSGen2Object<'a>) -> Result<(), StorageError> {
+    fn validate_container<'a>(&self, obj: &AdlsGen2Object<'a>) -> Result<(), StorageError> {
         if obj.file_system != self.container_client.container_name() {
             Err(StorageError::Uri {
                 source: UriError::ContainerMismatch {
@@ -111,7 +111,7 @@ fn to_storage_err(err: Box<dyn Error + Sync + std::marker::Send>) -> StorageErro
 }
 
 #[async_trait::async_trait]
-impl StorageBackend for ADLSGen2Backend {
+impl StorageBackend for AdlsGen2Backend {
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
         debug!("Getting properties for {}", path);
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
@@ -166,7 +166,7 @@ impl StorageBackend for ADLSGen2Backend {
             .map_ok(move |response| {
                 futures::stream::iter(response.incomplete_vector.vector.into_iter().map(
                     move |blob| {
-                        let object = ADLSGen2Object {
+                        let object = AdlsGen2Object {
                             account_name: &self.account,
                             file_system: &blob.container_name,
                             path: &blob.name,
