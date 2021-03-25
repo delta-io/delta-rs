@@ -596,10 +596,14 @@ impl DeltaTable {
         self.state.min_writer_version
     }
 
+    /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
+    /// no metadata was found in the log.
     pub fn schema(&self) -> Option<&Schema> {
         self.state.current_metadata.as_ref().map(|m| &m.schema)
     }
 
+    /// Return table schema parsed from transaction log. Return `DeltaTableError` if table hasn't
+    /// been loaded or no metadata was found in the log.
     pub fn get_schema(&self) -> Result<&Schema, DeltaTableError> {
         self.schema().ok_or(DeltaTableError::NoSchema)
     }
@@ -611,6 +615,10 @@ impl DeltaTable {
         DeltaTransaction::new(self, options)
     }
 
+    /// Create a new Delta Table struct without loading any data from backing storage.
+    ///
+    /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
+    /// call one of the `open_table` helper methods instead.
     pub fn new(
         table_path: &str,
         storage_backend: Box<dyn StorageBackend>,
@@ -627,6 +635,10 @@ impl DeltaTable {
         })
     }
 
+    /// Time travel Delta table to latest version that's created at or before provided `datetime`
+    /// argument.
+    ///
+    /// Internally, this methods performs a binary search on all Delta transaction logs.
     pub async fn load_with_datetime(
         &mut self,
         datetime: DateTime<Utc>,
