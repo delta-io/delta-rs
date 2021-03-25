@@ -241,6 +241,8 @@ pub struct ObjectMeta {
     pub modified: DateTime<Utc>,
 }
 
+/// Abstractions for underlying blob storages hosting the Delta table. To add support for new cloud
+/// or local storage systems, simply implement this trait.
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + Debug {
     /// Create a new path by appending `path_to_join` as a new component to `path`.
@@ -273,10 +275,14 @@ pub trait StorageBackend: Send + Sync + Debug {
 
     /// Create new object with `obj_bytes` as content.
     ///
-    /// For a multi-writer safe backend, put_obj needs to implement create if not exists semantic.
+    /// Implementation note:
+    ///
+    /// For a multi-writer safe Backend, `put_obj` needs to implement `create if not exists`
+    /// semantic.
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError>;
 }
 
+/// Dynamically construct a Storage backend trait object based on scheme for provided URI
 pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, StorageError> {
     match parse_uri(uri)? {
         Uri::LocalPath(root) => Ok(Box::new(file::FileStorageBackend::new(root))),
