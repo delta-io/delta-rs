@@ -119,8 +119,8 @@ mod tests {
                     }
                 }
             }
-            Err(e) => panic!(format!("expect std::io::Error, got: {:#}", e)),
-            Ok(()) => panic!("expect rename to fail with Err, but got Ok"),
+            Err(e) => panic!("expect std::io::Error, got: {:#}", e),
+            Ok(()) => panic!("{}", "expect rename to fail with Err, but got Ok"),
         }
 
         // successful move A to C
