@@ -24,7 +24,7 @@ fn test_create_delta_table_partition() {
 }
 
 #[test]
-fn test_match_filter() {
+fn test_match_partition() {
     let partition_2021 = deltalake::DeltaTablePartition {
         key: "year",
         value: "2021",
@@ -48,52 +48,52 @@ fn test_match_filter() {
     };
 
     assert_eq!(
-        partition_2021.match_filter(&partition_year_2020_filter),
+        partition_year_2020_filter.match_partition(&partition_2021),
         false
     );
     assert_eq!(
-        partition_2020.match_filter(&partition_year_2020_filter),
+        partition_year_2020_filter.match_partition(&partition_2020),
         true
     );
     assert_eq!(
-        partition_2019.match_filter(&partition_year_2020_filter),
+        partition_year_2020_filter.match_partition(&partition_2019),
         false
     );
     assert_eq!(
-        partition_2019.match_filter(&partition_month_12_filter),
-        true
+        partition_month_12_filter.match_partition(&partition_2019),
+        false
     );
 }
 
 #[test]
 fn test_match_filters() {
-    let partition_2021 = deltalake::DeltaTablePartition {
+    let partitions = vec![
+        deltalake::DeltaTablePartition {
+            key: "year",
+            value: "2021",
+        },
+        deltalake::DeltaTablePartition {
+            key: "month",
+            value: "12",
+        },
+    ];
+
+    let valid_filters = deltalake::PartitionFilter {
         key: "year",
-        value: "2021",
+        value: deltalake::PartitionValue::Equal("2021"),
     };
 
-    let valid_filters = vec![
-        deltalake::PartitionFilter {
-            key: "year",
-            value: deltalake::PartitionValue::Equal("2021"),
-        },
-        deltalake::PartitionFilter {
-            key: "month",
-            value: deltalake::PartitionValue::Equal("12"),
-        },
-    ];
+    let valid_filter_month = deltalake::PartitionFilter {
+        key: "month",
+        value: deltalake::PartitionValue::Equal("12"),
+    };
 
-    let invalid_filters = vec![
-        deltalake::PartitionFilter {
-            key: "year",
-            value: deltalake::PartitionValue::Equal("2020"),
-        },
-        deltalake::PartitionFilter {
-            key: "month",
-            value: deltalake::PartitionValue::Equal("12"),
-        },
-    ];
+    let invalid_filter = deltalake::PartitionFilter {
+        key: "year",
+        value: deltalake::PartitionValue::Equal("2020"),
+    };
 
-    assert_eq!(partition_2021.match_filters(&valid_filters), true);
-    assert_eq!(partition_2021.match_filters(&invalid_filters), false);
+    assert_eq!(valid_filters.match_partitions(&partitions), true);
+    assert_eq!(valid_filter_month.match_partitions(&partitions), true);
+    assert_eq!(invalid_filter.match_partitions(&partitions), false);
 }

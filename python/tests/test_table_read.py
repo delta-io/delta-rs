@@ -72,7 +72,9 @@ def test_get_files_partitioned_table():
         str(exception.value)
         == "Only the type String is currently allowed inside the partition filters."
     )
-    # TODO: partition_filters = [("unknown_column", "=", "3")], not accepting unknown partition key
+
+    partition_filters = [("unknown", "=", "3")]
+    assert dt.files_by_partitions(partition_filters=partition_filters) == []
 
 
 class ExcPassThroughThread(Thread):
