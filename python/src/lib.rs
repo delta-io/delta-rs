@@ -58,9 +58,9 @@ impl RawDeltaTable {
     }
 
     pub fn load_version(&mut self, version: deltalake::DeltaDataTypeVersion) -> PyResult<()> {
-        Ok(rt()?
+        rt()?
             .block_on(self._table.load_version(version))
-            .map_err(PyDeltaTableError::from_raw)?)
+            .map_err(PyDeltaTableError::from_raw)
     }
 
     pub fn files(&self) -> PyResult<Vec<String>> {
@@ -76,8 +76,8 @@ impl RawDeltaTable {
             ._table
             .get_schema()
             .map_err(PyDeltaTableError::from_raw)?;
-        Ok(serde_json::to_string(&schema)
-            .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))?)
+        serde_json::to_string(&schema)
+            .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))
     }
 
     pub fn arrow_schema_json(&self) -> PyResult<String> {
@@ -85,12 +85,12 @@ impl RawDeltaTable {
             ._table
             .get_schema()
             .map_err(PyDeltaTableError::from_raw)?;
-        Ok(serde_json::to_string(
+        serde_json::to_string(
             &<ArrowSchema as TryFrom<&deltalake::Schema>>::try_from(schema)
                 .map_err(PyDeltaTableError::from_arrow)?
                 .to_json(),
         )
-        .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))?)
+        .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))
     }
 }
 

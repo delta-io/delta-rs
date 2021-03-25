@@ -4,7 +4,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
-pub type GUID = String;
+pub type Guid = String;
 pub type DeltaDataTypeLong = i64;
 pub type DeltaDataTypeVersion = DeltaDataTypeLong;
 pub type DeltaDataTypeTimestamp = DeltaDataTypeLong;

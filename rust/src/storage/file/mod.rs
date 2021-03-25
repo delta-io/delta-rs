@@ -148,7 +148,7 @@ mod tests {
             .put_obj(new_file_path.to_str().unwrap(), b"hello")
             .await
         {
-            panic!(format!("Expect put_obj to return Ok, got Err: {:#?}", e));
+            panic!("Expect put_obj to return Ok, got Err: {:#?}", e)
         }
 
         // second try should result in already exists error
