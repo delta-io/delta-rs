@@ -16,6 +16,27 @@ pub struct PartitionFilter<'a, T> {
     pub value: PartitionValue<T>,
 }
 
+impl<'a> PartitionFilter<'a, &str> {
+    pub fn match_partition(&self, partition: &DeltaTablePartition<'a>) -> bool {
+        if self.key != partition.key {
+            return false;
+        }
+
+        match &self.value {
+            PartitionValue::Equal(value) => value == &partition.value,
+            PartitionValue::NotEqual(value) => value != &partition.value,
+            PartitionValue::In(value) => value.contains(&partition.value),
+            PartitionValue::NotIn(value) => !value.contains(&partition.value),
+        }
+    }
+
+    pub fn match_partitions(&self, partitions: &[DeltaTablePartition<'a>]) -> bool {
+        partitions
+            .iter()
+            .any(|partition| self.match_partition(&partition))
+    }
+}
+
 impl<'a, T: std::fmt::Debug> TryFrom<(&'a str, &str, T)> for PartitionFilter<'a, T> {
     type Error = DeltaTableError;
 
@@ -60,25 +81,6 @@ impl<'a, T: std::fmt::Debug> TryFrom<(&'a str, &str, Vec<T>)> for PartitionFilte
 pub struct DeltaTablePartition<'a> {
     pub key: &'a str,
     pub value: &'a str,
-}
-
-impl<'a> DeltaTablePartition<'a> {
-    pub fn match_filter(&self, filter: &PartitionFilter<&'a str>) -> bool {
-        if filter.key != self.key {
-            return true;
-        }
-
-        match &filter.value {
-            PartitionValue::Equal(value) => &self.value == value,
-            PartitionValue::NotEqual(value) => &self.value != value,
-            PartitionValue::In(value) => value.contains(&self.value),
-            PartitionValue::NotIn(value) => !value.contains(&self.value),
-        }
-    }
-
-    pub fn match_filters(&self, filters: &[PartitionFilter<&'a str>]) -> bool {
-        filters.iter().all(|filter| self.match_filter(filter))
-    }
 }
 
 impl<'a> TryFrom<&'a str> for DeltaTablePartition<'a> {

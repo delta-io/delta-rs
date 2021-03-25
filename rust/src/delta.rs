@@ -589,12 +589,13 @@ impl DeltaTable {
             .files
             .iter()
             .filter(|f| {
-                f.splitn(partitions_number + 1, separator)
-                    .map(|p: &str| DeltaTablePartition::try_from(p).ok())
-                    .all(|p| match p {
-                        Some(p) => p.match_filters(&filters),
-                        _ => true,
-                    })
+                let partitions = f
+                    .splitn(partitions_number + 1, separator)
+                    .filter_map(|p: &str| DeltaTablePartition::try_from(p).ok())
+                    .collect::<Vec<DeltaTablePartition>>();
+                filters
+                    .iter()
+                    .all(|filter| filter.match_partitions(&partitions))
             })
             .cloned()
             .collect();
