@@ -342,7 +342,7 @@ pub struct Format {
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MetaData {
     // Unique identifier for this table
-    pub id: GUID,
+    pub id: Guid,
     // User-provided identifier for this table
     pub name: Option<String>,
     // User-provided description for this table
