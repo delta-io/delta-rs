@@ -20,30 +20,14 @@ mod imp {
     use super::*;
     use std::ffi::CString;
 
-    #[cfg(target_os = "linux")]
-    const RENAME_NOREPLACE: libc::c_uint = 1;
-
-    #[cfg(target_os = "linux")]
-    extern "C" {
-        fn renameat2(
-            olddirfd: libc::c_int,
-            oldpath: *const libc::c_char,
-            newdirfd: libc::c_int,
-            newpath: *const libc::c_char,
-            flags: libc::c_uint,
-        ) -> libc::c_int;
-    }
-
     fn to_c_string(p: &str) -> Result<CString, StorageError> {
         CString::new(p).map_err(|e| StorageError::Generic(format!("{}", e)))
     }
 
     pub fn atomic_rename(from: &str, to: &str) -> Result<(), StorageError> {
-        let ret = unsafe {
-            let from = to_c_string(from)?;
-            let to = to_c_string(to)?;
-            platform_specific_rename(from.as_ptr(), to.as_ptr())
-        };
+        let cs_from = to_c_string(from)?;
+        let cs_to = to_c_string(to)?;
+        let ret = unsafe { platform_specific_rename(cs_from.as_ptr(), cs_to.as_ptr()) };
 
         if ret != 0 {
             let e = errno::errno();
@@ -60,10 +44,30 @@ mod imp {
         Ok(())
     }
 
+    #[allow(unused_variables)]
     unsafe fn platform_specific_rename(from: *const libc::c_char, to: *const libc::c_char) -> i32 {
         cfg_if::cfg_if! {
-            if #[cfg(target_os = "linux")] {
-                renameat2(libc::AT_FDCWD, from, libc::AT_FDCWD, to, RENAME_NOREPLACE)
+            if #[cfg(all(target_os = "linux", target_env = "gnu"))] {
+                cfg_if::cfg_if! {
+                    if #[cfg(glibc_renameat2)] {
+                        const RENAME_NOREPLACE: libc::c_uint = 1;
+
+                        extern "C" {
+                            fn renameat2(
+                                olddirfd: libc::c_int,
+                                oldpath: *const libc::c_char,
+                                newdirfd: libc::c_int,
+                                newpath: *const libc::c_char,
+                                flags: libc::c_uint,
+                            ) -> libc::c_int;
+                        }
+
+                        renameat2(libc::AT_FDCWD, from, libc::AT_FDCWD, to, RENAME_NOREPLACE)
+                    } else {
+                        // target has old glibc (< 2.28), we would need to invoke syscall manually
+                        unimplemented!()
+                    }
+                }
             } else if #[cfg(target_os = "macos")] {
                 libc::renamex_np(from, to, libc::RENAME_EXCL)
             } else {

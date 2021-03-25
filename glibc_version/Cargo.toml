@@ -1,0 +1,13 @@
+[package]
+name = "glibc_version"
+description = "Discover GNU libc version at build time"
+version = "0.1.2"
+authors = ["Qingping Hou <qph@scribd.com>"]
+edition = "2018"
+readme = "README.md"
+license = "Apache-2.0"
+documentation = "https://docs.rs/glibc_version/"
+homepage = "https://github.com/delta-io/delta.rs"
+
+[dependencies]
+regex = "1"
