@@ -193,7 +193,9 @@ struct DeltaTableState {
 }
 
 pub struct DeltaTable {
+    /// The version of the table as of the most recent loaded Delta log entry.
     pub version: DeltaDataTypeVersion,
+    /// The path the DeltaTable was loaded from.
     pub table_path: String,
 
     state: DeltaTableState,
@@ -451,6 +453,7 @@ impl DeltaTable {
         Ok(())
     }
 
+    /// Updates the DeltaTable to the most recent state committed to the transaction log.
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
@@ -502,6 +505,7 @@ impl DeltaTable {
         Ok(())
     }
 
+    /// Loads the DeltaTable state for the given version.
     pub async fn load_version(
         &mut self,
         version: DeltaDataTypeVersion,
@@ -561,10 +565,12 @@ impl DeltaTable {
         }
     }
 
+    /// Returns a reference to the file list present in the loaded state.
     pub fn get_files(&self) -> &Vec<String> {
         &self.state.files
     }
 
+    /// Returns a copy of the file paths present in the loaded state.
     pub fn get_file_paths(&self) -> Vec<String> {
         self.state
             .files
@@ -573,6 +579,7 @@ impl DeltaTable {
             .collect()
     }
 
+    /// Returns the metadata associated with the loaded state.
     pub fn get_metadata(&self) -> Result<&DeltaTableMetaData, DeltaTableError> {
         self.state
             .current_metadata
@@ -580,18 +587,24 @@ impl DeltaTable {
             .ok_or(DeltaTableError::NoMetadata)
     }
 
+    /// Returns a vector of tombstones (i.e. `Remove` actions present in the current delta log.
     pub fn get_tombstones(&self) -> &Vec<action::Remove> {
         &self.state.tombstones
     }
 
+    /// Returns the current version of the DeltaTable based on the loaded metadata.
     pub fn get_app_transaction_version(&self) -> &HashMap<String, DeltaDataTypeVersion> {
         &self.state.app_transaction_version
     }
 
+    /// Returns the minimum reader version supported by the DeltaTable based on the loaded
+    /// metadata.
     pub fn get_min_reader_version(&self) -> i32 {
         self.state.min_reader_version
     }
 
+    /// Returns the minimum writer version supported by the DeltaTable based on the loaded
+    /// metadata.
     pub fn get_min_writer_version(&self) -> i32 {
         self.state.min_writer_version
     }
@@ -608,6 +621,9 @@ impl DeltaTable {
         self.schema().ok_or(DeltaTableError::NoSchema)
     }
 
+    /// Creates a new DeltaTransaction for the DeltaTable.
+    /// The transaction holds a mutable reference to the DeltaTable, preventing other references
+    /// until the transaction is dropped.
     pub fn create_transaction(
         &mut self,
         options: Option<DeltaTransactionOptions>,
@@ -706,26 +722,41 @@ impl std::fmt::Debug for DeltaTable {
 /// Error returned by the DeltaTransaction struct
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTransactionError {
+    /// Error that indicates the number of optimistic concurrency retries has been exceeded and no further
+    /// attempts will be made.
     #[error("Transaction commit exceeded max retries. Last error: {inner}")]
     CommitRetriesExceeded {
+        /// The wrapped TransactionCommitAttemptError.
         #[from]
         inner: TransactionCommitAttemptError,
     },
 
+    /// Error that indicates the record batch is missing a partition column required by the Delta
+    /// schema.
     #[error("RecordBatch is missing partition column in Delta schema.")]
     MissingPartitionColumn,
 
+    /// Error that indicates the transaction failed due to an underlying storage error.
+    /// Specific details of the error are described by the wrapped storage error.
     #[error("Storage interaction failed: {source}")]
-    Storage { source: StorageError },
+    Storage {
+        /// The wrapped StorageError.
+        source: StorageError,
+    },
 
+    /// Error that wraps an underlying DeltaTable error.
+    /// The wrapped error describes the specific cause.
     #[error("DeltaTable interaction failed: {source}")]
     DeltaTable {
+        /// The wrapped DeltaTable error.
         #[from]
         source: DeltaTableError,
     },
 
+    /// Error caused by a problem while using serde_json to serialize an action.
     #[error("Action serialization failed: {source}")]
     ActionSerializationFailed {
+        /// The wrapped serde_json Error.
         #[from]
         source: serde_json::Error,
     },
@@ -735,17 +766,29 @@ pub enum DeltaTransactionError {
 #[derive(thiserror::Error, Debug)]
 pub enum TransactionCommitAttemptError {
     // NOTE: it would be nice to add a `num_retries` prop to this error so we can identify how frequently we hit optimistic concurrency retries and look for optimization paths
+    /// Error indicating the transaction commit attempt failed because the Delta table version has already been committed.
+    /// This is expected in the case of multiple writers to the same table and retried within the
+    /// optimistic concurrency loop.
     #[error("Version already exists: {source}")]
-    VersionExists { source: StorageError },
+    VersionExists {
+        /// The wrapped StorageError.
+        source: StorageError,
+    },
 
+    /// Error indicating a general DeltaTable error occurred during a transaction commit attempt.
     #[error("Commit Failed due to DeltaTable error: {source}")]
     DeltaTable {
+        /// The wrapped DeltaTableError
         #[from]
         source: DeltaTableError,
     },
 
+    /// Error indicating a general StorageError occurred during a transaction commit attempt.
     #[error("Commit Failed due to StorageError: {source}")]
-    Storage { source: StorageError },
+    Storage {
+        /// The wrapped StorageError
+        source: StorageError,
+    },
 }
 
 impl From<StorageError> for TransactionCommitAttemptError {
@@ -912,6 +955,8 @@ impl<'a> DeltaTransaction<'a> {
     }
 }
 
+/// Creates and loads a DeltaTable from the given path with current metadata.
+/// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError> {
     let storage_backend = storage::get_backend_for_uri(table_path)?;
     let mut table = DeltaTable::new(table_path, storage_backend)?;
@@ -920,6 +965,8 @@ pub async fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError>
     Ok(table)
 }
 
+/// Creates a DeltaTable from the given path and loads it with the metadata from the given version.
+/// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table_with_version(
     table_path: &str,
     version: DeltaDataTypeVersion,
@@ -931,6 +978,9 @@ pub async fn open_table_with_version(
     Ok(table)
 }
 
+/// Creates a DeltaTable from the given path.
+/// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
+/// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table_with_ds(table_path: &str, ds: &str) -> Result<DeltaTable, DeltaTableError> {
     let datetime = DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds)?);
     let storage_backend = storage::get_backend_for_uri(table_path)?;
