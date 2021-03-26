@@ -34,7 +34,7 @@ class DeltaTable:
 
     def files_by_partitions(self, partition_filters: List[Tuple]) -> List[str]:
         """
-        Get the files that matched after applying a list of partitions filters.
+        Get the files that match a given list of partitions filters.
         Partitions which do not match the filter predicate will be removed from scanned data.
         Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
         DNF allows arbitrary boolean logical combinations of single partition predicates.
@@ -92,7 +92,7 @@ class DeltaTable:
 
     def to_pyarrow_dataset(self) -> pyarrow.dataset.Dataset:
         """
-        Read the DeltaTable with the PyArrow dataset format.
+        Build a PyArrow Dataset using data from the DeltaTable.
         :return: the PyArrow dataset in PyArrow
         """
         file_paths = self._table.file_paths()
@@ -107,7 +107,7 @@ class DeltaTable:
 
     def to_pyarrow_table(self) -> pyarrow.Table:
         """
-        Read the DeltaTable with the PyArrow Table format.
+        Build a PyArrow Table using data from the DeltaTable.
         :return: the PyArrow table
         """
         return self.to_pyarrow_dataset().to_table()
