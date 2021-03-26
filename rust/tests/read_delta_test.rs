@@ -121,3 +121,69 @@ async fn read_delta_8_0_table_without_version() {
         }
     );
 }
+
+#[tokio::test]
+async fn read_delta_8_0_table_with_partitions() {
+    let table = deltalake::open_table("./tests/data/delta-0.8.0-partitioned")
+        .await
+        .unwrap();
+
+    let filters = vec![
+        deltalake::PartitionFilter {
+            key: "month",
+            value: deltalake::PartitionValue::Equal("2"),
+        },
+        deltalake::PartitionFilter {
+            key: "year",
+            value: deltalake::PartitionValue::Equal("2020"),
+        },
+    ];
+
+    assert_eq!(
+        table.get_files_by_partitions(&filters).unwrap(),
+        vec![
+            "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
+            "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string()
+        ]
+    );
+
+    let filters = vec![deltalake::PartitionFilter {
+        key: "month",
+        value: deltalake::PartitionValue::NotEqual("2"),
+    }];
+    assert_eq!(
+        table.get_files_by_partitions(&filters).unwrap(),
+        vec![
+            "year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet".to_string(),
+            "year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet".to_string(),
+            "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet".to_string(),
+            "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet".to_string()
+        ]
+    );
+
+    let filters = vec![deltalake::PartitionFilter {
+        key: "month",
+        value: deltalake::PartitionValue::In(vec!["2", "12"]),
+    }];
+    assert_eq!(
+        table.get_files_by_partitions(&filters).unwrap(),
+        vec![
+            "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
+            "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string(),
+            "year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet".to_string(),
+            "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet".to_string()
+        ]
+    );
+
+    let filters = vec![deltalake::PartitionFilter {
+        key: "month",
+        value: deltalake::PartitionValue::NotIn(vec!["2", "12"]),
+    }];
+    assert_eq!(
+        table.get_files_by_partitions(&filters).unwrap(),
+        vec![
+            "year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet".to_string(),
+            "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet".to_string()
+        ]
+    );
+}

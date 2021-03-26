@@ -14,6 +14,7 @@ extern crate thiserror;
 pub mod action;
 mod delta;
 mod delta_arrow;
+pub mod partitions;
 mod schema;
 mod storage;
 
@@ -24,5 +25,6 @@ mod delta_datafusion;
 mod delta_dataframe;
 
 pub use self::delta::*;
+pub use self::partitions::*;
 pub use self::schema::*;
 pub use self::storage::*;

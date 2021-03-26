@@ -4,6 +4,7 @@ extern crate arrow;
 extern crate pyo3;
 
 use arrow::datatypes::Schema as ArrowSchema;
+use deltalake::partitions::PartitionFilter;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -28,6 +29,12 @@ impl PyDeltaTableError {
 #[inline]
 fn rt() -> PyResult<tokio::runtime::Runtime> {
     tokio::runtime::Runtime::new().map_err(PyDeltaTableError::from_tokio)
+}
+
+#[derive(FromPyObject)]
+enum PartitionFilterValue<'a> {
+    Single(&'a str),
+    Multiple(Vec<&'a str>),
 }
 
 #[pyclass]
@@ -61,6 +68,31 @@ impl RawDeltaTable {
         rt()?
             .block_on(self._table.load_version(version))
             .map_err(PyDeltaTableError::from_raw)
+    }
+
+    pub fn files_by_partitions(
+        &self,
+        partitions_filters: Vec<(&str, &str, PartitionFilterValue)>,
+    ) -> PyResult<Vec<String>> {
+        let partition_filters: Result<Vec<PartitionFilter<&str>>, deltalake::DeltaTableError> =
+            partitions_filters
+                .into_iter()
+                .map(|filter| match filter {
+                    (key, op, PartitionFilterValue::Single(v)) => {
+                        PartitionFilter::try_from((key, op, v))
+                    }
+                    (key, op, PartitionFilterValue::Multiple(v)) => {
+                        PartitionFilter::try_from((key, op, v))
+                    }
+                })
+                .collect();
+        match partition_filters {
+            Ok(filters) => Ok(self
+                ._table
+                .get_files_by_partitions(&filters)
+                .map_err(PyDeltaTableError::from_raw)?),
+            Err(err) => Err(PyDeltaTableError::from_raw(err)),
+        }
     }
 
     pub fn files(&self) -> PyResult<Vec<String>> {
