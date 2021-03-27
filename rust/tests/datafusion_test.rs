@@ -33,4 +33,25 @@ mod datafusion {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_datafusion_date_column() -> Result<()> {
+        let mut ctx = ExecutionContext::new();
+        let table = deltalake::open_table("./tests/data/delta-0.8.0-date")
+            .await
+            .unwrap();
+        ctx.register_table("dates", Box::new(table));
+
+        let batches = ctx
+            .sql("SELECT date from dates WHERE dayOfYear = 2")?
+            .collect()
+            .await?;
+
+        assert_eq!(
+            batches[0].column(0).as_ref(),
+            Arc::new(Date32Array::from(vec![18629])).as_ref(),
+        );
+
+        Ok(())
+    }
 }

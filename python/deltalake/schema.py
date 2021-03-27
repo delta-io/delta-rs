@@ -10,6 +10,10 @@ import pyarrow
 
 
 class DataType:
+    """
+    Base class of all Delta data types.
+    """
+
     def __init__(self, type_class: str):
         self.type = type_class
 
@@ -24,6 +28,11 @@ class DataType:
 
     @classmethod
     def from_dict(cls, json_dict: Dict[str, Any]) -> "DataType":
+        """
+        Generate a DataType from a DataType in json format
+        :param json_dict: the data type in json format
+        :return: the Delta DataType
+        """
         type_class = json_dict["type"]
         if type_class == "map":
             key_type = json_dict["keyType"]
@@ -60,6 +69,8 @@ class DataType:
 
 
 class MapType(DataType):
+    """ Concrete class for map data types. """
+
     def __init__(self, key_type: str, value_type: str, value_contains_null: bool):
         super().__init__("map")
         self.key_type = key_type
@@ -78,6 +89,8 @@ class MapType(DataType):
 
 
 class ArrayType(DataType):
+    """ Concrete class for array data types. """
+
     def __init__(self, element_type: DataType, contains_null: bool):
         super().__init__("array")
         self.element_type = element_type
@@ -94,6 +107,8 @@ class ArrayType(DataType):
 
 
 class StructType(DataType):
+    """ Concrete class for struct data types. """
+
     def __init__(self, fields: List["Field"]):
         super().__init__("struct")
         self.fields = fields
@@ -107,6 +122,8 @@ class StructType(DataType):
 
 
 class Field:
+    """ Create a DeltaTable Field instance."""
+
     def __init__(
         self,
         name: str,
@@ -132,6 +149,8 @@ class Field:
 
 
 class Schema:
+    """ Create a DeltaTable Schema instance."""
+
     def __init__(self, fields: List[Field], json_value: Dict[str, Any]):
         self.fields = fields
         self.json_value = json_value
@@ -162,6 +181,11 @@ class Schema:
 
 
 def pyarrow_datatype_from_dict(json_dict: Dict) -> pyarrow.DataType:
+    """
+    Create a DataType in PyArrow format from a Schema json format.
+    :param json_dict: the DataType in json format
+    :return: the DataType in PyArrow format
+    """ ""
     type_class = json_dict["type"]["name"]
     if type_class == "dictionary":
         key_type = json_dict["dictionary"]["indexType"]
@@ -199,6 +223,11 @@ def pyarrow_datatype_from_dict(json_dict: Dict) -> pyarrow.DataType:
 
 
 def pyarrow_field_from_dict(field: Dict) -> pyarrow.Field:
+    """
+    Create a Field in PyArrow format from a Field in json format.
+    :param field: the field in json format
+    :return: the Field in PyArrow format
+    """ ""
     return pyarrow.field(
         field["name"],
         pyarrow_datatype_from_dict(field),
@@ -208,6 +237,11 @@ def pyarrow_field_from_dict(field: Dict) -> pyarrow.Field:
 
 
 def pyarrow_schema_from_json(json_data: str) -> pyarrow.Schema:
+    """
+    Create a Schema in PyArrow format from a Schema in json format.
+    :param json_data: the field in json format
+    :return: the Schema in PyArrow format
+    """ ""
     schema_json = json.loads(json_data)
     arrow_fields = [pyarrow_field_from_dict(field) for field in schema_json["fields"]]
     return pyarrow.schema(arrow_fields)
