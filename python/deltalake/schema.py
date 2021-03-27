@@ -38,22 +38,28 @@ class DataType:
             )
         if type_class == "array":
             field = json_dict["elementType"]
-            element_type = cls.from_dict(json_dict=field)
+            if isinstance(field, str):
+                element_type = cls(field)
+            else:
+                element_type = cls.from_dict(json_dict=field)
             return ArrayType(
                 element_type=element_type,
                 contains_null=json_dict["containsNull"],
             )
         if type_class == "struct":
-            fields = json_dict["fields"]
-            fields = [
-                Field(
-                    name=field["name"],
-                    type=cls.from_dict(field["type"]),
-                    nullable=field["nullable"],
-                    metadata=field.get("metadata"),
+            fields = []
+            for json_field in json_dict["fields"]:
+                if isinstance(json_field["type"], str):
+                    data_type = cls(json_field["type"])
+                else:
+                    data_type =  cls.from_dict(json_field["type"])
+                field = Field(
+                    name=json_field["name"],
+                    type=data_type,
+                    nullable=json_field["nullable"],
+                    metadata=json_field.get("metadata"),
                 )
-                for field in fields
-            ]
+                fields.append(field)
             return StructType(fields=fields)
 
         return DataType(type_class)
@@ -66,9 +72,10 @@ class MapType(DataType):
         self.value_type = value_type
         self.value_contains_null = value_contains_null
 
-    def __eq__(self, other: "MapType") -> bool:
+    def __eq__(self, other: "DataType") -> bool:
         return (
-            self.key_type == other.key_type
+            isinstance(other, MapType)
+            and self.key_type == other.key_type
             and self.value_type == other.value_type
             and self.value_contains_null == other.value_contains_null
         )
@@ -83,9 +90,10 @@ class ArrayType(DataType):
         self.element_type = element_type
         self.contains_null = contains_null
 
-    def __eq__(self, other: "ArrayType") -> bool:
+    def __eq__(self, other: "DataType") -> bool:
         return (
-            self.element_type == other.element_type
+            isinstance(other, ArrayType)
+            and self.element_type == other.element_type
             and self.contains_null == other.contains_null
         )
 
@@ -98,8 +106,8 @@ class StructType(DataType):
         super().__init__("struct")
         self.fields = fields
 
-    def __eq__(self, other: "StructType") -> bool:
-        return self.fields == other.fields
+    def __eq__(self, other: "DataType") -> bool:
+        return isinstance(other, StructType) and self.fields == other.fields
 
     def __str__(self) -> str:
         field_strs = [str(f) for f in self.fields]
@@ -149,15 +157,19 @@ class Schema:
     @classmethod
     def from_json(cls, json_data: str) -> "Schema":
         json_value = json.loads(json_data)
-        fields = [
-            Field(
-                name=field["name"],
-                type=DataType.from_dict(field),
-                nullable=field["nullable"],
-                metadata=field.get("metadata"),
+        fields = []
+        for json_field in json_value["fields"]:
+            if isinstance(json_field["type"], str):
+                data_type = DataType(json_field["type"])
+            else:
+                data_type = DataType.from_dict(json_field["type"])
+            field = Field(
+                name=json_field["name"],
+                type=data_type,
+                nullable=json_field["nullable"],
+                metadata=json_field.get("metadata"),
             )
-            for field in json_value["fields"]
-        ]
+            fields.append(field)
         return cls(fields=fields, json_value=json_value)
 
 

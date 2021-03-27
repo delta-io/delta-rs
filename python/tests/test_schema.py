@@ -9,6 +9,7 @@ from deltalake.schema import (
     MapType,
     StructType,
     pyarrow_field_from_dict,
+    Schema,
 )
 
 
@@ -26,6 +27,10 @@ def test_table_schema():
     assert field.type == DataType("long")
     assert field.nullable is True
     assert field.metadata == {}
+
+    json = '{"type":"struct","fields":[{"name":"x","type":{"type":"array","elementType":"long","containsNull":true},"nullable":true,"metadata":{}}]}'
+    schema = Schema.from_json(json)
+    assert schema.fields[0] == Field("x", ArrayType(DataType("long"), True), True, {})
 
 
 def test_table_schema_pyarrow_simple():
