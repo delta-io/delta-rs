@@ -89,9 +89,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                     "date" => {
                         // A calendar date, represented as a year-month-day triple without a
                         // timezone.
-                        Err(ArrowError::SchemaError(
-                            "Invalid data type for Arrow: date".to_string(),
-                        ))
+                        Ok(ArrowDataType::Date32)
                     }
                     "timestamp" => {
                         // Microsecond precision timestamp without a timezone.
