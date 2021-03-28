@@ -163,6 +163,36 @@ def test_schema_pyarrow_types():
     assert dict(pyarrow_field.metadata) == metadata
     assert pyarrow_field.nullable is False
 
+    field_name = "column_timestamp_no_unit"
+    metadata = {b"metadata_k": b"metadata_v"}
+    pyarrow_field = pyarrow_field_from_dict(
+        {
+            "name": field_name,
+            "nullable": False,
+            "metadata": metadata,
+            "type": {"name": "timestamp"},
+        }
+    )
+    assert pyarrow_field.name == field_name
+    assert pyarrow_field.type == pyarrow.timestamp("ns")
+    assert dict(pyarrow_field.metadata) == metadata
+    assert pyarrow_field.nullable is False
+
+    field_name = "column_timestamp_with_unit"
+    metadata = {b"metadata_k": b"metadata_v"}
+    pyarrow_field = pyarrow_field_from_dict(
+        {
+            "name": field_name,
+            "nullable": False,
+            "metadata": metadata,
+            "type": {"name": "timestamp", "unit": "MICROSECOND"},
+        }
+    )
+    assert pyarrow_field.name == field_name
+    assert pyarrow_field.type == pyarrow.timestamp("us")
+    assert dict(pyarrow_field.metadata) == metadata
+    assert pyarrow_field.nullable is False
+
     pyarrow_field = pyarrow_field_from_dict(
         {
             "name": field_name,
