@@ -225,6 +225,20 @@ def pyarrow_datatype_from_dict(json_dict: Dict) -> pyarrow.DataType:
         else:
             unit = "s"
         return pyarrow.type_for_alias(f'{type_class}{type_info["bitWidth"]}[{unit}]')
+    elif type_class == "timestamp":
+        type_info = json_dict["type"]
+        if "unit" in type_info:
+            if type_info["unit"] == "MICROSECOND":
+                unit = "us"
+            elif type_info["unit"] == "NANOSECOND":
+                unit = "ns"
+            elif type_info["unit"] == "MILLISECOND":
+                unit = "ms"
+            elif type_info["unit"] == "SECOND":
+                unit = "s"
+        else:
+            unit = "ns"
+        return pyarrow.type_for_alias(f"{type_class}[{unit}]")
     elif type_class.startswith("decimal"):
         type_info = json_dict["type"]
         return pyarrow.decimal128(
