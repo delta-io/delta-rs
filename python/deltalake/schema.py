@@ -52,7 +52,7 @@ class DataType:
                 if isinstance(json_field["type"], str):
                     data_type = cls(json_field["type"])
                 else:
-                    data_type =  cls.from_dict(json_field["type"])
+                    data_type = cls.from_dict(json_field["type"])
                 field = Field(
                     name=json_field["name"],
                     type=data_type,
