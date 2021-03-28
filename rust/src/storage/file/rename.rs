@@ -50,19 +50,7 @@ mod imp {
             if #[cfg(all(target_os = "linux", target_env = "gnu"))] {
                 cfg_if::cfg_if! {
                     if #[cfg(glibc_renameat2)] {
-                        const RENAME_NOREPLACE: libc::c_uint = 1;
-
-                        extern "C" {
-                            fn renameat2(
-                                olddirfd: libc::c_int,
-                                oldpath: *const libc::c_char,
-                                newdirfd: libc::c_int,
-                                newpath: *const libc::c_char,
-                                flags: libc::c_uint,
-                            ) -> libc::c_int;
-                        }
-
-                        renameat2(libc::AT_FDCWD, from, libc::AT_FDCWD, to, RENAME_NOREPLACE)
+                        libc::renameat2(libc::AT_FDCWD, from, libc::AT_FDCWD, to, libc::RENAME_NOREPLACE)
                     } else {
                         // target has old glibc (< 2.28), we would need to invoke syscall manually
                         unimplemented!()
