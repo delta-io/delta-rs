@@ -146,7 +146,7 @@ impl S3StorageBackend {
         let region = if let Ok(url) = std::env::var("AWS_ENDPOINT_URL") {
             Region::Custom {
                 name: "custom".to_string(),
-                endpoint: url.clone(),
+                endpoint: url,
             }
         } else {
             Region::default()
