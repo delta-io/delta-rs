@@ -14,7 +14,7 @@ pub enum ActionError {
     /// The action contains an invalid field.
     #[error("Invalid action field: {0}")]
     InvalidField(String),
-    /// A parquet log checkpoint file contains and invalid action.
+    /// A parquet log checkpoint file contains an invalid action.
     #[error("Invalid action in parquet row: {0}")]
     InvalidRow(String),
     /// A generic action error. The wrapped error string describes the details.
