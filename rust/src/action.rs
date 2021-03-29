@@ -8,12 +8,16 @@ use serde_json::Value;
 
 use super::schema::*;
 
+/// Error returned when an invalid Delta log action is encountered.
 #[derive(thiserror::Error, Debug)]
 pub enum ActionError {
+    /// The action contains an invalid field.
     #[error("Invalid action field: {0}")]
     InvalidField(String),
+    /// A parquet log checkpoint file contains an invalid action.
     #[error("Invalid action in parquet row: {0}")]
     InvalidRow(String),
+    /// A generic action error. The wrapped error string describes the details.
     #[error("Generic action error: {0}")]
     Generic(String),
 }
@@ -48,14 +52,18 @@ fn gen_action_type_error(action: &str, field: &str, expected_type: &str) -> Acti
     ))
 }
 
+/// Struct used to represent minValues and maxValues in add action statistics.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum ColumnValueStat {
+    /// Composite HashMap representation of statistics.
     Column(HashMap<String, ColumnValueStat>),
+    /// Json representation of statistics.
     Value(serde_json::Value),
 }
 
 impl ColumnValueStat {
+    /// Returns the HashMap representation of the ColumnValueStat.
     pub fn as_column(&self) -> Option<&HashMap<String, ColumnValueStat>> {
         match self {
             ColumnValueStat::Column(m) => Some(m),
@@ -63,6 +71,7 @@ impl ColumnValueStat {
         }
     }
 
+    /// Returns the serde_json representation of the ColumnValueStat.
     pub fn as_value(&self) -> Option<&serde_json::Value> {
         match self {
             ColumnValueStat::Value(v) => Some(v),
@@ -71,14 +80,18 @@ impl ColumnValueStat {
     }
 }
 
+/// Struct used to represent nullCount in add action statistics.
 #[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum ColumnCountStat {
+    /// Composite HashMap representation of statistics.
     Column(HashMap<String, ColumnCountStat>),
+    /// Json representation of statistics.
     Value(DeltaDataTypeLong),
 }
 
 impl ColumnCountStat {
+    /// Returns the HashMap representation of the ColumnCountStat.
     pub fn as_column(&self) -> Option<&HashMap<String, ColumnCountStat>> {
         match self {
             ColumnCountStat::Column(m) => Some(m),
@@ -86,6 +99,7 @@ impl ColumnCountStat {
         }
     }
 
+    /// Returns the serde_json representation of the ColumnCountStat.
     pub fn as_value(&self) -> Option<DeltaDataTypeLong> {
         match self {
             ColumnCountStat::Value(v) => Some(*v),
@@ -94,72 +108,72 @@ impl ColumnCountStat {
     }
 }
 
+/// Statistics associated with Add actions contained in the Delta log.
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Stats {
-    // number of records in this file
+    /// Number of records in the file associated with the log action.
     pub numRecords: DeltaDataTypeLong,
 
     // start of per column stats
-
-    // A value samller than all values present in the file for all columns
+    /// Contains a value smaller than all values present in the file for all columns.
     pub minValues: HashMap<String, ColumnValueStat>,
-    // A value larger than all values present in the file for all columns
+    /// Contains a value larger than all values present in the file for all columns.
     pub maxValues: HashMap<String, ColumnValueStat>,
-    // The number of null values for all column
+    /// The number of null values for all columns.
     pub nullCount: HashMap<String, ColumnCountStat>,
 }
 
-// file stats parsed from raw parquet format
+/// File stats parsed from raw parquet format.
 #[derive(Debug, Default)]
 pub struct StatsParsed {
-    // number of records in this file
+    /// Number of records in the file associated with the log action.
     pub numRecords: DeltaDataTypeLong,
 
     // start of per column stats
-
-    // A value samller than all values present in the file for all columns
+    /// Contains a value smaller than all values present in the file for all columns.
     pub minValues: HashMap<String, parquet::record::Field>,
-    // A value larger than all values present in the file for all columns
+    /// Contains a value larger than all values present in the file for all columns.
     pub maxValues: HashMap<String, parquet::record::Field>,
-    // The number of null values for all column
+    /// The number of null values for all columns.
     pub nullCount: HashMap<String, DeltaDataTypeLong>,
 }
 
+/// Delta log action that describes a parquet data file that is part of the table.
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Add {
-    // A relative path, from the root of the table, to a file that should be added to the table
+    /// A relative path, from the root of the table, to a file that should be added to the table
     pub path: String,
-    // The size of this file in bytes
+    /// The size of this file in bytes
     pub size: DeltaDataTypeLong,
-    // A map from partition column to value for this file
+    /// A map from partition column to value for this file
     pub partitionValues: HashMap<String, String>,
-    // Partition values stored in raw parquet struct format. In this struct, the column names
-    // correspond to the partition columns and the values are stored in their corresponding data
-    // type. This is a required field when the table is partitioned and the table property
-    // delta.checkpoint.writeStatsAsStruct is set to true. If the table is not partitioned, this
-    // column can be omitted.
-    //
-    // This field is only available in add action records read from checkpoints
+    /// Partition values stored in raw parquet struct format. In this struct, the column names
+    /// correspond to the partition columns and the values are stored in their corresponding data
+    /// type. This is a required field when the table is partitioned and the table property
+    /// delta.checkpoint.writeStatsAsStruct is set to true. If the table is not partitioned, this
+    /// column can be omitted.
+    ///
+    /// This field is only available in add action records read from checkpoints
     #[serde(skip_serializing, skip_deserializing)]
     pub partitionValues_parsed: Option<parquet::record::Row>,
-    // The time this file was created, as milliseconds since the epoch
+    /// The time this file was created, as milliseconds since the epoch
     pub modificationTime: DeltaDataTypeTimestamp,
-    // When false the file must already be present in the table or the records in the added file
-    // must be contained in one or more remove actions in the same version
-    //
-    // streaming queries that are tailing the transaction log can use this flag to skip actions
-    // that would not affect the final results.
+    /// When false the file must already be present in the table or the records in the added file
+    /// must be contained in one or more remove actions in the same version
+    ///
+    /// streaming queries that are tailing the transaction log can use this flag to skip actions
+    /// that would not affect the final results.
     pub dataChange: bool,
-    // Contains statistics (e.g., count, min/max values for columns) about the data in this file
+    /// Contains statistics (e.g., count, min/max values for columns) about the data in this file
     pub stats: Option<String>,
-    // Contains statistics (e.g., count, min/max values for columns) about the data in this file in
-    // raw parquet format. This field needs to be written when statistics are available and the
-    // table property: delta.checkpoint.writeStatsAsStruct is set to true.
-    //
-    // This field is only available in add action records read from checkpoints
+    /// Contains statistics (e.g., count, min/max values for columns) about the data in this file in
+    /// raw parquet format. This field needs to be written when statistics are available and the
+    /// table property: delta.checkpoint.writeStatsAsStruct is set to true.
+    ///
+    /// This field is only available in add action records read from checkpoints
     #[serde(skip_serializing, skip_deserializing)]
     pub stats_parsed: Option<parquet::record::Row>,
-    // Map containing metadata about this file
+    /// Map containing metadata about this file
     pub tags: Option<HashMap<String, String>>,
 }
 
@@ -258,12 +272,16 @@ impl Add {
         Ok(re)
     }
 
+    /// Returns the serde_json representation of stats contained in the action if present.
+    /// Since stats are defined as optional in the protocol, this may be None.
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         self.stats
             .as_ref()
             .map_or(Ok(None), |s| serde_json::from_str(s))
     }
 
+    /// Returns the composite HashMap representation of stats contained in the action if present.
+    /// Since stats are defined as optional in the protocol, this may be None.
     pub fn get_stats_parsed(&self) -> Result<Option<StatsParsed>, parquet::errors::ParquetError> {
         self.stats_parsed.as_ref().map_or(Ok(None), |record| {
             let mut stats = StatsParsed::default();
@@ -331,31 +349,34 @@ impl Add {
     }
 }
 
+/// Describes the data format of files in the table.
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
 pub struct Format {
-    // Name of the encoding for files in this table
+    /// Name of the encoding for files in this table.
     provider: String,
-    // A map containing configuration options for the format
+    /// A map containing configuration options for the format.
     options: Option<HashMap<String, String>>,
 }
 
+/// Action that describes the metadata of the table.
+/// This is a top-level action in Delta log entries.
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct MetaData {
-    // Unique identifier for this table
+    /// Unique identifier for this table
     pub id: Guid,
-    // User-provided identifier for this table
+    /// User-provided identifier for this table
     pub name: Option<String>,
-    // User-provided description for this table
+    /// User-provided description for this table
     pub description: Option<String>,
-    // Specification of the encoding for the files stored in the table
+    /// Specification of the encoding for the files stored in the table
     pub format: Format,
-    // Schema of the table
+    /// Schema of the table
     pub schemaString: String,
-    // An array containing the names of columns by which the data should be partitioned
+    /// An array containing the names of columns by which the data should be partitioned
     pub partitionColumns: Vec<String>,
-    // NOTE: this field is undocumented
+    /// NOTE: this field is undocumented
     pub configuration: HashMap<String, String>,
-    // NOTE: this field is undocumented
+    /// NOTE: this field is undocumented
     pub createdTime: DeltaDataTypeTimestamp,
 }
 
@@ -465,15 +486,23 @@ impl MetaData {
         Ok(re)
     }
 
+    /// Returns the table schema from the embedded schema string contained within the metadata
+    /// action.
     pub fn get_schema(&self) -> Result<Schema, serde_json::error::Error> {
         serde_json::from_str(&self.schemaString)
     }
 }
 
+/// Represents a tombstone (deleted file) in the Delta log.
+/// This is a top-level action in Delta log entries.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
 pub struct Remove {
+    /// The path of the file that is removed from the table.
     pub path: String,
+    /// The timestamp when the remove was added to table state.
     pub deletionTimestamp: DeltaDataTypeTimestamp,
+    /// Whether data is changed by the remove. A table optimize will report this as false for
+    /// example, since it adds and removes files by combining many files into one.
     pub dataChange: bool,
     pub extendedFileMetadata: Option<bool>,
     pub partitionValues: Option<HashMap<String, String>>,
@@ -563,13 +592,15 @@ impl Remove {
     }
 }
 
+/// Action used by streaming systems to track progress using application-specific versions to
+/// enable idempotency.
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Txn {
-    // A unique identifier for the application performing the transaction
+    /// A unique identifier for the application performing the transaction.
     pub appId: String,
-    // An application-specific numeric identifier for this transaction
+    /// An application-specific numeric identifier for this transaction.
     pub version: DeltaDataTypeVersion,
-    // NOTE: undocumented field
+    /// The time when this transaction action was created in milliseconds since the Unix epoch.
     pub lastUpdated: DeltaDataTypeTimestamp,
 }
 
@@ -611,9 +642,15 @@ impl Txn {
     }
 }
 
+/// Action used to increase the version of the Delta protocol required to read or write to the
+/// table.
 #[derive(Serialize, Deserialize, Debug, Default)]
 pub struct Protocol {
+    /// Minimum version of the Delta read protocol a client must implement to correctly read the
+    /// table.
     pub minReaderVersion: DeltaDataTypeInt,
+    /// Minimum version of the Delta write protocol a client must implement to correctly read the
+    /// table.
     pub minWriterVersion: DeltaDataTypeInt,
 }
 
@@ -649,17 +686,29 @@ impl Protocol {
     }
 }
 
+/// Represents an action in the Delta log. The Delta log is an aggregate of all actions performed
+/// on the table, so the full list of actions is required to properly read a table.
 #[derive(Serialize, Deserialize, Debug)]
 pub enum Action {
+    /// Changes the current metadata of the table. Must be present in the first version of a table.
+    /// Subsequent `metaData` actions completely overwrite previous metadata.
     metaData(MetaData),
+    /// Adds a file to the table state.
     add(Add),
+    /// Removes a file from the table state.
     remove(Remove),
+    /// Used by streaming systems to track progress externally with application specific version
+    /// identifiers.
     txn(Txn),
+    /// Describes the minimum reader and writer versions required to read or write to the table.
     protocol(Protocol),
+    /// Describes commit provenance information for the table.
     commitInfo(Value),
 }
 
 impl Action {
+    /// Returns an action from the given parquet Row. Used when deserializing delta log parquet
+    /// checkpoints.
     pub fn from_parquet_record(
         schema: &parquet::schema::types::Type,
         record: &parquet::record::Row,
@@ -710,6 +759,56 @@ impl Action {
             }
         })
     }
+}
+
+/// Operation performed when creating a new log entry with one or more actions.
+/// This is a key element of the `CommitInfo` action.
+#[derive(Serialize, Deserialize, Debug)]
+pub enum DeltaOperation {
+    /// Represents a Delta `Write` operation.
+    /// Write operations will typically only include `Add` actions.
+    Write {
+        /// The save mode used during the write.
+        mode: SaveMode,
+        /// The columns the write is partitioned by.
+        partitionBy: Option<Vec<String>>,
+        /// The predicate used during the write.
+        predicate: Option<String>,
+    },
+    /// Represents a Delta `StreamingUpdate` operation.
+    StreamingUpdate {
+        /// The output mode the streaming writer is using.
+        outputMode: OutputMode,
+        /// The query id of the streaming writer.
+        queryId: String,
+        /// The epoch id of the written micro-batch.
+        epochId: i64,
+    },
+    // TODO: Add more operations
+}
+
+/// The SaveMode used when performing a DeltaOperation
+#[derive(Serialize, Deserialize, Debug)]
+pub enum SaveMode {
+    /// Files will be appended to the target location.
+    Append,
+    /// The target location will be overwritten.
+    Overwrite,
+    /// If files exist for the target, the operation must fail.
+    ErrorIfExists,
+    /// If files exist for the target, the operation must not proceed or change any data.
+    Ignore,
+}
+
+/// The OutputMode used in streaming operations.
+#[derive(Serialize, Deserialize, Debug)]
+pub enum OutputMode {
+    /// Only new rows will be written when new data is available.
+    Append,
+    /// The full output (all rows) will be written whenever new data is available.
+    Complete,
+    /// Only rows with updates will be written when new or changed data is available.
+    Update,
 }
 
 #[cfg(test)]
@@ -799,48 +898,4 @@ mod tests {
             1
         );
     }
-}
-
-/// Operation performed when creating a new log entry with one or more actions.
-/// This is a key element of the `CommitInfo` action and used for optimization when executing an operation that must do re-writes.
-#[derive(Serialize, Deserialize, Debug)]
-pub enum DeltaOperation {
-    /// Represents a Delta `Write` operation.
-    /// Write operations will typically only include `Add` actions.
-    Write {
-        mode: SaveMode,
-        partitionBy: Option<Vec<String>>,
-        predicate: Option<String>,
-    },
-    /// Represents a Delta `StreamingUpdate` operation.
-    StreamingUpdate {
-        outputMode: OutputMode,
-        queryId: String,
-        epochId: i64,
-    },
-    // TODO: Add more operations
-}
-
-/// The SaveMode used when performing a DeltaOperation
-#[derive(Serialize, Deserialize, Debug)]
-pub enum SaveMode {
-    /// Files will be appended to the target location.
-    Append,
-    /// The target location will be overwritten.
-    Overwrite,
-    /// If files exist for the target, the operation must fail.
-    ErrorIfExists,
-    /// If files exist for the target, the operation must not proceed or change any data.
-    Ignore,
-}
-
-/// The OutputMode used in streaming operations.
-#[derive(Serialize, Deserialize, Debug)]
-pub enum OutputMode {
-    /// Only new rows will be written when new data is available.
-    Append,
-    /// The full output (all rows) will be written whenever new data is available.
-    Complete,
-    /// Only rows with updates will be written when new or changed data is available.
-    Update,
 }
