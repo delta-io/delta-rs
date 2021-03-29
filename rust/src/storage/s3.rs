@@ -143,7 +143,16 @@ pub struct S3StorageBackend {
 
 impl S3StorageBackend {
     pub fn new() -> Self {
-        let client = create_s3_client(Region::default()).unwrap();
+        let region = if let Ok(url) = std::env::var("AWS_ENDPOINT_URL") {
+            Region::Custom {
+                name: "custom".to_string(),
+                endpoint: url.clone(),
+            }
+        } else {
+            Region::default()
+        };
+
+        let client = create_s3_client(region).unwrap();
         Self { client }
     }
 }
