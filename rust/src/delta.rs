@@ -29,6 +29,7 @@ use super::storage::{StorageBackend, StorageError, UriError};
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
 pub struct CheckPoint {
+    /// Delta table version
     version: DeltaDataTypeVersion, // 20 digits decimals
     size: DeltaDataTypeLong,
     parts: Option<u32>, // 10 digits decimals
@@ -110,21 +111,22 @@ pub enum DeltaTableError {
     InvalidPartitionFilter { partition_filter: String },
 }
 
+/// Delta table metadata
 #[derive(Clone)]
 pub struct DeltaTableMetaData {
-    // Unique identifier for this table
+    /// Unique identifier for this table
     pub id: Guid,
-    // User-provided identifier for this table
+    /// User-provided identifier for this table
     pub name: Option<String>,
-    // User-provided description for this table
+    /// User-provided description for this table
     pub description: Option<String>,
-    // Specification of the encoding for the files stored in the table
+    /// Specification of the encoding for the files stored in the table
     pub format: action::Format,
-    // Schema of the table
+    /// Schema of the table
     pub schema: Schema,
-    // An array containing the names of columns by which the data should be partitioned
+    /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
-    // table properties
+    /// table properties
     pub configuration: HashMap<String, String>,
 }
 
@@ -440,6 +442,7 @@ impl DeltaTable {
         Ok(version)
     }
 
+    /// Load DeltaTable with data from latest checkpoint
     pub async fn load(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
@@ -573,6 +576,8 @@ impl DeltaTable {
         }
     }
 
+    /// Returns the file list tracked in current table state filtered by provided
+    /// `PartitionFilter`s.
     pub fn get_files_by_partitions(
         &self,
         filters: &[PartitionFilter<&str>],
