@@ -18,15 +18,18 @@ use parquet::file::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::convert::TryFrom;
 
 use super::action;
 use super::action::{Action, DeltaOperation};
+use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
 pub struct CheckPoint {
+    /// Delta table version
     version: DeltaDataTypeVersion, // 20 digits decimals
     size: DeltaDataTypeLong,
     parts: Option<u32>, // 10 digits decimals
@@ -100,23 +103,30 @@ pub enum DeltaTableError {
     NoMetadata,
     #[error("No schema found, please make sure table is loaded.")]
     NoSchema,
+    #[error("No partitions found, please make sure table is partitioned.")]
+    LoadPartitions,
+    #[error("This partition is not formatted with key=value: {}", .partition)]
+    PartitionError { partition: String },
+    #[error("Invalid partition filter found: {}.", .partition_filter)]
+    InvalidPartitionFilter { partition_filter: String },
 }
 
+/// Delta table metadata
 #[derive(Clone)]
 pub struct DeltaTableMetaData {
-    // Unique identifier for this table
+    /// Unique identifier for this table
     pub id: Guid,
-    // User-provided identifier for this table
+    /// User-provided identifier for this table
     pub name: Option<String>,
-    // User-provided description for this table
+    /// User-provided description for this table
     pub description: Option<String>,
-    // Specification of the encoding for the files stored in the table
+    /// Specification of the encoding for the files stored in the table
     pub format: action::Format,
-    // Schema of the table
+    /// Schema of the table
     pub schema: Schema,
-    // An array containing the names of columns by which the data should be partitioned
+    /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
-    // table properties
+    /// table properties
     pub configuration: HashMap<String, String>,
 }
 
@@ -432,6 +442,7 @@ impl DeltaTable {
         Ok(version)
     }
 
+    /// Load DeltaTable with data from latest checkpoint
     pub async fn load(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
@@ -563,6 +574,42 @@ impl DeltaTable {
                 Ok(ts)
             }
         }
+    }
+
+    /// Returns the file list tracked in current table state filtered by provided
+    /// `PartitionFilter`s.
+    pub fn get_files_by_partitions(
+        &self,
+        filters: &[PartitionFilter<&str>],
+    ) -> Result<Vec<String>, DeltaTableError> {
+        let partitions_number = match &self
+            .state
+            .current_metadata
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .partition_columns
+        {
+            partitions if !partitions.is_empty() => partitions.len(),
+            _ => return Err(DeltaTableError::LoadPartitions),
+        };
+        let separator = "/";
+        let files = self
+            .state
+            .files
+            .iter()
+            .filter(|f| {
+                let partitions = f
+                    .splitn(partitions_number + 1, separator)
+                    .filter_map(|p: &str| DeltaTablePartition::try_from(p).ok())
+                    .collect::<Vec<DeltaTablePartition>>();
+                filters
+                    .iter()
+                    .all(|filter| filter.match_partitions(&partitions))
+            })
+            .cloned()
+            .collect();
+
+        Ok(files)
     }
 
     /// Returns a reference to the file list present in the loaded state.
