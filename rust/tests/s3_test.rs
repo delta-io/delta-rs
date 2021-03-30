@@ -19,6 +19,7 @@ mod s3 {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_s3_simple() {
@@ -52,6 +53,7 @@ mod s3 {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_s3_simple_with_version() {
@@ -88,6 +90,7 @@ mod s3 {
         );
     }
 
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_s3_simple_with_trailing_slash() {
@@ -99,6 +102,7 @@ mod s3 {
         assert_eq!(table.get_min_reader_version(), 1);
     }
 
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_s3_simple_golden() {
@@ -113,6 +117,7 @@ mod s3 {
         assert_eq!(table.get_min_reader_version(), 1);
     }
 
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_s3_head_obj() {

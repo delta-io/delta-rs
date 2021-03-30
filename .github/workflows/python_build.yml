@@ -72,6 +72,6 @@ jobs:
       run: |
         py.test tests -m 'not integration'
 
-    - name: Run Integration tests
-      run: |
-        py.test tests -m integration
+    # - name: Run Integration tests
+    #   run: |
+    #     py.test tests -m integration
