@@ -5,3 +5,6 @@ members = [
     "python",
     "glibc_version",
 ]
+
+[profile.dev]
+split-debuginfo = "unpacked"
