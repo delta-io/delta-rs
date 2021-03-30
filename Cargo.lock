@@ -608,7 +608,7 @@ dependencies = [
  "env_logger",
  "errno",
  "futures",
- "glibc_version",
+ "glibc_version 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static",
  "libc",
  "log",
@@ -1004,6 +1004,15 @@ checksum = "f6503fe142514ca4799d4c26297c4248239fe8838d827db6bd6065c6ed29a6ce"
 [[package]]
 name = "glibc_version"
 version = "0.1.2"
+dependencies = [
+ "regex",
+]
+
+[[package]]
+name = "glibc_version"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "803ff7635f1ab4e2c064b68a0c60da917d3d18dc8d086130f689d62ce4f1c33e"
 dependencies = [
  "regex",
 ]
