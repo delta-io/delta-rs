@@ -9,6 +9,7 @@ from deltalake.schema import (
     MapType,
     StructType,
     pyarrow_field_from_dict,
+    Schema,
 )
 
 
@@ -26,6 +27,10 @@ def test_table_schema():
     assert field.type == DataType("long")
     assert field.nullable is True
     assert field.metadata == {}
+
+    json = '{"type":"struct","fields":[{"name":"x","type":{"type":"array","elementType":"long","containsNull":true},"nullable":true,"metadata":{}}]}'
+    schema = Schema.from_json(json)
+    assert schema.fields[0] == Field("x", ArrayType(DataType("long"), True), True, {})
 
 
 def test_table_schema_pyarrow_simple():
@@ -155,6 +160,36 @@ def test_schema_pyarrow_types():
     )
     assert pyarrow_field.name == field_name
     assert pyarrow_field.type == pyarrow.int8()
+    assert dict(pyarrow_field.metadata) == metadata
+    assert pyarrow_field.nullable is False
+
+    field_name = "column_timestamp_no_unit"
+    metadata = {b"metadata_k": b"metadata_v"}
+    pyarrow_field = pyarrow_field_from_dict(
+        {
+            "name": field_name,
+            "nullable": False,
+            "metadata": metadata,
+            "type": {"name": "timestamp"},
+        }
+    )
+    assert pyarrow_field.name == field_name
+    assert pyarrow_field.type == pyarrow.timestamp("ns")
+    assert dict(pyarrow_field.metadata) == metadata
+    assert pyarrow_field.nullable is False
+
+    field_name = "column_timestamp_with_unit"
+    metadata = {b"metadata_k": b"metadata_v"}
+    pyarrow_field = pyarrow_field_from_dict(
+        {
+            "name": field_name,
+            "nullable": False,
+            "metadata": metadata,
+            "type": {"name": "timestamp", "unit": "MICROSECOND"},
+        }
+    )
+    assert pyarrow_field.name == field_name
+    assert pyarrow_field.type == pyarrow.timestamp("us")
     assert dict(pyarrow_field.metadata) == metadata
     assert pyarrow_field.nullable is False
 

@@ -10,6 +10,10 @@ import pyarrow
 
 
 class DataType:
+    """
+    Base class of all Delta data types.
+    """
+
     def __init__(self, type_class: str):
         self.type = type_class
 
@@ -24,6 +28,11 @@ class DataType:
 
     @classmethod
     def from_dict(cls, json_dict: Dict[str, Any]) -> "DataType":
+        """
+        Generate a DataType from a DataType in json format
+        :param json_dict: the data type in json format
+        :return: the Delta DataType
+        """
         type_class = json_dict["type"]
         if type_class == "map":
             key_type = json_dict["keyType"]
@@ -38,37 +47,46 @@ class DataType:
             )
         if type_class == "array":
             field = json_dict["elementType"]
-            element_type = cls.from_dict(json_dict=field)
+            if isinstance(field, str):
+                element_type = cls(field)
+            else:
+                element_type = cls.from_dict(json_dict=field)
             return ArrayType(
                 element_type=element_type,
                 contains_null=json_dict["containsNull"],
             )
         if type_class == "struct":
-            fields = json_dict["fields"]
-            fields = [
-                Field(
-                    name=field["name"],
-                    type=cls.from_dict(field["type"]),
-                    nullable=field["nullable"],
-                    metadata=field.get("metadata"),
+            fields = []
+            for json_field in json_dict["fields"]:
+                if isinstance(json_field["type"], str):
+                    data_type = cls(json_field["type"])
+                else:
+                    data_type = cls.from_dict(json_field["type"])
+                field = Field(
+                    name=json_field["name"],
+                    type=data_type,
+                    nullable=json_field["nullable"],
+                    metadata=json_field.get("metadata"),
                 )
-                for field in fields
-            ]
+                fields.append(field)
             return StructType(fields=fields)
 
         return DataType(type_class)
 
 
 class MapType(DataType):
+    """ Concrete class for map data types. """
+
     def __init__(self, key_type: str, value_type: str, value_contains_null: bool):
         super().__init__("map")
         self.key_type = key_type
         self.value_type = value_type
         self.value_contains_null = value_contains_null
 
-    def __eq__(self, other: "MapType") -> bool:
+    def __eq__(self, other: "DataType") -> bool:
         return (
-            self.key_type == other.key_type
+            isinstance(other, MapType)
+            and self.key_type == other.key_type
             and self.value_type == other.value_type
             and self.value_contains_null == other.value_contains_null
         )
@@ -78,14 +96,17 @@ class MapType(DataType):
 
 
 class ArrayType(DataType):
+    """ Concrete class for array data types. """
+
     def __init__(self, element_type: DataType, contains_null: bool):
         super().__init__("array")
         self.element_type = element_type
         self.contains_null = contains_null
 
-    def __eq__(self, other: "ArrayType") -> bool:
+    def __eq__(self, other: "DataType") -> bool:
         return (
-            self.element_type == other.element_type
+            isinstance(other, ArrayType)
+            and self.element_type == other.element_type
             and self.contains_null == other.contains_null
         )
 
@@ -94,12 +115,14 @@ class ArrayType(DataType):
 
 
 class StructType(DataType):
+    """ Concrete class for struct data types. """
+
     def __init__(self, fields: List["Field"]):
         super().__init__("struct")
         self.fields = fields
 
-    def __eq__(self, other: "StructType") -> bool:
-        return self.fields == other.fields
+    def __eq__(self, other: "DataType") -> bool:
+        return isinstance(other, StructType) and self.fields == other.fields
 
     def __str__(self) -> str:
         field_strs = [str(f) for f in self.fields]
@@ -107,6 +130,8 @@ class StructType(DataType):
 
 
 class Field:
+    """ Create a DeltaTable Field instance."""
+
     def __init__(
         self,
         name: str,
@@ -132,6 +157,8 @@ class Field:
 
 
 class Schema:
+    """ Create a DeltaTable Schema instance."""
+
     def __init__(self, fields: List[Field], json_value: Dict[str, Any]):
         self.fields = fields
         self.json_value = json_value
@@ -149,19 +176,28 @@ class Schema:
     @classmethod
     def from_json(cls, json_data: str) -> "Schema":
         json_value = json.loads(json_data)
-        fields = [
-            Field(
-                name=field["name"],
-                type=DataType.from_dict(field),
-                nullable=field["nullable"],
-                metadata=field.get("metadata"),
+        fields = []
+        for json_field in json_value["fields"]:
+            if isinstance(json_field["type"], str):
+                data_type = DataType(json_field["type"])
+            else:
+                data_type = DataType.from_dict(json_field["type"])
+            field = Field(
+                name=json_field["name"],
+                type=data_type,
+                nullable=json_field["nullable"],
+                metadata=json_field.get("metadata"),
             )
-            for field in json_value["fields"]
-        ]
+            fields.append(field)
         return cls(fields=fields, json_value=json_value)
 
 
 def pyarrow_datatype_from_dict(json_dict: Dict) -> pyarrow.DataType:
+    """
+    Create a DataType in PyArrow format from a Schema json format.
+    :param json_dict: the DataType in json format
+    :return: the DataType in PyArrow format
+    """ ""
     type_class = json_dict["type"]["name"]
     if type_class == "dictionary":
         key_type = json_dict["dictionary"]["indexType"]
@@ -189,6 +225,20 @@ def pyarrow_datatype_from_dict(json_dict: Dict) -> pyarrow.DataType:
         else:
             unit = "s"
         return pyarrow.type_for_alias(f'{type_class}{type_info["bitWidth"]}[{unit}]')
+    elif type_class == "timestamp":
+        type_info = json_dict["type"]
+        if "unit" in type_info:
+            if type_info["unit"] == "MICROSECOND":
+                unit = "us"
+            elif type_info["unit"] == "NANOSECOND":
+                unit = "ns"
+            elif type_info["unit"] == "MILLISECOND":
+                unit = "ms"
+            elif type_info["unit"] == "SECOND":
+                unit = "s"
+        else:
+            unit = "ns"
+        return pyarrow.type_for_alias(f"{type_class}[{unit}]")
     elif type_class.startswith("decimal"):
         type_info = json_dict["type"]
         return pyarrow.decimal128(
@@ -199,6 +249,11 @@ def pyarrow_datatype_from_dict(json_dict: Dict) -> pyarrow.DataType:
 
 
 def pyarrow_field_from_dict(field: Dict) -> pyarrow.Field:
+    """
+    Create a Field in PyArrow format from a Field in json format.
+    :param field: the field in json format
+    :return: the Field in PyArrow format
+    """ ""
     return pyarrow.field(
         field["name"],
         pyarrow_datatype_from_dict(field),
@@ -208,6 +263,11 @@ def pyarrow_field_from_dict(field: Dict) -> pyarrow.Field:
 
 
 def pyarrow_schema_from_json(json_data: str) -> pyarrow.Schema:
+    """
+    Create a Schema in PyArrow format from a Schema in json format.
+    :param json_data: the field in json format
+    :return: the Schema in PyArrow format
+    """ ""
     schema_json = json.loads(json_data)
     arrow_fields = [pyarrow_field_from_dict(field) for field in schema_json["fields"]]
     return pyarrow.schema(arrow_fields)

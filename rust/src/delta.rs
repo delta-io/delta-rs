@@ -18,9 +18,11 @@ use parquet::file::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::convert::TryFrom;
 
 use super::action;
 use super::action::{Action, DeltaOperation};
+use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
@@ -100,6 +102,12 @@ pub enum DeltaTableError {
     NoMetadata,
     #[error("No schema found, please make sure table is loaded.")]
     NoSchema,
+    #[error("No partitions found, please make sure table is partitioned.")]
+    LoadPartitions,
+    #[error("This partition is not formatted with key=value: {}", .partition)]
+    PartitionError { partition: String },
+    #[error("Invalid partition filter found: {}.", .partition_filter)]
+    InvalidPartitionFilter { partition_filter: String },
 }
 
 #[derive(Clone)]
@@ -563,6 +571,40 @@ impl DeltaTable {
                 Ok(ts)
             }
         }
+    }
+
+    pub fn get_files_by_partitions(
+        &self,
+        filters: &[PartitionFilter<&str>],
+    ) -> Result<Vec<String>, DeltaTableError> {
+        let partitions_number = match &self
+            .state
+            .current_metadata
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .partition_columns
+        {
+            partitions if !partitions.is_empty() => partitions.len(),
+            _ => return Err(DeltaTableError::LoadPartitions),
+        };
+        let separator = "/";
+        let files = self
+            .state
+            .files
+            .iter()
+            .filter(|f| {
+                let partitions = f
+                    .splitn(partitions_number + 1, separator)
+                    .filter_map(|p: &str| DeltaTablePartition::try_from(p).ok())
+                    .collect::<Vec<DeltaTablePartition>>();
+                filters
+                    .iter()
+                    .all(|filter| filter.match_partitions(&partitions))
+            })
+            .cloned()
+            .collect();
+
+        Ok(files)
     }
 
     /// Returns a reference to the file list present in the loaded state.
