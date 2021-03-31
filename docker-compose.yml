@@ -1,0 +1,31 @@
+version: "3.9"
+services:
+  localstack:
+    image: localstack/localstack
+    ports:
+      - "4566:4566"
+      - "${PORT_WEB_UI-8080}:${PORT_WEB_UI-8080}"
+    environment:
+      - SERVICES=s3,dynamodb
+      - DEBUG=1
+      - DATA_DIR=/tmp/localstack/data
+      - PORT_WEB_UI=8080
+      - DOCKER_HOST=unix:///var/run/docker.sock
+      - HOST_TMP_FOLDER=${TMPDIR}
+    volumes:
+      - "${TMPDIR:-/tmp/localstack}:/tmp/localstack"
+    healthcheck:
+      test: [ "CMD", "curl", "-f", "http://localhost:4566/health" ]
+
+  setup:
+    build:
+      context: .
+      dockerfile: ./build/Dockerfile
+    depends_on:
+      - localstack
+    command:
+      - /setup.sh
+    volumes:
+      - "./build/setup.sh:/setup.sh"
+      - "./rust/tests/data/golden:/data/golden"
+      - "./rust/tests/data/simple_table:/data/simple"

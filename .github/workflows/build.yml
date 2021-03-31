@@ -81,5 +81,7 @@ jobs:
         profile: default
         toolchain: stable
         override: true
+    - name: Setup localstack
+      run: docker-compose up setup
     - name: Run tests
       run: cargo test --verbose --features azure,s3
