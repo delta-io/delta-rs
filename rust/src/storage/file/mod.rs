@@ -31,6 +31,7 @@ pub struct FileStorageBackend {
 }
 
 impl FileStorageBackend {
+    /// Creates a new FileStorageBackend.
     pub fn new(root: &str) -> Self {
         Self {
             root: String::from(root),

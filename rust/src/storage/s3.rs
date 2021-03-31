@@ -125,9 +125,12 @@ impl TryFrom<rusoto_s3::Object> for ObjectMeta {
     }
 }
 
+/// Struct describing an object stored in S3.
 #[derive(Debug, PartialEq)]
 pub struct S3Object<'a> {
+    /// The bucket where the object is stored.
     pub bucket: &'a str,
+    /// The key of the object within the bucket.
     pub key: &'a str,
 }
 
@@ -137,11 +140,13 @@ impl<'a> fmt::Display for S3Object<'a> {
     }
 }
 
+/// An S3 implementation of the `StorageBackend` trait
 pub struct S3StorageBackend {
     client: rusoto_s3::S3Client,
 }
 
 impl S3StorageBackend {
+    /// Creates a new S3StorageBackend.
     pub fn new() -> Self {
         let region = if let Ok(url) = std::env::var("AWS_ENDPOINT_URL") {
             Region::Custom {
