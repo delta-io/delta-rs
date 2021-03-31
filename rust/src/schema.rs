@@ -130,14 +130,14 @@ impl SchemaTypeMap {
 #[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(untagged)]
 pub enum SchemaDataType {
-    /// Variant representing non-array, non-map, non-struct fields. Wrapped value will contain the
-    /// the string name of the primitive type.
+    // Variant representing non-array, non-map, non-struct fields. Wrapped value will contain the
+    // the string name of the primitive type.
     primitive(String),
-    /// Variant representing a struct.
+    // Variant representing a struct.
     r#struct(SchemaTypeStruct),
-    /// Variant representing an array.
+    // Variant representing an array.
     array(SchemaTypeArray),
-    /// Variant representing a map.
+    // Variant representing a map.
     map(SchemaTypeMap),
 }
 
