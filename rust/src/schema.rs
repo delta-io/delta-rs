@@ -69,12 +69,12 @@ impl SchemaField {
 /// Schema definition for array type fields.
 #[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct SchemaTypeArray {
-    /// type field is always the string "array", so we are ignoring it here
+    // type field is always the string "array", so we are ignoring it here
     r#type: String,
-    /// The type of element stored in this array represented as a string containing the name of a
-    /// primitive type, a struct definition, an array definition or a map definition
+    // The type of element stored in this array represented as a string containing the name of a
+    // primitive type, a struct definition, an array definition or a map definition
     elementType: Box<SchemaDataType>,
-    /// Boolean denoting whether this array can contain one or more null values
+    // Boolean denoting whether this array can contain one or more null values
     containsNull: bool,
 }
 
