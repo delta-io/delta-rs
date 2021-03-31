@@ -43,6 +43,7 @@ requires-dist = [
     "pandas; extra =='pandas'",
     "pytest; extra == 'devel'",
     "pytest-mock; extra == 'devel'",
+    "pytest-cov; extra == 'devel'",
     "pytest-timeout; extra == 'devel'",
 ]
 provides-extra = ["pandas", "devel"]

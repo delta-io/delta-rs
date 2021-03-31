@@ -70,8 +70,8 @@ jobs:
 
     - name: Run tests
       run: |
-        py.test tests -m 'not integration'
+        py.test --cov tests -m 'not integration'
 
     # - name: Run Integration tests
     #   run: |
-    #     py.test tests -m integration
+    #     py.test --cov tests -m integration
