@@ -45,5 +45,8 @@ requires-dist = [
     "pytest-mock; extra == 'devel'",
     "pytest-cov; extra == 'devel'",
     "pytest-timeout; extra == 'devel'",
+    "sphinx; extra == 'devel'",
+    "sphinx-rtd-theme; extra == 'devel'",
+    "toml; extra == 'devel'",
 ]
 provides-extra = ["pandas", "devel"]

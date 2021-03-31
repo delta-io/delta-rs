@@ -57,7 +57,7 @@ jobs:
     - name: Enable manylinux Python targets
       run: echo "/opt/python/cp36-cp36m/bin" >> $GITHUB_PATH
 
-    - name: Install matruin
+    - name: Install maturin
       run: pip install maturin==0.9.0
 
     - name: Build and install deltalake
@@ -75,3 +75,7 @@ jobs:
     # - name: Run Integration tests
     #   run: |
     #     py.test --cov tests -m integration
+
+    - name: Build Sphinx documentation
+      run: |
+        sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
