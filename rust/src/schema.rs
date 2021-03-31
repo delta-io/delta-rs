@@ -105,7 +105,7 @@ impl SchemaTypeMap {
         &self.keyType
     }
 
-    /// The type of element used for the key of this map, represented as a string containing the
+    /// The type of element contained in the value of this map, represented as a string containing the
     /// name of a primitive type, a struct definition, an array definition or a map definition
     pub fn get_value_type(&self) -> &SchemaDataType {
         &self.valueType
