@@ -18,7 +18,7 @@ services:
       test: [ "CMD", "curl", "-f", "http://localhost:4566/health" ]
 
   setup:
-    image: amazon/aws-cli
+    image: localstack/localstack
     depends_on:
       - localstack
     entrypoint: "/bin/bash"
