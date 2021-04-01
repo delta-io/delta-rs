@@ -62,24 +62,19 @@ jobs:
         toolchain: stable
         override: true
     - name: Run tests
-      run: cargo test --verbose --features datafusion-ext
+      run: cargo test --verbose --features datafusion-ext azure
 
-  integration_test:
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-latest
-    runs-on: ${{ matrix.os }}
+  s3_test:
+    runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - name: Install minimal stable with clippy and rustfmt
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: default
-        toolchain: stable
-        override: true
-    - name: Setup localstack
-      run: docker-compose up setup
-    - name: Run tests
-      run: cargo test --verbose --features azure,s3
+      - uses: actions/checkout@v2
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: stable
+          override: true
+      - name: Setup localstack
+        run: docker-compose up setup
+      - name: Run tests
+        run: cargo test s3 --verbose --features s3

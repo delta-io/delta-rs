@@ -18,14 +18,13 @@ services:
       test: [ "CMD", "curl", "-f", "http://localhost:4566/health" ]
 
   setup:
-    build:
-      context: .
-      dockerfile: ./build/Dockerfile
+    image: amazon/aws-cli
     depends_on:
       - localstack
+    entrypoint: "/bin/bash"
     command:
-      - /setup.sh
+      - /setup_localstack.sh
     volumes:
-      - "./build/setup.sh:/setup.sh"
+      - "./build/setup_localstack.sh:/setup_localstack.sh"
       - "./rust/tests/data/golden:/data/golden"
       - "./rust/tests/data/simple_table:/data/simple"
