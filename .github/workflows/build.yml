@@ -62,7 +62,7 @@ jobs:
         toolchain: stable
         override: true
     - name: Run tests
-      run: cargo test --verbose --features datafusion-ext azure
+      run: cargo test --verbose --features datafusion-ext,azure
 
   s3_test:
     runs-on: ubuntu-latest
