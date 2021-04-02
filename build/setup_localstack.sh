@@ -23,11 +23,9 @@ function wait_for() {
 wait_for "S3" "aws s3api list-buckets --endpoint-url=$ENDPOINT"
 
 echo "Uploading S3 test delta tables..."
-aws s3 rm s3://deltars --recursive --endpoint-url=$ENDPOINT > /dev/null 2>&1
-aws s3api delete-bucket --bucket deltars --endpoint-url=$ENDPOINT
-aws s3api create-bucket --bucket deltars --endpoint-url=$ENDPOINT
-aws s3 sync /data/golden s3://deltars/golden/ --endpoint-url=$ENDPOINT > /dev/null
-aws s3 sync /data/simple s3://deltars/simple/ --endpoint-url=$ENDPOINT > /dev/null
+aws s3api create-bucket --bucket deltars --endpoint-url=$ENDPOINT > /dev/null 2>&1
+aws s3 sync /data/golden s3://deltars/golden/ --delete --endpoint-url=$ENDPOINT > /dev/null
+aws s3 sync /data/simple s3://deltars/simple/ --delete --endpoint-url=$ENDPOINT > /dev/null
 
 wait_for "DynamoDB" "aws dynamodb list-tables --endpoint-url=$ENDPOINT"
 
