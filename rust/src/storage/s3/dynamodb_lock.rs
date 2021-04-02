@@ -5,9 +5,12 @@ use rusoto_core::RusotoError;
 use rusoto_dynamodb::*;
 use uuid::Uuid;
 
-pub struct DynamoLock {
-    client: DynamoDbClient,
-    opts: Options,
+mod options {
+    pub const PARTITION_KEY_VALUE: &str = "DYNAMO_LOCK_PARTITION_KEY_VALUE";
+    pub const TABLE_NAME: &str = "DYNAMO_LOCK_TABLE_NAME";
+    pub const OWNER_NAME: &str = "DYNAMO_LOCK_OWNER_NAME";
+    pub const LEASE_DURATION: &str = "DYNAMO_LOCK_LEASE_DURATION";
+    pub const SLEEP_MILLIS: &str = "DYNAMO_LOCK_SLEEP_MILLIS";
 }
 
 #[derive(Clone, Debug)]
@@ -19,6 +22,29 @@ pub struct Options {
     pub sleep_millis: u64,
 }
 
+impl Default for Options {
+    fn default() -> Self {
+        fn str_env(key: &str, default: String) -> String {
+            std::env::var(key).unwrap_or(default)
+        }
+
+        fn u64_env(key: &str, default: u64) -> u64 {
+            std::env::var(key)
+                .ok()
+                .and_then(|e| e.parse::<u64>().ok())
+                .unwrap_or(default)
+        }
+
+        Self {
+            partition_key_value: str_env(options::PARTITION_KEY_VALUE, "delta-rs".to_string()),
+            table_name: str_env(options::TABLE_NAME, "delta_rs_lock_table".to_string()),
+            owner_name: str_env(options::OWNER_NAME, Uuid::new_v4().to_string()),
+            lease_duration: u64_env(options::LEASE_DURATION, 20),
+            sleep_millis: u64_env(options::SLEEP_MILLIS, 1000),
+        }
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct LockItem {
     pub owner_name: String,
@@ -27,6 +53,15 @@ pub struct LockItem {
     pub is_released: bool,
     pub data: Option<String>,
     pub lookup_time: u128,
+}
+
+impl LockItem {
+    fn is_expired(&self) -> bool {
+        if self.is_released {
+            return true;
+        }
+        now_millis() - self.lookup_time > (self.lease_duration as u128) * 1000
+    }
 }
 
 #[derive(thiserror::Error, Debug)]
@@ -54,6 +89,26 @@ pub enum DynamoError {
 
     #[error("Delete item error: {0}")]
     DeleteItemError(#[from] RusotoError<DeleteItemError>),
+}
+
+impl From<RusotoError<PutItemError>> for DynamoError {
+    fn from(error: RusotoError<PutItemError>) -> Self {
+        match error {
+            RusotoError::Service(PutItemError::ConditionalCheckFailed(_)) => {
+                DynamoError::ConditionalCheckFailed
+            }
+            _ => DynamoError::PutItemError(error),
+        }
+    }
+}
+
+impl From<RusotoError<GetItemError>> for DynamoError {
+    fn from(error: RusotoError<GetItemError>) -> Self {
+        match error {
+            RusotoError::Service(GetItemError::ResourceNotFound(_)) => DynamoError::TableNotFound,
+            _ => DynamoError::GetItemError(error),
+        }
+    }
 }
 
 pub const PARTITION_KEY_NAME: &str = "key";
@@ -90,38 +145,12 @@ mod vars {
     pub const DATA_VALUE: &str = ":d";
 }
 
-mod options {
-    pub const PARTITION_KEY_VALUE: &str = "DYNAMO_LOCK_PARTITION_KEY_VALUE";
-    pub const TABLE_NAME: &str = "DYNAMO_LOCK_TABLE_NAME";
-    pub const OWNER_NAME: &str = "DYNAMO_LOCK_OWNER_NAME";
-    pub const LEASE_DURATION: &str = "DYNAMO_LOCK_LEASE_DURATION";
-    pub const SLEEP_MILLIS: &str = "DYNAMO_LOCK_SLEEP_MILLIS";
+pub struct DynamoDbLockClient {
+    client: DynamoDbClient,
+    opts: Options,
 }
 
-impl Default for Options {
-    fn default() -> Self {
-        fn str_env(key: &str, default: String) -> String {
-            std::env::var(key).unwrap_or(default)
-        }
-
-        fn u64_env(key: &str, default: u64) -> u64 {
-            std::env::var(key)
-                .ok()
-                .and_then(|e| e.parse::<u64>().ok())
-                .unwrap_or(default)
-        }
-
-        Self {
-            partition_key_value: str_env(options::PARTITION_KEY_VALUE, "delta-rs".to_string()),
-            table_name: str_env(options::TABLE_NAME, "delta_rs_lock_table".to_string()),
-            owner_name: str_env(options::OWNER_NAME, Uuid::new_v4().to_string()),
-            lease_duration: u64_env(options::LEASE_DURATION, 20),
-            sleep_millis: u64_env(options::SLEEP_MILLIS, 1000),
-        }
-    }
-}
-
-impl DynamoLock {
+impl DynamoDbLockClient {
     pub fn new(client: DynamoDbClient, opts: Options) -> Self {
         Self { client, opts }
     }
@@ -270,15 +299,6 @@ impl DynamoLock {
     }
 }
 
-impl LockItem {
-    fn is_expired(&self) -> bool {
-        if self.is_released {
-            return true;
-        }
-        now_millis() - self.lookup_time > (self.lease_duration as u128) * 1000
-    }
-}
-
 fn now_millis() -> u128 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -294,7 +314,7 @@ pub fn attr<T: ToString>(s: T) -> AttributeValue {
 }
 
 struct AcquireLockState<'a> {
-    client: &'a DynamoLock,
+    client: &'a DynamoDbLockClient,
     cached_lock: Option<LockItem>,
     started: Instant,
     timeout_in: Duration,
@@ -399,25 +419,5 @@ impl<'a> AcquireLockState<'a> {
                 }),
             )
             .await
-    }
-}
-
-impl From<RusotoError<PutItemError>> for DynamoError {
-    fn from(error: RusotoError<PutItemError>) -> Self {
-        match error {
-            RusotoError::Service(PutItemError::ConditionalCheckFailed(_)) => {
-                DynamoError::ConditionalCheckFailed
-            }
-            _ => DynamoError::PutItemError(error),
-        }
-    }
-}
-
-impl From<RusotoError<GetItemError>> for DynamoError {
-    fn from(error: RusotoError<GetItemError>) -> Self {
-        match error {
-            RusotoError::Service(GetItemError::ResourceNotFound(_)) => DynamoError::TableNotFound,
-            _ => DynamoError::GetItemError(error),
-        }
     }
 }

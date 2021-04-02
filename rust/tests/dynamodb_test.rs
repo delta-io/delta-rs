@@ -4,13 +4,13 @@ extern crate maplit;
 
 #[cfg(feature = "dynamodb")]
 mod dynamodb {
-    use deltalake::s3::dynamodb::{attr, DynamoLock, Options, PARTITION_KEY_NAME};
+    use deltalake::s3::dynamodb_lock::{attr, DynamoDbLockClient, Options, PARTITION_KEY_NAME};
     use rusoto_core::Region;
     use rusoto_dynamodb::*;
     use serial_test::serial;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    async fn create_dynamo_lock(key: &str, owner: &str) -> DynamoLock {
+    async fn create_dynamo_lock(key: &str, owner: &str) -> DynamoDbLockClient {
         let table_name = "test_table";
         std::env::set_var("AWS_ACCESS_KEY_ID", "test");
         std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
@@ -34,7 +34,7 @@ mod dynamodb {
                 ..Default::default()
             })
             .await;
-        DynamoLock::new(client, opts)
+        DynamoDbLockClient::new(client, opts)
     }
 
     #[tokio::test]
