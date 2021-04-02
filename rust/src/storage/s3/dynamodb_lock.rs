@@ -6,19 +6,32 @@ use rusoto_dynamodb::*;
 use uuid::Uuid;
 
 mod options {
+    /// Environment variable for `partition_key_value` option.
     pub const PARTITION_KEY_VALUE: &str = "DYNAMO_LOCK_PARTITION_KEY_VALUE";
+    /// Environment variable for `table_name` option.
     pub const TABLE_NAME: &str = "DYNAMO_LOCK_TABLE_NAME";
+    /// Environment variable for `owner_name` option.
     pub const OWNER_NAME: &str = "DYNAMO_LOCK_OWNER_NAME";
+    /// Environment variable for `lease_duration` option.
     pub const LEASE_DURATION: &str = "DYNAMO_LOCK_LEASE_DURATION";
+    /// Environment variable for `sleep_millis` option.
     pub const SLEEP_MILLIS: &str = "DYNAMO_LOCK_SLEEP_MILLIS";
 }
 
+/// Configuration options for [`DynamoDbLockClient`].
 #[derive(Clone, Debug)]
 pub struct Options {
+    /// Partition key value of DynamoDB table,
+    /// should be the same among the clients which work with the lock.
     pub partition_key_value: String,
+    /// The DynamoDB table name, should be the same among the clients which work with the lock.
+    /// The table has to be created if it not exists before using it with DynamoDB locking API.
     pub table_name: String,
+    /// Owner name, should be unique among the clients which work with the lock.
     pub owner_name: String,
+    /// The amount of time (in seconds) that the owner has for the acquired lock.
     pub lease_duration: u64,
+    /// The amount of time (in millis) to wait between the retries of acquiring the lock.
     pub sleep_millis: u64,
 }
 
@@ -45,13 +58,21 @@ impl Default for Options {
     }
 }
 
+/// A lock that has been successfully acquired
 #[derive(Clone, Debug)]
 pub struct LockItem {
+    /// The name of the owner that owns this lock.
     pub owner_name: String,
+    /// Current version number of the lock in DynamoDB. This is what tells the lock client
+    /// when the lock is stale.
     pub record_version_number: String,
+    /// The amount of time (in millis) that the owner has this lock for.
     pub lease_duration: u64,
+    /// Tells whether or not the lock was marked as released when loaded from DynamoDB.
     pub is_released: bool,
+    /// Optional data associated with this lock.
     pub data: Option<String>,
+    /// The last time this lock was updated or retrieved.
     pub lookup_time: u128,
 }
 
@@ -64,31 +85,39 @@ impl LockItem {
     }
 }
 
+/// Error returned by the [`DynamoDbLockClient`] API.
 #[derive(thiserror::Error, Debug)]
 pub enum DynamoError {
+    /// Error caused by the DynamoDB table not being created.
     #[error("Dynamo table not found")]
     TableNotFound,
 
+    /// Error that indicates the condition in the DynamoDB operation could not be evaluated.
+    /// Mostly used by [`DynamoDbLockClient::acquire_lock`] to handle unsuccessful retries
+    /// of acquiring the lock.
     #[error("Conditional check failed")]
     ConditionalCheckFailed,
 
+    /// The required field of [`LockItem`] is missing in DynamoDB record or has incompatible type.
     #[error("DynamoDB item has invalid schema")]
     InvalidItemSchema,
 
+    /// Error returned by [`DynamoDbLockClient::acquire_lock`] which indicates that the lock could
+    /// not be acquired for more that returned number of seconds.
     #[error("Could not acquire lock for {0} sec")]
     TimedOut(u64),
 
+    /// Error caused by the [`DynamoDbClient::put_item`] request.
     #[error("Put item error: {0}")]
     PutItemError(RusotoError<PutItemError>),
 
+    /// Error caused by the [`DynamoDbClient::update_item`] request.
     #[error("Update item error: {0}")]
     UpdateItemError(#[from] RusotoError<UpdateItemError>),
 
+    /// Error caused by the [`DynamoDbClient::get_item`] request.
     #[error("Get item error: {0}")]
     GetItemError(RusotoError<GetItemError>),
-
-    #[error("Delete item error: {0}")]
-    DeleteItemError(#[from] RusotoError<DeleteItemError>),
 }
 
 impl From<RusotoError<PutItemError>> for DynamoError {
@@ -110,26 +139,40 @@ impl From<RusotoError<GetItemError>> for DynamoError {
         }
     }
 }
-
+/// The partition key field name in DynamoDB
 pub const PARTITION_KEY_NAME: &str = "key";
+/// The field name of `owner_name` in DynamoDB
 pub const OWNER_NAME: &str = "ownerName";
+/// The field name of `record_version_number` in DynamoDB
 pub const RECORD_VERSION_NUMBER: &str = "recordVersionNumber";
+/// The field name of `is_released` in DynamoDB
 pub const IS_RELEASED: &str = "isReleased";
+/// The field name of `lease_duration` in DynamoDB
 pub const LEASE_DURATION: &str = "leaseDuration";
+/// The field name of `data` in DynamoDB
 pub const DATA: &str = "data";
 
 mod expressions {
+    /// The expression that checks whether the lock record does not exists.
     pub const ACQUIRE_LOCK_THAT_DOESNT_EXIST: &str = "attribute_not_exists(#pk)";
 
+    /// The expression that checks whether the lock record exists and it is marked as released.
     pub const PK_EXISTS_AND_IS_RELEASED: &str = "attribute_exists(#pk) AND #ir = :ir";
 
+    /// The expression that checks whether the lock record exists
+    /// and its record version number matches with the given one.
     pub const PK_EXISTS_AND_RVN_MATCHES: &str = "attribute_exists(#pk) AND #rvn = :rvn";
 
+    /// The expression that checks whether the lock record exists,
+    /// its record version number matches with the given one
+    /// and its owner name matches with the given one.
     pub const PK_EXISTS_AND_OWNER_RVN_MATCHES: &str =
         "attribute_exists(#pk) AND #rvn = :rvn AND #on = :on";
 
+    /// The expression that updates is_released and data fields of DynamoDB record.
     pub const UPDATE_IS_RELEASED_AND_DATA: &str = "SET #ir = :ir, #d = :d";
 
+    /// The expression that updates is_released field of DynamoDB record.
     pub const UPDATE_IS_RELEASED: &str = "SET #ir = :ir";
 }
 
@@ -145,16 +188,24 @@ mod vars {
     pub const DATA_VALUE: &str = ":d";
 }
 
+/// Provides a simple library for using DynamoDB's consistent read/write feature
+/// to use it for managing distributed locks.
 pub struct DynamoDbLockClient {
     client: DynamoDbClient,
     opts: Options,
 }
 
 impl DynamoDbLockClient {
+    /// Creates new DynamoDB lock client
     pub fn new(client: DynamoDbClient, opts: Options) -> Self {
         Self { client, opts }
     }
 
+    /// Attempts to acquire a lock until it either acquires the lock or the error is found.
+    /// It it does not see the existing DynamoDB record then it's immediately created and
+    /// returned to the caller. If it does see a lock, it will take its lease duration into
+    /// consideration. If the lock is deemed stale (it's not released by its owner within lease
+    /// duration), then this will acquire and return it.
     pub async fn acquire_lock(&self) -> Result<LockItem, DynamoError> {
         let mut state = AcquireLockState {
             client: self,
@@ -177,6 +228,7 @@ impl DynamoDbLockClient {
         }
     }
 
+    /// Returns current lock from DynamoDB (if any).
     pub async fn get_lock(&self) -> Result<Option<LockItem>, DynamoError> {
         let output = self
             .client
@@ -216,6 +268,7 @@ impl DynamoDbLockClient {
         Ok(None)
     }
 
+    /// Releases given lock if thee current owner still has it.
     pub async fn release_lock(&self, lock: &LockItem) -> Result<(), DynamoError> {
         let mut names = hashmap! {
             vars::PK_PATH.to_string() => PARTITION_KEY_NAME.to_string(),
@@ -306,6 +359,7 @@ fn now_millis() -> u128 {
         .as_millis()
 }
 
+/// Converts Rust String into DynamoDB string AttributeValue
 pub fn attr<T: ToString>(s: T) -> AttributeValue {
     AttributeValue {
         s: Some(s.to_string()),
@@ -341,7 +395,7 @@ impl<'a> AcquireLockState<'a> {
                     None => {
                         // first we store it, extend timeout period and try again later
                         return self.set_new_cached_lock_and_fail(existing);
-                    },
+                    }
                     Some(cached) => cached,
                 };
                 // there's existing lock and we've already tried to acquire it, let's try again
