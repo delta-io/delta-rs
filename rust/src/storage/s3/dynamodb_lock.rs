@@ -336,29 +336,30 @@ impl<'a> AcquireLockState<'a> {
                 Ok(self.upsert_released_lock(existing.data).await?)
             }
             Some(existing) => {
-                // there's existing lock and it's out first attempt to acquire it
-                if self.cached_lock.is_none() {
-                    // first we store it, extend timeout period and try again later
-                    return self.set_new_cached_lock_and_fail(existing);
-                }
-
+                let cached = match self.cached_lock.as_ref() {
+                    // there's existing lock and it's out first attempt to acquire it
+                    None => {
+                        // first we store it, extend timeout period and try again later
+                        return self.set_new_cached_lock_and_fail(existing);
+                    },
+                    Some(cached) => cached,
+                };
                 // there's existing lock and we've already tried to acquire it, let's try again
-                let active = self.cached_lock.as_ref().unwrap();
-                let active_rvn = &active.record_version_number;
+                let cached_rvn = &cached.record_version_number;
 
                 // let's check store rvn against current lock from dynamo
-                if active_rvn == &existing.record_version_number {
+                if cached_rvn == &existing.record_version_number {
                     // rvn matches
-                    if active.is_expired() {
+                    if cached.is_expired() {
                         // the lock is expired and we're safe to try to acquire it
-                        self.upsert_expired_lock(active_rvn, existing.data).await
+                        self.upsert_expired_lock(cached_rvn, existing.data).await
                     } else {
                         // the lock is not yet expired, try again later
                         Err(DynamoError::ConditionalCheckFailed)
                     }
                 } else {
                     // rvn doesn't match, meaning that other worker acquire it before us
-                    // let's change active lock with new one and extend timeout period
+                    // let's change cached lock with new one and extend timeout period
                     self.set_new_cached_lock_and_fail(existing)
                 }
             }
