@@ -42,7 +42,7 @@ jobs:
         toolchain: stable
         override: true
     - name: build and lint with clippy
-      run: cargo clippy --features azure,datafusion-ext,s3
+      run: cargo clippy --features azure,datafusion-ext,s3,dynamodb
 
   test:
     strategy:
@@ -77,4 +77,4 @@ jobs:
       - name: Setup localstack
         run: docker-compose up setup
       - name: Run tests
-        run: cargo test s3 --verbose --features s3
+        run: cargo test s3 --verbose --features s3,dynamodb

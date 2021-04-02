@@ -37,6 +37,8 @@ rusoto_core = { version = "0.46", optional = true }
 rusoto_credential = { version = "0.46", optional = true }
 rusoto_s3 = { version = "0.46", optional = true }
 rusoto_sts = { version = "0.46", optional = true }
+rusoto_dynamodb = { version = "0.46", optional = true }
+maplit = { version = "1", optional = true }
 
 # Cannot use branch constraint due to https://github.com/PyO3/maturin/issues/389
 arrow  = { git = "https://github.com/apache/arrow.git", rev = "05b36567bd8216bec71b796fe3bb6811c71abbec" }
@@ -54,6 +56,7 @@ rust-dataframe-ext = []
 datafusion-ext = ["datafusion", "crossbeam"]
 azure = ["azure_core", "azure_storage", "reqwest"]
 s3 = ["rusoto_core", "rusoto_credential", "rusoto_s3", "rusoto_sts"]
+dynamodb = ["rusoto_dynamodb", "maplit"]
 
 [build-dependencies]
 glibc_version = "0"
