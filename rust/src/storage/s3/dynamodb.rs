@@ -129,7 +129,7 @@ impl DynamoLock {
     pub async fn acquire_lock(&self) -> Result<LockItem, DynamoError> {
         let mut state = AcquireLockState {
             client: self,
-            active_lock: None,
+            cached_lock: None,
             started: Instant::now(),
             timeout_in: Duration::from_millis(self.opts.sleep_millis),
         };
@@ -295,7 +295,7 @@ pub fn attr<T: ToString>(s: T) -> AttributeValue {
 
 struct AcquireLockState<'a> {
     client: &'a DynamoLock,
-    active_lock: Option<LockItem>,
+    cached_lock: Option<LockItem>,
     started: Instant,
     timeout_in: Duration,
 }
@@ -317,13 +317,13 @@ impl<'a> AcquireLockState<'a> {
             }
             Some(existing) => {
                 // there's existing lock and it's out first attempt to acquire it
-                if self.active_lock.is_none() {
+                if self.cached_lock.is_none() {
                     // first we store it, extend timeout period and try again later
-                    return self.set_new_active_lock_and_fail(existing);
+                    return self.set_new_cached_lock_and_fail(existing);
                 }
 
                 // there's existing lock and we've already tried to acquire it, let's try again
-                let active = self.active_lock.as_ref().unwrap();
+                let active = self.cached_lock.as_ref().unwrap();
                 let active_rvn = &active.record_version_number;
 
                 // let's check store rvn against current lock from dynamo
@@ -339,21 +339,17 @@ impl<'a> AcquireLockState<'a> {
                 } else {
                     // rvn doesn't match, meaning that other worker acquire it before us
                     // let's change active lock with new one and extend timeout period
-                    self.set_new_active_lock_and_fail(existing)
+                    self.set_new_cached_lock_and_fail(existing)
                 }
             }
         }
     }
 
-    fn set_new_active_lock_and_fail(&mut self, lock: LockItem) -> Result<LockItem, DynamoError> {
-        self.extend_timeout_by(lock.lease_duration);
-        self.active_lock = Some(lock);
+    fn set_new_cached_lock_and_fail(&mut self, lock: LockItem) -> Result<LockItem, DynamoError> {
+        self.timeout_in = Duration::from_secs(self.timeout_in.as_secs() + lock.lease_duration);
+        self.cached_lock = Some(lock);
 
         Err(DynamoError::ConditionalCheckFailed)
-    }
-
-    fn extend_timeout_by(&mut self, seconds: u64) {
-        self.timeout_in = Duration::from_secs(self.timeout_in.as_secs() + seconds)
     }
 
     async fn upsert_new_lock(&self) -> Result<LockItem, DynamoError> {
