@@ -20,9 +20,9 @@ jobs:
       with:
         python-version: 3.6
     - name: Format Python code with Black
-      uses: psf/black@stable
-      with:
-        args: ". --check"
+      run: |
+        pip install black
+        black . --check
     - name: Install minimal stable with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
