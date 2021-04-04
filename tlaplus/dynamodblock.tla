@@ -50,6 +50,7 @@ define
 end define;
 
 macro Sleep() begin
+    \* sleep becomes a no op when timer is disabled in the spec
     if TIME_TICK_UNIT > 0 then
         next_time_tick := time_now + TIME_TICK_UNIT;
         await time_now = next_time_tick;
@@ -132,7 +133,7 @@ createlock:       call DynamodbUpsertLock(owner, record_version, cached_lock_loo
                     else
                         \* cached lock has not expired yet
                         \* sleep and retry
-                        skip;
+                        goto retry;
                     end if;
                   else
                     \* lock version mismatch, lock changed hands
@@ -146,6 +147,7 @@ createlock:       call DynamodbUpsertLock(owner, record_version, cached_lock_loo
              return;
 end procedure;
 
+\* if our lock works as expected, steps in this procedure should be executed atomically
 procedure CriticalSection()
     variables
         local_count_value = NULL;
@@ -156,6 +158,7 @@ begin
              return;
 end procedure;
 
+\* concurrent writers loop that tries to access a critical section guarded by dynamodb lock
 fair process Writer \in WRITERS
 begin
 writerloop:  while (local_counter[self] < LOOP_COUNT) do
@@ -174,6 +177,7 @@ loop_count:      local_counter[self] := local_counter[self] + 1;
              active_writer := active_writer - 1;
 end process;
 
+\* this process simulates flow of time using a global time_now counter
 fair process Timer = TIME_TICK_UNIT
 begin
     tick:  while TIME_TICK_UNIT > 0 /\ active_writer > 0 do
@@ -182,11 +186,11 @@ begin
 end process;
 
 end algorithm; *)
-\* BEGIN TRANSLATION (chksum(pcal) = "e6415912" /\ chksum(tla) = "ffc65bb2")
-\* Procedure variable cached_lock_lookup_time of procedure AcquireLock at line 99 col 9 changed to cached_lock_lookup_time_
-\* Procedure variable cached_lock_duration of procedure AcquireLock at line 100 col 9 changed to cached_lock_duration_
-\* Parameter owner of procedure DynamodbUpsertLock at line 72 col 5 changed to owner_
-\* Parameter record_version of procedure DynamodbUpsertLock at line 73 col 5 changed to record_version_
+\* BEGIN TRANSLATION (chksum(pcal) = "27144e93" /\ chksum(tla) = "26d8d366")
+\* Procedure variable cached_lock_lookup_time of procedure AcquireLock at line 100 col 9 changed to cached_lock_lookup_time_
+\* Procedure variable cached_lock_duration of procedure AcquireLock at line 101 col 9 changed to cached_lock_duration_
+\* Parameter owner of procedure DynamodbUpsertLock at line 73 col 5 changed to owner_
+\* Parameter record_version of procedure DynamodbUpsertLock at line 74 col 5 changed to record_version_
 VARIABLES shared_counter, time_now, active_writer, local_record_version, 
           local_counter, re_upsert_err, lock_owner, lock_released, 
           lock_record_version, lock_duration, pc, stack
@@ -284,9 +288,9 @@ DynamodbUpsertLock(self) == cond_put(self)
 
 validate(self) == /\ pc[self] = "validate"
                   /\ Assert(owner[self] /= NULL, 
-                            "Failure of assertion at line 103, column 14.")
-                  /\ Assert(record_version[self] /= NULL, 
                             "Failure of assertion at line 104, column 14.")
+                  /\ Assert(record_version[self] /= NULL, 
+                            "Failure of assertion at line 105, column 14.")
                   /\ pc' = [pc EXCEPT ![self] = "try_loop"]
                   /\ UNCHANGED << shared_counter, time_now, active_writer, 
                                   local_record_version, local_counter, 
@@ -306,9 +310,9 @@ try_loop(self) == /\ pc[self] = "try_loop"
                                              cached_lock_duration_, 
                                              cached_lock_version >>
                         ELSE /\ Assert(lock_owner /= self, 
-                                       "Failure of assertion at line 117, column 19.")
-                             /\ Assert(lock_record_version /= NULL, 
                                        "Failure of assertion at line 118, column 19.")
+                             /\ Assert(lock_record_version /= NULL, 
+                                       "Failure of assertion at line 119, column 19.")
                              /\ IF (cached_lock_version[self] = NULL)
                                    THEN /\ cached_lock_version' = [cached_lock_version EXCEPT ![self] = lock_record_version]
                                         /\ cached_lock_lookup_time_' = [cached_lock_lookup_time_ EXCEPT ![self] = time_now]
@@ -317,8 +321,7 @@ try_loop(self) == /\ pc[self] = "try_loop"
                                    ELSE /\ IF (cached_lock_version[self] = lock_record_version)
                                               THEN /\ IF time_now - cached_lock_lookup_time_[self] > cached_lock_duration_[self]
                                                          THEN /\ pc' = [pc EXCEPT ![self] = "takelock"]
-                                                         ELSE /\ TRUE
-                                                              /\ pc' = [pc EXCEPT ![self] = "retry"]
+                                                         ELSE /\ pc' = [pc EXCEPT ![self] = "retry"]
                                                    /\ UNCHANGED << cached_lock_lookup_time_, 
                                                                    cached_lock_duration_, 
                                                                    cached_lock_version >>
@@ -553,7 +556,7 @@ csection(self) == /\ pc[self] = "csection"
 release(self) == /\ pc[self] = "release"
                  /\ IF TIME_TICK_UNIT = 0
                        THEN /\ Assert(lock_owner = self, 
-                                      "Failure of assertion at line 169, column 22.")
+                                      "Failure of assertion at line 172, column 22.")
                        ELSE /\ TRUE
                  /\ IF (lock_owner = self /\ lock_record_version = (local_record_version[self]))
                        THEN /\ lock_released' = TRUE
@@ -629,5 +632,5 @@ Termination == <>(\A self \in ProcSet: pc[self] = "Done")
 
 =============================================================================
 \* Modification History
-\* Last modified Sun Apr 04 13:49:05 PDT 2021 by qph
+\* Last modified Sun Apr 04 16:13:06 PDT 2021 by qph
 \* Created Sun Mar 28 23:02:14 PDT 2021 by qph
