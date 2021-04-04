@@ -79,7 +79,7 @@ mod tests {
 
     #[test]
     fn test_atomic_rename() {
-        let tmp_dir = tempdir::TempDir::new("test_atomic_rename").unwrap();
+        let tmp_dir = tempdir::TempDir::new_in(".", "test_atomic_rename").unwrap();
         let a = create_file(&tmp_dir.path(), "a");
         let b = create_file(&tmp_dir.path(), "b");
         let c = &tmp_dir.path().join("c");
