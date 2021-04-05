@@ -202,7 +202,7 @@ impl DynamoDbLockClient {
     }
 
     /// Attempts to acquire a lock until it either acquires the lock or the error is found.
-    /// It it does not see the existing DynamoDB record then it's immediately created and
+    /// If it does not see an existing DynamoDB record then it's immediately created and
     /// returned to the caller. If it does see a lock, it will take its lease duration into
     /// consideration. If the lock is deemed stale (it's not released by its owner within lease
     /// duration), then this will acquire and return it.
