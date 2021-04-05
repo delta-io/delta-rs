@@ -228,11 +228,17 @@ impl DynamoDbLockClient {
     }
 
     /// Attempts to acquire a lock until it either acquires the lock or a specified
-    /// `additional_time_to_wait_for_lock` is reached.
-    /// If it does not see an existing DynamoDB record then it's immediately created and
-    /// returned to the caller. If it does see a lock, it will take its lease duration into
-    /// consideration. If the lock is deemed stale (it's not released by its owner within lease
-    /// duration), then this will acquire and return it.
+    /// `additional_time_to_wait_for_lock` is reached. This function will poll DynamoDB based
+    /// on the `refresh_period`. If it does not see the lock in DynamoDB, it will immediately
+    /// return the lock to the caller. If it does see the lock, it will note the lease
+    /// expiration on the lock. If the lock is deemed stale, then this will acquire and return it.
+    /// Otherwise, if it waits for as long as `additional_time_to_wait_for_lock` without acquiring
+    /// the lock, then it will a [`DynamoError::TimedOut].
+    ///
+    /// Note that this method will wait for at least as long as the `lease_duration` in order
+    /// to acquire a lock that already exists. If the lock is not acquired in that time,
+    /// it will wait an additional amount of time specified in `additional_time_to_wait_for_lock`
+    /// before giving up.
     pub async fn acquire_lock(&self) -> Result<LockItem, DynamoError> {
         let mut state = AcquireLockState {
             client: self,
