@@ -14,8 +14,10 @@ mod options {
     pub const OWNER_NAME: &str = "DYNAMO_LOCK_OWNER_NAME";
     /// Environment variable for `lease_duration` option.
     pub const LEASE_DURATION: &str = "DYNAMO_LOCK_LEASE_DURATION";
-    /// Environment variable for `sleep_millis` option.
-    pub const SLEEP_MILLIS: &str = "DYNAMO_LOCK_SLEEP_MILLIS";
+    /// Environment variable for `refresh_period` option.
+    pub const REFRESH_PERIOD_SECS: &str = "DYNAMO_LOCK_REFRESH_PERIOD_SECS";
+    /// Environment variable for `additional_time_to_wait_for_lock` option.
+    pub const ADDITIONAL_TIME_TO_WAIT_SECS: &str = "DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_SECS";
 }
 
 /// Configuration options for [`DynamoDbLockClient`].
@@ -31,8 +33,10 @@ pub struct Options {
     pub owner_name: String,
     /// The amount of time (in seconds) that the owner has for the acquired lock.
     pub lease_duration: u64,
-    /// The amount of time (in millis) to wait between the retries of acquiring the lock.
-    pub sleep_millis: u64,
+    /// The amount of time to wait before trying to get the lock again.
+    pub refresh_period: Duration,
+    /// The amount of time to wait in addition to `lease_duration`.
+    pub additional_time_to_wait_for_lock: Duration,
 }
 
 impl Default for Options {
@@ -48,12 +52,17 @@ impl Default for Options {
                 .unwrap_or(default)
         }
 
+        let refresh_period = Duration::from_secs(u64_env(options::REFRESH_PERIOD_SECS, 1000));
+        let additional_time_to_wait_for_lock =
+            Duration::from_secs(u64_env(options::ADDITIONAL_TIME_TO_WAIT_SECS, 1000));
+
         Self {
             partition_key_value: str_env(options::PARTITION_KEY_VALUE, "delta-rs".to_string()),
             table_name: str_env(options::TABLE_NAME, "delta_rs_lock_table".to_string()),
             owner_name: str_env(options::OWNER_NAME, Uuid::new_v4().to_string()),
             lease_duration: u64_env(options::LEASE_DURATION, 20),
-            sleep_millis: u64_env(options::SLEEP_MILLIS, 1000),
+            refresh_period,
+            additional_time_to_wait_for_lock,
         }
     }
 }
@@ -66,7 +75,7 @@ pub struct LockItem {
     /// Current version number of the lock in DynamoDB. This is what tells the lock client
     /// when the lock is stale.
     pub record_version_number: String,
-    /// The amount of time (in millis) that the owner has this lock for.
+    /// The amount of time (in seconds) that the owner has this lock for.
     pub lease_duration: u64,
     /// Tells whether or not the lock was marked as released when loaded from DynamoDB.
     pub is_released: bool,
@@ -98,6 +107,11 @@ pub enum DynamoError {
     #[error("Conditional check failed")]
     ConditionalCheckFailed,
 
+    /// Error that is returned by [`DynamoDbLockClient::release_lock`] when the given lock
+    /// has been already expired and could not be released.
+    #[error("Lock is expired")]
+    LockIsExpired,
+
     /// The required field of [`LockItem`] is missing in DynamoDB record or has incompatible type.
     #[error("DynamoDB item has invalid schema")]
     InvalidItemSchema,
@@ -113,7 +127,7 @@ pub enum DynamoError {
 
     /// Error caused by the [`DynamoDbClient::update_item`] request.
     #[error("Update item error: {0}")]
-    UpdateItemError(#[from] RusotoError<UpdateItemError>),
+    UpdateItemError(RusotoError<UpdateItemError>),
 
     /// Error caused by the [`DynamoDbClient::get_item`] request.
     #[error("Get item error: {0}")]
@@ -139,6 +153,18 @@ impl From<RusotoError<GetItemError>> for DynamoError {
         }
     }
 }
+
+impl From<RusotoError<UpdateItemError>> for DynamoError {
+    fn from(error: RusotoError<UpdateItemError>) -> Self {
+        match error {
+            RusotoError::Service(UpdateItemError::ConditionalCheckFailed(_)) => {
+                DynamoError::LockIsExpired
+            }
+            _ => DynamoError::UpdateItemError(error),
+        }
+    }
+}
+
 /// The partition key field name in DynamoDB
 pub const PARTITION_KEY_NAME: &str = "key";
 /// The field name of `owner_name` in DynamoDB
@@ -201,7 +227,8 @@ impl DynamoDbLockClient {
         Self { client, opts }
     }
 
-    /// Attempts to acquire a lock until it either acquires the lock or the error is found.
+    /// Attempts to acquire a lock until it either acquires the lock or a specified
+    /// `additional_time_to_wait_for_lock` is reached.
     /// If it does not see an existing DynamoDB record then it's immediately created and
     /// returned to the caller. If it does see a lock, it will take its lease duration into
     /// consideration. If the lock is deemed stale (it's not released by its owner within lease
@@ -211,7 +238,7 @@ impl DynamoDbLockClient {
             client: self,
             cached_lock: None,
             started: Instant::now(),
-            timeout_in: Duration::from_millis(self.opts.sleep_millis),
+            timeout_in: self.opts.additional_time_to_wait_for_lock,
         };
 
         loop {
@@ -221,7 +248,7 @@ impl DynamoDbLockClient {
                     if state.has_timed_out() {
                         return Err(DynamoError::TimedOut(state.started.elapsed().as_secs()));
                     }
-                    tokio::time::sleep(Duration::from_millis(self.opts.sleep_millis)).await;
+                    tokio::time::sleep(self.opts.refresh_period).await;
                 }
                 Err(e) => return Err(e),
             }
@@ -394,7 +421,12 @@ impl<'a> AcquireLockState<'a> {
                     // there's existing lock and it's out first attempt to acquire it
                     None => {
                         // first we store it, extend timeout period and try again later
-                        return self.set_new_cached_lock_and_fail(existing);
+                        self.timeout_in = Duration::from_secs(
+                            self.timeout_in.as_secs() + existing.lease_duration,
+                        );
+                        self.cached_lock = Some(existing);
+
+                        return Err(DynamoError::ConditionalCheckFailed);
                     }
                     Some(cached) => cached,
                 };
@@ -414,17 +446,11 @@ impl<'a> AcquireLockState<'a> {
                 } else {
                     // rvn doesn't match, meaning that other worker acquire it before us
                     // let's change cached lock with new one and extend timeout period
-                    self.set_new_cached_lock_and_fail(existing)
+                    self.cached_lock = Some(existing);
+                    return Err(DynamoError::ConditionalCheckFailed);
                 }
             }
         }
-    }
-
-    fn set_new_cached_lock_and_fail(&mut self, lock: LockItem) -> Result<LockItem, DynamoError> {
-        self.timeout_in = Duration::from_secs(self.timeout_in.as_secs() + lock.lease_duration);
-        self.cached_lock = Some(lock);
-
-        Err(DynamoError::ConditionalCheckFailed)
     }
 
     async fn upsert_new_lock(&self) -> Result<LockItem, DynamoError> {
