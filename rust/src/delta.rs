@@ -45,70 +45,104 @@ impl Eq for CheckPoint {}
 
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTableError {
+    /// Error returned when applying transaction log failed.
     #[error("Failed to apply transaction log: {}", .source)]
     ApplyLog {
+        /// Apply error details returned when applying transaction log failed.
         #[from]
         source: ApplyLogError,
     },
+    /// Error returned when loading checkpoint failed.
     #[error("Failed to load checkpoint: {}", .source)]
     LoadCheckpoint {
+        /// Load checkpoint error details returned when loading checkpoint failed.
         #[from]
         source: LoadCheckpointError,
     },
+    /// Error returned when reading the delta log object failed.
     #[error("Failed to read delta log object: {}", .source)]
     StorageError {
+        /// Storage error details when reading the delta log object failed.
         #[from]
         source: StorageError,
     },
+    /// Error returned when reading the checkpoint failed.
     #[error("Failed to read checkpoint: {}", .source)]
     ParquetError {
+        /// Parquet error details returned when reading the checkpoint failed.
         #[from]
         source: ParquetError,
     },
+    /// Error returned when converting the schema in Arrow format failed.
     #[error("Failed to convert into Arrow schema: {}", .source)]
     ArrowError {
+        /// Arrow error details returned when converting the schema in Arrow format failed
         #[from]
         source: ArrowError,
     },
+    /// Error returned when the table has an invalid path.
     #[error("Invalid table path: {}", .source)]
     UriError {
+        /// Uri error details returned when the table has an invalid path.
         #[from]
         source: UriError,
     },
+    /// Error returned when the log record has an invalid JSON.
     #[error("Invalid JSON in log record: {}", .source)]
     InvalidJson {
+        /// JSON error details returned when the log record has an invalid JSON.
         #[from]
         source: serde_json::error::Error,
     },
+    /// Error returned when the DeltaTable has an invalid version.
     #[error("Invalid table version: {0}")]
     InvalidVersion(DeltaDataTypeVersion),
+    /// Error returned when the DeltaTable has no data files.
     #[error("Corrupted table, cannot read data file {}: {}", .path, .source)]
     MissingDataFile {
+        /// Source error details returned when the DeltaTable has no data files.
         source: std::io::Error,
+        /// The Path used of the DeltaTable
         path: String,
     },
+    /// Error returned when the datetime string is invalid for a conversion.
     #[error("Invalid datetime string: {}", .source)]
-    InvalidDateTimeSTring {
+    InvalidDateTimeString {
+        /// Parse error details returned of the datetime string parse error.
         #[from]
         source: chrono::ParseError,
     },
+    /// Error returned when the action record is invalid in log.
     #[error("Invalid action record found in log: {}", .source)]
     InvalidAction {
+        /// Action error details returned of the invalid action.
         #[from]
         source: action::ActionError,
     },
+    /// Error returned when it is not a DeltaTable.
     #[error("Not a Delta table")]
     NotATable,
+    /// Error returned when no metadata was found in the DeltaTable.
     #[error("No metadata found, please make sure table is loaded.")]
     NoMetadata,
+    /// Error returned when no schema was found in the DeltaTable.
     #[error("No schema found, please make sure table is loaded.")]
     NoSchema,
+    /// Error returned when no partition was found in the DeltaTable.
     #[error("No partitions found, please make sure table is partitioned.")]
     LoadPartitions,
+    /// Error returned when a partition is not formatted as a Hive Partition.
     #[error("This partition is not formatted with key=value: {}", .partition)]
-    PartitionError { partition: String },
+    PartitionError {
+        /// The malformed partition used.
+        partition: String
+    },
+    /// Error returned when a invalid partition filter was found.
     #[error("Invalid partition filter found: {}.", .partition_filter)]
-    InvalidPartitionFilter { partition_filter: String },
+    InvalidPartitionFilter {
+        /// The invalid partition filter used.
+        partition_filter: String
+    },
 }
 
 /// Delta table metadata
@@ -142,17 +176,26 @@ impl fmt::Display for DeltaTableMetaData {
 
 #[derive(thiserror::Error, Debug)]
 pub enum ApplyLogError {
+    /// Error returned when the end of transaction log is reached.
     #[error("End of transaction log")]
     EndOfLog,
+    /// Error returned when the JSON of the log record is invalid.
     #[error("Invalid JSON in log record")]
     InvalidJson {
+        /// JSON error details returned when reading the JSON log record.
         #[from]
         source: serde_json::error::Error,
     },
+    /// Error returned when the storage failed to read the log content.
     #[error("Failed to read log content")]
-    Storage { source: StorageError },
+    Storage {
+        /// Storage error details returned while reading the log content.
+        source: StorageError
+    },
+    /// Error returned when a line from log record is invalid.
     #[error("Failed to read line from log record")]
     Io {
+        /// Source error details returned while reading the log record.
         #[from]
         source: std::io::Error,
     },
@@ -169,15 +212,22 @@ impl From<StorageError> for ApplyLogError {
 
 #[derive(thiserror::Error, Debug)]
 pub enum LoadCheckpointError {
+    /// Error returned when the JSON checkpoint is not found.
     #[error("Checkpoint file not found")]
     NotFound,
+    /// Error returned when the JSON checkpoint is invalid.
     #[error("Invalid JSON in checkpoint: {source}")]
     InvalidJson {
+        /// Error details returned while reading the JSON.
         #[from]
         source: serde_json::error::Error,
     },
+    /// Error returned when it failed to read the checkpoint content.
     #[error("Failed to read checkpoint content: {source}")]
-    Storage { source: StorageError },
+    Storage {
+        /// Storage error details returned while reading the checkpoint content.
+        source: StorageError
+    },
 }
 
 impl From<StorageError> for LoadCheckpointError {
