@@ -249,6 +249,7 @@ pub enum StorageError {
     #[error("Invalid object URI")]
     Uri {
         #[from]
+        /// Uri error details when the URI is invalid.
         source: UriError,
     },
 }
