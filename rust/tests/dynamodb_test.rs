@@ -4,9 +4,7 @@ extern crate maplit;
 
 #[cfg(feature = "dynamodb")]
 mod dynamodb {
-    use deltalake::s3::dynamodb_lock::{
-        attr, DynamoDbLockClient, DynamoError, Options, PARTITION_KEY_NAME,
-    };
+    use deltalake::s3::dynamodb_lock::{attr, DynamoDbLockClient, Options, PARTITION_KEY_NAME};
     use rusoto_core::Region;
     use rusoto_dynamodb::*;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -109,16 +107,16 @@ mod dynamodb {
         let c2 = create_dynamo_lock("test_acquire_expired_lock_multiple_workers", "w2").await;
 
         let _ = origin.acquire_lock().await.unwrap();
-        let f1 = tokio::spawn(async move { c1.acquire_lock().await });
-        let f2 = tokio::spawn(async move { c2.acquire_lock().await });
+        let f1 = tokio::spawn(async move { c1.try_acquire_lock().await });
+        let f2 = tokio::spawn(async move { c2.try_acquire_lock().await });
 
         let acquired = match (f1.await.unwrap(), f2.await.unwrap()) {
-            (Ok(lock), Err(DynamoError::TimedOut(_))) => {
+            (Ok(Some(lock)), Ok(None)) => {
                 // first got the lock
                 assert_eq!(lock.owner_name, "w1");
                 lock
             }
-            (Err(DynamoError::TimedOut(_)), Ok(lock)) => {
+            (Ok(None), Ok(Some(lock))) => {
                 // second got the lock
                 assert_eq!(lock.owner_name, "w2");
                 lock

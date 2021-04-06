@@ -116,6 +116,11 @@ pub enum DynamoError {
     #[error("Could not acquire lock for {0} sec")]
     TimedOut(u64),
 
+    /// Error that caused by the dynamodb request exceeded maximum allowed provisioned throughput
+    /// for the table.
+    #[error("Maximum allowed provisioned throughput for the table exceeded")]
+    ProvisionedThroughputExceeded,
+
     /// Error caused by the [`DynamoDbClient::put_item`] request.
     #[error("Put item error: {0}")]
     PutItemError(RusotoError<PutItemError>),
@@ -135,6 +140,9 @@ impl From<RusotoError<PutItemError>> for DynamoError {
             RusotoError::Service(PutItemError::ConditionalCheckFailed(_)) => {
                 DynamoError::ConditionalCheckFailed
             }
+            RusotoError::Service(PutItemError::ProvisionedThroughputExceeded(_)) => {
+                DynamoError::ProvisionedThroughputExceeded
+            }
             _ => DynamoError::PutItemError(error),
         }
     }
@@ -144,6 +152,9 @@ impl From<RusotoError<GetItemError>> for DynamoError {
     fn from(error: RusotoError<GetItemError>) -> Self {
         match error {
             RusotoError::Service(GetItemError::ResourceNotFound(_)) => DynamoError::TableNotFound,
+            RusotoError::Service(GetItemError::ProvisionedThroughputExceeded(_)) => {
+                DynamoError::ProvisionedThroughputExceeded
+            }
             _ => DynamoError::GetItemError(error),
         }
     }
@@ -209,6 +220,20 @@ impl DynamoDbLockClient {
     /// Creates new DynamoDB lock client
     pub fn new(client: DynamoDbClient, opts: Options) -> Self {
         Self { client, opts }
+    }
+
+    /// Attempts to acquire lock. If successful, returns the lock.
+    /// Otherwise returns [`Option::None`] when the lock is stolen by someone else or max
+    /// provisioned throughput for a table is exceeded. Both are retryable actions.
+    ///
+    /// For more details on behavior,  please see [`DynamoDbLockClient::acquire_lock`].
+    pub async fn try_acquire_lock(&self) -> Result<Option<LockItem>, DynamoError> {
+        match self.acquire_lock().await {
+            Ok(lock) => Ok(Some(lock)),
+            Err(DynamoError::TimedOut(_)) => Ok(None),
+            Err(DynamoError::ProvisionedThroughputExceeded) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 
     /// Attempts to acquire a lock until it either acquires the lock or a specified
