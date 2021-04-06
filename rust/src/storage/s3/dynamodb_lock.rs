@@ -309,7 +309,7 @@ impl DynamoDbLockClient {
             update = expressions::UPDATE_IS_RELEASED;
         }
 
-        self.client.update_item(UpdateItemInput {
+        let result = self.client.update_item(UpdateItemInput {
             table_name: self.opts.table_name.clone(),
             key: hashmap! {
                 PARTITION_KEY_NAME.to_string() => attr(self.opts.partition_key_value.clone())
@@ -335,7 +335,6 @@ impl DynamoDbLockClient {
         expression_attribute_names: Option<HashMap<String, String>>,
         expression_attribute_values: Option<HashMap<String, AttributeValue>>,
     ) -> Result<LockItem, DynamoError> {
-        let lookup_time = now_millis();
         let rvn = Uuid::new_v4().to_string();
 
         let mut item = hashmap! {
@@ -366,7 +365,7 @@ impl DynamoDbLockClient {
             lease_duration: self.opts.lease_duration,
             is_released: false,
             data,
-            lookup_time,
+            lookup_time: now_millis(),
         })
     }
 }
