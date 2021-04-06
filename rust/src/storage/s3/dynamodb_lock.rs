@@ -107,11 +107,6 @@ pub enum DynamoError {
     #[error("Conditional check failed")]
     ConditionalCheckFailed,
 
-    /// Error that is returned by [`DynamoDbLockClient::release_lock`] when the given lock
-    /// has been already expired and could not be released.
-    #[error("Lock is expired")]
-    LockIsExpired,
-
     /// The required field of [`LockItem`] is missing in DynamoDB record or has incompatible type.
     #[error("DynamoDB item has invalid schema")]
     InvalidItemSchema,
