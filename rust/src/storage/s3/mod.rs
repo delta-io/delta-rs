@@ -16,7 +16,6 @@ use tokio::io::AsyncReadExt;
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
 
 #[cfg(feature = "dynamodb")]
-#[allow(dead_code)]
 pub mod dynamodb_lock;
 
 impl From<RusotoError<rusoto_s3::GetObjectError>> for StorageError {
