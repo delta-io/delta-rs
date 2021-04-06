@@ -64,7 +64,7 @@ mod dynamodb {
 
         // save some arbitrary data into the lock item
         existing.data = Some("test".to_string());
-        lock.release_lock(&existing).await.unwrap();
+        assert!(lock.release_lock(&existing).await.unwrap());
 
         let released = lock.get_lock().await.unwrap().unwrap();
         // the lock from dynamodb should be the same, but with is_released=true field
@@ -91,13 +91,10 @@ mod dynamodb {
         assert!(now.elapsed().as_millis() > 3000);
 
         // cannot release the lock since it's been expired by other client
-        match c1.release_lock(&l1).await {
-            Err(DynamoError::LockIsExpired) => (),
-            r => panic!("{:?}", r),
-        }
+        assert!(!c1.release_lock(&l1).await.unwrap());
 
         // the owner successfully expires a lock
-        c2.release_lock(&l2).await.unwrap();
+        assert!(c2.release_lock(&l2).await.unwrap());
 
         // check what it is true
         let current = c1.get_lock().await.unwrap().unwrap();

@@ -127,7 +127,7 @@ pub enum DynamoError {
 
     /// Error caused by the [`DynamoDbClient::update_item`] request.
     #[error("Update item error: {0}")]
-    UpdateItemError(RusotoError<UpdateItemError>),
+    UpdateItemError(#[from] RusotoError<UpdateItemError>),
 
     /// Error caused by the [`DynamoDbClient::get_item`] request.
     #[error("Get item error: {0}")]
@@ -150,17 +150,6 @@ impl From<RusotoError<GetItemError>> for DynamoError {
         match error {
             RusotoError::Service(GetItemError::ResourceNotFound(_)) => DynamoError::TableNotFound,
             _ => DynamoError::GetItemError(error),
-        }
-    }
-}
-
-impl From<RusotoError<UpdateItemError>> for DynamoError {
-    fn from(error: RusotoError<UpdateItemError>) -> Self {
-        match error {
-            RusotoError::Service(UpdateItemError::ConditionalCheckFailed(_)) => {
-                DynamoError::LockIsExpired
-            }
-            _ => DynamoError::UpdateItemError(error),
         }
     }
 }
@@ -301,8 +290,9 @@ impl DynamoDbLockClient {
         Ok(None)
     }
 
-    /// Releases given lock if thee current owner still has it.
-    pub async fn release_lock(&self, lock: &LockItem) -> Result<(), DynamoError> {
+    /// Releases the given lock if the current user still has it, returning true if the lock was
+    /// successfully released, and false if someone else already stole the lock
+    pub async fn release_lock(&self, lock: &LockItem) -> Result<bool, DynamoError> {
         let mut names = hashmap! {
             vars::PK_PATH.to_string() => PARTITION_KEY_NAME.to_string(),
             vars::RVN_PATH.to_string() => RECORD_VERSION_NUMBER.to_string(),
@@ -324,22 +314,23 @@ impl DynamoDbLockClient {
             update = expressions::UPDATE_IS_RELEASED;
         }
 
-        self.client
-            .update_item(UpdateItemInput {
-                table_name: self.opts.table_name.clone(),
-                key: hashmap! {
-                    PARTITION_KEY_NAME.to_string() => attr(self.opts.partition_key_value.clone())
-                },
-                condition_expression: Some(
-                    expressions::PK_EXISTS_AND_OWNER_RVN_MATCHES.to_string(),
-                ),
-                update_expression: Some(update.to_string()),
-                expression_attribute_names: Some(names),
-                expression_attribute_values: Some(values),
-                ..Default::default()
-            })
-            .await?;
-        Ok(())
+        self.client.update_item(UpdateItemInput {
+            table_name: self.opts.table_name.clone(),
+            key: hashmap! {
+                PARTITION_KEY_NAME.to_string() => attr(self.opts.partition_key_value.clone())
+            },
+            condition_expression: Some(expressions::PK_EXISTS_AND_OWNER_RVN_MATCHES.to_string()),
+            update_expression: Some(update.to_string()),
+            expression_attribute_names: Some(names),
+            expression_attribute_values: Some(values),
+            ..Default::default()
+        });
+
+        match result.await {
+            Ok(_) => Ok(true),
+            Err(RusotoError::Service(UpdateItemError::ConditionalCheckFailed(_))) => Ok(false),
+            Err(e) => Err(DynamoError::UpdateItemError(e)),
+        }
     }
 
     async fn upsert_item(
