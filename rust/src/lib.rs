@@ -11,6 +11,10 @@ extern crate serde;
 extern crate serde_json;
 extern crate thiserror;
 
+#[cfg(feature = "dynamodb")]
+#[macro_use]
+extern crate maplit;
+
 pub mod action;
 mod delta;
 mod delta_arrow;
