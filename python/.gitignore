@@ -1,1 +1,4 @@
+# sphinx build directory
+docs/build
+
 *.so

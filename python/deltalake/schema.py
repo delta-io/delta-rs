@@ -29,7 +29,8 @@ class DataType:
     @classmethod
     def from_dict(cls, json_dict: Dict[str, Any]) -> "DataType":
         """
-        Generate a DataType from a DataType in json format
+        Generate a DataType from a DataType in json format.
+
         :param json_dict: the data type in json format
         :return: the Delta DataType
         """
@@ -175,6 +176,12 @@ class Schema:
 
     @classmethod
     def from_json(cls, json_data: str) -> "Schema":
+        """
+        Generate a DeltaTable Schema from a json format.
+
+        :param json_data: the schema in json format
+        :return: the DeltaTable schema
+        """
         json_value = json.loads(json_data)
         fields = []
         for json_field in json_value["fields"]:
@@ -192,12 +199,13 @@ class Schema:
         return cls(fields=fields, json_value=json_value)
 
 
-def pyarrow_datatype_from_dict(json_dict: Dict) -> pyarrow.DataType:
+def pyarrow_datatype_from_dict(json_dict: Dict[str, Any]) -> pyarrow.DataType:
     """
     Create a DataType in PyArrow format from a Schema json format.
+
     :param json_dict: the DataType in json format
     :return: the DataType in PyArrow format
-    """ ""
+    """
     type_class = json_dict["type"]["name"]
     if type_class == "dictionary":
         key_type = json_dict["dictionary"]["indexType"]
@@ -248,12 +256,12 @@ def pyarrow_datatype_from_dict(json_dict: Dict) -> pyarrow.DataType:
         return pyarrow.type_for_alias(type_class)
 
 
-def pyarrow_field_from_dict(field: Dict) -> pyarrow.Field:
+def pyarrow_field_from_dict(field: Dict[str, Any]) -> pyarrow.Field:
     """
     Create a Field in PyArrow format from a Field in json format.
     :param field: the field in json format
     :return: the Field in PyArrow format
-    """ ""
+    """
     return pyarrow.field(
         field["name"],
         pyarrow_datatype_from_dict(field),
@@ -265,9 +273,10 @@ def pyarrow_field_from_dict(field: Dict) -> pyarrow.Field:
 def pyarrow_schema_from_json(json_data: str) -> pyarrow.Schema:
     """
     Create a Schema in PyArrow format from a Schema in json format.
+
     :param json_data: the field in json format
     :return: the Schema in PyArrow format
-    """ ""
+    """
     schema_json = json.loads(json_data)
     arrow_fields = [pyarrow_field_from_dict(field) for field in schema_json["fields"]]
     return pyarrow.schema(arrow_fields)
