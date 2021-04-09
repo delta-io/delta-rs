@@ -15,6 +15,7 @@ import sys
 import toml
 
 sys.path.insert(0, os.path.abspath("../deltalake/"))
+sys.path.insert(0, os.path.abspath("./_ext"))
 
 
 def get_release_version() -> str:
@@ -40,7 +41,7 @@ version = get_release_version()
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ["sphinx_rtd_theme", "sphinx.ext.autodoc"]
+extensions = ["sphinx_rtd_theme", "sphinx.ext.autodoc", "edit_on_github"]
 autodoc_typehints = "description"
 nitpicky = True
 nitpick_ignore = [
@@ -71,3 +72,7 @@ html_theme = "sphinx_rtd_theme"
 # relative to this directory. They are copied after the builtin static files,
 # so a file named "default.css" will overwrite the builtin "default.css".
 html_static_path = ["_static"]
+
+edit_on_github_project = "delta-io/delta-rs"
+edit_on_github_branch = "main"
+page_source_prefix = "python/docs/source"
