@@ -12,8 +12,6 @@ services:
       - PORT_WEB_UI=8080
       - DOCKER_HOST=unix:///var/run/docker.sock
       - HOST_TMP_FOLDER=${TMPDIR}
-    volumes:
-      - "${TMPDIR:-/tmp/localstack}:/tmp/localstack"
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:4566/health" ]
 
