@@ -2,6 +2,8 @@ Deltalake-python
 ================
 
 [![PyPI](https://img.shields.io/pypi/v/deltalake.svg?style=flat-square)](https://pypi.org/project/deltalake/)
+[![userdoc](https://img.shields.io/badge/docs-user-blue)](https://delta-io.github.io/delta-rs/python/)
+[![apidoc](https://img.shields.io/badge/docs-api-blue)](https://delta-io.github.io/delta-rs/python/api_reference.html)
 
 Native [Delta Lake](https://delta.io/) binding for Python based on
 [delta-rs](https://github.com/delta-io/delta-rs).
@@ -18,10 +20,6 @@ NOTE: official binary wheels are linked against openssl statically for remote
 objection store communication. Please file Github issue to request for critical
 openssl upgrade.
 
-
-Documentation
------
-<!--- Add the readthedocs link --->
 
 Develop
 -------
