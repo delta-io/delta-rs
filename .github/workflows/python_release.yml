@@ -95,3 +95,38 @@ jobs:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         # linux build uploads sdist to update projection description on PyPI
         run: maturin publish -b pyo3 --target x86_64-unknown-linux-gnu
+
+  release-docs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install minimal stable with clippy and rustfmt
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: default
+        toolchain: stable
+        override: true
+
+    - name: Install maturin
+      run: pip install maturin==0.9.0
+
+    - name: Build and install deltalake
+      run: |
+        maturin develop
+
+    - name: Build Sphinx documentation
+      run: |
+        sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
+        mv docs/build ~/build
+
+        git config --global user.name 'Github Action'
+        git config --global user.email 'deltars@users.noreply.github.com'
+        git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GITHUB_REPOSITORY
+
+        git checkout gh-pages
+        git clean -f
+        cp -r ~/build/html/  ./
+        PUSHED_TAG=${GITHUB_REF##*/}
+        git add .
+        git commit -m 'doc update for ${PUSHED_TAG}'
+        git push origin gh-pages
