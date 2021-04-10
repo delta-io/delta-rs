@@ -11,12 +11,10 @@ mod s3 {
     use deltalake::StorageError;
 
     fn setup() {
-        std::env::set_var("AWS_REGION", "us-west-2");
-        std::env::set_var("AWS_ACCESS_KEY_ID", "AKIAX7EGEQ7FT6CLQGWH");
-        std::env::set_var(
-            "AWS_SECRET_ACCESS_KEY",
-            "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",
-        );
+        std::env::set_var("AWS_REGION", "us-east-2");
+        std::env::set_var("AWS_ACCESS_KEY_ID", "test");
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
+        std::env::set_var("AWS_ENDPOINT_URL", "http://localhost:4566");
     }
 
     #[tokio::test]

@@ -119,6 +119,8 @@ class ExcPassThroughThread(Thread):
             raise self.exc
 
 
+@pytest.mark.s3
+@pytest.mark.integration
 @pytest.mark.timeout(timeout=5, method="thread")
 def test_read_multiple_tables_from_s3(s3cred):
     """
@@ -136,6 +138,8 @@ def test_read_multiple_tables_from_s3(s3cred):
         ]
 
 
+@pytest.mark.s3
+@pytest.mark.integration
 @pytest.mark.timeout(timeout=10, method="thread")
 def test_read_multiple_tables_from_s3_multi_threaded(s3cred):
     thread_count = 10

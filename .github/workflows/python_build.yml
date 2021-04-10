@@ -20,9 +20,9 @@ jobs:
       with:
         python-version: 3.6
     - name: Format Python code with Black
-      uses: psf/black@stable
-      with:
-        args: ". --check"
+      run: |
+        pip install black
+        black . --check
     - name: Install minimal stable with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
@@ -57,14 +57,25 @@ jobs:
     - name: Enable manylinux Python targets
       run: echo "/opt/python/cp36-cp36m/bin" >> $GITHUB_PATH
 
-    - name: Install matruin
+    - name: Install maturin
       run: pip install maturin==0.9.0
 
-    - name: Run Python tests
+    - name: Build and install deltalake
       run: |
         # disable manylinux audit checks for test builds
         maturin build --manylinux off
         ls -lh ../target/wheels
         PY_MINOR_VER=$(python -V | cut -d. -f 2)
         pip install $(printf ../target/wheels/deltalake-*-cp36-abi3-*.whl)'[devel,pandas]'
-        py.test tests
+
+    - name: Run tests
+      run: |
+        py.test --cov tests -m 'not integration'
+
+    # - name: Run Integration tests
+    #   run: |
+    #     py.test --cov tests -m integration
+
+    - name: Build Sphinx documentation
+      run: |
+        sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html

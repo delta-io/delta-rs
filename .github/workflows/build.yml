@@ -11,6 +11,19 @@ defaults:
     working-directory: ./rust
 
 jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install minimal stable with clippy and rustfmt
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: default
+        toolchain: stable
+        override: true
+    - name: Format
+      run: cargo fmt -- --check
+
   build:
     strategy:
       fail-fast: false
@@ -19,37 +32,49 @@ jobs:
           - ubuntu-latest
           - macOS-10.15
           - windows-2019
-
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v2
-    # the whole target dir is over 400MB cache limit, so we have to split up
-    # the cache step to avoid caching deps dir
-    - name: Cache Rust build
-      uses: actions/cache@v1.0.1
-      with:
-        path: target/debug/build
-        key: ${{ runner.OS }}-target-build-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.OS }}-target-build-
-    - name: Cache Rust incremental build
-      uses: actions/cache@v1.0.1
-      with:
-        path: target/debug/incremental
-        key: ${{ runner.OS }}-target-incremental-${{ hashFiles('**/Cargo.lock') }}
-        restore-keys: |
-          ${{ runner.OS }}-target-incremental-
     - name: Install minimal stable with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
         profile: default
         toolchain: stable
         override: true
-    - name: Check
-      run: cargo clippy --features azure,datafusion-ext,s3
-    - name: Build
-      run: cargo build --features azure,datafusion-ext,s3
-    - name: Format
-      run: cargo fmt -- --check
+    - name: build and lint with clippy
+      run: cargo clippy --features azure,datafusion-ext,s3,dynamodb
+
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macOS-10.15
+          - windows-2019
+    runs-on: ${{ matrix.os }}
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install minimal stable with clippy and rustfmt
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: default
+        toolchain: stable
+        override: true
     - name: Run tests
-      run: cargo test --verbose --features azure,datafusion-ext,s3
+      run: cargo test --verbose --features datafusion-ext,azure
+
+  s3_test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: stable
+          override: true
+      - name: Setup localstack
+        run: docker-compose up setup
+      - name: Run tests
+        run: cargo test s3 --verbose --features s3,dynamodb

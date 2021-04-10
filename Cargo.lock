@@ -608,16 +608,18 @@ dependencies = [
  "env_logger",
  "errno",
  "futures",
- "glibc_version",
+ "glibc_version 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static",
  "libc",
  "log",
+ "maplit",
  "parquet",
  "pretty_assertions",
  "regex",
  "reqwest",
  "rusoto_core",
  "rusoto_credential",
+ "rusoto_dynamodb",
  "rusoto_s3",
  "rusoto_sts",
  "serde",
@@ -1009,6 +1011,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "glibc_version"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "803ff7635f1ab4e2c064b68a0c60da917d3d18dc8d086130f689d62ce4f1c33e"
+dependencies = [
+ "regex",
+]
+
+[[package]]
 name = "h2"
 version = "0.3.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1336,6 +1347,12 @@ dependencies = [
  "cc",
  "libc",
 ]
+
+[[package]]
+name = "maplit"
+version = "1.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3e2e65a1a2e43cfcb47a895c4c8b10d1f4a61097f9f254f183aee60cad9c651d"
 
 [[package]]
 name = "matches"
@@ -2187,6 +2204,20 @@ dependencies = [
  "shlex",
  "tokio",
  "zeroize",
+]
+
+[[package]]
+name = "rusoto_dynamodb"
+version = "0.46.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0f26af40f36409cb8fae3069690f78f638f747b55c7b90f338d5ed36016b0cda"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "rusoto_core",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
