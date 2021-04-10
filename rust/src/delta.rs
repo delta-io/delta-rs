@@ -135,13 +135,13 @@ pub enum DeltaTableError {
     #[error("This partition is not formatted with key=value: {}", .partition)]
     PartitionError {
         /// The malformed partition used.
-        partition: String
+        partition: String,
     },
     /// Error returned when a invalid partition filter was found.
     #[error("Invalid partition filter found: {}.", .partition_filter)]
     InvalidPartitionFilter {
         /// The invalid partition filter used.
-        partition_filter: String
+        partition_filter: String,
     },
 }
 
@@ -174,6 +174,7 @@ impl fmt::Display for DeltaTableMetaData {
     }
 }
 
+/// Error related to Delta log application
 #[derive(thiserror::Error, Debug)]
 pub enum ApplyLogError {
     /// Error returned when the end of transaction log is reached.
@@ -190,7 +191,7 @@ pub enum ApplyLogError {
     #[error("Failed to read log content")]
     Storage {
         /// Storage error details returned while reading the log content.
-        source: StorageError
+        source: StorageError,
     },
     /// Error returned when a line from log record is invalid.
     #[error("Failed to read line from log record")]
@@ -210,6 +211,7 @@ impl From<StorageError> for ApplyLogError {
     }
 }
 
+/// Error related to checkpoint loading
 #[derive(thiserror::Error, Debug)]
 pub enum LoadCheckpointError {
     /// Error returned when the JSON checkpoint is not found.
@@ -226,7 +228,7 @@ pub enum LoadCheckpointError {
     #[error("Failed to read checkpoint content: {source}")]
     Storage {
         /// Storage error details returned while reading the checkpoint content.
-        source: StorageError
+        source: StorageError,
     },
 }
 

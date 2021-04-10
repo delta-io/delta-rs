@@ -59,9 +59,15 @@ pub enum UriError {
     #[cfg(feature = "azure")]
     #[error("Object URI missing path")]
     MissingObjectPath,
+    /// Error returned when container in an Azure URI doesn't match the expected value
     #[cfg(feature = "azure")]
     #[error("Container mismatch, expected: {expected}, got: {got}")]
-    ContainerMismatch { expected: String, got: String },
+    ContainerMismatch {
+        /// Expected container value
+        expected: String,
+        /// Actual container value
+        got: String,
+    },
 }
 
 /// Enum with variants representing each supported storage backend.
@@ -232,14 +238,21 @@ pub enum StorageError {
     #[error("S3 error: {0}")]
     S3Generic(String),
 
+    /// Azure error
     #[cfg(feature = "azure")]
     #[error("Error interacting with Azure: {source}")]
-    Azure { source: AzureError },
+    Azure {
+        /// Azure error reason
+        source: AzureError,
+    },
+    /// Generic Azure error
     #[cfg(feature = "azure")]
     #[error("Generic error: {source}")]
     AzureGeneric {
+        /// Generic Azure error reason
         source: Box<dyn Error + Sync + std::marker::Send>,
     },
+    /// Azure config error
     #[cfg(feature = "azure")]
     #[error("Azure config error: {0}")]
     AzureConfig(String),
