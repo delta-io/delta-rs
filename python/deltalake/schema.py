@@ -220,7 +220,7 @@ def pyarrow_datatype_from_dict(json_dict: Dict[str, Any]) -> pyarrow.DataType:
     elif type_class == "struct":
         fields = [pyarrow_field_from_dict(field) for field in json_dict["children"]]
         return pyarrow.struct(fields)
-    elif type_class == "int" or type_class == "float" or type_class == "date":
+    elif type_class == "int" or type_class == "date":
         return pyarrow.type_for_alias(f'{type_class}{json_dict["type"]["bitWidth"]}')
     elif type_class == "time":
         type_info = json_dict["type"]
@@ -252,6 +252,14 @@ def pyarrow_datatype_from_dict(json_dict: Dict[str, Any]) -> pyarrow.DataType:
         return pyarrow.decimal128(
             precision=type_info["precision"], scale=type_info["scale"]
         )
+    elif type_class.startswith("floatingpoint"):
+        type_info = json_dict["type"]
+        if type_info["precision"] == "HALF":
+            return pyarrow.float16()
+        elif type_info["precision"] == "SINGLE":
+            return pyarrow.float32()
+        elif type_info["precision"] == "DOUBLE":
+            return pyarrow.float64()
     else:
         return pyarrow.type_for_alias(type_class)
 
