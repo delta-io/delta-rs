@@ -92,8 +92,8 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                         Ok(ArrowDataType::Date32)
                     }
                     "timestamp" => {
-                        // Microsecond precision timestamp without a timezone.
-                        Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
+                        // Issue: https://github.com/delta-io/delta/issues/643
+                        Ok(ArrowDataType::Timestamp(TimeUnit::Nanosecond, None))
                     }
                     s => Err(ArrowError::SchemaError(format!(
                         "Invalid data type for Arrow: {}",
