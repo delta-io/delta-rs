@@ -8,6 +8,7 @@ use deltalake::partitions::PartitionFilter;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
@@ -42,6 +43,20 @@ struct RawDeltaTable {
     _table: deltalake::DeltaTable,
 }
 
+#[pyclass]
+struct RawDeltaTableMetaData {
+    #[pyo3(get)]
+    id: String,
+    #[pyo3(get)]
+    name: Option<String>,
+    #[pyo3(get)]
+    description: Option<String>,
+    #[pyo3(get)]
+    partition_columns: Vec<String>,
+    #[pyo3(get)]
+    configuration: HashMap<String, String>,
+}
+
 #[pymethods]
 impl RawDeltaTable {
     #[new]
@@ -62,6 +77,20 @@ impl RawDeltaTable {
 
     pub fn version(&self) -> PyResult<i64> {
         Ok(self._table.version)
+    }
+
+    pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
+        let metadata = self
+            ._table
+            .get_metadata()
+            .map_err(PyDeltaTableError::from_raw)?;
+        Ok(RawDeltaTableMetaData {
+            id: metadata.id.clone(),
+            name: metadata.name.clone(),
+            description: metadata.description.clone(),
+            partition_columns: metadata.partition_columns.clone(),
+            configuration: metadata.configuration.clone(),
+        })
     }
 
     pub fn load_version(&mut self, version: deltalake::DeltaDataTypeVersion) -> PyResult<()> {
@@ -138,6 +167,7 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
 
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
     m.add_class::<RawDeltaTable>()?;
+    m.add_class::<RawDeltaTableMetaData>()?;
     m.add("DeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())
 }
