@@ -2,7 +2,7 @@ from threading import Barrier, Thread
 
 import pytest
 
-from deltalake import DeltaTable
+from deltalake import DeltaTable, Metadata
 
 
 def test_read_simple_table_to_dict():
@@ -15,6 +15,17 @@ def test_read_simple_table_by_version_to_dict():
     table_path = "../rust/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
+
+
+def test_read_partitioned_table_metadata():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    metadata = dt.metadata()
+    assert metadata.id == "fe5a3c11-30d4-4dd7-b115-a1c121e66a4e"
+    assert metadata.name is None
+    assert metadata.description is None
+    assert metadata.partition_columns == ["year", "month", "day"]
+    assert metadata.configuration == {}
 
 
 def test_get_files_partitioned_table():
