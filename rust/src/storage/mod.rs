@@ -181,10 +181,16 @@ pub enum StorageError {
     },
     #[cfg(feature = "s3")]
     #[error("Failed to delete S3 object: {0}")]
-    S3Delete(#[from] rusoto_core::RusotoError<rusoto_s3::DeleteObjectError>),
+    S3Delete {
+        #[from]
+        source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectError>,
+    },
     #[cfg(feature = "s3")]
     #[error("Failed to copy S3 object: {0}")]
-    S3Copy(#[from] rusoto_core::RusotoError<rusoto_s3::CopyObjectError>),
+    S3Copy {
+        #[from]
+        source: rusoto_core::RusotoError<rusoto_s3::CopyObjectError>,
+    },
     #[cfg(feature = "s3")]
     #[error("S3 Object missing body content: {0}")]
     S3MissingObjectBody(String),
