@@ -319,7 +319,7 @@ impl DeltaTable {
     ) -> Result<(), ApplyLogError> {
         for line in reader.lines() {
             let action: Action = serde_json::from_str(line?.as_str())?;
-            DeltaTable::process_action(&mut self.state, &action)?;
+            process_action(&mut self.state, &action)?;
         }
 
         Ok(())
@@ -347,7 +347,7 @@ impl DeltaTable {
                 )));
             }
             for record in preader.get_row_iter(None)? {
-                DeltaTable::process_action(
+                process_action(
                     &mut self.state,
                     &Action::from_parquet_record(&schema, &record)?,
                 )?;
