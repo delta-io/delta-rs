@@ -124,6 +124,8 @@ pub struct DeltaTableMetaData {
     pub schema: Schema,
     // An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
+    // The time when this metadata action is created, in milliseconds since the Unix epoch
+    pub created_time: DeltaDataTypeTimestamp,
     // table properties
     pub configuration: HashMap<String, String>,
 }
@@ -132,8 +134,8 @@ impl fmt::Display for DeltaTableMetaData {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "GUID={}, name={:?}, description={:?}, partitionColumns={:?}, configuration={:?}",
-            self.id, self.name, self.description, self.partition_columns, self.configuration
+            "GUID={}, name={:?}, description={:?}, partitionColumns={:?}, createdTime={:?}, configuration={:?}",
+            self.id, self.name, self.description, self.partition_columns, self.created_time, self.configuration
         )
     }
 }
@@ -925,6 +927,7 @@ fn process_action(
                 format: v.format.clone(),
                 schema: v.get_schema()?,
                 partition_columns: v.partitionColumns.clone(),
+                created_time: v.createdTime,
                 configuration: v.configuration.clone(),
             });
         }

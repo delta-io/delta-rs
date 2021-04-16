@@ -25,6 +25,7 @@ def test_read_partitioned_table_metadata():
     assert metadata.name is None
     assert metadata.description is None
     assert metadata.partition_columns == ["year", "month", "day"]
+    assert metadata.created_time == 1615555644515
     assert metadata.configuration == {}
 
 
