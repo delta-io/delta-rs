@@ -213,7 +213,6 @@ pub struct DeltaTable {
 
     last_check_point: Option<CheckPoint>,
     log_path: String,
-    commit_path: String,
     version_timestamp: HashMap<DeltaDataTypeVersion, i64>,
 }
 
@@ -223,9 +222,9 @@ impl DeltaTable {
         self.storage.join_path(&self.log_path, &version)
     }
 
-    fn commit_path(&self, token: &str) -> String {
-        let path = format!("_commit_{}", token);
-        self.storage.join_path(&self.commit_path, &path)
+    fn tmp_commit_log_path(&self, token: &str) -> String {
+        let path = format!("_commit_{}.json", token);
+        self.storage.join_path(&self.log_path, &path)
     }
 
     fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<String> {
@@ -665,7 +664,6 @@ impl DeltaTable {
         storage_backend: Box<dyn StorageBackend>,
     ) -> Result<Self, DeltaTableError> {
         let log_path_normalized = storage_backend.join_path(table_path, "_delta_log");
-        let commit_path_normalized = storage_backend.join_path(table_path, "_prepared_commits");
         Ok(Self {
             version: 0,
             state: DeltaTableState::default(),
@@ -673,7 +671,6 @@ impl DeltaTable {
             table_path: table_path.to_string(),
             last_check_point: None,
             log_path: log_path_normalized,
-            commit_path: commit_path_normalized,
             version_timestamp: HashMap::new(),
         })
     }
@@ -894,9 +891,9 @@ impl<'a> DeltaTransaction<'a> {
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
         let mut attempt_number: u32 = 0;
 
-        let commit_file = self.prepare_commit(log_entry).await?;
+        let tmp_log_path = self.prepare_commit(log_entry).await?;
         loop {
-            let commit_result = self.try_commit(&commit_file).await;
+            let commit_result = self.try_commit(&tmp_log_path).await;
 
             match commit_result {
                 Ok(v) => {
@@ -929,19 +926,19 @@ impl<'a> DeltaTransaction<'a> {
         log_entry: &[u8],
     ) -> Result<String, TransactionCommitAttemptError> {
         let token = Uuid::new_v4().to_string();
-        let commit_path = self.delta_table.commit_path(&token);
+        let tmp_log_path = self.delta_table.tmp_commit_log_path(&token);
 
         self.delta_table
             .storage
-            .put_obj(&commit_path, log_entry)
+            .put_obj(&tmp_log_path, log_entry)
             .await?;
 
-        Ok(commit_path)
+        Ok(tmp_log_path)
     }
 
     async fn try_commit(
         &mut self,
-        commit_file: &str,
+        tmp_log_path: &str,
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
         // get the next delta table version and the log path where it should be written
         let attempt_version = self.next_attempt_version().await?;
@@ -951,7 +948,7 @@ impl<'a> DeltaTransaction<'a> {
         // rely on storage to fail if the file already exists -
         self.delta_table
             .storage
-            .rename_obj(commit_file, &log_path)
+            .rename_obj(tmp_log_path, &log_path)
             .await?;
 
         Ok(attempt_version)

@@ -180,13 +180,13 @@ pub enum StorageError {
         source: rusoto_core::RusotoError<rusoto_s3::PutObjectError>,
     },
     #[cfg(feature = "s3")]
-    #[error("Failed to delete S3 object: {0}")]
+    #[error("Failed to delete S3 object: {source}")]
     S3Delete {
         #[from]
         source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectError>,
     },
     #[cfg(feature = "s3")]
-    #[error("Failed to copy S3 object: {0}")]
+    #[error("Failed to copy S3 object: {source}")]
     S3Copy {
         #[from]
         source: rusoto_core::RusotoError<rusoto_s3::CopyObjectError>,
