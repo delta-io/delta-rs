@@ -87,6 +87,12 @@ impl StorageBackend for FileStorageBackend {
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
         let tmp_path = create_tmp_file_with_retry(self, path, obj_bytes).await?;
 
+        let dir = std::path::Path::new(path);
+
+        if let Some(d) = dir.parent() {
+            fs::create_dir_all(d).await?;
+        }
+
         if let Err(e) = rename::atomic_rename(&tmp_path, path) {
             fs::remove_file(tmp_path).await.unwrap_or(());
             return Err(e);
