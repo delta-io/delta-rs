@@ -30,20 +30,27 @@ class Metadata:
         return self._metadata.description
 
     @property
-    def configuration(self):
-        """ Return the DeltaTable properties. """
-        return self._metadata.configuration
-
-    @property
     def partition_columns(self):
         """ Return an array containing the names of the partitioned columns of the DeltaTable. """
         return self._metadata.partition_columns
+
+    @property
+    def created_time(self):
+        """
+        Return The time when this metadata action is created, in milliseconds since the Unix epoch of the DeltaTable.
+        """
+        return self._metadata.created_time
+
+    @property
+    def configuration(self):
+        """ Return the DeltaTable properties. """
+        return self._metadata.configuration
 
     def __str__(self) -> str:
         return (
             f"Metadata(id: {self._metadata.id}, name: {self._metadata.name}, "
             f"description: {self._metadata.description}, partitionColumns: {self._metadata.partition_columns}, "
-            f"configuration={self._metadata.configuration})"
+            f"created_time: {self.created_time}, configuration={self._metadata.configuration})"
         )
 
     def __repr__(self) -> str:
@@ -55,8 +62,9 @@ class Metadata:
             and self._metadata.id == other._metadata.id
             and self._metadata.name == other._metadata.name
             and self._metadata.description == other._metadata.description
-            and self._metadata.configuration == other._metadata.configuration
             and self._metadata.partition_columns == other._metadata.partition_columns
+            and self._metadata.created_time == other._metadata.created_time
+            and self._metadata.configuration == other._metadata.configuration
         )
 
 

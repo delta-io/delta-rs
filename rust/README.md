@@ -28,7 +28,7 @@ part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet
 ❯ cargo run --bin delta-inspect info ./tests/data/delta-0.2.0
 DeltaTable(./tests/data/delta-0.2.0)
         version: 3
-        metadata: GUID=22ef18ba-191c-4c36-a606-3dad5cdf3830, name=None, description=None, partitionColumns=[], configuration={}
+        metadata: GUID=22ef18ba-191c-4c36-a606-3dad5cdf3830, name=None, description=None, partitionColumns=[], createdTime=1564524294376, configuration={}
         min_version: read=1, write=2
         files count: 3
 ```
