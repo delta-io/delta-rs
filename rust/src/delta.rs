@@ -984,7 +984,7 @@ mod tests {
 
     #[test]
     fn state_records_new_txn_version() {
-        let app_transaction_version = HashMap::new();
+        let mut app_transaction_version = HashMap::new();
         app_transaction_version.insert("abc".to_string(), 1);
         app_transaction_version.insert("xyz".to_string(), 1);
 
