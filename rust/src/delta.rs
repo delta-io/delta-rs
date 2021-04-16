@@ -998,9 +998,6 @@ mod tests {
             app_transaction_version,
         };
 
-        let app_transaction_version = HashMap::new();
-        app_transaction_version.insert("abc", 3);
-
         let txn_action = Action::txn(action::Txn {
             appId: "abc".to_string(),
             version: 2,
