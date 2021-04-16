@@ -282,10 +282,10 @@ impl DeltaTable {
                 });
             }
             Action::txn(v) => {
-                state
+                *state
                     .app_transaction_version
                     .entry(v.appId.clone())
-                    .or_insert(v.version);
+                    .or_insert(v.version) = v.version;
             }
             Action::commitInfo(v) => {
                 state.commit_infos.push(v.clone());
