@@ -4,8 +4,7 @@
 <html class="writer-html5" lang="en" >
 <head>
   <meta charset="utf-8" />
-  <meta name="generator" content="Docutils 0.17: http://docutils.sourceforge.net/" />
-
+  
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   
   <title>API Reference &mdash; delta-rs  documentation</title>
@@ -63,7 +62,7 @@
             
             
               <div class="version">
-                0.4.4
+                0.4.6
               </div>
             
           
@@ -165,9 +164,9 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
             
-  <section id="api-reference">
+  <div class="section" id="api-reference">
 <h1>API Reference<a class="headerlink" href="#api-reference" title="Permalink to this headline">¶</a></h1>
-<section id="module-deltalake.table">
+<div class="section" id="module-deltalake.table">
 <span id="deltatable"></span><h2>DeltaTable<a class="headerlink" href="#module-deltalake.table" title="Permalink to this headline">¶</a></h2>
 <dl class="py class">
 <dt id="deltalake.table.DeltaTable">
@@ -247,6 +246,20 @@ The supported type for value is str.</p>
 </dd></dl>
 
 <dl class="py method">
+<dt id="deltalake.table.DeltaTable.metadata">
+<code class="sig-name descname"><span class="pre">metadata</span></code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.metadata" title="Permalink to this definition">¶</a></dt>
+<dd><p>Get the current metadata of the DeltaTable.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p>the current Metadata registered in the transaction log</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference internal" href="#deltalake.table.Metadata" title="deltalake.table.Metadata">deltalake.table.Metadata</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
 <dt id="deltalake.table.DeltaTable.pyarrow_schema">
 <code class="sig-name descname"><span class="pre">pyarrow_schema</span></code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.pyarrow_schema" title="Permalink to this definition">¶</a></dt>
 <dd><p>Get the current schema of the DeltaTable with the Parquet PyArrow format.</p>
@@ -318,8 +331,50 @@ The supported type for value is str.</p>
 
 </dd></dl>
 
-</section>
-<section id="module-deltalake.schema">
+<dl class="py class">
+<dt id="deltalake.table.Metadata">
+<em class="property"><span class="pre">class</span> </em><code class="sig-prename descclassname"><span class="pre">deltalake.table.</span></code><code class="sig-name descname"><span class="pre">Metadata</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.Metadata" title="Permalink to this definition">¶</a></dt>
+<dd><p>Create a Metadata instance.</p>
+<dl class="py method">
+<dt id="deltalake.table.Metadata.configuration">
+<em class="property"><span class="pre">property</span> </em><code class="sig-name descname"><span class="pre">configuration</span></code><a class="headerlink" href="#deltalake.table.Metadata.configuration" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return the DeltaTable properties.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt id="deltalake.table.Metadata.created_time">
+<em class="property"><span class="pre">property</span> </em><code class="sig-name descname"><span class="pre">created_time</span></code><a class="headerlink" href="#deltalake.table.Metadata.created_time" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return The time when this metadata action is created, in milliseconds since the Unix epoch of the DeltaTable.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt id="deltalake.table.Metadata.description">
+<em class="property"><span class="pre">property</span> </em><code class="sig-name descname"><span class="pre">description</span></code><a class="headerlink" href="#deltalake.table.Metadata.description" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return the user-provided description of the DeltaTable.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt id="deltalake.table.Metadata.id">
+<em class="property"><span class="pre">property</span> </em><code class="sig-name descname"><span class="pre">id</span></code><a class="headerlink" href="#deltalake.table.Metadata.id" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return the unique identifier of the DeltaTable.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt id="deltalake.table.Metadata.name">
+<em class="property"><span class="pre">property</span> </em><code class="sig-name descname"><span class="pre">name</span></code><a class="headerlink" href="#deltalake.table.Metadata.name" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return the user-provided identifier of the DeltaTable.</p>
+</dd></dl>
+
+<dl class="py method">
+<dt id="deltalake.table.Metadata.partition_columns">
+<em class="property"><span class="pre">property</span> </em><code class="sig-name descname"><span class="pre">partition_columns</span></code><a class="headerlink" href="#deltalake.table.Metadata.partition_columns" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return an array containing the names of the partitioned columns of the DeltaTable.</p>
+</dd></dl>
+
+</dd></dl>
+
+</div>
+<div class="section" id="module-deltalake.schema">
 <span id="deltaschema"></span><h2>DeltaSchema<a class="headerlink" href="#module-deltalake.schema" title="Permalink to this headline">¶</a></h2>
 <dl class="py class">
 <dt id="deltalake.schema.ArrayType">
@@ -441,8 +496,8 @@ The supported type for value is str.</p>
 </dl>
 </dd></dl>
 
-</section>
-</section>
+</div>
+</div>
 
 
            </div>

@@ -85,3 +85,13 @@ PyArrow format
     >>> dt = DeltaTable("../../rust/tests/data/simple_table")
     >>> dt.pyarrow_schema()
     id: int64
+
+Metadata
+-----------
+
+.. code-block:: python
+
+    >>> from deltalake import DeltaTable
+    >>> dt = DeltaTable("../../rust/tests/data/simple_table")
+    >>> dt.metadata()
+    Metadata(id: 5fba94ed-9794-4965-ba6e-6ee3c0d22af9, name: None, description: None, partitionColumns: [], created_time: 1587968585495, configuration={})

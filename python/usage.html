@@ -4,8 +4,7 @@
 <html class="writer-html5" lang="en" >
 <head>
   <meta charset="utf-8" />
-  <meta name="generator" content="Docutils 0.17: http://docutils.sourceforge.net/" />
-
+  
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   
   <title>Usage &mdash; delta-rs  documentation</title>
@@ -64,7 +63,7 @@
             
             
               <div class="version">
-                0.4.4
+                0.4.6
               </div>
             
           
@@ -94,6 +93,7 @@
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Usage</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="#deltatable">DeltaTable</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#deltaschema">DeltaSchema</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#metadata">Metadata</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="api_reference.html">API Reference</a></li>
@@ -166,9 +166,9 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
             
-  <section id="usage">
+  <div class="section" id="usage">
 <h1>Usage<a class="headerlink" href="#usage" title="Permalink to this headline">¶</a></h1>
-<section id="deltatable">
+<div class="section" id="deltatable">
 <h2>DeltaTable<a class="headerlink" href="#deltatable" title="Permalink to this headline">¶</a></h2>
 <p>Resolve partitions for current version of the DeltaTable</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
@@ -222,8 +222,8 @@
 <span class="go">7   9</span>
 </pre></div>
 </div>
-</section>
-<section id="deltaschema">
+</div>
+<div class="section" id="deltaschema">
 <h2>DeltaSchema<a class="headerlink" href="#deltaschema" title="Permalink to this headline">¶</a></h2>
 <p>Delta format</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
@@ -239,8 +239,17 @@
 <span class="go">id: int64</span>
 </pre></div>
 </div>
-</section>
-</section>
+</div>
+<div class="section" id="metadata">
+<h2>Metadata<a class="headerlink" href="#metadata" title="Permalink to this headline">¶</a></h2>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">metadata</span><span class="p">()</span>
+<span class="go">Metadata(id: 5fba94ed-9794-4965-ba6e-6ee3c0d22af9, name: None, description: None, partitionColumns: [], created_time: 1587968585495, configuration={})</span>
+</pre></div>
+</div>
+</div>
+</div>
 
 
            </div>
