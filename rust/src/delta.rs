@@ -26,6 +26,7 @@ use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
+use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
 pub struct CheckPoint {
@@ -221,6 +222,11 @@ impl DeltaTable {
     fn version_to_log_path(&self, version: DeltaDataTypeVersion) -> String {
         let version = format!("{:020}.json", version);
         self.storage.join_path(&self.log_path, &version)
+    }
+
+    fn tmp_commit_log_path(&self, token: &str) -> String {
+        let path = format!("_commit_{}.json", token);
+        self.storage.join_path(&self.log_path, &path)
     }
 
     fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<String> {
@@ -846,8 +852,9 @@ impl<'a> DeltaTransaction<'a> {
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
         let mut attempt_number: u32 = 0;
 
+        let tmp_log_path = self.prepare_commit(log_entry).await?;
         loop {
-            let commit_result = self.try_commit(log_entry).await;
+            let commit_result = self.try_commit(&tmp_log_path).await;
 
             match commit_result {
                 Ok(v) => {
@@ -875,23 +882,36 @@ impl<'a> DeltaTransaction<'a> {
         }
     }
 
-    async fn try_commit(
+    async fn prepare_commit(
         &mut self,
         log_entry: &[u8],
+    ) -> Result<String, TransactionCommitAttemptError> {
+        let token = Uuid::new_v4().to_string();
+        let tmp_log_path = self.delta_table.tmp_commit_log_path(&token);
+
+        self.delta_table
+            .storage
+            .put_obj(&tmp_log_path, log_entry)
+            .await?;
+
+        Ok(tmp_log_path)
+    }
+
+    async fn try_commit(
+        &mut self,
+        tmp_log_path: &str,
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
         // get the next delta table version and the log path where it should be written
         let attempt_version = self.next_attempt_version().await?;
-        let path = self.delta_table.version_to_log_path(attempt_version);
+        let log_path = self.delta_table.version_to_log_path(attempt_version);
 
-        // write the log file bytes to storage
+        // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
-        // storage must be atomic and fail if file already exists
         self.delta_table
             .storage
-            .put_obj(path.as_str(), log_entry)
+            .rename_obj(tmp_log_path, &log_path)
             .await?;
 
-        // return the newly committed version
         Ok(attempt_version)
     }
 
