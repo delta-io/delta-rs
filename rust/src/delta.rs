@@ -1007,7 +1007,7 @@ mod tests {
             lastUpdated: 0,
         });
 
-        process_action(&mut state, &txn_action);
+        let _ = process_action(&mut state, &txn_action).unwrap();
 
         assert_eq!(2, *state.app_transaction_version.get("abc").unwrap());
         assert_eq!(1, *state.app_transaction_version.get("xyz").unwrap());
