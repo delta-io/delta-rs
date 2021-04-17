@@ -180,6 +180,18 @@ pub enum StorageError {
         source: rusoto_core::RusotoError<rusoto_s3::PutObjectError>,
     },
     #[cfg(feature = "s3")]
+    #[error("Failed to delete S3 object: {source}")]
+    S3Delete {
+        #[from]
+        source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectError>,
+    },
+    #[cfg(feature = "s3")]
+    #[error("Failed to copy S3 object: {source}")]
+    S3Copy {
+        #[from]
+        source: rusoto_core::RusotoError<rusoto_s3::CopyObjectError>,
+    },
+    #[cfg(feature = "s3")]
     #[error("S3 Object missing body content: {0}")]
     S3MissingObjectBody(String),
     #[cfg(feature = "s3")]
@@ -275,6 +287,11 @@ pub trait StorageBackend: Send + Sync + Debug {
     ///
     /// For a multi-writer safe backend, put_obj needs to implement create if not exists semantic.
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError>;
+
+    /// Moves object `src` to `dst`.
+    ///
+    /// This operation may or may not be the atomic, depending on the underlying backend.
+    async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError>;
 }
 
 pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, StorageError> {

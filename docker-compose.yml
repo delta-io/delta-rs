@@ -25,4 +25,5 @@ services:
     volumes:
       - "./build/setup_localstack.sh:/setup_localstack.sh"
       - "./rust/tests/data/golden:/data/golden"
-      - "./rust/tests/data/simple_table:/data/simple"
+      - "./rust/tests/data/simple_table:/data/simple_table"
+      - "./rust/tests/data/simple_commit:/data/simple_commit"
