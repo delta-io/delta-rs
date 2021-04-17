@@ -256,48 +256,6 @@ impl DeltaTable {
         Ok(serde_json::from_slice(&data)?)
     }
 
-    fn process_action(
-        state: &mut DeltaTableState,
-        action: &Action,
-    ) -> Result<(), serde_json::error::Error> {
-        match action {
-            Action::add(v) => {
-                state.files.push(v.path.clone());
-            }
-            Action::remove(v) => {
-                state.files.retain(|e| *e != v.path);
-                state.tombstones.push(v.clone());
-            }
-            Action::protocol(v) => {
-                state.min_reader_version = v.minReaderVersion;
-                state.min_writer_version = v.minWriterVersion;
-            }
-            Action::metaData(v) => {
-                state.current_metadata = Some(DeltaTableMetaData {
-                    id: v.id.clone(),
-                    name: v.name.clone(),
-                    description: v.description.clone(),
-                    format: v.format.clone(),
-                    schema: v.get_schema()?,
-                    partition_columns: v.partitionColumns.clone(),
-                    created_time: v.createdTime,
-                    configuration: v.configuration.clone(),
-                });
-            }
-            Action::txn(v) => {
-                state
-                    .app_transaction_version
-                    .entry(v.appId.clone())
-                    .or_insert(v.version);
-            }
-            Action::commitInfo(v) => {
-                state.commit_infos.push(v.clone());
-            }
-        }
-
-        Ok(())
-    }
-
     async fn find_latest_check_point_for_version(
         &self,
         version: DeltaDataTypeVersion,
@@ -363,7 +321,7 @@ impl DeltaTable {
     ) -> Result<(), ApplyLogError> {
         for line in reader.lines() {
             let action: Action = serde_json::from_str(line?.as_str())?;
-            DeltaTable::process_action(&mut self.state, &action)?;
+            process_action(&mut self.state, &action)?;
         }
 
         Ok(())
@@ -391,7 +349,7 @@ impl DeltaTable {
                 )));
             }
             for record in preader.get_row_iter(None)? {
-                DeltaTable::process_action(
+                process_action(
                     &mut self.state,
                     &Action::from_parquet_record(&schema, &record)?,
                 )?;
@@ -945,6 +903,48 @@ impl<'a> DeltaTransaction<'a> {
     }
 }
 
+fn process_action(
+    state: &mut DeltaTableState,
+    action: &Action,
+) -> Result<(), serde_json::error::Error> {
+    match action {
+        Action::add(v) => {
+            state.files.push(v.path.clone());
+        }
+        Action::remove(v) => {
+            state.files.retain(|e| *e != v.path);
+            state.tombstones.push(v.clone());
+        }
+        Action::protocol(v) => {
+            state.min_reader_version = v.minReaderVersion;
+            state.min_writer_version = v.minWriterVersion;
+        }
+        Action::metaData(v) => {
+            state.current_metadata = Some(DeltaTableMetaData {
+                id: v.id.clone(),
+                name: v.name.clone(),
+                description: v.description.clone(),
+                format: v.format.clone(),
+                schema: v.get_schema()?,
+                partition_columns: v.partitionColumns.clone(),
+                created_time: v.createdTime,
+                configuration: v.configuration.clone(),
+            });
+        }
+        Action::txn(v) => {
+            *state
+                .app_transaction_version
+                .entry(v.appId.clone())
+                .or_insert(v.version) = v.version;
+        }
+        Action::commitInfo(v) => {
+            state.commit_infos.push(v.clone());
+        }
+    }
+
+    Ok(())
+}
+
 pub async fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError> {
     let storage_backend = storage::get_backend_for_uri(table_path)?;
     let mut table = DeltaTable::new(table_path, storage_backend)?;
@@ -976,4 +976,40 @@ pub async fn open_table_with_ds(table_path: &str, ds: &str) -> Result<DeltaTable
 /// Returns rust create version, can be use used in language bindings to expose Rust core version
 pub fn crate_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::action;
+    use super::action::Action;
+    use super::{process_action, DeltaTableState};
+    use std::collections::HashMap;
+
+    #[test]
+    fn state_records_new_txn_version() {
+        let mut app_transaction_version = HashMap::new();
+        app_transaction_version.insert("abc".to_string(), 1);
+        app_transaction_version.insert("xyz".to_string(), 1);
+
+        let mut state = DeltaTableState {
+            files: vec![],
+            commit_infos: vec![],
+            tombstones: vec![],
+            current_metadata: None,
+            min_reader_version: 1,
+            min_writer_version: 2,
+            app_transaction_version,
+        };
+
+        let txn_action = Action::txn(action::Txn {
+            appId: "abc".to_string(),
+            version: 2,
+            lastUpdated: 0,
+        });
+
+        let _ = process_action(&mut state, &txn_action).unwrap();
+
+        assert_eq!(2, *state.app_transaction_version.get("abc").unwrap());
+        assert_eq!(1, *state.app_transaction_version.get("xyz").unwrap());
+    }
 }
