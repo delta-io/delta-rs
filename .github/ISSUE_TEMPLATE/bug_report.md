@@ -4,7 +4,7 @@ about: Problems and issues with delta-rs
 title: ''
 labels: 'bug'
 ---
-#Environment
+# Environment
 
 **Delta-rs version**:
 
@@ -16,7 +16,7 @@ labels: 'bug'
 - **Other**:
 
 ***
-#Bug
+# Bug
 
 **What happened**:
 
