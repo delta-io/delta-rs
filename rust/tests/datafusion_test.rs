@@ -12,7 +12,7 @@ mod datafusion {
         let table = deltalake::open_table("./tests/data/simple_table")
             .await
             .unwrap();
-        ctx.register_table("demo", Box::new(table));
+        ctx.register_table("demo", Arc::new(table))?;
 
         let batches = ctx
             .sql("SELECT id FROM demo WHERE id > 5")?
@@ -40,7 +40,7 @@ mod datafusion {
         let table = deltalake::open_table("./tests/data/delta-0.8.0-date")
             .await
             .unwrap();
-        ctx.register_table("dates", Box::new(table));
+        ctx.register_table("dates", Arc::new(table))?;
 
         let batches = ctx
             .sql("SELECT date from dates WHERE dayOfYear = 2")?
