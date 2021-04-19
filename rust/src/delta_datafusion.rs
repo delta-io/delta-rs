@@ -30,6 +30,7 @@ impl TableProvider for delta::DeltaTable {
         projection: &Option<Vec<usize>>,
         batch_size: usize,
         filters: &[Expr],
+        limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         let schema = <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
             delta::DeltaTable::schema(&self).unwrap(),
@@ -72,6 +73,7 @@ impl TableProvider for delta::DeltaTable {
             projection.clone(),
             predicate_builder,
             batch_size,
+            limit,
         )))
     }
 
