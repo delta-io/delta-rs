@@ -19,6 +19,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::convert::TryFrom;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::action;
 use super::action::{Action, DeltaOperation};
@@ -109,6 +110,10 @@ pub enum DeltaTableError {
     PartitionError { partition: String },
     #[error("Invalid partition filter found: {}.", .partition_filter)]
     InvalidPartitionFilter { partition_filter: String },
+    #[error(
+        "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
+    )]
+    InvalidVacuumRetentionPeriod,
 }
 
 #[derive(Clone)]
@@ -603,6 +608,27 @@ impl DeltaTable {
 
     pub fn get_min_writer_version(&self) -> i32 {
         self.state.min_writer_version
+    }
+
+    /// Run the dry run of the Vacuum command on the Delta Table: list files no longer referenced by a Delta table and are older than the retention threshold.
+    /// We do not recommend that you set a retention interval shorter than 7 days, because old snapshots and uncommitted files can still be in use by concurrent readers or writers to the table. If vacuum cleans up active files, concurrent readers can fail or, worse, tables can be corrupted when vacuum deletes files that have not yet been committed.
+    pub fn vacuum_dry_run(&self, retention_hours: u64) -> Result<Vec<String>, DeltaTableError> {
+        if retention_hours < 168 {
+            return Err(DeltaTableError::InvalidVacuumRetentionPeriod);
+        }
+        let before_duration = (SystemTime::now() - Duration::from_secs(3600 * retention_hours))
+            .duration_since(UNIX_EPOCH);
+        let delete_before_timestamp = match before_duration {
+            Ok(duration) => duration.as_millis() as i64,
+            Err(_) => return Err(DeltaTableError::InvalidVacuumRetentionPeriod),
+        };
+
+        Ok(self
+            .get_tombstones()
+            .iter()
+            .filter(|tombstone| tombstone.deletionTimestamp < delete_before_timestamp)
+            .map(|tombstone| self.storage.join_path(&self.table_path, &tombstone.path))
+            .collect::<Vec<String>>())
     }
 
     pub fn schema(&self) -> Option<&Schema> {

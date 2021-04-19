@@ -159,6 +159,21 @@ class DeltaTable:
         """
         return self._metadata
 
+    def vacuum(self, retention_hours: int, dry_run: bool = True) -> List[str]:
+        """
+        Run the Vacuum command on the Delta Table: lists files no longer referenced by the Delta table and are older than the retention threshold.
+
+        :param retention_hours: the retention threshold in hours
+        :param dry_run: when activated, lists only the files, removed otherwise
+        :return: the list of files no longer referenced by the Delta Table and are older than the retention threshold.
+        """
+        if retention_hours < 0:
+            raise ValueError("The retention periods should be positive.")
+
+        if not dry_run:
+            raise NotImplementedError("Only Vacuum with dry_run is available.")
+        return self._table.vacuum(dry_run, retention_hours)
+
     def pyarrow_schema(self) -> pyarrow.Schema:
         """
         Get the current schema of the DeltaTable with the Parquet PyArrow format.
