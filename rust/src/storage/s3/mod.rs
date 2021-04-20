@@ -338,6 +338,21 @@ impl StorageBackend for S3StorageBackend {
 
         Ok(())
     }
+
+    async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
+        debug!("delete s3 object: {}...", path);
+
+        let uri = parse_uri(path)?.into_s3object()?;
+        let put_req = DeleteObjectRequest {
+            bucket: uri.bucket.to_string(),
+            key: uri.key.to_string(),
+            ..Default::default()
+        };
+
+        self.client.delete_object(put_req).await?;
+
+        Ok(())
+    }
 }
 
 #[cfg(test)]
