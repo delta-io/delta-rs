@@ -101,6 +101,10 @@ impl StorageBackend for FileStorageBackend {
     async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError> {
         rename::atomic_rename(src, dst)
     }
+
+    async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
+        fs::remove_file(path).await.map_err(StorageError::from)
+    }
 }
 
 #[cfg(test)]
@@ -130,6 +134,22 @@ mod tests {
             backend.rename_obj(tmp_file, new_file).await,
             Err(StorageError::AlreadyExists(s)) if s == new_file_path.to_str().unwrap(),
         ));
+    }
+
+    #[tokio::test]
+    async fn delete_obj() {
+        let tmp_dir = tempdir::TempDir::new("delete_test").unwrap();
+        let tmp_file_path = tmp_dir.path().join("tmp_file");
+        let backend = FileStorageBackend::new(tmp_dir.path().to_str().unwrap());
+
+        // put object
+        let path = tmp_file_path.to_str().unwrap();
+        backend.put_obj(path, &[]).await.unwrap();
+        assert_eq!(fs::metadata(path).await.is_ok(), true);
+
+        // delete object
+        backend.delete_obj(path).await.unwrap();
+        assert_eq!(fs::metadata(path).await.is_ok(), false)
     }
 
     #[test]

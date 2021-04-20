@@ -292,6 +292,9 @@ pub trait StorageBackend: Send + Sync + Debug {
     ///
     /// This operation may or may not be the atomic, depending on the underlying backend.
     async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError>;
+
+    /// Deletes object at this `path`.
+    async fn delete_obj(&self, path: &str) -> Result<(), StorageError>;
 }
 
 pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, StorageError> {
