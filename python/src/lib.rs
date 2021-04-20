@@ -144,6 +144,17 @@ impl RawDeltaTable {
             .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))
     }
 
+    /// Run the Vacuum command on the Delta Table: lists and removes files no longer referenced by the Delta table and are older than the retention threshold.
+    pub fn vacuum(&self, dry_run: bool, retention_hours: u64) -> PyResult<Vec<String>> {
+        match dry_run {
+            true => Ok(self
+                ._table
+                .vacuum_dry_run(retention_hours)
+                .map_err(PyDeltaTableError::from_raw)?),
+            false => unimplemented!("Only Vacuum with dry_run is available."),
+        }
+    }
+
     pub fn arrow_schema_json(&self) -> PyResult<String> {
         let schema = self
             ._table

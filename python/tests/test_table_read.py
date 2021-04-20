@@ -17,6 +17,36 @@ def test_read_simple_table_by_version_to_dict():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
 
+def test_vacuum_dry_run_simple_table():
+    table_path = "../rust/tests/data/delta-0.2.0"
+    dt = DeltaTable(table_path)
+    retention_periods = 169
+    assert dt.vacuum(retention_periods) == [
+        "../rust/tests/data/delta-0.2.0/part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet",
+        "../rust/tests/data/delta-0.2.0/part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet",
+        "../rust/tests/data/delta-0.2.0/part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet",
+        "../rust/tests/data/delta-0.2.0/part-00001-4327c977-2734-4477-9507-7ccf67924649-c000.snappy.parquet",
+    ]
+
+    retention_periods = -1
+    with pytest.raises(Exception) as exception:
+        dt.vacuum(retention_periods)
+    assert str(exception.value) == "The retention periods should be positive."
+
+    retention_periods = 167
+    with pytest.raises(Exception) as exception:
+        dt.vacuum(retention_periods)
+    assert (
+        str(exception.value)
+        == "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
+    )
+
+    retention_periods = 167
+    with pytest.raises(Exception) as exception:
+        dt.vacuum(retention_periods, dry_run=False)
+    assert str(exception.value) == "Only Vacuum with dry_run is available."
+
+
 def test_read_partitioned_table_metadata():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
