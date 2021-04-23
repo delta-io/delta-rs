@@ -374,9 +374,9 @@ pub struct MetaData {
     pub schemaString: String,
     /// An array containing the names of columns by which the data should be partitioned
     pub partitionColumns: Vec<String>,
-    // The time when this metadata action is created, in milliseconds since the Unix epoch
+    /// The time when this metadata action is created, in milliseconds since the Unix epoch
     pub createdTime: DeltaDataTypeTimestamp,
-    // A map containing configuration options for the table
+    /// A map containing configuration options for the table
     pub configuration: HashMap<String, String>,
 }
 
@@ -505,7 +505,9 @@ pub struct Remove {
     /// example, since it adds and removes files by combining many files into one.
     pub dataChange: bool,
     pub extendedFileMetadata: Option<bool>,
+    /// Partition values for the removed file
     pub partitionValues: Option<HashMap<String, String>>,
+    /// Size of the file being removed
     pub size: Option<DeltaDataTypeLong>,
     pub tags: Option<HashMap<String, String>>,
 }

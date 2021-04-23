@@ -29,6 +29,7 @@ use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
 use uuid::Uuid;
 
+/// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
 pub struct CheckPoint {
     /// Delta table version
@@ -166,9 +167,9 @@ pub struct DeltaTableMetaData {
     pub schema: Schema,
     /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
-    // The time when this metadata action is created, in milliseconds since the Unix epoch
+    /// The time when this metadata action is created, in milliseconds since the Unix epoch
     pub created_time: DeltaDataTypeTimestamp,
-    // table properties
+    /// table properties
     pub configuration: HashMap<String, String>,
 }
 
