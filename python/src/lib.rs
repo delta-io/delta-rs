@@ -8,6 +8,7 @@ use deltalake::partitions::PartitionFilter;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
@@ -42,6 +43,22 @@ struct RawDeltaTable {
     _table: deltalake::DeltaTable,
 }
 
+#[pyclass]
+struct RawDeltaTableMetaData {
+    #[pyo3(get)]
+    id: String,
+    #[pyo3(get)]
+    name: Option<String>,
+    #[pyo3(get)]
+    description: Option<String>,
+    #[pyo3(get)]
+    partition_columns: Vec<String>,
+    #[pyo3(get)]
+    created_time: deltalake::DeltaDataTypeTimestamp,
+    #[pyo3(get)]
+    configuration: HashMap<String, String>,
+}
+
 #[pymethods]
 impl RawDeltaTable {
     #[new]
@@ -62,6 +79,21 @@ impl RawDeltaTable {
 
     pub fn version(&self) -> PyResult<i64> {
         Ok(self._table.version)
+    }
+
+    pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
+        let metadata = self
+            ._table
+            .get_metadata()
+            .map_err(PyDeltaTableError::from_raw)?;
+        Ok(RawDeltaTableMetaData {
+            id: metadata.id.clone(),
+            name: metadata.name.clone(),
+            description: metadata.description.clone(),
+            partition_columns: metadata.partition_columns.clone(),
+            created_time: metadata.created_time,
+            configuration: metadata.configuration.clone(),
+        })
     }
 
     pub fn load_version(&mut self, version: deltalake::DeltaDataTypeVersion) -> PyResult<()> {
@@ -112,6 +144,17 @@ impl RawDeltaTable {
             .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))
     }
 
+    /// Run the Vacuum command on the Delta Table: lists and removes files no longer referenced by the Delta table and are older than the retention threshold.
+    pub fn vacuum(&self, dry_run: bool, retention_hours: u64) -> PyResult<Vec<String>> {
+        match dry_run {
+            true => Ok(self
+                ._table
+                .vacuum_dry_run(retention_hours)
+                .map_err(PyDeltaTableError::from_raw)?),
+            false => unimplemented!("Only Vacuum with dry_run is available."),
+        }
+    }
+
     pub fn arrow_schema_json(&self) -> PyResult<String> {
         let schema = self
             ._table
@@ -138,6 +181,7 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
 
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
     m.add_class::<RawDeltaTable>()?;
+    m.add_class::<RawDeltaTableMetaData>()?;
     m.add("DeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())
 }

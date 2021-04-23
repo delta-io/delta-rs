@@ -2,18 +2,27 @@ extern crate chrono;
 extern crate deltalake;
 extern crate utime;
 
-use deltalake::action;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-#[tokio::test]
-async fn test_two_commits() {
-    cleanup_log_dir();
+use deltalake::action;
 
-    let mut table = deltalake::open_table("./tests/data/simple_commit")
-        .await
-        .unwrap();
+#[tokio::test]
+async fn test_two_commits_fs() {
+    cleanup_log_dir_fs();
+    test_two_commits("./tests/data/simple_commit").await;
+}
+
+#[cfg(feature = "s3")]
+#[tokio::test]
+async fn test_two_commits_s3() {
+    s3_ops::cleanup_log_dir_s3().await;
+    test_two_commits("s3://deltars/simple_commit_rw").await;
+}
+
+async fn test_two_commits(table_path: &str) {
+    let mut table = deltalake::open_table(table_path).await.unwrap();
 
     assert_eq!(0, table.version);
     assert_eq!(0, table.get_files().len());
@@ -91,7 +100,7 @@ async fn test_two_commits() {
     assert_eq!(4, table.get_files().len());
 }
 
-fn cleanup_log_dir() {
+fn cleanup_log_dir_fs() {
     let log_dir = PathBuf::from("./tests/data/simple_commit/_delta_log");
     let paths = fs::read_dir(log_dir.as_path()).unwrap();
 
@@ -110,5 +119,33 @@ fn cleanup_log_dir() {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(feature = "s3")]
+mod s3_ops {
+    use rusoto_core::Region;
+    use rusoto_s3::{DeleteObjectRequest, S3Client, S3};
+
+    pub async fn cleanup_log_dir_s3() {
+        let endpoint = "http://localhost:4566";
+        std::env::set_var("AWS_ACCESS_KEY_ID", "test");
+        std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
+        std::env::set_var("AWS_ENDPOINT_URL", &endpoint);
+        let client = S3Client::new(Region::Custom {
+            name: "custom".to_string(),
+            endpoint: endpoint.to_string(),
+        });
+        delete_obj(&client, "00000000000000000001.json").await;
+        delete_obj(&client, "00000000000000000002.json").await;
+    }
+
+    async fn delete_obj(client: &S3Client, name: &str) {
+        let req = DeleteObjectRequest {
+            bucket: "deltars".to_string(),
+            key: format!("simple_commit_rw/_delta_log/{}", name),
+            ..Default::default()
+        };
+        client.delete_object(req).await.unwrap();
     }
 }

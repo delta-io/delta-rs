@@ -4,8 +4,68 @@ from urllib.parse import urlparse
 import pyarrow
 from pyarrow.dataset import dataset
 
-from .deltalake import RawDeltaTable
+from .deltalake import RawDeltaTable, RawDeltaTableMetaData
 from .schema import Schema, pyarrow_schema_from_json
+
+
+class Metadata:
+    """ Create a Metadata instance. """
+
+    def __init__(self, table: RawDeltaTable):
+        self._metadata = table.metadata()
+
+    @property
+    def id(self):
+        """ Return the unique identifier of the DeltaTable. """
+        return self._metadata.id
+
+    @property
+    def name(self):
+        """ Return the user-provided identifier of the DeltaTable. """
+        return self._metadata.name
+
+    @property
+    def description(self):
+        """ Return the user-provided description of the DeltaTable. """
+        return self._metadata.description
+
+    @property
+    def partition_columns(self):
+        """ Return an array containing the names of the partitioned columns of the DeltaTable. """
+        return self._metadata.partition_columns
+
+    @property
+    def created_time(self):
+        """
+        Return The time when this metadata action is created, in milliseconds since the Unix epoch of the DeltaTable.
+        """
+        return self._metadata.created_time
+
+    @property
+    def configuration(self):
+        """ Return the DeltaTable properties. """
+        return self._metadata.configuration
+
+    def __str__(self) -> str:
+        return (
+            f"Metadata(id: {self._metadata.id}, name: {self._metadata.name}, "
+            f"description: {self._metadata.description}, partitionColumns: {self._metadata.partition_columns}, "
+            f"created_time: {self.created_time}, configuration={self._metadata.configuration})"
+        )
+
+    def __repr__(self) -> str:
+        return self.__str__()
+
+    def __eq__(self, other: "Metadata") -> bool:
+        return (
+            isinstance(other, Metadata)
+            and self._metadata.id == other._metadata.id
+            and self._metadata.name == other._metadata.name
+            and self._metadata.description == other._metadata.description
+            and self._metadata.partition_columns == other._metadata.partition_columns
+            and self._metadata.created_time == other._metadata.created_time
+            and self._metadata.configuration == other._metadata.configuration
+        )
 
 
 class DeltaTable:
@@ -20,6 +80,7 @@ class DeltaTable:
         :param version: version of the DeltaTable
         """
         self._table = RawDeltaTable(table_path, version=version)
+        self._metadata = Metadata(self._table)
 
     def version(self) -> int:
         """
@@ -89,6 +150,29 @@ class DeltaTable:
         :return: the current Schema registered in the transaction log
         """
         return Schema.from_json(self._table.schema_json())
+
+    def metadata(self) -> Metadata:
+        """
+        Get the current metadata of the DeltaTable.
+
+        :return: the current Metadata registered in the transaction log
+        """
+        return self._metadata
+
+    def vacuum(self, retention_hours: int, dry_run: bool = True) -> List[str]:
+        """
+        Run the Vacuum command on the Delta Table: lists files no longer referenced by the Delta table and are older than the retention threshold.
+
+        :param retention_hours: the retention threshold in hours
+        :param dry_run: when activated, lists only the files, removed otherwise
+        :return: the list of files no longer referenced by the Delta Table and are older than the retention threshold.
+        """
+        if retention_hours < 0:
+            raise ValueError("The retention periods should be positive.")
+
+        if not dry_run:
+            raise NotImplementedError("Only Vacuum with dry_run is available.")
+        return self._table.vacuum(dry_run, retention_hours)
 
     def pyarrow_schema(self) -> pyarrow.Schema:
         """

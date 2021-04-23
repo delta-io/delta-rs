@@ -8,7 +8,6 @@ use tokio::io::AsyncWriteExt;
 use tokio_stream::wrappers::ReadDirStream;
 
 use super::{ObjectMeta, StorageBackend, StorageError};
-use uuid::Uuid;
 
 mod rename;
 
@@ -86,52 +85,27 @@ impl StorageBackend for FileStorageBackend {
     }
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
-        let tmp_path = create_tmp_file_with_retry(self, path, obj_bytes).await?;
-
-        if let Err(e) = rename::atomic_rename(&tmp_path, path) {
-            fs::remove_file(tmp_path).await.unwrap_or(());
-            return Err(e);
+        if let Some(parent) = Path::new(path).parent() {
+            fs::create_dir_all(parent).await?;
         }
+        let mut f = fs::OpenOptions::new()
+            .create_new(true)
+            .write(true)
+            .open(path)
+            .await?;
+
+        f.write(obj_bytes).await?;
 
         Ok(())
     }
-}
 
-const CREATE_TEMPORARY_FILE_MAX_TRIES: i32 = 5;
-
-async fn create_tmp_file_with_retry(
-    backend: &FileStorageBackend,
-    path: &str,
-    obj_bytes: &[u8],
-) -> Result<String, StorageError> {
-    let mut i = 0;
-
-    while i < CREATE_TEMPORARY_FILE_MAX_TRIES {
-        let tmp_file_name = format!("{}.temporary", Uuid::new_v4().to_string());
-        let tmp_path = backend.join_path(&backend.root, &tmp_file_name);
-        let rf = fs::OpenOptions::new()
-            .create_new(true)
-            .write(true)
-            .open(&tmp_path)
-            .await;
-
-        match rf {
-            Ok(mut f) => {
-                f.write(obj_bytes).await?;
-                return Ok(tmp_path);
-            }
-            Err(e) => {
-                std::fs::remove_file(&tmp_path).unwrap_or(());
-                if e.kind() != std::io::ErrorKind::AlreadyExists {
-                    return Err(StorageError::Io { source: e });
-                }
-            }
-        }
-
-        i += 1;
+    async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError> {
+        rename::atomic_rename(src, dst)
     }
 
-    Err(StorageError::AlreadyExists(String::from(path)))
+    async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
+        fs::remove_file(path).await.map_err(StorageError::from)
+    }
 }
 
 #[cfg(test)]
@@ -139,31 +113,44 @@ mod tests {
     use super::*;
 
     #[tokio::test]
-    async fn put_obj() {
+    async fn put_and_rename() {
         let tmp_dir = tempdir::TempDir::new("rename_test").unwrap();
         let backend = FileStorageBackend::new(tmp_dir.path().to_str().unwrap());
-        let tmp_dir_path = tmp_dir.path();
-        let new_file_path = tmp_dir_path.join("new_file");
 
-        if let Err(e) = backend
-            .put_obj(new_file_path.to_str().unwrap(), b"hello")
-            .await
-        {
+        let tmp_file_path = tmp_dir.path().join("tmp_file");
+        let new_file_path = tmp_dir.path().join("new_file");
+
+        let tmp_file = tmp_file_path.to_str().unwrap();
+        let new_file = new_file_path.to_str().unwrap();
+
+        // first try should result in successful rename
+        backend.put_obj(tmp_file, b"hello").await.unwrap();
+        if let Err(e) = backend.rename_obj(tmp_file, new_file).await {
             panic!("Expect put_obj to return Ok, got Err: {:#?}", e)
         }
 
         // second try should result in already exists error
+        backend.put_obj(tmp_file, b"hello").await.unwrap();
         assert!(matches!(
-            backend.put_obj(new_file_path.to_str().unwrap(), b"hello").await,
+            backend.rename_obj(tmp_file, new_file).await,
             Err(StorageError::AlreadyExists(s)) if s == new_file_path.to_str().unwrap(),
         ));
+    }
 
-        // make sure rename failure doesn't leave any dangling temp file
-        let paths = std::fs::read_dir(tmp_dir_path)
-            .unwrap()
-            .map(|entry| entry.unwrap().path())
-            .collect::<Vec<_>>();
-        assert_eq!(paths, [new_file_path]);
+    #[tokio::test]
+    async fn delete_obj() {
+        let tmp_dir = tempdir::TempDir::new("delete_test").unwrap();
+        let tmp_file_path = tmp_dir.path().join("tmp_file");
+        let backend = FileStorageBackend::new(tmp_dir.path().to_str().unwrap());
+
+        // put object
+        let path = tmp_file_path.to_str().unwrap();
+        backend.put_obj(path, &[]).await.unwrap();
+        assert_eq!(fs::metadata(path).await.is_ok(), true);
+
+        // delete object
+        backend.delete_obj(path).await.unwrap();
+        assert_eq!(fs::metadata(path).await.is_ok(), false)
     }
 
     #[test]

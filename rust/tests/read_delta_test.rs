@@ -1,7 +1,10 @@
 extern crate deltalake;
 
+use deltalake::file::FileStorageBackend;
+use deltalake::StorageBackend;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::time::SystemTime;
 
 #[tokio::test]
 async fn read_delta_2_0_table_without_version() {
@@ -186,4 +189,38 @@ async fn read_delta_8_0_table_with_partitions() {
             "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet".to_string()
         ]
     );
+}
+
+#[tokio::test]
+async fn vacuum_delta_8_0_table() {
+    let table = deltalake::open_table("./tests/data/delta-0.8.0")
+        .await
+        .unwrap();
+
+    let retention_hours = 169;
+    let backend = FileStorageBackend::new("./tests/data/delta-0.8.0");
+
+    assert_eq!(
+        table.vacuum_dry_run(retention_hours).unwrap(),
+        vec![backend.join_path(
+            "./tests/data/delta-0.8.0",
+            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"
+        )]
+    );
+
+    let retention_hours = 1;
+
+    assert!(matches!(
+        table.vacuum_dry_run(retention_hours).unwrap_err(),
+        deltalake::DeltaTableError::InvalidVacuumRetentionPeriod,
+    ));
+
+    let retention_hours = SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()
+        / 3600;
+    let empty: Vec<String> = Vec::new();
+
+    assert_eq!(table.vacuum_dry_run(retention_hours).unwrap(), empty);
 }

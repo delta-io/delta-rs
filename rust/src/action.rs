@@ -374,10 +374,10 @@ pub struct MetaData {
     pub schemaString: String,
     /// An array containing the names of columns by which the data should be partitioned
     pub partitionColumns: Vec<String>,
-    /// NOTE: this field is undocumented
-    pub configuration: HashMap<String, String>,
-    /// NOTE: this field is undocumented
+    // The time when this metadata action is created, in milliseconds since the Unix epoch
     pub createdTime: DeltaDataTypeTimestamp,
+    // A map containing configuration options for the table
+    pub configuration: HashMap<String, String>,
 }
 
 impl MetaData {

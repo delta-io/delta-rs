@@ -19,6 +19,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::convert::TryFrom;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::action;
 use super::action::{Action, DeltaOperation};
@@ -26,6 +27,7 @@ use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
+use uuid::Uuid;
 
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
 pub struct CheckPoint {
@@ -143,6 +145,10 @@ pub enum DeltaTableError {
         /// The invalid partition filter used.
         partition_filter: String,
     },
+    #[error(
+        "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
+    )]
+    InvalidVacuumRetentionPeriod,
 }
 
 /// Delta table metadata
@@ -160,7 +166,9 @@ pub struct DeltaTableMetaData {
     pub schema: Schema,
     /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
-    /// table properties
+    // The time when this metadata action is created, in milliseconds since the Unix epoch
+    pub created_time: DeltaDataTypeTimestamp,
+    // table properties
     pub configuration: HashMap<String, String>,
 }
 
@@ -168,8 +176,8 @@ impl fmt::Display for DeltaTableMetaData {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
             f,
-            "GUID={}, name={:?}, description={:?}, partitionColumns={:?}, configuration={:?}",
-            self.id, self.name, self.description, self.partition_columns, self.configuration
+            "GUID={}, name={:?}, description={:?}, partitionColumns={:?}, createdTime={:?}, configuration={:?}",
+            self.id, self.name, self.description, self.partition_columns, self.created_time, self.configuration
         )
     }
 }
@@ -277,6 +285,11 @@ impl DeltaTable {
         self.storage.join_path(&self.log_path, &version)
     }
 
+    fn tmp_commit_log_path(&self, token: &str) -> String {
+        let path = format!("_commit_{}.json", token);
+        self.storage.join_path(&self.log_path, &path)
+    }
+
     fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<String> {
         let checkpoint_prefix_pattern = format!("{:020}", check_point.version);
         let checkpoint_prefix = self
@@ -308,47 +321,6 @@ impl DeltaTable {
         let data = self.storage.get_obj(&last_checkpoint_path).await?;
 
         Ok(serde_json::from_slice(&data)?)
-    }
-
-    fn process_action(
-        state: &mut DeltaTableState,
-        action: &Action,
-    ) -> Result<(), serde_json::error::Error> {
-        match action {
-            Action::add(v) => {
-                state.files.push(v.path.clone());
-            }
-            Action::remove(v) => {
-                state.files.retain(|e| *e != v.path);
-                state.tombstones.push(v.clone());
-            }
-            Action::protocol(v) => {
-                state.min_reader_version = v.minReaderVersion;
-                state.min_writer_version = v.minWriterVersion;
-            }
-            Action::metaData(v) => {
-                state.current_metadata = Some(DeltaTableMetaData {
-                    id: v.id.clone(),
-                    name: v.name.clone(),
-                    description: v.description.clone(),
-                    format: v.format.clone(),
-                    schema: v.get_schema()?,
-                    partition_columns: v.partitionColumns.clone(),
-                    configuration: v.configuration.clone(),
-                });
-            }
-            Action::txn(v) => {
-                state
-                    .app_transaction_version
-                    .entry(v.appId.clone())
-                    .or_insert(v.version);
-            }
-            Action::commitInfo(v) => {
-                state.commit_infos.push(v.clone());
-            }
-        }
-
-        Ok(())
     }
 
     async fn find_latest_check_point_for_version(
@@ -416,7 +388,7 @@ impl DeltaTable {
     ) -> Result<(), ApplyLogError> {
         for line in reader.lines() {
             let action: Action = serde_json::from_str(line?.as_str())?;
-            DeltaTable::process_action(&mut self.state, &action)?;
+            process_action(&mut self.state, &action)?;
         }
 
         Ok(())
@@ -444,7 +416,7 @@ impl DeltaTable {
                 )));
             }
             for record in preader.get_row_iter(None)? {
-                DeltaTable::process_action(
+                process_action(
                     &mut self.state,
                     &Action::from_parquet_record(&schema, &record)?,
                 )?;
@@ -706,6 +678,27 @@ impl DeltaTable {
     /// metadata.
     pub fn get_min_writer_version(&self) -> i32 {
         self.state.min_writer_version
+    }
+
+    /// Run the dry run of the Vacuum command on the Delta Table: list files no longer referenced by a Delta table and are older than the retention threshold.
+    /// We do not recommend that you set a retention interval shorter than 7 days, because old snapshots and uncommitted files can still be in use by concurrent readers or writers to the table. If vacuum cleans up active files, concurrent readers can fail or, worse, tables can be corrupted when vacuum deletes files that have not yet been committed.
+    pub fn vacuum_dry_run(&self, retention_hours: u64) -> Result<Vec<String>, DeltaTableError> {
+        if retention_hours < 168 {
+            return Err(DeltaTableError::InvalidVacuumRetentionPeriod);
+        }
+        let before_duration = (SystemTime::now() - Duration::from_secs(3600 * retention_hours))
+            .duration_since(UNIX_EPOCH);
+        let delete_before_timestamp = match before_duration {
+            Ok(duration) => duration.as_millis() as i64,
+            Err(_) => return Err(DeltaTableError::InvalidVacuumRetentionPeriod),
+        };
+
+        Ok(self
+            .get_tombstones()
+            .iter()
+            .filter(|tombstone| tombstone.deletionTimestamp < delete_before_timestamp)
+            .map(|tombstone| self.storage.join_path(&self.table_path, &tombstone.path))
+            .collect::<Vec<String>>())
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
@@ -997,8 +990,9 @@ impl<'a> DeltaTransaction<'a> {
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
         let mut attempt_number: u32 = 0;
 
+        let tmp_log_path = self.prepare_commit(log_entry).await?;
         loop {
-            let commit_result = self.try_commit(log_entry).await;
+            let commit_result = self.try_commit(&tmp_log_path).await;
 
             match commit_result {
                 Ok(v) => {
@@ -1026,23 +1020,36 @@ impl<'a> DeltaTransaction<'a> {
         }
     }
 
-    async fn try_commit(
+    async fn prepare_commit(
         &mut self,
         log_entry: &[u8],
+    ) -> Result<String, TransactionCommitAttemptError> {
+        let token = Uuid::new_v4().to_string();
+        let tmp_log_path = self.delta_table.tmp_commit_log_path(&token);
+
+        self.delta_table
+            .storage
+            .put_obj(&tmp_log_path, log_entry)
+            .await?;
+
+        Ok(tmp_log_path)
+    }
+
+    async fn try_commit(
+        &mut self,
+        tmp_log_path: &str,
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
         // get the next delta table version and the log path where it should be written
         let attempt_version = self.next_attempt_version().await?;
-        let path = self.delta_table.version_to_log_path(attempt_version);
+        let log_path = self.delta_table.version_to_log_path(attempt_version);
 
-        // write the log file bytes to storage
+        // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
-        // storage must be atomic and fail if file already exists
         self.delta_table
             .storage
-            .put_obj(path.as_str(), log_entry)
+            .rename_obj(tmp_log_path, &log_path)
             .await?;
 
-        // return the newly committed version
         Ok(attempt_version)
     }
 
@@ -1052,6 +1059,48 @@ impl<'a> DeltaTransaction<'a> {
         self.delta_table.update().await?;
         Ok(self.delta_table.version + 1)
     }
+}
+
+fn process_action(
+    state: &mut DeltaTableState,
+    action: &Action,
+) -> Result<(), serde_json::error::Error> {
+    match action {
+        Action::add(v) => {
+            state.files.push(v.path.clone());
+        }
+        Action::remove(v) => {
+            state.files.retain(|e| *e != v.path);
+            state.tombstones.push(v.clone());
+        }
+        Action::protocol(v) => {
+            state.min_reader_version = v.minReaderVersion;
+            state.min_writer_version = v.minWriterVersion;
+        }
+        Action::metaData(v) => {
+            state.current_metadata = Some(DeltaTableMetaData {
+                id: v.id.clone(),
+                name: v.name.clone(),
+                description: v.description.clone(),
+                format: v.format.clone(),
+                schema: v.get_schema()?,
+                partition_columns: v.partitionColumns.clone(),
+                created_time: v.createdTime,
+                configuration: v.configuration.clone(),
+            });
+        }
+        Action::txn(v) => {
+            *state
+                .app_transaction_version
+                .entry(v.appId.clone())
+                .or_insert(v.version) = v.version;
+        }
+        Action::commitInfo(v) => {
+            state.commit_infos.push(v.clone());
+        }
+    }
+
+    Ok(())
 }
 
 /// Creates and loads a DeltaTable from the given path with current metadata.
@@ -1092,4 +1141,40 @@ pub async fn open_table_with_ds(table_path: &str, ds: &str) -> Result<DeltaTable
 /// Returns rust create version, can be use used in language bindings to expose Rust core version
 pub fn crate_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::action;
+    use super::action::Action;
+    use super::{process_action, DeltaTableState};
+    use std::collections::HashMap;
+
+    #[test]
+    fn state_records_new_txn_version() {
+        let mut app_transaction_version = HashMap::new();
+        app_transaction_version.insert("abc".to_string(), 1);
+        app_transaction_version.insert("xyz".to_string(), 1);
+
+        let mut state = DeltaTableState {
+            files: vec![],
+            commit_infos: vec![],
+            tombstones: vec![],
+            current_metadata: None,
+            min_reader_version: 1,
+            min_writer_version: 2,
+            app_transaction_version,
+        };
+
+        let txn_action = Action::txn(action::Txn {
+            appId: "abc".to_string(),
+            version: 2,
+            lastUpdated: 0,
+        });
+
+        let _ = process_action(&mut state, &txn_action).unwrap();
+
+        assert_eq!(2, *state.app_transaction_version.get("abc").unwrap());
+        assert_eq!(1, *state.app_transaction_version.get("xyz").unwrap());
+    }
 }

@@ -95,3 +95,44 @@ jobs:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         # linux build uploads sdist to update projection description on PyPI
         run: maturin publish -b pyo3 --target x86_64-unknown-linux-gnu
+
+  release-docs:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+      with:
+        fetch-depth: 0  # fetch full history for gh-pages branch checkout
+    - name: Install minimal stable with clippy and rustfmt
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: default
+        toolchain: stable
+        override: true
+
+    - name: Build and install deltalake
+      run: |
+        pip install maturin==0.9.0
+        maturin build --manylinux off
+        pip install $(printf ../target/wheels/deltalake-*-cp36-abi3-*.whl)'[devel,pandas]'
+
+    - name: Build Sphinx documentation
+      run: |
+        sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
+        mv docs/build ~/build
+
+        echo "Configuring git..."
+        git config --global user.name 'Github Action'
+        git config --global user.email 'deltars@users.noreply.github.com'
+        git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GITHUB_REPOSITORY
+
+        echo "Commit to gh-pages branch..."
+        git reset --hard HEAD
+        git clean -d -fx .
+        git checkout gh-pages
+        cd ..
+        cp -avr ~/build/html/.  ./python
+        PUSHED_TAG=${GITHUB_REF##*/}
+        git status
+        git add ./python
+        git commit -m "doc update for tag `${PUSHED_TAG}`"
+        git push origin gh-pages

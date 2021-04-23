@@ -8,7 +8,8 @@ use rusoto_core::credential::ChainProvider;
 use rusoto_core::{HttpClient, Region, RusotoError};
 use rusoto_credential::AutoRefreshingProvider;
 use rusoto_s3::{
-    GetObjectRequest, HeadObjectRequest, ListObjectsV2Request, PutObjectRequest, S3Client, S3,
+    CopyObjectRequest, DeleteObjectRequest, GetObjectRequest, HeadObjectRequest,
+    ListObjectsV2Request, PutObjectRequest, S3Client, S3,
 };
 use rusoto_sts::WebIdentityProvider;
 use tokio::io::AsyncReadExt;
@@ -298,12 +299,6 @@ impl StorageBackend for S3StorageBackend {
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
         debug!("put s3 object: {}...", path);
 
-        match self.head_obj(path).await {
-            Ok(_) => return Err(StorageError::AlreadyExists(path.to_string())),
-            Err(StorageError::NotFound) => (),
-            Err(e) => return Err(e),
-        }
-
         let uri = parse_uri(path)?.into_s3object()?;
         let put_req = PutObjectRequest {
             bucket: uri.bucket.to_string(),
@@ -313,6 +308,53 @@ impl StorageBackend for S3StorageBackend {
         };
 
         self.client.put_object(put_req).await?;
+
+        Ok(())
+    }
+
+    async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError> {
+        debug!("rename s3 object: {} to {}...", src, dst);
+
+        match self.head_obj(dst).await {
+            Ok(_) => return Err(StorageError::AlreadyExists(dst.to_string())),
+            Err(StorageError::NotFound) => (),
+            Err(e) => return Err(e),
+        }
+
+        let src = parse_uri(src)?.into_s3object()?;
+        let dst = parse_uri(dst)?.into_s3object()?;
+
+        self.client
+            .copy_object(CopyObjectRequest {
+                bucket: dst.bucket.to_string(),
+                key: dst.key.to_string(),
+                copy_source: format!("{}/{}", src.bucket, src.key),
+                ..Default::default()
+            })
+            .await?;
+
+        self.client
+            .delete_object(DeleteObjectRequest {
+                bucket: src.bucket.to_string(),
+                key: src.key.to_string(),
+                ..Default::default()
+            })
+            .await?;
+
+        Ok(())
+    }
+
+    async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
+        debug!("delete s3 object: {}...", path);
+
+        let uri = parse_uri(path)?.into_s3object()?;
+        let put_req = DeleteObjectRequest {
+            bucket: uri.bucket.to_string(),
+            key: uri.key.to_string(),
+            ..Default::default()
+        };
+
+        self.client.delete_object(put_req).await?;
 
         Ok(())
     }

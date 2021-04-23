@@ -231,6 +231,18 @@ pub enum StorageError {
     },
     /// Error returned when an S3 response for a requested URI does not include body bytes.
     #[cfg(feature = "s3")]
+    #[error("Failed to delete S3 object: {source}")]
+    S3Delete {
+        #[from]
+        source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectError>,
+    },
+    #[cfg(feature = "s3")]
+    #[error("Failed to copy S3 object: {source}")]
+    S3Copy {
+        #[from]
+        source: rusoto_core::RusotoError<rusoto_s3::CopyObjectError>,
+    },
+    #[cfg(feature = "s3")]
     #[error("S3 Object missing body content: {0}")]
     S3MissingObjectBody(String),
     #[cfg(feature = "s3")]
@@ -346,6 +358,14 @@ pub trait StorageBackend: Send + Sync + Debug {
     /// For a multi-writer safe Backend, `put_obj` needs to implement `create if not exists`
     /// semantic.
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError>;
+
+    /// Moves object `src` to `dst`.
+    ///
+    /// This operation may or may not be the atomic, depending on the underlying backend.
+    async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError>;
+
+    /// Deletes object at this `path`.
+    async fn delete_obj(&self, path: &str) -> Result<(), StorageError>;
 }
 
 /// Dynamically construct a Storage backend trait object based on scheme for provided URI

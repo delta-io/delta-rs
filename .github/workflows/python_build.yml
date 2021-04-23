@@ -65,7 +65,6 @@ jobs:
         # disable manylinux audit checks for test builds
         maturin build --manylinux off
         ls -lh ../target/wheels
-        PY_MINOR_VER=$(python -V | cut -d. -f 2)
         pip install $(printf ../target/wheels/deltalake-*-cp36-abi3-*.whl)'[devel,pandas]'
 
     - name: Run tests
