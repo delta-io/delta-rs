@@ -4,7 +4,9 @@ extern crate maplit;
 
 #[cfg(feature = "dynamodb")]
 mod dynamodb {
-    use deltalake::s3::dynamodb_lock::{attr, DynamoDbLockClient, Options, PARTITION_KEY_NAME};
+    use deltalake::storage::s3::dynamodb_lock::{
+        attr, DynamoDbLockClient, Options, PARTITION_KEY_NAME,
+    };
     use rusoto_core::Region;
     use rusoto_dynamodb::*;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
