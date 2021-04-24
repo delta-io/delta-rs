@@ -61,13 +61,13 @@ extern crate maplit;
 
 pub mod action;
 mod delta;
-mod delta_arrow;
+pub mod delta_arrow;
 pub mod partitions;
 mod schema;
-mod storage;
+pub mod storage;
 
 #[cfg(feature = "datafusion-ext")]
-mod delta_datafusion;
+pub mod delta_datafusion;
 
 #[cfg(feature = "rust-dataframe-ext")]
 mod delta_dataframe;
@@ -75,4 +75,4 @@ mod delta_dataframe;
 pub use self::delta::*;
 pub use self::partitions::*;
 pub use self::schema::*;
-pub use self::storage::*;
+pub use self::storage::{parse_uri, StorageBackend, StorageError, Uri, UriError};
