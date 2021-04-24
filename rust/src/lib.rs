@@ -75,4 +75,6 @@ mod delta_dataframe;
 pub use self::delta::*;
 pub use self::partitions::*;
 pub use self::schema::*;
-pub use self::storage::{parse_uri, StorageBackend, StorageError, Uri, UriError};
+pub use self::storage::{
+    get_backend_for_uri, parse_uri, StorageBackend, StorageError, Uri, UriError,
+};
