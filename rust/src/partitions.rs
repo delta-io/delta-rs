@@ -1,3 +1,5 @@
+//! Delta Table partition handling logic.
+
 use std::convert::TryFrom;
 
 use crate::DeltaTableError;

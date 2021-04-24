@@ -1,3 +1,5 @@
+//! Delta Table read and write implementation
+
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 
 use std::cmp::Ordering;
@@ -46,6 +48,7 @@ impl PartialEq for CheckPoint {
 
 impl Eq for CheckPoint {}
 
+/// Delta Table specific error
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTableError {
     /// Error returned when applying transaction log failed.
@@ -146,6 +149,7 @@ pub enum DeltaTableError {
         /// The invalid partition filter used.
         partition_filter: String,
     },
+    /// Error returned when Vacuume retention period is below the safe threshold
     #[error(
         "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
     )]
@@ -263,6 +267,7 @@ struct DeltaTableState {
     current_metadata: Option<DeltaTableMetaData>,
 }
 
+/// In memory representation of a Delta Table
 pub struct DeltaTable {
     /// The version of the table as of the most recent loaded Delta log entry.
     pub version: DeltaDataTypeVersion,

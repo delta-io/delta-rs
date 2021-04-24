@@ -1,3 +1,5 @@
+//! Actions included in Delta table transaction logs
+
 #![allow(non_snake_case, non_camel_case_types)]
 
 use std::collections::HashMap;
@@ -504,11 +506,13 @@ pub struct Remove {
     /// Whether data is changed by the remove. A table optimize will report this as false for
     /// example, since it adds and removes files by combining many files into one.
     pub dataChange: bool,
+    /// When true the fields partitionValues, size, and tags are present
     pub extendedFileMetadata: Option<bool>,
-    /// Partition values for the removed file
+    /// A map from partition column to value for this file.
     pub partitionValues: Option<HashMap<String, String>>,
-    /// Size of the file being removed
+    /// Size of this file in bytes
     pub size: Option<DeltaDataTypeLong>,
+    /// Map containing metadata about this file
     pub tags: Option<HashMap<String, String>>,
 }
 

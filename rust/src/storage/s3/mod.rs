@@ -1,3 +1,5 @@
+//! AWS S3 storage backend.
+
 use std::convert::TryFrom;
 use std::{fmt, pin::Pin};
 

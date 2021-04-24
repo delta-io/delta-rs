@@ -1,3 +1,5 @@
+//! Local file storage backend. This backend read and write objects from local filesystem.
+
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 

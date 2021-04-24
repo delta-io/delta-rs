@@ -1,3 +1,5 @@
+//! Object storage backend abstraction layer for Delta Table transaction logs and data
+
 use std::fmt::Debug;
 use std::pin::Pin;
 
@@ -38,7 +40,8 @@ pub enum UriError {
     #[error("Expected S3 URI, found: {0}")]
     ExpectedS3Uri(String),
 
-    /// Error returned when an Azure URI is expected, but the URI is not an Azure file system (abfs[s]) URI.
+    /// Error returned when an Azure URI is expected, but the URI is not an Azure file system
+    /// (abfs\[s\]) URI.
     #[cfg(feature = "azure")]
     #[error("Expected Azure URI, found: {0}")]
     ExpectedAzureUri(String),
@@ -205,43 +208,47 @@ pub enum StorageError {
     #[cfg(feature = "s3")]
     #[error("Failed to read S3 object content: {source}")]
     S3Get {
-        /// The underlying S3 error.
+        /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::GetObjectError>,
     },
     /// Error representing a failure when executing an S3 HEAD request.
     #[cfg(feature = "s3")]
     #[error("Failed to read S3 object metadata: {source}")]
     S3Head {
-        /// The underlying S3 error.
+        /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::HeadObjectError>,
     },
     /// Error representing a failure when executing an S3 list operation.
     #[cfg(feature = "s3")]
     #[error("Failed to list S3 objects: {source}")]
     S3List {
-        /// The underlying S3 error.
+        /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::ListObjectsV2Error>,
     },
     /// Error representing a failure when executing an S3 PUT request.
     #[cfg(feature = "s3")]
     #[error("Failed to put S3 object: {source}")]
     S3Put {
-        /// The underlying S3 error.
+        /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::PutObjectError>,
     },
     /// Error returned when an S3 response for a requested URI does not include body bytes.
     #[cfg(feature = "s3")]
     #[error("Failed to delete S3 object: {source}")]
     S3Delete {
+        /// The underlying Rusoto S3 error.
         #[from]
         source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectError>,
     },
+    /// Error representing a failure when copying a S3 object
     #[cfg(feature = "s3")]
     #[error("Failed to copy S3 object: {source}")]
     S3Copy {
+        /// The underlying Rusoto S3 error.
         #[from]
         source: rusoto_core::RusotoError<rusoto_s3::CopyObjectError>,
     },
+    /// Error returned when S3 object get response contains empty body
     #[cfg(feature = "s3")]
     #[error("S3 Object missing body content: {0}")]
     S3MissingObjectBody(String),
