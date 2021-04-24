@@ -1,4 +1,4 @@
-//! AWS S3 storage backend.
+//! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
 
 use std::convert::TryFrom;
 use std::{fmt, pin::Pin};

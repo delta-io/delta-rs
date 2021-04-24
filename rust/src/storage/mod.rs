@@ -359,19 +359,18 @@ pub trait StorageBackend: Send + Sync + Debug {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>;
 
     /// Create new object with `obj_bytes` as content.
+    async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError>;
+
+    /// Moves object from `src` to `dst`.
     ///
     /// Implementation note:
     ///
-    /// For a multi-writer safe Backend, `put_obj` needs to implement `create if not exists`
-    /// semantic.
-    async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError>;
-
-    /// Moves object `src` to `dst`.
-    ///
-    /// This operation may or may not be the atomic, depending on the underlying backend.
+    /// For a multi-writer safe backend, `rename_obj` needs to implement `atomic rename` semantic.
+    /// In other words, if the destination path already exists, rename should return a
+    /// [StorageError::AlreadyExists] error.
     async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError>;
 
-    /// Deletes object at this `path`.
+    /// Deletes object by `path`.
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError>;
 }
 

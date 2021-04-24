@@ -1,4 +1,6 @@
 //! Local file storage backend. This backend read and write objects from local filesystem.
+//!
+//! The local file storage backend is multi-writer safe.
 
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
