@@ -5,8 +5,34 @@
 //! Load a Delta Table by path:
 //!
 //! ```rust
-//! let table = deltalake::open_table("./tests/data/simple_table").unwrap();
-//! println!(table.get_files());
+//! async {
+//!   let table = deltalake::open_table("./tests/data/simple_table").await.unwrap();
+//!   let files = table.get_files();
+//! };
+//! ```
+//!
+//! Load a specific version of Delta Table by path then filter files by partitions:
+//!
+//! ```rust
+//! async {
+//!   let table = deltalake::open_table_with_version("./tests/data/simple_table", 0).await.unwrap();
+//!   let files = table.get_files_by_partitions(&[deltalake::PartitionFilter {
+//!       key: "month",
+//!       value: deltalake::PartitionValue::Equal("12"),
+//!   }]);
+//! };
+//! ```
+//!
+//! Load a specific version of Delta Table by path and datetime:
+//!
+//! ```rust
+//! async {
+//!   let table = deltalake::open_table_with_ds(
+//!       "./tests/data/simple_table",
+//!       "2020-05-02T23:47:31-07:00",
+//!   ).await.unwrap();
+//!   let files = table.get_files();
+//! };
 //! ```
 //!
 //! # Optional cargo package features
