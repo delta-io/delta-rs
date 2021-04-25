@@ -76,7 +76,7 @@ class DataType:
 
 
 class MapType(DataType):
-    """ Concrete class for map data types. """
+    """Concrete class for map data types."""
 
     def __init__(self, key_type: str, value_type: str, value_contains_null: bool):
         super().__init__("map")
@@ -97,7 +97,7 @@ class MapType(DataType):
 
 
 class ArrayType(DataType):
-    """ Concrete class for array data types. """
+    """Concrete class for array data types."""
 
     def __init__(self, element_type: DataType, contains_null: bool):
         super().__init__("array")
@@ -116,7 +116,7 @@ class ArrayType(DataType):
 
 
 class StructType(DataType):
-    """ Concrete class for struct data types. """
+    """Concrete class for struct data types."""
 
     def __init__(self, fields: List["Field"]):
         super().__init__("struct")
@@ -131,7 +131,7 @@ class StructType(DataType):
 
 
 class Field:
-    """ Create a DeltaTable Field instance."""
+    """Create a DeltaTable Field instance."""
 
     def __init__(
         self,
@@ -158,7 +158,7 @@ class Field:
 
 
 class Schema:
-    """ Create a DeltaTable Schema instance."""
+    """Create a DeltaTable Schema instance."""
 
     def __init__(self, fields: List[Field], json_value: Dict[str, Any]):
         self.fields = fields
