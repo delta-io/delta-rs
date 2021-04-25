@@ -193,27 +193,28 @@ async fn read_delta_8_0_table_with_partitions() {
 
 #[tokio::test]
 async fn vacuum_delta_8_0_table() {
-    let table = deltalake::open_table("./tests/data/delta-0.8.0")
+    let mut table = deltalake::open_table("./tests/data/delta-0.8.0")
         .await
         .unwrap();
 
-    let retention_hours = 169;
+    let retention_hours = 1;
     let backend = FileStorageBackend::new("./tests/data/delta-0.8.0");
+    let dry_run = true;
+
+    assert!(matches!(
+        table.vacuum(retention_hours, dry_run).await.unwrap_err(),
+        deltalake::DeltaTableError::InvalidVacuumRetentionPeriod,
+    ));
+
+    let retention_hours = 169;
 
     assert_eq!(
-        table.vacuum_dry_run(retention_hours).unwrap(),
+        table.vacuum(retention_hours, dry_run).await.unwrap(),
         vec![backend.join_path(
             "./tests/data/delta-0.8.0",
             "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"
         )]
     );
-
-    let retention_hours = 1;
-
-    assert!(matches!(
-        table.vacuum_dry_run(retention_hours).unwrap_err(),
-        deltalake::DeltaTableError::InvalidVacuumRetentionPeriod,
-    ));
 
     let retention_hours = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -222,5 +223,5 @@ async fn vacuum_delta_8_0_table() {
         / 3600;
     let empty: Vec<String> = Vec::new();
 
-    assert_eq!(table.vacuum_dry_run(retention_hours).unwrap(), empty);
+    assert_eq!(table.vacuum(retention_hours, dry_run).await.unwrap(), empty);
 }

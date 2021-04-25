@@ -41,11 +41,6 @@ def test_vacuum_dry_run_simple_table():
         == "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
     )
 
-    retention_periods = 167
-    with pytest.raises(Exception) as exception:
-        dt.vacuum(retention_periods, dry_run=False)
-    assert str(exception.value) == "Only Vacuum with dry_run is available."
-
 
 def test_read_partitioned_table_metadata():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"

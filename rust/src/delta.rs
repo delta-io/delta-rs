@@ -610,9 +610,8 @@ impl DeltaTable {
         self.state.min_writer_version
     }
 
-    /// Run the dry run of the Vacuum command on the Delta Table: list files no longer referenced by a Delta table and are older than the retention threshold.
-    /// We do not recommend that you set a retention interval shorter than 7 days, because old snapshots and uncommitted files can still be in use by concurrent readers or writers to the table. If vacuum cleans up active files, concurrent readers can fail or, worse, tables can be corrupted when vacuum deletes files that have not yet been committed.
-    pub fn vacuum_dry_run(&self, retention_hours: u64) -> Result<Vec<String>, DeltaTableError> {
+    /// List files no longer referenced by a Delta table and are older than the retention threshold.
+    fn get_stale_files(&self, retention_hours: u64) -> Result<Vec<String>, DeltaTableError> {
         if retention_hours < 168 {
             return Err(DeltaTableError::InvalidVacuumRetentionPeriod);
         }
@@ -629,6 +628,69 @@ impl DeltaTable {
             .filter(|tombstone| tombstone.deletionTimestamp < delete_before_timestamp)
             .map(|tombstone| self.storage.join_path(&self.table_path, &tombstone.path))
             .collect::<Vec<String>>())
+    }
+
+    /// Whether a path should be hidden for delta-related file operations, such as Vacuum.
+    /// Names of the form partitionCol=[value] are partition directories, and should be
+    /// deleted even if they'd normally be hidden. The _db_index directory contains (bloom filter)
+    /// indexes and these must be deleted when the data they are tied to is deleted.
+    fn is_hidden_directory(&self, path_name: &str) -> Result<bool, DeltaTableError> {
+        Ok(
+            (path_name.starts_with(&self.storage.join_path(&self.table_path, "."))
+                || path_name.starts_with(&self.storage.join_path(&self.table_path, "_")))
+                && !path_name
+                    .starts_with(&self.storage.join_path(&self.table_path, "_delta_index"))
+                && !path_name
+                    .starts_with(&self.storage.join_path(&self.table_path, "_change_data"))
+                && !self
+                    .state
+                    .current_metadata
+                    .as_ref()
+                    .ok_or(DeltaTableError::NoMetadata)?
+                    .partition_columns
+                    .iter()
+                    .any(|partition_column| {
+                        path_name.starts_with(
+                            &self.storage.join_path(&self.table_path, partition_column),
+                        )
+                    }),
+        )
+    }
+
+    /// Run the Vacuum command on the Delta Table: delete files no longer referenced by a Delta table and are older than the retention threshold.
+    /// We do not recommend that you set a retention interval shorter than 7 days, because old snapshots and uncommitted files can still be in use by concurrent readers or writers to the table. If vacuum cleans up active files, concurrent readers can fail or, worse, tables can be corrupted when vacuum deletes files that have not yet been committed.
+    pub async fn vacuum(
+        &mut self,
+        retention_hours: u64,
+        dry_run: bool,
+    ) -> Result<Vec<String>, DeltaTableError> {
+        let tombstones_path = self.get_stale_files(retention_hours)?;
+
+        let mut tombstones = vec![];
+        let mut all_files = self.storage.list_objs(&self.table_path).await?;
+        while let Some(obj_meta) = all_files.next().await {
+            let obj_meta = obj_meta?;
+            let is_not_valid_file = !self.get_file_paths().contains(&obj_meta.path);
+            let is_valid_tombstone = tombstones_path.contains(&obj_meta.path);
+            let is_not_hidden_directory = !self.is_hidden_directory(&obj_meta.path)?;
+            if is_not_valid_file && is_valid_tombstone && is_not_hidden_directory {
+                tombstones.push(obj_meta.path);
+            }
+        }
+
+        if dry_run {
+            return Ok(tombstones);
+        }
+
+        for tombstone in &tombstones {
+            match self.storage.delete_obj(&tombstone).await {
+                Ok(_) => continue,
+                Err(StorageError::NotFound) => continue,
+                Err(err) => return Err(DeltaTableError::StorageError { source: err }),
+            }
+        }
+
+        Ok(tombstones)
     }
 
     pub fn schema(&self) -> Option<&Schema> {
