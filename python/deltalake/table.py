@@ -195,7 +195,7 @@ class DeltaTable:
         # Decide based on the first file, if the file is on cloud storage or local
         if paths[0].netloc:
             query_str = ""
-            # pyarrow doesn't properly support the AWS_ENDPOINT_URL environment vartiable
+            # pyarrow doesn't properly support the AWS_ENDPOINT_URL environment variable
             # for non-AWS S3 like resources. This is a slight hack until such a
             # point when pyarrow learns about AWS_ENDPOINT_URL
             endpoint_url = os.environ.get("AWS_ENDPOINT_URL")
