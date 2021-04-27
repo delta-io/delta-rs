@@ -1,8 +1,9 @@
-//! The Azure Data Lake Storage Gen2 storage backend.
+//! The Azure Data Lake Storage Gen2 storage backend. It currently only supports read operations.
 //!
 //! This module is gated behind the "azure" feature. Its usage also requires
 //! the `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_KEY` environment variables
 //! to be set to the name and key of the Azure Storage Account, respectively.
+
 use std::error::Error;
 use std::sync::Arc;
 use std::{env, fmt, pin::Pin};

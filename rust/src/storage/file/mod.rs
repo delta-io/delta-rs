@@ -1,3 +1,7 @@
+//! Local file storage backend. This backend read and write objects from local filesystem.
+//!
+//! The local file storage backend is multi-writer safe.
+
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
@@ -30,6 +34,7 @@ pub struct FileStorageBackend {
 }
 
 impl FileStorageBackend {
+    /// Creates a new FileStorageBackend.
     pub fn new(root: &str) -> Self {
         Self {
             root: String::from(root),

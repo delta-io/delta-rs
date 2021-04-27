@@ -1,3 +1,5 @@
+//! Delta Table read and write implementation
+
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 
 use std::cmp::Ordering;
@@ -29,8 +31,10 @@ use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
 use uuid::Uuid;
 
+/// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
 pub struct CheckPoint {
+    /// Delta table version
     version: DeltaDataTypeVersion, // 20 digits decimals
     size: DeltaDataTypeLong,
     parts: Option<u32>, // 10 digits decimals
@@ -44,95 +48,132 @@ impl PartialEq for CheckPoint {
 
 impl Eq for CheckPoint {}
 
+/// Delta Table specific error
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTableError {
+    /// Error returned when applying transaction log failed.
     #[error("Failed to apply transaction log: {}", .source)]
     ApplyLog {
+        /// Apply error details returned when applying transaction log failed.
         #[from]
         source: ApplyLogError,
     },
+    /// Error returned when loading checkpoint failed.
     #[error("Failed to load checkpoint: {}", .source)]
     LoadCheckpoint {
+        /// Load checkpoint error details returned when loading checkpoint failed.
         #[from]
         source: LoadCheckpointError,
     },
+    /// Error returned when reading the delta log object failed.
     #[error("Failed to read delta log object: {}", .source)]
     StorageError {
+        /// Storage error details when reading the delta log object failed.
         #[from]
         source: StorageError,
     },
+    /// Error returned when reading the checkpoint failed.
     #[error("Failed to read checkpoint: {}", .source)]
     ParquetError {
+        /// Parquet error details returned when reading the checkpoint failed.
         #[from]
         source: ParquetError,
     },
+    /// Error returned when converting the schema in Arrow format failed.
     #[error("Failed to convert into Arrow schema: {}", .source)]
     ArrowError {
+        /// Arrow error details returned when converting the schema in Arrow format failed
         #[from]
         source: ArrowError,
     },
+    /// Error returned when the table has an invalid path.
     #[error("Invalid table path: {}", .source)]
     UriError {
+        /// Uri error details returned when the table has an invalid path.
         #[from]
         source: UriError,
     },
+    /// Error returned when the log record has an invalid JSON.
     #[error("Invalid JSON in log record: {}", .source)]
     InvalidJson {
+        /// JSON error details returned when the log record has an invalid JSON.
         #[from]
         source: serde_json::error::Error,
     },
+    /// Error returned when the DeltaTable has an invalid version.
     #[error("Invalid table version: {0}")]
     InvalidVersion(DeltaDataTypeVersion),
+    /// Error returned when the DeltaTable has no data files.
     #[error("Corrupted table, cannot read data file {}: {}", .path, .source)]
     MissingDataFile {
+        /// Source error details returned when the DeltaTable has no data files.
         source: std::io::Error,
+        /// The Path used of the DeltaTable
         path: String,
     },
+    /// Error returned when the datetime string is invalid for a conversion.
     #[error("Invalid datetime string: {}", .source)]
-    InvalidDateTimeSTring {
+    InvalidDateTimeString {
+        /// Parse error details returned of the datetime string parse error.
         #[from]
         source: chrono::ParseError,
     },
+    /// Error returned when the action record is invalid in log.
     #[error("Invalid action record found in log: {}", .source)]
     InvalidAction {
+        /// Action error details returned of the invalid action.
         #[from]
         source: action::ActionError,
     },
+    /// Error returned when it is not a DeltaTable.
     #[error("Not a Delta table")]
     NotATable,
+    /// Error returned when no metadata was found in the DeltaTable.
     #[error("No metadata found, please make sure table is loaded.")]
     NoMetadata,
+    /// Error returned when no schema was found in the DeltaTable.
     #[error("No schema found, please make sure table is loaded.")]
     NoSchema,
+    /// Error returned when no partition was found in the DeltaTable.
     #[error("No partitions found, please make sure table is partitioned.")]
     LoadPartitions,
+    /// Error returned when a partition is not formatted as a Hive Partition.
     #[error("This partition is not formatted with key=value: {}", .partition)]
-    PartitionError { partition: String },
+    PartitionError {
+        /// The malformed partition used.
+        partition: String,
+    },
+    /// Error returned when a invalid partition filter was found.
     #[error("Invalid partition filter found: {}.", .partition_filter)]
-    InvalidPartitionFilter { partition_filter: String },
+    InvalidPartitionFilter {
+        /// The invalid partition filter used.
+        partition_filter: String,
+    },
+    /// Error returned when Vacuume retention period is below the safe threshold
     #[error(
         "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
     )]
     InvalidVacuumRetentionPeriod,
 }
 
+/// Delta table metadata
 #[derive(Clone)]
 pub struct DeltaTableMetaData {
-    // Unique identifier for this table
+    /// Unique identifier for this table
     pub id: Guid,
-    // User-provided identifier for this table
+    /// User-provided identifier for this table
     pub name: Option<String>,
-    // User-provided description for this table
+    /// User-provided description for this table
     pub description: Option<String>,
-    // Specification of the encoding for the files stored in the table
+    /// Specification of the encoding for the files stored in the table
     pub format: action::Format,
-    // Schema of the table
+    /// Schema of the table
     pub schema: Schema,
-    // An array containing the names of columns by which the data should be partitioned
+    /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
-    // The time when this metadata action is created, in milliseconds since the Unix epoch
+    /// The time when this metadata action is created, in milliseconds since the Unix epoch
     pub created_time: DeltaDataTypeTimestamp,
-    // table properties
+    /// table properties
     pub configuration: HashMap<String, String>,
 }
 
@@ -146,19 +187,29 @@ impl fmt::Display for DeltaTableMetaData {
     }
 }
 
+/// Error related to Delta log application
 #[derive(thiserror::Error, Debug)]
 pub enum ApplyLogError {
+    /// Error returned when the end of transaction log is reached.
     #[error("End of transaction log")]
     EndOfLog,
+    /// Error returned when the JSON of the log record is invalid.
     #[error("Invalid JSON in log record")]
     InvalidJson {
+        /// JSON error details returned when reading the JSON log record.
         #[from]
         source: serde_json::error::Error,
     },
+    /// Error returned when the storage failed to read the log content.
     #[error("Failed to read log content")]
-    Storage { source: StorageError },
+    Storage {
+        /// Storage error details returned while reading the log content.
+        source: StorageError,
+    },
+    /// Error returned when a line from log record is invalid.
     #[error("Failed to read line from log record")]
     Io {
+        /// Source error details returned while reading the log record.
         #[from]
         source: std::io::Error,
     },
@@ -173,17 +224,25 @@ impl From<StorageError> for ApplyLogError {
     }
 }
 
+/// Error related to checkpoint loading
 #[derive(thiserror::Error, Debug)]
 pub enum LoadCheckpointError {
+    /// Error returned when the JSON checkpoint is not found.
     #[error("Checkpoint file not found")]
     NotFound,
+    /// Error returned when the JSON checkpoint is invalid.
     #[error("Invalid JSON in checkpoint: {source}")]
     InvalidJson {
+        /// Error details returned while reading the JSON.
         #[from]
         source: serde_json::error::Error,
     },
+    /// Error returned when it failed to read the checkpoint content.
     #[error("Failed to read checkpoint content: {source}")]
-    Storage { source: StorageError },
+    Storage {
+        /// Storage error details returned while reading the checkpoint content.
+        source: StorageError,
+    },
 }
 
 impl From<StorageError> for LoadCheckpointError {
@@ -208,8 +267,11 @@ struct DeltaTableState {
     current_metadata: Option<DeltaTableMetaData>,
 }
 
+/// In memory representation of a Delta Table
 pub struct DeltaTable {
+    /// The version of the table as of the most recent loaded Delta log entry.
     pub version: DeltaDataTypeVersion,
+    /// The path the DeltaTable was loaded from.
     pub table_path: String,
 
     state: DeltaTableState,
@@ -410,6 +472,7 @@ impl DeltaTable {
         Ok(version)
     }
 
+    /// Load DeltaTable with data from latest checkpoint
     pub async fn load(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
@@ -431,6 +494,7 @@ impl DeltaTable {
         Ok(())
     }
 
+    /// Updates the DeltaTable to the most recent state committed to the transaction log.
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
@@ -482,6 +546,7 @@ impl DeltaTable {
         Ok(())
     }
 
+    /// Loads the DeltaTable state for the given version.
     pub async fn load_version(
         &mut self,
         version: DeltaDataTypeVersion,
@@ -541,6 +606,8 @@ impl DeltaTable {
         }
     }
 
+    /// Returns the file list tracked in current table state filtered by provided
+    /// `PartitionFilter`s.
     pub fn get_files_by_partitions(
         &self,
         filters: &[PartitionFilter<&str>],
@@ -575,10 +642,12 @@ impl DeltaTable {
         Ok(files)
     }
 
+    /// Returns a reference to the file list present in the loaded state.
     pub fn get_files(&self) -> &Vec<String> {
         &self.state.files
     }
 
+    /// Returns a copy of the file paths present in the loaded state.
     pub fn get_file_paths(&self) -> Vec<String> {
         self.state
             .files
@@ -587,6 +656,7 @@ impl DeltaTable {
             .collect()
     }
 
+    /// Returns the metadata associated with the loaded state.
     pub fn get_metadata(&self) -> Result<&DeltaTableMetaData, DeltaTableError> {
         self.state
             .current_metadata
@@ -594,18 +664,24 @@ impl DeltaTable {
             .ok_or(DeltaTableError::NoMetadata)
     }
 
+    /// Returns a vector of tombstones (i.e. `Remove` actions present in the current delta log.
     pub fn get_tombstones(&self) -> &Vec<action::Remove> {
         &self.state.tombstones
     }
 
+    /// Returns the current version of the DeltaTable based on the loaded metadata.
     pub fn get_app_transaction_version(&self) -> &HashMap<String, DeltaDataTypeVersion> {
         &self.state.app_transaction_version
     }
 
+    /// Returns the minimum reader version supported by the DeltaTable based on the loaded
+    /// metadata.
     pub fn get_min_reader_version(&self) -> i32 {
         self.state.min_reader_version
     }
 
+    /// Returns the minimum writer version supported by the DeltaTable based on the loaded
+    /// metadata.
     pub fn get_min_writer_version(&self) -> i32 {
         self.state.min_writer_version
     }
@@ -631,14 +707,21 @@ impl DeltaTable {
             .collect::<Vec<String>>())
     }
 
+    /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
+    /// no metadata was found in the log.
     pub fn schema(&self) -> Option<&Schema> {
         self.state.current_metadata.as_ref().map(|m| &m.schema)
     }
 
+    /// Return table schema parsed from transaction log. Return `DeltaTableError` if table hasn't
+    /// been loaded or no metadata was found in the log.
     pub fn get_schema(&self) -> Result<&Schema, DeltaTableError> {
         self.schema().ok_or(DeltaTableError::NoSchema)
     }
 
+    /// Creates a new DeltaTransaction for the DeltaTable.
+    /// The transaction holds a mutable reference to the DeltaTable, preventing other references
+    /// until the transaction is dropped.
     pub fn create_transaction(
         &mut self,
         options: Option<DeltaTransactionOptions>,
@@ -646,6 +729,10 @@ impl DeltaTable {
         DeltaTransaction::new(self, options)
     }
 
+    /// Create a new Delta Table struct without loading any data from backing storage.
+    ///
+    /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
+    /// call one of the `open_table` helper methods instead.
     pub fn new(
         table_path: &str,
         storage_backend: Box<dyn StorageBackend>,
@@ -662,6 +749,10 @@ impl DeltaTable {
         })
     }
 
+    /// Time travel Delta table to latest version that's created at or before provided `datetime`
+    /// argument.
+    ///
+    /// Internally, this methods performs a binary search on all Delta transaction logs.
     pub async fn load_with_datetime(
         &mut self,
         datetime: DateTime<Utc>,
@@ -729,26 +820,41 @@ impl std::fmt::Debug for DeltaTable {
 /// Error returned by the DeltaTransaction struct
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTransactionError {
+    /// Error that indicates the number of optimistic concurrency retries has been exceeded and no further
+    /// attempts will be made.
     #[error("Transaction commit exceeded max retries. Last error: {inner}")]
     CommitRetriesExceeded {
+        /// The wrapped TransactionCommitAttemptError.
         #[from]
         inner: TransactionCommitAttemptError,
     },
 
+    /// Error that indicates the record batch is missing a partition column required by the Delta
+    /// schema.
     #[error("RecordBatch is missing partition column in Delta schema.")]
     MissingPartitionColumn,
 
+    /// Error that indicates the transaction failed due to an underlying storage error.
+    /// Specific details of the error are described by the wrapped storage error.
     #[error("Storage interaction failed: {source}")]
-    Storage { source: StorageError },
+    Storage {
+        /// The wrapped StorageError.
+        source: StorageError,
+    },
 
+    /// Error that wraps an underlying DeltaTable error.
+    /// The wrapped error describes the specific cause.
     #[error("DeltaTable interaction failed: {source}")]
     DeltaTable {
+        /// The wrapped DeltaTable error.
         #[from]
         source: DeltaTableError,
     },
 
+    /// Error caused by a problem while using serde_json to serialize an action.
     #[error("Action serialization failed: {source}")]
     ActionSerializationFailed {
+        /// The wrapped serde_json Error.
         #[from]
         source: serde_json::Error,
     },
@@ -758,17 +864,29 @@ pub enum DeltaTransactionError {
 #[derive(thiserror::Error, Debug)]
 pub enum TransactionCommitAttemptError {
     // NOTE: it would be nice to add a `num_retries` prop to this error so we can identify how frequently we hit optimistic concurrency retries and look for optimization paths
+    /// Error indicating the transaction commit attempt failed because the Delta table version has already been committed.
+    /// This is expected in the case of multiple writers to the same table and retried within the
+    /// optimistic concurrency loop.
     #[error("Version already exists: {source}")]
-    VersionExists { source: StorageError },
+    VersionExists {
+        /// The wrapped StorageError.
+        source: StorageError,
+    },
 
+    /// Error indicating a general DeltaTable error occurred during a transaction commit attempt.
     #[error("Commit Failed due to DeltaTable error: {source}")]
     DeltaTable {
+        /// The wrapped DeltaTableError
         #[from]
         source: DeltaTableError,
     },
 
+    /// Error indicating a general StorageError occurred during a transaction commit attempt.
     #[error("Commit Failed due to StorageError: {source}")]
-    Storage { source: StorageError },
+    Storage {
+        /// The wrapped StorageError
+        source: StorageError,
+    },
 }
 
 impl From<StorageError> for TransactionCommitAttemptError {
@@ -991,6 +1109,8 @@ fn process_action(
     Ok(())
 }
 
+/// Creates and loads a DeltaTable from the given path with current metadata.
+/// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError> {
     let storage_backend = storage::get_backend_for_uri(table_path)?;
     let mut table = DeltaTable::new(table_path, storage_backend)?;
@@ -999,6 +1119,8 @@ pub async fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError>
     Ok(table)
 }
 
+/// Creates a DeltaTable from the given path and loads it with the metadata from the given version.
+/// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table_with_version(
     table_path: &str,
     version: DeltaDataTypeVersion,
@@ -1010,6 +1132,9 @@ pub async fn open_table_with_version(
     Ok(table)
 }
 
+/// Creates a DeltaTable from the given path.
+/// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
+/// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table_with_ds(table_path: &str, ds: &str) -> Result<DeltaTable, DeltaTableError> {
     let datetime = DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds)?);
     let storage_backend = storage::get_backend_for_uri(table_path)?;

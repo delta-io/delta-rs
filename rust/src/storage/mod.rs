@@ -1,3 +1,5 @@
+//! Object storage backend abstraction layer for Delta Table transaction logs and data
+
 use std::fmt::Debug;
 use std::pin::Pin;
 
@@ -15,53 +17,78 @@ pub mod file;
 #[cfg(feature = "s3")]
 pub mod s3;
 
+/// Error enum that represents an invalid URI.
 #[derive(thiserror::Error, Debug, PartialEq)]
 pub enum UriError {
+    /// Error returned when the URI contains a scheme that is not handled.
     #[error("Invalid URI scheme: {0}")]
     InvalidScheme(String),
+    /// Error returned when a local file system path is expected, but the URI is not a local file system path.
     #[error("Expected local path URI, found: {0}")]
     ExpectedSLocalPathUri(String),
 
+    /// Error returned when the URI is expected to be an S3 path, but does not include a bucket part.
     #[cfg(feature = "s3")]
     #[error("Object URI missing bucket")]
     MissingObjectBucket,
+    /// Error returned when the URI is expected to be an S3 path, but does not include a key part.
     #[cfg(feature = "s3")]
     #[error("Object URI missing key")]
     MissingObjectKey,
+    /// Error returned when an S3 path is expected, but the URI is not an S3 URI.
     #[cfg(feature = "s3")]
     #[error("Expected S3 URI, found: {0}")]
     ExpectedS3Uri(String),
 
+    /// Error returned when an Azure URI is expected, but the URI is not an Azure file system
+    /// (abfs\[s\]) URI.
     #[cfg(feature = "azure")]
     #[error("Expected Azure URI, found: {0}")]
     ExpectedAzureUri(String),
+    /// Error returned when an Azure URI is expected, but the URI is missing the scheme.
     #[cfg(feature = "azure")]
     #[error("Object URI missing filesystem")]
     MissingObjectFileSystem,
+    /// Error returned when an Azure URI is expected, but the URI is missing the account name and
+    /// path.
     #[cfg(feature = "azure")]
     #[error("Object URI missing account name and path")]
     MissingObjectAccountAndPath,
+    /// Error returned when an Azure URI is expected, but the URI is missing the account name.
     #[cfg(feature = "azure")]
     #[error("Object URI missing account name")]
     MissingObjectAccountName,
+    /// Error returned when an Azure URI is expected, but the URI is missing the path.
     #[cfg(feature = "azure")]
     #[error("Object URI missing path")]
     MissingObjectPath,
+    /// Error returned when container in an Azure URI doesn't match the expected value
     #[cfg(feature = "azure")]
     #[error("Container mismatch, expected: {expected}, got: {got}")]
-    ContainerMismatch { expected: String, got: String },
+    ContainerMismatch {
+        /// Expected container value
+        expected: String,
+        /// Actual container value
+        got: String,
+    },
 }
 
+/// Enum with variants representing each supported storage backend.
 #[derive(Debug)]
 pub enum Uri<'a> {
+    /// URI for local file system backend.
     LocalPath(&'a str),
+    /// URI for S3 backend.
     #[cfg(feature = "s3")]
     S3Object(s3::S3Object<'a>),
+    /// URI for Azure backend.
     #[cfg(feature = "azure")]
     AdlsGen2Object(azure::AdlsGen2Object<'a>),
 }
 
 impl<'a> Uri<'a> {
+    /// Converts the URI to an S3Object. Returns UriError if the URI is not valid for the S3
+    /// backend.
     #[cfg(feature = "s3")]
     pub fn into_s3object(self) -> Result<s3::S3Object<'a>, UriError> {
         match self {
@@ -72,6 +99,8 @@ impl<'a> Uri<'a> {
         }
     }
 
+    /// Converts the URI to an AdlsGen2Object. Returns UriError if the URI is not valid for the
+    /// Azure backend.
     #[cfg(feature = "azure")]
     pub fn into_adlsgen2_object(self) -> Result<azure::AdlsGen2Object<'a>, UriError> {
         match self {
@@ -82,6 +111,8 @@ impl<'a> Uri<'a> {
         }
     }
 
+    /// Converts the URI to an str representing a local file system path. Returns UriError if the
+    /// URI is not valid for the file storage backend.
     pub fn into_localpath(self) -> Result<&'a str, UriError> {
         match self {
             Uri::LocalPath(x) => Ok(x),
@@ -93,6 +124,8 @@ impl<'a> Uri<'a> {
     }
 }
 
+/// Parses the URI and returns a variant of the Uri enum for the appropriate storage backend based
+/// on scheme.
 pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
     let parts: Vec<&'a str> = path.split("://").collect();
 
@@ -146,78 +179,115 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
     }
 }
 
+/// Error enum returned when storage backend interaction fails.
 #[derive(thiserror::Error, Debug)]
 pub enum StorageError {
+    /// The requested object does not exist.
     #[error("Object not found")]
     NotFound,
+    /// The object written to the storage backend already exists.
+    /// This error is expected in some cases.
+    /// For example, optimistic concurrency writes between multiple processes expect to compete
+    /// for the same URI when writing to _delta_log.
     #[error("Object exists already at path: {0}")]
     AlreadyExists(String),
+    /// An IO error occurred while reading from the local file system.
     #[error("Failed to read local object content: {source}")]
-    Io { source: std::io::Error },
+    Io {
+        /// The raw error returned when trying to read the local file.
+        source: std::io::Error,
+    },
+    /// The file system represented by the scheme is not known.
     #[error("File system not supported")]
     FileSystemNotSupported,
+    /// Wraps a generic storage backend error. The wrapped string contains the details.
     #[error("Generic error: {0}")]
     Generic(String),
 
+    /// Error representing an S3 GET failure.
     #[cfg(feature = "s3")]
     #[error("Failed to read S3 object content: {source}")]
     S3Get {
+        /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::GetObjectError>,
     },
+    /// Error representing a failure when executing an S3 HEAD request.
     #[cfg(feature = "s3")]
     #[error("Failed to read S3 object metadata: {source}")]
     S3Head {
+        /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::HeadObjectError>,
     },
+    /// Error representing a failure when executing an S3 list operation.
     #[cfg(feature = "s3")]
     #[error("Failed to list S3 objects: {source}")]
     S3List {
+        /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::ListObjectsV2Error>,
     },
+    /// Error representing a failure when executing an S3 PUT request.
     #[cfg(feature = "s3")]
     #[error("Failed to put S3 object: {source}")]
     S3Put {
+        /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::PutObjectError>,
     },
+    /// Error returned when an S3 response for a requested URI does not include body bytes.
     #[cfg(feature = "s3")]
     #[error("Failed to delete S3 object: {source}")]
     S3Delete {
+        /// The underlying Rusoto S3 error.
         #[from]
         source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectError>,
     },
+    /// Error representing a failure when copying a S3 object
     #[cfg(feature = "s3")]
     #[error("Failed to copy S3 object: {source}")]
     S3Copy {
+        /// The underlying Rusoto S3 error.
         #[from]
         source: rusoto_core::RusotoError<rusoto_s3::CopyObjectError>,
     },
+    /// Error returned when S3 object get response contains empty body
     #[cfg(feature = "s3")]
     #[error("S3 Object missing body content: {0}")]
     S3MissingObjectBody(String),
     #[cfg(feature = "s3")]
+    /// Represents a generic S3 error. The wrapped error string describes the details.
     #[error("S3 error: {0}")]
     S3Generic(String),
 
+    /// Azure error
     #[cfg(feature = "azure")]
     #[error("Error interacting with Azure: {source}")]
-    Azure { source: AzureError },
+    Azure {
+        /// Azure error reason
+        source: AzureError,
+    },
+    /// Generic Azure error
     #[cfg(feature = "azure")]
     #[error("Generic error: {source}")]
     AzureGeneric {
+        /// Generic Azure error reason
         source: Box<dyn Error + Sync + std::marker::Send>,
     },
+    /// Azure config error
     #[cfg(feature = "azure")]
     #[error("Azure config error: {0}")]
     AzureConfig(String),
 
+    /// Error returned when the URI is invalid.
+    /// The wrapped UriError contains additional details.
     #[error("Invalid object URI")]
     Uri {
         #[from]
+        /// Uri error details when the URI is invalid.
         source: UriError,
     },
 }
 
 impl StorageError {
+    /// Creates a StorageError::Io error wrapping the provided error string.
     pub fn other_std_io_err(desc: String) -> Self {
         Self::Io {
             source: std::io::Error::new(std::io::ErrorKind::Other, desc),
@@ -246,13 +316,18 @@ impl From<AzureError> for StorageError {
     }
 }
 
+/// Describes metadata of a storage object.
 pub struct ObjectMeta {
+    /// The path where the object is stored.
     pub path: String,
+    /// The last time the object was modified in the storage backend.
     // The timestamp of a commit comes from the remote storage `lastModifiedTime`, and can be
     // adjusted for clock skew.
     pub modified: DateTime<Utc>,
 }
 
+/// Abstractions for underlying blob storages hosting the Delta table. To add support for new cloud
+/// or local storage systems, simply implement this trait.
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + Debug {
     /// Create a new path by appending `path_to_join` as a new component to `path`.
@@ -284,19 +359,22 @@ pub trait StorageBackend: Send + Sync + Debug {
     ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>;
 
     /// Create new object with `obj_bytes` as content.
-    ///
-    /// For a multi-writer safe backend, put_obj needs to implement create if not exists semantic.
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError>;
 
-    /// Moves object `src` to `dst`.
+    /// Moves object from `src` to `dst`.
     ///
-    /// This operation may or may not be the atomic, depending on the underlying backend.
+    /// Implementation note:
+    ///
+    /// For a multi-writer safe backend, `rename_obj` needs to implement `atomic rename` semantic.
+    /// In other words, if the destination path already exists, rename should return a
+    /// [StorageError::AlreadyExists] error.
     async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError>;
 
-    /// Deletes object at this `path`.
+    /// Deletes object by `path`.
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError>;
 }
 
+/// Dynamically construct a Storage backend trait object based on scheme for provided URI
 pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, StorageError> {
     match parse_uri(uri)? {
         Uri::LocalPath(root) => Ok(Box::new(file::FileStorageBackend::new(root))),
