@@ -1,21 +1,19 @@
+#[cfg(feature = "s3")]
+mod s3_common;
+
 #[cfg(feature = "dynamodb")]
 mod dynamodb {
     use deltalake::storage::s3::dynamodb_lock::{
         attr, DynamoDbLockClient, Options, PARTITION_KEY_NAME,
     };
     use maplit::hashmap;
-    use rusoto_core::Region;
     use rusoto_dynamodb::*;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
     async fn create_dynamo_lock(key: &str, owner: &str) -> DynamoDbLockClient {
+        crate::s3_common::setup();
         let table_name = "test_table";
-        std::env::set_var("AWS_ACCESS_KEY_ID", "test");
-        std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
-        let client = DynamoDbClient::new(Region::Custom {
-            name: "custom".to_string(),
-            endpoint: "http://localhost:4566".to_string(),
-        });
+        let client = DynamoDbClient::new(crate::s3_common::region());
         let opts = Options {
             partition_key_value: key.to_string(),
             table_name: table_name.to_string(),
