@@ -13,8 +13,8 @@ Usage
 ### API
 
 ```rust
-let table = deltalake::open_table("./tests/data/simple_table").unwrap();
-println!(table.get_files());
+let table = deltalake::open_table("./tests/data/simple_table").await.unwrap();
+println!("{}", table.get_files());
 ```
 
 

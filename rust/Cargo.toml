@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.2.1"
+version = "0.3.0"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta.rs"
 license = "Apache-2.0"
@@ -56,7 +56,7 @@ rust-dataframe-ext = []
 datafusion-ext = ["datafusion", "crossbeam"]
 azure = ["azure_core", "azure_storage", "reqwest"]
 s3 = ["rusoto_core", "rusoto_credential", "rusoto_s3", "rusoto_sts"]
-dynamodb = ["rusoto_dynamodb", "maplit"]
+dynamodb = ["rusoto_dynamodb", "maplit", "s3"]
 
 [build-dependencies]
 glibc_version = "0"

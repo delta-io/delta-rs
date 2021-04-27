@@ -1,6 +1,10 @@
+//! Distributed lock backed by Dynamodb.
+//! Adapted from https://github.com/awslabs/amazon-dynamodb-lock-client.
+
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use maplit::hashmap;
 use rusoto_core::RusotoError;
 use rusoto_dynamodb::*;
 use uuid::Uuid;

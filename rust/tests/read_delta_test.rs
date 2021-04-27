@@ -1,6 +1,6 @@
 extern crate deltalake;
 
-use deltalake::file::FileStorageBackend;
+use deltalake::storage::file::FileStorageBackend;
 use deltalake::StorageBackend;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
