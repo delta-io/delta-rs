@@ -256,6 +256,14 @@ pub enum StorageError {
     /// Represents a generic S3 error. The wrapped error string describes the details.
     #[error("S3 error: {0}")]
     S3Generic(String),
+    #[cfg(feature = "dynamodb")]
+    #[error("DynamoDB error: {source}")]
+    /// TODO
+    DynamoDb {
+        #[from]
+        /// TODO
+        source: s3::dynamodb_lock::DynamoError,
+    },
 
     /// Azure error
     #[cfg(feature = "azure")]
@@ -379,7 +387,7 @@ pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, Storage
     match parse_uri(uri)? {
         Uri::LocalPath(root) => Ok(Box::new(file::FileStorageBackend::new(root))),
         #[cfg(feature = "s3")]
-        Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new())),
+        Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new()?)),
         #[cfg(feature = "azure")]
         Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
     }

@@ -20,7 +20,7 @@ async fn test_two_commits_fs() {
 #[cfg(feature = "s3")]
 #[tokio::test]
 async fn test_two_commits_s3() {
-    s3_ops::cleanup_log_dir_s3().await;
+    cleanup_log_dir_s3().await;
     test_two_commits("s3://deltars/simple_commit_rw").await;
 }
 
@@ -126,22 +126,10 @@ fn cleanup_log_dir_fs() {
 }
 
 #[cfg(feature = "s3")]
-mod s3_ops {
-    use rusoto_s3::{DeleteObjectRequest, S3Client, S3};
-
-    pub async fn cleanup_log_dir_s3() {
-        crate::s3_common::setup();
-        let client = S3Client::new(crate::s3_common::region());
-        delete_obj(&client, "00000000000000000001.json").await;
-        delete_obj(&client, "00000000000000000002.json").await;
-    }
-
-    async fn delete_obj(client: &S3Client, name: &str) {
-        let req = DeleteObjectRequest {
-            bucket: "deltars".to_string(),
-            key: format!("simple_commit_rw/_delta_log/{}", name),
-            ..Default::default()
-        };
-        client.delete_object(req).await.unwrap();
-    }
+async fn cleanup_log_dir_s3() {
+    crate::s3_common::delete_objects(vec![
+        "simple_commit_rw/_delta_log/00000000000000000001.json",
+        "simple_commit_rw/_delta_log/00000000000000000002.json",
+    ])
+    .await;
 }

@@ -1,4 +1,5 @@
 use rusoto_core::Region;
+use rusoto_s3::{Delete, DeleteObjectsRequest, ObjectIdentifier, S3Client, S3};
 
 pub const ENDPOINT: &str = "http://localhost:4566";
 
@@ -16,4 +17,28 @@ pub fn region() -> Region {
         name: "custom".to_string(),
         endpoint: ENDPOINT.to_string(),
     }
+}
+
+#[allow(dead_code)]
+pub async fn delete_objects<S: Into<String>>(paths: Vec<S>) {
+    crate::s3_common::setup();
+    let client = S3Client::new(crate::s3_common::region());
+
+    let mut objects = Vec::new();
+    for key in paths {
+        objects.push(ObjectIdentifier {
+            key: key.into(),
+            ..Default::default()
+        })
+    }
+    let req = DeleteObjectsRequest {
+        bucket: "deltars".to_string(),
+        delete: Delete {
+            objects,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    client.delete_objects(req).await.unwrap();
 }
