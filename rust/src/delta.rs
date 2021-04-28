@@ -256,8 +256,8 @@ impl From<StorageError> for LoadCheckpointError {
 
 #[derive(Default)]
 struct DeltaTableState {
-    // A remove action should remain in the state of the table as a tombstone until it has expired
-    // vacuum operation is responsible for providing the retention threshold
+    // A remove action should remain in the state of the table as a tombstone until it has expired.
+    // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: Vec<action::Remove>,
     files: Vec<String>,
     commit_infos: Vec<Value>,

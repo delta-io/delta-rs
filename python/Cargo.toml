@@ -19,7 +19,7 @@ env_logger = "0"
 # for binary wheel best practice, statically link openssl
 reqwest = { version = "*", features = ["native-tls-vendored"] }
 serde_json = "1"
-arrow  = { git = "https://github.com/apache/arrow.git", rev = "9c1e5bd19347635ea9f373bcf93f2cea0231d50a" }
+arrow  = { version = "4" }
 
 [dependencies.pyo3]
 version = "0.13"
