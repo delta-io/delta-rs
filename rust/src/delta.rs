@@ -1,3 +1,5 @@
+//! Delta Table read and write implementation
+
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 
 use std::cmp::Ordering;
@@ -29,8 +31,10 @@ use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
 use uuid::Uuid;
 
+/// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
 pub struct CheckPoint {
+    /// Delta table version
     version: DeltaDataTypeVersion, // 20 digits decimals
     size: DeltaDataTypeLong,
     parts: Option<u32>, // 10 digits decimals
@@ -765,6 +769,8 @@ impl DeltaTable {
         Ok(tombstones)
     }
 
+    /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
+    /// no metadata was found in the log.
     pub fn schema(&self) -> Option<&Schema> {
         self.state.current_metadata.as_ref().map(|m| &m.schema)
     }
