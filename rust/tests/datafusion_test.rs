@@ -15,20 +15,16 @@ mod datafusion {
         ctx.register_table("demo", Arc::new(table))?;
 
         let batches = ctx
-            .sql("SELECT id FROM demo WHERE id > 5")?
+            .sql("SELECT id FROM demo WHERE id > 5 ORDER BY id ASC")?
             .collect()
             .await?;
 
-        assert_eq!(batches.len(), 2);
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
 
         assert_eq!(
-            batches[0].column(0).as_ref(),
-            Arc::new(Int64Array::from(vec![7])).as_ref(),
-        );
-
-        assert_eq!(
-            batches[1].column(0).as_ref(),
-            Arc::new(Int64Array::from(vec![9])).as_ref(),
+            batch.column(0).as_ref(),
+            Arc::new(Int64Array::from(vec![7, 9])).as_ref(),
         );
 
         Ok(())
