@@ -433,7 +433,6 @@ fn try_create_lock_client(region: Region) -> Result<Option<Box<dyn LockClient>>,
     }
 }
 
-
 const DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS: u32 = 10_000;
 
 async fn rename_with_lock(
@@ -466,7 +465,7 @@ async fn rename_with_lock(
 
     if !release_result? {
         log::error!("Could not release lock {:?}", &lock);
-        return Err(StorageError::S3Generic("Lock is not released".to_string()))
+        return Err(StorageError::S3Generic("Lock is not released".to_string()));
     }
 
     Ok(())
