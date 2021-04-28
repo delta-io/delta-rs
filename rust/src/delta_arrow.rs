@@ -1,3 +1,5 @@
+//! Conversion between Delta Table schema and Arrow schema
+
 use crate::schema;
 use arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,

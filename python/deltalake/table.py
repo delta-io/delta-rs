@@ -1,6 +1,7 @@
 from typing import List, Optional, Tuple
 from urllib.parse import urlparse
 
+import os
 import pyarrow
 from pyarrow.dataset import dataset
 
@@ -9,29 +10,29 @@ from .schema import Schema, pyarrow_schema_from_json
 
 
 class Metadata:
-    """ Create a Metadata instance. """
+    """Create a Metadata instance."""
 
     def __init__(self, table: RawDeltaTable):
         self._metadata = table.metadata()
 
     @property
     def id(self):
-        """ Return the unique identifier of the DeltaTable. """
+        """Return the unique identifier of the DeltaTable."""
         return self._metadata.id
 
     @property
     def name(self):
-        """ Return the user-provided identifier of the DeltaTable. """
+        """Return the user-provided identifier of the DeltaTable."""
         return self._metadata.name
 
     @property
     def description(self):
-        """ Return the user-provided description of the DeltaTable. """
+        """Return the user-provided description of the DeltaTable."""
         return self._metadata.description
 
     @property
     def partition_columns(self):
-        """ Return an array containing the names of the partitioned columns of the DeltaTable. """
+        """Return an array containing the names of the partitioned columns of the DeltaTable."""
         return self._metadata.partition_columns
 
     @property
@@ -43,7 +44,7 @@ class Metadata:
 
     @property
     def configuration(self):
-        """ Return the DeltaTable properties. """
+        """Return the DeltaTable properties."""
         return self._metadata.configuration
 
     def __str__(self) -> str:
@@ -69,7 +70,7 @@ class Metadata:
 
 
 class DeltaTable:
-    """ Create a DeltaTable instance."""
+    """Create a DeltaTable instance."""
 
     def __init__(self, table_path: str, version: Optional[int] = None):
         """
@@ -191,11 +192,24 @@ class DeltaTable:
 
         # Decide based on the first file, if the file is on cloud storage or local
         if paths[0].netloc:
+            query_str = ""
+            # pyarrow doesn't properly support the AWS_ENDPOINT_URL environment variable
+            # for non-AWS S3 like resources. This is a slight hack until such a
+            # point when pyarrow learns about AWS_ENDPOINT_URL
+            endpoint_url = os.environ.get("AWS_ENDPOINT_URL")
+            if endpoint_url is not None:
+                endpoint = urlparse(endpoint_url)
+                # This format specific to the URL schema inference done inside
+                # of pyarrow, consult their tests/dataset.py for examples
+                query_str += (
+                    f"?scheme={endpoint.scheme}&endpoint_override={endpoint.netloc}"
+                )
+
             keys = [curr_file.path for curr_file in paths]
             return dataset(
                 keys,
                 schema=self.pyarrow_schema(),
-                filesystem=f"{paths[0].scheme}://{paths[0].netloc}",
+                filesystem=f"{paths[0].scheme}://{paths[0].netloc}{query_str}",
             )
         else:
             return dataset(file_paths, schema=self.pyarrow_schema(), format="parquet")

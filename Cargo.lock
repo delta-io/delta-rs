@@ -96,8 +96,9 @@ checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
 
 [[package]]
 name = "arrow"
-version = "4.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow.git?rev=9c1e5bd19347635ea9f373bcf93f2cea0231d50a#9c1e5bd19347635ea9f373bcf93f2cea0231d50a"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "014c7490f839d9dd4ce28f8232d4731f8b1fb93fa477d69e6fe881814ac2b6bb"
 dependencies = [
  "cfg_aliases",
  "chrono",
@@ -560,8 +561,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "4.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow.git?rev=9c1e5bd19347635ea9f373bcf93f2cea0231d50a#9c1e5bd19347635ea9f373bcf93f2cea0231d50a"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a9d28e885465d9c4ce7154b52511a3d3263c1a484010145dc84eb686abc56c2d"
 dependencies = [
  "ahash",
  "arrow",
@@ -590,7 +592,7 @@ dependencies = [
 
 [[package]]
 name = "deltalake"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -633,7 +635,7 @@ dependencies = [
 
 [[package]]
 name = "deltalake-python"
-version = "0.4.6"
+version = "0.4.7"
 dependencies = [
  "arrow",
  "deltalake",
@@ -1699,8 +1701,9 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "4.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow.git?rev=9c1e5bd19347635ea9f373bcf93f2cea0231d50a#9c1e5bd19347635ea9f373bcf93f2cea0231d50a"
+version = "4.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "32858ae16bd61fda406be4b76af617d2f632fed4f0093810245aa4f5316ac865"
 dependencies = [
  "arrow",
  "base64 0.12.3",

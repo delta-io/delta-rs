@@ -2,6 +2,9 @@ extern crate chrono;
 extern crate deltalake;
 extern crate utime;
 
+#[cfg(feature = "s3")]
+mod s3_common;
+
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
@@ -124,18 +127,11 @@ fn cleanup_log_dir_fs() {
 
 #[cfg(feature = "s3")]
 mod s3_ops {
-    use rusoto_core::Region;
     use rusoto_s3::{DeleteObjectRequest, S3Client, S3};
 
     pub async fn cleanup_log_dir_s3() {
-        let endpoint = "http://localhost:4566";
-        std::env::set_var("AWS_ACCESS_KEY_ID", "test");
-        std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
-        std::env::set_var("AWS_ENDPOINT_URL", &endpoint);
-        let client = S3Client::new(Region::Custom {
-            name: "custom".to_string(),
-            endpoint: endpoint.to_string(),
-        });
+        crate::s3_common::setup();
+        let client = S3Client::new(crate::s3_common::region());
         delete_obj(&client, "00000000000000000001.json").await;
         delete_obj(&client, "00000000000000000002.json").await;
     }
