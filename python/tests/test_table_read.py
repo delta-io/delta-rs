@@ -17,6 +17,18 @@ def test_read_simple_table_by_version_to_dict():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
 
+def test_read_partitioned_table_to_dict():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = {
+        "value": ["1", "2", "3", "6", "7", "5", "4"],
+        "year": ["2020", "2020", "2020", "2021", "2021", "2021", "2021"],
+        "month": ["1", "2", "2", "12", "12", "12", "4"],
+        "day": ["1", "3", "5", "20", "20", "4", "5"],
+    }
+    assert dt.to_pyarrow_dataset().to_table().to_pydict() == expected
+
+
 def test_vacuum_dry_run_simple_table():
     table_path = "../rust/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path)
