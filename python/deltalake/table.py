@@ -3,7 +3,7 @@ from urllib.parse import urlparse
 
 import os
 import pyarrow
-from pyarrow.dataset import dataset
+from pyarrow.dataset import dataset, partitioning
 
 from .deltalake import RawDeltaTable, RawDeltaTableMetaData
 from .schema import Schema, pyarrow_schema_from_json
@@ -212,9 +212,15 @@ class DeltaTable:
                 keys,
                 schema=self.pyarrow_schema(),
                 filesystem=f"{paths[0].scheme}://{paths[0].netloc}{query_str}",
+                partitioning=partitioning(flavor="hive"),
             )
         else:
-            return dataset(file_paths, schema=self.pyarrow_schema(), format="parquet")
+            return dataset(
+                file_paths,
+                schema=self.pyarrow_schema(),
+                format="parquet",
+                partitioning=partitioning(flavor="hive"),
+            )
 
     def to_pyarrow_table(self) -> pyarrow.Table:
         """
