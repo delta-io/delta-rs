@@ -62,7 +62,7 @@
             
             
               <div class="version">
-                0.4.6
+                0.4.7
               </div>
             
           
@@ -289,28 +289,54 @@ The supported type for value is str.</p>
 
 <dl class="py method">
 <dt id="deltalake.table.DeltaTable.to_pyarrow_dataset">
-<code class="sig-name descname"><span class="pre">to_pyarrow_dataset</span></code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.to_pyarrow_dataset" title="Permalink to this definition">¶</a></dt>
+<code class="sig-name descname"><span class="pre">to_pyarrow_dataset</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partitions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.to_pyarrow_dataset" title="Permalink to this definition">¶</a></dt>
 <dd><p>Build a PyArrow Dataset using data from the DeltaTable.</p>
 <dl class="field-list simple">
-<dt class="field-odd">Returns</dt>
-<dd class="field-odd"><p>the PyArrow dataset in PyArrow</p>
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p>
 </dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p>pyarrow._dataset.Dataset</p>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>the PyArrow dataset in PyArrow</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>pyarrow._dataset.Dataset</p>
 </dd>
 </dl>
 </dd></dl>
 
 <dl class="py method">
 <dt id="deltalake.table.DeltaTable.to_pyarrow_table">
-<code class="sig-name descname"><span class="pre">to_pyarrow_table</span></code><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.to_pyarrow_table" title="Permalink to this definition">¶</a></dt>
+<code class="sig-name descname"><span class="pre">to_pyarrow_table</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partitions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.to_pyarrow_table" title="Permalink to this definition">¶</a></dt>
 <dd><p>Build a PyArrow Table using data from the DeltaTable.</p>
 <dl class="field-list simple">
-<dt class="field-odd">Returns</dt>
-<dd class="field-odd"><p>the PyArrow table</p>
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p>
 </dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p>pyarrow.lib.Table</p>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>the PyArrow table</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>pyarrow.lib.Table</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt id="deltalake.table.DeltaTable.vacuum">
+<code class="sig-name descname"><span class="pre">vacuum</span></code><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">retention_hours</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dry_run</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.vacuum" title="Permalink to this definition">¶</a></dt>
+<dd><p>Run the Vacuum command on the Delta Table: lists files no longer referenced by the Delta table and are older than the retention threshold.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>retention_hours</strong> (<em>int</em>) – the retention threshold in hours</p></li>
+<li><p><strong>dry_run</strong> (<em>bool</em>) – when activated, lists only the files, removed otherwise</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>the list of files no longer referenced by the Delta Table and are older than the retention threshold.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>List[str]</p>
 </dd>
 </dl>
 </dd></dl>
