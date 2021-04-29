@@ -3,24 +3,26 @@ extern crate deltalake;
 extern crate utime;
 
 #[cfg(feature = "s3")]
+#[allow(dead_code)]
 mod s3_common;
 
+#[allow(dead_code)]
+mod fs_common;
+
 use std::collections::HashMap;
-use std::fs;
-use std::path::PathBuf;
 
 use deltalake::action;
 
 #[tokio::test]
 async fn test_two_commits_fs() {
-    cleanup_log_dir_fs();
+    prepare_fs();
     test_two_commits("./tests/data/simple_commit").await;
 }
 
 #[cfg(feature = "s3")]
 #[tokio::test]
 async fn test_two_commits_s3() {
-    s3_ops::cleanup_log_dir_s3().await;
+    prepare_s3().await;
     test_two_commits("s3://deltars/simple_commit_rw").await;
 }
 
@@ -103,45 +105,17 @@ async fn test_two_commits(table_path: &str) {
     assert_eq!(4, table.get_files().len());
 }
 
-fn cleanup_log_dir_fs() {
-    let log_dir = PathBuf::from("./tests/data/simple_commit/_delta_log");
-    let paths = fs::read_dir(log_dir.as_path()).unwrap();
-
-    for p in paths {
-        match p {
-            Ok(d) => {
-                let file_path = d.path();
-
-                if let Some(extension) = file_path.extension() {
-                    if extension == "json"
-                        && file_path.file_stem().unwrap() != "00000000000000000000"
-                    {
-                        fs::remove_file(file_path).unwrap();
-                    }
-                }
-            }
-            _ => {}
-        }
-    }
+fn prepare_fs() {
+    fs_common::cleanup_dir_except(
+        "./tests/data/simple_commit/_delta_log",
+        vec!["00000000000000000000.json".to_string()],
+    );
 }
 
-#[cfg(feature = "s3")]
-mod s3_ops {
-    use rusoto_s3::{DeleteObjectRequest, S3Client, S3};
-
-    pub async fn cleanup_log_dir_s3() {
-        crate::s3_common::setup();
-        let client = S3Client::new(crate::s3_common::region());
-        delete_obj(&client, "00000000000000000001.json").await;
-        delete_obj(&client, "00000000000000000002.json").await;
-    }
-
-    async fn delete_obj(client: &S3Client, name: &str) {
-        let req = DeleteObjectRequest {
-            bucket: "deltars".to_string(),
-            key: format!("simple_commit_rw/_delta_log/{}", name),
-            ..Default::default()
-        };
-        client.delete_object(req).await.unwrap();
-    }
+async fn prepare_s3() {
+    s3_common::cleanup_dir_except(
+        "s3://deltars/simple_commit_rw/_delta_log",
+        vec!["00000000000000000000.json".to_string()],
+    )
+    .await;
 }

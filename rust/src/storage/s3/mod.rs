@@ -1,6 +1,7 @@
 //! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
 
 use std::convert::TryFrom;
+use std::fmt::Debug;
 use std::{fmt, pin::Pin};
 
 use chrono::{DateTime, FixedOffset, Utc};
@@ -149,11 +150,12 @@ impl<'a> fmt::Display for S3Object<'a> {
 /// An S3 implementation of the `StorageBackend` trait
 pub struct S3StorageBackend {
     client: rusoto_s3::S3Client,
+    lock_client: Option<Box<dyn LockClient>>,
 }
 
 impl S3StorageBackend {
     /// Creates a new S3StorageBackend.
-    pub fn new() -> Self {
+    pub fn new() -> Result<Self, StorageError> {
         let region = if let Ok(url) = std::env::var("AWS_ENDPOINT_URL") {
             Region::Custom {
                 name: "custom".to_string(),
@@ -163,14 +165,53 @@ impl S3StorageBackend {
             Region::default()
         };
 
-        let client = create_s3_client(region).unwrap();
-        Self { client }
+        let client = create_s3_client(region.clone())?;
+        let lock_client = try_create_lock_client(region.clone())?;
+
+        Ok(Self {
+            client,
+            lock_client,
+        })
+    }
+
+    async fn unsafe_rename_obj(
+        self: &S3StorageBackend,
+        src: &str,
+        dst: &str,
+    ) -> Result<(), StorageError> {
+        match self.head_obj(dst).await {
+            Ok(_) => return Err(StorageError::AlreadyExists(dst.to_string())),
+            Err(StorageError::NotFound) => (),
+            Err(e) => return Err(e),
+        }
+
+        let src = parse_uri(src)?.into_s3object()?;
+        let dst = parse_uri(dst)?.into_s3object()?;
+
+        self.client
+            .copy_object(CopyObjectRequest {
+                bucket: dst.bucket.to_string(),
+                key: dst.key.to_string(),
+                copy_source: format!("{}/{}", src.bucket, src.key),
+                ..Default::default()
+            })
+            .await?;
+
+        self.client
+            .delete_object(DeleteObjectRequest {
+                bucket: src.bucket.to_string(),
+                key: src.key.to_string(),
+                ..Default::default()
+            })
+            .await?;
+
+        Ok(())
     }
 }
 
 impl Default for S3StorageBackend {
     fn default() -> Self {
-        Self::new()
+        Self::new().unwrap()
     }
 }
 
@@ -315,34 +356,10 @@ impl StorageBackend for S3StorageBackend {
     }
 
     async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError> {
-        debug!("rename s3 object: {} to {}...", src, dst);
-
-        match self.head_obj(dst).await {
-            Ok(_) => return Err(StorageError::AlreadyExists(dst.to_string())),
-            Err(StorageError::NotFound) => (),
-            Err(e) => return Err(e),
+        match self.lock_client {
+            None => self.unsafe_rename_obj(src, dst).await?,
+            Some(ref lock_client) => rename_with_lock(self, lock_client.as_ref(), src, dst).await?,
         }
-
-        let src = parse_uri(src)?.into_s3object()?;
-        let dst = parse_uri(dst)?.into_s3object()?;
-
-        self.client
-            .copy_object(CopyObjectRequest {
-                bucket: dst.bucket.to_string(),
-                key: dst.key.to_string(),
-                copy_source: format!("{}/{}", src.bucket, src.key),
-                ..Default::default()
-            })
-            .await?;
-
-        self.client
-            .delete_object(DeleteObjectRequest {
-                bucket: src.bucket.to_string(),
-                key: src.key.to_string(),
-                ..Default::default()
-            })
-            .await?;
-
         Ok(())
     }
 
@@ -362,13 +379,105 @@ impl StorageBackend for S3StorageBackend {
     }
 }
 
+/// A lock that has been successfully acquired
+#[derive(Clone, Debug)]
+pub struct LockItem {
+    /// The name of the owner that owns this lock.
+    pub owner_name: String,
+    /// Current version number of the lock in DynamoDB. This is what tells the lock client
+    /// when the lock is stale.
+    pub record_version_number: String,
+    /// The amount of time (in seconds) that the owner has this lock for.
+    pub lease_duration: u64,
+    /// Tells whether or not the lock was marked as released when loaded from DynamoDB.
+    pub is_released: bool,
+    /// Optional data associated with this lock.
+    pub data: Option<String>,
+    /// The last time this lock was updated or retrieved.
+    pub lookup_time: u128,
+}
+
+///  TODO
+#[async_trait::async_trait]
+pub trait LockClient: Send + Sync + Debug {
+    /// Attempts to acquire lock. If successful, returns the lock.
+    /// Otherwise returns [`Option::None`] which is retryable action.
+    /// Visit implementation docs for more details.
+    async fn try_acquire_lock(&self) -> Result<Option<LockItem>, StorageError>;
+
+    /// Returns current lock from DynamoDB (if any).
+    async fn get_lock(&self) -> Result<Option<LockItem>, StorageError>;
+
+    /// Releases the given lock if the current user still has it, returning true if the lock was
+    /// successfully released, and false if someone else already stole the lock
+    async fn release_lock(&self, lock: &LockItem) -> Result<bool, StorageError>;
+}
+
+fn try_create_lock_client(region: Region) -> Result<Option<Box<dyn LockClient>>, StorageError> {
+    match std::env::var("AWS_S3_LOCKING_PROVIDER") {
+        Ok(p) if p.to_lowercase() == "dynamodb" => {
+            cfg_if::cfg_if! {
+                if #[cfg(feature = "dynamodb")] {
+                    let client = dynamodb_lock::DynamoDbLockClient::new(
+                        rusoto_dynamodb::DynamoDbClient::new(region),
+                        dynamodb_lock::Options::default()
+                    );
+                    Ok(Some(Box::new(client)))
+                } else {
+                    return Err(StorageError::Generic("dynamodb feature is not enabled".to_string()));
+                }
+
+            }
+        }
+        _ => Ok(None),
+    }
+}
+
+const DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS: u32 = 10_000;
+
+async fn rename_with_lock(
+    s3_backend: &S3StorageBackend,
+    lock_client: &dyn LockClient,
+    src: &str,
+    dst: &str,
+) -> Result<(), StorageError> {
+    let lock;
+    let mut retries = 0;
+
+    loop {
+        match lock_client.try_acquire_lock().await? {
+            Some(l) => {
+                lock = l;
+                break;
+            }
+            None => {
+                retries += 1;
+                if retries > DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS {
+                    return Err(StorageError::S3Generic("Cannot acquire lock".to_string()));
+                }
+            }
+        }
+    }
+    let rename_result = s3_backend.unsafe_rename_obj(src, dst).await;
+    let release_result = lock_client.release_lock(&lock).await;
+
+    rename_result?;
+
+    if !release_result? {
+        log::error!("Could not release lock {:?}", &lock);
+        return Err(StorageError::S3Generic("Lock is not released".to_string()));
+    }
+
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
     fn join_multiple_paths() {
-        let backend = S3StorageBackend::new();
+        let backend = S3StorageBackend::new().unwrap();
         assert_eq!(&backend.join_paths(&["abc", "efg/", "123"]), "abc/efg/123",);
         assert_eq!(&backend.join_paths(&["abc", "efg/"]), "abc/efg",);
         assert_eq!(&backend.join_paths(&["foo"]), "foo",);
