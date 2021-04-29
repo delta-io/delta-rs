@@ -39,7 +39,7 @@ classifier = [
 ]
 project-url = { Repo = "https://github.com/delta-io/delta-rs" }
 requires-dist = [
-    "pyarrow>=2",
+    "pyarrow>=4",
     'numpy<1.20.0;python_version<="3.6"',
     "pandas; extra =='pandas'",
     "pytest; extra == 'devel'",

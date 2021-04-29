@@ -3,7 +3,7 @@ from urllib.parse import urlparse
 
 import os
 import pyarrow
-from pyarrow.dataset import dataset
+from pyarrow.dataset import dataset, partitioning
 
 from .deltalake import RawDeltaTable, RawDeltaTableMetaData
 from .schema import Schema, pyarrow_schema_from_json
@@ -183,13 +183,23 @@ class DeltaTable:
         """
         return pyarrow_schema_from_json(self._table.arrow_schema_json())
 
-    def to_pyarrow_dataset(self) -> pyarrow.dataset.Dataset:
+    def to_pyarrow_dataset(
+        self, partitions: Optional[List[Tuple]] = None
+    ) -> pyarrow.dataset.Dataset:
         """
         Build a PyArrow Dataset using data from the DeltaTable.
 
+        :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
         :return: the PyArrow dataset in PyArrow
         """
-        file_paths = self._table.file_paths()
+        if partitions is None:
+            file_paths = self._table.file_paths()
+        else:
+            table_path = self._table.table_path()
+            file_paths = [
+                f"{table_path}/{file_name}"
+                for file_name in self._table.files_by_partitions(partitions)
+            ]
         paths = [urlparse(curr_file) for curr_file in file_paths]
 
         # Decide based on the first file, if the file is on cloud storage or local
@@ -212,14 +222,23 @@ class DeltaTable:
                 keys,
                 schema=self.pyarrow_schema(),
                 filesystem=f"{paths[0].scheme}://{paths[0].netloc}{query_str}",
+                partitioning=partitioning(flavor="hive"),
             )
         else:
-            return dataset(file_paths, schema=self.pyarrow_schema(), format="parquet")
+            return dataset(
+                file_paths,
+                schema=self.pyarrow_schema(),
+                format="parquet",
+                partitioning=partitioning(flavor="hive"),
+            )
 
-    def to_pyarrow_table(self) -> pyarrow.Table:
+    def to_pyarrow_table(
+        self, partitions: Optional[List[Tuple]] = None
+    ) -> pyarrow.Table:
         """
         Build a PyArrow Table using data from the DeltaTable.
 
+        :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
         :return: the PyArrow table
         """
-        return self.to_pyarrow_dataset().to_table()
+        return self.to_pyarrow_dataset(partitions).to_table()
