@@ -96,6 +96,7 @@ pub struct SchemaTypeMap {
     r#type: String,
     keyType: Box<SchemaDataType>,
     valueType: Box<SchemaDataType>,
+    valueContainsNull: bool,
 }
 
 impl SchemaTypeMap {
@@ -109,6 +110,11 @@ impl SchemaTypeMap {
     /// name of a primitive type, a struct definition, an array definition or a map definition
     pub fn get_value_type(&self) -> &SchemaDataType {
         &self.valueType
+    }
+
+    /// Whether the value field is allowed to contain null elements.
+    pub fn get_value_contains_null(&self) -> bool {
+        self.valueContainsNull
     }
 }
 

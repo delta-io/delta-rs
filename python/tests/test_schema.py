@@ -123,8 +123,8 @@ def test_schema_delta_types():
         type=DataType.from_dict(
             {
                 "type": "map",
-                "keyType": {"type": "integer"},
-                "valueType": {"type": "integer"},
+                "keyType": "integer",
+                "valueType": "integer",
                 "valueContainsNull": True,
             }
         ),
