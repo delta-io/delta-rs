@@ -414,20 +414,19 @@ pub trait LockClient: Send + Sync + Debug {
 }
 
 #[allow(clippy::unnecessary_wraps)]
-fn try_create_lock_client(region: Region) -> Result<Option<Box<dyn LockClient>>, StorageError> {
+fn try_create_lock_client(_region: Region) -> Result<Option<Box<dyn LockClient>>, StorageError> {
     match std::env::var("AWS_S3_LOCKING_PROVIDER") {
         Ok(p) if p.to_lowercase() == "dynamodb" => {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "dynamodb")] {
                     let client = dynamodb_lock::DynamoDbLockClient::new(
-                        rusoto_dynamodb::DynamoDbClient::new(region),
+                        rusoto_dynamodb::DynamoDbClient::new(_region),
                         dynamodb_lock::Options::default()
                     );
                     Ok(Some(Box::new(client)))
                 } else {
-                    return Err(StorageError::Generic("dynamodb feature is not enabled".to_string()));
+                    Err(StorageError::Generic("dynamodb feature is not enabled".to_string()))
                 }
-
             }
         }
         _ => Ok(None),

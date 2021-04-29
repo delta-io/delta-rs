@@ -117,6 +117,7 @@ fn prepare_fs() {
     );
 }
 
+#[cfg(feature = "s3")]
 async fn prepare_s3() {
     std::env::set_var("AWS_S3_LOCKING_PROVIDER", "dynamodb");
     std::env::set_var("DYNAMO_LOCK_TABLE_NAME", "test_table");

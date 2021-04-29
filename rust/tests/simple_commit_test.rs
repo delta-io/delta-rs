@@ -112,6 +112,7 @@ fn prepare_fs() {
     );
 }
 
+#[cfg(feature = "s3")]
 async fn prepare_s3() {
     s3_common::cleanup_dir_except(
         "s3://deltars/simple_commit_rw/_delta_log",
