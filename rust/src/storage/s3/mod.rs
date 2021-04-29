@@ -166,7 +166,7 @@ impl S3StorageBackend {
         };
 
         let client = create_s3_client(region.clone())?;
-        let lock_client = try_create_lock_client(region.clone())?;
+        let lock_client = try_create_lock_client(region)?;
 
         Ok(Self {
             client,
@@ -413,6 +413,7 @@ pub trait LockClient: Send + Sync + Debug {
     async fn release_lock(&self, lock: &LockItem) -> Result<bool, StorageError>;
 }
 
+#[allow(clippy::unnecessary_wraps)]
 fn try_create_lock_client(region: Region) -> Result<Option<Box<dyn LockClient>>, StorageError> {
     match std::env::var("AWS_S3_LOCKING_PROVIDER") {
         Ok(p) if p.to_lowercase() == "dynamodb" => {
