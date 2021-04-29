@@ -36,8 +36,8 @@ class DataType:
         """
         type_class = json_dict["type"]
         if type_class == "map":
-            key_type = json_dict["keyType"]
-            value_type = json_dict["valueType"]
+            key_type = {"type": json_dict["keyType"]}
+            value_type = {"type": json_dict["valueType"]}
             value_contains_null = json_dict["valueContainsNull"]
             key_type = cls.from_dict(json_dict=key_type)
             value_type = cls.from_dict(json_dict=value_type)
