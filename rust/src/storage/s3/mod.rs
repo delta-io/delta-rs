@@ -156,7 +156,7 @@ impl S3StorageBackend {
     pub fn new() -> Self {
         let region = if let Ok(url) = std::env::var("AWS_ENDPOINT_URL") {
             Region::Custom {
-                name: "custom".to_string(),
+                name: std::env::var("AWS_REGION").unwrap_or_else(|_| "custom".to_string()),
                 endpoint: url,
             }
         } else {
