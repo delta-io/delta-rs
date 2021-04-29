@@ -33,7 +33,9 @@ def test_vacuum_dry_run_simple_table():
     table_path = "../rust/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path)
     retention_periods = 169
-    assert dt.vacuum(retention_periods) == [
+    tombstones = dt.vacuum(retention_periods)
+    tombstones.sort()
+    assert tombstones == [
         "../rust/tests/data/delta-0.2.0/part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet",
         "../rust/tests/data/delta-0.2.0/part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet",
         "../rust/tests/data/delta-0.2.0/part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet",
@@ -52,11 +54,6 @@ def test_vacuum_dry_run_simple_table():
         str(exception.value)
         == "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
     )
-
-    retention_periods = 167
-    with pytest.raises(Exception) as exception:
-        dt.vacuum(retention_periods, dry_run=False)
-    assert str(exception.value) == "Only Vacuum with dry_run is available."
 
 
 def test_read_partitioned_table_metadata():
