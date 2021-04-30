@@ -208,6 +208,22 @@ def test_schema_pyarrow_types():
     assert dict(pyarrow_field.metadata) == metadata
     assert pyarrow_field.nullable is False
 
+    field_name = "date_with_day_unit"
+    metadata = {b"metadata_k": b"metadata_v"}
+    pyarrow_field = pyarrow_field_from_dict(
+        {
+            "name": field_name,
+            "nullable": False,
+            "metadata": metadata,
+            "type": {"name": "date", "unit": "DAY"},
+        }
+    )
+    assert pyarrow_field.name == field_name
+    assert pyarrow_field.type == pyarrow.date32()
+    assert dict(pyarrow_field.metadata) == metadata
+    assert pyarrow_field.nullable is False
+
+    field_name = "simple_list"
     pyarrow_field = pyarrow_field_from_dict(
         {
             "name": field_name,
@@ -218,10 +234,61 @@ def test_schema_pyarrow_types():
         }
     )
     assert pyarrow_field.name == field_name
-    assert pyarrow_field.type == pyarrow.list_(pyarrow.int32())
+    assert pyarrow_field.type == pyarrow.list_(
+        pyarrow.field("element", pyarrow.int32())
+    )
     assert pyarrow_field.metadata == metadata
     assert pyarrow_field.nullable is False
 
+    field_name = "dictionary"
+    pyarrow_field = pyarrow_field_from_dict(
+        {
+            "name": field_name,
+            "nullable": False,
+            "metadata": metadata,
+            "type": {"name": "int", "bitWidth": 32, "isSigned": True},
+            "children": [],
+            "dictionary": {
+                "id": 0,
+                "indexType": {"name": "int", "bitWidth": 16, "isSigned": True},
+            },
+        }
+    )
+    assert pyarrow_field.name == field_name
+    assert pyarrow_field.type == pyarrow.map_(pyarrow.int16(), pyarrow.int32())
+    assert pyarrow_field.metadata == metadata
+    assert pyarrow_field.nullable is False
+
+    field_name = "struct_array"
+    pyarrow_field = pyarrow_field_from_dict(
+        {
+            "name": field_name,
+            "nullable": False,
+            "metadata": metadata,
+            "type": {"name": "list"},
+            "children": [],
+            "dictionary": {
+                "id": 0,
+                "indexType": {"name": "int", "bitWidth": 32, "isSigned": True},
+            },
+        }
+    )
+    assert pyarrow_field.name == field_name
+    assert pyarrow_field.type == pyarrow.map_(
+        pyarrow.int32(),
+        pyarrow.list_(
+            pyarrow.field(
+                "element",
+                pyarrow.struct(
+                    [pyarrow.field("val", pyarrow.int32(), False, metadata)]
+                ),
+            )
+        ),
+    )
+    assert pyarrow_field.metadata == metadata
+    assert pyarrow_field.nullable is False
+
+    field_name = "simple_dictionary"
     pyarrow_field = pyarrow_field_from_dict(
         {
             "name": field_name,
