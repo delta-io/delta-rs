@@ -356,10 +356,10 @@ impl StorageBackend for S3StorageBackend {
     }
 
     async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError> {
-        match self.lock_client {
-            None => self.unsafe_rename_obj(src, dst).await?,
-            Some(ref lock_client) => rename_with_lock(self, lock_client.as_ref(), src, dst).await?,
-        }
+        debug!("rename s3 object: {} -> {}...", src, dst);
+
+        rename_with_lock(self, src, dst).await?;
+
         Ok(())
     }
 
@@ -437,10 +437,14 @@ const DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS: u32 = 10_000;
 
 async fn rename_with_lock(
     s3_backend: &S3StorageBackend,
-    lock_client: &dyn LockClient,
     src: &str,
     dst: &str,
 ) -> Result<(), StorageError> {
+    let lock_client = match s3_backend.lock_client {
+        Some(ref lock_client) => lock_client,
+        None => return Err(StorageError::S3Generic("dynamodb locking is not enabled".to_string()))
+    };
+
     let lock;
     let mut retries = 0;
 

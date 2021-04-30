@@ -11,23 +11,49 @@ mod fs_common;
 
 use std::collections::HashMap;
 
-use deltalake::action;
+use deltalake::{action, DeltaTransactionError};
 
 #[tokio::test]
 async fn test_two_commits_fs() {
     prepare_fs();
-    test_two_commits("./tests/data/simple_commit").await;
+    test_two_commits("./tests/data/simple_commit").await.unwrap();
 }
 
-#[cfg(feature = "s3")]
+#[cfg(all(feature = "s3", feature = "dynamodb"))]
 #[tokio::test]
 async fn test_two_commits_s3() {
-    prepare_s3().await;
-    test_two_commits("s3://deltars/simple_commit_rw").await;
+    let path = "s3://deltars/simple_commit_rw1";
+    s3_common::setup_dynamodb("concurrent_writes");
+    prepare_s3(path).await;
+
+    test_two_commits(path).await.unwrap();
 }
 
-async fn test_two_commits(table_path: &str) {
-    let mut table = deltalake::open_table(table_path).await.unwrap();
+#[cfg(all(feature = "s3", not(feature = "dynamodb")))]
+#[tokio::test]
+async fn test_two_commits_s3_fails_with_no_lock() {
+    use deltalake::{TransactionCommitAttemptError, StorageError};
+
+    let path = "s3://deltars/simple_commit_rw2";
+    prepare_s3(path).await;
+
+    let result = test_two_commits(path).await;
+    if let Err(DeltaTransactionError::CommitRetriesExceeded { ref inner }) = result {
+        if let TransactionCommitAttemptError::Storage { source } = inner {
+            if let StorageError::S3Generic(err) = source {
+                assert_eq!(err, "dynamodb locking is not enabled");
+                return;
+            }
+        }
+    }
+
+    result.unwrap();
+
+    panic!("S3 commit without dynamodb locking is expected to fail")
+}
+
+async fn test_two_commits(table_path: &str) -> Result<(), DeltaTransactionError> {
+    let mut table = deltalake::open_table(table_path).await?;
 
     assert_eq!(0, table.version);
     assert_eq!(0, table.get_files().len());
@@ -62,7 +88,7 @@ async fn test_two_commits(table_path: &str) {
     ];
 
     let mut tx1 = table.create_transaction(None);
-    let version = tx1.commit_with(tx1_actions.as_slice(), None).await.unwrap();
+    let version = tx1.commit_with(tx1_actions.as_slice(), None).await?;
 
     assert_eq!(1, version);
     assert_eq!(version, table.version);
@@ -103,6 +129,7 @@ async fn test_two_commits(table_path: &str) {
     assert_eq!(2, version);
     assert_eq!(version, table.version);
     assert_eq!(4, table.get_files().len());
+    Ok(())
 }
 
 fn prepare_fs() {
@@ -113,9 +140,10 @@ fn prepare_fs() {
 }
 
 #[cfg(feature = "s3")]
-async fn prepare_s3() {
+async fn prepare_s3(path: &str) {
+    let delta_log = format!("{}/_delta_log", path);
     s3_common::cleanup_dir_except(
-        "s3://deltars/simple_commit_rw/_delta_log",
+        &delta_log,
         vec!["00000000000000000000.json".to_string()],
     )
     .await;

@@ -26,7 +26,8 @@ echo "Uploading S3 test delta tables..."
 aws s3api create-bucket --bucket deltars --endpoint-url=$ENDPOINT > /dev/null 2>&1
 aws s3 sync /data/golden s3://deltars/golden/ --delete --endpoint-url=$ENDPOINT > /dev/null
 aws s3 sync /data/simple_table s3://deltars/simple/ --delete --endpoint-url=$ENDPOINT > /dev/null
-aws s3 sync /data/simple_commit s3://deltars/simple_commit_rw/ --delete --endpoint-url=$ENDPOINT > /dev/null
+aws s3 sync /data/simple_commit s3://deltars/simple_commit_rw1/ --delete --endpoint-url=$ENDPOINT > /dev/null
+aws s3 sync /data/simple_commit s3://deltars/simple_commit_rw2/ --delete --endpoint-url=$ENDPOINT > /dev/null
 aws s3 sync /data/concurrent_workers s3://deltars/concurrent_workers/ --delete --endpoint-url=$ENDPOINT > /dev/null
 
 wait_for "DynamoDB" "aws dynamodb list-tables --endpoint-url=$ENDPOINT"

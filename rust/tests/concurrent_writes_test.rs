@@ -119,11 +119,7 @@ fn prepare_fs() {
 
 #[cfg(feature = "s3")]
 async fn prepare_s3() {
-    std::env::set_var("AWS_S3_LOCKING_PROVIDER", "dynamodb");
-    std::env::set_var("DYNAMO_LOCK_TABLE_NAME", "test_table");
-    std::env::set_var("DYNAMO_LOCK_PARTITION_KEY_VALUE", "s3_multi_test");
-    std::env::set_var("DYNAMO_LOCK_REFRESH_PERIOD_MILLIS", "100");
-    std::env::set_var("DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS", "100");
+    s3_common::setup_dynamodb("concurrent_writes");
     s3_common::cleanup_dir_except(
         "s3://deltars/concurrent_workers/_delta_log",
         vec!["00000000000000000000.json".to_string()],
