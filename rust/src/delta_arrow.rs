@@ -40,7 +40,7 @@ impl TryFrom<&schema::SchemaTypeArray> for ArrowField {
 
     fn try_from(a: &schema::SchemaTypeArray) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
-            "",
+            "element",
             ArrowDataType::try_from(a.get_element_type())?,
             a.contains_null(),
         ))
