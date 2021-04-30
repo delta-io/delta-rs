@@ -213,15 +213,48 @@ def pyarrow_datatype_from_dict(json_dict: Dict[str, Any]) -> pyarrow.DataType:
         key_type = pyarrow_datatype_from_dict(key_type)
         value_type = pyarrow_datatype_from_dict(value_type)
         return pyarrow.map_(key_type, value_type)
+    elif "dictionary" in json_dict:
+        key_type = {
+            "name": "key",
+            "type": json_dict["dictionary"]["indexType"],
+            "nullable": json_dict["nullable"],
+        }
+        key = pyarrow_datatype_from_dict(key_type)
+        if type_class == "list":
+            value_type = {
+                "name": "val",
+                "type": json_dict["dictionary"]["indexType"],
+                "nullable": json_dict["nullable"],
+            }
+            return pyarrow.map_(
+                key,
+                pyarrow.list_(
+                    pyarrow.field(
+                        "element", pyarrow.struct([pyarrow_field_from_dict(value_type)])
+                    )
+                ),
+            )
+        value_type = {
+            "name": "value",
+            "type": json_dict["type"],
+            "nullable": json_dict["nullable"],
+        }
+        return pyarrow.map_(key, pyarrow_datatype_from_dict(value_type))
     elif type_class == "list":
         field = json_dict["children"][0]
         element_type = pyarrow_datatype_from_dict(field)
-        return pyarrow.list_(element_type)
+        return pyarrow.list_(pyarrow.field("element", element_type))
     elif type_class == "struct":
         fields = [pyarrow_field_from_dict(field) for field in json_dict["children"]]
         return pyarrow.struct(fields)
-    elif type_class == "int" or type_class == "date":
+    elif type_class == "int":
         return pyarrow.type_for_alias(f'{type_class}{json_dict["type"]["bitWidth"]}')
+    elif type_class == "date":
+        type_info = json_dict["type"]
+        if type_info["unit"] == "DAY":
+            return pyarrow.date32()
+        else:
+            return pyarrow.date64()
     elif type_class == "time":
         type_info = json_dict["type"]
         if type_info["unit"] == "MICROSECOND":
