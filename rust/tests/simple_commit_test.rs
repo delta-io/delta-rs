@@ -16,7 +16,9 @@ use deltalake::{action, DeltaTransactionError};
 #[tokio::test]
 async fn test_two_commits_fs() {
     prepare_fs();
-    test_two_commits("./tests/data/simple_commit").await.unwrap();
+    test_two_commits("./tests/data/simple_commit")
+        .await
+        .unwrap();
 }
 
 #[cfg(all(feature = "s3", feature = "dynamodb"))]
@@ -32,7 +34,7 @@ async fn test_two_commits_s3() {
 #[cfg(all(feature = "s3", not(feature = "dynamodb")))]
 #[tokio::test]
 async fn test_two_commits_s3_fails_with_no_lock() {
-    use deltalake::{TransactionCommitAttemptError, StorageError};
+    use deltalake::{StorageError, TransactionCommitAttemptError};
 
     let path = "s3://deltars/simple_commit_rw2";
     prepare_s3(path).await;
@@ -142,9 +144,5 @@ fn prepare_fs() {
 #[cfg(feature = "s3")]
 async fn prepare_s3(path: &str) {
     let delta_log = format!("{}/_delta_log", path);
-    s3_common::cleanup_dir_except(
-        &delta_log,
-        vec!["00000000000000000000.json".to_string()],
-    )
-    .await;
+    s3_common::cleanup_dir_except(&delta_log, vec!["00000000000000000000.json".to_string()]).await;
 }

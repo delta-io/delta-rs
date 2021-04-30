@@ -442,7 +442,11 @@ async fn rename_with_lock(
 ) -> Result<(), StorageError> {
     let lock_client = match s3_backend.lock_client {
         Some(ref lock_client) => lock_client,
-        None => return Err(StorageError::S3Generic("dynamodb locking is not enabled".to_string()))
+        None => {
+            return Err(StorageError::S3Generic(
+                "dynamodb locking is not enabled".to_string(),
+            ))
+        }
     };
 
     let lock;
