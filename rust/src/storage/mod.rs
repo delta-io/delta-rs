@@ -356,7 +356,10 @@ pub trait StorageBackend: Send + Sync + Debug {
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>;
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
+        StorageError,
+    >;
 
     /// Create new object with `obj_bytes` as content.
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError>;
