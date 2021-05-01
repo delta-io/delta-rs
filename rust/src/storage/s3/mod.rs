@@ -232,8 +232,10 @@ impl StorageBackend for S3StorageBackend {
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>
-    {
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
+        StorageError,
+    > {
         let uri = parse_uri(path)?.into_s3object()?;
 
         /// This enum is used to represent 3 states in our object metadata streaming logic:

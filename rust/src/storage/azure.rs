@@ -153,8 +153,10 @@ impl StorageBackend for AdlsGen2Backend {
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>
-    {
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
+        StorageError,
+    > {
         debug!("Listing objects under {}", path);
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
         self.validate_container(&obj)?;

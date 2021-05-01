@@ -76,8 +76,10 @@ impl StorageBackend for FileStorageBackend {
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
-    ) -> Result<Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + 'a>>, StorageError>
-    {
+    ) -> Result<
+        Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
+        StorageError,
+    > {
         let readdir = ReadDirStream::new(fs::read_dir(path).await?);
 
         Ok(Box::pin(readdir.err_into().and_then(|entry| async move {
