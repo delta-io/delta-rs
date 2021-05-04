@@ -397,7 +397,7 @@ pub struct LockItem {
     pub lookup_time: u128,
 }
 
-///  TODO
+/// Abstraction over a distributive lock provider
 #[async_trait::async_trait]
 pub trait LockClient: Send + Sync + Debug {
     /// Attempts to acquire lock. If successful, returns the lock.
