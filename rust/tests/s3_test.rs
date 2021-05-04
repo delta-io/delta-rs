@@ -1,4 +1,5 @@
 #[cfg(feature = "s3")]
+#[allow(dead_code)]
 mod s3_common;
 
 #[cfg(feature = "s3")]
