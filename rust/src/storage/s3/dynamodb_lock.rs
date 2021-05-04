@@ -4,6 +4,7 @@
 use std::collections::HashMap;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::storage::s3::{LockClient, LockItem, StorageError};
 use maplit::hashmap;
 use rusoto_core::RusotoError;
 use rusoto_dynamodb::*;
@@ -19,9 +20,9 @@ mod options {
     /// Environment variable for `lease_duration` option.
     pub const LEASE_DURATION: &str = "DYNAMO_LOCK_LEASE_DURATION";
     /// Environment variable for `refresh_period` option.
-    pub const REFRESH_PERIOD_SECS: &str = "DYNAMO_LOCK_REFRESH_PERIOD_SECS";
+    pub const REFRESH_PERIOD_MILLIS: &str = "DYNAMO_LOCK_REFRESH_PERIOD_MILLIS";
     /// Environment variable for `additional_time_to_wait_for_lock` option.
-    pub const ADDITIONAL_TIME_TO_WAIT_SECS: &str = "DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_SECS";
+    pub const ADDITIONAL_TIME_TO_WAIT_MILLIS: &str = "DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS";
 }
 
 /// Configuration options for [`DynamoDbLockClient`].
@@ -56,9 +57,9 @@ impl Default for Options {
                 .unwrap_or(default)
         }
 
-        let refresh_period = Duration::from_secs(u64_env(options::REFRESH_PERIOD_SECS, 1000));
+        let refresh_period = Duration::from_millis(u64_env(options::REFRESH_PERIOD_MILLIS, 1000));
         let additional_time_to_wait_for_lock =
-            Duration::from_secs(u64_env(options::ADDITIONAL_TIME_TO_WAIT_SECS, 1000));
+            Duration::from_millis(u64_env(options::ADDITIONAL_TIME_TO_WAIT_MILLIS, 1000));
 
         Self {
             partition_key_value: str_env(options::PARTITION_KEY_VALUE, "delta-rs".to_string()),
@@ -69,24 +70,6 @@ impl Default for Options {
             additional_time_to_wait_for_lock,
         }
     }
-}
-
-/// A lock that has been successfully acquired
-#[derive(Clone, Debug)]
-pub struct LockItem {
-    /// The name of the owner that owns this lock.
-    pub owner_name: String,
-    /// Current version number of the lock in DynamoDB. This is what tells the lock client
-    /// when the lock is stale.
-    pub record_version_number: String,
-    /// The amount of time (in seconds) that the owner has this lock for.
-    pub lease_duration: u64,
-    /// Tells whether or not the lock was marked as released when loaded from DynamoDB.
-    pub is_released: bool,
-    /// Optional data associated with this lock.
-    pub data: Option<String>,
-    /// The last time this lock was updated or retrieved.
-    pub lookup_time: u128,
 }
 
 impl LockItem {
@@ -218,6 +201,27 @@ mod vars {
 pub struct DynamoDbLockClient {
     client: DynamoDbClient,
     opts: Options,
+}
+
+impl std::fmt::Debug for DynamoDbLockClient {
+    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        write!(fmt, "DynamoDbLockClient")
+    }
+}
+
+#[async_trait::async_trait]
+impl LockClient for DynamoDbLockClient {
+    async fn try_acquire_lock(&self) -> Result<Option<LockItem>, StorageError> {
+        Ok(self.try_acquire_lock().await?)
+    }
+
+    async fn get_lock(&self) -> Result<Option<LockItem>, StorageError> {
+        Ok(self.get_lock().await?)
+    }
+
+    async fn release_lock(&self, lock: &LockItem) -> Result<bool, StorageError> {
+        Ok(self.release_lock(lock).await?)
+    }
 }
 
 impl DynamoDbLockClient {
