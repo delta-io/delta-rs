@@ -6,6 +6,10 @@ on:
   pull_request:
     branches: [ main ]
 
+defaults:
+  run:
+    working-directory: ./ruby
+
 jobs:
   build:
     runs-on: ubuntu-latest
@@ -39,6 +43,6 @@ jobs:
     - name: 'Set up Ruby'
       uses: actions/setup-ruby@v1
     - name: 'Install Ruby Dependencies'
-      run: '(cd ruby && bundle install --path vendor/bundle)'
+      run: bundle install --path vendor/bundle
     - name: 'Test Ruby'
-      run: '(cd ruby && bundle exec rake spec)'
+      run: bundle exec rake spec
