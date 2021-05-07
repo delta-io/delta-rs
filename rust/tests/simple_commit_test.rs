@@ -9,6 +9,7 @@ mod s3_common;
 #[allow(dead_code)]
 mod fs_common;
 
+#[cfg(feature = "s3")]
 use serial_test::serial;
 use std::collections::HashMap;
 

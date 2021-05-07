@@ -224,7 +224,7 @@ impl std::fmt::Debug for DynamoDbLockClient {
 
 #[async_trait::async_trait]
 impl LockClient for DynamoDbLockClient {
-    async fn try_acquire_lock(&self, data: &String) -> Result<Option<LockItem>, StorageError> {
+    async fn try_acquire_lock(&self, data: &str) -> Result<Option<LockItem>, StorageError> {
         Ok(self.try_acquire_lock(Some(data)).await?)
     }
 
@@ -250,7 +250,7 @@ impl DynamoDbLockClient {
     /// For more details on behavior,  please see [`DynamoDbLockClient::acquire_lock`].
     pub async fn try_acquire_lock(
         &self,
-        data: Option<&String>,
+        data: Option<&str>,
     ) -> Result<Option<LockItem>, DynamoError> {
         match self.acquire_lock(data).await {
             Ok(lock) => Ok(Some(lock)),
@@ -272,7 +272,7 @@ impl DynamoDbLockClient {
     /// to acquire a lock that already exists. If the lock is not acquired in that time,
     /// it will wait an additional amount of time specified in `additional_time_to_wait_for_lock`
     /// before giving up.
-    pub async fn acquire_lock(&self, data: Option<&String>) -> Result<LockItem, DynamoError> {
+    pub async fn acquire_lock(&self, data: Option<&str>) -> Result<LockItem, DynamoError> {
         let mut state = AcquireLockState {
             client: self,
             cached_lock: None,
@@ -380,7 +380,7 @@ impl DynamoDbLockClient {
 
     async fn upsert_item(
         &self,
-        data: Option<&String>,
+        data: Option<&str>,
         acquired_expired_lock: bool,
         condition_expression: Option<String>,
         expression_attribute_names: Option<HashMap<String, String>>,
@@ -415,7 +415,7 @@ impl DynamoDbLockClient {
             record_version_number: rvn,
             lease_duration: self.opts.lease_duration,
             is_released: false,
-            data: data.cloned(),
+            data: data.map(String::from),
             lookup_time: now_millis(),
             acquired_expired_lock,
         })
@@ -456,7 +456,7 @@ impl<'a> AcquireLockState<'a> {
         self.started.elapsed() > self.timeout_in
     }
 
-    async fn try_acquire_lock(&mut self, data: Option<&String>) -> Result<LockItem, DynamoError> {
+    async fn try_acquire_lock(&mut self, data: Option<&str>) -> Result<LockItem, DynamoError> {
         match self.client.get_lock().await? {
             None => {
                 // there's no lock, we good to acquire it
@@ -488,7 +488,7 @@ impl<'a> AcquireLockState<'a> {
                     // rvn matches
                     if cached.is_expired() {
                         // the lock is expired and we're safe to try to acquire it
-                        self.upsert_expired_lock(cached_rvn, existing.data.as_ref())
+                        self.upsert_expired_lock(cached_rvn, existing.data.as_deref())
                             .await
                     } else {
                         // the lock is not yet expired, try again later
@@ -504,7 +504,7 @@ impl<'a> AcquireLockState<'a> {
         }
     }
 
-    async fn upsert_new_lock(&self, data: Option<&String>) -> Result<LockItem, DynamoError> {
+    async fn upsert_new_lock(&self, data: Option<&str>) -> Result<LockItem, DynamoError> {
         self.client
             .upsert_item(
                 data,
@@ -518,7 +518,7 @@ impl<'a> AcquireLockState<'a> {
             .await
     }
 
-    async fn upsert_released_lock(&self, data: Option<&String>) -> Result<LockItem, DynamoError> {
+    async fn upsert_released_lock(&self, data: Option<&str>) -> Result<LockItem, DynamoError> {
         self.client
             .upsert_item(
                 data,
@@ -538,7 +538,7 @@ impl<'a> AcquireLockState<'a> {
     async fn upsert_expired_lock(
         &self,
         existing_rvn: &str,
-        data: Option<&String>,
+        data: Option<&str>,
     ) -> Result<LockItem, DynamoError> {
         self.client
             .upsert_item(

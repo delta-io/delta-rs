@@ -439,7 +439,7 @@ pub trait LockClient: Send + Sync + Debug {
     /// Attempts to acquire lock. If successful, returns the lock.
     /// Otherwise returns [`Option::None`] which is retryable action.
     /// Visit implementation docs for more details.
-    async fn try_acquire_lock(&self, data: &String) -> Result<Option<LockItem>, StorageError>;
+    async fn try_acquire_lock(&self, data: &str) -> Result<Option<LockItem>, StorageError>;
 
     /// Returns current lock from DynamoDB (if any).
     async fn get_lock(&self) -> Result<Option<LockItem>, StorageError>;
