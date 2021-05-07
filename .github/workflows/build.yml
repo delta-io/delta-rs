@@ -42,7 +42,7 @@ jobs:
         toolchain: stable
         override: true
     - name: build and lint with clippy
-      run: cargo clippy --features datafusion-ext,s3,dynamodb
+      run: cargo clippy --features azure,datafusion-ext,s3,dynamodb
 
   test:
     strategy:
@@ -62,7 +62,7 @@ jobs:
         toolchain: stable
         override: true
     - name: Run tests
-      run: cargo test --verbose --features datafusion-ext
+      run: cargo test --verbose --features datafusion-ext,azure
 
   s3_test:
     runs-on: ubuntu-latest
