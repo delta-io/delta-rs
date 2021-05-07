@@ -13,7 +13,7 @@ use std::iter::FromIterator;
 use std::time::Duration;
 
 #[tokio::test]
-#[cfg(all(feature = "s3", feature = "dynamodb"))]
+#[cfg(all(feature = "s3"))]
 async fn concurrent_writes_s3() {
     prepare_s3().await;
     run_test(|name| Worker::new("s3://deltars/concurrent_workers", name)).await;

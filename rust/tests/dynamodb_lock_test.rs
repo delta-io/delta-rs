@@ -2,11 +2,9 @@
 #[allow(dead_code)]
 mod s3_common;
 
-#[cfg(feature = "dynamodb")]
+#[cfg(feature = "s3")]
 mod dynamodb {
-    use deltalake::storage::s3::dynamodb_lock::{
-        attr, DynamoDbLockClient, Options, PARTITION_KEY_NAME,
-    };
+    use deltalake::storage::s3::dynamodb_lock::{DynamoDbLockClient, Options, PARTITION_KEY_NAME};
     use maplit::hashmap;
     use rusoto_dynamodb::*;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -22,11 +20,15 @@ mod dynamodb {
             lease_duration: 3,
             refresh_period: Duration::from_millis(500),
             additional_time_to_wait_for_lock: Duration::from_millis(500),
+            delete_data_on_release: true,
         };
         let _ = client
             .delete_item(DeleteItemInput {
                 key: hashmap! {
-                    PARTITION_KEY_NAME.to_string() => attr(key)
+                    PARTITION_KEY_NAME.to_string() => AttributeValue {
+                        s: Some(key.to_string()),
+                        ..Default::default()
+                    }
                 },
                 table_name: table_name.to_string(),
                 ..Default::default()
@@ -39,10 +41,11 @@ mod dynamodb {
     async fn test_acquire_get_release_flow() {
         let lock = create_dynamo_lock("test_acquire_get_release_flow", "worker").await;
 
-        let item = lock.acquire_lock().await.unwrap();
+        let data = "data".to_string();
+        let item = lock.acquire_lock(Some(&data)).await.unwrap();
         assert_eq!(item.owner_name, "worker");
         assert_eq!(item.lease_duration, 3);
-        assert!(item.data.is_none());
+        assert_eq!(item.data.as_ref(), Some(&data));
         assert_eq!(item.is_released, false);
         assert_eq!(
             item.lookup_time / 1000,
@@ -52,14 +55,14 @@ mod dynamodb {
                 .as_secs() as u128
         );
 
-        let mut existing = lock.get_lock().await.unwrap().unwrap();
+        let existing = lock.get_lock().await.unwrap().unwrap();
         //verify that in dynamodb it is the same lock
         assert_eq!(item.record_version_number, existing.record_version_number);
         // although it is the same lock, but lookup time is different
         assert_ne!(item.lookup_time, existing.lookup_time);
 
-        // save some arbitrary data into the lock item
-        existing.data = Some("test".to_string());
+        // check data data given in acquire function is stored in dynamo
+        assert_eq!(existing.data.as_ref(), Some(&data));
         assert!(lock.release_lock(&existing).await.unwrap());
 
         let released = lock.get_lock().await.unwrap().unwrap();
@@ -69,8 +72,8 @@ mod dynamodb {
             released.record_version_number,
             existing.record_version_number
         );
-        // check that the data above is stored successfully
-        assert_eq!(released.data, existing.data);
+        // check data data is cleared after release
+        assert!(released.data.is_none());
     }
 
     #[tokio::test]
@@ -78,10 +81,10 @@ mod dynamodb {
         let c1 = create_dynamo_lock("test_acquire_expired_lock", "w1").await;
         let c2 = create_dynamo_lock("test_acquire_expired_lock", "w2").await;
 
-        let l1 = c1.acquire_lock().await.unwrap();
+        let l1 = c1.acquire_lock(None).await.unwrap();
 
         let now = Instant::now();
-        let l2 = c2.acquire_lock().await.unwrap();
+        let l2 = c2.acquire_lock(None).await.unwrap();
 
         // ensure that we've waiter for more than lease_duration
         assert!(now.elapsed().as_millis() > 3000);
@@ -104,9 +107,9 @@ mod dynamodb {
         let c1 = create_dynamo_lock("test_acquire_expired_lock_multiple_workers", "w1").await;
         let c2 = create_dynamo_lock("test_acquire_expired_lock_multiple_workers", "w2").await;
 
-        let _ = origin.acquire_lock().await.unwrap();
-        let f1 = tokio::spawn(async move { c1.try_acquire_lock().await });
-        let f2 = tokio::spawn(async move { c2.try_acquire_lock().await });
+        let _ = origin.acquire_lock(None).await.unwrap();
+        let f1 = tokio::spawn(async move { c1.try_acquire_lock(None).await });
+        let f2 = tokio::spawn(async move { c2.try_acquire_lock(None).await });
 
         let acquired = match (f1.await.unwrap(), f2.await.unwrap()) {
             (Ok(Some(lock)), Ok(None)) => {

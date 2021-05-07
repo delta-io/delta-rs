@@ -23,6 +23,8 @@ mod options {
     pub const REFRESH_PERIOD_MILLIS: &str = "DYNAMO_LOCK_REFRESH_PERIOD_MILLIS";
     /// Environment variable for `additional_time_to_wait_for_lock` option.
     pub const ADDITIONAL_TIME_TO_WAIT_MILLIS: &str = "DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS";
+    /// Environment variable for `delete_data_on_release` option.
+    pub const DELETE_DATA_ON_RELEASE: &str = "DYNAMO_DELETE_DATA_ON_RELEASE";
 }
 
 /// Configuration options for [`DynamoDbLockClient`].
@@ -42,6 +44,8 @@ pub struct Options {
     pub refresh_period: Duration,
     /// The amount of time to wait in addition to `lease_duration`.
     pub additional_time_to_wait_for_lock: Duration,
+    ///  If true, then `data` field will be deleted on release.
+    pub delete_data_on_release: bool,
 }
 
 impl Default for Options {
@@ -61,6 +65,10 @@ impl Default for Options {
         let additional_time_to_wait_for_lock =
             Duration::from_millis(u64_env(options::ADDITIONAL_TIME_TO_WAIT_MILLIS, 1000));
 
+        let delete_data_on_release = str_env(options::DELETE_DATA_ON_RELEASE, "true".to_string())
+            .parse::<bool>()
+            .unwrap();
+
         Self {
             partition_key_value: str_env(options::PARTITION_KEY_VALUE, "delta-rs".to_string()),
             table_name: str_env(options::TABLE_NAME, "delta_rs_lock_table".to_string()),
@@ -68,6 +76,7 @@ impl Default for Options {
             lease_duration: u64_env(options::LEASE_DURATION, 20),
             refresh_period,
             additional_time_to_wait_for_lock,
+            delete_data_on_release,
         }
     }
 }
@@ -159,6 +168,10 @@ pub const IS_RELEASED: &str = "isReleased";
 pub const LEASE_DURATION: &str = "leaseDuration";
 /// The field name of `data` in DynamoDB
 pub const DATA: &str = "data";
+/// The field name of `data.source` in DynamoDB
+pub const DATA_SOURCE: &str = "src";
+/// The field name of `data.destination` in DynamoDB
+pub const DATA_DESTINATION: &str = "dst";
 
 mod expressions {
     /// The expression that checks whether the lock record does not exists.
@@ -211,8 +224,8 @@ impl std::fmt::Debug for DynamoDbLockClient {
 
 #[async_trait::async_trait]
 impl LockClient for DynamoDbLockClient {
-    async fn try_acquire_lock(&self) -> Result<Option<LockItem>, StorageError> {
-        Ok(self.try_acquire_lock().await?)
+    async fn try_acquire_lock(&self, data: &String) -> Result<Option<LockItem>, StorageError> {
+        Ok(self.try_acquire_lock(Some(data)).await?)
     }
 
     async fn get_lock(&self) -> Result<Option<LockItem>, StorageError> {
@@ -235,8 +248,11 @@ impl DynamoDbLockClient {
     /// provisioned throughput for a table is exceeded. Both are retryable actions.
     ///
     /// For more details on behavior,  please see [`DynamoDbLockClient::acquire_lock`].
-    pub async fn try_acquire_lock(&self) -> Result<Option<LockItem>, DynamoError> {
-        match self.acquire_lock().await {
+    pub async fn try_acquire_lock(
+        &self,
+        data: Option<&String>,
+    ) -> Result<Option<LockItem>, DynamoError> {
+        match self.acquire_lock(data).await {
             Ok(lock) => Ok(Some(lock)),
             Err(DynamoError::TimedOut(_)) => Ok(None),
             Err(DynamoError::ProvisionedThroughputExceeded) => Ok(None),
@@ -256,7 +272,7 @@ impl DynamoDbLockClient {
     /// to acquire a lock that already exists. If the lock is not acquired in that time,
     /// it will wait an additional amount of time specified in `additional_time_to_wait_for_lock`
     /// before giving up.
-    pub async fn acquire_lock(&self) -> Result<LockItem, DynamoError> {
+    pub async fn acquire_lock(&self, data: Option<&String>) -> Result<LockItem, DynamoError> {
         let mut state = AcquireLockState {
             client: self,
             cached_lock: None,
@@ -265,7 +281,7 @@ impl DynamoDbLockClient {
         };
 
         loop {
-            match state.try_acquire_lock().await {
+            match state.try_acquire_lock(data).await {
                 Ok(lock) => return Ok(lock),
                 Err(DynamoError::ConditionalCheckFailed) => {
                     if state.has_timed_out() {
@@ -293,25 +309,20 @@ impl DynamoDbLockClient {
             .await?;
 
         if let Some(item) = output.item {
-            let get_value = |key| -> Result<String, DynamoError> {
-                Ok(item
-                    .get(key)
-                    .and_then(|r| r.s.as_ref())
-                    .ok_or(DynamoError::InvalidItemSchema)?
-                    .clone())
-            };
-
-            let lease_duration = get_value(LEASE_DURATION)?
+            let lease_duration = get_string(item.get(LEASE_DURATION))?
                 .parse::<u64>()
                 .map_err(|_| DynamoError::InvalidItemSchema)?;
 
+            let data = item.get(DATA).and_then(|r| r.s.as_ref()).cloned();
+
             return Ok(Some(LockItem {
-                owner_name: get_value(OWNER_NAME)?,
-                record_version_number: get_value(RECORD_VERSION_NUMBER)?,
+                owner_name: get_string(item.get(OWNER_NAME))?,
+                record_version_number: get_string(item.get(RECORD_VERSION_NUMBER))?,
                 lease_duration,
                 is_released: item.contains_key(IS_RELEASED),
-                data: get_value(DATA).ok(),
+                data,
                 lookup_time: now_millis(),
+                acquired_expired_lock: false,
             }));
         }
 
@@ -334,10 +345,16 @@ impl DynamoDbLockClient {
         };
 
         let update: &str;
-        if let Some(ref data) = lock.data {
+        if self.opts.delete_data_on_release {
             update = expressions::UPDATE_IS_RELEASED_AND_DATA;
             names.insert(vars::DATA_PATH.to_string(), DATA.to_string());
-            values.insert(vars::DATA_VALUE.to_string(), attr(data));
+            values.insert(
+                vars::DATA_VALUE.to_string(),
+                AttributeValue {
+                    null: Some(true),
+                    ..Default::default()
+                },
+            );
         } else {
             update = expressions::UPDATE_IS_RELEASED;
         }
@@ -363,7 +380,8 @@ impl DynamoDbLockClient {
 
     async fn upsert_item(
         &self,
-        data: Option<String>,
+        data: Option<&String>,
+        acquired_expired_lock: bool,
         condition_expression: Option<String>,
         expression_attribute_names: Option<HashMap<String, String>>,
         expression_attribute_values: Option<HashMap<String, AttributeValue>>,
@@ -377,7 +395,7 @@ impl DynamoDbLockClient {
             LEASE_DURATION.to_string() => attr(&self.opts.lease_duration),
         };
 
-        if let Some(ref d) = data {
+        if let Some(d) = data {
             item.insert(DATA.to_string(), attr(d));
         }
 
@@ -397,8 +415,9 @@ impl DynamoDbLockClient {
             record_version_number: rvn,
             lease_duration: self.opts.lease_duration,
             is_released: false,
-            data,
+            data: data.cloned(),
             lookup_time: now_millis(),
+            acquired_expired_lock,
         })
     }
 }
@@ -411,11 +430,18 @@ fn now_millis() -> u128 {
 }
 
 /// Converts Rust String into DynamoDB string AttributeValue
-pub fn attr<T: ToString>(s: T) -> AttributeValue {
+fn attr<T: ToString>(s: T) -> AttributeValue {
     AttributeValue {
         s: Some(s.to_string()),
         ..Default::default()
     }
+}
+
+fn get_string(attr: Option<&AttributeValue>) -> Result<String, DynamoError> {
+    Ok(attr
+        .and_then(|r| r.s.as_ref())
+        .ok_or(DynamoError::InvalidItemSchema)?
+        .clone())
 }
 
 struct AcquireLockState<'a> {
@@ -430,15 +456,15 @@ impl<'a> AcquireLockState<'a> {
         self.started.elapsed() > self.timeout_in
     }
 
-    async fn try_acquire_lock(&mut self) -> Result<LockItem, DynamoError> {
+    async fn try_acquire_lock(&mut self, data: Option<&String>) -> Result<LockItem, DynamoError> {
         match self.client.get_lock().await? {
             None => {
                 // there's no lock, we good to acquire it
-                Ok(self.upsert_new_lock().await?)
+                Ok(self.upsert_new_lock(data).await?)
             }
             Some(existing) if existing.is_released => {
                 // lock is released by a caller, we good to acquire it
-                Ok(self.upsert_released_lock(existing.data).await?)
+                Ok(self.upsert_released_lock(data).await?)
             }
             Some(existing) => {
                 let cached = match self.cached_lock.as_ref() {
@@ -462,7 +488,8 @@ impl<'a> AcquireLockState<'a> {
                     // rvn matches
                     if cached.is_expired() {
                         // the lock is expired and we're safe to try to acquire it
-                        self.upsert_expired_lock(cached_rvn, existing.data).await
+                        self.upsert_expired_lock(cached_rvn, existing.data.as_ref())
+                            .await
                     } else {
                         // the lock is not yet expired, try again later
                         Err(DynamoError::ConditionalCheckFailed)
@@ -477,10 +504,11 @@ impl<'a> AcquireLockState<'a> {
         }
     }
 
-    async fn upsert_new_lock(&self) -> Result<LockItem, DynamoError> {
+    async fn upsert_new_lock(&self, data: Option<&String>) -> Result<LockItem, DynamoError> {
         self.client
             .upsert_item(
-                None,
+                data,
+                false,
                 Some(expressions::ACQUIRE_LOCK_THAT_DOESNT_EXIST.to_string()),
                 Some(hashmap! {
                     vars::PK_PATH.to_string() => PARTITION_KEY_NAME.to_string(),
@@ -490,10 +518,11 @@ impl<'a> AcquireLockState<'a> {
             .await
     }
 
-    async fn upsert_released_lock(&self, data: Option<String>) -> Result<LockItem, DynamoError> {
+    async fn upsert_released_lock(&self, data: Option<&String>) -> Result<LockItem, DynamoError> {
         self.client
             .upsert_item(
                 data,
+                false,
                 Some(expressions::PK_EXISTS_AND_IS_RELEASED.to_string()),
                 Some(hashmap! {
                     vars::PK_PATH.to_string() => PARTITION_KEY_NAME.to_string(),
@@ -509,11 +538,12 @@ impl<'a> AcquireLockState<'a> {
     async fn upsert_expired_lock(
         &self,
         existing_rvn: &str,
-        data: Option<String>,
+        data: Option<&String>,
     ) -> Result<LockItem, DynamoError> {
         self.client
             .upsert_item(
                 data,
+                true,
                 Some(expressions::PK_EXISTS_AND_RVN_MATCHES.to_string()),
                 Some(hashmap! {
                   vars::PK_PATH.to_string() => PARTITION_KEY_NAME.to_string(),

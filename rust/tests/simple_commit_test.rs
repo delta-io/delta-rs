@@ -9,6 +9,7 @@ mod s3_common;
 #[allow(dead_code)]
 mod fs_common;
 
+use serial_test::serial;
 use std::collections::HashMap;
 
 use deltalake::{action, DeltaTransactionError};
@@ -21,8 +22,9 @@ async fn test_two_commits_fs() {
         .unwrap();
 }
 
-#[cfg(all(feature = "s3", feature = "dynamodb"))]
+#[cfg(feature = "s3")]
 #[tokio::test]
+#[serial]
 async fn test_two_commits_s3() {
     let path = "s3://deltars/simple_commit_rw1";
     s3_common::setup_dynamodb("concurrent_writes");
@@ -31,13 +33,15 @@ async fn test_two_commits_s3() {
     test_two_commits(path).await.unwrap();
 }
 
-#[cfg(all(feature = "s3", not(feature = "dynamodb")))]
+#[cfg(feature = "s3")]
 #[tokio::test]
+#[serial]
 async fn test_two_commits_s3_fails_with_no_lock() {
     use deltalake::{StorageError, TransactionCommitAttemptError};
 
     let path = "s3://deltars/simple_commit_rw2";
     prepare_s3(path).await;
+    std::env::set_var("AWS_S3_LOCKING_PROVIDER", "none  ");
 
     let result = test_two_commits(path).await;
     if let Err(DeltaTransactionError::CommitRetriesExceeded { ref inner }) = result {

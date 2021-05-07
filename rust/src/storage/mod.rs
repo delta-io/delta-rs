@@ -256,7 +256,7 @@ pub enum StorageError {
     /// Represents a generic S3 error. The wrapped error string describes the details.
     #[error("S3 error: {0}")]
     S3Generic(String),
-    #[cfg(feature = "dynamodb")]
+    #[cfg(feature = "s3")]
     /// Wraps the DynamoDB error
     #[error("DynamoDB error: {source}")]
     DynamoDb {
