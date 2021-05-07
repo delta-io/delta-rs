@@ -2,7 +2,7 @@ Deltalake
 =========
 
 [![crates.io](https://img.shields.io/crates/v/deltalake.svg?style=flat-square)](https://crates.io/crates/deltalake)
-[![api_doc](https://img.shields.io/badge/doc-api-blue)](https://docs.rs/deltalake/0.1.1/deltalake/)
+[![api_doc](https://img.shields.io/badge/doc-api-blue)](https://docs.rs/deltalake)
 
 Native Delta Lake implementation in Rust
 
