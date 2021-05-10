@@ -54,7 +54,7 @@ jobs:
 
       - name: Install matruin
         run: |
-          pip install maturin==0.9.0
+          pip install maturin==0.10.4
 
       - name: Publish to pypi (without sdist)
         env:
@@ -88,7 +88,7 @@ jobs:
 
       - name: Install matruin
         run: |
-          pip install maturin==0.9.0
+          pip install maturin==0.10.4
 
       - name: Publish manylinux to pypi (without sdist)
         env:
@@ -111,7 +111,7 @@ jobs:
 
     - name: Build and install deltalake
       run: |
-        pip install maturin==0.9.0
+        pip install maturin==0.10.4
         maturin build --manylinux off
         pip install $(printf ../target/wheels/deltalake-*-cp36-abi3-*.whl)'[devel,pandas]'
 
