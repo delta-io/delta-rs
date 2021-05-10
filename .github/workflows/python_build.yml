@@ -58,7 +58,7 @@ jobs:
       run: echo "/opt/python/cp36-cp36m/bin" >> $GITHUB_PATH
 
     - name: Install maturin
-      run: pip install maturin==0.9.0
+      run: pip install maturin==0.10.4
 
     - name: Build and install deltalake
       run: |
