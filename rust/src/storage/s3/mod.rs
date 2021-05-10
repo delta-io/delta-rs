@@ -419,6 +419,20 @@ pub struct LockData {
     pub destination: String,
 }
 
+impl LockData {
+    /// Builds new `LockData` instance and then creates json string from it.
+    pub fn json(src: &str, dst: &str) -> Result<String, StorageError> {
+        let data = LockData {
+            source: src.to_string(),
+            destination: dst.to_string(),
+        };
+        let json = serde_json::to_string(&data)
+            .map_err(|_| StorageError::S3Generic("Lock data serialize error".to_string()))?;
+
+        Ok(json)
+    }
+}
+
 #[allow(clippy::unnecessary_wraps)]
 fn try_create_lock_client(_region: Region) -> Result<Option<Box<dyn LockClient>>, StorageError> {
     match std::env::var("AWS_S3_LOCKING_PROVIDER") {
@@ -444,6 +458,11 @@ pub trait LockClient: Send + Sync + Debug {
     /// Returns current lock from DynamoDB (if any).
     async fn get_lock(&self) -> Result<Option<LockItem>, StorageError>;
 
+    /// Update data in the upstream lock of the current user still has it.
+    /// The returned lock will have a new `rnv` so it'll increase the lease duration
+    /// as this method is usually called when the work with a lock is extended.
+    async fn update_data(&self, lock: &LockItem) -> Result<LockItem, StorageError>;
+
     /// Releases the given lock if the current user still has it, returning true if the lock was
     /// successfully released, and false if someone else already stole the lock
     async fn release_lock(&self, lock: &LockItem) -> Result<bool, StorageError>;
@@ -458,13 +477,24 @@ impl dyn LockClient {
         src: &str,
         dst: &str,
     ) -> Result<(), StorageError> {
-        let lock = self.acquire_lock_loop(src, dst).await?;
+        let mut lock = self.acquire_lock_loop(src, dst).await?;
 
         if let Some(ref data) = lock.data {
             let data: LockData = serde_json::from_str(data)
                 .map_err(|_| StorageError::S3Generic("Lock data deserialize error".to_string()))?;
 
-            let rename_result = s3.unsafe_rename_obj(&data.source, &data.destination).await;
+            let mut rename_result = s3.unsafe_rename_obj(&data.source, &data.destination).await;
+
+            if rename_result.is_ok() && lock.acquired_expired_lock {
+                // If we acquired expired lock then the rename done above is
+                // a repair of expired one. So on this time we try the intended rename.
+
+                // lock.data = LockData { src, dst }
+                // s3.update_data()
+                lock.data = Some(LockData::json(src, dst)?);
+                lock = self.update_data(&lock).await?;
+                rename_result = s3.unsafe_rename_obj(src, dst).await;
+            }
 
             let release_result = self.release_lock(&lock).await;
 
@@ -477,13 +507,6 @@ impl dyn LockClient {
                 return Err(StorageError::S3Generic("Lock is not released".to_string()));
             }
 
-            if lock.acquired_expired_lock {
-                // If we acquired expired lock then the rename done above is
-                // a repair of expired one. In this case we return `AlreadyExists`
-                // so the actual rename would be retried again
-                return Err(StorageError::AlreadyExists(data.destination.to_string()));
-            }
-
             Ok(())
         } else {
             Err(StorageError::S3Generic(
@@ -493,12 +516,7 @@ impl dyn LockClient {
     }
 
     async fn acquire_lock_loop(&self, src: &str, dst: &str) -> Result<LockItem, StorageError> {
-        let data = LockData {
-            source: src.to_string(),
-            destination: dst.to_string(),
-        };
-        let data = serde_json::to_string(&data)
-            .map_err(|_| StorageError::S3Generic("Lock data serialize error".to_string()))?;
+        let data = LockData::json(src, dst)?;
 
         let lock;
         let mut retries = 0;

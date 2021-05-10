@@ -232,6 +232,10 @@ impl LockClient for DynamoDbLockClient {
         Ok(self.get_lock().await?)
     }
 
+    async fn update_data(&self, lock: &LockItem) -> Result<LockItem, StorageError> {
+        Ok(self.update_data(lock).await?)
+    }
+
     async fn release_lock(&self, lock: &LockItem) -> Result<bool, StorageError> {
         Ok(self.release_lock(lock).await?)
     }
@@ -327,6 +331,27 @@ impl DynamoDbLockClient {
         }
 
         Ok(None)
+    }
+
+    /// Update data in the upstream lock of the current user still has it.
+    /// The returned lock will have a new `rnv` so it'll increase the lease duration
+    /// as this method is usually called when the work with a lock is extended.
+    pub async fn update_data(&self, lock: &LockItem) -> Result<LockItem, DynamoError> {
+        self.upsert_item(
+            lock.data.as_deref(),
+            false,
+            Some(expressions::PK_EXISTS_AND_OWNER_RVN_MATCHES.to_string()),
+            Some(hashmap! {
+                vars::PK_PATH.to_string() => PARTITION_KEY_NAME.to_string(),
+                vars::RVN_PATH.to_string() => RECORD_VERSION_NUMBER.to_string(),
+                vars::OWNER_NAME_PATH.to_string() => OWNER_NAME.to_string(),
+            }),
+            Some(hashmap! {
+                vars::RVN_VALUE.to_string() => attr(&lock.record_version_number),
+                vars::OWNER_NAME_VALUE.to_string() => attr(&lock.owner_name),
+            }),
+        )
+        .await
     }
 
     /// Releases the given lock if the current user still has it, returning true if the lock was
