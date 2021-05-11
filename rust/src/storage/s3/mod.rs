@@ -489,8 +489,6 @@ impl dyn LockClient {
                 // If we acquired expired lock then the rename done above is
                 // a repair of expired one. So on this time we try the intended rename.
 
-                // lock.data = LockData { src, dst }
-                // s3.update_data()
                 lock.data = Some(LockData::json(src, dst)?);
                 lock = self.update_data(&lock).await?;
                 rename_result = s3.unsafe_rename_obj(src, dst).await;
