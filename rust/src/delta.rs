@@ -157,7 +157,7 @@ pub enum DeltaTableError {
 }
 
 /// Delta table metadata
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DeltaTableMetaData {
     /// Unique identifier for this table
     pub id: Guid,
@@ -254,7 +254,7 @@ impl From<StorageError> for LoadCheckpointError {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct DeltaTableState {
     // A remove action should remain in the state of the table as a tombstone until it has expired.
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
@@ -965,6 +965,7 @@ impl From<StorageError> for TransactionCommitAttemptError {
 const DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS: u32 = 10_000_000;
 
 /// Options for customizing behavior of a `DeltaTransaction`
+#[derive(Debug)]
 pub struct DeltaTransactionOptions {
     /// number of retry attempts allowed when committing a transaction
     max_retry_commit_attempts: u32,
@@ -988,6 +989,7 @@ impl Default for DeltaTransactionOptions {
 }
 
 /// Object representing a delta transaction
+#[derive(Debug)]
 pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
     options: DeltaTransactionOptions,
