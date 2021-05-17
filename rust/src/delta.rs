@@ -655,7 +655,12 @@ impl DeltaTable {
             .collect())
     }
 
-    /// Returns a reference to the file list present in the loaded state.
+    /// Return a refernece to the "add" actions present in the loaded state
+    pub fn get_actions(&self) -> &Vec<action::Add> {
+        &self.state.files
+    }
+
+    /// Returns a collection of file names present in the loaded state
     pub fn get_files(&self) -> Vec<String> {
         self.state
             .files
