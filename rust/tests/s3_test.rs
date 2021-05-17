@@ -26,7 +26,7 @@ mod s3 {
         assert_eq!(table.get_min_reader_version(), 1);
         assert_eq!(
             table.get_files(),
-            &vec![
+            vec![
                 "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
                 "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
                 "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
@@ -61,7 +61,7 @@ mod s3 {
         assert_eq!(table.get_min_reader_version(), 1);
         assert_eq!(
             table.get_files(),
-            &vec![
+            vec![
                 "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
                 "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
                 "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",

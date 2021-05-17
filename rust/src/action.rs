@@ -141,7 +141,7 @@ pub struct StatsParsed {
 }
 
 /// Delta log action that describes a parquet data file that is part of the table.
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct Add {
     /// A relative path, from the root of the table, to a file that should be added to the table
     pub path: String,
