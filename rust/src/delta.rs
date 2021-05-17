@@ -642,6 +642,18 @@ impl DeltaTable {
         Ok(files)
     }
 
+    /// Return the full file paths as strings for the partition(s)
+    pub fn get_file_paths_by_partitions(
+        &self,
+        filters: &[PartitionFilter<&str>],
+    ) -> Result<Vec<String>, DeltaTableError> {
+        let files = self.get_files_by_partitions(filters)?;
+        Ok(files
+            .iter()
+            .map(|fname| self.storage.join_path(&self.table_path, fname))
+            .collect())
+    }
+
     /// Returns a reference to the file list present in the loaded state.
     pub fn get_files(&self) -> &Vec<String> {
         &self.state.files
