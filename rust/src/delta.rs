@@ -259,7 +259,7 @@ struct DeltaTableState {
     // A remove action should remain in the state of the table as a tombstone until it has expired.
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: Vec<action::Remove>,
-    files: Vec<String>,
+    files: Vec<action::Add>,
     commit_infos: Vec<Value>,
     app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
     min_reader_version: i32,
@@ -627,8 +627,9 @@ impl DeltaTable {
             .state
             .files
             .iter()
-            .filter(|f| {
-                let partitions = f
+            .filter(|add| {
+                let partitions = add
+                    .path
                     .splitn(partitions_number + 1, separator)
                     .filter_map(|p: &str| DeltaTablePartition::try_from(p).ok())
                     .collect::<Vec<DeltaTablePartition>>();
@@ -636,7 +637,7 @@ impl DeltaTable {
                     .iter()
                     .all(|filter| filter.match_partitions(&partitions))
             })
-            .cloned()
+            .map(|add| add.path.clone())
             .collect();
 
         Ok(files)
@@ -655,8 +656,12 @@ impl DeltaTable {
     }
 
     /// Returns a reference to the file list present in the loaded state.
-    pub fn get_files(&self) -> &Vec<String> {
-        &self.state.files
+    pub fn get_files(&self) -> Vec<String> {
+        self.state
+            .files
+            .iter()
+            .map(|add| add.path.clone())
+            .collect()
     }
 
     /// Returns a copy of the file paths present in the loaded state.
@@ -664,7 +669,7 @@ impl DeltaTable {
         self.state
             .files
             .iter()
-            .map(|fname| self.storage.join_path(&self.table_path, fname))
+            .map(|add| self.storage.join_path(&self.table_path, &add.path))
             .collect()
     }
 
@@ -1149,10 +1154,10 @@ fn process_action(
 ) -> Result<(), serde_json::error::Error> {
     match action {
         Action::add(v) => {
-            state.files.push(v.path.clone());
+            state.files.push(v.clone());
         }
         Action::remove(v) => {
-            state.files.retain(|e| *e != v.path);
+            state.files.retain(|a| *a.path != v.path);
             state.tombstones.push(v.clone());
         }
         Action::protocol(v) => {

@@ -16,7 +16,7 @@ async fn read_delta_2_0_table_without_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet",
             "part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet",
             "part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet",
@@ -58,7 +58,7 @@ async fn read_delta_2_0_table_with_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet",
             "part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet",
         ],
@@ -72,7 +72,7 @@ async fn read_delta_2_0_table_with_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet",
             "part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet",
         ]
@@ -86,7 +86,7 @@ async fn read_delta_2_0_table_with_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet",
             "part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet",
             "part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet",
@@ -104,7 +104,7 @@ async fn read_delta_8_0_table_without_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet",
             "part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet"
         ]
