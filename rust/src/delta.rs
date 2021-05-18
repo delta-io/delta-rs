@@ -816,17 +816,19 @@ impl DeltaTable {
         DeltaTransaction::new(self, options)
     }
 
-
     /// Create a new add action and write the given bytes to the storage backend as a fully formed
     /// Parquet file
-    pub async fn add_file(&mut self, bytes: &Vec<u8>, partitions: Option<Vec<WritablePartitionValue>>) -> Result<i64, DeltaTransactionError> {
+    pub async fn add_file(
+        &mut self,
+        bytes: &Vec<u8>,
+        partitions: Option<Vec<WritablePartitionValue>>,
+    ) -> Result<i64, DeltaTransactionError> {
         let path = self.generate_parquet_filename(partitions);
-        let storage_path = self
-            .storage
-            .join_path(&self.table_path, &path);
+        let storage_path = self.storage.join_path(&self.table_path, &path);
 
         debug!("Writing a parquet file to {}", &storage_path);
-        self.storage.put_obj(&storage_path, &bytes)
+        self.storage
+            .put_obj(&storage_path, &bytes)
             .await
             .map_err(|source| DeltaTransactionError::Storage { source })?;
 
@@ -871,7 +873,8 @@ impl DeltaTable {
             }
         }
 
-        self.storage.join_paths(&path_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
+        self.storage
+            .join_paths(&path_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
     }
 
     /// Create a new Delta Table struct without loading any data from backing storage.
