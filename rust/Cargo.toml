@@ -40,6 +40,9 @@ rusoto_sts = { version = "0.46", optional = true }
 rusoto_dynamodb = { version = "0.46", optional = true }
 maplit = { version = "1", optional = true }
 
+# High-level writer
+parquet-format = "~2.6.1"
+
 arrow  = { version = "4" }
 datafusion = { version = "4", optional = true }
 parquet = { version = "4" }
