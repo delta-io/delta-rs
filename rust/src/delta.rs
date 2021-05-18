@@ -904,12 +904,19 @@ impl std::fmt::Debug for DeltaTable {
 /// Error returned by the DeltaTransaction struct
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTransactionError {
-    /// Error that indicates the number of optimistic concurrency retries has been exceeded and no further
-    /// attempts will be made.
-    #[error("Transaction commit exceeded max retries. Last error: {inner}")]
-    CommitRetriesExceeded {
+    /// Error that indicates the transaction commit attempt failed. The wrapped inner error
+    /// contains details.
+    #[error("Transaction commit attempt failed. Last error: {inner}")]
+    TransactionCommitAttempt {
         /// The wrapped TransactionCommitAttemptError.
-        #[from]
+        inner: TransactionCommitAttemptError,
+    },
+
+    /// Error that indicates a Delta version conflict. i.e. a writer tried to write version _N_ but
+    /// version _N_ already exists in the delta log.
+    #[error("Version already existed when writing transaction. Last error: {inner}")]
+    VersionAlreadyExists {
+        /// The wrapped TransactionCommitAttemptError.
         inner: TransactionCommitAttemptError,
     },
 
@@ -973,6 +980,16 @@ pub enum TransactionCommitAttemptError {
     },
 }
 
+impl From<TransactionCommitAttemptError> for DeltaTransactionError {
+    fn from(error: TransactionCommitAttemptError) -> Self {
+        match error {
+            TransactionCommitAttemptError::VersionExists { .. } => {
+                DeltaTransactionError::VersionAlreadyExists { inner: error }
+            }
+            _ => DeltaTransactionError::TransactionCommitAttempt { inner: error },
+        }
+    }
+}
 impl From<StorageError> for TransactionCommitAttemptError {
     fn from(error: StorageError) -> Self {
         match error {
@@ -1010,7 +1027,14 @@ impl Default for DeltaTransactionOptions {
     }
 }
 
-/// Object representing a delta transaction
+/// Object representing a delta transaction.
+/// Clients that do not need to mutate action content in case a transaction conflict is encountered
+/// may use the `commit_with` method and rely on optimistic concurrency to determine the
+/// appropriate Delta version number for a commit. A good example of this type of client is an
+/// append only client that does not need to maintain transaction state with external systems.
+/// Clients that may need to do conflict resolution if the Delta version changes should use the `commit_version`
+/// method and manage the Delta version themselves so that they can resolve data conflicts that may
+/// occur between Delta versions.
 #[derive(Debug)]
 pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
