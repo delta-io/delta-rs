@@ -245,7 +245,6 @@ pub enum StorageError {
     #[error("Failed to copy S3 object: {source}")]
     S3Copy {
         /// The underlying Rusoto S3 error.
-        #[from]
         source: rusoto_core::RusotoError<rusoto_s3::CopyObjectError>,
     },
     /// Error returned when S3 object get response contains empty body

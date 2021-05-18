@@ -83,3 +83,4 @@ jobs:
          cargo test s3 --test simple_commit_test --features s3
          cargo test s3 --test dynamodb_lock_test --features s3
          cargo test s3 --test concurrent_writes_test --features s3
+         cargo test s3 --test repair_s3_rename_test --features s3

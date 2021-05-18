@@ -54,8 +54,10 @@ async fn list_objects(client: &S3Client, bucket: &str, prefix: &str) -> Vec<Stri
         .await
         .unwrap();
 
-    for obj in result.contents.unwrap() {
-        list.push(obj.key.unwrap());
+    if let Some(contents) = result.contents {
+        for obj in contents {
+            list.push(obj.key.unwrap());
+        }
     }
 
     list

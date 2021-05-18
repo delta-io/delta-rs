@@ -62,6 +62,15 @@ impl From<RusotoError<rusoto_s3::ListObjectsV2Error>> for StorageError {
     }
 }
 
+impl From<RusotoError<rusoto_s3::CopyObjectError>> for StorageError {
+    fn from(error: RusotoError<rusoto_s3::CopyObjectError>) -> Self {
+        match error {
+            RusotoError::Unknown(response) if response.status == 404 => StorageError::NotFound,
+            _ => StorageError::S3Copy { source: error },
+        }
+    }
+}
+
 fn create_s3_client(region: Region) -> Result<S3Client, StorageError> {
     let dispatcher = HttpClient::new()
         .map_err(|_| StorageError::S3Generic("Failed to create request dispatcher".to_string()))?;
@@ -172,6 +181,14 @@ impl S3StorageBackend {
             client,
             lock_client,
         })
+    }
+
+    /// Creates a new S3StorageBackend with given s3 and lock clients.
+    pub fn new_with(client: rusoto_s3::S3Client, lock_client: Box<dyn LockClient>) -> Self {
+        Self {
+            client,
+            lock_client: Some(lock_client),
+        }
     }
 
     async fn unsafe_rename_obj(
@@ -483,12 +500,23 @@ impl dyn LockClient {
             let data: LockData = serde_json::from_str(data)
                 .map_err(|_| StorageError::S3Generic("Lock data deserialize error".to_string()))?;
 
+            if lock.acquired_expired_lock {
+                log::info!(
+                    "Acquired expired lock. Repairing the rename of {} to {}.",
+                    &data.source,
+                    &data.destination
+                );
+            }
+
             let mut rename_result = s3.unsafe_rename_obj(&data.source, &data.destination).await;
 
-            if rename_result.is_ok() && lock.acquired_expired_lock {
+            if lock.acquired_expired_lock {
+                if let Err(e) = rename_result {
+                    log::warn!("Caught an error {:?} during the repairing of a rename.", e);
+                }
+
                 // If we acquired expired lock then the rename done above is
                 // a repair of expired one. So on this time we try the intended rename.
-
                 lock.data = Some(LockData::json(src, dst)?);
                 lock = self.update_data(&lock).await?;
                 rename_result = s3.unsafe_rename_obj(src, dst).await;
