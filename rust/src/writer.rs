@@ -4,7 +4,11 @@
 //! Unlike the transaction API on DeltaTable, this higher level writer will also write out the
 //! parquet files
 
-
+use crate::{
+    action::{Add, ColumnCountStat, ColumnValueStat, Stats},
+    DeltaDataTypeVersion, DeltaTable, DeltaTableError, DeltaTransactionError, Schema,
+    StorageBackend, StorageError, UriError,
+};
 use arrow::{
     array::{as_boolean_array, as_primitive_array, make_array, Array, ArrayData},
     buffer::MutableBuffer,
@@ -14,12 +18,7 @@ use arrow::{
     json::reader::Decoder,
     record_batch::RecordBatch,
 };
-use crate::{
-    action::{Action, Add, ColumnCountStat, ColumnValueStat, Stats},
-    DeltaDataTypeVersion, DeltaTable, DeltaTableError, DeltaTransactionError, Schema,
-    StorageBackend, StorageError, UriError,
-};
-use log::{debug, info};
+use log::*;
 use parquet::{
     arrow::ArrowWriter,
     basic::{Compression, LogicalType},
@@ -47,7 +46,7 @@ pub enum DeltaWriterError {
     #[error("Missing partition column: {col_name}")]
     MissingPartitionColumn {
         /// The name of the column missing the partition
-        col_name: String
+        col_name: String,
     },
 
     /// The Arrow RecordBatch schema doesn't match the expected schema
@@ -71,7 +70,7 @@ pub enum DeltaWriterError {
     #[error("Serialization of delta log statistics failed")]
     StatsSerializationFailed {
         /// TODO
-        stats: Stats
+        stats: Stats,
     },
 
     /// Invalid table path
@@ -150,9 +149,9 @@ pub struct DeltaWriter {
 
 impl DeltaWriter {
     /// Initialize the writer from the given table path and delta schema
-    pub async fn for_table_path(table_path: String) -> Result<DeltaWriter, DeltaWriterError> {
-        let table = crate::open_table(&table_path.as_str()).await?;
-        let storage = crate::get_backend_for_uri(table_path.as_str())?;
+    pub async fn for_table_path(table_path: &str) -> Result<DeltaWriter, DeltaWriterError> {
+        let table = crate::open_table(&table_path).await?;
+        let storage = crate::get_backend_for_uri(table_path)?;
 
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.get_metadata()?.clone();
@@ -237,48 +236,15 @@ impl DeltaWriter {
     }
 
     /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
-    pub async fn write_file(
-        &mut self,
-        actions: &mut Vec<Action>,
-    ) -> Result<DeltaDataTypeVersion, DeltaWriterError> {
-        info!("Writing parquet file.");
-
-        let metadata = self.arrow_writer.close()?;
-
-        let path = self.next_data_path(&self.partition_columns, &self.partition_values)?;
-
+    pub async fn write_file(&mut self) -> Result<DeltaDataTypeVersion, DeltaWriterError> {
+        debug!("Writing parquet file.");
         let obj_bytes = self.cursor.data();
-        let file_size = obj_bytes.len() as i64;
 
-        let storage_path = self
-            .storage
-            .join_path(self.table.table_path.as_str(), path.as_str());
-
-        //
-        // TODO: Wrap in retry loop to handle temporary network errors
-        //
-
-        self.storage
-            .put_obj(storage_path.as_str(), obj_bytes.as_slice())
-            .await?;
-
-        info!("Parquet file written.");
+        // TODO: support partitions on the write
+        let version = self.table.add_file(&obj_bytes, None).await?;
 
         // After data is written, re-initialize internal state to handle another file
         self.reset()?;
-
-        info!("Writing Delta transaction.");
-
-        let add = create_add(&self.partition_values, path, file_size, &metadata)?;
-
-        actions.push(Action::add(add));
-
-        // TODO: Pass StreamingUpdate operation
-        let mut tx = self.table.create_transaction(None);
-        let version = tx.commit_with(actions.as_slice(), None).await?;
-
-        info!("Committed Delta version {}", version);
-
         Ok(version)
     }
 
@@ -706,4 +672,23 @@ fn stringified_partition_value(arr: &Arc<dyn Array>) -> Result<String, DeltaWrit
     };
 
     Ok(s)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_nonexistent_table() {
+        let res = DeltaWriter::for_table_path("/nonexistent/table").await;
+        assert!(res.is_err());
+        if let Err(err) = res {
+            match err {
+                DeltaWriterError::DeltaTable { source: _ } => {}
+                other => {
+                    assert!(false, "Expected a DeltaTable error, got `{}`", other);
+                }
+            }
+        }
+    }
 }
