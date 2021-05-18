@@ -193,11 +193,7 @@ class DeltaTable:
         if partitions is None:
             file_paths = self._table.file_paths()
         else:
-            table_path = self._table.table_path()
-            file_paths = [
-                f"{table_path}/{file_name}"
-                for file_name in self._table.files_by_partitions(partitions)
-            ]
+            file_paths = self._table.files_by_partitions(partitions)
         paths = [urlparse(curr_file) for curr_file in file_paths]
 
         # Decide based on the first file, if the file is on cloud storage or local
