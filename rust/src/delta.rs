@@ -1056,18 +1056,10 @@ impl<'a> DeltaTransaction<'a> {
         // TODO: create a CommitInfo action and prepend it to actions.
 
         // Serialize all actions that are part of this log entry.
-        let mut jsons = Vec::<String>::new();
-
-        for action in additional_actions {
-            let json = serde_json::to_string(action)?;
-            jsons.push(json);
-        }
-
-        let log_entry = jsons.join("\n");
-        let log_entry = log_entry.as_bytes();
+        let log_entry = log_bytes_from_actions(additional_actions)?;
 
         // try to commit in a loop in case other writers write the next version first
-        let version = self.try_commit_loop(log_entry).await?;
+        let version = self.try_commit_loop(log_entry.as_bytes(), None).await?;
 
         // NOTE: since we have the log entry in memory already,
         // we could optimize this further by merging the log entry instead of updating from storage.
@@ -1076,15 +1068,37 @@ impl<'a> DeltaTransaction<'a> {
         Ok(version)
     }
 
+    /// Commits the delta transaction at the specified version.
+    /// Propagates version conflict errors back to the caller immediately.
+    pub async fn commit_version(
+        &mut self,
+        version: DeltaDataTypeVersion,
+        additional_actions: &[Action],
+        _operation: Option<DeltaOperation>,
+    ) -> Result<(), DeltaTransactionError> {
+        // TODO: create a CommitInfo action and prepend it to actions.
+
+        let log_entry = log_bytes_from_actions(additional_actions)?;
+
+        let _ = self
+            .try_commit_loop(log_entry.as_bytes(), Some(version))
+            .await?;
+
+        self.delta_table.update().await?;
+
+        Ok(())
+    }
+
     async fn try_commit_loop(
         &mut self,
         log_entry: &[u8],
+        version: Option<DeltaDataTypeVersion>,
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
         let mut attempt_number: u32 = 0;
 
         let tmp_log_path = self.prepare_commit(log_entry).await?;
         loop {
-            let commit_result = self.try_commit(&tmp_log_path).await;
+            let commit_result = self.try_commit(&tmp_log_path, version).await;
 
             match commit_result {
                 Ok(v) => {
@@ -1092,6 +1106,13 @@ impl<'a> DeltaTransaction<'a> {
                 }
                 Err(e) => {
                     match e {
+                        TransactionCommitAttemptError::VersionExists { .. }
+                            if version.is_some() =>
+                        {
+                            // If the client wants to manage version conflict externally, propagate
+                            // the error.
+                            return Err(e);
+                        }
                         TransactionCommitAttemptError::VersionExists { .. }
                             if attempt_number > self.options.max_retry_commit_attempts + 1 =>
                         {
@@ -1130,10 +1151,16 @@ impl<'a> DeltaTransaction<'a> {
     async fn try_commit(
         &mut self,
         tmp_log_path: &str,
+        version: Option<DeltaDataTypeVersion>,
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
-        // get the next delta table version and the log path where it should be written
-        let attempt_version = self.next_attempt_version().await?;
-        let log_path = self.delta_table.version_to_log_path(attempt_version);
+        let version = if let Some(v) = version {
+            v
+        } else {
+            // get the next delta table version and the log path where it should be written
+            self.next_attempt_version().await?
+        };
+
+        let log_path = self.delta_table.version_to_log_path(version);
 
         // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
@@ -1142,7 +1169,7 @@ impl<'a> DeltaTransaction<'a> {
             .rename_obj(tmp_log_path, &log_path)
             .await?;
 
-        Ok(attempt_version)
+        Ok(version)
     }
 
     async fn next_attempt_version(
@@ -1151,6 +1178,19 @@ impl<'a> DeltaTransaction<'a> {
         self.delta_table.update().await?;
         Ok(self.delta_table.version + 1)
     }
+}
+
+fn log_bytes_from_actions(actions: &[Action]) -> Result<String, serde_json::Error> {
+    let mut jsons = Vec::<String>::new();
+
+    for action in actions {
+        let json = serde_json::to_string(action)?;
+        jsons.push(json);
+    }
+
+    let log_entry = jsons.join("\n");
+
+    Ok(log_entry)
 }
 
 fn process_action(
