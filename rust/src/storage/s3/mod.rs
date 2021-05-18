@@ -511,8 +511,11 @@ impl dyn LockClient {
             let mut rename_result = s3.unsafe_rename_obj(&data.source, &data.destination).await;
 
             if lock.acquired_expired_lock {
-                if let Err(e) = rename_result {
-                    log::warn!("Caught an error {:?} during the repairing of a rename.", e);
+                match rename_result {
+                    // AlreadyExists when the stale rename is done, but the lock not released
+                    // NotFound when the source file of rename is missing
+                    Err(StorageError::AlreadyExists(_)) | Err(StorageError::NotFound) => (),
+                    _ => rename_result?,
                 }
 
                 // If we acquired expired lock then the rename done above is
