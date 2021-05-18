@@ -1212,9 +1212,7 @@ fn log_bytes_from_actions(actions: &[Action]) -> Result<String, serde_json::Erro
         jsons.push(json);
     }
 
-    let log_entry = jsons.join("\n");
-
-    Ok(log_entry)
+    Ok(jsons.join("\n"))
 }
 
 fn process_action(
