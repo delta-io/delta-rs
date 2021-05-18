@@ -8,6 +8,7 @@ image:https://img.shields.io/badge/docs-rust-blue.svg?style=flat-square[Docs,lin
 image:https://img.shields.io/pypi/v/deltalake.svg?style=flat-square[Python binding,link=https://pypi.org/project/deltalake]
 image:https://img.shields.io/badge/docs-python-blue.svg?style=flat-square[Docs,link=https://delta-io.github.io/delta-rs/python]
 
+image::logo.png[Delta-rs logo]
 A native interface to
 link:https://delta.io[Delta Lake].
 
