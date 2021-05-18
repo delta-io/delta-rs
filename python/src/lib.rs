@@ -121,7 +121,7 @@ impl RawDeltaTable {
         match partition_filters {
             Ok(filters) => Ok(self
                 ._table
-                .get_files_by_partitions(&filters)
+                .get_file_paths_by_partitions(&filters)
                 .map_err(PyDeltaTableError::from_raw)?),
             Err(err) => Err(PyDeltaTableError::from_raw(err)),
         }
