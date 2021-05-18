@@ -84,7 +84,7 @@ mod simple_commit_fs {
             .await
             .unwrap();
 
-        assert_eq!((), result);
+        assert_eq!(1, result);
         assert_eq!(1, table.version);
         assert_eq!(2, table.get_files().len());
     }

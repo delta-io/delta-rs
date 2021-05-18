@@ -1083,7 +1083,7 @@ impl<'a> DeltaTransaction<'a> {
         let log_entry = log_bytes_from_actions(additional_actions)?;
 
         // try to commit in a loop in case other writers write the next version first
-        let version = self.try_commit_loop(log_entry.as_bytes(), None).await?;
+        let version = self.try_commit_loop(log_entry.as_bytes()).await?;
 
         // NOTE: since we have the log entry in memory already,
         // we could optimize this further by merging the log entry instead of updating from storage.
@@ -1099,29 +1099,28 @@ impl<'a> DeltaTransaction<'a> {
         version: DeltaDataTypeVersion,
         additional_actions: &[Action],
         _operation: Option<DeltaOperation>,
-    ) -> Result<(), DeltaTransactionError> {
+    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         // TODO: create a CommitInfo action and prepend it to actions.
 
         let log_entry = log_bytes_from_actions(additional_actions)?;
-
-        let _ = self
-            .try_commit_loop(log_entry.as_bytes(), Some(version))
-            .await?;
+        let tmp_log_path = self.prepare_commit(log_entry.as_bytes()).await?;
+        let version = self.try_commit(&tmp_log_path, version).await?;
 
         self.delta_table.update().await?;
 
-        Ok(())
+        Ok(version)
     }
 
     async fn try_commit_loop(
         &mut self,
         log_entry: &[u8],
-        version: Option<DeltaDataTypeVersion>,
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
         let mut attempt_number: u32 = 0;
 
         let tmp_log_path = self.prepare_commit(log_entry).await?;
         loop {
+            let version = self.next_attempt_version().await?;
+
             let commit_result = self.try_commit(&tmp_log_path, version).await;
 
             match commit_result {
@@ -1130,13 +1129,6 @@ impl<'a> DeltaTransaction<'a> {
                 }
                 Err(e) => {
                     match e {
-                        TransactionCommitAttemptError::VersionExists { .. }
-                            if version.is_some() =>
-                        {
-                            // If the client wants to manage version conflict externally, propagate
-                            // the error.
-                            return Err(e);
-                        }
                         TransactionCommitAttemptError::VersionExists { .. }
                             if attempt_number > self.options.max_retry_commit_attempts + 1 =>
                         {
@@ -1175,15 +1167,8 @@ impl<'a> DeltaTransaction<'a> {
     async fn try_commit(
         &mut self,
         tmp_log_path: &str,
-        version: Option<DeltaDataTypeVersion>,
+        version: DeltaDataTypeVersion,
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
-        let version = if let Some(v) = version {
-            v
-        } else {
-            // get the next delta table version and the log path where it should be written
-            self.next_attempt_version().await?
-        };
-
         let log_path = self.delta_table.version_to_log_path(version);
 
         // move temporary commit file to delta log directory
