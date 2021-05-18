@@ -816,6 +816,64 @@ impl DeltaTable {
         DeltaTransaction::new(self, options)
     }
 
+
+    /// Create a new add action and write the given bytes to the storage backend as a fully formed
+    /// Parquet file
+    pub async fn add_file(&mut self, bytes: &Vec<u8>, partitions: Option<Vec<WritablePartitionValue>>) -> Result<i64, DeltaTransactionError> {
+        let path = self.generate_parquet_filename(partitions);
+        let storage_path = self
+            .storage
+            .join_path(&self.table_path, &path);
+
+        debug!("Writing a parquet file to {}", &storage_path);
+        self.storage.put_obj(&storage_path, &bytes)
+            .await
+            .map_err(|source| DeltaTransactionError::Storage { source })?;
+
+        // Determine the modification timestamp to include in the add action - milliseconds since epoch
+        // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
+        let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let modification_time = modification_time.as_millis() as i64;
+
+        let add = action::Add {
+            path,
+            size: bytes.len() as i64,
+            partitionValues: HashMap::default(),
+            partitionValues_parsed: None,
+            modificationTime: modification_time,
+            dataChange: true,
+            stats: None,
+            stats_parsed: None,
+            tags: None,
+        };
+
+        let mut tx = self.create_transaction(None);
+        let actions = vec![Action::add(add)];
+        let version = tx.commit_with(&actions, None).await?;
+
+        debug!("Committed Delta version {}", version);
+
+        Ok(version)
+    }
+
+    fn generate_parquet_filename(&self, partitions: Option<Vec<WritablePartitionValue>>) -> String {
+        let mut path_parts = vec![];
+        /*
+         * The specific file naming for parquet is not well documented including the preceding five
+         * zeros and the trailing c000 string
+         *
+         */
+        path_parts.push(format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4()));
+
+        if let Some(partitions) = partitions {
+            for partition in partitions {
+                path_parts.push(format!("{}={}", partition.name, partition.value));
+            }
+        }
+
+        self.storage.join_paths(&path_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
+    }
+
     /// Create a new Delta Table struct without loading any data from backing storage.
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
@@ -1283,6 +1341,12 @@ pub async fn open_table_with_ds(table_path: &str, ds: &str) -> Result<DeltaTable
 /// Returns rust create version, can be use used in language bindings to expose Rust core version
 pub fn crate_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
+}
+
+/// A partition value for writing files
+pub struct WritablePartitionValue {
+    name: String,
+    value: String,
 }
 
 #[cfg(test)]
