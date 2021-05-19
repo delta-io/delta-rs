@@ -241,7 +241,7 @@ impl DeltaWriter {
         let obj_bytes = self.cursor.data();
 
         // TODO: support partitions on the write
-        let version = self.table.add_file(&obj_bytes, None).await?;
+        let version = self.table.add_file(&obj_bytes, None, None).await?;
 
         // After data is written, re-initialize internal state to handle another file
         self.reset()?;

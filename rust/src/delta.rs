@@ -818,10 +818,17 @@ impl DeltaTable {
 
     /// Create a new add action and write the given bytes to the storage backend as a fully formed
     /// Parquet file
+    ///
+    /// add_file accepts two optional parameters:
+    ///
+    /// partitions: an ordered vec of WritablePartitionValues for the file to be added
+    /// actions: an ordered list of Actions to be inserted into the log file _ahead_ of the Add
+    ///     action for the file added. This should typically be used for txn type actions
     pub async fn add_file(
         &mut self,
         bytes: &Vec<u8>,
         partitions: Option<Vec<WritablePartitionValue>>,
+        actions: Option<Vec<action::Action>>,
     ) -> Result<i64, DeltaTransactionError> {
         let path = self.generate_parquet_filename(partitions);
         let storage_path = self.storage.join_path(&self.table_path, &path);
@@ -850,8 +857,14 @@ impl DeltaTable {
         };
 
         let mut tx = self.create_transaction(None);
-        let actions = vec![Action::add(add)];
-        let version = tx.commit_with(&actions, None).await?;
+        let mut commit_actions= vec![];
+        if let Some(actions) = actions {
+            for action in actions {
+                commit_actions.insert(0, action);
+            }
+        }
+        commit_actions.push(Action::add(add));
+        let version = tx.commit_with(&commit_actions, None).await?;
 
         debug!("Committed Delta version {}", version);
 
