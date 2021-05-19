@@ -14,6 +14,7 @@ mod s3 {
     use rusoto_core::{DispatchSignedRequest, HttpClient};
     use rusoto_s3::S3Client;
     use serial_test::serial;
+    use std::sync::{Arc, Mutex};
     use tokio::task::JoinHandle;
     use tokio::time::Duration;
 
@@ -42,7 +43,7 @@ mod s3 {
     }
 
     async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), StorageError> {
-        std::env::set_var("DYNAMO_LOCK_LEASE_DURATION", "3");
+        std::env::set_var("DYNAMO_LOCK_LEASE_DURATION", "2");
         s3_common::setup_dynamodb(path);
         s3_common::cleanup_dir_except(path, Vec::new()).await;
 
@@ -52,12 +53,12 @@ mod s3 {
         let src2 = format!("{}/src2", path);
         let dst2 = format!("{}/dst2", path);
 
-        let s3_1 = {
+        let (s3_1, w1_pause) = {
             let copy = if pause_copy { Some(dst1.clone()) } else { None };
             let del = if pause_copy { None } else { Some(src1.clone()) };
             create_s3_backend("w1", copy, del)
         };
-        let s3_2 = create_s3_backend("w2", None, None);
+        let (s3_2, _) = create_s3_backend("w2", None, None);
 
         s3_1.put_obj(&src1, b"test1").await.unwrap();
         s3_2.put_obj(&src2, b"test2").await.unwrap();
@@ -68,6 +69,7 @@ mod s3 {
         let rename2 = rename(s3_2, src2.clone(), dst2.clone());
 
         rename2.await.unwrap().unwrap(); // ensure that worker 2 is ok
+        resume(&w1_pause); // resume worker 1
         rename1.await.unwrap() // return the result of worker 1
     }
 
@@ -84,11 +86,39 @@ mod s3 {
         })
     }
 
+    fn create_s3_backend(
+        name: &str,
+        pause_copy: Option<String>,
+        pause_del: Option<String>,
+    ) -> (S3StorageBackend, Arc<Mutex<bool>>) {
+        let pause_until_true = Arc::new(Mutex::new(false));
+        let dispatcher = InterceptingDispatcher {
+            client: HttpClient::new().unwrap(),
+            name: name.to_string(),
+            // lazy way to remove "s3:/" part
+            pause_before_copy_path: pause_copy.map(|x| x[4..].to_string()),
+            pause_before_delete_path: pause_del.map(|x| x[4..].to_string()),
+            pause_until_true: pause_until_true.clone(),
+        };
+
+        let client = S3Client::new_with(dispatcher, ChainProvider::new(), s3_common::region());
+        let lock_client = dynamodb_lock::DynamoDbLockClient::new(
+            rusoto_dynamodb::DynamoDbClient::new(s3_common::region()),
+            dynamodb_lock::Options::default(),
+        );
+
+        (
+            S3StorageBackend::new_with(client, Box::new(lock_client)),
+            pause_until_true,
+        )
+    }
+
     struct InterceptingDispatcher {
         client: HttpClient,
         name: String,
         pause_before_copy_path: Option<String>,
         pause_before_delete_path: Option<String>,
+        pause_until_true: Arc<Mutex<bool>>,
     }
 
     impl DispatchSignedRequest for InterceptingDispatcher {
@@ -99,13 +129,13 @@ mod s3 {
         ) -> DispatchSignedRequestFuture {
             if let Some(ref path) = self.pause_before_copy_path {
                 if request.method == "PUT" && &request.path == path {
-                    pause()
+                    pause(&self.pause_until);
                 }
             }
 
             if let Some(ref path) = self.pause_before_delete_path {
                 if request.method == "DELETE" && &request.path == path {
-                    pause()
+                    pause(&self.pause_until);
                 }
             }
 
@@ -118,33 +148,29 @@ mod s3 {
         }
     }
 
-    fn pause() {
-        println!("Simulating client unexpected pause for 8 seconds.");
-        for _ in 0..8 {
-            std::thread::sleep(Duration::from_secs(1));
+    fn pause(pause_until_true: &Mutex<bool>) {
+        println!("Simulating client unexpected pause.");
+        let mut retries = 0;
+        loop {
+            retries += 1;
+            let resume = {
+                let value = pause_until_true.lock().unwrap();
+                *value
+            };
+            if !resume {
+                std::thread::sleep(Duration::from_millis(200));
+            } else if !resume && retries > 60 {
+                println!("Paused for more than 1 min, most likely an error");
+                return;
+            } else {
+                println!("Waking up and continue to work");
+                return;
+            }
         }
-        println!("Waking up and continue to work");
     }
 
-    fn create_s3_backend(
-        name: &str,
-        pause_copy: Option<String>,
-        pause_del: Option<String>,
-    ) -> S3StorageBackend {
-        let dispatcher = InterceptingDispatcher {
-            client: HttpClient::new().unwrap(),
-            name: name.to_string(),
-            // lazy way to remove "s3:/" part
-            pause_before_copy_path: pause_copy.map(|x| x[4..].to_string()),
-            pause_before_delete_path: pause_del.map(|x| x[4..].to_string()),
-        };
-
-        let client = S3Client::new_with(dispatcher, ChainProvider::new(), s3_common::region());
-        let lock_client = dynamodb_lock::DynamoDbLockClient::new(
-            rusoto_dynamodb::DynamoDbClient::new(s3_common::region()),
-            dynamodb_lock::Options::default(),
-        );
-
-        S3StorageBackend::new_with(client, Box::new(lock_client))
+    fn resume(pause_until_true: &Mutex<bool>) {
+        let mut value = pause_until_true.lock().unwrap();
+        *value = true;
     }
 }
