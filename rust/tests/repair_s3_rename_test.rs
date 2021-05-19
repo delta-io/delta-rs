@@ -70,7 +70,31 @@ mod s3 {
 
         rename2.await.unwrap().unwrap(); // ensure that worker 2 is ok
         resume(&w1_pause); // resume worker 1
-        rename1.await.unwrap() // return the result of worker 1
+        let result = rename1.await.unwrap(); // return the result of worker 1
+
+        let s3 = S3StorageBackend::new().unwrap();
+        // but first we check that the rename is successful and not overwritten
+        async fn get_text(s3: &S3StorageBackend, path: &str) -> String {
+            std::str::from_utf8(&s3.get_obj(path).await.unwrap())
+                .unwrap()
+                .to_string()
+        }
+
+        assert_eq!(get_text(&s3, &dst1).await, "test1");
+        assert_eq!(get_text(&s3, &dst2).await, "test2");
+
+        async fn not_exists(s3: &S3StorageBackend, path: &str) -> bool {
+            if let Err(StorageError::NotFound) = s3.head_obj(path).await {
+                true
+            } else {
+                false
+            }
+        }
+
+        assert!(not_exists(&s3, &src1).await);
+        assert!(not_exists(&s3, &src2).await);
+
+        result
     }
 
     fn rename(
@@ -129,13 +153,13 @@ mod s3 {
         ) -> DispatchSignedRequestFuture {
             if let Some(ref path) = self.pause_before_copy_path {
                 if request.method == "PUT" && &request.path == path {
-                    pause(&self.pause_until);
+                    pause(&self.pause_until_true);
                 }
             }
 
             if let Some(ref path) = self.pause_before_delete_path {
                 if request.method == "DELETE" && &request.path == path {
-                    pause(&self.pause_until);
+                    pause(&self.pause_until_true);
                 }
             }
 
