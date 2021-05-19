@@ -1080,7 +1080,7 @@ impl<'a> DeltaTransaction<'a> {
         // TODO: create a CommitInfo action and prepend it to actions.
 
         // Serialize all actions that are part of this log entry.
-        let log_entry = log_bytes_from_actions(additional_actions)?;
+        let log_entry = log_entry_from_actions(additional_actions)?;
 
         // try to commit in a loop in case other writers write the next version first
         let version = self.try_commit_loop(log_entry.as_bytes()).await?;
@@ -1102,7 +1102,7 @@ impl<'a> DeltaTransaction<'a> {
     ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         // TODO: create a CommitInfo action and prepend it to actions.
 
-        let log_entry = log_bytes_from_actions(additional_actions)?;
+        let log_entry = log_entry_from_actions(additional_actions)?;
         let tmp_log_path = self.prepare_commit(log_entry.as_bytes()).await?;
         let version = self.try_commit(&tmp_log_path, version).await?;
 
@@ -1189,7 +1189,7 @@ impl<'a> DeltaTransaction<'a> {
     }
 }
 
-fn log_bytes_from_actions(actions: &[Action]) -> Result<String, serde_json::Error> {
+fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Error> {
     let mut jsons = Vec::<String>::new();
 
     for action in actions {
