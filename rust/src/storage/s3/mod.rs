@@ -476,7 +476,7 @@ pub trait LockClient: Send + Sync + Debug {
     async fn get_lock(&self) -> Result<Option<LockItem>, StorageError>;
 
     /// Update data in the upstream lock of the current user still has it.
-    /// The returned lock will have a new `rnv` so it'll increase the lease duration
+    /// The returned lock will have a new `rvn` so it'll increase the lease duration
     /// as this method is usually called when the work with a lock is extended.
     async fn update_data(&self, lock: &LockItem) -> Result<LockItem, StorageError>;
 
