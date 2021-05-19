@@ -23,8 +23,6 @@ mod options {
     pub const REFRESH_PERIOD_MILLIS: &str = "DYNAMO_LOCK_REFRESH_PERIOD_MILLIS";
     /// Environment variable for `additional_time_to_wait_for_lock` option.
     pub const ADDITIONAL_TIME_TO_WAIT_MILLIS: &str = "DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS";
-    /// Environment variable for `delete_data_on_release` option.
-    pub const DELETE_DATA_ON_RELEASE: &str = "DYNAMO_DELETE_DATA_ON_RELEASE";
 }
 
 /// Configuration options for [`DynamoDbLockClient`].
@@ -44,8 +42,6 @@ pub struct Options {
     pub refresh_period: Duration,
     /// The amount of time to wait in addition to `lease_duration`.
     pub additional_time_to_wait_for_lock: Duration,
-    ///  If true, then `data` field will be deleted on release.
-    pub delete_data_on_release: bool,
 }
 
 impl Default for Options {
@@ -65,10 +61,6 @@ impl Default for Options {
         let additional_time_to_wait_for_lock =
             Duration::from_millis(u64_env(options::ADDITIONAL_TIME_TO_WAIT_MILLIS, 1000));
 
-        let delete_data_on_release = str_env(options::DELETE_DATA_ON_RELEASE, "true".to_string())
-            .parse::<bool>()
-            .unwrap();
-
         Self {
             partition_key_value: str_env(options::PARTITION_KEY_VALUE, "delta-rs".to_string()),
             table_name: str_env(options::TABLE_NAME, "delta_rs_lock_table".to_string()),
@@ -76,7 +68,6 @@ impl Default for Options {
             lease_duration: u64_env(options::LEASE_DURATION, 20),
             refresh_period,
             additional_time_to_wait_for_lock,
-            delete_data_on_release,
         }
     }
 }
@@ -121,9 +112,9 @@ pub enum DynamoError {
     #[error("Put item error: {0}")]
     PutItemError(RusotoError<PutItemError>),
 
-    /// Error caused by the [`DynamoDbClient::update_item`] request.
-    #[error("Update item error: {0}")]
-    UpdateItemError(#[from] RusotoError<UpdateItemError>),
+    /// Error caused by the [`DynamoDbClient::delete_item`] request.
+    #[error("Delete item error: {0}")]
+    DeleteItemError(#[from] RusotoError<DeleteItemError>),
 
     /// Error caused by the [`DynamoDbClient::get_item`] request.
     #[error("Get item error: {0}")]
@@ -189,12 +180,6 @@ mod expressions {
     /// and its owner name matches with the given one.
     pub const PK_EXISTS_AND_OWNER_RVN_MATCHES: &str =
         "attribute_exists(#pk) AND #rvn = :rvn AND #on = :on";
-
-    /// The expression that updates is_released and data fields of DynamoDB record.
-    pub const UPDATE_IS_RELEASED_AND_DATA: &str = "SET #ir = :ir, #d = :d";
-
-    /// The expression that updates is_released field of DynamoDB record.
-    pub const UPDATE_IS_RELEASED: &str = "SET #ir = :ir";
 }
 
 mod vars {
@@ -205,8 +190,6 @@ mod vars {
     pub const IS_RELEASED_VALUE: &str = ":ir";
     pub const OWNER_NAME_PATH: &str = "#on";
     pub const OWNER_NAME_VALUE: &str = ":on";
-    pub const DATA_PATH: &str = "#d";
-    pub const DATA_VALUE: &str = ":d";
 }
 
 /// Provides a simple library for using DynamoDB's consistent read/write feature
@@ -357,49 +340,28 @@ impl DynamoDbLockClient {
     /// Releases the given lock if the current user still has it, returning true if the lock was
     /// successfully released, and false if someone else already stole the lock
     pub async fn release_lock(&self, lock: &LockItem) -> Result<bool, DynamoError> {
-        let mut names = hashmap! {
-            vars::PK_PATH.to_string() => PARTITION_KEY_NAME.to_string(),
-            vars::RVN_PATH.to_string() => RECORD_VERSION_NUMBER.to_string(),
-            vars::OWNER_NAME_PATH.to_string() => OWNER_NAME.to_string(),
-            vars::IS_RELEASED_PATH.to_string() => IS_RELEASED.to_string(),
-        };
-        let mut values = hashmap! {
-            vars::IS_RELEASED_VALUE.to_string() => attr("1"),
-            vars::RVN_VALUE.to_string() => attr(&lock.record_version_number),
-            vars::OWNER_NAME_VALUE.to_string() => attr(&lock.owner_name),
-        };
-
-        let update: &str;
-        if self.opts.delete_data_on_release {
-            update = expressions::UPDATE_IS_RELEASED_AND_DATA;
-            names.insert(vars::DATA_PATH.to_string(), DATA.to_string());
-            values.insert(
-                vars::DATA_VALUE.to_string(),
-                AttributeValue {
-                    null: Some(true),
-                    ..Default::default()
-                },
-            );
-        } else {
-            update = expressions::UPDATE_IS_RELEASED;
-        }
-
-        let result = self.client.update_item(UpdateItemInput {
+        let result = self.client.delete_item(DeleteItemInput {
             table_name: self.opts.table_name.clone(),
             key: hashmap! {
                 PARTITION_KEY_NAME.to_string() => attr(self.opts.partition_key_value.clone())
             },
             condition_expression: Some(expressions::PK_EXISTS_AND_OWNER_RVN_MATCHES.to_string()),
-            update_expression: Some(update.to_string()),
-            expression_attribute_names: Some(names),
-            expression_attribute_values: Some(values),
+            expression_attribute_names: Some(hashmap! {
+                vars::PK_PATH.to_string() => PARTITION_KEY_NAME.to_string(),
+                vars::RVN_PATH.to_string() => RECORD_VERSION_NUMBER.to_string(),
+                vars::OWNER_NAME_PATH.to_string() => OWNER_NAME.to_string(),
+            }),
+            expression_attribute_values: Some(hashmap! {
+                vars::RVN_VALUE.to_string() => attr(&lock.record_version_number),
+                vars::OWNER_NAME_VALUE.to_string() => attr(&lock.owner_name),
+            }),
             ..Default::default()
         });
 
         match result.await {
             Ok(_) => Ok(true),
-            Err(RusotoError::Service(UpdateItemError::ConditionalCheckFailed(_))) => Ok(false),
-            Err(e) => Err(DynamoError::UpdateItemError(e)),
+            Err(RusotoError::Service(DeleteItemError::ConditionalCheckFailed(_))) => Ok(false),
+            Err(e) => Err(DynamoError::DeleteItemError(e)),
         }
     }
 

@@ -20,7 +20,6 @@ mod dynamodb {
             lease_duration: 3,
             refresh_period: Duration::from_millis(500),
             additional_time_to_wait_for_lock: Duration::from_millis(500),
-            delete_data_on_release: true,
         };
         let _ = client
             .delete_item(DeleteItemInput {
@@ -65,15 +64,10 @@ mod dynamodb {
         assert_eq!(existing.data.as_ref(), Some(&data));
         assert!(lock.release_lock(&existing).await.unwrap());
 
-        let released = lock.get_lock().await.unwrap().unwrap();
-        // the lock from dynamodb should be the same, but with is_released=true field
-        assert_eq!(released.is_released, true);
-        assert_eq!(
-            released.record_version_number,
-            existing.record_version_number
-        );
-        // check data data is cleared after release
-        assert!(released.data.is_none());
+        let released = lock.get_lock().await.unwrap();
+
+        // check that lock is deleted after release
+        assert!(released.is_none());
     }
 
     #[tokio::test]
@@ -94,11 +88,6 @@ mod dynamodb {
 
         // the owner successfully expires a lock
         assert!(c2.release_lock(&l2).await.unwrap());
-
-        // check what it is true
-        let current = c1.get_lock().await.unwrap().unwrap();
-        assert!(current.is_released);
-        assert_eq!(current.record_version_number, l2.record_version_number);
     }
 
     #[tokio::test]
