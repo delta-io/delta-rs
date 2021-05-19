@@ -334,7 +334,7 @@ impl DynamoDbLockClient {
     }
 
     /// Update data in the upstream lock of the current user still has it.
-    /// The returned lock will have a new `rnv` so it'll increase the lease duration
+    /// The returned lock will have a new `rvn` so it'll increase the lease duration
     /// as this method is usually called when the work with a lock is extended.
     pub async fn update_data(&self, lock: &LockItem) -> Result<LockItem, DynamoError> {
         self.upsert_item(
