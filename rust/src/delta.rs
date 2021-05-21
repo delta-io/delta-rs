@@ -137,6 +137,15 @@ pub enum DeltaTableError {
     /// Error returned when no partition was found in the DeltaTable.
     #[error("No partitions found, please make sure table is partitioned.")]
     LoadPartitions,
+
+    /// Error returned when writes are attempted with data that doesn't match the schema of the
+    /// table
+    #[error("Data does not match the schema or partitions of the table: {}", msg)]
+    SchemaMismatch {
+        /// Information about the mismatch
+        msg: String,
+    },
+
     /// Error returned when a partition is not formatted as a Hive Partition.
     #[error("This partition is not formatted with key=value: {}", .partition)]
     PartitionError {
@@ -816,80 +825,6 @@ impl DeltaTable {
         DeltaTransaction::new(self, options)
     }
 
-    /// Create a new add action and write the given bytes to the storage backend as a fully formed
-    /// Parquet file
-    ///
-    /// add_file accepts two optional parameters:
-    ///
-    /// partitions: an ordered vec of WritablePartitionValues for the file to be added
-    /// actions: an ordered list of Actions to be inserted into the log file _ahead_ of the Add
-    ///     action for the file added. This should typically be used for txn type actions
-    pub async fn add_file(
-        &mut self,
-        bytes: &Vec<u8>,
-        partitions: Option<Vec<WritablePartitionValue>>,
-        actions: Option<Vec<action::Action>>,
-    ) -> Result<i64, DeltaTransactionError> {
-        let path = self.generate_parquet_filename(partitions);
-        let storage_path = self.storage.join_path(&self.table_path, &path);
-
-        debug!("Writing a parquet file to {}", &storage_path);
-        self.storage
-            .put_obj(&storage_path, &bytes)
-            .await
-            .map_err(|source| DeltaTransactionError::Storage { source })?;
-
-        // Determine the modification timestamp to include in the add action - milliseconds since epoch
-        // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
-        let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        let modification_time = modification_time.as_millis() as i64;
-
-        let add = action::Add {
-            path,
-            size: bytes.len() as i64,
-            partitionValues: HashMap::default(),
-            partitionValues_parsed: None,
-            modificationTime: modification_time,
-            dataChange: true,
-            stats: None,
-            stats_parsed: None,
-            tags: None,
-        };
-
-        let mut tx = self.create_transaction(None);
-        let mut commit_actions= vec![];
-        if let Some(actions) = actions {
-            for action in actions {
-                commit_actions.insert(0, action);
-            }
-        }
-        commit_actions.push(Action::add(add));
-        let version = tx.commit_with(&commit_actions, None).await?;
-
-        debug!("Committed Delta version {}", version);
-
-        Ok(version)
-    }
-
-    fn generate_parquet_filename(&self, partitions: Option<Vec<WritablePartitionValue>>) -> String {
-        let mut path_parts = vec![];
-        /*
-         * The specific file naming for parquet is not well documented including the preceding five
-         * zeros and the trailing c000 string
-         *
-         */
-        path_parts.push(format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4()));
-
-        if let Some(partitions) = partitions {
-            for partition in partitions {
-                path_parts.push(format!("{}={}", partition.name, partition.value));
-            }
-        }
-
-        self.storage
-            .join_paths(&path_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
-    }
-
     /// Create a new Delta Table struct without loading any data from backing storage.
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
@@ -1115,6 +1050,7 @@ impl Default for DeltaTransactionOptions {
 #[derive(Debug)]
 pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
+    actions: Vec<Action>,
     options: DeltaTransactionOptions,
 }
 
@@ -1125,15 +1061,93 @@ impl<'a> DeltaTransaction<'a> {
     pub fn new(delta_table: &'a mut DeltaTable, options: Option<DeltaTransactionOptions>) -> Self {
         DeltaTransaction {
             delta_table,
+            actions: vec![],
             options: options.unwrap_or_else(DeltaTransactionOptions::default),
         }
     }
 
+    /// Add an arbitrary "action" to the actions associated with this transaction
+    pub fn add_action(&mut self, action: action::Action) {
+        self.actions.push(action);
+    }
+
+    /// Add an arbitrary number of actions to the actions associated with this transaction
+    pub fn add_actions(&mut self, actions: Vec<action::Action>) {
+        for action in actions.into_iter() {
+            self.actions.push(action);
+        }
+    }
+
+    /// Create a new add action and write the given bytes to the storage backend as a fully formed
+    /// Parquet file
+    ///
+    /// add_file accepts two optional parameters:
+    ///
+    /// partitions: an ordered vec of WritablePartitionValues for the file to be added
+    /// actions: an ordered list of Actions to be inserted into the log file _ahead_ of the Add
+    ///     action for the file added. This should typically be used for txn type actions
+    pub async fn add_file(
+        &mut self,
+        bytes: &Vec<u8>,
+        partitions: Option<Vec<(String, String)>>,
+    ) -> Result<(), DeltaTransactionError> {
+        let path = self.generate_parquet_filename(partitions);
+        let storage_path = self
+            .delta_table
+            .storage
+            .join_path(&self.delta_table.table_path, &path);
+
+        debug!("Writing a parquet file to {}", &storage_path);
+        self.delta_table
+            .storage
+            .put_obj(&storage_path, &bytes)
+            .await
+            .map_err(|source| DeltaTransactionError::Storage { source })?;
+
+        // Determine the modification timestamp to include in the add action - milliseconds since epoch
+        // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
+        let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let modification_time = modification_time.as_millis() as i64;
+
+        self.actions.push(Action::add(action::Add {
+            path,
+            size: bytes.len() as i64,
+            partitionValues: HashMap::default(),
+            partitionValues_parsed: None,
+            modificationTime: modification_time,
+            dataChange: true,
+            stats: None,
+            stats_parsed: None,
+            tags: None,
+        }));
+
+        Ok(())
+    }
+
+    fn generate_parquet_filename(&self, partitions: Option<Vec<(String, String)>>) -> String {
+        let mut path_parts = vec![];
+        /*
+         * The specific file naming for parquet is not well documented including the preceding five
+         * zeros and the trailing c000 string
+         *
+         */
+        path_parts.push(format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4()));
+
+        if let Some(partitions) = partitions {
+            for partition in partitions {
+                path_parts.push(format!("{}={}", partition.0, partition.1));
+            }
+        }
+
+        self.delta_table
+            .storage
+            .join_paths(&path_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
+    }
+
     /// Commits the given actions to the delta log.
     /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
-    pub async fn commit_with(
+    pub async fn commit(
         &mut self,
-        additional_actions: &[Action],
         _operation: Option<DeltaOperation>,
     ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action), but leaving it unused for now.
@@ -1157,7 +1171,7 @@ impl<'a> DeltaTransaction<'a> {
         // TODO: create a CommitInfo action and prepend it to actions.
 
         // Serialize all actions that are part of this log entry.
-        let log_entry = log_entry_from_actions(additional_actions)?;
+        let log_entry = log_entry_from_actions(&self.actions)?;
 
         // try to commit in a loop in case other writers write the next version first
         let version = self.try_commit_loop(log_entry.as_bytes()).await?;
@@ -1174,12 +1188,11 @@ impl<'a> DeltaTransaction<'a> {
     pub async fn commit_version(
         &mut self,
         version: DeltaDataTypeVersion,
-        additional_actions: &[Action],
         _operation: Option<DeltaOperation>,
     ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         // TODO: create a CommitInfo action and prepend it to actions.
 
-        let log_entry = log_entry_from_actions(additional_actions)?;
+        let log_entry = log_entry_from_actions(&self.actions)?;
         let tmp_log_path = self.prepare_commit(log_entry.as_bytes()).await?;
         let version = self.try_commit(&tmp_log_path, version).await?;
 
@@ -1357,12 +1370,6 @@ pub async fn open_table_with_ds(table_path: &str, ds: &str) -> Result<DeltaTable
 /// Returns rust create version, can be use used in language bindings to expose Rust core version
 pub fn crate_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
-}
-
-/// A partition value for writing files
-pub struct WritablePartitionValue {
-    name: String,
-    value: String,
 }
 
 #[cfg(test)]

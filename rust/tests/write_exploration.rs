@@ -401,11 +401,9 @@ async fn smoke_test() {
     // HACK: cloning the add path to remove later in test. Ultimately, an "UpdateCommmand" will need to handle this differently
     let remove_path = add.path.clone();
 
+    transaction.add_action(Action::add(add));
     // commit the transaction
-    transaction
-        .commit_with(&[Action::add(add)], None)
-        .await
-        .unwrap();
+    transaction.commit(None).await.unwrap();
 
     //
     // ---
@@ -455,11 +453,9 @@ async fn smoke_test() {
     // TODO: removes should be calculated based on files containing a match for the update key.
     let remove = create_remove(remove_path);
 
+    transaction.add_actions(vec![Action::add(add), Action::remove(remove)]);
     // commit the transaction
-    transaction
-        .commit_with(&[Action::add(add), Action::remove(remove)], None)
-        .await
-        .unwrap();
+    transaction.commit(None).await.unwrap();
 
     // A notable thing to mention:
     // This implementation treats the DeltaTable instance as a single snapshot of the current log.
