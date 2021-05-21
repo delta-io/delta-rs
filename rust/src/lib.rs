@@ -52,6 +52,8 @@ extern crate lazy_static;
 extern crate parquet;
 extern crate regex;
 extern crate serde;
+#[cfg(test)]
+#[macro_use]
 extern crate serde_json;
 extern crate thiserror;
 

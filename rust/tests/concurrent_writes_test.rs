@@ -94,7 +94,8 @@ impl Worker {
     }
 
     async fn commit_file(&mut self, name: &str) -> i64 {
-        let actions = [action::Action::add(action::Add {
+        let mut tx = self.table.create_transaction(None);
+        tx.add_action(action::Action::add(action::Add {
             path: format!("{}.parquet", name),
             size: 396,
             partitionValues: HashMap::new(),
@@ -104,9 +105,8 @@ impl Worker {
             stats: None,
             stats_parsed: None,
             tags: None,
-        })];
-        let mut tx = self.table.create_transaction(None);
-        tx.commit_with(&actions, None).await.unwrap()
+        }));
+        tx.commit(None).await.unwrap()
     }
 }
 
