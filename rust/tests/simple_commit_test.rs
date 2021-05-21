@@ -14,8 +14,6 @@ use std::collections::HashMap;
 use deltalake::{action, DeltaTransactionError};
 
 mod simple_commit_s3 {
-    use super::*;
-
     #[cfg(all(feature = "s3", feature = "dynamodb"))]
     #[tokio::test]
     async fn test_two_commits_s3() {
@@ -76,13 +74,9 @@ mod simple_commit_fs {
         assert_eq!(0, table.version);
         assert_eq!(0, table.get_files().len());
 
-        let tx1_actions = tx1_actions();
-
         let mut tx1 = table.create_transaction(None);
-        let result = tx1
-            .commit_version(1, tx1_actions.as_slice(), None)
-            .await
-            .unwrap();
+        tx1.add_actions(tx1_actions());
+        let result = tx1.commit_version(1, None).await.unwrap();
 
         assert_eq!(1, result);
         assert_eq!(1, table.version);
@@ -100,20 +94,14 @@ mod simple_commit_fs {
         assert_eq!(0, table.version);
         assert_eq!(0, table.get_files().len());
 
-        let tx1_actions = tx1_actions();
-
         let mut tx1 = table.create_transaction(None);
-        let _ = tx1
-            .commit_version(1, tx1_actions.as_slice(), None)
-            .await
-            .unwrap();
-
-        let tx2_actions = tx2_actions();
+        tx1.add_actions(tx1_actions());
+        let _ = tx1.commit_version(1, None).await.unwrap();
 
         let mut tx2 = table.create_transaction(None);
-
+        tx2.add_actions(tx2_actions());
         // we already committed version 1 - this should fail and return error for caller to handle.
-        let result = tx2.commit_version(1, tx2_actions.as_slice(), None).await;
+        let result = tx2.commit_version(1, None).await;
 
         match result {
             Err(deltalake::DeltaTransactionError::VersionAlreadyExists { .. }) => {
@@ -136,19 +124,17 @@ async fn test_two_commits(table_path: &str) -> Result<(), DeltaTransactionError>
     assert_eq!(0, table.version);
     assert_eq!(0, table.get_files().len());
 
-    let tx1_actions = tx1_actions();
-
     let mut tx1 = table.create_transaction(None);
-    let version = tx1.commit_with(tx1_actions.as_slice(), None).await?;
+    tx1.add_actions(tx1_actions());
+    let version = tx1.commit(None).await?;
 
     assert_eq!(1, version);
     assert_eq!(version, table.version);
     assert_eq!(2, table.get_files().len());
 
-    let tx2_actions = tx2_actions();
-
     let mut tx2 = table.create_transaction(None);
-    let version = tx2.commit_with(tx2_actions.as_slice(), None).await.unwrap();
+    tx2.add_actions(tx2_actions());
+    let version = tx2.commit(None).await.unwrap();
 
     assert_eq!(2, version);
     assert_eq!(version, table.version);
