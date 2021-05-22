@@ -7,6 +7,7 @@
 use crate::action::Txn;
 use crate::{DeltaTableError, DeltaTransactionError};
 use arrow::record_batch::RecordBatch;
+use log::*;
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
@@ -16,11 +17,9 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-/**
- * BufferedJSONWriter allows for buffering serde_json::Value rows before flushing to parquet files
- * and a Delta transaction
- */
-pub struct BufferedJSONWriter {
+/// BufferedJsonWriter allows for buffering serde_json::Value rows before flushing to parquet files
+/// and a Delta transaction
+pub struct BufferedJsonWriter {
     table: crate::DeltaTable,
     buffer: HashMap<WriterPartition, Vec<Value>>,
     schema: arrow::datatypes::SchemaRef,
@@ -28,11 +27,9 @@ pub struct BufferedJSONWriter {
     txns: Vec<Txn>,
 }
 
-impl BufferedJSONWriter {
-    /**
-     * Attempt to construct the BufferedJSONWriter, will fail if the table's metadata is not
-     * present
-     */
+impl BufferedJsonWriter {
+    /// Attempt to construct the BufferedJsonWriter, will fail if the table's metadata is not
+    /// present
     pub fn try_new(table: crate::DeltaTable) -> Result<Self, DeltaTableError> {
         let metadata = table.get_metadata()?.clone();
         let schema = metadata.schema;
@@ -49,23 +46,17 @@ impl BufferedJSONWriter {
         })
     }
 
-    /**
-     * Return the total Values pending in the buffer
-     */
+    /// Return the total Values pending in the buffer
     pub fn count(&self, partitions: &WriterPartition) -> Option<usize> {
         self.buffer.get(&partitions).map(|b| b.len())
     }
 
-    /**
-     * Add a txn action to the buffer
-     */
+    /// Add a txn action to the buffer
     pub fn record_txn(&mut self, txn: Txn) {
         self.txns.push(txn);
     }
 
-    /**
-     * Write a new Value into the buffer
-     */
+    /// Write a new Value into the buffer
     pub fn write(
         &mut self,
         value: Value,
@@ -73,14 +64,14 @@ impl BufferedJSONWriter {
     ) -> Result<(), DeltaTableError> {
         match partitions {
             WriterPartition::NoPartitions => {
-                if self.partitions.len() > 0 {
+                if !self.partitions.is_empty() {
                     return Err(DeltaTableError::SchemaMismatch {
                         msg: "Table has partitions but noone were supplied on write".to_string(),
                     });
                 }
             }
             WriterPartition::KeyValues { .. } => {
-                if self.partitions.len() == 0 {
+                if self.partitions.is_empty() {
                     return Err(DeltaTableError::SchemaMismatch {
                         msg: "Table has no partitions yet they were supplied on write".to_string(),
                     });
@@ -96,12 +87,10 @@ impl BufferedJSONWriter {
         Ok(())
     }
 
-    /**
-     * Flush the buffer, causing a write of parquet files for each set of partitioned information
-     * as well as any buffered txn actions
-     *
-     * This will create a single transaction in the delta transaction log
-     */
+    /// Flush the buffer, causing a write of parquet files for each set of partitioned information
+    /// as well as any buffered txn actions
+    ///
+    /// This will create a single transaction in the delta transaction log
     pub async fn flush(&mut self) -> Result<(), DeltaTransactionError> {
         use arrow::json::reader::Decoder;
 
@@ -116,21 +105,32 @@ impl BufferedJSONWriter {
                 .next_batch(&mut value_iter)
                 .map_err(|source| DeltaTableError::ArrowError { source })?;
 
-            if record_batch.is_none() {
-                return Ok(());
+            if record_batch.is_some() {
+                let mut pb = ParquetBuffer::try_new(self.schema.clone())?;
+                pb.write_batch(&record_batch.unwrap())?;
+                let _metadata = pb.close();
+                parquet_bufs.push((partitions.clone(), pb.data()));
+            } else {
+                warn!("Attempted to flush an empty RecordBatch from the BufferedJsonWriter");
             }
-
-            let mut pb = ParquetBuffer::try_new(self.schema.clone())?;
-            pb.write_batch(&record_batch.unwrap())?;
-            let _metadata = pb.close();
-            parquet_bufs.push(pb.data());
         }
 
         let mut dtx = self.table.create_transaction(None);
+        for (partitions, buf) in parquet_bufs {
+            match partitions {
+                WriterPartition::NoPartitions => {
+                    dtx.add_file(&buf, None).await?;
+                }
+                WriterPartition::KeyValues { partitions } => {
+                    dtx.add_file(&buf, Some(partitions)).await?;
+                }
+            }
+        }
+
         dtx.add_actions(
             self.txns
                 .drain(0..)
-                .map(|t| crate::action::Action::txn(t))
+                .map(crate::action::Action::txn)
                 .collect(),
         );
 
@@ -200,9 +200,7 @@ impl<'a> Iterator for InMemValueIter<'a> {
     }
 }
 
-/**
- * The type of partition for a row being written to a writer
- */
+/// The type of partition for a row being written to a writer
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub enum WriterPartition {
     /// The row is not partitioned
@@ -221,7 +219,7 @@ mod tests {
     #[tokio::test]
     async fn test_writer_buffer_nopartition() {
         let table = crate::open_table("./tests/data/delta-0.8.0").await.unwrap();
-        let mut writer = BufferedJSONWriter::try_new(table).unwrap();
+        let mut writer = BufferedJsonWriter::try_new(table).unwrap();
         assert_eq!(writer.count(&WriterPartition::NoPartitions), None);
         let res = writer.write(json!({"hello":"world"}), WriterPartition::NoPartitions);
         assert!(res.is_ok());
@@ -233,7 +231,7 @@ mod tests {
         let table = crate::open_table("./tests/data/delta-0.8.0-partitioned")
             .await
             .unwrap();
-        let mut writer = BufferedJSONWriter::try_new(table).unwrap();
+        let mut writer = BufferedJsonWriter::try_new(table).unwrap();
         let res = writer.write(json!({"hello":"world"}), WriterPartition::NoPartitions);
         assert!(res.is_err());
     }
@@ -241,7 +239,7 @@ mod tests {
     #[tokio::test]
     async fn test_writer_write_partitions_to_nopartition() {
         let table = crate::open_table("./tests/data/delta-0.8.0").await.unwrap();
-        let mut writer = BufferedJSONWriter::try_new(table).unwrap();
+        let mut writer = BufferedJsonWriter::try_new(table).unwrap();
         let partitions = WriterPartition::KeyValues {
             partitions: vec![("year".to_string(), "2021".to_string())],
         };

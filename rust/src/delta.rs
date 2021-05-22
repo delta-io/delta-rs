@@ -1088,9 +1088,16 @@ impl<'a> DeltaTransaction<'a> {
     ///     action for the file added. This should typically be used for txn type actions
     pub async fn add_file(
         &mut self,
-        bytes: &Vec<u8>,
+        bytes: &[u8],
         partitions: Option<Vec<(String, String)>>,
     ) -> Result<(), DeltaTransactionError> {
+        let mut partition_values = HashMap::new();
+        if let Some(partitions) = &partitions {
+            for (key, value) in partitions {
+                partition_values.insert(key.clone(), value.clone());
+            }
+        }
+
         let path = self.generate_parquet_filename(partitions);
         let storage_path = self
             .delta_table
@@ -1112,7 +1119,7 @@ impl<'a> DeltaTransaction<'a> {
         self.actions.push(Action::add(action::Add {
             path,
             size: bytes.len() as i64,
-            partitionValues: HashMap::default(),
+            partitionValues: partition_values,
             partitionValues_parsed: None,
             modificationTime: modification_time,
             dataChange: true,
@@ -1125,13 +1132,12 @@ impl<'a> DeltaTransaction<'a> {
     }
 
     fn generate_parquet_filename(&self, partitions: Option<Vec<(String, String)>>) -> String {
-        let mut path_parts = vec![];
         /*
          * The specific file naming for parquet is not well documented including the preceding five
          * zeros and the trailing c000 string
          *
          */
-        path_parts.push(format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4()));
+        let mut path_parts = vec![format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4())];
 
         if let Some(partitions) = partitions {
             for partition in partitions {
