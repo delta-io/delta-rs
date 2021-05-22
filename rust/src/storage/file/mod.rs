@@ -44,6 +44,7 @@ impl FileStorageBackend {
 
 #[async_trait::async_trait]
 impl StorageBackend for FileStorageBackend {
+    #[inline]
     fn join_path(&self, path: &str, path_to_join: &str) -> String {
         let new_path = Path::new(path);
         new_path
@@ -53,11 +54,17 @@ impl StorageBackend for FileStorageBackend {
             .unwrap()
     }
 
+    #[inline]
     fn join_paths(&self, paths: &[&str]) -> String {
         let mut iter = paths.iter();
         let mut path = PathBuf::from(iter.next().unwrap_or(&""));
         iter.for_each(|s| path.push(s));
         path.into_os_string().into_string().unwrap()
+    }
+
+    #[inline]
+    fn trim_path(&self, path: &str) -> String {
+        path.trim_end_matches(std::path::MAIN_SEPARATOR).to_string()
     }
 
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {

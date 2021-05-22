@@ -339,6 +339,7 @@ pub struct ObjectMeta {
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + Debug {
     /// Create a new path by appending `path_to_join` as a new component to `path`.
+    #[inline]
     fn join_path(&self, path: &str, path_to_join: &str) -> String {
         let normalized_path = path.trim_end_matches('/');
         format!("{}/{}", normalized_path, path_to_join)
@@ -346,12 +347,19 @@ pub trait StorageBackend: Send + Sync + Debug {
 
     /// More efficient path join for multiple path components. Use this method if you need to
     /// combine more than two path components.
+    #[inline]
     fn join_paths(&self, paths: &[&str]) -> String {
         paths
             .iter()
             .map(|s| s.trim_end_matches('/'))
             .collect::<Vec<_>>()
             .join("/")
+    }
+
+    /// Returns trimed path with trailing path separator removed.
+    #[inline]
+    fn trim_path(&self, path: &str) -> String {
+        path.trim_end_matches('/').to_string()
     }
 
     /// Fetch object metadata without reading the actual content

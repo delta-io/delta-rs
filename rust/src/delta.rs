@@ -3,7 +3,7 @@
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 
 use std::cmp::Ordering;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
 
@@ -149,11 +149,14 @@ pub enum DeltaTableError {
         /// The invalid partition filter used.
         partition_filter: String,
     },
-    /// Error returned when Vacuume retention period is below the safe threshold
+    /// Error returned when Vacuum retention period is below the safe threshold
     #[error(
         "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
     )]
     InvalidVacuumRetentionPeriod,
+    /// Generic Delta Table error
+    #[error("Generic DeltaTable error: {0}")]
+    Generic(String),
 }
 
 /// Delta table metadata
@@ -286,6 +289,20 @@ pub struct DeltaTable {
 }
 
 impl DeltaTable {
+    /// Return path relative to table_path
+    #[inline]
+    fn rel_path<'a>(&self, path: &'a str) -> Result<&'a str, DeltaTableError> {
+        if path.starts_with(&self.table_path) {
+            // plus one to account for path separator
+            Ok(&path[self.table_path.len() + 1..])
+        } else {
+            Err(DeltaTableError::Generic(format!(
+                "Table path `{}` is not a prefix of path `{}`",
+                self.table_path, path
+            )))
+        }
+    }
+
     fn version_to_log_path(&self, version: DeltaDataTypeVersion) -> String {
         let version = format!("{:020}.json", version);
         self.storage.join_path(&self.log_path, &version)
@@ -669,6 +686,15 @@ impl DeltaTable {
             .collect()
     }
 
+    /// Returns file names present in the loaded state in HashSet
+    pub fn get_file_set(&self) -> HashSet<String> {
+        self.state
+            .files
+            .iter()
+            .map(|add| add.path.clone())
+            .collect()
+    }
+
     /// Returns a copy of the file paths present in the loaded state.
     pub fn get_file_paths(&self) -> Vec<String> {
         self.state
@@ -709,7 +735,7 @@ impl DeltaTable {
     }
 
     /// List files no longer referenced by a Delta table and are older than the retention threshold.
-    fn get_stale_files(&self, retention_hours: u64) -> Result<Vec<String>, DeltaTableError> {
+    fn get_stale_files(&self, retention_hours: u64) -> Result<HashSet<String>, DeltaTableError> {
         if retention_hours < 168 {
             return Err(DeltaTableError::InvalidVacuumRetentionPeriod);
         }
@@ -724,8 +750,8 @@ impl DeltaTable {
             .get_tombstones()
             .iter()
             .filter(|tombstone| tombstone.deletionTimestamp < delete_before_timestamp)
-            .map(|tombstone| self.storage.join_path(&self.table_path, &tombstone.path))
-            .collect::<Vec<String>>())
+            .map(|tombstone| tombstone.path.to_owned())
+            .collect::<HashSet<String>>())
     }
 
     /// Whether a path should be hidden for delta-related file operations, such as Vacuum.
@@ -733,26 +759,17 @@ impl DeltaTable {
     /// deleted even if they'd normally be hidden. The _db_index directory contains (bloom filter)
     /// indexes and these must be deleted when the data they are tied to is deleted.
     fn is_hidden_directory(&self, path_name: &str) -> Result<bool, DeltaTableError> {
-        Ok(
-            (path_name.starts_with(&self.storage.join_path(&self.table_path, "."))
-                || path_name.starts_with(&self.storage.join_path(&self.table_path, "_")))
-                && !path_name
-                    .starts_with(&self.storage.join_path(&self.table_path, "_delta_index"))
-                && !path_name
-                    .starts_with(&self.storage.join_path(&self.table_path, "_change_data"))
-                && !self
-                    .state
-                    .current_metadata
-                    .as_ref()
-                    .ok_or(DeltaTableError::NoMetadata)?
-                    .partition_columns
-                    .iter()
-                    .any(|partition_column| {
-                        path_name.starts_with(
-                            &self.storage.join_path(&self.table_path, partition_column),
-                        )
-                    }),
-        )
+        Ok((path_name.starts_with(".") || path_name.starts_with("_"))
+            && !path_name.starts_with("_delta_index")
+            && !path_name.starts_with("_change_data")
+            && !self
+                .state
+                .current_metadata
+                .as_ref()
+                .ok_or(DeltaTableError::NoMetadata)?
+                .partition_columns
+                .iter()
+                .any(|partition_column| path_name.starts_with(partition_column)))
     }
 
     /// Run the Vacuum command on the Delta Table: delete files no longer referenced by a Delta table and are older than the retention threshold.
@@ -762,33 +779,43 @@ impl DeltaTable {
         retention_hours: u64,
         dry_run: bool,
     ) -> Result<Vec<String>, DeltaTableError> {
-        let tombstones_path = self.get_stale_files(retention_hours)?;
+        let expired_tombstones = self.get_stale_files(retention_hours)?;
+        let valid_files = self.get_file_set();
 
-        let mut tombstones = vec![];
+        let mut files_to_delete = vec![];
         let mut all_files = self.storage.list_objs(&self.table_path).await?;
+
         while let Some(obj_meta) = all_files.next().await {
             let obj_meta = obj_meta?;
-            let is_not_valid_file = !self.get_file_paths().contains(&obj_meta.path);
-            let is_valid_tombstone = tombstones_path.contains(&obj_meta.path);
-            let is_not_hidden_directory = !self.is_hidden_directory(&obj_meta.path)?;
-            if is_not_valid_file && is_valid_tombstone && is_not_hidden_directory {
-                tombstones.push(obj_meta.path);
+            let rel_path = self.rel_path(&obj_meta.path)?;
+
+            if valid_files.contains(rel_path) // file is still being tracked in table
+                || !expired_tombstones.contains(rel_path) // file is not an expired tombstone
+                || self.is_hidden_directory(rel_path)?
+            {
+                continue;
             }
+
+            files_to_delete.push(obj_meta.path);
         }
 
         if dry_run {
-            return Ok(tombstones);
+            return Ok(files_to_delete);
         }
 
-        for tombstone in &tombstones {
-            match self.storage.delete_obj(&tombstone).await {
+        for rel_path in &files_to_delete {
+            match self
+                .storage
+                .delete_obj(&self.storage.join_path(&self.table_path, rel_path))
+                .await
+            {
                 Ok(_) => continue,
                 Err(StorageError::NotFound) => continue,
                 Err(err) => return Err(DeltaTableError::StorageError { source: err }),
             }
         }
 
-        Ok(tombstones)
+        Ok(files_to_delete)
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
@@ -821,12 +848,13 @@ impl DeltaTable {
         table_path: &str,
         storage_backend: Box<dyn StorageBackend>,
     ) -> Result<Self, DeltaTableError> {
-        let log_path_normalized = storage_backend.join_path(table_path, "_delta_log");
+        let table_path = storage_backend.trim_path(table_path);
+        let log_path_normalized = storage_backend.join_path(&table_path, "_delta_log");
         Ok(Self {
             version: 0,
             state: DeltaTableState::default(),
             storage: storage_backend,
-            table_path: table_path.to_string(),
+            table_path,
             last_check_point: None,
             log_path: log_path_normalized,
             version_timestamp: HashMap::new(),
@@ -1284,9 +1312,8 @@ pub fn crate_version() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::action;
-    use super::action::Action;
-    use super::{process_action, DeltaTableState};
+    use super::*;
+    use pretty_assertions::assert_eq;
     use std::collections::HashMap;
 
     #[test]
@@ -1315,5 +1342,42 @@ mod tests {
 
         assert_eq!(2, *state.app_transaction_version.get("abc").unwrap());
         assert_eq!(1, *state.app_transaction_version.get("xyz").unwrap());
+    }
+
+    #[test]
+    fn normalize_table_path() {
+        for table_path in [
+            "./tests/data/delta-0.8.0/",
+            "./tests/data/delta-0.8.0//",
+            "./tests/data/delta-0.8.0",
+        ]
+        .iter()
+        {
+            let fsbackend = storage::get_backend_for_uri(table_path).unwrap();
+            let table = DeltaTable::new(table_path, fsbackend).unwrap();
+            assert_eq!(table.table_path, "./tests/data/delta-0.8.0");
+        }
+    }
+
+    #[test]
+    fn rel_path() {
+        let table_path = "./tests/data/delta-0.8.0/";
+        let fsbackend = storage::get_backend_for_uri(table_path).unwrap();
+        let table = DeltaTable::new(table_path, fsbackend).unwrap();
+
+        assert!(matches!(
+            table.rel_path("./tests/data/delta-0.8.0/abc/123"),
+            Ok("abc/123"),
+        ));
+
+        assert!(matches!(
+            table.rel_path("./tests/data/delta-0.8.0/abc.json"),
+            Ok("abc.json"),
+        ));
+
+        assert!(matches!(
+            table.rel_path("./tests/abc.json"),
+            Err(DeltaTableError::Generic(_)),
+        ));
     }
 }

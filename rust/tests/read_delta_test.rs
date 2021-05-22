@@ -210,7 +210,7 @@ async fn read_delta_8_0_table_with_partitions() {
 
 #[tokio::test]
 async fn vacuum_delta_8_0_table() {
-    let mut table = deltalake::open_table("./tests/data/delta-0.8.0")
+    let mut table = deltalake::open_table("./tests/data/delta-0.8.0/")
         .await
         .unwrap();
 
