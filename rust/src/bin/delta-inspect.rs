@@ -54,7 +54,7 @@ async fn main() -> anyhow::Result<()> {
             let files = if files_matches.is_present("full_path") {
                 table.get_file_paths()
             } else {
-                table.get_files().clone()
+                table.get_files()
             };
 
             files.iter().for_each(|f| println!("{}", f));

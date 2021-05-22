@@ -759,7 +759,7 @@ impl DeltaTable {
     /// deleted even if they'd normally be hidden. The _db_index directory contains (bloom filter)
     /// indexes and these must be deleted when the data they are tied to is deleted.
     fn is_hidden_directory(&self, path_name: &str) -> Result<bool, DeltaTableError> {
-        Ok((path_name.starts_with(".") || path_name.starts_with("_"))
+        Ok((path_name.starts_with('.') || path_name.starts_with('_'))
             && !path_name.starts_with("_delta_index")
             && !path_name.starts_with("_change_data")
             && !self
