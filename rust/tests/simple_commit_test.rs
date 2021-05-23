@@ -13,8 +13,11 @@ use std::collections::HashMap;
 
 use deltalake::{action, DeltaTransactionError};
 
+#[cfg(feature = "s3")]
 mod simple_commit_s3 {
-    #[cfg(all(feature = "s3", feature = "dynamodb"))]
+    use super::*;
+
+    #[cfg(feature = "dynamodb")]
     #[tokio::test]
     async fn test_two_commits_s3() {
         let path = "s3://deltars/simple_commit_rw1";
@@ -24,7 +27,7 @@ mod simple_commit_s3 {
         test_two_commits(path).await.unwrap();
     }
 
-    #[cfg(all(feature = "s3", not(feature = "dynamodb")))]
+    #[cfg(not(feature = "dynamodb"))]
     #[tokio::test]
     async fn test_two_commits_s3_fails_with_no_lock() {
         use deltalake::{StorageError, TransactionCommitAttemptError};
@@ -45,6 +48,12 @@ mod simple_commit_s3 {
         result.unwrap();
 
         panic!("S3 commit without dynamodb locking is expected to fail")
+    }
+
+    async fn prepare_s3(path: &str) {
+        let delta_log = format!("{}/_delta_log", path);
+        s3_common::cleanup_dir_except(&delta_log, vec!["00000000000000000000.json".to_string()])
+            .await;
     }
 }
 
@@ -209,10 +218,4 @@ fn prepare_fs() {
         "./tests/data/simple_commit/_delta_log",
         vec!["00000000000000000000.json".to_string()],
     );
-}
-
-#[cfg(feature = "s3")]
-async fn prepare_s3(path: &str) {
-    let delta_log = format!("{}/_delta_log", path);
-    s3_common::cleanup_dir_except(&delta_log, vec!["00000000000000000000.json".to_string()]).await;
 }
