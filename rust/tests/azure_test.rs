@@ -6,6 +6,7 @@ mod azure {
      * Should there be test failures, or if you need more files uploaded into this account, let him
      * know
      */
+    #[ignore]
     #[tokio::test]
     async fn test_azure_simple() {
         std::env::set_var("AZURE_STORAGE_ACCOUNT", "deltars");
