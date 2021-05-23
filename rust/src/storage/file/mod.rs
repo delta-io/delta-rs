@@ -180,4 +180,24 @@ mod tests {
         assert_eq!(&backend.join_paths(&["foo"]), "foo",);
         assert_eq!(&backend.join_paths(&[]), "",);
     }
+
+    #[test]
+    fn trim_path() {
+        let be = FileStorageBackend::new("root");
+        let path = be.join_paths(&["foo", "bar"]);
+        assert_eq!(be.trim_path(&path), path);
+        assert_eq!(
+            be.trim_path(&format!("{}{}", path, std::path::MAIN_SEPARATOR)),
+            path,
+        );
+        assert_eq!(
+            be.trim_path(&format!(
+                "{}{}{}",
+                path,
+                std::path::MAIN_SEPARATOR,
+                std::path::MAIN_SEPARATOR
+            )),
+            path,
+        );
+    }
 }

@@ -417,27 +417,6 @@ mod tests {
         assert_eq!(uri2.into_localpath().unwrap(), "/foo/bar");
     }
 
-    #[test]
-    fn trim_path() {
-        let be = file::FileStorageBackend::new("./root");
-        assert_eq!(be.trim_path("/foo/bar"), "/foo/bar");
-        assert_eq!(be.trim_path("/foo/bar/"), "/foo/bar");
-        assert_eq!(be.trim_path("/foo/bar//"), "/foo/bar");
-    }
-
-    #[cfg(feature = "s3")]
-    #[test]
-    fn test_parse_s3_object_uri() {
-        let uri = parse_uri("s3://foo/bar").unwrap();
-        assert_eq!(
-            uri.into_s3object().unwrap(),
-            s3::S3Object {
-                bucket: "foo",
-                key: "bar",
-            }
-        );
-    }
-
     #[cfg(feature = "azure")]
     #[test]
     fn test_parse_azure_object_uri() {

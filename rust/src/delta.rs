@@ -1344,39 +1344,41 @@ mod tests {
         assert_eq!(1, *state.app_transaction_version.get("xyz").unwrap());
     }
 
+    #[cfg(feature = "s3")]
     #[test]
     fn normalize_table_path() {
         for table_path in [
-            "./tests/data/delta-0.8.0/",
-            "./tests/data/delta-0.8.0//",
-            "./tests/data/delta-0.8.0",
+            "s3://tests/data/delta-0.8.0/",
+            "s3://tests/data/delta-0.8.0//",
+            "s3://tests/data/delta-0.8.0",
         ]
         .iter()
         {
-            let fsbackend = storage::get_backend_for_uri(table_path).unwrap();
-            let table = DeltaTable::new(table_path, fsbackend).unwrap();
-            assert_eq!(table.table_path, "./tests/data/delta-0.8.0");
+            let be = storage::get_backend_for_uri(table_path).unwrap();
+            let table = DeltaTable::new(table_path, be).unwrap();
+            assert_eq!(table.table_path, "s3://tests/data/delta-0.8.0");
         }
     }
 
+    #[cfg(feature = "s3")]
     #[test]
     fn rel_path() {
-        let table_path = "./tests/data/delta-0.8.0/";
-        let fsbackend = storage::get_backend_for_uri(table_path).unwrap();
-        let table = DeltaTable::new(table_path, fsbackend).unwrap();
+        let table_path = "s3://tests/data/delta-0.8.0/";
+        let be = storage::get_backend_for_uri(table_path).unwrap();
+        let table = DeltaTable::new(table_path, be).unwrap();
 
         assert!(matches!(
-            table.rel_path("./tests/data/delta-0.8.0/abc/123"),
+            table.rel_path("s3://tests/data/delta-0.8.0/abc/123"),
             Ok("abc/123"),
         ));
 
         assert!(matches!(
-            table.rel_path("./tests/data/delta-0.8.0/abc.json"),
+            table.rel_path("s3://tests/data/delta-0.8.0/abc.json"),
             Ok("abc.json"),
         ));
 
         assert!(matches!(
-            table.rel_path("./tests/abc.json"),
+            table.rel_path("s3://tests/abc.json"),
             Err(DeltaTableError::Generic(_)),
         ));
     }
