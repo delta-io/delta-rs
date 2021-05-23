@@ -37,7 +37,10 @@ impl TableData {
     }
 
     fn files(&self) -> Vec<String> {
-        self.actual.get_files()
+        self.actual
+            .get_files_iter()
+            .map(|f| f.to_string())
+            .collect()
     }
 }
 

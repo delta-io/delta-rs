@@ -51,13 +51,14 @@ async fn main() -> anyhow::Result<()> {
                 Err(e) => e.exit(),
             };
 
-            let files = if files_matches.is_present("full_path") {
-                table.get_file_paths()
+            if files_matches.is_present("full_path") {
+                table
+                    .get_file_paths()
+                    .iter()
+                    .for_each(|f| println!("{}", f));
             } else {
-                table.get_files().clone()
+                table.get_files().iter().for_each(|f| println!("{}", f));
             };
-
-            files.iter().for_each(|f| println!("{}", f));
         }
         Some(("info", info_matches)) => {
             let table_path = info_matches.value_of("path").unwrap();
