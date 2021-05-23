@@ -15,7 +15,12 @@ use std::time::Duration;
 #[tokio::test]
 #[cfg(all(feature = "s3", feature = "dynamodb"))]
 async fn concurrent_writes_s3() {
-    prepare_s3().await;
+    s3_common::setup_dynamodb("concurrent_writes");
+    s3_common::cleanup_dir_except(
+        "s3://deltars/concurrent_workers/_delta_log",
+        vec!["00000000000000000000.json".to_string()],
+    )
+    .await;
     run_test(|name| Worker::new("s3://deltars/concurrent_workers", name)).await;
 }
 
@@ -115,14 +120,4 @@ fn prepare_fs() {
         "./tests/data/concurrent_workers/_delta_log",
         vec!["00000000000000000000.json".to_string()],
     );
-}
-
-#[cfg(feature = "s3")]
-async fn prepare_s3() {
-    s3_common::setup_dynamodb("concurrent_writes");
-    s3_common::cleanup_dir_except(
-        "s3://deltars/concurrent_workers/_delta_log",
-        vec!["00000000000000000000.json".to_string()],
-    )
-    .await;
 }
