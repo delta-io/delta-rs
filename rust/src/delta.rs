@@ -677,13 +677,16 @@ impl DeltaTable {
         &self.state.files
     }
 
+    /// Returns an iterator of file names present in the loaded state
+    #[inline]
+    pub fn get_files_iter(&self) -> impl Iterator<Item = &str> {
+        self.state.files.iter().map(|add| add.path.as_str())
+    }
+
     /// Returns a collection of file names present in the loaded state
-    pub fn get_files(&self) -> Vec<String> {
-        self.state
-            .files
-            .iter()
-            .map(|add| add.path.clone())
-            .collect()
+    #[inline]
+    pub fn get_files(&self) -> Vec<&str> {
+        self.get_files_iter().collect()
     }
 
     /// Returns file names present in the loaded state in HashSet

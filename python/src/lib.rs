@@ -128,7 +128,11 @@ impl RawDeltaTable {
     }
 
     pub fn files(&self) -> PyResult<Vec<String>> {
-        Ok(self._table.get_files())
+        Ok(self
+            ._table
+            .get_files_iter()
+            .map(|f| f.to_string())
+            .collect())
     }
 
     pub fn file_paths(&self) -> PyResult<Vec<String>> {
