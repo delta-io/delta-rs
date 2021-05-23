@@ -687,11 +687,11 @@ impl DeltaTable {
     }
 
     /// Returns file names present in the loaded state in HashSet
-    pub fn get_file_set(&self) -> HashSet<String> {
+    pub fn get_file_set(&self) -> HashSet<&str> {
         self.state
             .files
             .iter()
-            .map(|add| add.path.clone())
+            .map(|add| add.path.as_str())
             .collect()
     }
 
@@ -735,7 +735,7 @@ impl DeltaTable {
     }
 
     /// List files no longer referenced by a Delta table and are older than the retention threshold.
-    fn get_stale_files(&self, retention_hours: u64) -> Result<HashSet<String>, DeltaTableError> {
+    fn get_stale_files(&self, retention_hours: u64) -> Result<HashSet<&str>, DeltaTableError> {
         if retention_hours < 168 {
             return Err(DeltaTableError::InvalidVacuumRetentionPeriod);
         }
@@ -750,8 +750,8 @@ impl DeltaTable {
             .get_tombstones()
             .iter()
             .filter(|tombstone| tombstone.deletionTimestamp < delete_before_timestamp)
-            .map(|tombstone| tombstone.path.to_owned())
-            .collect::<HashSet<String>>())
+            .map(|tombstone| tombstone.path.as_str())
+            .collect::<HashSet<_>>())
     }
 
     /// Whether a path should be hidden for delta-related file operations, such as Vacuum.
