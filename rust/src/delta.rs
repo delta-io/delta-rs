@@ -661,11 +661,11 @@ impl DeltaTable {
     }
 
     /// Returns a collection of file names present in the loaded state
-    pub fn get_files(&self) -> Vec<String> {
+    pub fn get_files(&self) -> Vec<&str> {
         self.state
             .files
             .iter()
-            .map(|add| add.path.clone())
+            .map(|add| add.path.as_str())
             .collect()
     }
 
