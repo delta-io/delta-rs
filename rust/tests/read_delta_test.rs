@@ -210,12 +210,12 @@ async fn read_delta_8_0_table_with_partitions() {
 
 #[tokio::test]
 async fn vacuum_delta_8_0_table() {
-    let mut table = deltalake::open_table("./tests/data/delta-0.8.0/")
+    let backend = FileStorageBackend::new("");
+    let mut table = deltalake::open_table(&backend.join_paths(&["tests", "data", "delta-0.8.0"]))
         .await
         .unwrap();
 
     let retention_hours = 1;
-    let backend = FileStorageBackend::new("./tests/data/delta-0.8.0");
     let dry_run = true;
 
     assert!(matches!(
@@ -227,10 +227,12 @@ async fn vacuum_delta_8_0_table() {
 
     assert_eq!(
         table.vacuum(retention_hours, dry_run).await.unwrap(),
-        vec![backend.join_path(
-            "./tests/data/delta-0.8.0",
-            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"
-        )]
+        vec![backend.join_paths(&[
+            "tests",
+            "data",
+            "delta-0.8.0",
+            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet",
+        ])]
     );
 
     let retention_hours = SystemTime::now()
