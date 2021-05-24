@@ -1118,11 +1118,11 @@ impl<'a> DeltaTransaction<'a> {
 
         self.actions.push(Action::add(action::Add {
             path,
+            partition_values,
+            modification_time,
             size: bytes.len() as i64,
-            partitionValues: partition_values,
-            partitionValues_parsed: None,
-            modificationTime: modification_time,
-            dataChange: true,
+            partition_values_parsed: None,
+            data_change: true,
             stats: None,
             stats_parsed: None,
             tags: None,
