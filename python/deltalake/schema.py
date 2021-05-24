@@ -1,9 +1,7 @@
-from typing import Dict, List, Any, Optional
-
 import json
+from typing import Any, Dict, List, Optional
 
 import pyarrow
-
 
 # TODO: implement this module in Rust land to avoid JSON serialization
 # https://github.com/delta-io/delta-rs/issues/95
@@ -23,7 +21,7 @@ class DataType:
     def __repr__(self) -> str:
         return self.__str__()
 
-    def __eq__(self, other: "DataType") -> bool:
+    def __eq__(self, other: "DataType") -> bool:  # type: ignore
         return self.type == other.type
 
     @classmethod
@@ -36,11 +34,11 @@ class DataType:
         """
         type_class = json_dict["type"]
         if type_class == "map":
-            key_type = {"type": json_dict["keyType"]}
-            value_type = {"type": json_dict["valueType"]}
+            key_type_dict = {"type": json_dict["keyType"]}
+            value_type_dict = {"type": json_dict["valueType"]}
             value_contains_null = json_dict["valueContainsNull"]
-            key_type = cls.from_dict(json_dict=key_type)
-            value_type = cls.from_dict(json_dict=value_type)
+            key_type = cls.from_dict(json_dict=key_type_dict)
+            value_type = cls.from_dict(json_dict=value_type_dict)
             return MapType(
                 key_type=key_type,
                 value_type=value_type,
@@ -78,13 +76,15 @@ class DataType:
 class MapType(DataType):
     """Concrete class for map data types."""
 
-    def __init__(self, key_type: str, value_type: str, value_contains_null: bool):
+    def __init__(
+        self, key_type: "DataType", value_type: "DataType", value_contains_null: bool
+    ):
         super().__init__("map")
         self.key_type = key_type
         self.value_type = value_type
         self.value_contains_null = value_contains_null
 
-    def __eq__(self, other: "DataType") -> bool:
+    def __eq__(self, other: "DataType") -> bool:  # type: ignore
         return (
             isinstance(other, MapType)
             and self.key_type == other.key_type
@@ -104,7 +104,7 @@ class ArrayType(DataType):
         self.element_type = element_type
         self.contains_null = contains_null
 
-    def __eq__(self, other: "DataType") -> bool:
+    def __eq__(self, other: "DataType") -> bool:  # type: ignore
         return (
             isinstance(other, ArrayType)
             and self.element_type == other.element_type
@@ -122,7 +122,7 @@ class StructType(DataType):
         super().__init__("struct")
         self.fields = fields
 
-    def __eq__(self, other: "DataType") -> bool:
+    def __eq__(self, other: "DataType") -> bool:  # type: ignore
         return isinstance(other, StructType) and self.fields == other.fields
 
     def __str__(self) -> str:
@@ -148,7 +148,7 @@ class Field:
     def __str__(self) -> str:
         return f"Field({self.name}: {self.type} nullable({self.nullable}) metadata({self.metadata}))"
 
-    def __eq__(self, other: "Field") -> bool:
+    def __eq__(self, other: "Field") -> bool:  # type: ignore
         return (
             self.type == other.type
             and self.name == other.name

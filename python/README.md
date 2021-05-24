@@ -24,16 +24,25 @@ openssl upgrade.
 Develop
 -------
 
+#### Setup your local environment with virtualenv
+```bash
+$ make setup-venv
+```
+
+#### Activate it
+```bash
+$ source ./venv/bin/activate
+```
+
+#### Ready to develop with maturin
+
 [maturin](https://github.com/PyO3/maturin) is used to build the python package.
 
 To install development version of the package into your current Python environment:
 
 ```bash
-$ maturin develop
+$ make develop
 ```
-
-Code are formatted with https://github.com/psf/black.
-
 
 Build manylinux wheels
 ----------------------
