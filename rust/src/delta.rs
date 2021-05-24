@@ -19,9 +19,10 @@ use parquet::file::{
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::convert::TryFrom;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+
+use crate::action::CommitInfo;
 
 use super::action;
 use super::action::{Action, DeltaOperation};
@@ -269,7 +270,7 @@ struct DeltaTableState {
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: Vec<action::Remove>,
     files: Vec<action::Add>,
-    commit_infos: Vec<Value>,
+    commit_infos: Vec<action::CommitInfo>,
     app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
     min_reader_version: i32,
     min_writer_version: i32,
@@ -329,6 +330,16 @@ impl DeltaTable {
         }
 
         checkpoint_data_paths
+    }
+
+    /// Retruns commit history
+    pub async fn history(&mut self) -> Result<Vec<CommitInfo>, DeltaTableError> {
+        self.load().await?;
+        Ok(self.state
+            .commit_infos
+            .iter()
+            .map(CommitInfo::clone)
+            .collect())
     }
 
     async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
@@ -1380,6 +1391,7 @@ pub fn crate_version() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    use super::open_table;
     use super::action;
     use super::action::Action;
     use super::{process_action, DeltaTableState};
@@ -1411,5 +1423,18 @@ mod tests {
 
         assert_eq!(2, *state.app_transaction_version.get("abc").unwrap());
         assert_eq!(1, *state.app_transaction_version.get("xyz").unwrap());
+    }
+
+    macro_rules! aw {
+        ($e:expr) => {
+            tokio_test::block_on($e)
+        };
+      }
+
+    #[test]
+    fn opens_table_with_history() {
+        let mut table = aw!(open_table("tests/data/delta-0.8.0")).unwrap();
+        let history = aw!(table.history()).unwrap();
+        assert_eq!(4, history.len());
     }
 }

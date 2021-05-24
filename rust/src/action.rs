@@ -6,7 +6,6 @@ use std::collections::HashMap;
 
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 
 use super::schema::*;
 
@@ -602,6 +601,82 @@ impl Remove {
     }
 }
 
+/// Commit Info
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitInfo {
+    /// ...
+    pub version: Option<DeltaDataTypeLong>,
+    /// ...
+    pub read_version: Option<DeltaDataTypeLong>,
+    /// ...
+    pub user_id: Option<String>,
+    /// ...
+    pub user_name: Option<String>,
+    /// ...
+    pub timestamp: DeltaDataTypeTimestamp,
+    /// ...
+    pub operation: String,
+    /// ...
+    pub operation_parameters: HashMap<String,String>,
+    /// ...
+    pub job: Option<HashMap<String,String>>,
+    /// ...
+    pub notebook: Option<HashMap<String,String>>,
+    /// ...
+    pub cluster_id: Option<String>,
+    /// ...
+    pub isolation_level: Option<String>,
+    /// ...
+    pub is_blind_append: bool,
+    /// ...
+    pub operation_metrics: HashMap<String,String>,
+    /// ...
+    pub user_metadata: Option<String>
+}
+
+impl CommitInfo {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
+        let mut re = Self {
+            ..Default::default()
+        };
+        for (i, (name, _)) in record.get_column_iter().enumerate() {
+            match name.as_str() {
+                "timestamp" => {
+                    re.timestamp = record
+                        .get_long(i)
+                        .map_err(|_| gen_action_type_error("commitInfo", "timestamp", "long"))?;
+                }
+                "operation" => {
+                    re.operation = record
+                        .get_string(i)
+                        .map_err(|_| gen_action_type_error("commitInfo", "operation", "string"))?
+                        .clone();
+                }
+                "operationParameters" => {
+                    unimplemented!("FIXME add implementation")
+                }
+                "operationMetrics" => {
+                    unimplemented!("FIXME add implementation")
+                }
+                "isBlindAppend" => {
+                    re.is_blind_append = record
+                        .get_bool(i)
+                        .map_err(|_| gen_action_type_error("commitInfo", "isBlindAppend", "bool"))?;
+                }
+                _ => {
+                    log::warn!(
+                        "Not yet implemented field name `{}` for txn action: {:?}",
+                        name,
+                        record
+                    );
+                }
+            }
+        }
+        Ok(re)
+    }
+}
+
 /// Action used by streaming systems to track progress using application-specific versions to
 /// enable idempotency.
 #[derive(Serialize, Deserialize, Debug, Default)]
@@ -715,7 +790,7 @@ pub enum Action {
     /// Describes the minimum reader and writer versions required to read or write to the table.
     protocol(Protocol),
     /// Describes commit provenance information for the table.
-    commitInfo(Value),
+    commitInfo(CommitInfo),
 }
 
 impl Action {
@@ -760,9 +835,7 @@ impl Action {
             "remove" => Action::remove(Remove::from_parquet_record(col_data)?),
             "txn" => Action::txn(Txn::from_parquet_record(col_data)?),
             "protocol" => Action::protocol(Protocol::from_parquet_record(col_data)?),
-            "commitInfo" => {
-                unimplemented!("FIXME: support commitInfo");
-            }
+            "commitInfo" => Action::commitInfo(CommitInfo::from_parquet_record(col_data)?),
             name => {
                 return Err(ActionError::InvalidField(format!(
                     "Unexpected action from checkpoint: {}",
@@ -828,6 +901,32 @@ mod tests {
     use super::*;
     use parquet::file::reader::{FileReader, SerializedFileReader};
     use std::fs::File;
+
+    #[test]
+    fn commit_info_serde() {
+        let line = serde_json::json!({
+            "commitInfo": {
+                "timestamp":1615043767813 as i64,
+                "operation":"WRITE",
+                "operationParameters":{
+                    "mode":"Overwrite",
+                    "partitionBy":"[]"
+                },
+                "isBlindAppend":false,
+                "operationMetrics":{
+                    "numFiles":"2",
+                    "numOutputBytes":"885",
+                    "numOutputRows":"5"
+                }
+            }
+        }).to_string();
+        match serde_json::from_str(line.as_str()).unwrap() {
+            Action::commitInfo(ci) => {
+                assert_eq!("WRITE", ci.operation);
+            }
+            _ => panic!("commit info parsing is broken")
+        }
+    }
 
     #[test]
     fn test_add_action_without_partition_values_and_stats() {

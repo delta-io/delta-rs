@@ -4,6 +4,9 @@ extern crate arrow;
 extern crate pyo3;
 
 use arrow::datatypes::Schema as ArrowSchema;
+use deltalake::DeltaDataTypeLong;
+use deltalake::DeltaDataTypeTimestamp;
+use deltalake::action::CommitInfo;
 use deltalake::partitions::PartitionFilter;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -54,9 +57,35 @@ struct RawDeltaTableMetaData {
     #[pyo3(get)]
     partition_columns: Vec<String>,
     #[pyo3(get)]
-    created_time: deltalake::DeltaDataTypeTimestamp,
+    created_time: DeltaDataTypeTimestamp,
     #[pyo3(get)]
     configuration: HashMap<String, String>,
+}
+
+#[pyclass]
+struct DeltaCommit {
+    #[pyo3(get)]
+    version: Option<DeltaDataTypeLong>,
+    #[pyo3(get)]
+    timestamp: DeltaDataTypeTimestamp,
+    #[pyo3(get)]
+    operation: String,
+    #[pyo3(get)]
+    is_blind_append: bool,
+    #[pyo3(get)]
+    user_metadata: Option<String>
+}
+
+impl DeltaCommit {
+    fn from(ci: &CommitInfo) -> DeltaCommit {
+        DeltaCommit {
+            version: ci.version,
+            timestamp: ci.timestamp,
+            operation: ci.operation.clone(),
+            is_blind_append: ci.is_blind_append,
+            user_metadata: ci.user_metadata.clone()
+        }
+    }
 }
 
 #[pymethods]
@@ -167,6 +196,13 @@ impl RawDeltaTable {
         )
         .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))
     }
+
+    pub fn history(&mut self) -> PyResult<Vec<DeltaCommit>> {
+        let hist = rt()?
+            .block_on(self._table.history())
+            .map_err(PyDeltaTableError::from_raw)?;
+        Ok(hist.iter().map(DeltaCommit::from).collect())
+    }
 }
 
 #[pyfunction]
@@ -180,6 +216,7 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
+    m.add_class::<DeltaCommit>()?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add("DeltaTableError", py.get_type::<PyDeltaTableError>())?;
