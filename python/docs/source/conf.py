@@ -12,6 +12,7 @@
 #
 import os
 import sys
+
 import toml
 
 sys.path.insert(0, os.path.abspath("../deltalake/"))
@@ -50,6 +51,7 @@ nitpick_ignore = [
     ("py:class", "pyarrow.lib.Table"),
     ("py:class", "pyarrow.lib.DataType"),
     ("py:class", "pyarrow.lib.Field"),
+    ("py:class", "RawDeltaTable"),
 ]
 
 # Add any paths that contain templates here, relative to this directory.

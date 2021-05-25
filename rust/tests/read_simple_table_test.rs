@@ -16,7 +16,7 @@ async fn read_simple_table() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
             "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
             "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
@@ -30,11 +30,33 @@ async fn read_simple_table() {
         tombstones[0],
         deltalake::action::Remove {
             path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
-            deletionTimestamp: 1587968596250,
-            dataChange: true,
+            deletion_timestamp: 1587968596250,
+            data_change: true,
             ..Default::default()
         }
     );
+    #[cfg(unix)]
+    {
+        let paths: Vec<String> = vec![
+                "./tests/data/simple_table/part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet".to_string(),
+                "./tests/data/simple_table/part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet".to_string(),
+                "./tests/data/simple_table/part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet".to_string(),
+                "./tests/data/simple_table/part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet".to_string(),
+                "./tests/data/simple_table/part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet".to_string(),
+            ];
+        assert_eq!(table.get_file_paths(), paths);
+    }
+    #[cfg(windows)]
+    {
+        let paths: Vec<String> = vec![
+                "./tests/data/simple_table\\part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet".to_string(),
+                "./tests/data/simple_table\\part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet".to_string(),
+                "./tests/data/simple_table\\part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet".to_string(),
+                "./tests/data/simple_table\\part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet".to_string(),
+                "./tests/data/simple_table\\part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet".to_string(),
+            ];
+        assert_eq!(table.get_file_paths(), paths);
+    }
 }
 
 #[tokio::test]
@@ -47,7 +69,7 @@ async fn read_simple_table_with_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-a72b1fb3-f2df-41fe-a8f0-e65b746382dd-c000.snappy.parquet",
             "part-00001-c506e79a-0bf8-4e2b-a42b-9731b2e490ae-c000.snappy.parquet",
             "part-00003-508ae4aa-801c-4c2c-a923-f6f89930a5c1-c000.snappy.parquet",
@@ -65,7 +87,7 @@ async fn read_simple_table_with_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
             "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
             "part-00003-53f42606-6cda-4f13-8d07-599a21197296-c000.snappy.parquet",
@@ -83,7 +105,7 @@ async fn read_simple_table_with_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
             "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
             "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",

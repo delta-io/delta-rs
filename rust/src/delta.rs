@@ -137,6 +137,15 @@ pub enum DeltaTableError {
     /// Error returned when no partition was found in the DeltaTable.
     #[error("No partitions found, please make sure table is partitioned.")]
     LoadPartitions,
+
+    /// Error returned when writes are attempted with data that doesn't match the schema of the
+    /// table
+    #[error("Data does not match the schema or partitions of the table: {}", msg)]
+    SchemaMismatch {
+        /// Information about the mismatch
+        msg: String,
+    },
+
     /// Error returned when a partition is not formatted as a Hive Partition.
     #[error("This partition is not formatted with key=value: {}", .partition)]
     PartitionError {
@@ -157,7 +166,7 @@ pub enum DeltaTableError {
 }
 
 /// Delta table metadata
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct DeltaTableMetaData {
     /// Unique identifier for this table
     pub id: Guid,
@@ -254,12 +263,12 @@ impl From<StorageError> for LoadCheckpointError {
     }
 }
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 struct DeltaTableState {
     // A remove action should remain in the state of the table as a tombstone until it has expired.
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: Vec<action::Remove>,
-    files: Vec<String>,
+    files: Vec<action::Add>,
     commit_infos: Vec<Value>,
     app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
     min_reader_version: i32,
@@ -627,8 +636,9 @@ impl DeltaTable {
             .state
             .files
             .iter()
-            .filter(|f| {
-                let partitions = f
+            .filter(|add| {
+                let partitions = add
+                    .path
                     .splitn(partitions_number + 1, separator)
                     .filter_map(|p: &str| DeltaTablePartition::try_from(p).ok())
                     .collect::<Vec<DeltaTablePartition>>();
@@ -636,15 +646,39 @@ impl DeltaTable {
                     .iter()
                     .all(|filter| filter.match_partitions(&partitions))
             })
-            .cloned()
+            .map(|add| add.path.clone())
             .collect();
 
         Ok(files)
     }
 
-    /// Returns a reference to the file list present in the loaded state.
-    pub fn get_files(&self) -> &Vec<String> {
+    /// Return the full file paths as strings for the partition(s)
+    pub fn get_file_paths_by_partitions(
+        &self,
+        filters: &[PartitionFilter<&str>],
+    ) -> Result<Vec<String>, DeltaTableError> {
+        let files = self.get_files_by_partitions(filters)?;
+        Ok(files
+            .iter()
+            .map(|fname| self.storage.join_path(&self.table_path, fname))
+            .collect())
+    }
+
+    /// Return a refernece to the "add" actions present in the loaded state
+    pub fn get_actions(&self) -> &Vec<action::Add> {
         &self.state.files
+    }
+
+    /// Returns an iterator of file names present in the loaded state
+    #[inline]
+    pub fn get_files_iter(&self) -> impl Iterator<Item = &str> {
+        self.state.files.iter().map(|add| add.path.as_str())
+    }
+
+    /// Returns a collection of file names present in the loaded state
+    #[inline]
+    pub fn get_files(&self) -> Vec<&str> {
+        self.get_files_iter().collect()
     }
 
     /// Returns a copy of the file paths present in the loaded state.
@@ -652,7 +686,7 @@ impl DeltaTable {
         self.state
             .files
             .iter()
-            .map(|fname| self.storage.join_path(&self.table_path, fname))
+            .map(|add| self.storage.join_path(&self.table_path, &add.path))
             .collect()
     }
 
@@ -701,7 +735,7 @@ impl DeltaTable {
         Ok(self
             .get_tombstones()
             .iter()
-            .filter(|tombstone| tombstone.deletionTimestamp < delete_before_timestamp)
+            .filter(|tombstone| tombstone.deletion_timestamp < delete_before_timestamp)
             .map(|tombstone| self.storage.join_path(&self.table_path, &tombstone.path))
             .collect::<Vec<String>>())
     }
@@ -882,12 +916,19 @@ impl std::fmt::Debug for DeltaTable {
 /// Error returned by the DeltaTransaction struct
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTransactionError {
-    /// Error that indicates the number of optimistic concurrency retries has been exceeded and no further
-    /// attempts will be made.
-    #[error("Transaction commit exceeded max retries. Last error: {inner}")]
-    CommitRetriesExceeded {
+    /// Error that indicates the transaction commit attempt failed. The wrapped inner error
+    /// contains details.
+    #[error("Transaction commit attempt failed. Last error: {inner}")]
+    TransactionCommitAttempt {
         /// The wrapped TransactionCommitAttemptError.
-        #[from]
+        inner: TransactionCommitAttemptError,
+    },
+
+    /// Error that indicates a Delta version conflict. i.e. a writer tried to write version _N_ but
+    /// version _N_ already exists in the delta log.
+    #[error("Version already existed when writing transaction. Last error: {inner}")]
+    VersionAlreadyExists {
+        /// The wrapped TransactionCommitAttemptError.
         inner: TransactionCommitAttemptError,
     },
 
@@ -951,6 +992,16 @@ pub enum TransactionCommitAttemptError {
     },
 }
 
+impl From<TransactionCommitAttemptError> for DeltaTransactionError {
+    fn from(error: TransactionCommitAttemptError) -> Self {
+        match error {
+            TransactionCommitAttemptError::VersionExists { .. } => {
+                DeltaTransactionError::VersionAlreadyExists { inner: error }
+            }
+            _ => DeltaTransactionError::TransactionCommitAttempt { inner: error },
+        }
+    }
+}
 impl From<StorageError> for TransactionCommitAttemptError {
     fn from(error: StorageError) -> Self {
         match error {
@@ -965,6 +1016,7 @@ impl From<StorageError> for TransactionCommitAttemptError {
 const DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS: u32 = 10_000_000;
 
 /// Options for customizing behavior of a `DeltaTransaction`
+#[derive(Debug)]
 pub struct DeltaTransactionOptions {
     /// number of retry attempts allowed when committing a transaction
     max_retry_commit_attempts: u32,
@@ -987,9 +1039,18 @@ impl Default for DeltaTransactionOptions {
     }
 }
 
-/// Object representing a delta transaction
+/// Object representing a delta transaction.
+/// Clients that do not need to mutate action content in case a transaction conflict is encountered
+/// may use the `commit_with` method and rely on optimistic concurrency to determine the
+/// appropriate Delta version number for a commit. A good example of this type of client is an
+/// append only client that does not need to maintain transaction state with external systems.
+/// Clients that may need to do conflict resolution if the Delta version changes should use the `commit_version`
+/// method and manage the Delta version themselves so that they can resolve data conflicts that may
+/// occur between Delta versions.
+#[derive(Debug)]
 pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
+    actions: Vec<Action>,
     options: DeltaTransactionOptions,
 }
 
@@ -1000,15 +1061,99 @@ impl<'a> DeltaTransaction<'a> {
     pub fn new(delta_table: &'a mut DeltaTable, options: Option<DeltaTransactionOptions>) -> Self {
         DeltaTransaction {
             delta_table,
+            actions: vec![],
             options: options.unwrap_or_else(DeltaTransactionOptions::default),
         }
     }
 
+    /// Add an arbitrary "action" to the actions associated with this transaction
+    pub fn add_action(&mut self, action: action::Action) {
+        self.actions.push(action);
+    }
+
+    /// Add an arbitrary number of actions to the actions associated with this transaction
+    pub fn add_actions(&mut self, actions: Vec<action::Action>) {
+        for action in actions.into_iter() {
+            self.actions.push(action);
+        }
+    }
+
+    /// Create a new add action and write the given bytes to the storage backend as a fully formed
+    /// Parquet file
+    ///
+    /// add_file accepts two optional parameters:
+    ///
+    /// partitions: an ordered vec of WritablePartitionValues for the file to be added
+    /// actions: an ordered list of Actions to be inserted into the log file _ahead_ of the Add
+    ///     action for the file added. This should typically be used for txn type actions
+    pub async fn add_file(
+        &mut self,
+        bytes: &[u8],
+        partitions: Option<Vec<(String, String)>>,
+    ) -> Result<(), DeltaTransactionError> {
+        let mut partition_values = HashMap::new();
+        if let Some(partitions) = &partitions {
+            for (key, value) in partitions {
+                partition_values.insert(key.clone(), value.clone());
+            }
+        }
+
+        let path = self.generate_parquet_filename(partitions);
+        let storage_path = self
+            .delta_table
+            .storage
+            .join_path(&self.delta_table.table_path, &path);
+
+        debug!("Writing a parquet file to {}", &storage_path);
+        self.delta_table
+            .storage
+            .put_obj(&storage_path, &bytes)
+            .await
+            .map_err(|source| DeltaTransactionError::Storage { source })?;
+
+        // Determine the modification timestamp to include in the add action - milliseconds since epoch
+        // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
+        let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let modification_time = modification_time.as_millis() as i64;
+
+        self.actions.push(Action::add(action::Add {
+            path,
+            partition_values,
+            modification_time,
+            size: bytes.len() as i64,
+            partition_values_parsed: None,
+            data_change: true,
+            stats: None,
+            stats_parsed: None,
+            tags: None,
+        }));
+
+        Ok(())
+    }
+
+    fn generate_parquet_filename(&self, partitions: Option<Vec<(String, String)>>) -> String {
+        /*
+         * The specific file naming for parquet is not well documented including the preceding five
+         * zeros and the trailing c000 string
+         *
+         */
+        let mut path_parts = vec![format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4())];
+
+        if let Some(partitions) = partitions {
+            for partition in partitions {
+                path_parts.push(format!("{}={}", partition.0, partition.1));
+            }
+        }
+
+        self.delta_table
+            .storage
+            .join_paths(&path_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
+    }
+
     /// Commits the given actions to the delta log.
     /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
-    pub async fn commit_with(
+    pub async fn commit(
         &mut self,
-        additional_actions: &[Action],
         _operation: Option<DeltaOperation>,
     ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action), but leaving it unused for now.
@@ -1032,21 +1177,31 @@ impl<'a> DeltaTransaction<'a> {
         // TODO: create a CommitInfo action and prepend it to actions.
 
         // Serialize all actions that are part of this log entry.
-        let mut jsons = Vec::<String>::new();
-
-        for action in additional_actions {
-            let json = serde_json::to_string(action)?;
-            jsons.push(json);
-        }
-
-        let log_entry = jsons.join("\n");
-        let log_entry = log_entry.as_bytes();
+        let log_entry = log_entry_from_actions(&self.actions)?;
 
         // try to commit in a loop in case other writers write the next version first
-        let version = self.try_commit_loop(log_entry).await?;
+        let version = self.try_commit_loop(log_entry.as_bytes()).await?;
 
         // NOTE: since we have the log entry in memory already,
         // we could optimize this further by merging the log entry instead of updating from storage.
+        self.delta_table.update().await?;
+
+        Ok(version)
+    }
+
+    /// Commits the delta transaction at the specified version.
+    /// Propagates version conflict errors back to the caller immediately.
+    pub async fn commit_version(
+        &mut self,
+        version: DeltaDataTypeVersion,
+        _operation: Option<DeltaOperation>,
+    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+        // TODO: create a CommitInfo action and prepend it to actions.
+
+        let log_entry = log_entry_from_actions(&self.actions)?;
+        let tmp_log_path = self.prepare_commit(log_entry.as_bytes()).await?;
+        let version = self.try_commit(&tmp_log_path, version).await?;
+
         self.delta_table.update().await?;
 
         Ok(version)
@@ -1060,7 +1215,9 @@ impl<'a> DeltaTransaction<'a> {
 
         let tmp_log_path = self.prepare_commit(log_entry).await?;
         loop {
-            let commit_result = self.try_commit(&tmp_log_path).await;
+            let version = self.next_attempt_version().await?;
+
+            let commit_result = self.try_commit(&tmp_log_path, version).await;
 
             match commit_result {
                 Ok(v) => {
@@ -1106,10 +1263,9 @@ impl<'a> DeltaTransaction<'a> {
     async fn try_commit(
         &mut self,
         tmp_log_path: &str,
+        version: DeltaDataTypeVersion,
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
-        // get the next delta table version and the log path where it should be written
-        let attempt_version = self.next_attempt_version().await?;
-        let log_path = self.delta_table.version_to_log_path(attempt_version);
+        let log_path = self.delta_table.version_to_log_path(version);
 
         // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
@@ -1118,7 +1274,7 @@ impl<'a> DeltaTransaction<'a> {
             .rename_obj(tmp_log_path, &log_path)
             .await?;
 
-        Ok(attempt_version)
+        Ok(version)
     }
 
     async fn next_attempt_version(
@@ -1129,21 +1285,32 @@ impl<'a> DeltaTransaction<'a> {
     }
 }
 
+fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Error> {
+    let mut jsons = Vec::<String>::new();
+
+    for action in actions {
+        let json = serde_json::to_string(action)?;
+        jsons.push(json);
+    }
+
+    Ok(jsons.join("\n"))
+}
+
 fn process_action(
     state: &mut DeltaTableState,
     action: &Action,
 ) -> Result<(), serde_json::error::Error> {
     match action {
         Action::add(v) => {
-            state.files.push(v.path.clone());
+            state.files.push(v.clone());
         }
         Action::remove(v) => {
-            state.files.retain(|e| *e != v.path);
+            state.files.retain(|a| *a.path != v.path);
             state.tombstones.push(v.clone());
         }
         Action::protocol(v) => {
-            state.min_reader_version = v.minReaderVersion;
-            state.min_writer_version = v.minWriterVersion;
+            state.min_reader_version = v.min_reader_version;
+            state.min_writer_version = v.min_writer_version;
         }
         Action::metaData(v) => {
             state.current_metadata = Some(DeltaTableMetaData {
@@ -1152,15 +1319,15 @@ fn process_action(
                 description: v.description.clone(),
                 format: v.format.clone(),
                 schema: v.get_schema()?,
-                partition_columns: v.partitionColumns.clone(),
-                created_time: v.createdTime,
+                partition_columns: v.partition_columns.clone(),
+                created_time: v.created_time,
                 configuration: v.configuration.clone(),
             });
         }
         Action::txn(v) => {
             *state
                 .app_transaction_version
-                .entry(v.appId.clone())
+                .entry(v.app_id.clone())
                 .or_insert(v.version) = v.version;
         }
         Action::commitInfo(v) => {
@@ -1235,9 +1402,9 @@ mod tests {
         };
 
         let txn_action = Action::txn(action::Txn {
-            appId: "abc".to_string(),
+            app_id: "abc".to_string(),
             version: 2,
-            lastUpdated: 0,
+            last_updated: 0,
         });
 
         let _ = process_action(&mut state, &txn_action).unwrap();

@@ -6,6 +6,7 @@ mod azure {
      * Should there be test failures, or if you need more files uploaded into this account, let him
      * know
      */
+    #[ignore]
     #[tokio::test]
     async fn test_azure_simple() {
         std::env::set_var("AZURE_STORAGE_ACCOUNT", "deltars");
@@ -20,7 +21,7 @@ mod azure {
         assert_eq!(table.get_min_reader_version(), 1);
         assert_eq!(
             table.get_files(),
-            &vec![
+            vec![
                 "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
                 "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
                 "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
@@ -35,8 +36,8 @@ mod azure {
             deltalake::action::Remove {
                 path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet"
                     .to_string(),
-                deletionTimestamp: 1587968596250,
-                dataChange: true,
+                deletion_timestamp: 1587968596250,
+                data_change: true,
                 ..Default::default()
             }
         );

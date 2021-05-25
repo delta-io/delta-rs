@@ -121,14 +121,18 @@ impl RawDeltaTable {
         match partition_filters {
             Ok(filters) => Ok(self
                 ._table
-                .get_files_by_partitions(&filters)
+                .get_file_paths_by_partitions(&filters)
                 .map_err(PyDeltaTableError::from_raw)?),
             Err(err) => Err(PyDeltaTableError::from_raw(err)),
         }
     }
 
     pub fn files(&self) -> PyResult<Vec<String>> {
-        Ok(self._table.get_files().to_vec())
+        Ok(self
+            ._table
+            .get_files_iter()
+            .map(|f| f.to_string())
+            .collect())
     }
 
     pub fn file_paths(&self) -> PyResult<Vec<String>> {

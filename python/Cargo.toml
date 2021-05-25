@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "0.4.7"
+version = "0.4.9"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
@@ -32,6 +32,7 @@ features = ["s3", "azure"]
 
 [package.metadata.maturin]
 name = "deltalake"
+requires-python = ">=3.6"
 classifier = [
     "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: Apache Software License",
@@ -42,6 +43,8 @@ requires-dist = [
     "pyarrow>=4",
     'numpy<1.20.0;python_version<="3.6"',
     "pandas; extra =='pandas'",
+    "mypy; extra == 'devel'",
+    "isort; extra == 'devel'",
     "pytest; extra == 'devel'",
     "pytest-mock; extra == 'devel'",
     "pytest-cov; extra == 'devel'",

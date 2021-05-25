@@ -36,8 +36,11 @@ impl TableData {
         self.actual.version
     }
 
-    fn files(&self) -> &[String] {
-        self.actual.get_files().as_slice()
+    fn files(&self) -> Vec<String> {
+        self.actual
+            .get_files_iter()
+            .map(|f| f.to_string())
+            .collect()
     }
 }
 
@@ -69,7 +72,7 @@ methods!(
         let mut array = Array::with_capacity(files.len());
 
         for file in files {
-            array.push(RString::new_utf8(file));
+            array.push(RString::new_utf8(&file));
         }
 
         array

@@ -19,20 +19,18 @@ jobs:
       uses: actions/setup-python@v2
       with:
         python-version: 3.6
-    - name: Format Python code with Black
+    - name: Check Python
       run: |
-        pip install black
-        black . --check
+        pip install black isort mypy
+        make check-python
     - name: Install minimal stable with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
         profile: default
         toolchain: stable
         override: true
-    - name: Check
-      run: cargo clippy
-    - name: Format
-      run: cargo fmt -- --check
+    - name: Check Rust
+      run: make check-rust
 
   test:
     runs-on: ubuntu-latest
@@ -57,24 +55,20 @@ jobs:
     - name: Enable manylinux Python targets
       run: echo "/opt/python/cp36-cp36m/bin" >> $GITHUB_PATH
 
-    - name: Install maturin
-      run: pip install maturin==0.9.0
-
     - name: Build and install deltalake
       run: |
+        make setup
         # disable manylinux audit checks for test builds
         maturin build --manylinux off
         ls -lh ../target/wheels
         pip install $(printf ../target/wheels/deltalake-*-cp36-abi3-*.whl)'[devel,pandas]'
 
     - name: Run tests
-      run: |
-        py.test --cov tests -m 'not integration'
+      run: make unit-test
 
     # - name: Run Integration tests
     #   run: |
     #     py.test --cov tests -m integration
 
     - name: Build Sphinx documentation
-      run: |
-        sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
+      run: make build-documentation

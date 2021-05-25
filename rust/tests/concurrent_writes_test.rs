@@ -15,7 +15,12 @@ use std::time::Duration;
 #[tokio::test]
 #[cfg(all(feature = "s3"))]
 async fn concurrent_writes_s3() {
-    prepare_s3().await;
+    s3_common::setup_dynamodb("concurrent_writes");
+    s3_common::cleanup_dir_except(
+        "s3://deltars/concurrent_workers/_delta_log",
+        vec!["00000000000000000000.json".to_string()],
+    )
+    .await;
     run_test(|name| Worker::new("s3://deltars/concurrent_workers", name)).await;
 }
 
@@ -94,19 +99,19 @@ impl Worker {
     }
 
     async fn commit_file(&mut self, name: &str) -> i64 {
-        let actions = [action::Action::add(action::Add {
+        let mut tx = self.table.create_transaction(None);
+        tx.add_action(action::Action::add(action::Add {
             path: format!("{}.parquet", name),
             size: 396,
-            partitionValues: HashMap::new(),
-            partitionValues_parsed: None,
-            modificationTime: 1564524294000,
-            dataChange: true,
+            partition_values: HashMap::new(),
+            partition_values_parsed: None,
+            modification_time: 1564524294000,
+            data_change: true,
             stats: None,
             stats_parsed: None,
             tags: None,
-        })];
-        let mut tx = self.table.create_transaction(None);
-        tx.commit_with(&actions, None).await.unwrap()
+        }));
+        tx.commit(None).await.unwrap()
     }
 }
 
@@ -115,14 +120,4 @@ fn prepare_fs() {
         "./tests/data/concurrent_workers/_delta_log",
         vec!["00000000000000000000.json".to_string()],
     );
-}
-
-#[cfg(feature = "s3")]
-async fn prepare_s3() {
-    s3_common::setup_dynamodb("concurrent_writes");
-    s3_common::cleanup_dir_except(
-        "s3://deltars/concurrent_workers/_delta_log",
-        vec!["00000000000000000000.json".to_string()],
-    )
-    .await;
 }

@@ -592,7 +592,7 @@ dependencies = [
 
 [[package]]
 name = "deltalake"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "arrow",
@@ -614,6 +614,7 @@ dependencies = [
  "log",
  "maplit",
  "parquet",
+ "parquet-format",
  "pretty_assertions",
  "regex",
  "reqwest",
@@ -635,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "deltalake-python"
-version = "0.4.7"
+version = "0.4.9"
 dependencies = [
  "arrow",
  "deltalake",

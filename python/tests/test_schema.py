@@ -1,15 +1,13 @@
 import pyarrow
-from deltalake import (
-    DeltaTable,
-    Field,
-)
+
+from deltalake import DeltaTable, Field
 from deltalake.schema import (
-    DataType,
     ArrayType,
+    DataType,
     MapType,
+    Schema,
     StructType,
     pyarrow_field_from_dict,
-    Schema,
 )
 
 

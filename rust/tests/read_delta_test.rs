@@ -16,7 +16,7 @@ async fn read_delta_2_0_table_without_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet",
             "part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet",
             "part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet",
@@ -28,8 +28,8 @@ async fn read_delta_2_0_table_without_version() {
         tombstones[0],
         deltalake::action::Remove {
             path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
-            deletionTimestamp: 1564524298213,
-            dataChange: false,
+            deletion_timestamp: 1564524298213,
+            data_change: false,
             ..Default::default()
         }
     );
@@ -58,7 +58,7 @@ async fn read_delta_2_0_table_with_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet",
             "part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet",
         ],
@@ -72,7 +72,7 @@ async fn read_delta_2_0_table_with_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet",
             "part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet",
         ]
@@ -86,7 +86,7 @@ async fn read_delta_2_0_table_with_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet",
             "part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet",
             "part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet",
@@ -104,7 +104,7 @@ async fn read_delta_8_0_table_without_version() {
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
         table.get_files(),
-        &vec![
+        vec![
             "part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet",
             "part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet"
         ]
@@ -115,10 +115,10 @@ async fn read_delta_8_0_table_without_version() {
         tombstones[0],
         deltalake::action::Remove {
             path: "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet".to_string(),
-            deletionTimestamp: 1615043776198,
-            dataChange: true,
-            extendedFileMetadata: Some(true),
-            partitionValues: Some(HashMap::new()),
+            deletion_timestamp: 1615043776198,
+            data_change: true,
+            extended_file_metadata: Some(true),
+            partition_values: Some(HashMap::new()),
             size: Some(445),
             ..Default::default()
         }
@@ -147,6 +147,23 @@ async fn read_delta_8_0_table_with_partitions() {
         vec![
             "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
             "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string()
+        ]
+    );
+
+    #[cfg(unix)]
+    assert_eq!(
+        table.get_file_paths_by_partitions(&filters).unwrap(),
+        vec![
+            "./tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
+            "./tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string()
+        ]
+    );
+    #[cfg(windows)]
+    assert_eq!(
+        table.get_file_paths_by_partitions(&filters).unwrap(),
+        vec![
+            "./tests/data/delta-0.8.0-partitioned\\year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
+            "./tests/data/delta-0.8.0-partitioned\\year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string()
         ]
     );
 

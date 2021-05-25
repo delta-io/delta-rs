@@ -52,14 +52,13 @@ jobs:
         with:
           python-version: 3.6
 
-      - name: Install matruin
-        run: |
-          pip install maturin==0.9.0
+      - name: Setup
+        run: make setup
 
       - name: Publish to pypi (without sdist)
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        run: maturin publish -b pyo3 --target ${{ matrix.target }} --no-sdist
+        run: make publish TARGET="${{ matrix.target }}" EXTRA_ARGS="--no-sdist"
 
   release-github-pypi-manylinux:
     needs: validate-release-tag
@@ -86,15 +85,14 @@ jobs:
         run: |
             echo "/opt/python/cp36-cp36m/bin" >> $GITHUB_PATH
 
-      - name: Install matruin
-        run: |
-          pip install maturin==0.9.0
+      - name: Setup
+        run: make setup
 
       - name: Publish manylinux to pypi (without sdist)
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         # linux build uploads sdist to update projection description on PyPI
-        run: maturin publish -b pyo3 --target x86_64-unknown-linux-gnu
+        run: make publish TARGET="x86_64-unknown-linux-gnu" EXTRA_ARGS=""
 
   release-docs:
     runs-on: ubuntu-latest
@@ -111,13 +109,13 @@ jobs:
 
     - name: Build and install deltalake
       run: |
-        pip install maturin==0.9.0
+        make setup
         maturin build --manylinux off
         pip install $(printf ../target/wheels/deltalake-*-cp36-abi3-*.whl)'[devel,pandas]'
 
     - name: Build Sphinx documentation
       run: |
-        sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
+        make build-documentation
         mv docs/build ~/build
 
         echo "Configuring git..."
