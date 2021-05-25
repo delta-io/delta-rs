@@ -487,25 +487,13 @@ pub trait LockClient: Send + Sync + Debug {
 
 const DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS: u32 = 10_000;
 
-/// Returned as a successful result of `rename_with_lock`. However due to nature of
-/// the s3 rename consisting of a sequence with several IO calls. Hence despite the rename
-/// is successful, but the lock used with it is not.
-pub enum RenameResult {
-    /// The rename is successful
-    NoError,
-    /// The rename is successful but the lock has been expired by other workers. Most likely
-    /// there's been a pause during a rename which lead for the lock expiration.
-    LockPreempted,
-}
-
-
 impl dyn LockClient {
     async fn rename_with_lock(
         &self,
         s3: &S3StorageBackend,
         src: &str,
         dst: &str,
-    ) -> Result<RenameResult, StorageError> {
+    ) -> Result<(), StorageError> {
         let mut lock = self.acquire_lock_loop(src, dst).await?;
 
         if let Some(ref data) = lock.data {
@@ -543,12 +531,12 @@ impl dyn LockClient {
             // no longer hold the lock
             rename_result?;
 
-            if release_result? {
-                Ok(RenameResult::NoError)
-            } else {
+            if !release_result? {
                 log::error!("Could not release lock {:?}", &lock);
-                Ok(RenameResult::LockPreempted)
+                return Err(StorageError::S3Generic("Lock is not released".to_string()));
             }
+
+            Ok(())
         } else {
             Err(StorageError::S3Generic(
                 "Acquired lock with no lock data".to_string(),
