@@ -1394,7 +1394,6 @@ pub fn crate_version() -> &'static str {
 mod tests {
     use super::action;
     use super::action::Action;
-    use super::open_table;
     use super::{process_action, DeltaTableState};
     use std::collections::HashMap;
 
@@ -1424,18 +1423,5 @@ mod tests {
 
         assert_eq!(2, *state.app_transaction_version.get("abc").unwrap());
         assert_eq!(1, *state.app_transaction_version.get("xyz").unwrap());
-    }
-
-    macro_rules! aw {
-        ($e:expr) => {
-            tokio_test::block_on($e)
-        };
-    }
-
-    #[test]
-    fn opens_table_with_history() {
-        let mut table = aw!(open_table("tests/data/delta-0.8.0")).unwrap();
-        let history = aw!(table.history()).unwrap();
-        assert_eq!(4, history.len());
     }
 }

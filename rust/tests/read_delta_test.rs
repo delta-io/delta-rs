@@ -242,3 +242,12 @@ async fn vacuum_delta_8_0_table() {
 
     assert_eq!(table.vacuum(retention_hours, dry_run).await.unwrap(), empty);
 }
+
+#[tokio::test]
+async fn opens_table_with_history() {
+    let mut table = deltalake::open_table("tests/data/delta-0.8.0")
+        .await
+        .unwrap();
+    let history = table.history().await.unwrap();
+    assert_eq!(4, history.len());
+}
