@@ -9,8 +9,8 @@ mod s3_common;
 #[allow(dead_code)]
 mod fs_common;
 
-use std::collections::HashMap;
 use deltalake::{action, DeltaTransactionError};
+use std::collections::HashMap;
 
 use serial_test::serial;
 
@@ -54,7 +54,8 @@ mod simple_commit_s3 {
 
     async fn prepare_s3(path: &str) {
         let delta_log = format!("{}/_delta_log", path);
-        s3_common::cleanup_dir_except(&delta_log, vec!["00000000000000000000.json".to_string()]).await;
+        s3_common::cleanup_dir_except(&delta_log, vec!["00000000000000000000.json".to_string()])
+            .await;
     }
 }
 
