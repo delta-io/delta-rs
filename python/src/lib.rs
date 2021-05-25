@@ -4,10 +4,10 @@ extern crate arrow;
 extern crate pyo3;
 
 use arrow::datatypes::Schema as ArrowSchema;
-use deltalake::DeltaDataTypeLong;
-use deltalake::DeltaDataTypeTimestamp;
 use deltalake::action::CommitInfo;
 use deltalake::partitions::PartitionFilter;
+use deltalake::DeltaDataTypeLong;
+use deltalake::DeltaDataTypeTimestamp;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
@@ -73,7 +73,7 @@ struct DeltaCommit {
     #[pyo3(get)]
     is_blind_append: bool,
     #[pyo3(get)]
-    user_metadata: Option<String>
+    user_metadata: Option<String>,
 }
 
 impl DeltaCommit {
@@ -83,7 +83,7 @@ impl DeltaCommit {
             timestamp: ci.timestamp,
             operation: ci.operation.clone(),
             is_blind_append: ci.is_blind_append,
-            user_metadata: ci.user_metadata.clone()
+            user_metadata: ci.user_metadata.clone(),
         }
     }
 }

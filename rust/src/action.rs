@@ -618,11 +618,11 @@ pub struct CommitInfo {
     /// ...
     pub operation: String,
     /// ...
-    pub operation_parameters: HashMap<String,String>,
+    pub operation_parameters: HashMap<String, String>,
     /// ...
-    pub job: Option<HashMap<String,String>>,
+    pub job: Option<HashMap<String, String>>,
     /// ...
-    pub notebook: Option<HashMap<String,String>>,
+    pub notebook: Option<HashMap<String, String>>,
     /// ...
     pub cluster_id: Option<String>,
     /// ...
@@ -630,9 +630,9 @@ pub struct CommitInfo {
     /// ...
     pub is_blind_append: bool,
     /// ...
-    pub operation_metrics: HashMap<String,String>,
+    pub operation_metrics: HashMap<String, String>,
     /// ...
-    pub user_metadata: Option<String>
+    pub user_metadata: Option<String>,
 }
 
 impl CommitInfo {
@@ -660,9 +660,9 @@ impl CommitInfo {
                     unimplemented!("FIXME add implementation")
                 }
                 "isBlindAppend" => {
-                    re.is_blind_append = record
-                        .get_bool(i)
-                        .map_err(|_| gen_action_type_error("commitInfo", "isBlindAppend", "bool"))?;
+                    re.is_blind_append = record.get_bool(i).map_err(|_| {
+                        gen_action_type_error("commitInfo", "isBlindAppend", "bool")
+                    })?;
                 }
                 _ => {
                     log::warn!(
@@ -919,12 +919,13 @@ mod tests {
                     "numOutputRows":"5"
                 }
             }
-        }).to_string();
+        })
+        .to_string();
         match serde_json::from_str(line.as_str()).unwrap() {
             Action::commitInfo(ci) => {
                 assert_eq!("WRITE", ci.operation);
             }
-            _ => panic!("commit info parsing is broken")
+            _ => panic!("commit info parsing is broken"),
         }
     }
 

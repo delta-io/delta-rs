@@ -335,7 +335,8 @@ impl DeltaTable {
     /// Retruns commit history
     pub async fn history(&mut self) -> Result<Vec<CommitInfo>, DeltaTableError> {
         self.load().await?;
-        Ok(self.state
+        Ok(self
+            .state
             .commit_infos
             .iter()
             .map(CommitInfo::clone)
@@ -1391,9 +1392,9 @@ pub fn crate_version() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::open_table;
     use super::action;
     use super::action::Action;
+    use super::open_table;
     use super::{process_action, DeltaTableState};
     use std::collections::HashMap;
 
@@ -1429,7 +1430,7 @@ mod tests {
         ($e:expr) => {
             tokio_test::block_on($e)
         };
-      }
+    }
 
     #[test]
     fn opens_table_with_history() {
