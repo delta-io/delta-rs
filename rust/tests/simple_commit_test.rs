@@ -9,16 +9,17 @@ mod s3_common;
 #[allow(dead_code)]
 mod fs_common;
 
+use deltalake::{action, DeltaTransactionError};
 use std::collections::HashMap;
 
-use deltalake::{action, DeltaTransactionError};
+use serial_test::serial;
 
 #[cfg(feature = "s3")]
 mod simple_commit_s3 {
     use super::*;
 
-    #[cfg(feature = "dynamodb")]
     #[tokio::test]
+    #[serial]
     async fn test_two_commits_s3() {
         let path = "s3://deltars/simple_commit_rw1";
         s3_common::setup_dynamodb("concurrent_writes");
@@ -27,13 +28,14 @@ mod simple_commit_s3 {
         test_two_commits(path).await.unwrap();
     }
 
-    #[cfg(not(feature = "dynamodb"))]
     #[tokio::test]
+    #[serial]
     async fn test_two_commits_s3_fails_with_no_lock() {
         use deltalake::{StorageError, TransactionCommitAttemptError};
 
         let path = "s3://deltars/simple_commit_rw2";
         prepare_s3(path).await;
+        std::env::set_var("AWS_S3_LOCKING_PROVIDER", "none  ");
 
         let result = test_two_commits(path).await;
         if let Err(DeltaTransactionError::TransactionCommitAttempt { ref inner }) = result {
@@ -58,11 +60,9 @@ mod simple_commit_s3 {
 }
 
 mod simple_commit_fs {
-    // Tests are run serially to allow usage of the same local fs directory.
-    use serial_test::serial;
-
     use super::*;
 
+    // Tests are run serially to allow usage of the same local fs directory.
     #[tokio::test]
     #[serial]
     async fn test_two_commits_fs() {
@@ -124,6 +124,13 @@ mod simple_commit_fs {
         assert!(result.is_err());
         assert_eq!(1, table.version);
         assert_eq!(2, table.get_files().len());
+    }
+
+    fn prepare_fs() {
+        fs_common::cleanup_dir_except(
+            "./tests/data/simple_commit/_delta_log",
+            vec!["00000000000000000000.json".to_string()],
+        );
     }
 }
 
@@ -211,11 +218,4 @@ fn tx2_actions() -> Vec<action::Action> {
             tags: None,
         }),
     ]
-}
-
-fn prepare_fs() {
-    fs_common::cleanup_dir_except(
-        "./tests/data/simple_commit/_delta_log",
-        vec!["00000000000000000000.json".to_string()],
-    );
 }
