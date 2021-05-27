@@ -1,6 +1,6 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
-use std::fmt::Debug;
+use std::fmt::{Debug, Display};
 use std::pin::Pin;
 
 use chrono::{DateTime, Utc};
@@ -16,6 +16,8 @@ pub mod azure;
 pub mod file;
 #[cfg(feature = "s3")]
 pub mod s3;
+#[cfg(feature = "delta-sharing")]
+pub mod deltashare;
 
 /// Error enum that represents an invalid URI.
 #[derive(thiserror::Error, Debug, PartialEq)]
@@ -71,6 +73,10 @@ pub enum UriError {
         /// Actual container value
         got: String,
     },
+    /// Error returned when the URI does not appear to be a valid Delta Sharing URI
+    #[cfg(feature = "delta-sharing")]
+    #[error("Expected a Delta Sharing URI, found: {0}")]
+    ExpectedDeltaSharingUri(String),
 }
 
 /// Enum with variants representing each supported storage backend.
@@ -84,6 +90,23 @@ pub enum Uri<'a> {
     /// URI for Azure backend.
     #[cfg(feature = "azure")]
     AdlsGen2Object(azure::AdlsGen2Object<'a>),
+    /// URI for the Delta Share backend
+    #[cfg(feature = "delta-sharing")]
+    DeltaShareObject(deltashare::DeltaShareObject<'a>),
+}
+
+impl<'a> Display for Uri<'a> {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", match self {
+            Uri::LocalPath(p) => p.to_string(),
+            #[cfg(feature = "s3")]
+            Uri::S3Object(s) =>s.to_string(),
+            #[cfg(feature = "azure")]
+            Uri::AdlsGen2Object(a) => a.to_string(),
+            #[cfg(feature = "delta-sharing")]
+            Uri::DeltaShareObject(d) => d.to_string(),
+        })
+    }
 }
 
 impl<'a> Uri<'a> {
@@ -93,9 +116,7 @@ impl<'a> Uri<'a> {
     pub fn into_s3object(self) -> Result<s3::S3Object<'a>, UriError> {
         match self {
             Uri::S3Object(x) => Ok(x),
-            #[cfg(feature = "azure")]
-            Uri::AdlsGen2Object(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
-            Uri::LocalPath(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
+            x => Err(UriError::ExpectedS3Uri(x.to_string())),
         }
     }
 
@@ -105,9 +126,17 @@ impl<'a> Uri<'a> {
     pub fn into_adlsgen2_object(self) -> Result<azure::AdlsGen2Object<'a>, UriError> {
         match self {
             Uri::AdlsGen2Object(x) => Ok(x),
-            #[cfg(feature = "s3")]
-            Uri::S3Object(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
-            Uri::LocalPath(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
+            x => Err(UriError::ExpectedAzureUri(x.to_string())),
+        }
+    }
+
+    /// Converts the URI into a DeltaShareObject. Returns UriError if the URLis not a valid
+    /// Delta Sharing backend
+    #[cfg(feature = "delta-sharing")]
+    pub fn into_deltashare_object(self) -> Result<deltashare::DeltaShareObject<'a>, UriError> {
+        match self {
+            Uri::DeltaShareObject(x) => Ok(x),
+            x => Err(UriError::ExpectedDeltaSharingUri(x.to_string())),
         }
     }
 
@@ -116,10 +145,7 @@ impl<'a> Uri<'a> {
     pub fn into_localpath(self) -> Result<&'a str, UriError> {
         match self {
             Uri::LocalPath(x) => Ok(x),
-            #[cfg(feature = "s3")]
-            Uri::S3Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
-            #[cfg(feature = "azure")]
-            Uri::AdlsGen2Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
+            x => Err(UriError::ExpectedSLocalPathUri(x.to_string())),
         }
     }
 }
@@ -158,6 +184,15 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
             }
         }
         "file" => Ok(Uri::LocalPath(parts[1])),
+        "http" => {
+            cfg_if::cfg_if! {
+                if #[cfg(feature = "delta-sharing")] {
+                    Ok(Uri::DeltaShareObject(deltashare::DeltaShareObject { url: parts[1] }))
+                } else {
+                    Err(UriError::InvalidScheme(String::from(parts[0])))
+                }
+            }
+        },
         "abfss" => {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "azure")] {
@@ -283,6 +318,11 @@ pub enum StorageError {
     #[error("Azure config error: {0}")]
     AzureConfig(String),
 
+
+    ///! Error when the storage backend cannot support the requested API
+    #[error("The storage backend does not support the requested operation: {0}")]
+    UnsupportedOperation(String),
+
     /// Error returned when the URI is invalid.
     /// The wrapped UriError contains additional details.
     #[error("Invalid object URI")]
@@ -392,6 +432,8 @@ pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, Storage
         Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new()?)),
         #[cfg(feature = "azure")]
         Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
+        #[cfg(feature = "delta-sharing")]
+        Uri::DeltaShareObject(obj) => Ok(Box::new(deltashare::DeltaShareBackend::new(obj))),
     }
 }
 

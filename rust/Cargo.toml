@@ -56,6 +56,7 @@ async-trait = "0.1"
 [features]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion", "crossbeam"]
+delta-sharing = ["reqwest"]
 azure = ["azure_core", "azure_storage", "reqwest"]
 s3 = ["rusoto_core", "rusoto_credential", "rusoto_s3", "rusoto_sts", "rusoto_dynamodb", "maplit"]
 
