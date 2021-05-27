@@ -163,6 +163,13 @@ pub enum DeltaTableError {
         "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
     )]
     InvalidVacuumRetentionPeriod,
+    /// Generic error returned from HTTP requests
+    #[error("An underlying reqwest (HTTP) error occurred: {source}")]
+    ReqwestError {
+        #[from]
+        /// Internal reqwest::Error
+        source: reqwest::Error,
+    }
 }
 
 /// Delta table metadata
@@ -483,6 +490,22 @@ impl DeltaTable {
 
     /// Load DeltaTable with data from latest checkpoint
     pub async fn load(&mut self) -> Result<(), DeltaTableError> {
+        #[cfg(feature = "delta-sharing")]
+        {
+            if self.storage.backend_type() == StorageBackendType::DeltaSharing {
+                let response = reqwest::get(format!("{}/metadata", self.table_path)).await?;
+                let version_header = response.headers().get("Delta-Table-Version").unwrap();
+                self.version = version_header.to_str().unwrap().parse::<i64>().unwrap();
+
+                let body = response.text().await?;
+                let lines: Vec<&str> = body.lines().map(|s| s).collect();
+
+                let _protocol: crate::action::Protocol = serde_json::from_str(&lines[0])?;
+                return Ok(());
+            }
+        }
+
+
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
                 self.last_check_point = Some(last_check_point);
