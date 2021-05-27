@@ -663,6 +663,10 @@ pub struct Protocol {
     pub min_reader_version: DeltaDataTypeInt,
     /// Minimum version of the Delta write protocol a client must implement to correctly read the
     /// table.
+    ///
+    /// If the table is not writeable the value of the min_writer_version will be i32::MAX to
+    /// ensure that no client computes that it can write to the table
+    #[serde(default="max_int32")]
     pub min_writer_version: DeltaDataTypeInt,
 }
 
@@ -696,6 +700,11 @@ impl Protocol {
 
         Ok(re)
     }
+}
+
+/// Return i32::MAX for serde defaults
+fn max_int32() -> DeltaDataTypeInt {
+    i32::MAX
 }
 
 /// Represents an action in the Delta log. The Delta log is an aggregate of all actions performed
