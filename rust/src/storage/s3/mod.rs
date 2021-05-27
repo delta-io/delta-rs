@@ -18,7 +18,7 @@ use rusoto_sts::WebIdentityProvider;
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 
-use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
+use super::{parse_uri, ObjectMeta, StorageBackend, StorageBackendType, StorageError};
 
 pub mod dynamodb_lock;
 
@@ -240,6 +240,10 @@ impl std::fmt::Debug for S3StorageBackend {
 
 #[async_trait::async_trait]
 impl StorageBackend for S3StorageBackend {
+    fn backend_type(&self) -> StorageBackendType {
+        StorageBackendType::S3
+    }
+
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
         let uri = parse_uri(path)?.into_s3object()?;
 

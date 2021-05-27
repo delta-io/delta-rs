@@ -16,7 +16,7 @@ use azure_storage::clients::{
 use futures::stream::{Stream, TryStreamExt};
 use log::debug;
 
-use super::{parse_uri, ObjectMeta, StorageBackend, StorageError, UriError};
+use super::{parse_uri, ObjectMeta, StorageBackend, StorageBackendType, StorageError, UriError};
 
 /// An object on an Azure Data Lake Storage Gen2 account.
 #[derive(Debug, PartialEq)]
@@ -113,6 +113,10 @@ fn to_storage_err(err: Box<dyn Error + Sync + std::marker::Send>) -> StorageErro
 
 #[async_trait::async_trait]
 impl StorageBackend for AdlsGen2Backend {
+    fn backend_type(&self) -> StorageBackendType {
+        StorageBackendType::Azure
+    }
+
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
         debug!("Getting properties for {}", path);
         let obj = parse_uri(path)?.into_adlsgen2_object()?;

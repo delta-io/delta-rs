@@ -28,7 +28,7 @@ use super::action::{Action, DeltaOperation};
 use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
-use super::storage::{StorageBackend, StorageError, UriError};
+use super::storage::{StorageBackend, StorageBackendType, StorageError, UriError};
 use uuid::Uuid;
 
 /// Metadata for a checkpoint file

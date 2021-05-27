@@ -11,7 +11,7 @@ use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio_stream::wrappers::ReadDirStream;
 
-use super::{ObjectMeta, StorageBackend, StorageError};
+use super::{ObjectMeta, StorageBackend, StorageBackendType, StorageError};
 
 mod rename;
 
@@ -44,6 +44,10 @@ impl FileStorageBackend {
 
 #[async_trait::async_trait]
 impl StorageBackend for FileStorageBackend {
+    fn backend_type(&self) -> StorageBackendType {
+        StorageBackendType::FileSystem
+    }
+
     fn join_path(&self, path: &str, path_to_join: &str) -> String {
         let new_path = Path::new(path);
         new_path

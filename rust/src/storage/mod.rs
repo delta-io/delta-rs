@@ -373,10 +373,29 @@ pub struct ObjectMeta {
     pub modified: DateTime<Utc>,
 }
 
+/// Enumeration of the supported storage backends
+#[derive(Debug, PartialEq)]
+pub enum StorageBackendType {
+    /// File system backend
+    FileSystem,
+    /// S3 backend
+    #[cfg(feature = "s3")]
+    S3,
+    /// Azure backend
+    #[cfg(feature = "azure")]
+    Azure,
+    /// Delta Sharing backend
+    #[cfg(feature = "delta-sharing")]
+    DeltaSharing,
+}
+
 /// Abstractions for underlying blob storages hosting the Delta table. To add support for new cloud
 /// or local storage systems, simply implement this trait.
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + Debug {
+    /// Return the type of the storage backend to hint callers
+    fn backend_type(&self) -> StorageBackendType;
+
     /// Create a new path by appending `path_to_join` as a new component to `path`.
     fn join_path(&self, path: &str, path_to_join: &str) -> String {
         let normalized_path = path.trim_end_matches('/');
@@ -433,7 +452,7 @@ pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, Storage
         #[cfg(feature = "azure")]
         Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
         #[cfg(feature = "delta-sharing")]
-        Uri::DeltaShareObject(obj) => Ok(Box::new(deltashare::DeltaShareBackend::new(obj))),
+        Uri::DeltaShareObject(_) => Ok(Box::new(deltashare::DeltaShareBackend::new())),
     }
 }
 
