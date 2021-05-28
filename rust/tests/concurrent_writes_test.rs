@@ -13,7 +13,7 @@ use std::iter::FromIterator;
 use std::time::Duration;
 
 #[tokio::test]
-#[cfg(all(feature = "s3", feature = "dynamodb"))]
+#[cfg(feature = "s3")]
 async fn concurrent_writes_s3() {
     s3_common::setup_dynamodb("concurrent_writes");
     s3_common::cleanup_dir_except(
@@ -103,10 +103,10 @@ impl Worker {
         tx.add_action(action::Action::add(action::Add {
             path: format!("{}.parquet", name),
             size: 396,
-            partitionValues: HashMap::new(),
-            partitionValues_parsed: None,
-            modificationTime: 1564524294000,
-            dataChange: true,
+            partition_values: HashMap::new(),
+            partition_values_parsed: None,
+            modification_time: 1564524294000,
+            data_change: true,
             stats: None,
             stats_parsed: None,
             tags: None,

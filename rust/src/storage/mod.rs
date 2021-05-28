@@ -245,7 +245,6 @@ pub enum StorageError {
     #[error("Failed to copy S3 object: {source}")]
     S3Copy {
         /// The underlying Rusoto S3 error.
-        #[from]
         source: rusoto_core::RusotoError<rusoto_s3::CopyObjectError>,
     },
     /// Error returned when S3 object get response contains empty body
@@ -256,7 +255,7 @@ pub enum StorageError {
     /// Represents a generic S3 error. The wrapped error string describes the details.
     #[error("S3 error: {0}")]
     S3Generic(String),
-    #[cfg(feature = "dynamodb")]
+    #[cfg(feature = "s3")]
     /// Wraps the DynamoDB error
     #[error("DynamoDB error: {source}")]
     DynamoDb {

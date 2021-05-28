@@ -735,7 +735,7 @@ impl DeltaTable {
         Ok(self
             .get_tombstones()
             .iter()
-            .filter(|tombstone| tombstone.deletionTimestamp < delete_before_timestamp)
+            .filter(|tombstone| tombstone.deletion_timestamp < delete_before_timestamp)
             .map(|tombstone| self.storage.join_path(&self.table_path, &tombstone.path))
             .collect::<Vec<String>>())
     }
@@ -1118,11 +1118,11 @@ impl<'a> DeltaTransaction<'a> {
 
         self.actions.push(Action::add(action::Add {
             path,
+            partition_values,
+            modification_time,
             size: bytes.len() as i64,
-            partitionValues: partition_values,
-            partitionValues_parsed: None,
-            modificationTime: modification_time,
-            dataChange: true,
+            partition_values_parsed: None,
+            data_change: true,
             stats: None,
             stats_parsed: None,
             tags: None,
@@ -1309,8 +1309,8 @@ fn process_action(
             state.tombstones.push(v.clone());
         }
         Action::protocol(v) => {
-            state.min_reader_version = v.minReaderVersion;
-            state.min_writer_version = v.minWriterVersion;
+            state.min_reader_version = v.min_reader_version;
+            state.min_writer_version = v.min_writer_version;
         }
         Action::metaData(v) => {
             state.current_metadata = Some(DeltaTableMetaData {
@@ -1319,15 +1319,15 @@ fn process_action(
                 description: v.description.clone(),
                 format: v.format.clone(),
                 schema: v.get_schema()?,
-                partition_columns: v.partitionColumns.clone(),
-                created_time: v.createdTime,
+                partition_columns: v.partition_columns.clone(),
+                created_time: v.created_time,
                 configuration: v.configuration.clone(),
             });
         }
         Action::txn(v) => {
             *state
                 .app_transaction_version
-                .entry(v.appId.clone())
+                .entry(v.app_id.clone())
                 .or_insert(v.version) = v.version;
         }
         Action::commitInfo(v) => {
@@ -1402,9 +1402,9 @@ mod tests {
         };
 
         let txn_action = Action::txn(action::Txn {
-            appId: "abc".to_string(),
+            app_id: "abc".to_string(),
             version: 2,
-            lastUpdated: 0,
+            last_updated: 0,
         });
 
         let _ = process_action(&mut state, &txn_action).unwrap();

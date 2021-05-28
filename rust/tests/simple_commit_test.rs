@@ -9,16 +9,17 @@ mod s3_common;
 #[allow(dead_code)]
 mod fs_common;
 
+use deltalake::{action, DeltaTransactionError};
 use std::collections::HashMap;
 
-use deltalake::{action, DeltaTransactionError};
+use serial_test::serial;
 
 #[cfg(feature = "s3")]
 mod simple_commit_s3 {
     use super::*;
 
-    #[cfg(feature = "dynamodb")]
     #[tokio::test]
+    #[serial]
     async fn test_two_commits_s3() {
         let path = "s3://deltars/simple_commit_rw1";
         s3_common::setup_dynamodb("concurrent_writes");
@@ -27,13 +28,14 @@ mod simple_commit_s3 {
         test_two_commits(path).await.unwrap();
     }
 
-    #[cfg(not(feature = "dynamodb"))]
     #[tokio::test]
+    #[serial]
     async fn test_two_commits_s3_fails_with_no_lock() {
         use deltalake::{StorageError, TransactionCommitAttemptError};
 
         let path = "s3://deltars/simple_commit_rw2";
         prepare_s3(path).await;
+        std::env::set_var("AWS_S3_LOCKING_PROVIDER", "none  ");
 
         let result = test_two_commits(path).await;
         if let Err(DeltaTransactionError::TransactionCommitAttempt { ref inner }) = result {
@@ -58,11 +60,9 @@ mod simple_commit_s3 {
 }
 
 mod simple_commit_fs {
-    // Tests are run serially to allow usage of the same local fs directory.
-    use serial_test::serial;
-
     use super::*;
 
+    // Tests are run serially to allow usage of the same local fs directory.
     #[tokio::test]
     #[serial]
     async fn test_two_commits_fs() {
@@ -125,6 +125,13 @@ mod simple_commit_fs {
         assert_eq!(1, table.version);
         assert_eq!(2, table.get_files().len());
     }
+
+    fn prepare_fs() {
+        fs_common::cleanup_dir_except(
+            "./tests/data/simple_commit/_delta_log",
+            vec!["00000000000000000000.json".to_string()],
+        );
+    }
 }
 
 async fn test_two_commits(table_path: &str) -> Result<(), DeltaTransactionError> {
@@ -158,10 +165,10 @@ fn tx1_actions() -> Vec<action::Action> {
                 "part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet",
             ),
             size: 396,
-            partitionValues: HashMap::new(),
-            partitionValues_parsed: None,
-            modificationTime: 1564524294000,
-            dataChange: true,
+            partition_values: HashMap::new(),
+            partition_values_parsed: None,
+            modification_time: 1564524294000,
+            data_change: true,
             stats: None,
             stats_parsed: None,
             tags: None,
@@ -171,10 +178,10 @@ fn tx1_actions() -> Vec<action::Action> {
                 "part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet",
             ),
             size: 400,
-            partitionValues: HashMap::new(),
-            partitionValues_parsed: None,
-            modificationTime: 1564524294000,
-            dataChange: true,
+            partition_values: HashMap::new(),
+            partition_values_parsed: None,
+            modification_time: 1564524294000,
+            data_change: true,
             stats: None,
             stats_parsed: None,
             tags: None,
@@ -189,10 +196,10 @@ fn tx2_actions() -> Vec<action::Action> {
                 "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet",
             ),
             size: 396,
-            partitionValues: HashMap::new(),
-            partitionValues_parsed: None,
-            modificationTime: 1564524296000,
-            dataChange: true,
+            partition_values: HashMap::new(),
+            partition_values_parsed: None,
+            modification_time: 1564524296000,
+            data_change: true,
             stats: None,
             stats_parsed: None,
             tags: None,
@@ -202,20 +209,13 @@ fn tx2_actions() -> Vec<action::Action> {
                 "part-00001-4327c977-2734-4477-9507-7ccf67924649-c000.snappy.parquet",
             ),
             size: 400,
-            partitionValues: HashMap::new(),
-            partitionValues_parsed: None,
-            modificationTime: 1564524296000,
-            dataChange: true,
+            partition_values: HashMap::new(),
+            partition_values_parsed: None,
+            modification_time: 1564524296000,
+            data_change: true,
             stats: None,
             stats_parsed: None,
             tags: None,
         }),
     ]
-}
-
-fn prepare_fs() {
-    fs_common::cleanup_dir_except(
-        "./tests/data/simple_commit/_delta_log",
-        vec!["00000000000000000000.json".to_string()],
-    );
 }

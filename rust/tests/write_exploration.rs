@@ -272,12 +272,12 @@ pub fn create_add(
     record_batch: &RecordBatch,
 ) -> Result<Add, DeltaWriterError> {
     let stats = Stats {
-        numRecords: record_batch.num_rows() as i64,
+        num_records: record_batch.num_rows() as i64,
         // TODO: calculate additional stats
         // look at https://github.com/apache/arrow/blob/master/rust/arrow/src/compute/kernels/aggregate.rs for pulling these stats
-        minValues: HashMap::new(),
-        maxValues: HashMap::new(),
-        nullCount: HashMap::new(),
+        min_values: HashMap::new(),
+        max_values: HashMap::new(),
+        null_count: HashMap::new(),
     };
     let stats_string = serde_json::to_string(&stats).unwrap();
 
@@ -288,11 +288,11 @@ pub fn create_add(
         path,
         size,
 
-        partitionValues: partition_values.to_owned(),
-        partitionValues_parsed: None,
+        partition_values: partition_values.to_owned(),
+        partition_values_parsed: None,
 
-        modificationTime: modification_time,
-        dataChange: true,
+        modification_time: modification_time,
+        data_change: true,
 
         // TODO: calculate additional stats
         stats: Some(stats_string),
@@ -310,9 +310,9 @@ pub fn create_remove(path: String) -> Remove {
 
     Remove {
         path,
-        deletionTimestamp: deletion_timestamp,
-        dataChange: true,
-        extendedFileMetadata: Some(false),
+        deletion_timestamp: deletion_timestamp,
+        data_change: true,
+        extended_file_metadata: Some(false),
         ..Default::default()
     }
 }
