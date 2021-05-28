@@ -3,7 +3,7 @@
 VENV := venv
 
 
-.PHON: setup-venv
+.PHONY: setup-venv
 setup-venv: ## Setup the virtualenv
 	$(info --- Setup virtualenv ---)
 	python -m venv $(VENV)
