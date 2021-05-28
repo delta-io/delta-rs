@@ -13,11 +13,11 @@ use std::error::Error;
 
 #[cfg(feature = "azure")]
 pub mod azure;
+#[cfg(feature = "delta-sharing")]
+pub mod deltashare;
 pub mod file;
 #[cfg(feature = "s3")]
 pub mod s3;
-#[cfg(feature = "delta-sharing")]
-pub mod deltashare;
 
 /// Error enum that represents an invalid URI.
 #[derive(thiserror::Error, Debug, PartialEq)]
@@ -97,15 +97,19 @@ pub enum Uri<'a> {
 
 impl<'a> Display for Uri<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
-        write!(f, "{}", match self {
-            Uri::LocalPath(p) => p.to_string(),
-            #[cfg(feature = "s3")]
-            Uri::S3Object(s) =>s.to_string(),
-            #[cfg(feature = "azure")]
-            Uri::AdlsGen2Object(a) => a.to_string(),
-            #[cfg(feature = "delta-sharing")]
-            Uri::DeltaShareObject(d) => d.to_string(),
-        })
+        write!(
+            f,
+            "{}",
+            match self {
+                Uri::LocalPath(p) => p.to_string(),
+                #[cfg(feature = "s3")]
+                Uri::S3Object(s) => s.to_string(),
+                #[cfg(feature = "azure")]
+                Uri::AdlsGen2Object(a) => a.to_string(),
+                #[cfg(feature = "delta-sharing")]
+                Uri::DeltaShareObject(d) => d.to_string(),
+            }
+        )
     }
 }
 
@@ -145,6 +149,7 @@ impl<'a> Uri<'a> {
     pub fn into_localpath(self) -> Result<&'a str, UriError> {
         match self {
             Uri::LocalPath(x) => Ok(x),
+            #[cfg(any(feature = "delta-sharing", feature = "s3", feature = "azure"))]
             x => Err(UriError::ExpectedSLocalPathUri(x.to_string())),
         }
     }
@@ -192,7 +197,16 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
                     Err(UriError::InvalidScheme(String::from(parts[0])))
                 }
             }
-        },
+        }
+        "https" => {
+            cfg_if::cfg_if! {
+                if #[cfg(feature = "delta-sharing")] {
+                    Ok(Uri::DeltaShareObject(deltashare::DeltaShareObject { url: parts[1] }))
+                } else {
+                    Err(UriError::InvalidScheme(String::from(parts[0])))
+                }
+            }
+        }
         "abfss" => {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "azure")] {
@@ -317,7 +331,6 @@ pub enum StorageError {
     #[cfg(feature = "azure")]
     #[error("Azure config error: {0}")]
     AzureConfig(String),
-
 
     ///! Error when the storage backend cannot support the requested API
     #[error("The storage backend does not support the requested operation: {0}")]

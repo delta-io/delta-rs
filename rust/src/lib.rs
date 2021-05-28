@@ -52,7 +52,7 @@ extern crate lazy_static;
 extern crate parquet;
 extern crate regex;
 extern crate serde;
-#[cfg(test)]
+#[cfg(any(feature = "delta-sharing", test))]
 #[macro_use]
 extern crate serde_json;
 extern crate thiserror;

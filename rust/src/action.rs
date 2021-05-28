@@ -2,6 +2,7 @@
 
 #![allow(non_snake_case, non_camel_case_types)]
 
+use chrono::prelude::*;
 use std::collections::HashMap;
 
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
@@ -179,6 +180,33 @@ pub struct Add {
     pub stats_parsed: Option<parquet::record::Row>,
     /// Map containing metadata about this file
     pub tags: Option<HashMap<String, String>>,
+}
+
+/// Delta Sharing specific action for a "file"
+#[cfg(feature = "delta-sharing")]
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct File {
+    /// A relative path, from the root of the table, to a file that should be added to the table
+    pub url: String,
+    /// The size of this file in bytes
+    pub size: DeltaDataTypeLong,
+    /// A map from partition column to value for this file
+    pub partition_values: HashMap<String, String>,
+}
+
+#[cfg(feature = "delta-sharing")]
+impl From<&File> for Add {
+    fn from(file: &File) -> Self {
+        Self {
+            path: file.url.clone(),
+            size: file.size,
+            partition_values: file.partition_values.clone(),
+            modification_time: current_timestamp(),
+            data_change: false,
+            ..Default::default()
+        }
+    }
 }
 
 impl Add {
@@ -380,8 +408,10 @@ pub struct MetaData {
     /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
+    #[serde(default = "current_timestamp")]
     pub created_time: DeltaDataTypeTimestamp,
     /// A map containing configuration options for the table
+    #[serde(default)]
     pub configuration: HashMap<String, String>,
 }
 
@@ -496,6 +526,11 @@ impl MetaData {
     pub fn get_schema(&self) -> Result<Schema, serde_json::error::Error> {
         serde_json::from_str(&self.schema_string)
     }
+}
+
+/// Simple function to provide the current timestamp in ms since epoch
+fn current_timestamp() -> DeltaDataTypeTimestamp {
+    Utc::now().timestamp_millis()
 }
 
 /// Represents a tombstone (deleted file) in the Delta log.
@@ -666,7 +701,7 @@ pub struct Protocol {
     ///
     /// If the table is not writeable the value of the min_writer_version will be i32::MAX to
     /// ensure that no client computes that it can write to the table
-    #[serde(default="max_int32")]
+    #[serde(default = "max_int32")]
     pub min_writer_version: DeltaDataTypeInt,
 }
 
@@ -725,7 +760,11 @@ pub enum Action {
     protocol(Protocol),
     /// Describes commit provenance information for the table.
     commitInfo(Value),
+    /// Delta Sharing specific action for files
+    #[cfg(feature = "delta-sharing")]
+    file(File),
 }
+
 
 impl Action {
     /// Returns an action from the given parquet Row. Used when deserializing delta log parquet

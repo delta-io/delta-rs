@@ -28,7 +28,9 @@ use super::action::{Action, DeltaOperation};
 use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
-use super::storage::{StorageBackend, StorageBackendType, StorageError, UriError};
+use super::storage::{StorageBackend, StorageError, UriError};
+#[cfg(feature = "delta-sharing")]
+use super::storage::StorageBackendType;
 use uuid::Uuid;
 
 /// Metadata for a checkpoint file
@@ -164,12 +166,13 @@ pub enum DeltaTableError {
     )]
     InvalidVacuumRetentionPeriod,
     /// Generic error returned from HTTP requests
+    #[cfg(feature = "delta-sharing")]
     #[error("An underlying reqwest (HTTP) error occurred: {source}")]
     ReqwestError {
         #[from]
         /// Internal reqwest::Error
         source: reqwest::Error,
-    }
+    },
 }
 
 /// Delta table metadata
@@ -488,23 +491,31 @@ impl DeltaTable {
         Ok(version)
     }
 
+    #[cfg(feature = "delta-sharing")]
+    async fn deltasharing_load(&mut self) -> Result<(), DeltaTableError> {
+        let response = reqwest::Client::new()
+                        .post(format!("{}/query", self.table_path))
+                        .bearer_auth(std::env::var("BEARER_TOKEN").unwrap_or("".to_string()))
+                        .json(&json!({"predicateHints": [], "limitHint": 1000}))
+                        .send()
+                        .await?;
+        let version_header = response.headers().get("Delta-Table-Version").unwrap();
+        self.version = version_header.to_str().unwrap().parse::<i64>().unwrap();
+
+        let body = response.text().await?;
+        let reader = BufReader::new(body.as_bytes());
+        self.state = DeltaTableState::default();
+        self.apply_log_from_bufread(reader)?;
+
+        return Ok(());
+    }
+
     /// Load DeltaTable with data from latest checkpoint
     pub async fn load(&mut self) -> Result<(), DeltaTableError> {
         #[cfg(feature = "delta-sharing")]
-        {
-            if self.storage.backend_type() == StorageBackendType::DeltaSharing {
-                let response = reqwest::get(format!("{}/metadata", self.table_path)).await?;
-                let version_header = response.headers().get("Delta-Table-Version").unwrap();
-                self.version = version_header.to_str().unwrap().parse::<i64>().unwrap();
-
-                let body = response.text().await?;
-                let lines: Vec<&str> = body.lines().map(|s| s).collect();
-
-                let _protocol: crate::action::Protocol = serde_json::from_str(&lines[0])?;
-                return Ok(());
-            }
+        if self.storage.backend_type() == StorageBackendType::DeltaSharing {
+            return self.deltasharing_load().await;
         }
-
 
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
@@ -1330,6 +1341,10 @@ fn process_action(
         Action::remove(v) => {
             state.files.retain(|a| *a.path != v.path);
             state.tombstones.push(v.clone());
+        }
+        #[cfg(feature = "delta-sharing")]
+        Action::file(f) => {
+            state.files.push(From::from(f));
         }
         Action::protocol(v) => {
             state.min_reader_version = v.min_reader_version;

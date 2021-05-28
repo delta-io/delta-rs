@@ -1,4 +1,4 @@
-//! The Delta Share backend encapsulates the functionality necessary for using a 
+//! The Delta Share backend encapsulates the functionality necessary for using a
 //! Delta Sharing server (https://delta.io/sharing/) API as the DeltaTable storage
 //! backend
 
@@ -14,7 +14,7 @@ pub struct DeltaShareObject<'a> {
     pub url: &'a str,
 }
 
-impl<'a> std::fmt::Display for DeltaShareObject<'a>{
+impl<'a> std::fmt::Display for DeltaShareObject<'a> {
     fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
         write!(f, "{}", self.url)
     }
@@ -22,8 +22,7 @@ impl<'a> std::fmt::Display for DeltaShareObject<'a>{
 
 /// The DeltaShareBackend is an empty shell since Delta Sharing is integrated directly into DeltaTable
 #[derive(Debug)]
-pub struct DeltaShareBackend {
-}
+pub struct DeltaShareBackend {}
 
 impl DeltaShareBackend {
     /// Instantiate a new backend
@@ -39,11 +38,15 @@ impl StorageBackend for DeltaShareBackend {
     }
 
     async fn head_obj(&self, _path: &str) -> Result<ObjectMeta, StorageError> {
-        Err(StorageError::UnsupportedOperation("head_obj will not work directly against a Delta Share".to_string()))
+        Err(StorageError::UnsupportedOperation(
+            "head_obj will not work directly against a Delta Share".to_string(),
+        ))
     }
 
     async fn get_obj(&self, _path: &str) -> Result<Vec<u8>, StorageError> {
-        Err(StorageError::UnsupportedOperation("get_obj will not work directly against a Delta Share".to_string()))
+        Err(StorageError::UnsupportedOperation(
+            "get_obj will not work directly against a Delta Share".to_string(),
+        ))
     }
 
     async fn list_objs<'a>(
@@ -53,18 +56,26 @@ impl StorageBackend for DeltaShareBackend {
         Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
         StorageError,
     > {
-        Err(StorageError::UnsupportedOperation("list_obj will not work directly against a Delta Share".to_string()))
+        Err(StorageError::UnsupportedOperation(
+            "list_obj will not work directly against a Delta Share".to_string(),
+        ))
     }
 
     async fn put_obj(&self, _path: &str, _obj_bytes: &[u8]) -> Result<(), StorageError> {
-        Err(StorageError::UnsupportedOperation("put_obj will not work directly against a Delta Share".to_string()))
+        Err(StorageError::UnsupportedOperation(
+            "put_obj will not work directly against a Delta Share".to_string(),
+        ))
     }
 
     async fn rename_obj(&self, _src: &str, _dst: &str) -> Result<(), StorageError> {
-        Err(StorageError::UnsupportedOperation("rename_obj will not work directly against a Delta Share".to_string()))
+        Err(StorageError::UnsupportedOperation(
+            "rename_obj will not work directly against a Delta Share".to_string(),
+        ))
     }
 
     async fn delete_obj(&self, _path: &str) -> Result<(), StorageError> {
-        Err(StorageError::UnsupportedOperation("delete_obj will not work directly against a Delta Share".to_string()))
+        Err(StorageError::UnsupportedOperation(
+            "delete_obj will not work directly against a Delta Share".to_string(),
+        ))
     }
 }

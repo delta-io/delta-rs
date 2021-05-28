@@ -28,7 +28,7 @@ uuid = { version = "0.8", features = ["serde", "v4"] }
 lazy_static = "1"
 
 # Azure
-reqwest = { version = "0", optional = true }
+reqwest = { version = "0", features = ["json"], optional = true }
 azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "536da42ebefd411feff8ba6a0965865e2741267e" }
 azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "536da42ebefd411feff8ba6a0965865e2741267e", features = ["blob", "account", "adls_gen2"] }
 
