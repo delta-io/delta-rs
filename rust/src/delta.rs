@@ -28,9 +28,9 @@ use super::action::{Action, DeltaOperation};
 use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
-use super::storage::{StorageBackend, StorageError, UriError};
 #[cfg(feature = "delta-sharing")]
 use super::storage::StorageBackendType;
+use super::storage::{StorageBackend, StorageError, UriError};
 use uuid::Uuid;
 
 /// Metadata for a checkpoint file
@@ -494,11 +494,11 @@ impl DeltaTable {
     #[cfg(feature = "delta-sharing")]
     async fn deltasharing_load(&mut self) -> Result<(), DeltaTableError> {
         let response = reqwest::Client::new()
-                        .post(format!("{}/query", self.table_path))
-                        .bearer_auth(std::env::var("BEARER_TOKEN").unwrap_or("".to_string()))
-                        .json(&json!({"predicateHints": [], "limitHint": 1000}))
-                        .send()
-                        .await?;
+            .post(format!("{}/query", self.table_path))
+            .bearer_auth(std::env::var("BEARER_TOKEN").unwrap_or("".to_string()))
+            .json(&json!({"predicateHints": [], "limitHint": 1000}))
+            .send()
+            .await?;
         let version_header = response.headers().get("Delta-Table-Version").unwrap();
         self.version = version_header.to_str().unwrap().parse::<i64>().unwrap();
 

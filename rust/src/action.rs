@@ -765,7 +765,6 @@ pub enum Action {
     file(File),
 }
 
-
 impl Action {
     /// Returns an action from the given parquet Row. Used when deserializing delta log parquet
     /// checkpoints.
