@@ -37,6 +37,12 @@ impl StorageBackend for DeltaShareBackend {
         StorageBackendType::DeltaSharing
     }
 
+    /// Delta Sharing file paths are already fully formed, no need for this helper
+    /// to do any actual joining
+    fn join_path(&self, _path: &str, path_to_join: &str) -> String {
+        path_to_join.to_string()
+    }
+
     async fn head_obj(&self, _path: &str) -> Result<ObjectMeta, StorageError> {
         Err(StorageError::UnsupportedOperation(
             "head_obj will not work directly against a Delta Share".to_string(),

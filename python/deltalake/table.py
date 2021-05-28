@@ -2,6 +2,7 @@ import os
 from typing import Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
+import fsspec
 import pyarrow
 from pyarrow.dataset import dataset, partitioning
 
@@ -200,10 +201,16 @@ class DeltaTable:
                 )
 
             keys = [curr_file.path for curr_file in paths]
+            filesystem = (f"{paths[0].scheme}://{paths[0].netloc}{query_str}",)
+
+            if paths[0].scheme in ("http", "https"):
+                filesystem = fsspec.filesystem(paths[0].scheme)
+                keys = [curr_file.geturl() for curr_file in paths]
+
             return dataset(
                 keys,
                 schema=self.pyarrow_schema(),
-                filesystem=f"{paths[0].scheme}://{paths[0].netloc}{query_str}",
+                filesystem=filesystem,
                 partitioning=partitioning(flavor="hive"),
             )
         else:

@@ -28,7 +28,7 @@ features = ["extension-module", "abi3", "abi3-py36"]
 [dependencies.deltalake]
 path = "../rust"
 version = "0"
-features = ["s3", "azure"]
+features = ["s3", "azure", "delta-sharing"]
 
 [package.metadata.maturin]
 name = "deltalake"
@@ -41,6 +41,8 @@ classifier = [
 project-url = { Repo = "https://github.com/delta-io/delta-rs" }
 requires-dist = [
     "pyarrow>=4",
+    "fsspec>=0.7.4",
+    "aiohttp",
     'numpy<1.20.0;python_version<="3.6"',
     "pandas; extra =='pandas'",
     "mypy; extra == 'devel'",
