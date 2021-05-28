@@ -1,4 +1,5 @@
 import os
+from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
@@ -9,6 +10,7 @@ from .deltalake import RawDeltaTable, RawDeltaTableMetaData
 from .schema import Schema, pyarrow_schema_from_json
 
 
+@dataclass(init=False)
 class Metadata:
     """Create a Metadata instance."""
 
@@ -55,6 +57,7 @@ class Metadata:
         )
 
 
+@dataclass(init=False)
 class DeltaTable:
     """Create a DeltaTable instance."""
 
