@@ -5,13 +5,13 @@ require 'deltalake'
 
 describe Deltalake do
   describe '#open_table' do
-    let(:table_path) do
+    let(:table_uri) do
       File.expand_path('../rust/tests/data/simple_table')
     end
 
-    subject(:table) { Deltalake.open_table(table_path) }
+    subject(:table) { Deltalake.open_table(table_uri) }
 
-    its(:table_path) { should eq(table_path) }
+    its(:table_uri) { should eq(table_uri) }
     its(:version) { should eq 4 }
 
     describe '#files' do
