@@ -122,6 +122,18 @@ impl<'a> Uri<'a> {
             Uri::AdlsGen2Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
         }
     }
+
+    /// Return URI path component as String
+    #[inline]
+    pub fn path(&self) -> String {
+        match self {
+            Uri::LocalPath(x) => x.to_string(),
+            #[cfg(feature = "s3")]
+            Uri::S3Object(x) => x.key.to_string(),
+            #[cfg(feature = "azure")]
+            Uri::AdlsGen2Object(x) => x.path.to_string(),
+        }
+    }
 }
 
 /// Parses the URI and returns a variant of the Uri enum for the appropriate storage backend based
@@ -326,7 +338,13 @@ impl From<AzureError> for StorageError {
 
 /// Describes metadata of a storage object.
 pub struct ObjectMeta {
-    /// The path where the object is stored.
+    /// The path where the object is stored. This is the path component of the object URI.
+    ///
+    /// For example:
+    ///   * path for `s3://bucket/foo/bar` should be `foo/bar`.
+    ///   * path for `dir/foo/bar` should be `dir/foo/bar`.
+    ///
+    /// Given a table URI, object URI can be constructed by joining table URI with object path.
     pub path: String,
     /// The last time the object was modified in the storage backend.
     // The timestamp of a commit comes from the remote storage `lastModifiedTime`, and can be
@@ -401,33 +419,5 @@ pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, Storage
         Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new()?)),
         #[cfg(feature = "azure")]
         Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn test_parse_uri_local_file() {
-        let uri = parse_uri("foo/bar").unwrap();
-        assert_eq!(uri.into_localpath().unwrap(), "foo/bar");
-
-        let uri2 = parse_uri("file:///foo/bar").unwrap();
-        assert_eq!(uri2.into_localpath().unwrap(), "/foo/bar");
-    }
-
-    #[cfg(feature = "azure")]
-    #[test]
-    fn test_parse_azure_object_uri() {
-        let uri = parse_uri("abfss://fs@sa.dfs.core.windows.net/foo").unwrap();
-        assert_eq!(
-            uri.into_adlsgen2_object().unwrap(),
-            azure::AdlsGen2Object {
-                account_name: "sa",
-                file_system: "fs",
-                path: "foo",
-            }
-        );
     }
 }

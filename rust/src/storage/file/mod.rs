@@ -123,6 +123,7 @@ impl StorageBackend for FileStorageBackend {
 
 #[cfg(test)]
 mod tests {
+    use super::super::parse_uri;
     use super::*;
 
     #[tokio::test]
@@ -199,5 +200,16 @@ mod tests {
             )),
             path,
         );
+    }
+
+    #[test]
+    fn test_parse_uri() {
+        let uri = parse_uri("foo/bar").unwrap();
+        assert_eq!(uri.path(), "foo/bar");
+        assert_eq!(uri.into_localpath().unwrap(), "foo/bar");
+
+        let uri2 = parse_uri("file:///foo/bar").unwrap();
+        assert_eq!(uri2.path(), "/foo/bar");
+        assert_eq!(uri2.into_localpath().unwrap(), "/foo/bar");
     }
 }

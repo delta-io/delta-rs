@@ -503,13 +503,14 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_s3_object_uri() {
-        let uri = parse_uri("s3://foo/bar").unwrap();
+    fn parse_s3_object_uri() {
+        let uri = parse_uri("s3://foo/bar/baz").unwrap();
+        assert_eq!(uri.path(), "bar/baz");
         assert_eq!(
             uri.into_s3object().unwrap(),
             S3Object {
                 bucket: "foo",
-                key: "bar",
+                key: "bar/baz",
             }
         );
     }
