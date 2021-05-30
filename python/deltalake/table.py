@@ -1,4 +1,5 @@
 import os
+import warnings
 from dataclasses import dataclass
 from typing import Any, List, Optional, Tuple
 from urllib.parse import urlparse
@@ -61,15 +62,15 @@ class Metadata:
 class DeltaTable:
     """Create a DeltaTable instance."""
 
-    def __init__(self, table_path: str, version: Optional[int] = None):
+    def __init__(self, table_uri: str, version: Optional[int] = None):
         """
         Create the Delta Table from a path with an optional version.
         Multiple StorageBackends are currently supported: AWS S3, Azure Data Lake Storage Gen2 and local URI.
 
-        :param table_path: the path of the DeltaTable
+        :param table_uri: the path of the DeltaTable
         :param version: version of the DeltaTable
         """
-        self._table = RawDeltaTable(table_path, version=version)
+        self._table = RawDeltaTable(table_uri, version=version)
         self._metadata = Metadata(self._table)
 
     def version(self) -> int:
@@ -123,7 +124,20 @@ class DeltaTable:
         """
         Get the list of files with an absolute path.
 
-        :return: list of the .parquet files with an absolute path referenced for the current version of the DeltaTable
+        :return: list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
+        """
+        warnings.warn(
+            "Call to deprecated method file_paths. Please use file_uris instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.file_uris()
+
+    def file_uris(self) -> List[str]:
+        """
+        Get the list of files with an absolute path.
+
+        :return: list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
         """
         return self._table.file_uris()
 
@@ -182,7 +196,7 @@ class DeltaTable:
         :return: the PyArrow dataset in PyArrow
         """
         if partitions is None:
-            file_paths = self._table.file_paths()
+            file_paths = self._table.file_uris()
         else:
             file_paths = self._table.files_by_partitions(partitions)
         paths = [urlparse(curr_file) for curr_file in file_paths]

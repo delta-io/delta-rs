@@ -13,23 +13,23 @@ use rutie::{AnyObject, Array, Class, Integer, Object, RString};
 use std::sync::Arc;
 
 pub struct TableData {
-    table_path: String,
+    table_uri: String,
     actual: Arc<DeltaTable>,
 }
 
 impl TableData {
-    fn new(table_path: String) -> Self {
-        println!("initializing with {}", table_path);
+    fn new(table_uri: String) -> Self {
+        println!("initializing with {}", table_uri);
 
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let table = rt.block_on(deltalake::open_table(&table_path)).unwrap();
+        let table = rt.block_on(deltalake::open_table(&table_uri)).unwrap();
         let actual = Arc::new(table);
 
-        Self { table_path, actual }
+        Self { table_uri, actual }
     }
 
-    fn table_path(&self) -> &str {
-        &self.table_path
+    fn table_uri(&self) -> &str {
+        &self.table_uri
     }
 
     fn version(&self) -> i64 {
@@ -51,15 +51,15 @@ class!(Table);
 methods!(
     Table,
     rtself,
-    fn ruby_table_new(table_path: RString) -> AnyObject {
-        let table_data = TableData::new(table_path.unwrap().to_string());
+    fn ruby_table_new(table_uri: RString) -> AnyObject {
+        let table_data = TableData::new(table_uri.unwrap().to_string());
 
         Class::from_existing("Table").wrap_data(table_data, &*TABLE_DATA_WRAPPER)
     },
-    fn ruby_table_path() -> RString {
-        let table_path = rtself.get_data(&*TABLE_DATA_WRAPPER).table_path();
+    fn ruby_table_uri() -> RString {
+        let table_uri = rtself.get_data(&*TABLE_DATA_WRAPPER).table_uri();
 
-        RString::new_utf8(table_path)
+        RString::new_utf8(table_uri)
     },
     fn ruby_version() -> Integer {
         let version = rtself.get_data(&*TABLE_DATA_WRAPPER).version();
@@ -87,7 +87,7 @@ pub extern "C" fn Init_table() {
     Class::new("Table", Some(&data_class)).define(|klass| {
         klass.def_self("new", ruby_table_new);
 
-        klass.def("table_path", ruby_table_path);
+        klass.def("table_uri", ruby_table_uri);
         klass.def("version", ruby_version);
         klass.def("files", ruby_files);
     });

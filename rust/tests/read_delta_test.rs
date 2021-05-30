@@ -152,7 +152,7 @@ async fn read_delta_8_0_table_with_partitions() {
 
     #[cfg(unix)]
     assert_eq!(
-        table.get_file_paths_by_partitions(&filters).unwrap(),
+        table.get_file_uris_by_partitions(&filters).unwrap(),
         vec![
             "./tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
             "./tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string()
@@ -160,7 +160,7 @@ async fn read_delta_8_0_table_with_partitions() {
     );
     #[cfg(windows)]
     assert_eq!(
-        table.get_file_paths_by_partitions(&filters).unwrap(),
+        table.get_file_uris_by_partitions(&filters).unwrap(),
         vec![
             "./tests/data/delta-0.8.0-partitioned\\year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
             "./tests/data/delta-0.8.0-partitioned\\year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string()

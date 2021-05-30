@@ -44,7 +44,7 @@ async fn read_simple_table() {
                 "./tests/data/simple_table/part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet".to_string(),
                 "./tests/data/simple_table/part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet".to_string(),
             ];
-        assert_eq!(table.get_file_paths(), paths);
+        assert_eq!(table.get_file_uris(), paths);
     }
     #[cfg(windows)]
     {
@@ -55,7 +55,7 @@ async fn read_simple_table() {
                 "./tests/data/simple_table\\part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet".to_string(),
                 "./tests/data/simple_table\\part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet".to_string(),
             ];
-        assert_eq!(table.get_file_paths(), paths);
+        assert_eq!(table.get_file_uris(), paths);
     }
 }
 
