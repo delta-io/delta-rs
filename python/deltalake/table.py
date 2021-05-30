@@ -1,7 +1,8 @@
-from typing import List, Optional, Tuple
+import os
+from dataclasses import dataclass
+from typing import Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
-import os
 import pyarrow
 from pyarrow.dataset import dataset, partitioning
 
@@ -9,6 +10,7 @@ from .deltalake import RawDeltaTable, RawDeltaTableMetaData
 from .schema import Schema, pyarrow_schema_from_json
 
 
+@dataclass(init=False)
 class Metadata:
     """Create a Metadata instance."""
 
@@ -16,34 +18,34 @@ class Metadata:
         self._metadata = table.metadata()
 
     @property
-    def id(self):
+    def id(self) -> int:
         """Return the unique identifier of the DeltaTable."""
         return self._metadata.id
 
     @property
-    def name(self):
+    def name(self) -> str:
         """Return the user-provided identifier of the DeltaTable."""
         return self._metadata.name
 
     @property
-    def description(self):
+    def description(self) -> str:
         """Return the user-provided description of the DeltaTable."""
         return self._metadata.description
 
     @property
-    def partition_columns(self):
+    def partition_columns(self) -> List[str]:
         """Return an array containing the names of the partitioned columns of the DeltaTable."""
         return self._metadata.partition_columns
 
     @property
-    def created_time(self):
+    def created_time(self) -> int:
         """
         Return The time when this metadata action is created, in milliseconds since the Unix epoch of the DeltaTable.
         """
         return self._metadata.created_time
 
     @property
-    def configuration(self):
+    def configuration(self) -> List[str]:
         """Return the DeltaTable properties."""
         return self._metadata.configuration
 
@@ -54,21 +56,8 @@ class Metadata:
             f"created_time: {self.created_time}, configuration={self._metadata.configuration})"
         )
 
-    def __repr__(self) -> str:
-        return self.__str__()
 
-    def __eq__(self, other: "Metadata") -> bool:
-        return (
-            isinstance(other, Metadata)
-            and self._metadata.id == other._metadata.id
-            and self._metadata.name == other._metadata.name
-            and self._metadata.description == other._metadata.description
-            and self._metadata.partition_columns == other._metadata.partition_columns
-            and self._metadata.created_time == other._metadata.created_time
-            and self._metadata.configuration == other._metadata.configuration
-        )
-
-
+@dataclass(init=False)
 class DeltaTable:
     """Create a DeltaTable instance."""
 
@@ -99,7 +88,9 @@ class DeltaTable:
         """
         return self._table.files()
 
-    def files_by_partitions(self, partition_filters: List[Tuple]) -> List[str]:
+    def files_by_partitions(
+        self, partition_filters: List[Tuple[str, str, Any]]
+    ) -> List[str]:
         """
         Get the files that match a given list of partitions filters.
         Partitions which do not match the filter predicate will be removed from scanned data.
@@ -182,7 +173,7 @@ class DeltaTable:
         return pyarrow_schema_from_json(self._table.arrow_schema_json())
 
     def to_pyarrow_dataset(
-        self, partitions: Optional[List[Tuple]] = None
+        self, partitions: Optional[List[Tuple[str, str, Any]]] = None
     ) -> pyarrow.dataset.Dataset:
         """
         Build a PyArrow Dataset using data from the DeltaTable.
@@ -227,7 +218,7 @@ class DeltaTable:
             )
 
     def to_pyarrow_table(
-        self, partitions: Optional[List[Tuple]] = None
+        self, partitions: Optional[List[Tuple[str, str, Any]]] = None
     ) -> pyarrow.Table:
         """
         Build a PyArrow Table using data from the DeltaTable.

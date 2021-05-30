@@ -1,30 +1,23 @@
-from typing import Dict, List, Any, Optional
-
 import json
+from dataclasses import dataclass
+from typing import Any, Dict, List, Optional
 
 import pyarrow
-
 
 # TODO: implement this module in Rust land to avoid JSON serialization
 # https://github.com/delta-io/delta-rs/issues/95
 
 
+@dataclass
 class DataType:
     """
     Base class of all Delta data types.
     """
 
-    def __init__(self, type_class: str):
-        self.type = type_class
+    type: str
 
     def __str__(self) -> str:
         return f"DataType({self.type})"
-
-    def __repr__(self) -> str:
-        return self.__str__()
-
-    def __eq__(self, other: "DataType") -> bool:
-        return self.type == other.type
 
     @classmethod
     def from_dict(cls, json_dict: Dict[str, Any]) -> "DataType":
@@ -36,11 +29,11 @@ class DataType:
         """
         type_class = json_dict["type"]
         if type_class == "map":
-            key_type = {"type": json_dict["keyType"]}
-            value_type = {"type": json_dict["valueType"]}
+            key_type_dict = {"type": json_dict["keyType"]}
+            value_type_dict = {"type": json_dict["valueType"]}
             value_contains_null = json_dict["valueContainsNull"]
-            key_type = cls.from_dict(json_dict=key_type)
-            value_type = cls.from_dict(json_dict=value_type)
+            key_type = cls.from_dict(json_dict=key_type_dict)
+            value_type = cls.from_dict(json_dict=value_type_dict)
             return MapType(
                 key_type=key_type,
                 value_type=value_type,
@@ -75,101 +68,83 @@ class DataType:
         return DataType(type_class)
 
 
+@dataclass(init=False)
 class MapType(DataType):
     """Concrete class for map data types."""
 
-    def __init__(self, key_type: str, value_type: str, value_contains_null: bool):
+    key_type: DataType
+    value_type: DataType
+    value_contains_null: bool
+    type: str
+
+    def __init__(
+        self, key_type: "DataType", value_type: "DataType", value_contains_null: bool
+    ):
         super().__init__("map")
         self.key_type = key_type
         self.value_type = value_type
         self.value_contains_null = value_contains_null
 
-    def __eq__(self, other: "DataType") -> bool:
-        return (
-            isinstance(other, MapType)
-            and self.key_type == other.key_type
-            and self.value_type == other.value_type
-            and self.value_contains_null == other.value_contains_null
-        )
-
     def __str__(self) -> str:
         return f"DataType(map<{self.key_type}, {self.value_type}, {self.value_contains_null}>)"
 
 
+@dataclass(init=False)
 class ArrayType(DataType):
     """Concrete class for array data types."""
+
+    element_type: DataType
+    contains_null: bool
+    type: str
 
     def __init__(self, element_type: DataType, contains_null: bool):
         super().__init__("array")
         self.element_type = element_type
         self.contains_null = contains_null
 
-    def __eq__(self, other: "DataType") -> bool:
-        return (
-            isinstance(other, ArrayType)
-            and self.element_type == other.element_type
-            and self.contains_null == other.contains_null
-        )
-
     def __str__(self) -> str:
         return f"DataType(array<{self.element_type}> {self.contains_null})"
 
 
+@dataclass(init=False)
 class StructType(DataType):
     """Concrete class for struct data types."""
+
+    fields: List["Field"]
+    type: str
 
     def __init__(self, fields: List["Field"]):
         super().__init__("struct")
         self.fields = fields
-
-    def __eq__(self, other: "DataType") -> bool:
-        return isinstance(other, StructType) and self.fields == other.fields
 
     def __str__(self) -> str:
         field_strs = [str(f) for f in self.fields]
         return f"DataType(struct<{', '.join(field_strs)}>)"
 
 
+@dataclass
 class Field:
     """Create a DeltaTable Field instance."""
 
-    def __init__(
-        self,
-        name: str,
-        type: DataType,
-        nullable: bool,
-        metadata: Optional[Dict[str, str]] = None,
-    ):
-        self.type = type
-        self.name = name
-        self.nullable = nullable
-        self.metadata = metadata
+    name: str
+    type: DataType
+    nullable: bool
+    metadata: Optional[Dict[str, str]] = None
 
     def __str__(self) -> str:
         return f"Field({self.name}: {self.type} nullable({self.nullable}) metadata({self.metadata}))"
 
-    def __eq__(self, other: "Field") -> bool:
-        return (
-            self.type == other.type
-            and self.name == other.name
-            and self.nullable == other.nullable
-            and self.metadata == other.metadata
-        )
 
-
+@dataclass
 class Schema:
     """Create a DeltaTable Schema instance."""
 
-    def __init__(self, fields: List[Field], json_value: Dict[str, Any]):
-        self.fields = fields
-        self.json_value = json_value
+    fields: List[Field]
+    json_value: Dict[str, Any]
 
     def __str__(self) -> str:
         field_strs = [str(f) for f in self.fields]
         return f"Schema({', '.join(field_strs)})"
-
-    def __repr__(self) -> str:
-        return self.__str__()
 
     def json(self) -> Dict[str, Any]:
         return self.json_value

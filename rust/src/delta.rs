@@ -137,6 +137,15 @@ pub enum DeltaTableError {
     /// Error returned when no partition was found in the DeltaTable.
     #[error("No partitions found, please make sure table is partitioned.")]
     LoadPartitions,
+
+    /// Error returned when writes are attempted with data that doesn't match the schema of the
+    /// table
+    #[error("Data does not match the schema or partitions of the table: {}", msg)]
+    SchemaMismatch {
+        /// Information about the mismatch
+        msg: String,
+    },
+
     /// Error returned when a partition is not formatted as a Hive Partition.
     #[error("This partition is not formatted with key=value: {}", .partition)]
     PartitionError {
@@ -776,7 +785,7 @@ impl DeltaTable {
         Ok(self
             .get_tombstones()
             .iter()
-            .filter(|tombstone| tombstone.deletionTimestamp < delete_before_timestamp)
+            .filter(|tombstone| tombstone.deletion_timestamp < delete_before_timestamp)
             .map(|tombstone| tombstone.path.as_str())
             .collect::<HashSet<_>>())
     }
@@ -1100,6 +1109,7 @@ impl Default for DeltaTransactionOptions {
 #[derive(Debug)]
 pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
+    actions: Vec<Action>,
     options: DeltaTransactionOptions,
 }
 
@@ -1110,15 +1120,99 @@ impl<'a> DeltaTransaction<'a> {
     pub fn new(delta_table: &'a mut DeltaTable, options: Option<DeltaTransactionOptions>) -> Self {
         DeltaTransaction {
             delta_table,
+            actions: vec![],
             options: options.unwrap_or_else(DeltaTransactionOptions::default),
         }
     }
 
+    /// Add an arbitrary "action" to the actions associated with this transaction
+    pub fn add_action(&mut self, action: action::Action) {
+        self.actions.push(action);
+    }
+
+    /// Add an arbitrary number of actions to the actions associated with this transaction
+    pub fn add_actions(&mut self, actions: Vec<action::Action>) {
+        for action in actions.into_iter() {
+            self.actions.push(action);
+        }
+    }
+
+    /// Create a new add action and write the given bytes to the storage backend as a fully formed
+    /// Parquet file
+    ///
+    /// add_file accepts two optional parameters:
+    ///
+    /// partitions: an ordered vec of WritablePartitionValues for the file to be added
+    /// actions: an ordered list of Actions to be inserted into the log file _ahead_ of the Add
+    ///     action for the file added. This should typically be used for txn type actions
+    pub async fn add_file(
+        &mut self,
+        bytes: &[u8],
+        partitions: Option<Vec<(String, String)>>,
+    ) -> Result<(), DeltaTransactionError> {
+        let mut partition_values = HashMap::new();
+        if let Some(partitions) = &partitions {
+            for (key, value) in partitions {
+                partition_values.insert(key.clone(), value.clone());
+            }
+        }
+
+        let path = self.generate_parquet_filename(partitions);
+        let parquet_uri = self
+            .delta_table
+            .storage
+            .join_path(&self.delta_table.table_uri, &path);
+
+        debug!("Writing a parquet file to {}", &parquet_uri);
+        self.delta_table
+            .storage
+            .put_obj(&parquet_uri, &bytes)
+            .await
+            .map_err(|source| DeltaTransactionError::Storage { source })?;
+
+        // Determine the modification timestamp to include in the add action - milliseconds since epoch
+        // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
+        let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let modification_time = modification_time.as_millis() as i64;
+
+        self.actions.push(Action::add(action::Add {
+            path,
+            partition_values,
+            modification_time,
+            size: bytes.len() as i64,
+            partition_values_parsed: None,
+            data_change: true,
+            stats: None,
+            stats_parsed: None,
+            tags: None,
+        }));
+
+        Ok(())
+    }
+
+    fn generate_parquet_filename(&self, partitions: Option<Vec<(String, String)>>) -> String {
+        /*
+         * The specific file naming for parquet is not well documented including the preceding five
+         * zeros and the trailing c000 string
+         *
+         */
+        let mut path_parts = vec![format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4())];
+
+        if let Some(partitions) = partitions {
+            for partition in partitions {
+                path_parts.push(format!("{}={}", partition.0, partition.1));
+            }
+        }
+
+        self.delta_table
+            .storage
+            .join_paths(&path_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
+    }
+
     /// Commits the given actions to the delta log.
     /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
-    pub async fn commit_with(
+    pub async fn commit(
         &mut self,
-        additional_actions: &[Action],
         _operation: Option<DeltaOperation>,
     ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action), but leaving it unused for now.
@@ -1142,7 +1236,7 @@ impl<'a> DeltaTransaction<'a> {
         // TODO: create a CommitInfo action and prepend it to actions.
 
         // Serialize all actions that are part of this log entry.
-        let log_entry = log_entry_from_actions(additional_actions)?;
+        let log_entry = log_entry_from_actions(&self.actions)?;
 
         // try to commit in a loop in case other writers write the next version first
         let version = self.try_commit_loop(log_entry.as_bytes()).await?;
@@ -1159,12 +1253,11 @@ impl<'a> DeltaTransaction<'a> {
     pub async fn commit_version(
         &mut self,
         version: DeltaDataTypeVersion,
-        additional_actions: &[Action],
         _operation: Option<DeltaOperation>,
     ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         // TODO: create a CommitInfo action and prepend it to actions.
 
-        let log_entry = log_entry_from_actions(additional_actions)?;
+        let log_entry = log_entry_from_actions(&self.actions)?;
         let tmp_commit_uri = self.prepare_commit(log_entry.as_bytes()).await?;
         let version = self.try_commit(&tmp_commit_uri, version).await?;
 
@@ -1275,8 +1368,8 @@ fn process_action(
             state.tombstones.push(v.clone());
         }
         Action::protocol(v) => {
-            state.min_reader_version = v.minReaderVersion;
-            state.min_writer_version = v.minWriterVersion;
+            state.min_reader_version = v.min_reader_version;
+            state.min_writer_version = v.min_writer_version;
         }
         Action::metaData(v) => {
             state.current_metadata = Some(DeltaTableMetaData {
@@ -1285,15 +1378,15 @@ fn process_action(
                 description: v.description.clone(),
                 format: v.format.clone(),
                 schema: v.get_schema()?,
-                partition_columns: v.partitionColumns.clone(),
-                created_time: v.createdTime,
+                partition_columns: v.partition_columns.clone(),
+                created_time: v.created_time,
                 configuration: v.configuration.clone(),
             });
         }
         Action::txn(v) => {
             *state
                 .app_transaction_version
-                .entry(v.appId.clone())
+                .entry(v.app_id.clone())
                 .or_insert(v.version) = v.version;
         }
         Action::commitInfo(v) => {
@@ -1367,9 +1460,9 @@ mod tests {
         };
 
         let txn_action = Action::txn(action::Txn {
-            appId: "abc".to_string(),
+            app_id: "abc".to_string(),
             version: 2,
-            lastUpdated: 0,
+            last_updated: 0,
         });
 
         let _ = process_action(&mut state, &txn_action).unwrap();

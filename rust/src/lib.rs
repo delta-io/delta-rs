@@ -52,6 +52,8 @@ extern crate lazy_static;
 extern crate parquet;
 extern crate regex;
 extern crate serde;
+#[cfg(test)]
+#[macro_use]
 extern crate serde_json;
 extern crate thiserror;
 
@@ -61,6 +63,7 @@ pub mod delta_arrow;
 pub mod partitions;
 mod schema;
 pub mod storage;
+pub mod writer;
 
 #[cfg(feature = "datafusion-ext")]
 pub mod delta_datafusion;
