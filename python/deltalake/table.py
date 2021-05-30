@@ -134,7 +134,7 @@ class DeltaTable:
 
         :return: list of the .parquet files with an absolute path referenced for the current version of the DeltaTable
         """
-        return self._table.file_paths()
+        return self._table.file_uris()
 
     def load_version(self, version: int) -> None:
         """

@@ -663,8 +663,20 @@ impl DeltaTable {
         Ok(files)
     }
 
-    /// Return the full file paths as strings for the partition(s)
+    /// Return the file uris as strings for the partition(s)
+    #[deprecated(
+        since = "0.4.0",
+        note = "Please use the get_file_uris_by_partitions function instead"
+    )]
     pub fn get_file_paths_by_partitions(
+        &self,
+        filters: &[PartitionFilter<&str>],
+    ) -> Result<Vec<String>, DeltaTableError> {
+        self.get_file_uris_by_partitions(filters)
+    }
+
+    /// Return the file uris as strings for the partition(s)
+    pub fn get_file_uris_by_partitions(
         &self,
         filters: &[PartitionFilter<&str>],
     ) -> Result<Vec<String>, DeltaTableError> {
@@ -701,8 +713,17 @@ impl DeltaTable {
             .collect()
     }
 
-    /// Returns a copy of the file paths present in the loaded state.
+    /// Returns a URIs for all active files present in the current table version.
+    #[deprecated(
+        since = "0.4.0",
+        note = "Please use the get_file_uris function instead"
+    )]
     pub fn get_file_paths(&self) -> Vec<String> {
+        self.get_file_uris()
+    }
+
+    /// Returns a URIs for all active files present in the current table version.
+    pub fn get_file_uris(&self) -> Vec<String> {
         self.state
             .files
             .iter()
