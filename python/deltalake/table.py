@@ -187,6 +187,14 @@ class DeltaTable:
             file_paths = self._table.files_by_partitions(partitions)
         paths = [urlparse(curr_file) for curr_file in file_paths]
 
+        empty_delta_table = len(paths) == 0
+        if empty_delta_table:
+            return dataset(
+                [],
+                schema=self.pyarrow_schema(),
+                partitioning=partitioning(flavor="hive"),
+            )
+
         # Decide based on the first file, if the file is on cloud storage or local
         if paths[0].netloc:
             query_str = ""
