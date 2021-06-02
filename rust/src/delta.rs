@@ -8,11 +8,14 @@ use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
 
 use arrow::error::ArrowError;
+use arrow::json::reader::ReaderBuilder;
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use log::debug;
+use log::*;
+use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
+use parquet::file::writer::InMemoryWriteableCursor;
 use parquet::file::{
     reader::{FileReader, SerializedFileReader},
     serialized_reader::SliceableCursor,
@@ -21,6 +24,7 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::convert::TryFrom;
+use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use super::action;
@@ -196,6 +200,40 @@ impl fmt::Display for DeltaTableMetaData {
     }
 }
 
+impl TryFrom<&action::MetaData> for DeltaTableMetaData {
+    type Error = serde_json::error::Error;
+
+    fn try_from(action_metadata: &action::MetaData) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: action_metadata.id.clone(),
+            name: action_metadata.name.clone(),
+            description: action_metadata.description.clone(),
+            format: action_metadata.format.clone(),
+            schema: action_metadata.get_schema()?,
+            partition_columns: action_metadata.partition_columns.clone(),
+            created_time: action_metadata.created_time,
+            configuration: action_metadata.configuration.clone(),
+        })
+    }
+}
+
+impl TryFrom<&DeltaTableMetaData> for action::MetaData {
+    type Error = serde_json::error::Error;
+
+    fn try_from(metadata: &DeltaTableMetaData) -> Result<Self, Self::Error> {
+        Ok(Self {
+            id: metadata.id.clone(),
+            name: metadata.name.clone(),
+            description: metadata.description.clone(),
+            format: metadata.format.clone(),
+            schema_string: serde_json::to_string(&metadata.schema)?,
+            partition_columns: metadata.partition_columns.clone(),
+            created_time: metadata.created_time,
+            configuration: metadata.configuration.clone(),
+        })
+    }
+}
+
 /// Error related to Delta log application
 #[derive(thiserror::Error, Debug)]
 pub enum ApplyLogError {
@@ -263,8 +301,9 @@ impl From<StorageError> for LoadCheckpointError {
     }
 }
 
-#[derive(Default, Debug)]
-struct DeltaTableState {
+/// State snapshot currently held by the Delta Table instance.
+#[derive(Default, Debug, Clone)]
+pub struct DeltaTableState {
     // A remove action should remain in the state of the table as a tombstone until it has expired.
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: Vec<action::Remove>,
@@ -274,6 +313,61 @@ struct DeltaTableState {
     min_reader_version: i32,
     min_writer_version: i32,
     current_metadata: Option<DeltaTableMetaData>,
+}
+
+impl DeltaTableState {
+    /// Creates a new instance of DeltaTableState from the supplied components.
+    pub fn new(
+        tombstones: Vec<action::Remove>,
+        files: Vec<action::Add>,
+        commit_infos: Vec<Value>,
+        app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
+        min_reader_version: i32,
+        min_writer_version: i32,
+        current_metadata: Option<DeltaTableMetaData>,
+    ) -> Self {
+        Self {
+            tombstones,
+            files,
+            commit_infos,
+            app_transaction_version,
+            min_reader_version,
+            min_writer_version,
+            current_metadata,
+        }
+    }
+
+    /// Full list of tombstones (remove actions) representing files removed from table state).
+    pub fn tombstones(&self) -> &Vec<action::Remove> {
+        self.tombstones.as_ref()
+    }
+
+    /// Full list of add actions representing all parquet files that are part of the current
+    /// delta table state.
+    pub fn files(&self) -> &Vec<action::Add> {
+        self.files.as_ref()
+    }
+
+    /// HashMap containing the last txn version stored for every app id writing txn
+    /// actions.
+    pub fn app_transaction_version(&self) -> &HashMap<String, DeltaDataTypeVersion> {
+        &self.app_transaction_version
+    }
+
+    /// The min reader version required by the protocol.
+    pub fn min_reader_version(&self) -> i32 {
+        self.min_reader_version
+    }
+
+    /// The min writer version required by the protocol.
+    pub fn min_writer_version(&self) -> i32 {
+        self.min_writer_version
+    }
+
+    /// The most recent metadata of the table.
+    pub fn current_metadata(&self) -> Option<&DeltaTableMetaData> {
+        self.current_metadata.as_ref()
+    }
 }
 
 /// In memory representation of a Delta Table
@@ -419,9 +513,11 @@ impl DeltaTable {
 
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
         let checkpoint_data_paths = self.get_checkpoint_data_paths(&check_point);
+        println!("{:?}", checkpoint_data_paths);
         // process actions from checkpoint
         self.state = DeltaTableState::default();
         for f in &checkpoint_data_paths {
+            println!("{:?}", f);
             let obj = self.storage.get_obj(&f).await?;
             let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
             let schema = preader.metadata().file_metadata().schema();
@@ -486,7 +582,9 @@ impl DeltaTable {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
                 self.last_check_point = Some(last_check_point);
+                println!("Restoring checkpoint {:?}", last_check_point);
                 self.restore_checkpoint(last_check_point).await?;
+                println!("Checkpoint restored {}", last_check_point.version);
                 self.version = last_check_point.version + 1;
             }
             Err(LoadCheckpointError::NotFound) => {
@@ -688,6 +786,11 @@ impl DeltaTable {
             .iter()
             .map(|add| self.storage.join_path(&self.table_path, &add.path))
             .collect()
+    }
+
+    /// Returns the currently loaded state snapshot.
+    pub fn get_state(&self) -> &DeltaTableState {
+        &self.state
     }
 
     /// Returns the metadata associated with the loaded state.
@@ -1296,6 +1399,199 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Erro
     Ok(jsons.join("\n"))
 }
 
+/// Error returned when the CheckPointWriter is unable to write a checkpoint.
+#[derive(thiserror::Error, Debug)]
+pub enum CheckPointWriterError {
+    /// Error returned when the DeltaTableState does not contain a metadata action.
+    #[error("DeltaTableMetadata not present in DeltaTableState")]
+    MissingMetaData,
+
+    /// Error returned when creating the checkpoint schema.
+    #[error("DeltaLogSchemaError: {source}")]
+    DeltaLogSchema {
+        /// The source DeltaLogSchemaError
+        #[from]
+        source: DeltaLogSchemaError,
+    },
+
+    /// Passthrough error returned when calling DeltaTable.
+    #[error("DeltaTableError: {source}")]
+    DeltaTable {
+        /// The source DeltaTableError.
+        #[from]
+        source: DeltaTableError,
+    },
+    /// Error returned when reading the checkpoint failed.
+    #[error("Failed to read checkpoint: {}", .source)]
+    ParquetError {
+        /// Parquet error details returned when reading the checkpoint failed.
+        #[from]
+        source: ParquetError,
+    },
+    /// Error returned when converting the schema in Arrow format failed.
+    #[error("Failed to convert into Arrow schema: {}", .source)]
+    ArrowError {
+        /// Arrow error details returned when converting the schema in Arrow format failed
+        #[from]
+        source: ArrowError,
+    },
+    /// Passthrough error returned when calling StorageBackend.
+    #[error("StorageError: {source}")]
+    Storage {
+        /// The source StorageError.
+        #[from]
+        source: StorageError,
+    },
+    /// Passthrough error returned by serde_json.
+    #[error("serde_json::Error: {source}")]
+    JSONSerialization {
+        /// The source serde_json::Error.
+        #[from]
+        source: serde_json::Error,
+    },
+}
+
+/// Struct for writing checkpoints to the delta log.
+pub struct CheckPointWriter {
+    delta_log_path: String,
+    last_checkpoint_path: String,
+    storage: Box<dyn StorageBackend>,
+}
+
+impl CheckPointWriter {
+    /// Creates a new CheckPointWriter.
+    pub fn new(table_path: &str, storage: Box<dyn StorageBackend>) -> Self {
+        let delta_log_path = storage.join_path(table_path, "_delta_log");
+        let last_checkpoint_path = storage.join_path(delta_log_path.as_str(), "_last_checkpoint");
+
+        Self {
+            delta_log_path,
+            last_checkpoint_path,
+            storage,
+        }
+    }
+
+    /// Creates a new checkpoint at the specified version from the given DeltaTableState.
+    pub async fn create_checkpoint_from_state(
+        &self,
+        version: DeltaDataTypeVersion,
+        state: &DeltaTableState,
+    ) -> Result<(), CheckPointWriterError> {
+        // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
+        // an appropriate split point yet though so only writing a single part currently.
+
+        info!("Writing parquet bytes to checkpoint buffer.");
+        let parquet_bytes = parquet_bytes_from_state(state)?;
+
+        let size = parquet_bytes.len() as i64;
+
+        let checkpoint = CheckPoint {
+            version,
+            size,
+            parts: None,
+        };
+
+        let file_name = format!("{:020}.parquet", version);
+        let checkpoint_path = self.storage.join_path(&self.delta_log_path, &file_name);
+
+        info!("Writing checkpoint to {:?}.", checkpoint_path);
+        self.storage
+            .put_obj(&checkpoint_path, &parquet_bytes)
+            .await?;
+
+        let last_checkpoint_content: serde_json::Value = serde_json::to_value(&checkpoint)?;
+        let last_checkpoint_content = serde_json::to_string(&last_checkpoint_content)?;
+
+        info!(
+            "Writing _last_checkpoint to {:?}.",
+            self.last_checkpoint_path
+        );
+        self.storage
+            .put_obj(
+                self.last_checkpoint_path.as_str(),
+                last_checkpoint_content.as_bytes(),
+            )
+            .await?;
+
+        Ok(())
+    }
+}
+
+fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, CheckPointWriterError> {
+    let mut json_buffer: Vec<u8> = Vec::new();
+
+    let protocol = action::Action::protocol(action::Protocol {
+        min_reader_version: state.min_reader_version(),
+        min_writer_version: state.min_writer_version(),
+    });
+
+    extend_json_byte_buffer(&mut json_buffer, &protocol)?;
+
+    let metadata = state
+        .current_metadata()
+        .ok_or_else(|| CheckPointWriterError::MissingMetaData)?;
+    let metadata = action::Action::metaData(action::MetaData::try_from(metadata)?);
+    extend_json_byte_buffer(&mut json_buffer, &metadata)?;
+
+    for add in state.files() {
+        let add = action::Action::add(add.clone());
+        extend_json_byte_buffer(&mut json_buffer, &add)?;
+    }
+
+    for remove in state.tombstones() {
+        let remove = action::Action::remove(remove.clone());
+        extend_json_byte_buffer(&mut json_buffer, &remove)?;
+    }
+
+    for (app_id, version) in state.app_transaction_version().iter() {
+        let txn = action::Action::txn(action::Txn {
+            app_id: app_id.clone(),
+            version: *version,
+            last_updated: None,
+        });
+        extend_json_byte_buffer(&mut json_buffer, &txn)?;
+    }
+
+    let arrow_schema = delta_log_arrow_schema()?;
+    let arrow_schema = Arc::new(arrow_schema);
+
+    let cursor = Cursor::new(json_buffer);
+
+    let mut json_reader = ReaderBuilder::new()
+        .with_schema(arrow_schema.clone())
+        .build(cursor)?;
+
+    debug!("Preparing checkpoint parquet buffer.");
+
+    let writeable_cursor = InMemoryWriteableCursor::default();
+    let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema, None)?;
+
+    debug!("Writing to checkpoint parquet buffer...");
+
+    while let Some(batch) = json_reader.next()? {
+        writer.write(&batch)?;
+    }
+
+    let _ = writer.close()?;
+
+    debug!("Finsihed writing checkpoint file.");
+
+    Ok(writeable_cursor.data())
+}
+
+fn extend_json_byte_buffer<T>(
+    json_byte_buffer: &mut Vec<u8>,
+    json_value: &T,
+) -> Result<(), serde_json::error::Error>
+where
+    T: ?Sized + Serialize,
+{
+    json_byte_buffer.extend(serde_json::to_vec(json_value)?);
+    json_byte_buffer.push(b'\n');
+
+    Ok(())
+}
+
 fn process_action(
     state: &mut DeltaTableState,
     action: &Action,
@@ -1313,16 +1609,7 @@ fn process_action(
             state.min_writer_version = v.min_writer_version;
         }
         Action::metaData(v) => {
-            state.current_metadata = Some(DeltaTableMetaData {
-                id: v.id.clone(),
-                name: v.name.clone(),
-                description: v.description.clone(),
-                format: v.format.clone(),
-                schema: v.get_schema()?,
-                partition_columns: v.partition_columns.clone(),
-                created_time: v.created_time,
-                configuration: v.configuration.clone(),
-            });
+            state.current_metadata = Some(DeltaTableMetaData::try_from(v)?);
         }
         Action::txn(v) => {
             *state
@@ -1373,7 +1660,7 @@ pub async fn open_table_with_ds(table_path: &str, ds: &str) -> Result<DeltaTable
     Ok(table)
 }
 
-/// Returns rust create version, can be use used in language bindings to expose Rust core version
+/// Returns rust crate version, can be use used in language bindings to expose Rust core version
 pub fn crate_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
@@ -1404,7 +1691,7 @@ mod tests {
         let txn_action = Action::txn(action::Txn {
             app_id: "abc".to_string(),
             version: 2,
-            last_updated: 0,
+            last_updated: Some(0),
         });
 
         let _ = process_action(&mut state, &txn_action).unwrap();

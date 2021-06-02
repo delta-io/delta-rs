@@ -1,8 +1,12 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
-use std::collections::HashMap;
-
+use arrow::datatypes::Schema as ArrowSchema;
+use arrow::error::ArrowError;
+use parquet::errors::ParquetError;
 use serde::{Deserialize, Serialize};
+use serde_json::{json, Value};
+use std::collections::HashMap;
+use std::convert::TryFrom;
 
 /// Type alias for a string expected to match a GUID/UUID format
 pub type Guid = String;
@@ -159,4 +163,279 @@ impl Schema {
     pub fn get_fields(&self) -> &Vec<SchemaField> {
         &self.fields
     }
+}
+
+/// Error representing a failure while training to create the delta log schema.
+#[derive(thiserror::Error, Debug)]
+pub enum DeltaLogSchemaError {
+    /// Error returned when reading the checkpoint failed.
+    #[error("Failed to read checkpoint: {}", .source)]
+    ParquetError {
+        /// Parquet error details returned when reading the checkpoint failed.
+        #[from]
+        source: ParquetError,
+    },
+    /// Error returned when converting the schema in Arrow format failed.
+    #[error("Failed to convert into Arrow schema: {}", .source)]
+    ArrowError {
+        /// Arrow error details returned when converting the schema in Arrow format failed
+        #[from]
+        source: ArrowError,
+    },
+    /// Passthrough error returned by serde_json.
+    #[error("serde_json::Error: {source}")]
+    JSONSerialization {
+        /// The source serde_json::Error.
+        #[from]
+        source: serde_json::Error,
+    },
+}
+
+pub(crate) fn delta_log_arrow_schema() -> Result<ArrowSchema, DeltaLogSchemaError> {
+    let delta_schema = delta_log_schema()?;
+    let arrow_schema: ArrowSchema = <ArrowSchema as TryFrom<&Schema>>::try_from(&delta_schema)?;
+
+    Ok(arrow_schema)
+}
+
+pub(crate) fn delta_log_schema() -> Result<Schema, DeltaLogSchemaError> {
+    let field_map = delta_log_json_fields();
+
+    // TODO: receive a table schema parameter and merge into add.stats_parsed in the delta log schema
+    // TODO: also merge partition column schema fields under add.partitionValues_parsed
+    // Skipping this for now until I can get the maps to work.
+
+    let json_fields: Vec<Value> = field_map.values().map(|v| v.to_owned()).collect();
+    let mut json_schema = serde_json::Map::new();
+    json_schema.insert("type".to_string(), Value::String("struct".to_string()));
+    json_schema.insert("fields".to_string(), Value::Array(json_fields));
+    let json_schema = Value::Object(json_schema);
+
+    let delta_schema: Schema = serde_json::from_value(json_schema)?;
+
+    Ok(delta_schema)
+}
+
+pub(crate) fn delta_log_json_fields() -> HashMap<String, Value> {
+    // TODO: Missing feature in arrow - string keys are not supported by Arrow Dictionary.
+    // Example: https://github.com/apache/arrow-rs/blob/master/arrow/src/json/reader.rs#L858-L898
+    // There are many other code refs in arrow besides this one that limit dict keys to numeric
+    // keys.
+    let meta_data = json!({
+        "name": "metaData",
+        "type": {
+            "type": "struct",
+            "fields": [{
+                "name": "id",
+                "type": "string",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "name",
+                "type": "string",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "description",
+                "type": "string",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "schemaString",
+                "type": "string",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "createdTime",
+                "type": "long",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "partitionColumns",
+                "type": {
+                    "type": "array",
+                    "elementType": "string",
+                    "containsNull": true,
+                },
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "format",
+                "type": {
+                    "type": "struct",
+                    "fields": [{
+                        "name": "provider",
+                        "type": "string",
+                        "nullable": true,
+                        "metadata": {},
+                    },/*{
+                        "name": "options",
+                        "type": {
+                            "type": "map",
+                            "keyType": "string",
+                            "valueType": "string",
+                            "valueContainsNull": true,
+                        },
+                        "nullable": true,
+                        "metadata": {}
+                    }*/]
+                },
+                "nullable": true,
+                "metadata": {}
+            },/*{
+                "name": "configuration",
+                "type": {
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": "string",
+                    "valueContainsNull": true,
+                },
+                "nullable": true,
+                "metadata": {}
+            }*/]
+        },
+        "nullable": true,
+        "metadata": {}
+    });
+
+    let protocol = json!({
+        "name": "protocol",
+        "type": {
+            "type": "struct",
+            "fields": [{
+                "name": "minReaderVersion",
+                "type": "integer",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "minWriterVersion",
+                "type": "integer",
+                "nullable": true,
+                "metadata": {},
+            }]
+        },
+        "nullable": true,
+        "metadata": {}
+    });
+
+    let txn = json!({
+        "name": "txn",
+        "type": {
+            "type": "struct",
+            "fields": [{
+                "name": "appId",
+                "type": "string",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "version",
+                "type": "long",
+                "nullable": true,
+                "metadata": {},
+            }]
+        },
+        "nullable": true,
+        "metadata": {}
+    });
+
+    let add = json!({
+        "name": "add",
+        "type": {
+            "type": "struct",
+            "fields": [{
+                "name": "path",
+                "type": "string",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "size",
+                "type": "long",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "modificationTime",
+                "type": "long",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "dataChange",
+                "type": "boolean",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "stats",
+                "type": "string",
+                "nullable": true,
+                "metadata": {},
+            },/*{
+                "name": "partitionValues",
+                "type": {
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": "string",
+                    "valueContainsNull": true,
+                },
+                "nullable": true,
+                "metadata": {},
+            }*/]
+        },
+        "nullable": true,
+        "metadata": {}
+    });
+
+    let remove = json!({
+        "name": "remove",
+        "type": {
+            "type": "struct",
+            "fields": [{
+                "name": "path",
+                "type": "string",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "size",
+                "type": "long",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "modificationTime",
+                "type": "long",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "dataChange",
+                "type": "boolean",
+                "nullable": true,
+                "metadata": {},
+            },{
+                "name": "stats",
+                "type": "string",
+                "nullable": true,
+                "metadata": {},
+            },/*{
+                "name": "partitionValues",
+                "type": {
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": "string",
+                    "valueContainsNull": true,
+                },
+                "nullable": true,
+                "metadata": {},
+
+            }*/],
+        },
+        "nullable": true,
+        "metadata": {}
+    });
+
+    let mut map = HashMap::new();
+
+    map.insert("metaData".to_string(), meta_data);
+    map.insert("protocol".to_string(), protocol);
+    map.insert("txn".to_string(), txn);
+    map.insert("add".to_string(), add);
+    map.insert("remove".to_string(), remove);
+
+    map
 }

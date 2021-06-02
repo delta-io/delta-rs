@@ -32,7 +32,7 @@
 //!       "2020-05-02T23:47:31-07:00",
 //!   ).await.unwrap();
 //!   let files = table.get_files();
-//! };
+//! }               ;
 //! ```
 //!
 //! # Optional cargo package features

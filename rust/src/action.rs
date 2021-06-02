@@ -441,6 +441,7 @@ impl MetaData {
                     let configuration_map = record
                         .get_map(i)
                         .map_err(|_| gen_action_type_error("metaData", "configuration", "map"))?;
+                    re.configuration = HashMap::new();
                     populate_hashmap_from_parquet_map(&mut re.configuration, configuration_map)
                         .map_err(|estr| {
                             ActionError::InvalidField(format!(
@@ -612,7 +613,7 @@ pub struct Txn {
     /// An application-specific numeric identifier for this transaction.
     pub version: DeltaDataTypeVersion,
     /// The time when this transaction action was created in milliseconds since the Unix epoch.
-    pub last_updated: DeltaDataTypeTimestamp,
+    pub last_updated: Option<DeltaDataTypeTimestamp>,
 }
 
 impl Txn {
@@ -635,9 +636,11 @@ impl Txn {
                         .map_err(|_| gen_action_type_error("txn", "version", "long"))?;
                 }
                 "lastUpdated" => {
-                    re.last_updated = record
-                        .get_long(i)
-                        .map_err(|_| gen_action_type_error("txn", "lastUpdated", "long"))?;
+                    re.last_updated = Some(
+                        record
+                            .get_long(i)
+                            .map_err(|_| gen_action_type_error("txn", "lastUpdated", "long"))?,
+                    );
                 }
                 _ => {
                     log::warn!(
