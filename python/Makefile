@@ -23,7 +23,7 @@ format: ## Format the code
 	$(info --- Rust format ---)
 	cargo fmt
 	$(info --- Python format ---)
-	black .
+	black deltalake tests *.py
 	isort .
 
 .PHONY: check-rust

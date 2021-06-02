@@ -62,19 +62,17 @@ struct RawDeltaTableMetaData {
 #[pymethods]
 impl RawDeltaTable {
     #[new]
-    fn new(table_path: &str, version: Option<deltalake::DeltaDataTypeLong>) -> PyResult<Self> {
+    fn new(table_uri: &str, version: Option<deltalake::DeltaDataTypeLong>) -> PyResult<Self> {
         let table = match version {
-            None => rt()?.block_on(deltalake::open_table(table_path)),
-            Some(version) => {
-                rt()?.block_on(deltalake::open_table_with_version(table_path, version))
-            }
+            None => rt()?.block_on(deltalake::open_table(table_uri)),
+            Some(version) => rt()?.block_on(deltalake::open_table_with_version(table_uri, version)),
         }
         .map_err(PyDeltaTableError::from_raw)?;
         Ok(RawDeltaTable { _table: table })
     }
 
-    pub fn table_path(&self) -> PyResult<&str> {
-        Ok(&self._table.table_path)
+    pub fn table_uri(&self) -> PyResult<&str> {
+        Ok(&self._table.table_uri)
     }
 
     pub fn version(&self) -> PyResult<i64> {
@@ -121,7 +119,7 @@ impl RawDeltaTable {
         match partition_filters {
             Ok(filters) => Ok(self
                 ._table
-                .get_file_paths_by_partitions(&filters)
+                .get_file_uris_by_partitions(&filters)
                 .map_err(PyDeltaTableError::from_raw)?),
             Err(err) => Err(PyDeltaTableError::from_raw(err)),
         }
@@ -135,8 +133,8 @@ impl RawDeltaTable {
             .collect())
     }
 
-    pub fn file_paths(&self) -> PyResult<Vec<String>> {
-        Ok(self._table.get_file_paths())
+    pub fn file_uris(&self) -> PyResult<Vec<String>> {
+        Ok(self._table.get_file_uris())
     }
 
     pub fn schema_json(&self) -> PyResult<String> {
