@@ -427,7 +427,9 @@ impl DeltaTable {
 
     async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
         let last_checkpoint_path = self.storage.join_path(&self.log_path, "_last_checkpoint");
+        println!("Last checkpoint path {:?}", last_checkpoint_path);
         let data = self.storage.get_obj(&last_checkpoint_path).await?;
+        println!("Loaded last checkpoint.");
 
         Ok(serde_json::from_slice(&data)?)
     }
@@ -513,11 +515,10 @@ impl DeltaTable {
 
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
         let checkpoint_data_paths = self.get_checkpoint_data_paths(&check_point);
-        println!("{:?}", checkpoint_data_paths);
         // process actions from checkpoint
         self.state = DeltaTableState::default();
         for f in &checkpoint_data_paths {
-            println!("{:?}", f);
+            println!("Checkpoint data path {:?}", f);
             let obj = self.storage.get_obj(&f).await?;
             let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
             let schema = preader.metadata().file_metadata().schema();
@@ -1491,7 +1492,7 @@ impl CheckPointWriter {
             parts: None,
         };
 
-        let file_name = format!("{:020}.parquet", version);
+        let file_name = format!("{:020}.checkpoint.parquet", version);
         let checkpoint_path = self.storage.join_path(&self.delta_log_path, &file_name);
 
         info!("Writing checkpoint to {:?}.", checkpoint_path);

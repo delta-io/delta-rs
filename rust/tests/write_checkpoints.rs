@@ -28,8 +28,11 @@ async fn write_simple_checkpoint() {
         .unwrap();
 
     // checkpoint should exist
-    let checkpoint_path = log_path.join("00000000000000000005.parquet");
+    let checkpoint_path = log_path.join("00000000000000000005.checkpoint.parquet");
     assert!(checkpoint_path.as_path().exists());
+
+    // HACK: seems like fs backend is eventually consistent :/
+    std::thread::sleep(std::time::Duration::from_secs(1));
 
     // _last_checkpoint should exist
     let last_checkpoint_path = log_path.join("_last_checkpoint");
@@ -37,8 +40,11 @@ async fn write_simple_checkpoint() {
 
     // _last_checkpoint should point to checkpoint
     let last_checkpoint_content = fs::read_to_string(last_checkpoint_path.as_path()).unwrap();
+    println!("{:?}", last_checkpoint_content);
+    let last_checkpoint_content = last_checkpoint_content.trim();
+    println!("{:?}", last_checkpoint_content);
     let last_checkpoint_content: serde_json::Value =
-        serde_json::from_str(last_checkpoint_content.as_str()).unwrap();
+        serde_json::from_str(last_checkpoint_content).unwrap();
 
     println!("{:?}", last_checkpoint_content);
 
@@ -60,7 +66,7 @@ fn cleanup_checkpoint_files(log_path: &Path) {
                 println!("Checking path {:?}", path);
 
                 if path.file_name().unwrap() == "_last_checkpoint"
-                    || path.extension().unwrap() == "parquet"
+                    || (path.extension().is_some() && path.extension().unwrap() == "parquet")
                 {
                     println!("Deleting {:?}", path);
                     fs::remove_file(path).unwrap();
