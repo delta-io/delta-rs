@@ -581,4 +581,25 @@ mod tests {
         assert_eq!(&backend.join_paths(&["foo"]), "foo",);
         assert_eq!(&backend.join_paths(&[]), "",);
     }
+
+    #[test]
+    fn trim_path() {
+        let be = S3StorageBackend::new().unwrap();
+        assert_eq!(be.trim_path("s3://foo/bar"), "s3://foo/bar");
+        assert_eq!(be.trim_path("s3://foo/bar/"), "s3://foo/bar");
+        assert_eq!(be.trim_path("/foo/bar//"), "/foo/bar");
+    }
+
+    #[test]
+    fn parse_s3_object_uri() {
+        let uri = parse_uri("s3://foo/bar/baz").unwrap();
+        assert_eq!(uri.path(), "bar/baz");
+        assert_eq!(
+            uri.into_s3object().unwrap(),
+            S3Object {
+                bucket: "foo",
+                key: "bar/baz",
+            }
+        );
+    }
 }

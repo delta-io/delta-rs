@@ -39,3 +39,11 @@ Optional cargo package features
 - `s3` - enable the S3 storage backend to work with Delta Tables in AWS S3.
 - `azure` - enable the Azure storage backend to work with Delta Tables in Azure Data Lake Storage Gen2 accounts.
 - `datafusion-ext` - enable the `datafusion::datasource::TableProvider` trait implementation for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow/tree/master/rust/datafusion).
+
+
+Development
+-----------
+
+To run s3 integration tests from local machine, we use docker-compose to stand
+up AWS local stack. To spin up the test environment run `docker-compose up` in
+the root of the `delta-rs` repo.

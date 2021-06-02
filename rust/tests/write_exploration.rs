@@ -359,7 +359,7 @@ async fn smoke_test() {
     let mut delta_table = deltalake::open_table("./tests/data/write_exploration")
         .await
         .unwrap();
-    let delta_writer = DeltaWriter::for_table_path(delta_table.table_path.clone())
+    let delta_writer = DeltaWriter::for_table_path(delta_table.table_uri.clone())
         .await
         .unwrap();
 

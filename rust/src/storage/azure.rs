@@ -201,3 +201,22 @@ impl StorageBackend for AdlsGen2Backend {
         unimplemented!("delete_obj not implemented for azure");
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_azure_object_uri() {
+        let uri = parse_uri("abfss://fs@sa.dfs.core.windows.net/foo").unwrap();
+        assert_eq!(uri.path(), "foo");
+        assert_eq!(
+            uri.into_adlsgen2_object().unwrap(),
+            AdlsGen2Object {
+                account_name: "sa",
+                file_system: "fs",
+                path: "foo",
+            }
+        );
+    }
+}

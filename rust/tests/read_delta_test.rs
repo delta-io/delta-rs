@@ -152,7 +152,7 @@ async fn read_delta_8_0_table_with_partitions() {
 
     #[cfg(unix)]
     assert_eq!(
-        table.get_file_paths_by_partitions(&filters).unwrap(),
+        table.get_file_uris_by_partitions(&filters).unwrap(),
         vec![
             "./tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
             "./tests/data/delta-0.8.0-partitioned/year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string()
@@ -160,7 +160,7 @@ async fn read_delta_8_0_table_with_partitions() {
     );
     #[cfg(windows)]
     assert_eq!(
-        table.get_file_paths_by_partitions(&filters).unwrap(),
+        table.get_file_uris_by_partitions(&filters).unwrap(),
         vec![
             "./tests/data/delta-0.8.0-partitioned\\year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet".to_string(),
             "./tests/data/delta-0.8.0-partitioned\\year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet".to_string()
@@ -210,12 +210,12 @@ async fn read_delta_8_0_table_with_partitions() {
 
 #[tokio::test]
 async fn vacuum_delta_8_0_table() {
-    let mut table = deltalake::open_table("./tests/data/delta-0.8.0")
+    let backend = FileStorageBackend::new("");
+    let mut table = deltalake::open_table(&backend.join_paths(&["tests", "data", "delta-0.8.0"]))
         .await
         .unwrap();
 
     let retention_hours = 1;
-    let backend = FileStorageBackend::new("./tests/data/delta-0.8.0");
     let dry_run = true;
 
     assert!(matches!(
@@ -227,10 +227,12 @@ async fn vacuum_delta_8_0_table() {
 
     assert_eq!(
         table.vacuum(retention_hours, dry_run).await.unwrap(),
-        vec![backend.join_path(
-            "./tests/data/delta-0.8.0",
-            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"
-        )]
+        vec![backend.join_paths(&[
+            "tests",
+            "data",
+            "delta-0.8.0",
+            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet",
+        ])]
     );
 
     let retention_hours = SystemTime::now()

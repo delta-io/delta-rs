@@ -44,6 +44,7 @@ impl FileStorageBackend {
 
 #[async_trait::async_trait]
 impl StorageBackend for FileStorageBackend {
+    #[inline]
     fn join_path(&self, path: &str, path_to_join: &str) -> String {
         let new_path = Path::new(path);
         new_path
@@ -53,11 +54,17 @@ impl StorageBackend for FileStorageBackend {
             .unwrap()
     }
 
+    #[inline]
     fn join_paths(&self, paths: &[&str]) -> String {
         let mut iter = paths.iter();
         let mut path = PathBuf::from(iter.next().unwrap_or(&""));
         iter.for_each(|s| path.push(s));
         path.into_os_string().into_string().unwrap()
+    }
+
+    #[inline]
+    fn trim_path(&self, path: &str) -> String {
+        path.trim_end_matches(std::path::MAIN_SEPARATOR).to_string()
     }
 
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
@@ -116,6 +123,7 @@ impl StorageBackend for FileStorageBackend {
 
 #[cfg(test)]
 mod tests {
+    use super::super::parse_uri;
     use super::*;
 
     #[tokio::test]
@@ -172,5 +180,36 @@ mod tests {
         );
         assert_eq!(&backend.join_paths(&["foo"]), "foo",);
         assert_eq!(&backend.join_paths(&[]), "",);
+    }
+
+    #[test]
+    fn trim_path() {
+        let be = FileStorageBackend::new("root");
+        let path = be.join_paths(&["foo", "bar"]);
+        assert_eq!(be.trim_path(&path), path);
+        assert_eq!(
+            be.trim_path(&format!("{}{}", path, std::path::MAIN_SEPARATOR)),
+            path,
+        );
+        assert_eq!(
+            be.trim_path(&format!(
+                "{}{}{}",
+                path,
+                std::path::MAIN_SEPARATOR,
+                std::path::MAIN_SEPARATOR
+            )),
+            path,
+        );
+    }
+
+    #[test]
+    fn test_parse_uri() {
+        let uri = parse_uri("foo/bar").unwrap();
+        assert_eq!(uri.path(), "foo/bar");
+        assert_eq!(uri.into_localpath().unwrap(), "foo/bar");
+
+        let uri2 = parse_uri("file:///foo/bar").unwrap();
+        assert_eq!(uri2.path(), "/foo/bar");
+        assert_eq!(uri2.into_localpath().unwrap(), "/foo/bar");
     }
 }
