@@ -441,7 +441,6 @@ impl MetaData {
                     let configuration_map = record
                         .get_map(i)
                         .map_err(|_| gen_action_type_error("metaData", "configuration", "map"))?;
-                    re.configuration = HashMap::new();
                     populate_hashmap_from_parquet_map(&mut re.configuration, configuration_map)
                         .map_err(|estr| {
                             ActionError::InvalidField(format!(
