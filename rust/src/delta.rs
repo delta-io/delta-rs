@@ -2,6 +2,7 @@
 
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 //
+
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
 use arrow::json::reader::ReaderBuilder;
@@ -19,13 +20,13 @@ use parquet::file::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use std::cmp::Ordering;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{cmp::Ordering, collections::HashSet};
 use uuid::Uuid;
 
 use super::action;
@@ -33,7 +34,7 @@ use super::action::{Action, DeltaOperation};
 use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
-use super::storage::{StorageBackend, StorageError, UriError};
+use super::storage::{parse_uri, StorageBackend, StorageError, UriError};
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
@@ -162,11 +163,14 @@ pub enum DeltaTableError {
         /// The invalid partition filter used.
         partition_filter: String,
     },
-    /// Error returned when Vacuume retention period is below the safe threshold
+    /// Error returned when Vacuum retention period is below the safe threshold
     #[error(
         "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
     )]
     InvalidVacuumRetentionPeriod,
+    /// Generic Delta Table error
+    #[error("Generic DeltaTable error: {0}")]
+    Generic(String),
 }
 
 /// Delta table metadata
@@ -370,12 +374,29 @@ impl DeltaTableState {
     }
 }
 
+#[inline]
+/// Return path relative to parent_path
+fn extract_rel_path<'a, 'b>(
+    parent_path: &'b str,
+    path: &'a str,
+) -> Result<&'a str, DeltaTableError> {
+    if path.starts_with(&parent_path) {
+        // plus one to account for path separator
+        Ok(&path[parent_path.len() + 1..])
+    } else {
+        Err(DeltaTableError::Generic(format!(
+            "Parent path `{}` is not a prefix of path `{}`",
+            parent_path, path
+        )))
+    }
+}
+
 /// In memory representation of a Delta Table
 pub struct DeltaTable {
     /// The version of the table as of the most recent loaded Delta log entry.
     pub version: DeltaDataTypeVersion,
-    /// The path the DeltaTable was loaded from.
-    pub table_path: String,
+    /// The URI the DeltaTable was loaded from.
+    pub table_uri: String,
 
     state: DeltaTableState,
 
@@ -384,26 +405,26 @@ pub struct DeltaTable {
     storage: Box<dyn StorageBackend>,
 
     last_check_point: Option<CheckPoint>,
-    log_path: String,
+    log_uri: String,
     version_timestamp: HashMap<DeltaDataTypeVersion, i64>,
 }
 
 impl DeltaTable {
-    fn version_to_log_path(&self, version: DeltaDataTypeVersion) -> String {
+    fn commit_uri_from_version(&self, version: DeltaDataTypeVersion) -> String {
         let version = format!("{:020}.json", version);
-        self.storage.join_path(&self.log_path, &version)
+        self.storage.join_path(&self.log_uri, &version)
     }
 
-    fn tmp_commit_log_path(&self, token: &str) -> String {
+    fn tmp_commit_uri(&self, token: &str) -> String {
         let path = format!("_commit_{}.json", token);
-        self.storage.join_path(&self.log_path, &path)
+        self.storage.join_path(&self.log_uri, &path)
     }
 
     fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<String> {
         let checkpoint_prefix_pattern = format!("{:020}", check_point.version);
         let checkpoint_prefix = self
             .storage
-            .join_path(&self.log_path, &checkpoint_prefix_pattern);
+            .join_path(&self.log_uri, &checkpoint_prefix_pattern);
         let mut checkpoint_data_paths = Vec::new();
 
         match check_point.parts {
@@ -426,7 +447,7 @@ impl DeltaTable {
     }
 
     async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
-        let last_checkpoint_path = self.storage.join_path(&self.log_path, "_last_checkpoint");
+        let last_checkpoint_path = self.storage.join_path(&self.log_uri, "_last_checkpoint");
         let data = self.storage.get_obj(&last_checkpoint_path).await?;
 
         Ok(serde_json::from_slice(&data)?)
@@ -446,7 +467,7 @@ impl DeltaTable {
         }
 
         let mut cp: Option<CheckPoint> = None;
-        let mut stream = self.storage.list_objs(&self.log_path).await?;
+        let mut stream = self.storage.list_objs(&self.log_uri).await?;
 
         while let Some(obj_meta) = stream.next().await {
             // Exit early if any objects can't be listed.
@@ -504,8 +525,8 @@ impl DeltaTable {
     }
 
     async fn apply_log(&mut self, version: DeltaDataTypeVersion) -> Result<(), ApplyLogError> {
-        let log_path = self.version_to_log_path(version);
-        let commit_log_bytes = self.storage.get_obj(&log_path).await?;
+        let commit_uri = self.commit_uri_from_version(version);
+        let commit_log_bytes = self.storage.get_obj(&commit_uri).await?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
         self.apply_log_from_bufread(reader)
@@ -551,7 +572,7 @@ impl DeltaTable {
         loop {
             match self
                 .storage
-                .head_obj(&self.version_to_log_path(version))
+                .head_obj(&self.commit_uri_from_version(version))
                 .await
             {
                 Ok(meta) => {
@@ -655,8 +676,8 @@ impl DeltaTable {
         version: DeltaDataTypeVersion,
     ) -> Result<(), DeltaTableError> {
         // check if version is valid
-        let log_path = self.version_to_log_path(version);
-        match self.storage.head_obj(&log_path).await {
+        let commit_uri = self.commit_uri_from_version(version);
+        match self.storage.head_obj(&commit_uri).await {
             Ok(_) => {}
             Err(StorageError::NotFound) => {
                 return Err(DeltaTableError::InvalidVersion(version));
@@ -698,7 +719,7 @@ impl DeltaTable {
             None => {
                 let meta = self
                     .storage
-                    .head_obj(&self.version_to_log_path(version))
+                    .head_obj(&self.commit_uri_from_version(version))
                     .await?;
                 let ts = meta.modified.timestamp();
                 // also cache timestamp for version
@@ -746,15 +767,27 @@ impl DeltaTable {
         Ok(files)
     }
 
-    /// Return the full file paths as strings for the partition(s)
+    /// Return the file uris as strings for the partition(s)
+    #[deprecated(
+        since = "0.4.0",
+        note = "Please use the get_file_uris_by_partitions function instead"
+    )]
     pub fn get_file_paths_by_partitions(
+        &self,
+        filters: &[PartitionFilter<&str>],
+    ) -> Result<Vec<String>, DeltaTableError> {
+        self.get_file_uris_by_partitions(filters)
+    }
+
+    /// Return the file uris as strings for the partition(s)
+    pub fn get_file_uris_by_partitions(
         &self,
         filters: &[PartitionFilter<&str>],
     ) -> Result<Vec<String>, DeltaTableError> {
         let files = self.get_files_by_partitions(filters)?;
         Ok(files
             .iter()
-            .map(|fname| self.storage.join_path(&self.table_path, fname))
+            .map(|fname| self.storage.join_path(&self.table_uri, fname))
             .collect())
     }
 
@@ -775,12 +808,30 @@ impl DeltaTable {
         self.get_files_iter().collect()
     }
 
-    /// Returns a copy of the file paths present in the loaded state.
-    pub fn get_file_paths(&self) -> Vec<String> {
+    /// Returns file names present in the loaded state in HashSet
+    pub fn get_file_set(&self) -> HashSet<&str> {
         self.state
             .files
             .iter()
-            .map(|add| self.storage.join_path(&self.table_path, &add.path))
+            .map(|add| add.path.as_str())
+            .collect()
+    }
+
+    /// Returns a URIs for all active files present in the current table version.
+    #[deprecated(
+        since = "0.4.0",
+        note = "Please use the get_file_uris function instead"
+    )]
+    pub fn get_file_paths(&self) -> Vec<String> {
+        self.get_file_uris()
+    }
+
+    /// Returns a URIs for all active files present in the current table version.
+    pub fn get_file_uris(&self) -> Vec<String> {
+        self.state
+            .files
+            .iter()
+            .map(|add| self.storage.join_path(&self.table_uri, &add.path))
             .collect()
     }
 
@@ -820,7 +871,7 @@ impl DeltaTable {
     }
 
     /// List files no longer referenced by a Delta table and are older than the retention threshold.
-    fn get_stale_files(&self, retention_hours: u64) -> Result<Vec<String>, DeltaTableError> {
+    fn get_stale_files(&self, retention_hours: u64) -> Result<HashSet<&str>, DeltaTableError> {
         if retention_hours < 168 {
             return Err(DeltaTableError::InvalidVacuumRetentionPeriod);
         }
@@ -835,8 +886,8 @@ impl DeltaTable {
             .get_tombstones()
             .iter()
             .filter(|tombstone| tombstone.deletion_timestamp < delete_before_timestamp)
-            .map(|tombstone| self.storage.join_path(&self.table_path, &tombstone.path))
-            .collect::<Vec<String>>())
+            .map(|tombstone| tombstone.path.as_str())
+            .collect::<HashSet<_>>())
     }
 
     /// Whether a path should be hidden for delta-related file operations, such as Vacuum.
@@ -844,26 +895,17 @@ impl DeltaTable {
     /// deleted even if they'd normally be hidden. The _db_index directory contains (bloom filter)
     /// indexes and these must be deleted when the data they are tied to is deleted.
     fn is_hidden_directory(&self, path_name: &str) -> Result<bool, DeltaTableError> {
-        Ok(
-            (path_name.starts_with(&self.storage.join_path(&self.table_path, "."))
-                || path_name.starts_with(&self.storage.join_path(&self.table_path, "_")))
-                && !path_name
-                    .starts_with(&self.storage.join_path(&self.table_path, "_delta_index"))
-                && !path_name
-                    .starts_with(&self.storage.join_path(&self.table_path, "_change_data"))
-                && !self
-                    .state
-                    .current_metadata
-                    .as_ref()
-                    .ok_or(DeltaTableError::NoMetadata)?
-                    .partition_columns
-                    .iter()
-                    .any(|partition_column| {
-                        path_name.starts_with(
-                            &self.storage.join_path(&self.table_path, partition_column),
-                        )
-                    }),
-        )
+        Ok((path_name.starts_with('.') || path_name.starts_with('_'))
+            && !path_name.starts_with("_delta_index")
+            && !path_name.starts_with("_change_data")
+            && !self
+                .state
+                .current_metadata
+                .as_ref()
+                .ok_or(DeltaTableError::NoMetadata)?
+                .partition_columns
+                .iter()
+                .any(|partition_column| path_name.starts_with(partition_column)))
     }
 
     /// Run the Vacuum command on the Delta Table: delete files no longer referenced by a Delta table and are older than the retention threshold.
@@ -873,33 +915,50 @@ impl DeltaTable {
         retention_hours: u64,
         dry_run: bool,
     ) -> Result<Vec<String>, DeltaTableError> {
-        let tombstones_path = self.get_stale_files(retention_hours)?;
+        let expired_tombstones = self.get_stale_files(retention_hours)?;
+        let valid_files = self.get_file_set();
 
-        let mut tombstones = vec![];
-        let mut all_files = self.storage.list_objs(&self.table_path).await?;
+        let mut files_to_delete = vec![];
+        let mut all_files = self.storage.list_objs(&self.table_uri).await?;
+
+        // TODO: table_path is currently only used in vacuum, consider precalcualte it during table
+        // struct initialization if it ends up being used in other hot paths
+        let table_path = parse_uri(&self.table_uri)?.path();
+
         while let Some(obj_meta) = all_files.next().await {
             let obj_meta = obj_meta?;
-            let is_not_valid_file = !self.get_file_paths().contains(&obj_meta.path);
-            let is_valid_tombstone = tombstones_path.contains(&obj_meta.path);
-            let is_not_hidden_directory = !self.is_hidden_directory(&obj_meta.path)?;
-            if is_not_valid_file && is_valid_tombstone && is_not_hidden_directory {
-                tombstones.push(obj_meta.path);
+            // We can't use self.table_uri as the prefix to extract relative path because
+            // obj_meta.path is not a URI. For example, for S3 objects, obj_meta.path is just the
+            // object key without `s3://` and bucket name.
+            let rel_path = extract_rel_path(&table_path, &obj_meta.path)?;
+
+            if valid_files.contains(rel_path) // file is still being tracked in table
+                || !expired_tombstones.contains(rel_path) // file is not an expired tombstone
+                || self.is_hidden_directory(rel_path)?
+            {
+                continue;
             }
+
+            files_to_delete.push(obj_meta.path);
         }
 
         if dry_run {
-            return Ok(tombstones);
+            return Ok(files_to_delete);
         }
 
-        for tombstone in &tombstones {
-            match self.storage.delete_obj(&tombstone).await {
+        for rel_path in &files_to_delete {
+            match self
+                .storage
+                .delete_obj(&self.storage.join_path(&self.table_uri, rel_path))
+                .await
+            {
                 Ok(_) => continue,
                 Err(StorageError::NotFound) => continue,
                 Err(err) => return Err(DeltaTableError::StorageError { source: err }),
             }
         }
 
-        Ok(tombstones)
+        Ok(files_to_delete)
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
@@ -929,17 +988,18 @@ impl DeltaTable {
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
     /// call one of the `open_table` helper methods instead.
     pub fn new(
-        table_path: &str,
+        table_uri: &str,
         storage_backend: Box<dyn StorageBackend>,
     ) -> Result<Self, DeltaTableError> {
-        let log_path_normalized = storage_backend.join_path(table_path, "_delta_log");
+        let table_uri = storage_backend.trim_path(table_uri);
+        let log_uri_normalized = storage_backend.join_path(&table_uri, "_delta_log");
         Ok(Self {
             version: 0,
             state: DeltaTableState::default(),
             storage: storage_backend,
-            table_path: table_path.to_string(),
+            table_uri,
             last_check_point: None,
-            log_path: log_path_normalized,
+            log_uri: log_uri_normalized,
             version_timestamp: HashMap::new(),
         })
     }
@@ -987,7 +1047,7 @@ impl DeltaTable {
 
 impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "DeltaTable({})", self.table_path)?;
+        writeln!(f, "DeltaTable({})", self.table_uri)?;
         writeln!(f, "\tversion: {}", self.version)?;
         match self.state.current_metadata.as_ref() {
             Some(metadata) => {
@@ -1008,7 +1068,7 @@ impl fmt::Display for DeltaTable {
 
 impl std::fmt::Debug for DeltaTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "DeltaTable <{}>", self.table_path)
+        write!(f, "DeltaTable <{}>", self.table_uri)
     }
 }
 
@@ -1198,15 +1258,15 @@ impl<'a> DeltaTransaction<'a> {
         }
 
         let path = self.generate_parquet_filename(partitions);
-        let storage_path = self
+        let parquet_uri = self
             .delta_table
             .storage
-            .join_path(&self.delta_table.table_path, &path);
+            .join_path(&self.delta_table.table_uri, &path);
 
-        debug!("Writing a parquet file to {}", &storage_path);
+        debug!("Writing a parquet file to {}", &parquet_uri);
         self.delta_table
             .storage
-            .put_obj(&storage_path, &bytes)
+            .put_obj(&parquet_uri, &bytes)
             .await
             .map_err(|source| DeltaTransactionError::Storage { source })?;
 
@@ -1298,8 +1358,8 @@ impl<'a> DeltaTransaction<'a> {
         // TODO: create a CommitInfo action and prepend it to actions.
 
         let log_entry = log_entry_from_actions(&self.actions)?;
-        let tmp_log_path = self.prepare_commit(log_entry.as_bytes()).await?;
-        let version = self.try_commit(&tmp_log_path, version).await?;
+        let tmp_commit_uri = self.prepare_commit(log_entry.as_bytes()).await?;
+        let version = self.try_commit(&tmp_commit_uri, version).await?;
 
         self.delta_table.update().await?;
 
@@ -1312,11 +1372,11 @@ impl<'a> DeltaTransaction<'a> {
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
         let mut attempt_number: u32 = 0;
 
-        let tmp_log_path = self.prepare_commit(log_entry).await?;
+        let tmp_commit_uri = self.prepare_commit(log_entry).await?;
         loop {
             let version = self.next_attempt_version().await?;
 
-            let commit_result = self.try_commit(&tmp_log_path, version).await;
+            let commit_result = self.try_commit(&tmp_commit_uri, version).await;
 
             match commit_result {
                 Ok(v) => {
@@ -1349,28 +1409,28 @@ impl<'a> DeltaTransaction<'a> {
         log_entry: &[u8],
     ) -> Result<String, TransactionCommitAttemptError> {
         let token = Uuid::new_v4().to_string();
-        let tmp_log_path = self.delta_table.tmp_commit_log_path(&token);
+        let tmp_commit_uri = self.delta_table.tmp_commit_uri(&token);
 
         self.delta_table
             .storage
-            .put_obj(&tmp_log_path, log_entry)
+            .put_obj(&tmp_commit_uri, log_entry)
             .await?;
 
-        Ok(tmp_log_path)
+        Ok(tmp_commit_uri)
     }
 
     async fn try_commit(
         &mut self,
-        tmp_log_path: &str,
+        tmp_commit_uri: &str,
         version: DeltaDataTypeVersion,
     ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
-        let log_path = self.delta_table.version_to_log_path(version);
+        let commit_uri = self.delta_table.commit_uri_from_version(version);
 
         // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
         self.delta_table
             .storage
-            .rename_obj(tmp_log_path, &log_path)
+            .rename_obj(tmp_commit_uri, &commit_uri)
             .await?;
 
         Ok(version)
@@ -1632,9 +1692,9 @@ fn process_action(
 
 /// Creates and loads a DeltaTable from the given path with current metadata.
 /// Infers the storage backend to use from the scheme in the given table path.
-pub async fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError> {
-    let storage_backend = storage::get_backend_for_uri(table_path)?;
-    let mut table = DeltaTable::new(table_path, storage_backend)?;
+pub async fn open_table(table_uri: &str) -> Result<DeltaTable, DeltaTableError> {
+    let storage_backend = storage::get_backend_for_uri(table_uri)?;
+    let mut table = DeltaTable::new(table_uri, storage_backend)?;
     table.load().await?;
 
     Ok(table)
@@ -1643,11 +1703,11 @@ pub async fn open_table(table_path: &str) -> Result<DeltaTable, DeltaTableError>
 /// Creates a DeltaTable from the given path and loads it with the metadata from the given version.
 /// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table_with_version(
-    table_path: &str,
+    table_uri: &str,
     version: DeltaDataTypeVersion,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let storage_backend = storage::get_backend_for_uri(table_path)?;
-    let mut table = DeltaTable::new(table_path, storage_backend)?;
+    let storage_backend = storage::get_backend_for_uri(table_uri)?;
+    let mut table = DeltaTable::new(table_uri, storage_backend)?;
     table.load_version(version).await?;
 
     Ok(table)
@@ -1656,10 +1716,10 @@ pub async fn open_table_with_version(
 /// Creates a DeltaTable from the given path.
 /// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
 /// Infers the storage backend to use from the scheme in the given table path.
-pub async fn open_table_with_ds(table_path: &str, ds: &str) -> Result<DeltaTable, DeltaTableError> {
+pub async fn open_table_with_ds(table_uri: &str, ds: &str) -> Result<DeltaTable, DeltaTableError> {
     let datetime = DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds)?);
-    let storage_backend = storage::get_backend_for_uri(table_path)?;
-    let mut table = DeltaTable::new(table_path, storage_backend)?;
+    let storage_backend = storage::get_backend_for_uri(table_uri)?;
+    let mut table = DeltaTable::new(table_uri, storage_backend)?;
     table.load_with_datetime(datetime).await?;
 
     Ok(table)
@@ -1672,9 +1732,8 @@ pub fn crate_version() -> &'static str {
 
 #[cfg(test)]
 mod tests {
-    use super::action;
-    use super::action::Action;
-    use super::{process_action, DeltaTableState};
+    use super::*;
+    use pretty_assertions::assert_eq;
     use std::collections::HashMap;
 
     #[test]
@@ -1703,5 +1762,39 @@ mod tests {
 
         assert_eq!(2, *state.app_transaction_version.get("abc").unwrap());
         assert_eq!(1, *state.app_transaction_version.get("xyz").unwrap());
+    }
+
+    #[cfg(feature = "s3")]
+    #[test]
+    fn normalize_table_uri() {
+        for table_uri in [
+            "s3://tests/data/delta-0.8.0/",
+            "s3://tests/data/delta-0.8.0//",
+            "s3://tests/data/delta-0.8.0",
+        ]
+        .iter()
+        {
+            let be = storage::get_backend_for_uri(table_uri).unwrap();
+            let table = DeltaTable::new(table_uri, be).unwrap();
+            assert_eq!(table.table_uri, "s3://tests/data/delta-0.8.0");
+        }
+    }
+
+    #[test]
+    fn rel_path() {
+        assert!(matches!(
+            extract_rel_path("data/delta-0.8.0", "data/delta-0.8.0/abc/123"),
+            Ok("abc/123"),
+        ));
+
+        assert!(matches!(
+            extract_rel_path("data/delta-0.8.0", "data/delta-0.8.0/abc.json"),
+            Ok("abc.json"),
+        ));
+
+        assert!(matches!(
+            extract_rel_path("data/delta-0.8.0", "tests/abc.json"),
+            Err(DeltaTableError::Generic(_)),
+        ));
     }
 }

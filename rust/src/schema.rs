@@ -1,7 +1,6 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
 use arrow::error::ArrowError;
-use lazy_static::lazy_static;
 use parquet::errors::ParquetError;
 use serde::{Deserialize, Serialize};
 use serde_json::json;

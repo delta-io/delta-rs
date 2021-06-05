@@ -57,7 +57,7 @@ impl TableProvider for delta::DeltaTable {
         let schema = <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
             delta::DeltaTable::schema(&self).unwrap(),
         )?;
-        let filenames = self.get_file_paths();
+        let filenames = self.get_file_uris();
 
         let partitions = filenames
             .into_iter()
