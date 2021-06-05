@@ -1579,7 +1579,7 @@ impl CheckPointWriter {
     ) -> Result<Vec<u8>, CheckPointWriterError> {
         let current_metadata = state
             .current_metadata()
-            .ok_or_else(|| CheckPointWriterError::MissingMetaData)?;
+            .ok_or(CheckPointWriterError::MissingMetaData)?;
 
         let mut json_buffer: Vec<u8> = Vec::new();
 

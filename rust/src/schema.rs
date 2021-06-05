@@ -350,7 +350,7 @@ impl DeltaLogSchemaFactory {
                 "add" => {
                     let mut fields = fields.clone();
 
-                    if partition_fields.len() > 0 {
+                    if !partition_fields.is_empty() {
                         let partition_values_parsed = SchemaField {
                             name: "partitionValues_parsed".to_string(),
                             nullable: true,
@@ -363,7 +363,7 @@ impl DeltaLogSchemaFactory {
                         fields.push(partition_values_parsed);
                     }
 
-                    if non_partition_fields.len() > 0 {
+                    if !non_partition_fields.is_empty() {
                         let min_values = SchemaField {
                             name: "minValues".to_string(),
                             nullable: true,
@@ -433,6 +433,12 @@ impl DeltaLogSchemaFactory {
             r#type: "struct".to_string(),
             fields,
         })
+    }
+}
+
+impl Default for DeltaLogSchemaFactory {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
