@@ -1,7 +1,5 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
-use arrow::error::ArrowError;
-use parquet::errors::ParquetError;
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use std::collections::HashMap;
@@ -166,20 +164,6 @@ impl Schema {
 /// Error representing a failure while creating the delta log schema.
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaLogSchemaError {
-    /// Error returned when reading the checkpoint failed.
-    #[error("Failed to read checkpoint: {}", .source)]
-    ParquetError {
-        /// Parquet error details returned when reading the checkpoint failed.
-        #[from]
-        source: ParquetError,
-    },
-    /// Error returned when converting the schema in Arrow format failed.
-    #[error("Failed to convert into Arrow schema: {}", .source)]
-    ArrowError {
-        /// Arrow error details returned when converting the schema in Arrow format failed
-        #[from]
-        source: ArrowError,
-    },
     /// Error returned when JSON de-serialization of schema components fails.
     #[error("serde_json::Error: {source}")]
     JSONSerialization {
