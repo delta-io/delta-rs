@@ -1,12 +1,11 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
-use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
+use lazy_static::lazy_static;
 use parquet::errors::ParquetError;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::json;
 use std::collections::HashMap;
-use std::convert::TryFrom;
 
 /// Type alias for a string expected to match a GUID/UUID format
 pub type Guid = String;
@@ -165,7 +164,7 @@ impl Schema {
     }
 }
 
-/// Error representing a failure while training to create the delta log schema.
+/// Error representing a failure while creating the delta log schema.
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaLogSchemaError {
     /// Error returned when reading the checkpoint failed.
@@ -182,7 +181,7 @@ pub enum DeltaLogSchemaError {
         #[from]
         source: ArrowError,
     },
-    /// Passthrough error returned by serde_json.
+    /// Error returned when JSON de-serialization of schema components fails.
     #[error("serde_json::Error: {source}")]
     JSONSerialization {
         /// The source serde_json::Error.
@@ -191,66 +190,28 @@ pub enum DeltaLogSchemaError {
     },
 }
 
-pub(crate) fn delta_log_arrow_schema() -> Result<ArrowSchema, DeltaLogSchemaError> {
-    let delta_schema = delta_log_schema()?;
-    let arrow_schema: ArrowSchema = <ArrowSchema as TryFrom<&Schema>>::try_from(&delta_schema)?;
-
-    Ok(arrow_schema)
+/// Factory for creating a Delta log schema for a specific table schema.
+/// REF: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#checkpoint-schema
+pub struct DeltaLogSchemaFactory {
+    common_fields: HashMap<String, Vec<SchemaField>>,
 }
 
-pub(crate) fn delta_log_schema() -> Result<Schema, DeltaLogSchemaError> {
-    let field_map = delta_log_json_fields();
+impl DeltaLogSchemaFactory {
+    /// Creates a new DeltaLogSchemaFactory which can be used to create Schema's representing the
+    /// Delta log for specific tables.
+    pub fn new() -> Self {
+        // TODO: map<string, string> is not supported by arrow currently.
+        // See:
+        // * https://github.com/apache/arrow-rs/issues/395
+        // * https://github.com/apache/arrow-rs/issues/396
 
-    // TODO: receive a table schema parameter and merge into add.stats_parsed in the delta log schema
-    // TODO: also merge partition column schema fields under add.partitionValues_parsed
-    // Skipping this for now until I can get the maps to work.
-
-    let json_fields: Vec<Value> = field_map.values().map(|v| v.to_owned()).collect();
-    let mut json_schema = serde_json::Map::new();
-    json_schema.insert("type".to_string(), Value::String("struct".to_string()));
-    json_schema.insert("fields".to_string(), Value::Array(json_fields));
-    let json_schema = Value::Object(json_schema);
-
-    let delta_schema: Schema = serde_json::from_value(json_schema)?;
-
-    Ok(delta_schema)
-}
-
-pub(crate) fn delta_log_json_fields() -> HashMap<String, Value> {
-    // TODO: Missing feature in arrow - string keys are not supported by Arrow Dictionary.
-    // Example: https://github.com/apache/arrow-rs/blob/master/arrow/src/json/reader.rs#L858-L898
-    // There are many other code refs in arrow besides this one that limit dict keys to numeric
-    // keys.
-    let meta_data = json!({
-        "name": "metaData",
-        "type": {
-            "type": "struct",
-            "fields": [{
-                "name": "id",
-                "type": "string",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "name",
-                "type": "string",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "description",
-                "type": "string",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "schemaString",
-                "type": "string",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "createdTime",
-                "type": "long",
-                "nullable": true,
-                "metadata": {},
-            },{
+        let meta_data_fields = json!([
+            { "name": "id", "type": "string", "nullable": true, "metadata": {} },
+            { "name": "name", "type": "string", "nullable": true, "metadata": {} },
+            { "name": "description", "type": "string", "nullable": true, "metadata": {} },
+            { "name": "schemaString", "type": "string", "nullable": true, "metadata": {} },
+            { "name": "createdTime", "type": "long", "nullable": true, "metadata": {} },
+            { 
                 "name": "partitionColumns",
                 "type": {
                     "type": "array",
@@ -258,8 +219,8 @@ pub(crate) fn delta_log_json_fields() -> HashMap<String, Value> {
                     "containsNull": true,
                 },
                 "nullable": true,
-                "metadata": {},
-            },{
+                "metadata": {} },
+            { 
                 "name": "format",
                 "type": {
                     "type": "struct",
@@ -282,7 +243,8 @@ pub(crate) fn delta_log_json_fields() -> HashMap<String, Value> {
                 },
                 "nullable": true,
                 "metadata": {}
-            },/*{
+            },
+            /*{
                 "name": "configuration",
                 "type": {
                     "type": "map",
@@ -292,82 +254,25 @@ pub(crate) fn delta_log_json_fields() -> HashMap<String, Value> {
                 },
                 "nullable": true,
                 "metadata": {}
-            }*/]
-        },
-        "nullable": true,
-        "metadata": {}
-    });
+            }*/]);
 
-    let protocol = json!({
-        "name": "protocol",
-        "type": {
-            "type": "struct",
-            "fields": [{
-                "name": "minReaderVersion",
-                "type": "integer",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "minWriterVersion",
-                "type": "integer",
-                "nullable": true,
-                "metadata": {},
-            }]
-        },
-        "nullable": true,
-        "metadata": {}
-    });
+        let protocol_fields = json!([
+            { "name": "minReaderVersion", "type": "integer", "nullable": true, "metadata": {} },
+            { "name": "minWriterVersion", "type": "integer", "nullable": true, "metadata": {} }
+        ]);
 
-    let txn = json!({
-        "name": "txn",
-        "type": {
-            "type": "struct",
-            "fields": [{
-                "name": "appId",
-                "type": "string",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "version",
-                "type": "long",
-                "nullable": true,
-                "metadata": {},
-            }]
-        },
-        "nullable": true,
-        "metadata": {}
-    });
+        let txn_fields = json!([
+            { "name": "appId", "type": "string", "nullable": true, "metadata": {} },
+            { "name": "version", "type": "long", "nullable": true, "metadata": {} }
+        ]);
 
-    let add = json!({
-        "name": "add",
-        "type": {
-            "type": "struct",
-            "fields": [{
-                "name": "path",
-                "type": "string",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "size",
-                "type": "long",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "modificationTime",
-                "type": "long",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "dataChange",
-                "type": "boolean",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "stats",
-                "type": "string",
-                "nullable": true,
-                "metadata": {},
-            },/*{
+        let add_fields = json!([
+            { "name": "path", "type": "string", "nullable": true, "metadata": {} },
+            { "name": "size", "type": "long", "nullable": true, "metadata": {} },
+            { "name": "modificationTime", "type": "long", "nullable": true, "metadata": {} },
+            { "name": "dataChange", "type": "boolean", "nullable": true, "metadata": {} },
+            { "name": "stats", "type": "string", "nullable": true, "metadata": {} },
+            /*{
                 "name": "partitionValues",
                 "type": {
                     "type": "map",
@@ -377,41 +282,15 @@ pub(crate) fn delta_log_json_fields() -> HashMap<String, Value> {
                 },
                 "nullable": true,
                 "metadata": {},
-            }*/]
-        },
-        "nullable": true,
-        "metadata": {}
-    });
+            }*/
+        ]);
 
-    let remove = json!({
-        "name": "remove",
-        "type": {
-            "type": "struct",
-            "fields": [{
-                "name": "path",
-                "type": "string",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "size",
-                "type": "long",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "modificationTime",
-                "type": "long",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "dataChange",
-                "type": "boolean",
-                "nullable": true,
-                "metadata": {},
-            },{
-                "name": "stats",
-                "type": "string",
-                "nullable": true,
-                "metadata": {},
+        let remove_fields = json!([
+            { "name": "path", "type": "string", "nullable": true, "metadata": {} },
+            { "name": "size", "type": "long", "nullable": true, "metadata": {} },
+            { "name": "modificationTime", "type": "long", "nullable": true, "metadata": {} },
+            { "name": "dataChange", "type": "boolean", "nullable": true, "metadata": {}, },
+            { "name": "stats", "type": "string", "nullable": true, "metadata": {},
             },/*{
                 "name": "partitionValues",
                 "type": {
@@ -423,19 +302,121 @@ pub(crate) fn delta_log_json_fields() -> HashMap<String, Value> {
                 "nullable": true,
                 "metadata": {},
 
-            }*/],
-        },
-        "nullable": true,
-        "metadata": {}
-    });
+            }*/]);
 
-    let mut map = HashMap::new();
+        let mut map = HashMap::new();
 
-    map.insert("metaData".to_string(), meta_data);
-    map.insert("protocol".to_string(), protocol);
-    map.insert("txn".to_string(), txn);
-    map.insert("add".to_string(), add);
-    map.insert("remove".to_string(), remove);
+        map.insert(
+            "metaData".to_string(),
+            serde_json::from_value(meta_data_fields).unwrap(),
+        );
+        map.insert(
+            "protocol".to_string(),
+            serde_json::from_value(protocol_fields).unwrap(),
+        );
+        map.insert(
+            "txn".to_string(),
+            serde_json::from_value(txn_fields).unwrap(),
+        );
+        map.insert(
+            "add".to_string(),
+            serde_json::from_value(add_fields).unwrap(),
+        );
+        map.insert(
+            "remove".to_string(),
+            serde_json::from_value(remove_fields).unwrap(),
+        );
 
-    map
+        Self { common_fields: map }
+    }
+
+    /// Creates a Schema representing the delta log for a specific delta table.
+    /// Merges fields from the table schema into the delta log schema.
+    pub fn delta_log_schema_for_table(
+        &self,
+        table_schema: &Schema,
+        partition_columns: &[String],
+    ) -> Result<Schema, DeltaLogSchemaError> {
+        let (partition_fields, non_partition_fields): (Vec<SchemaField>, Vec<SchemaField>) =
+            table_schema
+                .fields
+                .iter()
+                .map(|f| f.to_owned())
+                .partition(|field| partition_columns.contains(&field.name));
+
+        let fields: Vec<SchemaField> = self
+            .common_fields
+            .iter()
+            .map(|(name, fields)| match name.as_str() {
+                "add" => {
+                    let mut fields = fields.clone();
+
+                    if partition_fields.len() > 0 {
+                        let partition_values_parsed = SchemaField {
+                            name: "partitionValues_parsed".to_string(),
+                            nullable: true,
+                            metadata: HashMap::new(),
+                            r#type: SchemaDataType::r#struct(SchemaTypeStruct {
+                                r#type: "struct".to_string(),
+                                fields: partition_fields.clone(),
+                            }),
+                        };
+                        fields.push(partition_values_parsed);
+                    }
+
+                    if non_partition_fields.len() > 0 {
+                        let stats_parsed = SchemaField {
+                            name: "stats_parsed".to_string(),
+                            nullable: true,
+                            metadata: HashMap::new(),
+                            r#type: SchemaDataType::r#struct(SchemaTypeStruct {
+                                r#type: "struct".to_string(),
+                                fields: non_partition_fields.clone(),
+                            }),
+                        };
+
+                        fields.push(stats_parsed);
+                    }
+
+
+                    SchemaField {
+                        name: name.clone(),
+                        nullable: true,
+                        metadata: HashMap::new(),
+                        r#type: SchemaDataType::r#struct(SchemaTypeStruct {
+                            r#type: "struct".to_string(),
+                            fields,
+                        }),
+                    }
+                }
+                _ => SchemaField {
+                    name: name.clone(),
+                    nullable: true,
+                    metadata: HashMap::new(),
+                    r#type: SchemaDataType::r#struct(SchemaTypeStruct {
+                        r#type: "struct".to_string(),
+                        fields: fields.clone(),
+                    }),
+                },
+            })
+            .collect();
+
+        Ok(Schema {
+            r#type: "struct".to_string(),
+            fields,
+        })
+    }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delta_log_schema_factory_creates_schema() {
+        let _factory = DeltaLogSchemaFactory::new();
+
+        // TODO:
+    }
+}
+

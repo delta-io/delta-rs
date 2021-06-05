@@ -116,6 +116,11 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                     a
                 )?)))
             }
+            // NOTE: this doesn't currently support maps with string keys
+            // See below arrow-rs issues for adding arrow::datatypes::DataType::Map to support a
+            // more general map type:
+            // https://github.com/apache/arrow-rs/issues/395
+            // https://github.com/apache/arrow-rs/issues/396
             schema::SchemaDataType::map(m) => Ok(ArrowDataType::Dictionary(
                 Box::new(
                     <ArrowDataType as TryFrom<&schema::SchemaDataType>>::try_from(

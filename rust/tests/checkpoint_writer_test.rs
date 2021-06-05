@@ -5,6 +5,9 @@ use deltalake::CheckPointWriter;
 use std::fs;
 use std::path::{Path, PathBuf};
 
+// NOTE: The below is a useful external command for inspecting the written checkpoint schema visually:
+// parquet-tools inspect tests/data/checkpoints/_delta_log/00000000000000000005.checkpoint.parquet
+
 #[tokio::test]
 async fn write_simple_checkpoint() {
     let table_location = "./tests/data/checkpoints";
@@ -31,28 +34,32 @@ async fn write_simple_checkpoint() {
     let checkpoint_path = log_path.join("00000000000000000005.checkpoint.parquet");
     assert!(checkpoint_path.as_path().exists());
 
-    // HACK: seems like fs backend is eventually consistent :/
+    // HACK: seems like a race condition exists reading the file back in.
+    // Without the sleep, frequently fails with:
+    // Error("EOF while parsing a value", line: 1, column: 0)'
     std::thread::sleep(std::time::Duration::from_secs(1));
 
     // _last_checkpoint should exist
     let last_checkpoint_path = log_path.join("_last_checkpoint");
     assert!(last_checkpoint_path.as_path().exists());
 
-    // _last_checkpoint should point to checkpoint
+    // _last_checkpoint should point to the correct version
     let last_checkpoint_content = fs::read_to_string(last_checkpoint_path.as_path()).unwrap();
-    println!("{:?}", last_checkpoint_content);
-    let last_checkpoint_content = last_checkpoint_content.trim();
-    println!("{:?}", last_checkpoint_content);
     let last_checkpoint_content: serde_json::Value =
-        serde_json::from_str(last_checkpoint_content).unwrap();
+        serde_json::from_str(last_checkpoint_content.trim()).unwrap();
 
-    println!("{:?}", last_checkpoint_content);
+    let version = last_checkpoint_content
+        .get("version")
+        .unwrap()
+        .as_i64()
+        .unwrap();
+    assert_eq!(5, version);
 
     // delta table should load just fine with the checkpoint in place
     let table_result = deltalake::open_table(table_location).await.unwrap();
     let table = table_result;
     let files = table.get_files();
-    println!("{:?}", files);
+    assert_eq!(11, files.len());
 }
 
 fn cleanup_checkpoint_files(log_path: &Path) {
@@ -63,12 +70,9 @@ fn cleanup_checkpoint_files(log_path: &Path) {
             Ok(d) => {
                 let path = d.path();
 
-                println!("Checking path {:?}", path);
-
                 if path.file_name().unwrap() == "_last_checkpoint"
                     || (path.extension().is_some() && path.extension().unwrap() == "parquet")
                 {
-                    println!("Deleting {:?}", path);
                     fs::remove_file(path).unwrap();
                 }
             }

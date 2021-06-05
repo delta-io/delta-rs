@@ -1,12 +1,8 @@
 //! Delta Table read and write implementation
 
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
-
-use std::cmp::Ordering;
-use std::collections::HashMap;
-use std::fmt;
-use std::io::{BufRead, BufReader, Cursor};
-
+//
+use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
 use arrow::json::reader::ReaderBuilder;
 use chrono::{DateTime, FixedOffset, Utc};
@@ -23,9 +19,14 @@ use parquet::file::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::cmp::Ordering;
+use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::fmt;
+use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use uuid::Uuid;
 
 use super::action;
 use super::action::{Action, DeltaOperation};
@@ -33,7 +34,6 @@ use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
-use uuid::Uuid;
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
@@ -427,9 +427,7 @@ impl DeltaTable {
 
     async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
         let last_checkpoint_path = self.storage.join_path(&self.log_path, "_last_checkpoint");
-        println!("Last checkpoint path {:?}", last_checkpoint_path);
         let data = self.storage.get_obj(&last_checkpoint_path).await?;
-        println!("Loaded last checkpoint.");
 
         Ok(serde_json::from_slice(&data)?)
     }
@@ -518,7 +516,6 @@ impl DeltaTable {
         // process actions from checkpoint
         self.state = DeltaTableState::default();
         for f in &checkpoint_data_paths {
-            println!("Checkpoint data path {:?}", f);
             let obj = self.storage.get_obj(&f).await?;
             let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
             let schema = preader.metadata().file_metadata().schema();
@@ -583,9 +580,7 @@ impl DeltaTable {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
                 self.last_check_point = Some(last_check_point);
-                println!("Restoring checkpoint {:?}", last_check_point);
                 self.restore_checkpoint(last_check_point).await?;
-                println!("Checkpoint restored {}", last_check_point.version);
                 self.version = last_check_point.version + 1;
             }
             Err(LoadCheckpointError::NotFound) => {
@@ -1406,7 +1401,6 @@ pub enum CheckPointWriterError {
     /// Error returned when the DeltaTableState does not contain a metadata action.
     #[error("DeltaTableMetadata not present in DeltaTableState")]
     MissingMetaData,
-
     /// Error returned when creating the checkpoint schema.
     #[error("DeltaLogSchemaError: {source}")]
     DeltaLogSchema {
@@ -1414,7 +1408,6 @@ pub enum CheckPointWriterError {
         #[from]
         source: DeltaLogSchemaError,
     },
-
     /// Passthrough error returned when calling DeltaTable.
     #[error("DeltaTableError: {source}")]
     DeltaTable {
@@ -1422,14 +1415,14 @@ pub enum CheckPointWriterError {
         #[from]
         source: DeltaTableError,
     },
-    /// Error returned when reading the checkpoint failed.
-    #[error("Failed to read checkpoint: {}", .source)]
+    /// Error returned when the parquet writer fails while writing the checkpoint.
+    #[error("Failed to write parquet: {}", .source)]
     ParquetError {
-        /// Parquet error details returned when reading the checkpoint failed.
+        /// Parquet error details returned when writing the checkpoint failed.
         #[from]
         source: ParquetError,
     },
-    /// Error returned when converting the schema in Arrow format failed.
+    /// Error returned when converting the schema to Arrow format failed.
     #[error("Failed to convert into Arrow schema: {}", .source)]
     ArrowError {
         /// Arrow error details returned when converting the schema in Arrow format failed
@@ -1457,6 +1450,7 @@ pub struct CheckPointWriter {
     delta_log_path: String,
     last_checkpoint_path: String,
     storage: Box<dyn StorageBackend>,
+    schema_factory: DeltaLogSchemaFactory,
 }
 
 impl CheckPointWriter {
@@ -1464,11 +1458,13 @@ impl CheckPointWriter {
     pub fn new(table_path: &str, storage: Box<dyn StorageBackend>) -> Self {
         let delta_log_path = storage.join_path(table_path, "_delta_log");
         let last_checkpoint_path = storage.join_path(delta_log_path.as_str(), "_last_checkpoint");
+        let schema_factory = DeltaLogSchemaFactory::new();
 
         Self {
             delta_log_path,
             last_checkpoint_path,
             storage,
+            schema_factory,
         }
     }
 
@@ -1482,7 +1478,7 @@ impl CheckPointWriter {
         // an appropriate split point yet though so only writing a single part currently.
 
         info!("Writing parquet bytes to checkpoint buffer.");
-        let parquet_bytes = parquet_bytes_from_state(state)?;
+        let parquet_bytes = self.parquet_bytes_from_state(state)?;
 
         let size = parquet_bytes.len() as i64;
 
@@ -1516,68 +1512,76 @@ impl CheckPointWriter {
 
         Ok(())
     }
-}
 
-fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, CheckPointWriterError> {
-    let mut json_buffer: Vec<u8> = Vec::new();
+    fn parquet_bytes_from_state(
+        &self,
+        state: &DeltaTableState,
+    ) -> Result<Vec<u8>, CheckPointWriterError> {
+        let current_metadata = state
+            .current_metadata()
+            .ok_or_else(|| CheckPointWriterError::MissingMetaData)?;
 
-    let protocol = action::Action::protocol(action::Protocol {
-        min_reader_version: state.min_reader_version(),
-        min_writer_version: state.min_writer_version(),
-    });
+        let mut json_buffer: Vec<u8> = Vec::new();
 
-    extend_json_byte_buffer(&mut json_buffer, &protocol)?;
-
-    let metadata = state
-        .current_metadata()
-        .ok_or_else(|| CheckPointWriterError::MissingMetaData)?;
-    let metadata = action::Action::metaData(action::MetaData::try_from(metadata)?);
-    extend_json_byte_buffer(&mut json_buffer, &metadata)?;
-
-    for add in state.files() {
-        let add = action::Action::add(add.clone());
-        extend_json_byte_buffer(&mut json_buffer, &add)?;
-    }
-
-    for remove in state.tombstones() {
-        let remove = action::Action::remove(remove.clone());
-        extend_json_byte_buffer(&mut json_buffer, &remove)?;
-    }
-
-    for (app_id, version) in state.app_transaction_version().iter() {
-        let txn = action::Action::txn(action::Txn {
-            app_id: app_id.clone(),
-            version: *version,
-            last_updated: None,
+        let protocol = action::Action::protocol(action::Protocol {
+            min_reader_version: state.min_reader_version(),
+            min_writer_version: state.min_writer_version(),
         });
-        extend_json_byte_buffer(&mut json_buffer, &txn)?;
+        extend_json_byte_buffer(&mut json_buffer, &protocol)?;
+
+        let metadata = action::Action::metaData(action::MetaData::try_from(current_metadata)?);
+        extend_json_byte_buffer(&mut json_buffer, &metadata)?;
+
+        for add in state.files() {
+            let add = action::Action::add(add.clone());
+            extend_json_byte_buffer(&mut json_buffer, &add)?;
+        }
+
+        for remove in state.tombstones() {
+            let remove = action::Action::remove(remove.clone());
+            extend_json_byte_buffer(&mut json_buffer, &remove)?;
+        }
+
+        for (app_id, version) in state.app_transaction_version().iter() {
+            let txn = action::Action::txn(action::Txn {
+                app_id: app_id.clone(),
+                version: *version,
+                last_updated: None,
+            });
+            extend_json_byte_buffer(&mut json_buffer, &txn)?;
+        }
+
+        let checkpoint_schema = self.schema_factory.delta_log_schema_for_table(
+            &current_metadata.schema,
+            current_metadata.partition_columns.as_slice(),
+        )?;
+        let arrow_checkpoint_schema: ArrowSchema =
+            <ArrowSchema as TryFrom<&Schema>>::try_from(&checkpoint_schema)?;
+        let arrow_schema = Arc::new(arrow_checkpoint_schema);
+
+        let cursor = Cursor::new(json_buffer);
+
+        let mut json_reader = ReaderBuilder::new()
+            .with_schema(arrow_schema.clone())
+            .build(cursor)?;
+
+        debug!("Preparing checkpoint parquet buffer.");
+
+        let writeable_cursor = InMemoryWriteableCursor::default();
+        let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema, None)?;
+
+        debug!("Writing to checkpoint parquet buffer...");
+
+        while let Some(batch) = json_reader.next()? {
+            writer.write(&batch)?;
+        }
+
+        let _ = writer.close()?;
+
+        info!("Finished writing checkpoint file.");
+
+        Ok(writeable_cursor.data())
     }
-
-    let arrow_schema = delta_log_arrow_schema()?;
-    let arrow_schema = Arc::new(arrow_schema);
-
-    let cursor = Cursor::new(json_buffer);
-
-    let mut json_reader = ReaderBuilder::new()
-        .with_schema(arrow_schema.clone())
-        .build(cursor)?;
-
-    debug!("Preparing checkpoint parquet buffer.");
-
-    let writeable_cursor = InMemoryWriteableCursor::default();
-    let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema, None)?;
-
-    debug!("Writing to checkpoint parquet buffer...");
-
-    while let Some(batch) = json_reader.next()? {
-        writer.write(&batch)?;
-    }
-
-    let _ = writer.close()?;
-
-    debug!("Finsihed writing checkpoint file.");
-
-    Ok(writeable_cursor.data())
 }
 
 fn extend_json_byte_buffer<T>(
