@@ -1507,6 +1507,7 @@ pub enum CheckPointWriterError {
 
 /// Struct for writing checkpoints to the delta log.
 pub struct CheckPointWriter {
+    table_uri: String,
     delta_log_path: String,
     last_checkpoint_path: String,
     storage: Box<dyn StorageBackend>,
@@ -1515,17 +1516,31 @@ pub struct CheckPointWriter {
 
 impl CheckPointWriter {
     /// Creates a new CheckPointWriter.
-    pub fn new(table_path: &str, storage: Box<dyn StorageBackend>) -> Self {
-        let delta_log_path = storage.join_path(table_path, "_delta_log");
+    pub fn new(table_uri: &str, storage: Box<dyn StorageBackend>) -> Self {
+        let delta_log_path = storage.join_path(table_uri, "_delta_log");
         let last_checkpoint_path = storage.join_path(delta_log_path.as_str(), "_last_checkpoint");
         let schema_factory = DeltaLogSchemaFactory::new();
 
         Self {
+            table_uri: table_uri.to_string(),
             delta_log_path,
             last_checkpoint_path,
             storage,
             schema_factory,
         }
+    }
+
+    /// Creates a new checkpoint at the specified version.
+    /// NOTE: This method loads a new instance of delta table to determine the state to
+    /// checkpoint.
+    pub async fn create_checkpoint_for_version(
+        &self,
+        version: DeltaDataTypeVersion,
+    ) -> Result<(), CheckPointWriterError> {
+        let table = open_table_with_version(self.table_uri.as_str(), version).await?;
+
+        self.create_checkpoint_from_state(version, table.get_state())
+            .await
     }
 
     /// Creates a new checkpoint at the specified version from the given DeltaTableState.
