@@ -364,7 +364,7 @@ pub struct Format {
 
 /// Action that describes the metadata of the table.
 /// This is a top-level action in Delta log entries.
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MetaData {
     /// Unique identifier for this table

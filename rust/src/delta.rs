@@ -204,36 +204,38 @@ impl fmt::Display for DeltaTableMetaData {
     }
 }
 
-impl TryFrom<&action::MetaData> for DeltaTableMetaData {
+impl TryFrom<action::MetaData> for DeltaTableMetaData {
     type Error = serde_json::error::Error;
 
-    fn try_from(action_metadata: &action::MetaData) -> Result<Self, Self::Error> {
+    fn try_from(action_metadata: action::MetaData) -> Result<Self, Self::Error> {
+        let schema = action_metadata.get_schema()?;
         Ok(Self {
-            id: action_metadata.id.clone(),
-            name: action_metadata.name.clone(),
-            description: action_metadata.description.clone(),
-            format: action_metadata.format.clone(),
-            schema: action_metadata.get_schema()?,
-            partition_columns: action_metadata.partition_columns.clone(),
+            id: action_metadata.id,
+            name: action_metadata.name,
+            description: action_metadata.description,
+            format: action_metadata.format,
+            schema,
+            partition_columns: action_metadata.partition_columns,
             created_time: action_metadata.created_time,
-            configuration: action_metadata.configuration.clone(),
+            configuration: action_metadata.configuration,
         })
     }
 }
 
-impl TryFrom<&DeltaTableMetaData> for action::MetaData {
+impl TryFrom<DeltaTableMetaData> for action::MetaData {
     type Error = serde_json::error::Error;
 
-    fn try_from(metadata: &DeltaTableMetaData) -> Result<Self, Self::Error> {
+    fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
+        let schema_string = serde_json::to_string(&metadata.schema)?;
         Ok(Self {
-            id: metadata.id.clone(),
-            name: metadata.name.clone(),
-            description: metadata.description.clone(),
-            format: metadata.format.clone(),
-            schema_string: serde_json::to_string(&metadata.schema)?,
-            partition_columns: metadata.partition_columns.clone(),
+            id: metadata.id,
+            name: metadata.name,
+            description: metadata.description,
+            format: metadata.format,
+            schema_string,
+            partition_columns: metadata.partition_columns,
             created_time: metadata.created_time,
-            configuration: metadata.configuration.clone(),
+            configuration: metadata.configuration,
         })
     }
 }
@@ -518,7 +520,7 @@ impl DeltaTable {
     ) -> Result<(), ApplyLogError> {
         for line in reader.lines() {
             let action: Action = serde_json::from_str(line?.as_str())?;
-            process_action(&mut self.state, &action)?;
+            process_action(&mut self.state, action)?;
         }
 
         Ok(())
@@ -548,7 +550,7 @@ impl DeltaTable {
             for record in preader.get_row_iter(None)? {
                 process_action(
                     &mut self.state,
-                    &Action::from_parquet_record(&schema, &record)?,
+                    Action::from_parquet_record(&schema, &record)?,
                 )?;
             }
         }
@@ -1604,7 +1606,8 @@ impl CheckPointWriter {
         });
         extend_json_byte_buffer(&mut json_buffer, &protocol)?;
 
-        let metadata = action::Action::metaData(action::MetaData::try_from(current_metadata)?);
+        let metadata =
+            action::Action::metaData(action::MetaData::try_from(current_metadata.clone())?);
         extend_json_byte_buffer(&mut json_buffer, &metadata)?;
 
         for add in state.files() {
@@ -1674,7 +1677,7 @@ where
 
 fn process_action(
     state: &mut DeltaTableState,
-    action: &Action,
+    action: Action,
 ) -> Result<(), serde_json::error::Error> {
     match action {
         Action::add(v) => {
@@ -1773,7 +1776,7 @@ mod tests {
             last_updated: Some(0),
         });
 
-        let _ = process_action(&mut state, &txn_action).unwrap();
+        let _ = process_action(&mut state, txn_action).unwrap();
 
         assert_eq!(2, *state.app_transaction_version.get("abc").unwrap());
         assert_eq!(1, *state.app_transaction_version.get("xyz").unwrap());
