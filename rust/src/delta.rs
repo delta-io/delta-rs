@@ -1653,7 +1653,7 @@ impl CheckPointWriter {
 
         let _ = writer.close()?;
 
-        info!("Finished writing checkpoint file.");
+        debug!("Finished writing checkpoint parquet buffer.");
 
         Ok(writeable_cursor.data())
     }
