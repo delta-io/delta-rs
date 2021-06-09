@@ -1,7 +1,7 @@
 extern crate deltalake;
 
+use deltalake::checkpoints::CheckPointWriter;
 use deltalake::storage;
-use deltalake::CheckPointWriter;
 use std::fs;
 use std::path::{Path, PathBuf};
 

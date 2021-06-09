@@ -58,6 +58,7 @@ extern crate serde_json;
 extern crate thiserror;
 
 pub mod action;
+pub mod checkpoints;
 mod delta;
 pub mod delta_arrow;
 pub mod partitions;
