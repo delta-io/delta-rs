@@ -1681,11 +1681,11 @@ fn process_action(
 ) -> Result<(), serde_json::error::Error> {
     match action {
         Action::add(v) => {
-            state.files.push(v.clone());
+            state.files.push(v);
         }
         Action::remove(v) => {
             state.files.retain(|a| *a.path != v.path);
-            state.tombstones.push(v.clone());
+            state.tombstones.push(v);
         }
         Action::protocol(v) => {
             state.min_reader_version = v.min_reader_version;
@@ -1697,11 +1697,11 @@ fn process_action(
         Action::txn(v) => {
             *state
                 .app_transaction_version
-                .entry(v.app_id.clone())
+                .entry(v.app_id)
                 .or_insert(v.version) = v.version;
         }
         Action::commitInfo(v) => {
-            state.commit_infos.push(v.clone());
+            state.commit_infos.push(v);
         }
     }
 
