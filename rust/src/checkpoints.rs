@@ -2,20 +2,19 @@
 
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
-use arrow::json::reader::ReaderBuilder;
+use arrow::json::reader::Decoder;
 use log::*;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use parquet::file::writer::InMemoryWriteableCursor;
-use serde::Serialize;
 use std::convert::TryFrom;
-use std::io::Cursor;
 use std::sync::Arc;
 
 use super::action;
 use super::open_table_with_version;
 use super::schema::*;
 use super::storage::{StorageBackend, StorageError};
+use super::writer::InMemValueIter;
 use super::{CheckPoint, DeltaTableError, DeltaTableState};
 
 /// Error returned when the CheckPointWriter is unable to write a checkpoint.
@@ -155,83 +154,37 @@ impl CheckPointWriter {
             .current_metadata()
             .ok_or(CheckPointWriterError::MissingMetaData)?;
 
-        // let jsons: Iterator<Item = Result<serde_json::Value, CheckPointWriterError>> = [
-        //     action::Action::protocol(action::Protocol {
-        //         min_reader_version: state.min_reader_version(),
-        //         min_writer_version: state.min_writer_version(),
-        //     }),
-        //     action::Action::metaData(action::MetaData::try_from(current_metadata.clone())?),
-        // ];
-        //
+        let jsons: Vec<serde_json::Value> = vec![
+            action::Action::protocol(action::Protocol {
+                min_reader_version: state.min_reader_version(),
+                min_writer_version: state.min_writer_version(),
+            }),
+            action::Action::metaData(action::MetaData::try_from(current_metadata.clone())?),
+        ]
+        .into_iter()
+        .chain(state.files().iter().map(|f| action::Action::add(f.clone())))
+        .chain(
+            state
+                .tombstones()
+                .iter()
+                .map(|f| action::Action::remove(f.clone())),
+        )
+        .chain(
+            state
+                .app_transaction_version()
+                .iter()
+                .map(|(app_id, version)| {
+                    action::Action::txn(action::Txn {
+                        app_id: app_id.clone(),
+                        version: *version,
+                        last_updated: None,
+                    })
+                }),
+        )
+        .filter_map(|a| serde_json::to_value(a).ok())
+        .collect();
 
-        //         let things: Vec<action::Action> = state
-        //             .files()
-        //             .iter()
-        //             .map(|f| action::Action::add(f.clone()))
-        //             .collect();
-
-        //         let jsons: dyn Iterator<Item = action::Action> = [
-        //             action::Action::protocol(action::Protocol {
-        //                 min_reader_version: state.min_reader_version(),
-        //                 min_writer_version: state.min_writer_version(),
-        //             }),
-        //             action::Action::metaData(action::MetaData::try_from(current_metadata.clone())?),
-        //         ]
-        //         .chain(state.files().iter().map(|f| action::Action::add(f.clone())));
-
-        // jsons
-        //     .iter()
-        //     .chain(state.files().iter().map(|f| action::Action::add(f.clone())))
-        //     .chain(
-        //         state
-        //             .tombstones()
-        //             .iter()
-        //             .map(|t| action::Action::remove(t.clone())),
-        //     )
-        //     .chain(
-        //         state
-        //             .app_transaction_version()
-        //             .iter()
-        //             .map(|(app_id, version)| {
-        //                 action::Action::txn(action::Txn {
-        //                     app_id: app_id.clone(),
-        //                     version: *version,
-        //                     last_updated: None,
-        //                 })
-        //             }),
-        //     )
-        //     .map(|action| Ok(action.into()));
-
-        let mut json_buffer: Vec<u8> = Vec::new();
-
-        let protocol = action::Action::protocol(action::Protocol {
-            min_reader_version: state.min_reader_version(),
-            min_writer_version: state.min_writer_version(),
-        });
-        extend_json_byte_buffer(&mut json_buffer, &protocol)?;
-
-        let metadata =
-            action::Action::metaData(action::MetaData::try_from(current_metadata.clone())?);
-        extend_json_byte_buffer(&mut json_buffer, &metadata)?;
-
-        for add in state.files() {
-            let add = action::Action::add(add.clone());
-            extend_json_byte_buffer(&mut json_buffer, &add)?;
-        }
-
-        for remove in state.tombstones() {
-            let remove = action::Action::remove(remove.clone());
-            extend_json_byte_buffer(&mut json_buffer, &remove)?;
-        }
-
-        for (app_id, version) in state.app_transaction_version().iter() {
-            let txn = action::Action::txn(action::Txn {
-                app_id: app_id.clone(),
-                version: *version,
-                last_updated: None,
-            });
-            extend_json_byte_buffer(&mut json_buffer, &txn)?;
-        }
+        debug!("Preparing checkpoint parquet buffer.");
 
         let checkpoint_schema = self.schema_factory.delta_log_schema_for_table(
             &current_metadata.schema,
@@ -241,20 +194,16 @@ impl CheckPointWriter {
             <ArrowSchema as TryFrom<&Schema>>::try_from(&checkpoint_schema)?;
         let arrow_schema = Arc::new(arrow_checkpoint_schema);
 
-        let cursor = Cursor::new(json_buffer);
-
-        let mut json_reader = ReaderBuilder::new()
-            .with_schema(arrow_schema.clone())
-            .build(cursor)?;
-
-        debug!("Preparing checkpoint parquet buffer.");
-
         let writeable_cursor = InMemoryWriteableCursor::default();
-        let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema, None)?;
+        let mut writer =
+            ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
 
         debug!("Writing to checkpoint parquet buffer...");
 
-        while let Some(batch) = json_reader.next()? {
+        let mut value_iter = InMemValueIter::from_vec(jsons.as_slice());
+        let decoder = Decoder::new(arrow_schema, jsons.len(), None);
+
+        while let Some(batch) = decoder.next_batch(&mut value_iter)? {
             writer.write(&batch)?;
         }
 
@@ -264,17 +213,4 @@ impl CheckPointWriter {
 
         Ok(writeable_cursor.data())
     }
-}
-
-fn extend_json_byte_buffer<T>(
-    json_byte_buffer: &mut Vec<u8>,
-    json_value: &T,
-) -> Result<(), serde_json::error::Error>
-where
-    T: ?Sized + Serialize,
-{
-    json_byte_buffer.extend(serde_json::to_vec(json_value)?);
-    json_byte_buffer.push(b'\n');
-
-    Ok(())
 }
