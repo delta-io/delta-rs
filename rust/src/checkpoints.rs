@@ -71,8 +71,8 @@ pub enum CheckPointWriterError {
 /// Struct for writing checkpoints to the delta log.
 pub struct CheckPointWriter {
     table_uri: String,
-    delta_log_path: String,
-    last_checkpoint_path: String,
+    delta_log_uri: String,
+    last_checkpoint_uri: String,
     storage: Box<dyn StorageBackend>,
     schema_factory: DeltaLogSchemaFactory,
 }
@@ -80,14 +80,14 @@ pub struct CheckPointWriter {
 impl CheckPointWriter {
     /// Creates a new CheckPointWriter.
     pub fn new(table_uri: &str, storage: Box<dyn StorageBackend>) -> Self {
-        let delta_log_path = storage.join_path(table_uri, "_delta_log");
-        let last_checkpoint_path = storage.join_path(delta_log_path.as_str(), "_last_checkpoint");
+        let delta_log_uri = storage.join_path(table_uri, "_delta_log");
+        let last_checkpoint_uri = storage.join_path(delta_log_uri.as_str(), "_last_checkpoint");
         let schema_factory = DeltaLogSchemaFactory::new();
 
         Self {
             table_uri: table_uri.to_string(),
-            delta_log_path,
-            last_checkpoint_path,
+            delta_log_uri,
+            last_checkpoint_uri,
             storage,
             schema_factory,
         }
@@ -123,11 +123,11 @@ impl CheckPointWriter {
         let checkpoint = CheckPoint::new(version, size, None);
 
         let file_name = format!("{:020}.checkpoint.parquet", version);
-        let checkpoint_path = self.storage.join_path(&self.delta_log_path, &file_name);
+        let checkpoint_uri = self.storage.join_path(&self.delta_log_uri, &file_name);
 
-        info!("Writing checkpoint to {:?}.", checkpoint_path);
+        info!("Writing checkpoint to {:?}.", checkpoint_uri);
         self.storage
-            .put_obj(&checkpoint_path, &parquet_bytes)
+            .put_obj(&checkpoint_uri, &parquet_bytes)
             .await?;
 
         let last_checkpoint_content: serde_json::Value = serde_json::to_value(&checkpoint)?;
@@ -135,11 +135,11 @@ impl CheckPointWriter {
 
         info!(
             "Writing _last_checkpoint to {:?}.",
-            self.last_checkpoint_path
+            self.last_checkpoint_uri
         );
         self.storage
             .put_obj(
-                self.last_checkpoint_path.as_str(),
+                self.last_checkpoint_uri.as_str(),
                 last_checkpoint_content.as_bytes(),
             )
             .await?;
@@ -154,6 +154,53 @@ impl CheckPointWriter {
         let current_metadata = state
             .current_metadata()
             .ok_or(CheckPointWriterError::MissingMetaData)?;
+
+        // let jsons: Iterator<Item = Result<serde_json::Value, CheckPointWriterError>> = [
+        //     action::Action::protocol(action::Protocol {
+        //         min_reader_version: state.min_reader_version(),
+        //         min_writer_version: state.min_writer_version(),
+        //     }),
+        //     action::Action::metaData(action::MetaData::try_from(current_metadata.clone())?),
+        // ];
+        //
+
+        //         let things: Vec<action::Action> = state
+        //             .files()
+        //             .iter()
+        //             .map(|f| action::Action::add(f.clone()))
+        //             .collect();
+
+        //         let jsons: dyn Iterator<Item = action::Action> = [
+        //             action::Action::protocol(action::Protocol {
+        //                 min_reader_version: state.min_reader_version(),
+        //                 min_writer_version: state.min_writer_version(),
+        //             }),
+        //             action::Action::metaData(action::MetaData::try_from(current_metadata.clone())?),
+        //         ]
+        //         .chain(state.files().iter().map(|f| action::Action::add(f.clone())));
+
+        // jsons
+        //     .iter()
+        //     .chain(state.files().iter().map(|f| action::Action::add(f.clone())))
+        //     .chain(
+        //         state
+        //             .tombstones()
+        //             .iter()
+        //             .map(|t| action::Action::remove(t.clone())),
+        //     )
+        //     .chain(
+        //         state
+        //             .app_transaction_version()
+        //             .iter()
+        //             .map(|(app_id, version)| {
+        //                 action::Action::txn(action::Txn {
+        //                     app_id: app_id.clone(),
+        //                     version: *version,
+        //                     last_updated: None,
+        //                 })
+        //             }),
+        //     )
+        //     .map(|action| Ok(action.into()));
 
         let mut json_buffer: Vec<u8> = Vec::new();
 
