@@ -141,8 +141,9 @@ pub enum DeltaTableError {
         source: action::ActionError,
     },
     /// Error returned when it is not a DeltaTable.
-    #[error("Not a Delta table")]
-    NotATable,
+    #[error("Not a Delta table: {0}")]
+    NotATable(String),
+
     /// Error returned when no metadata was found in the DeltaTable.
     #[error("No metadata found, please make sure table is loaded.")]
     NoMetadata,
@@ -646,7 +647,7 @@ impl DeltaTable {
                             if self.version == -1 {
                                 // no snapshot found, no 0 version found.  this is not a delta
                                 // table, possibly an empty directroy.
-                                return Err(DeltaTableError::NotATable);
+                                return Err(DeltaTableError::NotATable("No snapshot  or version 0 found, perhaps this is an empty directory?".to_string()));
                             }
                         }
                         _ => {
