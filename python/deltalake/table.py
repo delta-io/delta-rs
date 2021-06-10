@@ -240,7 +240,8 @@ class DeltaTable:
             )
 
     def to_pyarrow_table(
-        self, partitions: Optional[List[Tuple[str, str, Any]]] = None,
+        self,
+        partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
     ) -> pyarrow.Table:
         """

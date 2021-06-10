@@ -58,7 +58,10 @@ def test_read_table_with_column_subset():
         "value": ["1", "2", "3", "6", "7", "5", "4"],
         "day": ["1", "3", "5", "20", "20", "4", "5"],
     }
-    assert dt.to_pyarrow_dataset().to_table(columns=["value", "day"]).to_pydict() == expected
+    assert (
+        dt.to_pyarrow_dataset().to_table(columns=["value", "day"]).to_pydict()
+        == expected
+    )
 
 
 def test_vacuum_dry_run_simple_table():
