@@ -251,22 +251,78 @@ pub(crate) fn delta_log_schema_for_table(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::collections::HashMap;
 
     #[test]
     fn delta_log_schema_for_table_test() {
-        let table_schema = json!({
-            "type": "struct",
-            "fields": [
-                { "name": "pcol", "type": "integer", "nullable": true, "metadata": {} },
-                { "name": "col1", "type": "integer", "nullable": true, "metadata": {} },
-            ]
-        });
-        let table_schema = serde_json::from_value(table_schema).unwrap();
+        // NOTE: We should future proof the checkpoint schema in case action schema changes.
+        // See https://github.com/delta-io/delta-rs/issues/287
 
+        let table_schema = ArrowSchema::new(vec![
+            ArrowField::new("pcol", ArrowDataType::Int32, true),
+            ArrowField::new("col1", ArrowDataType::Int32, true),
+        ]);
         let partition_columns = vec!["pcol".to_string()];
+        let log_schema = delta_log_schema_for_table(table_schema, partition_columns.as_slice());
 
-        let _log_schema = delta_log_schema_for_table(table_schema, partition_columns.as_slice());
+        let expected_fields = vec!["metaData", "protocol", "txn", "remove", "add"];
+        for f in log_schema.fields().iter() {
+            assert!(expected_fields.contains(&f.name().as_str()));
+        }
+        let add_fields: Vec<_> = log_schema
+            .fields()
+            .iter()
+            .filter(|f| f.name() == "add")
+            .map(|f| {
+                if let ArrowDataType::Struct(fields) = f.data_type() {
+                    fields.iter().map(|f| f.clone())
+                } else {
+                    unreachable!();
+                }
+            })
+            .flatten()
+            .collect();
+        assert_eq!(7, add_fields.len());
 
-        todo!("Add tests for delta_log_schema_for_table");
+        let add_field_map: HashMap<_, _> = add_fields
+            .iter()
+            .map(|f| (f.name().to_owned(), f.clone()))
+            .collect();
+
+        let partition_values_parsed = add_field_map.get("partitionValues_parsed").unwrap();
+        if let ArrowDataType::Struct(fields) = partition_values_parsed.data_type() {
+            assert_eq!(1, fields.len());
+            let field = fields.get(0).unwrap().to_owned();
+            assert_eq!(ArrowField::new("pcol", ArrowDataType::Int32, true), field);
+        } else {
+            unreachable!();
+        }
+
+        let stats_parsed = add_field_map.get("stats_parsed").unwrap();
+        if let ArrowDataType::Struct(fields) = stats_parsed.data_type() {
+            assert_eq!(4, fields.len());
+
+            let field_map: HashMap<_, _> = fields
+                .iter()
+                .map(|f| (f.name().to_owned(), f.clone()))
+                .collect();
+
+            for (k, v) in field_map.iter() {
+                match k.as_ref() {
+                    "minValues" | "maxValues" | "nullCounts" => match v.data_type() {
+                        ArrowDataType::Struct(fields) => {
+                            assert_eq!(1, fields.len());
+                            let field = fields.get(0).unwrap().to_owned();
+                            assert_eq!(ArrowField::new("col1", ArrowDataType::Int32, true), field);
+                        }
+                        _ => unreachable!(),
+                    },
+                    "numRecords" => {}
+                    _ => panic!(),
+                }
+            }
+        } else {
+            unreachable!();
+        }
     }
 }

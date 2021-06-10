@@ -102,7 +102,7 @@ impl CheckPointWriter {
     ) -> Result<(), CheckPointWriterError> {
         // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
         // an appropriate split point yet though so only writing a single part currently.
-        // Will post a research issue to follow-up on this later.
+        // See https://github.com/delta-io/delta-rs/issues/288
 
         info!("Writing parquet bytes to checkpoint buffer.");
         let parquet_bytes = self.parquet_bytes_from_state(state)?;
@@ -143,7 +143,6 @@ impl CheckPointWriter {
         let current_metadata = state
             .current_metadata()
             .ok_or(CheckPointWriterError::MissingMetaData)?;
-
         let jsons: Vec<Result<serde_json::Value, ArrowError>> = vec![
             action::Action::protocol(action::Protocol {
                 min_reader_version: state.min_reader_version(),
@@ -175,25 +174,21 @@ impl CheckPointWriter {
         .collect();
 
         debug!("Preparing checkpoint parquet buffer.");
-
         let arrow_schema = delta_log_schema_for_table(
             <ArrowSchema as TryFrom<&Schema>>::try_from(&current_metadata.schema)?,
             current_metadata.partition_columns.as_slice(),
         );
-
         let writeable_cursor = InMemoryWriteableCursor::default();
         let mut writer =
             ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
 
         debug!("Writing to checkpoint parquet buffer...");
-
         let decoder = Decoder::new(arrow_schema, jsons.len(), None);
         let mut value_iter = jsons.into_iter();
         while let Some(batch) = decoder.next_batch(&mut value_iter)? {
             writer.write(&batch)?;
         }
         let _ = writer.close()?;
-
         debug!("Finished writing checkpoint parquet buffer.");
 
         Ok(writeable_cursor.data())
