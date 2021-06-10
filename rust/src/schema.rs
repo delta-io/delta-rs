@@ -1,7 +1,6 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
 use serde::{Deserialize, Serialize};
-use serde_json::json;
 use std::collections::HashMap;
 
 /// Type alias for a string expected to match a GUID/UUID format
@@ -161,486 +160,486 @@ impl Schema {
     }
 }
 
-/// Error representing a failure while creating the delta log schema.
-#[derive(thiserror::Error, Debug)]
-pub enum DeltaLogSchemaError {
-    /// Error returned when JSON de-serialization of schema components fails.
-    #[error("serde_json::Error: {source}")]
-    JSONSerialization {
-        /// The source serde_json::Error.
-        #[from]
-        source: serde_json::Error,
-    },
-}
+// /// Error representing a failure while creating the delta log schema.
+// #[derive(thiserror::Error, Debug)]
+// pub enum DeltaLogSchemaError {
+//     /// Error returned when JSON de-serialization of schema components fails.
+//     #[error("serde_json::Error: {source}")]
+//     JSONSerialization {
+//         /// The source serde_json::Error.
+//         #[from]
+//         source: serde_json::Error,
+//     },
+// }
 
-/// Factory for creating a Delta log schema for a specific table schema.
-/// REF: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#checkpoint-schema
-pub struct DeltaLogSchemaFactory {
-    common_fields: HashMap<String, Vec<SchemaField>>,
-}
+// /// Factory for creating a Delta log schema for a specific table schema.
+// /// REF: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#checkpoint-schema
+// pub struct DeltaLogSchemaFactory {
+//     common_fields: HashMap<String, Vec<SchemaField>>,
+// }
 
-impl DeltaLogSchemaFactory {
-    /// Creates a new DeltaLogSchemaFactory which can be used to create Schema's representing the
-    /// Delta log for specific tables.
-    pub fn new() -> Self {
-        // TODO: map<string, string> is not supported by arrow currently.
-        // See:
-        // * https://github.com/apache/arrow-rs/issues/395
-        // * https://github.com/apache/arrow-rs/issues/396
+// impl DeltaLogSchemaFactory {
+//     /// Creates a new DeltaLogSchemaFactory which can be used to create Schema's representing the
+//     /// Delta log for specific tables.
+//     pub fn new() -> Self {
+//         // TODO: map<string, string> is not supported by arrow currently.
+//         // See:
+//         // * https://github.com/apache/arrow-rs/issues/395
+//         // * https://github.com/apache/arrow-rs/issues/396
 
-        let meta_data_fields = json!([
-            { "name": "id", "type": "string", "nullable": true, "metadata": {} },
-            { "name": "name", "type": "string", "nullable": true, "metadata": {} },
-            { "name": "description", "type": "string", "nullable": true, "metadata": {} },
-            { "name": "schemaString", "type": "string", "nullable": true, "metadata": {} },
-            { "name": "createdTime", "type": "long", "nullable": true, "metadata": {} },
-            {
-                "name": "partitionColumns",
-                "type": {
-                    "type": "array",
-                    "elementType": "string",
-                    "containsNull": true,
-                },
-                "nullable": true,
-                "metadata": {} },
-            {
-                "name": "format",
-                "type": {
-                    "type": "struct",
-                    "fields": [{
-                        "name": "provider",
-                        "type": "string",
-                        "nullable": true,
-                        "metadata": {},
-                    },/*{
-                        "name": "options",
-                        "type": {
-                            "type": "map",
-                            "keyType": "string",
-                            "valueType": "string",
-                            "valueContainsNull": true,
-                        },
-                        "nullable": true,
-                        "metadata": {}
-                    }*/]
-                },
-                "nullable": true,
-                "metadata": {}
-            },
-            /*{
-                "name": "configuration",
-                "type": {
-                    "type": "map",
-                    "keyType": "string",
-                    "valueType": "string",
-                    "valueContainsNull": true,
-                },
-                "nullable": true,
-                "metadata": {}
-            }*/]);
+//         let meta_data_fields = json!([
+//             { "name": "id", "type": "string", "nullable": true, "metadata": {} },
+//             { "name": "name", "type": "string", "nullable": true, "metadata": {} },
+//             { "name": "description", "type": "string", "nullable": true, "metadata": {} },
+//             { "name": "schemaString", "type": "string", "nullable": true, "metadata": {} },
+//             { "name": "createdTime", "type": "long", "nullable": true, "metadata": {} },
+//             {
+//                 "name": "partitionColumns",
+//                 "type": {
+//                     "type": "array",
+//                     "elementType": "string",
+//                     "containsNull": true,
+//                 },
+//                 "nullable": true,
+//                 "metadata": {} },
+//             {
+//                 "name": "format",
+//                 "type": {
+//                     "type": "struct",
+//                     "fields": [{
+//                         "name": "provider",
+//                         "type": "string",
+//                         "nullable": true,
+//                         "metadata": {},
+//                     },/*{
+//                         "name": "options",
+//                         "type": {
+//                             "type": "map",
+//                             "keyType": "string",
+//                             "valueType": "string",
+//                             "valueContainsNull": true,
+//                         },
+//                         "nullable": true,
+//                         "metadata": {}
+//                     }*/]
+//                 },
+//                 "nullable": true,
+//                 "metadata": {}
+//             },
+//             /*{
+//                 "name": "configuration",
+//                 "type": {
+//                     "type": "map",
+//                     "keyType": "string",
+//                     "valueType": "string",
+//                     "valueContainsNull": true,
+//                 },
+//                 "nullable": true,
+//                 "metadata": {}
+//             }*/]);
 
-        let protocol_fields = json!([
-            { "name": "minReaderVersion", "type": "integer", "nullable": true, "metadata": {} },
-            { "name": "minWriterVersion", "type": "integer", "nullable": true, "metadata": {} }
-        ]);
+//         let protocol_fields = json!([
+//             { "name": "minReaderVersion", "type": "integer", "nullable": true, "metadata": {} },
+//             { "name": "minWriterVersion", "type": "integer", "nullable": true, "metadata": {} }
+//         ]);
 
-        let txn_fields = json!([
-            { "name": "appId", "type": "string", "nullable": true, "metadata": {} },
-            { "name": "version", "type": "long", "nullable": true, "metadata": {} }
-        ]);
+//         let txn_fields = json!([
+//             { "name": "appId", "type": "string", "nullable": true, "metadata": {} },
+//             { "name": "version", "type": "long", "nullable": true, "metadata": {} }
+//         ]);
 
-        let add_fields = json!([
-            { "name": "path", "type": "string", "nullable": true, "metadata": {} },
-            { "name": "size", "type": "long", "nullable": true, "metadata": {} },
-            { "name": "modificationTime", "type": "long", "nullable": true, "metadata": {} },
-            { "name": "dataChange", "type": "boolean", "nullable": true, "metadata": {} },
-            { "name": "stats", "type": "string", "nullable": true, "metadata": {} },
-            /*{
-                "name": "partitionValues",
-                "type": {
-                    "type": "map",
-                    "keyType": "string",
-                    "valueType": "string",
-                    "valueContainsNull": true,
-                },
-                "nullable": true,
-                "metadata": {},
-            }*/
-        ]);
+//         let add_fields = json!([
+//             { "name": "path", "type": "string", "nullable": true, "metadata": {} },
+//             { "name": "size", "type": "long", "nullable": true, "metadata": {} },
+//             { "name": "modificationTime", "type": "long", "nullable": true, "metadata": {} },
+//             { "name": "dataChange", "type": "boolean", "nullable": true, "metadata": {} },
+//             { "name": "stats", "type": "string", "nullable": true, "metadata": {} },
+//             /*{
+//                 "name": "partitionValues",
+//                 "type": {
+//                     "type": "map",
+//                     "keyType": "string",
+//                     "valueType": "string",
+//                     "valueContainsNull": true,
+//                 },
+//                 "nullable": true,
+//                 "metadata": {},
+//             }*/
+//         ]);
 
-        let remove_fields = json!([
-            { "name": "path", "type": "string", "nullable": true, "metadata": {} },
-            { "name": "size", "type": "long", "nullable": true, "metadata": {} },
-            { "name": "modificationTime", "type": "long", "nullable": true, "metadata": {} },
-            { "name": "dataChange", "type": "boolean", "nullable": true, "metadata": {}, },
-            { "name": "stats", "type": "string", "nullable": true, "metadata": {},
-            },/*{
-                "name": "partitionValues",
-                "type": {
-                    "type": "map",
-                    "keyType": "string",
-                    "valueType": "string",
-                    "valueContainsNull": true,
-                },
-                "nullable": true,
-                "metadata": {},
+//         let remove_fields = json!([
+//             { "name": "path", "type": "string", "nullable": true, "metadata": {} },
+//             { "name": "size", "type": "long", "nullable": true, "metadata": {} },
+//             { "name": "modificationTime", "type": "long", "nullable": true, "metadata": {} },
+//             { "name": "dataChange", "type": "boolean", "nullable": true, "metadata": {}, },
+//             { "name": "stats", "type": "string", "nullable": true, "metadata": {},
+//             },/*{
+//                 "name": "partitionValues",
+//                 "type": {
+//                     "type": "map",
+//                     "keyType": "string",
+//                     "valueType": "string",
+//                     "valueContainsNull": true,
+//                 },
+//                 "nullable": true,
+//                 "metadata": {},
 
-            }*/]);
+//             }*/]);
 
-        let mut map = HashMap::new();
+//         let mut map = HashMap::new();
 
-        map.insert(
-            "metaData".to_string(),
-            serde_json::from_value(meta_data_fields).unwrap(),
-        );
-        map.insert(
-            "protocol".to_string(),
-            serde_json::from_value(protocol_fields).unwrap(),
-        );
-        map.insert(
-            "txn".to_string(),
-            serde_json::from_value(txn_fields).unwrap(),
-        );
-        map.insert(
-            "add".to_string(),
-            serde_json::from_value(add_fields).unwrap(),
-        );
-        map.insert(
-            "remove".to_string(),
-            serde_json::from_value(remove_fields).unwrap(),
-        );
+//         map.insert(
+//             "metaData".to_string(),
+//             serde_json::from_value(meta_data_fields).unwrap(),
+//         );
+//         map.insert(
+//             "protocol".to_string(),
+//             serde_json::from_value(protocol_fields).unwrap(),
+//         );
+//         map.insert(
+//             "txn".to_string(),
+//             serde_json::from_value(txn_fields).unwrap(),
+//         );
+//         map.insert(
+//             "add".to_string(),
+//             serde_json::from_value(add_fields).unwrap(),
+//         );
+//         map.insert(
+//             "remove".to_string(),
+//             serde_json::from_value(remove_fields).unwrap(),
+//         );
 
-        Self { common_fields: map }
-    }
+//         Self { common_fields: map }
+//     }
 
-    /// Creates a Schema representing the delta log for a specific delta table.
-    /// Merges fields from the table schema into the delta log schema.
-    pub fn delta_log_schema_for_table(
-        &self,
-        table_schema: &Schema,
-        partition_columns: &[String],
-    ) -> Result<Schema, DeltaLogSchemaError> {
-        let (partition_fields, non_partition_fields): (Vec<SchemaField>, Vec<SchemaField>) =
-            table_schema
-                .fields
-                .iter()
-                .map(|f| f.to_owned())
-                .partition(|field| partition_columns.contains(&field.name));
+//     /// Creates a Schema representing the delta log for a specific delta table.
+//     /// Merges fields from the table schema into the delta log schema.
+//     pub fn delta_log_schema_for_table(
+//         &self,
+//         table_schema: &Schema,
+//         partition_columns: &[String],
+//     ) -> Result<Schema, DeltaLogSchemaError> {
+//         let (partition_fields, non_partition_fields): (Vec<SchemaField>, Vec<SchemaField>) =
+//             table_schema
+//                 .fields
+//                 .iter()
+//                 .map(|f| f.to_owned())
+//                 .partition(|field| partition_columns.contains(&field.name));
 
-        let fields: Vec<SchemaField> = self
-            .common_fields
-            .iter()
-            .map(|(name, fields)| match name.as_str() {
-                "add" => {
-                    let mut fields = fields.clone();
+//         let fields: Vec<SchemaField> = self
+//             .common_fields
+//             .iter()
+//             .map(|(name, fields)| match name.as_str() {
+//                 "add" => {
+//                     let mut fields = fields.clone();
 
-                    if !partition_fields.is_empty() {
-                        let partition_values_parsed = SchemaField {
-                            name: "partitionValues_parsed".to_string(),
-                            nullable: true,
-                            metadata: HashMap::new(),
-                            r#type: SchemaDataType::r#struct(SchemaTypeStruct {
-                                r#type: "struct".to_string(),
-                                fields: partition_fields.clone(),
-                            }),
-                        };
-                        fields.push(partition_values_parsed);
-                    }
+//                     if !partition_fields.is_empty() {
+//                         let partition_values_parsed = SchemaField {
+//                             name: "partitionValues_parsed".to_string(),
+//                             nullable: true,
+//                             metadata: HashMap::new(),
+//                             r#type: SchemaDataType::r#struct(SchemaTypeStruct {
+//                                 r#type: "struct".to_string(),
+//                                 fields: partition_fields.clone(),
+//                             }),
+//                         };
+//                         fields.push(partition_values_parsed);
+//                     }
 
-                    if !non_partition_fields.is_empty() {
-                        let min_values = SchemaField {
-                            name: "minValues".to_string(),
-                            nullable: true,
-                            metadata: HashMap::new(),
-                            r#type: SchemaDataType::r#struct(SchemaTypeStruct {
-                                r#type: "struct".to_string(),
-                                fields: non_partition_fields.clone(),
-                            }),
-                        };
+//                     if !non_partition_fields.is_empty() {
+//                         let min_values = SchemaField {
+//                             name: "minValues".to_string(),
+//                             nullable: true,
+//                             metadata: HashMap::new(),
+//                             r#type: SchemaDataType::r#struct(SchemaTypeStruct {
+//                                 r#type: "struct".to_string(),
+//                                 fields: non_partition_fields.clone(),
+//                             }),
+//                         };
 
-                        let max_values = SchemaField {
-                            name: "maxValues".to_string(),
-                            nullable: true,
-                            metadata: HashMap::new(),
-                            r#type: SchemaDataType::r#struct(SchemaTypeStruct {
-                                r#type: "struct".to_string(),
-                                fields: non_partition_fields.clone(),
-                            }),
-                        };
+//                         let max_values = SchemaField {
+//                             name: "maxValues".to_string(),
+//                             nullable: true,
+//                             metadata: HashMap::new(),
+//                             r#type: SchemaDataType::r#struct(SchemaTypeStruct {
+//                                 r#type: "struct".to_string(),
+//                                 fields: non_partition_fields.clone(),
+//                             }),
+//                         };
 
-                        let null_counts = SchemaField {
-                            name: "nullCounts".to_string(),
-                            nullable: true,
-                            metadata: HashMap::new(),
-                            r#type: SchemaDataType::r#struct(SchemaTypeStruct {
-                                r#type: "struct".to_string(),
-                                fields: non_partition_fields.clone(),
-                            }),
-                        };
+//                         let null_counts = SchemaField {
+//                             name: "nullCounts".to_string(),
+//                             nullable: true,
+//                             metadata: HashMap::new(),
+//                             r#type: SchemaDataType::r#struct(SchemaTypeStruct {
+//                                 r#type: "struct".to_string(),
+//                                 fields: non_partition_fields.clone(),
+//                             }),
+//                         };
 
-                        let stats_parsed = SchemaField {
-                            name: "stats_parsed".to_string(),
-                            nullable: true,
-                            metadata: HashMap::new(),
-                            r#type: SchemaDataType::r#struct(SchemaTypeStruct {
-                                r#type: "struct".to_string(),
-                                fields: vec![min_values, max_values, null_counts],
-                            }),
-                        };
+//                         let stats_parsed = SchemaField {
+//                             name: "stats_parsed".to_string(),
+//                             nullable: true,
+//                             metadata: HashMap::new(),
+//                             r#type: SchemaDataType::r#struct(SchemaTypeStruct {
+//                                 r#type: "struct".to_string(),
+//                                 fields: vec![min_values, max_values, null_counts],
+//                             }),
+//                         };
 
-                        fields.push(stats_parsed);
-                    }
+//                         fields.push(stats_parsed);
+//                     }
 
-                    SchemaField {
-                        name: name.clone(),
-                        nullable: true,
-                        metadata: HashMap::new(),
-                        r#type: SchemaDataType::r#struct(SchemaTypeStruct {
-                            r#type: "struct".to_string(),
-                            fields,
-                        }),
-                    }
-                }
-                _ => SchemaField {
-                    name: name.clone(),
-                    nullable: true,
-                    metadata: HashMap::new(),
-                    r#type: SchemaDataType::r#struct(SchemaTypeStruct {
-                        r#type: "struct".to_string(),
-                        fields: fields.clone(),
-                    }),
-                },
-            })
-            .collect();
+//                     SchemaField {
+//                         name: name.clone(),
+//                         nullable: true,
+//                         metadata: HashMap::new(),
+//                         r#type: SchemaDataType::r#struct(SchemaTypeStruct {
+//                             r#type: "struct".to_string(),
+//                             fields,
+//                         }),
+//                     }
+//                 }
+//                 _ => SchemaField {
+//                     name: name.clone(),
+//                     nullable: true,
+//                     metadata: HashMap::new(),
+//                     r#type: SchemaDataType::r#struct(SchemaTypeStruct {
+//                         r#type: "struct".to_string(),
+//                         fields: fields.clone(),
+//                     }),
+//                 },
+//             })
+//             .collect();
 
-        Ok(Schema {
-            r#type: "struct".to_string(),
-            fields,
-        })
-    }
-}
+//         Ok(Schema {
+//             r#type: "struct".to_string(),
+//             fields,
+//         })
+//     }
+// }
 
-impl Default for DeltaLogSchemaFactory {
-    fn default() -> Self {
-        Self::new()
-    }
-}
+// impl Default for DeltaLogSchemaFactory {
+//     fn default() -> Self {
+//         Self::new()
+//     }
+// }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
+// #[cfg(test)]
+// mod tests {
+//     use super::*;
 
-    #[test]
-    fn delta_log_schema_factory_creates_schema() {
-        let factory = DeltaLogSchemaFactory::new();
+//     #[test]
+//     fn delta_log_schema_factory_creates_schema() {
+//         let factory = DeltaLogSchemaFactory::new();
 
-        let table_schema = json!({
-            "type": "struct",
-            "fields": [
-                { "name": "pcol", "type": "integer", "nullable": true, "metadata": {} },
-                { "name": "col1", "type": "integer", "nullable": true, "metadata": {} },
-            ]
-        });
-        let table_schema = serde_json::from_value(table_schema).unwrap();
+//         let table_schema = json!({
+//             "type": "struct",
+//             "fields": [
+//                 { "name": "pcol", "type": "integer", "nullable": true, "metadata": {} },
+//                 { "name": "col1", "type": "integer", "nullable": true, "metadata": {} },
+//             ]
+//         });
+//         let table_schema = serde_json::from_value(table_schema).unwrap();
 
-        let partition_columns = vec!["pcol".to_string()];
+//         let partition_columns = vec!["pcol".to_string()];
 
-        let log_schema = factory
-            .delta_log_schema_for_table(&table_schema, partition_columns.as_slice())
-            .unwrap();
+//         let log_schema = factory
+//             .delta_log_schema_for_table(&table_schema, partition_columns.as_slice())
+//             .unwrap();
 
-        assert_eq!("struct", log_schema.r#type);
-        assert_eq!(5, log_schema.get_fields().len());
+//         assert_eq!("struct", log_schema.r#type);
+//         assert_eq!(5, log_schema.get_fields().len());
 
-        for f in log_schema.get_fields().iter() {
-            match f.get_name() {
-                "txn" => {
-                    if let SchemaDataType::r#struct(txn) = f.get_type() {
-                        assert_eq!(2, txn.get_fields().len());
-                        for f in txn.get_fields().iter() {
-                            match f.get_name() {
-                                "appId" => {
-                                    assert_eq!(
-                                        SchemaDataType::primitive("string".to_string()),
-                                        f.get_type().to_owned()
-                                    );
-                                }
-                                "version" => {
-                                    assert_eq!(
-                                        SchemaDataType::primitive("long".to_string()),
-                                        f.get_type().to_owned()
-                                    );
-                                }
-                                _ => panic!("Unhandled schema field name"),
-                            }
-                        }
-                    } else {
-                        panic!("txn must be a struct");
-                    }
-                }
-                "protocol" => {
-                    if let SchemaDataType::r#struct(protocol) = f.get_type() {
-                        assert_eq!(2, protocol.get_fields().len());
-                        for f in protocol.get_fields().iter() {
-                            match f.get_name() {
-                                "minReaderVersion" | "minWriterVersion" => {
-                                    assert_eq!(
-                                        SchemaDataType::primitive("integer".to_string()),
-                                        f.get_type().to_owned()
-                                    );
-                                }
-                                _ => panic!("Unhandled schema field name"),
-                            }
-                        }
-                    } else {
-                        panic!("protocol must be a struct");
-                    }
-                }
-                "metaData" => {
-                    if let SchemaDataType::r#struct(metadata) = f.get_type() {
-                        assert_eq!(7, metadata.get_fields().len());
-                        for f in metadata.get_fields().iter() {
-                            match f.get_name() {
-                                "id" | "name" | "description" | "schemaString" => {
-                                    assert_eq!(
-                                        SchemaDataType::primitive("string".to_string()),
-                                        f.get_type().to_owned()
-                                    );
-                                }
-                                "createdTime" => {
-                                    assert_eq!(
-                                        SchemaDataType::primitive("long".to_string()),
-                                        f.get_type().to_owned()
-                                    );
-                                }
-                                "partitionColumns" => match f.get_type() {
-                                    SchemaDataType::array(partition_columns) => {
-                                        assert_eq!("array", partition_columns.r#type);
-                                        assert_eq!(
-                                            Box::new(SchemaDataType::primitive(
-                                                "string".to_string()
-                                            )),
-                                            partition_columns.elementType
-                                        );
-                                    }
-                                    _ => panic!("partitionColumns should be an array"),
-                                },
-                                "format" => {
-                                    // TODO
-                                }
-                                _ => panic!("Unhandled schema field name"),
-                            }
-                        }
-                    } else {
-                        panic!("metaData must be a struct");
-                    }
-                }
-                "add" => {
-                    if let SchemaDataType::r#struct(add) = f.get_type() {
-                        assert_eq!(7, add.get_fields().len());
-                        for f in add.get_fields().iter() {
-                            match f.get_name() {
-                                "path" | "stats" => {
-                                    assert_eq!(
-                                        SchemaDataType::primitive("string".to_string()),
-                                        f.r#type
-                                    );
-                                }
-                                "size" | "modificationTime" => {
-                                    assert_eq!(
-                                        SchemaDataType::primitive("long".to_string()),
-                                        f.r#type
-                                    );
-                                }
-                                "dataChange" => {
-                                    assert_eq!(
-                                        SchemaDataType::primitive("boolean".to_string()),
-                                        f.r#type
-                                    );
-                                }
-                                "stats_parsed" => match f.get_type() {
-                                    SchemaDataType::r#struct(stats_parsed) => {
-                                        let expected_fields: Vec<&SchemaField> = table_schema
-                                            .get_fields()
-                                            .iter()
-                                            .filter(|f| !partition_columns.contains(&f.name))
-                                            .collect();
-                                        for stat_field in stats_parsed.get_fields() {
-                                            match stat_field.get_name() {
-                                                "minValues" | "maxValues" | "nullCounts" => {
-                                                    if let SchemaDataType::r#struct(f) =
-                                                        stat_field.get_type()
-                                                    {
-                                                        for (i, e) in
-                                                            f.get_fields().iter().enumerate()
-                                                        {
-                                                            assert_eq!(e, expected_fields[i]);
-                                                        }
-                                                    } else {
-                                                        panic!("Unexpected type for stat field");
-                                                    }
-                                                }
-                                                _ => panic!("Unhandled schema field name"),
-                                            }
-                                        }
-                                    }
-                                    _ => panic!("'stats_parsed' must be a struct"),
-                                },
-                                "partitionValues_parsed" => match f.get_type() {
-                                    SchemaDataType::r#struct(partition_values_parsed) => {
-                                        let expected_fields: Vec<&SchemaField> = table_schema
-                                            .get_fields()
-                                            .iter()
-                                            .filter(|f| partition_columns.contains(&f.name))
-                                            .collect();
+//         for f in log_schema.get_fields().iter() {
+//             match f.get_name() {
+//                 "txn" => {
+//                     if let SchemaDataType::r#struct(txn) = f.get_type() {
+//                         assert_eq!(2, txn.get_fields().len());
+//                         for f in txn.get_fields().iter() {
+//                             match f.get_name() {
+//                                 "appId" => {
+//                                     assert_eq!(
+//                                         SchemaDataType::primitive("string".to_string()),
+//                                         f.get_type().to_owned()
+//                                     );
+//                                 }
+//                                 "version" => {
+//                                     assert_eq!(
+//                                         SchemaDataType::primitive("long".to_string()),
+//                                         f.get_type().to_owned()
+//                                     );
+//                                 }
+//                                 _ => panic!("Unhandled schema field name"),
+//                             }
+//                         }
+//                     } else {
+//                         panic!("txn must be a struct");
+//                     }
+//                 }
+//                 "protocol" => {
+//                     if let SchemaDataType::r#struct(protocol) = f.get_type() {
+//                         assert_eq!(2, protocol.get_fields().len());
+//                         for f in protocol.get_fields().iter() {
+//                             match f.get_name() {
+//                                 "minReaderVersion" | "minWriterVersion" => {
+//                                     assert_eq!(
+//                                         SchemaDataType::primitive("integer".to_string()),
+//                                         f.get_type().to_owned()
+//                                     );
+//                                 }
+//                                 _ => panic!("Unhandled schema field name"),
+//                             }
+//                         }
+//                     } else {
+//                         panic!("protocol must be a struct");
+//                     }
+//                 }
+//                 "metaData" => {
+//                     if let SchemaDataType::r#struct(metadata) = f.get_type() {
+//                         assert_eq!(7, metadata.get_fields().len());
+//                         for f in metadata.get_fields().iter() {
+//                             match f.get_name() {
+//                                 "id" | "name" | "description" | "schemaString" => {
+//                                     assert_eq!(
+//                                         SchemaDataType::primitive("string".to_string()),
+//                                         f.get_type().to_owned()
+//                                     );
+//                                 }
+//                                 "createdTime" => {
+//                                     assert_eq!(
+//                                         SchemaDataType::primitive("long".to_string()),
+//                                         f.get_type().to_owned()
+//                                     );
+//                                 }
+//                                 "partitionColumns" => match f.get_type() {
+//                                     SchemaDataType::array(partition_columns) => {
+//                                         assert_eq!("array", partition_columns.r#type);
+//                                         assert_eq!(
+//                                             Box::new(SchemaDataType::primitive(
+//                                                 "string".to_string()
+//                                             )),
+//                                             partition_columns.elementType
+//                                         );
+//                                     }
+//                                     _ => panic!("partitionColumns should be an array"),
+//                                 },
+//                                 "format" => {
+//                                     // TODO
+//                                 }
+//                                 _ => panic!("Unhandled schema field name"),
+//                             }
+//                         }
+//                     } else {
+//                         panic!("metaData must be a struct");
+//                     }
+//                 }
+//                 "add" => {
+//                     if let SchemaDataType::r#struct(add) = f.get_type() {
+//                         assert_eq!(7, add.get_fields().len());
+//                         for f in add.get_fields().iter() {
+//                             match f.get_name() {
+//                                 "path" | "stats" => {
+//                                     assert_eq!(
+//                                         SchemaDataType::primitive("string".to_string()),
+//                                         f.r#type
+//                                     );
+//                                 }
+//                                 "size" | "modificationTime" => {
+//                                     assert_eq!(
+//                                         SchemaDataType::primitive("long".to_string()),
+//                                         f.r#type
+//                                     );
+//                                 }
+//                                 "dataChange" => {
+//                                     assert_eq!(
+//                                         SchemaDataType::primitive("boolean".to_string()),
+//                                         f.r#type
+//                                     );
+//                                 }
+//                                 "stats_parsed" => match f.get_type() {
+//                                     SchemaDataType::r#struct(stats_parsed) => {
+//                                         let expected_fields: Vec<&SchemaField> = table_schema
+//                                             .get_fields()
+//                                             .iter()
+//                                             .filter(|f| !partition_columns.contains(&f.name))
+//                                             .collect();
+//                                         for stat_field in stats_parsed.get_fields() {
+//                                             match stat_field.get_name() {
+//                                                 "minValues" | "maxValues" | "nullCounts" => {
+//                                                     if let SchemaDataType::r#struct(f) =
+//                                                         stat_field.get_type()
+//                                                     {
+//                                                         for (i, e) in
+//                                                             f.get_fields().iter().enumerate()
+//                                                         {
+//                                                             assert_eq!(e, expected_fields[i]);
+//                                                         }
+//                                                     } else {
+//                                                         panic!("Unexpected type for stat field");
+//                                                     }
+//                                                 }
+//                                                 _ => panic!("Unhandled schema field name"),
+//                                             }
+//                                         }
+//                                     }
+//                                     _ => panic!("'stats_parsed' must be a struct"),
+//                                 },
+//                                 "partitionValues_parsed" => match f.get_type() {
+//                                     SchemaDataType::r#struct(partition_values_parsed) => {
+//                                         let expected_fields: Vec<&SchemaField> = table_schema
+//                                             .get_fields()
+//                                             .iter()
+//                                             .filter(|f| partition_columns.contains(&f.name))
+//                                             .collect();
 
-                                        for (i, e) in
-                                            partition_values_parsed.get_fields().iter().enumerate()
-                                        {
-                                            assert_eq!(e, expected_fields[i], "'partitionValues_parsed' should contain SchemaFields for all partition columns");
-                                        }
-                                    }
-                                    _ => panic!("'partition_values_parsed' must be a struct"),
-                                },
-                                _ => panic!("Unhandled schema field name"),
-                            }
-                        }
-                    } else {
-                        panic!("'add' must be a struct");
-                    }
-                }
-                "remove" => {
-                    if let SchemaDataType::r#struct(remove) = f.get_type() {
-                        assert_eq!(5, remove.get_fields().len());
-                        for f in remove.get_fields().iter() {
-                            match f.get_name() {
-                                "path" | "stats" => {
-                                    assert_eq!(
-                                        SchemaDataType::primitive("string".to_string()),
-                                        f.get_type().to_owned()
-                                    );
-                                }
-                                "size" | "modificationTime" => {
-                                    assert_eq!(
-                                        SchemaDataType::primitive("long".to_string()),
-                                        f.get_type().to_owned()
-                                    );
-                                }
-                                "dataChange" => {
-                                    assert_eq!(
-                                        SchemaDataType::primitive("boolean".to_string()),
-                                        f.get_type().to_owned()
-                                    );
-                                }
-                                _ => panic!("Unhandled schema field name"),
-                            }
-                        }
-                    } else {
-                        panic!("'remove' must be a struct");
-                    }
-                }
-                _ => panic!("Unhandled schema field name"),
-            }
-        }
-    }
-}
+//                                         for (i, e) in
+//                                             partition_values_parsed.get_fields().iter().enumerate()
+//                                         {
+//                                             assert_eq!(e, expected_fields[i], "'partitionValues_parsed' should contain SchemaFields for all partition columns");
+//                                         }
+//                                     }
+//                                     _ => panic!("'partition_values_parsed' must be a struct"),
+//                                 },
+//                                 _ => panic!("Unhandled schema field name"),
+//                             }
+//                         }
+//                     } else {
+//                         panic!("'add' must be a struct");
+//                     }
+//                 }
+//                 "remove" => {
+//                     if let SchemaDataType::r#struct(remove) = f.get_type() {
+//                         assert_eq!(5, remove.get_fields().len());
+//                         for f in remove.get_fields().iter() {
+//                             match f.get_name() {
+//                                 "path" | "stats" => {
+//                                     assert_eq!(
+//                                         SchemaDataType::primitive("string".to_string()),
+//                                         f.get_type().to_owned()
+//                                     );
+//                                 }
+//                                 "size" | "modificationTime" => {
+//                                     assert_eq!(
+//                                         SchemaDataType::primitive("long".to_string()),
+//                                         f.get_type().to_owned()
+//                                     );
+//                                 }
+//                                 "dataChange" => {
+//                                     assert_eq!(
+//                                         SchemaDataType::primitive("boolean".to_string()),
+//                                         f.get_type().to_owned()
+//                                     );
+//                                 }
+//                                 _ => panic!("Unhandled schema field name"),
+//                             }
+//                         }
+//                     } else {
+//                         panic!("'remove' must be a struct");
+//                     }
+//                 }
+//                 _ => panic!("Unhandled schema field name"),
+//             }
+//         }
+//     }
+// }

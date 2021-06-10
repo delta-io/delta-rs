@@ -8,13 +8,12 @@ use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use parquet::file::writer::InMemoryWriteableCursor;
 use std::convert::TryFrom;
-use std::sync::Arc;
 
 use super::action;
+use super::delta_arrow::delta_log_schema_for_table;
 use super::open_table_with_version;
 use super::schema::*;
 use super::storage::{StorageBackend, StorageError};
-use super::writer::InMemValueIter;
 use super::{CheckPoint, DeltaTableError, DeltaTableState};
 
 /// Error returned when the CheckPointWriter is unable to write a checkpoint.
@@ -23,13 +22,6 @@ pub enum CheckPointWriterError {
     /// Error returned when the DeltaTableState does not contain a metadata action.
     #[error("DeltaTableMetadata not present in DeltaTableState")]
     MissingMetaData,
-    /// Error returned when creating the checkpoint schema.
-    #[error("DeltaLogSchemaError: {source}")]
-    DeltaLogSchema {
-        /// The source DeltaLogSchemaError
-        #[from]
-        source: DeltaLogSchemaError,
-    },
     /// Passthrough error returned when calling DeltaTable.
     #[error("DeltaTableError: {source}")]
     DeltaTable {
@@ -73,7 +65,6 @@ pub struct CheckPointWriter {
     delta_log_uri: String,
     last_checkpoint_uri: String,
     storage: Box<dyn StorageBackend>,
-    schema_factory: DeltaLogSchemaFactory,
 }
 
 impl CheckPointWriter {
@@ -81,14 +72,12 @@ impl CheckPointWriter {
     pub fn new(table_uri: &str, storage: Box<dyn StorageBackend>) -> Self {
         let delta_log_uri = storage.join_path(table_uri, "_delta_log");
         let last_checkpoint_uri = storage.join_path(delta_log_uri.as_str(), "_last_checkpoint");
-        let schema_factory = DeltaLogSchemaFactory::new();
 
         Self {
             table_uri: table_uri.to_string(),
             delta_log_uri,
             last_checkpoint_uri,
             storage,
-            schema_factory,
         }
     }
 
@@ -113,6 +102,7 @@ impl CheckPointWriter {
     ) -> Result<(), CheckPointWriterError> {
         // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
         // an appropriate split point yet though so only writing a single part currently.
+        // Will post a research issue to follow-up on this later.
 
         info!("Writing parquet bytes to checkpoint buffer.");
         let parquet_bytes = self.parquet_bytes_from_state(state)?;
@@ -154,7 +144,7 @@ impl CheckPointWriter {
             .current_metadata()
             .ok_or(CheckPointWriterError::MissingMetaData)?;
 
-        let jsons: Vec<serde_json::Value> = vec![
+        let jsons: Vec<Result<serde_json::Value, ArrowError>> = vec![
             action::Action::protocol(action::Protocol {
                 min_reader_version: state.min_reader_version(),
                 min_writer_version: state.min_writer_version(),
@@ -181,18 +171,15 @@ impl CheckPointWriter {
                     })
                 }),
         )
-        .filter_map(|a| serde_json::to_value(a).ok())
+        .map(|a| serde_json::to_value(a).map_err(|e| ArrowError::from(e)))
         .collect();
 
         debug!("Preparing checkpoint parquet buffer.");
 
-        let checkpoint_schema = self.schema_factory.delta_log_schema_for_table(
-            &current_metadata.schema,
+        let arrow_schema = delta_log_schema_for_table(
+            <ArrowSchema as TryFrom<&Schema>>::try_from(&current_metadata.schema)?,
             current_metadata.partition_columns.as_slice(),
-        )?;
-        let arrow_checkpoint_schema: ArrowSchema =
-            <ArrowSchema as TryFrom<&Schema>>::try_from(&checkpoint_schema)?;
-        let arrow_schema = Arc::new(arrow_checkpoint_schema);
+        );
 
         let writeable_cursor = InMemoryWriteableCursor::default();
         let mut writer =
@@ -200,13 +187,11 @@ impl CheckPointWriter {
 
         debug!("Writing to checkpoint parquet buffer...");
 
-        let mut value_iter = InMemValueIter::from_vec(jsons.as_slice());
         let decoder = Decoder::new(arrow_schema, jsons.len(), None);
-
+        let mut value_iter = jsons.into_iter();
         while let Some(batch) = decoder.next_batch(&mut value_iter)? {
             writer.write(&batch)?;
         }
-
         let _ = writer.close()?;
 
         debug!("Finished writing checkpoint parquet buffer.");

@@ -2,7 +2,7 @@
 
 use crate::schema;
 use arrow::datatypes::{
-    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
+    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef, TimeUnit,
 };
 use arrow::error::ArrowError;
 use lazy_static::lazy_static;
@@ -134,5 +134,139 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                 ),
             )),
         }
+    }
+}
+
+pub(crate) fn delta_log_schema_for_table(
+    table_schema: ArrowSchema,
+    partition_columns: &[String],
+) -> SchemaRef {
+    lazy_static! {
+        static ref SCHEMA_FIELDS: Vec<ArrowField> = vec![
+            ArrowField::new(
+                "metaData",
+                ArrowDataType::Struct(vec![
+                    ArrowField::new("id", ArrowDataType::Utf8, true),
+                    ArrowField::new("name", ArrowDataType::Utf8, true),
+                    ArrowField::new("description", ArrowDataType::Utf8, true),
+                    ArrowField::new("schemaString", ArrowDataType::Utf8, true),
+                    ArrowField::new("createdTime", ArrowDataType::Int64, true),
+                    ArrowField::new("partitionColumns", ArrowDataType::List(Box::new(
+                        ArrowField::new("element", ArrowDataType::Utf8, true))), true),
+                    ArrowField::new("format", ArrowDataType::Struct(vec![
+                        ArrowField::new("provider", ArrowDataType::Utf8, true),
+                        // TODO: Add "options" after ArrowDataType::Map support
+                        ]), true),
+                ]),
+                true
+            ),
+            ArrowField::new(
+                "protocol",
+                ArrowDataType::Struct(vec![
+                    ArrowField::new("minReaderVersion", ArrowDataType::Int32, true),
+                    ArrowField::new("minWriterVersion", ArrowDataType::Int32, true),
+                ]),
+                true
+            ),
+            ArrowField::new(
+                "txn",
+                ArrowDataType::Struct(vec![
+                    ArrowField::new("appId", ArrowDataType::Utf8, true),
+                    ArrowField::new("version", ArrowDataType::Int64, true),
+                ]),
+                true
+            ),
+            ArrowField::new(
+                "remove",
+                ArrowDataType::Struct(vec![
+                    ArrowField::new("path", ArrowDataType::Utf8, true),
+                    ArrowField::new("deletionTimestamp", ArrowDataType::Int64, true),
+                    ArrowField::new("dataChange", ArrowDataType::Boolean, true),
+                    ArrowField::new("extendedFileMetadata", ArrowDataType::Boolean, true),
+                    ArrowField::new("size", ArrowDataType::Int64, true),
+                    // TODO: Add "partitionValues" after ArrowDataType::Map support
+                    // TODO: Add "tags" after ArrowDataType::Map support
+                ]),
+                true
+            )
+        ];
+        static ref ADD_FIELDS: Vec<ArrowField> = vec![
+            ArrowField::new("path", ArrowDataType::Utf8, true),
+            ArrowField::new("size", ArrowDataType::Int64, true),
+            ArrowField::new("modificationTime", ArrowDataType::Int64, true),
+            ArrowField::new("dataChange", ArrowDataType::Boolean, true),
+            ArrowField::new("stats", ArrowDataType::Utf8, true),
+            // TODO: Add "partitionValues" after ArrowDataType::Map support
+            // TODO: Add "tags" after ArrowDataType::Map support
+        ];
+    }
+
+    let (partition_fields, non_partition_fields): (Vec<ArrowField>, Vec<ArrowField>) = table_schema
+        .fields()
+        .iter()
+        .map(|f| f.to_owned())
+        .partition(|field| partition_columns.contains(&field.name()));
+
+    let mut stats_parsed_fields: Vec<ArrowField> =
+        vec![ArrowField::new("numRecords", ArrowDataType::Int64, true)];
+
+    if !non_partition_fields.is_empty() {
+        stats_parsed_fields.extend(["minValues", "maxValues", "nullCounts"].iter().map(|name| {
+            ArrowField::new(
+                name,
+                ArrowDataType::Struct(non_partition_fields.clone()),
+                true,
+            )
+        }));
+    }
+
+    let mut add_fields = ADD_FIELDS.clone();
+
+    add_fields.push(ArrowField::new(
+        "stats_parsed",
+        ArrowDataType::Struct(stats_parsed_fields),
+        true,
+    ));
+
+    if !partition_fields.is_empty() {
+        add_fields.push(ArrowField::new(
+            "partitionValues_parsed",
+            ArrowDataType::Struct(partition_fields),
+            true,
+        ));
+    }
+
+    let mut schema_fields = SCHEMA_FIELDS.clone();
+    schema_fields.push(ArrowField::new(
+        "add",
+        ArrowDataType::Struct(add_fields),
+        true,
+    ));
+
+    let arrow_schema = ArrowSchema::new(schema_fields);
+
+    std::sync::Arc::new(arrow_schema)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn delta_log_schema_for_table_test() {
+        let table_schema = json!({
+            "type": "struct",
+            "fields": [
+                { "name": "pcol", "type": "integer", "nullable": true, "metadata": {} },
+                { "name": "col1", "type": "integer", "nullable": true, "metadata": {} },
+            ]
+        });
+        let table_schema = serde_json::from_value(table_schema).unwrap();
+
+        let partition_columns = vec!["pcol".to_string()];
+
+        let _log_schema = delta_log_schema_for_table(table_schema, partition_columns.as_slice());
+
+        todo!("Add tests for delta_log_schema_for_table");
     }
 }
