@@ -171,7 +171,7 @@ impl CheckPointWriter {
                     })
                 }),
         )
-        .map(|a| serde_json::to_value(a).map_err(|e| ArrowError::from(e)))
+        .map(|a| serde_json::to_value(a).map_err(ArrowError::from))
         .collect();
 
         debug!("Preparing checkpoint parquet buffer.");
