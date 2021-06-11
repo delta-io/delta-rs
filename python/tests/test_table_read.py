@@ -51,6 +51,19 @@ def test_read_empty_delta_table_after_delete():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == expected
 
 
+def test_read_table_with_column_subset():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = {
+        "value": ["1", "2", "3", "6", "7", "5", "4"],
+        "day": ["1", "3", "5", "20", "20", "4", "5"],
+    }
+    assert (
+        dt.to_pyarrow_dataset().to_table(columns=["value", "day"]).to_pydict()
+        == expected
+    )
+
+
 def test_vacuum_dry_run_simple_table():
     table_path = "../rust/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path)

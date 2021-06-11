@@ -240,12 +240,15 @@ class DeltaTable:
             )
 
     def to_pyarrow_table(
-        self, partitions: Optional[List[Tuple[str, str, Any]]] = None
+        self,
+        partitions: Optional[List[Tuple[str, str, Any]]] = None,
+        columns: Optional[List[str]] = None,
     ) -> pyarrow.Table:
         """
         Build a PyArrow Table using data from the DeltaTable.
 
         :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
+        :param columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
         :return: the PyArrow table
         """
-        return self.to_pyarrow_dataset(partitions).to_table()
+        return self.to_pyarrow_dataset(partitions).to_table(columns=columns)
