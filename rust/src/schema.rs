@@ -1,8 +1,7 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
-use std::collections::HashMap;
-
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Type alias for a string expected to match a GUID/UUID format
 pub type Guid = String;
@@ -17,7 +16,7 @@ pub type DeltaDataTypeInt = i32;
 
 /// Represents a struct field defined in the Delta table schema.
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Default, Clone)]
 pub struct SchemaTypeStruct {
     // type field is always the string "struct", so we are ignoring it here
     r#type: String,
@@ -32,7 +31,7 @@ impl SchemaTypeStruct {
 }
 
 /// Describes a specific field of the Delta table schema.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct SchemaField {
     // Name of this (possibly nested) column
     name: String,
@@ -67,7 +66,7 @@ impl SchemaField {
 }
 
 /// Schema definition for array type fields.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct SchemaTypeArray {
     // type field is always the string "array", so we are ignoring it here
     r#type: String,
@@ -91,7 +90,7 @@ impl SchemaTypeArray {
 }
 
 /// Schema definition for map type fields.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 pub struct SchemaTypeMap {
     r#type: String,
     keyType: Box<SchemaDataType>,
@@ -133,7 +132,7 @@ impl SchemaTypeMap {
  *   timestamp: Microsecond precision timestamp without a timezone
  */
 /// Enum with variants for each top level schema data type.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 #[serde(untagged)]
 pub enum SchemaDataType {
     /// Variant representing non-array, non-map, non-struct fields. Wrapped value will contain the

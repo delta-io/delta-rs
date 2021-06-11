@@ -1,17 +1,13 @@
 //! Delta Table read and write implementation
 
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
-
-use std::cmp::Ordering;
-use std::collections::{HashMap, HashSet};
-use std::fmt;
-use std::io::{BufRead, BufReader, Cursor};
+//
 
 use arrow::error::ArrowError;
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use log::debug;
+use log::*;
 use parquet::errors::ParquetError;
 use parquet::file::{
     reader::{FileReader, SerializedFileReader},
@@ -20,8 +16,13 @@ use parquet::file::{
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
+use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::fmt;
+use std::io::{BufRead, BufReader, Cursor};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{cmp::Ordering, collections::HashSet};
+use uuid::Uuid;
 
 use super::action;
 use super::action::{Action, DeltaOperation};
@@ -29,7 +30,6 @@ use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
 use super::storage::{parse_uri, StorageBackend, StorageError, UriError};
-use uuid::Uuid;
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
@@ -38,6 +38,21 @@ pub struct CheckPoint {
     version: DeltaDataTypeVersion, // 20 digits decimals
     size: DeltaDataTypeLong,
     parts: Option<u32>, // 10 digits decimals
+}
+
+impl CheckPoint {
+    /// Creates a new checkpoint from the given parameters.
+    pub(crate) fn new(
+        version: DeltaDataTypeVersion,
+        size: DeltaDataTypeLong,
+        parts: Option<u32>,
+    ) -> Self {
+        Self {
+            version,
+            size,
+            parts,
+        }
+    }
 }
 
 impl PartialEq for CheckPoint {
@@ -199,6 +214,42 @@ impl fmt::Display for DeltaTableMetaData {
     }
 }
 
+impl TryFrom<action::MetaData> for DeltaTableMetaData {
+    type Error = serde_json::error::Error;
+
+    fn try_from(action_metadata: action::MetaData) -> Result<Self, Self::Error> {
+        let schema = action_metadata.get_schema()?;
+        Ok(Self {
+            id: action_metadata.id,
+            name: action_metadata.name,
+            description: action_metadata.description,
+            format: action_metadata.format,
+            schema,
+            partition_columns: action_metadata.partition_columns,
+            created_time: action_metadata.created_time,
+            configuration: action_metadata.configuration,
+        })
+    }
+}
+
+impl TryFrom<DeltaTableMetaData> for action::MetaData {
+    type Error = serde_json::error::Error;
+
+    fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
+        let schema_string = serde_json::to_string(&metadata.schema)?;
+        Ok(Self {
+            id: metadata.id,
+            name: metadata.name,
+            description: metadata.description,
+            format: metadata.format,
+            schema_string,
+            partition_columns: metadata.partition_columns,
+            created_time: metadata.created_time,
+            configuration: metadata.configuration,
+        })
+    }
+}
+
 /// Error related to Delta log application
 #[derive(thiserror::Error, Debug)]
 pub enum ApplyLogError {
@@ -266,8 +317,9 @@ impl From<StorageError> for LoadCheckpointError {
     }
 }
 
-#[derive(Default, Debug)]
-struct DeltaTableState {
+/// State snapshot currently held by the Delta Table instance.
+#[derive(Default, Debug, Clone)]
+pub struct DeltaTableState {
     // A remove action should remain in the state of the table as a tombstone until it has expired.
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: Vec<action::Remove>,
@@ -277,6 +329,40 @@ struct DeltaTableState {
     min_reader_version: i32,
     min_writer_version: i32,
     current_metadata: Option<DeltaTableMetaData>,
+}
+
+impl DeltaTableState {
+    /// Full list of tombstones (remove actions) representing files removed from table state).
+    pub fn tombstones(&self) -> &Vec<action::Remove> {
+        self.tombstones.as_ref()
+    }
+
+    /// Full list of add actions representing all parquet files that are part of the current
+    /// delta table state.
+    pub fn files(&self) -> &Vec<action::Add> {
+        self.files.as_ref()
+    }
+
+    /// HashMap containing the last txn version stored for every app id writing txn
+    /// actions.
+    pub fn app_transaction_version(&self) -> &HashMap<String, DeltaDataTypeVersion> {
+        &self.app_transaction_version
+    }
+
+    /// The min reader version required by the protocol.
+    pub fn min_reader_version(&self) -> i32 {
+        self.min_reader_version
+    }
+
+    /// The min writer version required by the protocol.
+    pub fn min_writer_version(&self) -> i32 {
+        self.min_writer_version
+    }
+
+    /// The most recent metadata of the table.
+    pub fn current_metadata(&self) -> Option<&DeltaTableMetaData> {
+        self.current_metadata.as_ref()
+    }
 }
 
 #[inline]
@@ -423,7 +509,7 @@ impl DeltaTable {
     ) -> Result<(), ApplyLogError> {
         for line in reader.lines() {
             let action: Action = serde_json::from_str(line?.as_str())?;
-            process_action(&mut self.state, &action)?;
+            process_action(&mut self.state, action)?;
         }
 
         Ok(())
@@ -453,7 +539,7 @@ impl DeltaTable {
             for record in preader.get_row_iter(None)? {
                 process_action(
                     &mut self.state,
-                    &Action::from_parquet_record(&schema, &record)?,
+                    Action::from_parquet_record(&schema, &record)?,
                 )?;
             }
         }
@@ -738,6 +824,11 @@ impl DeltaTable {
             .iter()
             .map(|add| self.storage.join_path(&self.table_uri, &add.path))
             .collect()
+    }
+
+    /// Returns the currently loaded state snapshot.
+    pub fn get_state(&self) -> &DeltaTableState {
+        &self.state
     }
 
     /// Returns the metadata associated with the loaded state.
@@ -1357,40 +1448,31 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Erro
 
 fn process_action(
     state: &mut DeltaTableState,
-    action: &Action,
+    action: Action,
 ) -> Result<(), serde_json::error::Error> {
     match action {
         Action::add(v) => {
-            state.files.push(v.clone());
+            state.files.push(v);
         }
         Action::remove(v) => {
             state.files.retain(|a| *a.path != v.path);
-            state.tombstones.push(v.clone());
+            state.tombstones.push(v);
         }
         Action::protocol(v) => {
             state.min_reader_version = v.min_reader_version;
             state.min_writer_version = v.min_writer_version;
         }
         Action::metaData(v) => {
-            state.current_metadata = Some(DeltaTableMetaData {
-                id: v.id.clone(),
-                name: v.name.clone(),
-                description: v.description.clone(),
-                format: v.format.clone(),
-                schema: v.get_schema()?,
-                partition_columns: v.partition_columns.clone(),
-                created_time: v.created_time,
-                configuration: v.configuration.clone(),
-            });
+            state.current_metadata = Some(DeltaTableMetaData::try_from(v)?);
         }
         Action::txn(v) => {
             *state
                 .app_transaction_version
-                .entry(v.app_id.clone())
+                .entry(v.app_id)
                 .or_insert(v.version) = v.version;
         }
         Action::commitInfo(v) => {
-            state.commit_infos.push(v.clone());
+            state.commit_infos.push(v);
         }
     }
 
@@ -1432,7 +1514,7 @@ pub async fn open_table_with_ds(table_uri: &str, ds: &str) -> Result<DeltaTable,
     Ok(table)
 }
 
-/// Returns rust create version, can be use used in language bindings to expose Rust core version
+/// Returns rust crate version, can be use used in language bindings to expose Rust core version
 pub fn crate_version() -> &'static str {
     env!("CARGO_PKG_VERSION")
 }
@@ -1462,10 +1544,10 @@ mod tests {
         let txn_action = Action::txn(action::Txn {
             app_id: "abc".to_string(),
             version: 2,
-            last_updated: 0,
+            last_updated: Some(0),
         });
 
-        let _ = process_action(&mut state, &txn_action).unwrap();
+        let _ = process_action(&mut state, txn_action).unwrap();
 
         assert_eq!(2, *state.app_transaction_version.get("abc").unwrap());
         assert_eq!(1, *state.app_transaction_version.get("xyz").unwrap());
