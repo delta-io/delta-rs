@@ -143,14 +143,14 @@ impl CheckPointWriter {
         let current_metadata = state
             .current_metadata()
             .ok_or(CheckPointWriterError::MissingMetaData)?;
-        let jsons: Vec<Result<serde_json::Value, ArrowError>> = vec![
-            action::Action::protocol(action::Protocol {
-                min_reader_version: state.min_reader_version(),
-                min_writer_version: state.min_writer_version(),
-            }),
-            action::Action::metaData(action::MetaData::try_from(current_metadata.clone())?),
-        ]
-        .into_iter()
+
+        let jsons = std::iter::once(action::Action::protocol(action::Protocol {
+            min_reader_version: state.min_reader_version(),
+            min_writer_version: state.min_writer_version(),
+        }))
+        .chain(std::iter::once(action::Action::metaData(
+            action::MetaData::try_from(current_metadata.clone())?,
+        )))
         .chain(state.files().iter().map(|f| action::Action::add(f.clone())))
         .chain(
             state
@@ -170,8 +170,7 @@ impl CheckPointWriter {
                     })
                 }),
         )
-        .map(|a| serde_json::to_value(a).map_err(ArrowError::from))
-        .collect();
+        .map(|a| serde_json::to_value(a).map_err(ArrowError::from));
 
         debug!("Preparing checkpoint parquet buffer.");
         let arrow_schema = delta_log_schema_for_table(
@@ -183,7 +182,11 @@ impl CheckPointWriter {
             ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
 
         debug!("Writing to checkpoint parquet buffer...");
-        let decoder = Decoder::new(arrow_schema, jsons.len(), None);
+        let batch_size = state.app_transaction_version().len()
+            + state.tombstones().len()
+            + state.files().len()
+            + 2;
+        let decoder = Decoder::new(arrow_schema, batch_size, None);
         let mut value_iter = jsons.into_iter();
         while let Some(batch) = decoder.next_batch(&mut value_iter)? {
             writer.write(&batch)?;
