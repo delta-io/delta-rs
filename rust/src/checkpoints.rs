@@ -144,7 +144,7 @@ impl CheckPointWriter {
             .current_metadata()
             .ok_or(CheckPointWriterError::MissingMetaData)?;
 
-        let jsons = std::iter::once(action::Action::protocol(action::Protocol {
+        let mut jsons = std::iter::once(action::Action::protocol(action::Protocol {
             min_reader_version: state.min_reader_version(),
             min_writer_version: state.min_writer_version(),
         }))
@@ -187,8 +187,7 @@ impl CheckPointWriter {
             + state.files().len()
             + 2;
         let decoder = Decoder::new(arrow_schema, batch_size, None);
-        let mut value_iter = jsons.into_iter();
-        while let Some(batch) = decoder.next_batch(&mut value_iter)? {
+        while let Some(batch) = decoder.next_batch(&mut jsons)? {
             writer.write(&batch)?;
         }
         let _ = writer.close()?;
