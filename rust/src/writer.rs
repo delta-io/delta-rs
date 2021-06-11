@@ -176,13 +176,13 @@ impl ParquetBuffer {
     }
 }
 
-struct InMemValueIter<'a> {
+pub(crate) struct InMemValueIter<'a> {
     buffer: &'a [Value],
     current_index: usize,
 }
 
 impl<'a> InMemValueIter<'a> {
-    fn from_vec(buffer: &'a [Value]) -> Self {
+    pub(crate) fn from_vec(buffer: &'a [Value]) -> Self {
         Self {
             buffer,
             current_index: 0,

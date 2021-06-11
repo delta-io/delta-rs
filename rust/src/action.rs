@@ -364,7 +364,7 @@ pub struct Format {
 
 /// Action that describes the metadata of the table.
 /// This is a top-level action in Delta log entries.
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct MetaData {
     /// Unique identifier for this table
@@ -612,7 +612,7 @@ pub struct Txn {
     /// An application-specific numeric identifier for this transaction.
     pub version: DeltaDataTypeVersion,
     /// The time when this transaction action was created in milliseconds since the Unix epoch.
-    pub last_updated: DeltaDataTypeTimestamp,
+    pub last_updated: Option<DeltaDataTypeTimestamp>,
 }
 
 impl Txn {
@@ -635,9 +635,11 @@ impl Txn {
                         .map_err(|_| gen_action_type_error("txn", "version", "long"))?;
                 }
                 "lastUpdated" => {
-                    re.last_updated = record
-                        .get_long(i)
-                        .map_err(|_| gen_action_type_error("txn", "lastUpdated", "long"))?;
+                    re.last_updated = Some(
+                        record
+                            .get_long(i)
+                            .map_err(|_| gen_action_type_error("txn", "lastUpdated", "long"))?,
+                    );
                 }
                 _ => {
                     log::warn!(
