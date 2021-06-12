@@ -2205,6 +2205,7 @@ dependencies = [
  "futures",
  "http",
  "hyper",
+ "hyper-rustls",
  "hyper-tls",
  "lazy_static",
  "log",

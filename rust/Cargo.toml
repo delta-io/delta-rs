@@ -33,11 +33,11 @@ azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = t
 azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "536da42ebefd411feff8ba6a0965865e2741267e", features = ["blob", "account", "adls_gen2"] }
 
 # S3
-rusoto_core = { version = "0.46", optional = true }
+rusoto_core = { version = "0.46", default-features = false, optional = true }
 rusoto_credential = { version = "0.46", optional = true }
-rusoto_s3 = { version = "0.46", optional = true }
-rusoto_sts = { version = "0.46", optional = true }
-rusoto_dynamodb = { version = "0.46", optional = true }
+rusoto_s3 = { version = "0.46", default-features = false, optional = true }
+rusoto_sts = { version = "0.46", default-features = false, optional = true }
+rusoto_dynamodb = { version = "0.46", default-features = false, optional = true }
 maplit = { version = "1", optional = true }
 
 # High-level writer
@@ -57,7 +57,8 @@ async-trait = "0.1"
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion", "crossbeam"]
 azure = ["azure_core", "azure_storage", "reqwest"]
-s3 = ["rusoto_core", "rusoto_credential", "rusoto_s3", "rusoto_sts", "rusoto_dynamodb", "maplit"]
+s3-native-tls = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_s3/native-tls", "rusoto_sts/native-tls", "rusoto_dynamodb/native-tls", "maplit"]
+s3-rustls = ["rusoto_core/rustls", "rusoto_credential", "rusoto_s3/rustls", "rusoto_sts/rustls", "rusoto_dynamodb/rustls", "maplit"]
 
 [build-dependencies]
 glibc_version = "0"
