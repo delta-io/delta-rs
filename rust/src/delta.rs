@@ -1287,13 +1287,15 @@ impl<'a> DeltaTransaction<'a> {
          * zeros and the trailing c000 string
          *
          */
-        let mut path_parts = vec![format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4())];
+        let mut path_parts = vec![];
 
         if let Some(partitions) = partitions {
             for partition in partitions {
                 path_parts.push(format!("{}={}", partition.0, partition.1));
             }
         }
+
+        path_parts.push(format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4()));
 
         self.delta_table
             .storage
@@ -1585,5 +1587,23 @@ mod tests {
             extract_rel_path("data/delta-0.8.0", "tests/abc.json"),
             Err(DeltaTableError::Generic(_)),
         ));
+    }
+
+    #[tokio::test]
+    async fn parquet_filename() {
+        let mut table = open_table("./tests/data/simple_table")
+            .await
+            .unwrap();
+
+        let txn = DeltaTransaction {
+            delta_table: &mut table,
+            actions: vec![],
+            options: DeltaTransactionOptions::default(),
+        };
+
+        let partitions = vec![(String::from("col1"), String::from("a")),
+                              (String::from("col2"), String::from("b"))];
+        let parquet_filename = txn.generate_parquet_filename(Some(partitions));
+        assert!(parquet_filename.contains("col1=a/col2=b/part-00000-"));
     }
 }
