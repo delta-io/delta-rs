@@ -645,9 +645,11 @@ impl DeltaTable {
                         ApplyLogError::EndOfLog => {
                             self.version -= 1;
                             if self.version == -1 {
-                                // no snapshot found, no 0 version found.  this is not a delta
-                                // table, possibly an empty directroy.
-                                return Err(DeltaTableError::NotATable("No snapshot  or version 0 found, perhaps this is an empty directory?".to_string()));
+                                let err = format!(
+                                    "No snapshot or version 0 found, perhaps {} is an empty dir?",
+                                    self.table_uri
+                                );
+                                return Err(DeltaTableError::NotATable(err));
                             }
                         }
                         _ => {
