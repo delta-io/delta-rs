@@ -1591,9 +1591,7 @@ mod tests {
 
     #[tokio::test]
     async fn parquet_filename() {
-        let mut table = open_table("./tests/data/simple_table")
-            .await
-            .unwrap();
+        let mut table = open_table("./tests/data/simple_table").await.unwrap();
 
         let txn = DeltaTransaction {
             delta_table: &mut table,
@@ -1601,8 +1599,10 @@ mod tests {
             options: DeltaTransactionOptions::default(),
         };
 
-        let partitions = vec![(String::from("col1"), String::from("a")),
-                              (String::from("col2"), String::from("b"))];
+        let partitions = vec![
+            (String::from("col1"), String::from("a")),
+            (String::from("col2"), String::from("b")),
+        ];
         let parquet_filename = txn.generate_parquet_filename(Some(partitions));
         assert!(parquet_filename.contains("col1=a/col2=b/part-00000-"));
     }
