@@ -43,6 +43,8 @@ jobs:
         override: true
     - name: build and lint with clippy
       run: cargo clippy --features azure,datafusion-ext,s3
+    - name: Spot-check build for rustls features
+      run: cargo clippy --features s3-rustls
 
   test:
     strategy:

@@ -57,7 +57,7 @@ async-trait = "0.1"
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion", "crossbeam"]
 azure = ["azure_core", "azure_storage", "reqwest"]
-s3-native-tls = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_s3/native-tls", "rusoto_sts/native-tls", "rusoto_dynamodb/native-tls", "maplit"]
+s3 = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_s3/native-tls", "rusoto_sts/native-tls", "rusoto_dynamodb/native-tls", "maplit"]
 s3-rustls = ["rusoto_core/rustls", "rusoto_credential", "rusoto_s3/rustls", "rusoto_sts/rustls", "rusoto_dynamodb/rustls", "maplit"]
 
 [build-dependencies]
