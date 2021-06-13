@@ -9,6 +9,6 @@ async fn read_empty_folder() {
 
     assert!(matches!(
         result.unwrap_err(),
-        deltalake::DeltaTableError::NotATable,
+        deltalake::DeltaTableError::NotATable(_),
     ));
 }
