@@ -1607,6 +1607,10 @@ mod tests {
             (String::from("col2"), String::from("b")),
         ];
         let parquet_filename = txn.generate_parquet_filename(Some(partitions));
-        assert!(parquet_filename.contains("col1=a/col2=b/part-00000-"));
+        if cfg!(windows) {
+            assert!(parquet_filename.contains("col1=a\\col2=b\\part-00000-"));
+        } else {
+            assert!(parquet_filename.contains("col1=a/col2=b/part-00000-"));
+        }
     }
 }
