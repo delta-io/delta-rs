@@ -37,6 +37,5 @@ services:
       - /setup-localstack.sh
     volumes:
       - "./bin/setup-localstack.sh:/setup-localstack.sh"
-      - "./bin/notification.json:/notification.json"
       - "./target/lambda/delta-checkpoint.zip:/target/lambda/delta-checkpoint.zip"
 
