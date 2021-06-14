@@ -59,37 +59,24 @@ async fn process_event(event: &Value) -> Result<(), CheckPointLambdaError> {
 }
 
 fn bucket_and_key_from_event(event: &Value) -> Result<(String, String), CheckPointLambdaError> {
-    // TODO: Pull in aws_lambda_events instead of handling Value.
-    // https://docs.rs/aws_lambda_events/0.4.0/aws_lambda_events/event/s3/struct.S3Event.html
     let s3_value = event
         .get("Records")
-        .map(|v| {
-            v.as_array()
-                .map(|arr| arr.get(0))
-                .flatten()
-                .map(|elem| elem.get("s3"))
-                .flatten()
-        })
-        .flatten()
+        .and_then(|v| v.as_array())
+        .and_then(|arr| arr.get(0))
+        .and_then(|elem| elem.get("s3"))
         .ok_or_else(|| CheckPointLambdaError::InvalidEventStructure(event.to_string()))?;
 
     let bucket = s3_value
         .get("bucket")
-        .map(|v| v.get("name"))
-        .flatten()
+        .and_then(|v| v.get("name"))
+        .and_then(|v| v.as_str())
         .ok_or_else(|| CheckPointLambdaError::InvalidEventStructure(event.to_string()))?
-        .as_str()
-        .ok_or(CheckPointLambdaError::InvalidEventStructure(
-            event.to_string(),
-        ))?
         .to_string();
 
     let key = s3_value
         .get("object")
-        .map(|v| v.get("key"))
-        .flatten()
-        .ok_or_else(|| CheckPointLambdaError::InvalidEventStructure(event.to_string()))?
-        .as_str()
+        .and_then(|v| v.get("key"))
+        .and_then(|v| v.as_str())
         .ok_or_else(|| CheckPointLambdaError::InvalidEventStructure(event.to_string()))?
         .to_string();
 
