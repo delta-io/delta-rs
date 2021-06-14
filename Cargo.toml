@@ -4,6 +4,7 @@ members = [
     "rust",
     "python",
     "glibc_version",
+    "aws/delta-checkpoint",
 ]
 
 [profile.dev]

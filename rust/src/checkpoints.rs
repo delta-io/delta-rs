@@ -13,6 +13,7 @@ use super::action;
 use super::delta_arrow::delta_log_schema_for_table;
 use super::open_table_with_version;
 use super::schema::*;
+use super::storage;
 use super::storage::{StorageBackend, StorageError};
 use super::{CheckPoint, DeltaTableError, DeltaTableState};
 
@@ -79,6 +80,13 @@ impl CheckPointWriter {
             last_checkpoint_uri,
             storage,
         }
+    }
+
+    /// Creates a new CheckPointWriter for the table URI.
+    pub fn new_for_table_uri(table_uri: &str) -> Result<Self, CheckPointWriterError> {
+        let storage_backend = storage::get_backend_for_uri(table_uri)?;
+
+        Ok(Self::new(table_uri, storage_backend))
     }
 
     /// Creates a new checkpoint at the specified version.
