@@ -1,0 +1,23 @@
+{
+  "LambdaFunctionConfigurations": [
+    {
+      "Id": "delta-checkpoint-notification",
+      "LambdaFunctionArn": "arn:aws:lambda:us-east-2:000000000000:function:deltaCheckpoint",
+      "Events": ["s3:ObjectCreated:*"],
+      "Filter": {
+        "Key": {
+          "FilterRules": [
+            {
+              "Name": "prefix",
+              "Value": "checkpoint-test/_delta_log/"
+            },
+            {
+              "Name": "suffix",
+              "Value": "0.json"
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
