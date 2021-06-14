@@ -613,23 +613,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "delta-checkpoint"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "deltalake",
- "lambda_runtime",
- "lazy_static",
- "log",
- "regex",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "tokio-stream",
-]
-
-[[package]]
 name = "deltalake"
 version = "0.4.0"
 dependencies = [
@@ -1330,6 +1313,23 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2d99f9e3e84b8f67f846ef5b4cbbc3b1c29f6c759fcbce6f01aa0e73d932a24c"
 dependencies = [
  "wasm-bindgen",
+]
+
+[[package]]
+name = "lambda-delta-checkpoint"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "deltalake",
+ "lambda_runtime",
+ "lazy_static",
+ "log",
+ "regex",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "tokio-stream",
 ]
 
 [[package]]

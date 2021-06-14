@@ -1,7 +1,7 @@
 #!/bin/bash
 
 RELEASE_PATH="$(pwd)/builder/target/x86_64-unknown-linux-musl/release"
-PACKAGE=delta-checkpoint
+PACKAGE=lambda-delta-checkpoint
 
 docker run --rm \
   -v ${PWD}/../..:/home/rust/src \
