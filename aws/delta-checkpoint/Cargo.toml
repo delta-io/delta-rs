@@ -1,5 +1,5 @@
 [package]
-name = "delta-checkpoint"
+name = "lambda-delta-checkpoint"
 version = "0.1.0"
 authors = ["xianwill <christianwilliams79@gmail.com>"]
 edition = "2018"
