@@ -1,0 +1,52 @@
+name: build
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install minimal stable with clippy and rustfmt
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: default
+        toolchain: stable
+        override: true
+    - name: Format
+      run: cargo fmt -p lambda-delta-checkpoint -- --check
+
+  build:
+    strategy:
+      fail-fast: false
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install minimal stable with clippy and rustfmt
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: default
+        toolchain: stable
+        override: true
+    - name: build and lint with clippy
+      run: cargo clippy -p lambda-delta-checkpoint
+
+  test:
+    strategy:
+      fail-fast: false
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v2
+    - name: Install minimal stable with clippy and rustfmt
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: default
+        toolchain: stable
+        override: true
+    - name: Run tests
+      run: cargo test -p lambda-delta-checkpoint
+
