@@ -20,6 +20,8 @@ use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
+    let _ = pretty_env_logger::try_init();
+
     let func = handler_fn(func);
     lambda_runtime::run(func).await?;
     Ok(())
@@ -34,6 +36,9 @@ async fn process_event(event: &Value) -> Result<(), CheckPointLambdaError> {
     let (path, version) = table_path_and_version_from_key(key.as_str())?;
     let table_uri = table_uri_from_parts(bucket.as_str(), path.as_str())?;
 
+    // Checkpoints are created for every 10th delta log commit.
+    // Follows the reference implementation described in the delta protocol doc.
+    // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#checkpoints.
     if version % 10 == 0 && version != 0 {
         info!(
             "Writing checkpoint for table uri {} with delta version {}.",
