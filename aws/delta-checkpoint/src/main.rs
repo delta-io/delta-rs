@@ -8,9 +8,6 @@
 // https://docs.aws.amazon.com/lambda/latest/dg/with-s3.html
 // https://docs.aws.amazon.com/AmazonS3/latest/userguide/notification-how-to-filtering.html
 
-#[macro_use]
-extern crate serde_json;
-
 use deltalake::checkpoints::{CheckPointWriter, CheckPointWriterError};
 use deltalake::DeltaDataTypeVersion;
 use lambda_runtime::{handler_fn, Context, Error};
@@ -95,12 +92,12 @@ fn table_path_and_version_from_key(
         Some(captures) => {
             let table_path = captures
                 .get(1)
-                .ok_or(CheckPointLambdaError::ObjectKeyParseFailed(key.to_string()))?
+                .ok_or_else(|| CheckPointLambdaError::ObjectKeyParseFailed(key.to_string()))?
                 .as_str()
                 .to_string();
             let version_str = captures
                 .get(2)
-                .ok_or(CheckPointLambdaError::ObjectKeyParseFailed(key.to_string()))?
+                .ok_or_else(|| CheckPointLambdaError::ObjectKeyParseFailed(key.to_string()))?
                 .as_str();
             let version = version_str.parse::<DeltaDataTypeVersion>()?;
 
@@ -118,14 +115,15 @@ fn table_uri_from_parts(bucket: &str, path: &str) -> Result<String, CheckPointLa
 
     Ok(table_uri
         .to_str()
-        .ok_or(CheckPointLambdaError::InvalidEventStructure(
-            "table_uri".to_string(),
-        ))?
+        .ok_or_else(|| CheckPointLambdaError::InvalidTableUri(table_uri.clone()))?
         .to_string())
 }
 
 #[derive(thiserror::Error, Debug)]
 enum CheckPointLambdaError {
+    #[error("Invalid table uri: {0}")]
+    InvalidTableUri(PathBuf),
+
     #[error("Invalid event structure: {0}")]
     InvalidEventStructure(String),
 
