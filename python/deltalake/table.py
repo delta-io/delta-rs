@@ -257,7 +257,7 @@ class DeltaTable:
     def to_pandas(
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
-        columns: Optional[List[str]] = None
+        columns: Optional[List[str]] = None,
     ) -> pd.DataFrame:
         """
         Build a pandas dataframe using data from the DeltaTable.
@@ -267,4 +267,3 @@ class DeltaTable:
         :return: a pandas dataframe
         """
         return self.to_pyarrow_table(partitions, columns).to_pandas()
-
