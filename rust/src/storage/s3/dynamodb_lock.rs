@@ -501,7 +501,7 @@ impl<'a> AcquireLockState<'a> {
                     // rvn doesn't match, meaning that other worker acquire it before us
                     // let's change cached lock with new one and extend timeout period
                     self.cached_lock = Some(existing);
-                    return Err(DynamoError::ConditionalCheckFailed);
+                    Err(DynamoError::ConditionalCheckFailed)
                 }
             }
         }
