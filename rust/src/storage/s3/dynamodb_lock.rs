@@ -77,7 +77,12 @@ impl LockItem {
         if self.is_released {
             return true;
         }
-        now_millis() - self.lookup_time > (self.lease_duration as u128) * 1000
+        match self.lease_duration {
+            None => false,
+            Some(lease_duration) => {
+                now_millis() - self.lookup_time > (lease_duration as u128) * 1000
+            }
+        }
     }
 }
 
@@ -296,11 +301,17 @@ impl DynamoDbLockClient {
             .await?;
 
         if let Some(item) = output.item {
-            let lease_duration = get_string(item.get(LEASE_DURATION))?
-                .parse::<u64>()
-                .map_err(|_| DynamoError::InvalidItemSchema)?;
+            let lease_duration = {
+                match item.get(LEASE_DURATION).and_then(|v| v.s.clone()) {
+                    None => None,
+                    Some(v) => Some(
+                        v.parse::<u64>()
+                            .map_err(|_| DynamoError::InvalidItemSchema)?,
+                    ),
+                }
+            };
 
-            let data = item.get(DATA).and_then(|r| r.s.as_ref()).cloned();
+            let data = item.get(DATA).and_then(|r| r.s.clone());
 
             return Ok(Some(LockItem {
                 owner_name: get_string(item.get(OWNER_NAME))?,
@@ -400,7 +411,7 @@ impl DynamoDbLockClient {
         Ok(LockItem {
             owner_name: self.opts.owner_name.clone(),
             record_version_number: rvn,
-            lease_duration: self.opts.lease_duration,
+            lease_duration: Some(self.opts.lease_duration),
             is_released: false,
             data: data.map(String::from),
             lookup_time: now_millis(),
@@ -456,11 +467,16 @@ impl<'a> AcquireLockState<'a> {
             Some(existing) => {
                 let cached = match self.cached_lock.as_ref() {
                     // there's existing lock and it's out first attempt to acquire it
+                    // first we store it, extend timeout period and try again later
                     None => {
-                        // first we store it, extend timeout period and try again later
-                        self.timeout_in = Duration::from_secs(
-                            self.timeout_in.as_secs() + existing.lease_duration,
-                        );
+                        // if lease_duration is None then the existing lock cannot be expired,
+                        // but we still extends the timeout so the writer will wait until it's released
+                        let lease_duration = existing
+                            .lease_duration
+                            .unwrap_or(self.client.opts.lease_duration);
+
+                        self.timeout_in =
+                            Duration::from_secs(self.timeout_in.as_secs() + lease_duration);
                         self.cached_lock = Some(existing);
 
                         return Err(DynamoError::ConditionalCheckFailed);

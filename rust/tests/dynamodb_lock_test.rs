@@ -43,7 +43,7 @@ mod dynamodb {
         let data = "data".to_string();
         let item = lock.acquire_lock(Some(&data)).await.unwrap();
         assert_eq!(item.owner_name, "worker");
-        assert_eq!(item.lease_duration, 3);
+        assert_eq!(item.lease_duration, Some(3));
         assert_eq!(item.data.as_ref(), Some(&data));
         assert_eq!(item.is_released, false);
         assert_eq!(

@@ -416,7 +416,8 @@ pub struct LockItem {
     /// when the lock is stale.
     pub record_version_number: String,
     /// The amount of time (in seconds) that the owner has this lock for.
-    pub lease_duration: u64,
+    /// If lease_duration is None then the lock is non-expirable.
+    pub lease_duration: Option<u64>,
     /// Tells whether or not the lock was marked as released when loaded from DynamoDB.
     pub is_released: bool,
     /// Optional data associated with this lock.
