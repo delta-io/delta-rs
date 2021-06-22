@@ -52,6 +52,7 @@ nitpick_ignore = [
     ("py:class", "pyarrow.lib.DataType"),
     ("py:class", "pyarrow.lib.Field"),
     ("py:class", "RawDeltaTable"),
+    ("py:class", "pandas.DataFrame"),
 ]
 
 # Add any paths that contain templates here, relative to this directory.

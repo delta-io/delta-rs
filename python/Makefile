@@ -1,6 +1,7 @@
 .DEFAULT_GOAL := help
 
 VENV := venv
+PY_SOURCE_DIR := deltalake tests
 
 
 .PHONY: setup-venv
@@ -36,11 +37,11 @@ check-rust: ## Run check on Rust
 .PHONY: check-python
 check-python: ## Run check on Python
 	$(info Check Python isort)
-	isort --check-only .
+	isort --diff --check-only $(PY_SOURCE_DIR)
 	$(info Check Python black)
-	black --check .
+	black --check $(PY_SOURCE_DIR)
 	$(info Check Python mypy)
-	mypy --exclude "$(VENV)|docs|tests" .
+	mypy --config-file setup.cfg $(PY_SOURCE_DIR)
 
 .PHONY: unit-test
 unit-test: ## Run unit test
