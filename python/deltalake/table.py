@@ -1,11 +1,9 @@
 import os
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
-if TYPE_CHECKING:
-    import pandas as pd
 import pyarrow
 from pyarrow.dataset import dataset, partitioning
 
@@ -259,7 +257,7 @@ class DeltaTable:
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
-    ) -> pd.DataFrame:
+    ) -> "pd.DataFrame":  # type: ignore
         """
         Build a pandas dataframe using data from the DeltaTable.
 
