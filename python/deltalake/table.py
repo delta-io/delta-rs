@@ -252,3 +252,17 @@ class DeltaTable:
         :return: the PyArrow table
         """
         return self.to_pyarrow_dataset(partitions).to_table(columns=columns)
+
+    def to_pandas(
+        self,
+        partitions: Optional[List[Tuple[str, str, Any]]] = None,
+        columns: Optional[List[str]] = None,
+    ) -> "pd.DataFrame":  # type: ignore
+        """
+        Build a pandas dataframe using data from the DeltaTable.
+
+        :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
+        :param columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
+        :return: a pandas dataframe
+        """
+        return self.to_pyarrow_table(partitions, columns).to_pandas()
