@@ -1,10 +1,11 @@
 import os
 import warnings
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
 import pyarrow
 from pyarrow.dataset import dataset, partitioning
 
