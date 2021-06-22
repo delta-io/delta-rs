@@ -1,5 +1,6 @@
 from threading import Barrier, Thread
 
+import pandas as pd
 import pytest
 
 from deltalake import DeltaTable, Metadata
@@ -161,6 +162,12 @@ def test_get_files_partitioned_table():
 
     partition_filters = [("unknown", "=", "3")]
     assert dt.files_by_partitions(partition_filters=partition_filters) == []
+
+
+def test_delta_table_to_pandas():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 
 class ExcPassThroughThread(Thread):
