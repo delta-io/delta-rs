@@ -23,6 +23,9 @@ mod options {
     pub const REFRESH_PERIOD_MILLIS: &str = "DYNAMO_LOCK_REFRESH_PERIOD_MILLIS";
     /// Environment variable for `additional_time_to_wait_for_lock` option.
     pub const ADDITIONAL_TIME_TO_WAIT_MILLIS: &str = "DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS";
+    /// Environment variable for `do_not_timeout_on_non_expirable_locks` option.
+    pub const DO_NOT_TIMEOUT_ON_NON_EXPIRABLE_LOCKS: &str =
+        "DYNAMO_DO_NOT_TIMEOUT_ON_NON_EXPIRABLE_LOCKS";
 }
 
 /// Configuration options for [`DynamoDbLockClient`].
@@ -42,6 +45,8 @@ pub struct Options {
     pub refresh_period: Duration,
     /// The amount of time to wait in addition to `lease_duration`.
     pub additional_time_to_wait_for_lock: Duration,
+    /// If set, then `try_acquire_lock` will not fail with timeout if the active lock is non expirable.
+    pub do_not_timeout_on_non_expirable_locks: bool,
 }
 
 impl Default for Options {
@@ -61,6 +66,12 @@ impl Default for Options {
         let additional_time_to_wait_for_lock =
             Duration::from_millis(u64_env(options::ADDITIONAL_TIME_TO_WAIT_MILLIS, 1000));
 
+        let do_not_timeout_on_non_expirable_locks = "true"
+            == str_env(
+                options::DO_NOT_TIMEOUT_ON_NON_EXPIRABLE_LOCKS,
+                "true".to_string(),
+            );
+
         Self {
             partition_key_value: str_env(options::PARTITION_KEY_VALUE, "delta-rs".to_string()),
             table_name: str_env(options::TABLE_NAME, "delta_rs_lock_table".to_string()),
@@ -68,6 +79,7 @@ impl Default for Options {
             lease_duration: u64_env(options::LEASE_DURATION, 20),
             refresh_period,
             additional_time_to_wait_for_lock,
+            do_not_timeout_on_non_expirable_locks,
         }
     }
 }
@@ -450,8 +462,14 @@ struct AcquireLockState<'a> {
 }
 
 impl<'a> AcquireLockState<'a> {
+    /// If lock is expirable (lease_duration is set) and is do_not_timeout_on_non_expirable_locks
+    /// then this function returns `true` if the elapsed time sine `started` is reached `timeout_in`.
     fn has_timed_out(&self) -> bool {
-        self.started.elapsed() > self.timeout_in
+        self.started.elapsed() > self.timeout_in && {
+            let is_non_expirable = self.cached_lock.is_some()
+                && self.cached_lock.as_ref().unwrap().lease_duration.is_none();
+            !(self.client.opts.do_not_timeout_on_non_expirable_locks && is_non_expirable)
+        }
     }
 
     async fn try_acquire_lock(&mut self, data: Option<&str>) -> Result<LockItem, DynamoError> {
