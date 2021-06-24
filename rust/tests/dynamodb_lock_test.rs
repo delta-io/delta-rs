@@ -19,7 +19,6 @@ mod dynamodb {
             lease_duration: 3,
             refresh_period: Duration::from_millis(500),
             additional_time_to_wait_for_lock: Duration::from_millis(500),
-            do_not_timeout_on_non_expirable_locks: true,
         };
         create_dynamo_lock_with(key, opts).await
     }
@@ -141,24 +140,8 @@ mod dynamodb {
 
     #[tokio::test(flavor = "multi_thread")]
     async fn test_non_expirable_lock() {
-        non_expirable_lock_test_case("test_non_expirable_lock", true)
-            .await
-            .unwrap();
-    }
+        let key = "test_non_expirable_lock";
 
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_non_expirable_lock_timedout() {
-        let result = non_expirable_lock_test_case("test_non_expirable_lock_timedout", false).await;
-        match result {
-            Err(DynamoError::TimedOut(v)) => assert_eq!(v, 1),
-            _ => panic!("unexpected {:?}", result),
-        }
-    }
-
-    async fn non_expirable_lock_test_case(
-        key: &str,
-        do_not_timeout_on_non_expirable_locks: bool,
-    ) -> Result<(), DynamoError> {
         let opts = |owner: &str| Options {
             partition_key_value: key.to_string(),
             table_name: TABLE.to_string(),
@@ -166,7 +149,6 @@ mod dynamodb {
             lease_duration: 1,
             refresh_period: Duration::from_millis(100),
             additional_time_to_wait_for_lock: Duration::from_millis(100),
-            do_not_timeout_on_non_expirable_locks,
         };
 
         let w1 = create_dynamo_lock_with(key, opts("w1")).await;
@@ -205,12 +187,11 @@ mod dynamodb {
 
         // release w1, so w2 will acquire it
         assert!(w1.release_lock(&current).await.unwrap());
-        let lock_w2 = acquire_lock.await.unwrap()?;
+        let lock_w2 = acquire_lock.await.unwrap().unwrap();
 
         // check that it's actually another/new lock in dynamo
         let current = w1.get_lock().await.unwrap().unwrap();
         assert_ne!(w1_rnv, lock_w2.record_version_number);
         assert_eq!(current.record_version_number, lock_w2.record_version_number);
-        Ok(())
     }
 }
