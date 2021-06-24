@@ -466,9 +466,12 @@ impl<'a> AcquireLockState<'a> {
     /// then this function returns `true` if the elapsed time sine `started` is reached `timeout_in`.
     fn has_timed_out(&self) -> bool {
         self.started.elapsed() > self.timeout_in && {
-            let is_non_expirable = self.cached_lock.is_some()
-                && self.cached_lock.as_ref().unwrap().lease_duration.is_none();
-            !(self.client.opts.do_not_timeout_on_non_expirable_locks && is_non_expirable)
+            let non_expirable = if let Some(ref cached_lock) = self.cached_lock {
+                cached_lock.lease_duration.is_none()
+            } else {
+                false
+            };
+            !(self.client.opts.do_not_timeout_on_non_expirable_locks && non_expirable)
         }
     }
 
