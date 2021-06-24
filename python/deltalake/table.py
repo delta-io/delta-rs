@@ -1,11 +1,14 @@
 import os
 import warnings
 from dataclasses import dataclass
-from typing import Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import pyarrow
 from pyarrow.dataset import dataset, partitioning
+
+if TYPE_CHECKING:
+    import pandas
 
 from .deltalake import RawDeltaTable, RawDeltaTableMetaData
 from .schema import Schema, pyarrow_schema_from_json
@@ -257,7 +260,7 @@ class DeltaTable:
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
-    ) -> "pd.DataFrame":  # type: ignore
+    ) -> "pandas.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
 
