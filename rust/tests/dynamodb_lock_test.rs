@@ -4,23 +4,28 @@ mod s3_common;
 
 #[cfg(feature = "s3")]
 mod dynamodb {
-    use deltalake::storage::s3::dynamodb_lock::{DynamoDbLockClient, Options, PARTITION_KEY_NAME};
+    use deltalake::storage::s3::dynamodb_lock::*;
     use maplit::hashmap;
     use rusoto_dynamodb::*;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+    const TABLE: &str = "test_table";
+
     async fn create_dynamo_lock(key: &str, owner: &str) -> DynamoDbLockClient {
-        crate::s3_common::setup();
-        let table_name = "test_table";
-        let client = DynamoDbClient::new(crate::s3_common::region());
         let opts = Options {
             partition_key_value: key.to_string(),
-            table_name: table_name.to_string(),
+            table_name: TABLE.to_string(),
             owner_name: owner.to_string(),
             lease_duration: 3,
             refresh_period: Duration::from_millis(500),
             additional_time_to_wait_for_lock: Duration::from_millis(500),
         };
+        create_dynamo_lock_with(key, opts).await
+    }
+
+    async fn create_dynamo_lock_with(key: &str, opts: Options) -> DynamoDbLockClient {
+        crate::s3_common::setup();
+        let client = DynamoDbClient::new(crate::s3_common::region());
         let _ = client
             .delete_item(DeleteItemInput {
                 key: hashmap! {
@@ -29,11 +34,18 @@ mod dynamodb {
                         ..Default::default()
                     }
                 },
-                table_name: table_name.to_string(),
+                table_name: TABLE.to_string(),
                 ..Default::default()
             })
             .await;
         DynamoDbLockClient::new(client, opts)
+    }
+
+    fn attr_val<T: ToString>(s: T) -> AttributeValue {
+        AttributeValue {
+            s: Some(s.to_string()),
+            ..Default::default()
+        }
     }
 
     #[tokio::test]
@@ -43,7 +55,7 @@ mod dynamodb {
         let data = "data".to_string();
         let item = lock.acquire_lock(Some(&data)).await.unwrap();
         assert_eq!(item.owner_name, "worker");
-        assert_eq!(item.lease_duration, 3);
+        assert_eq!(item.lease_duration, Some(3));
         assert_eq!(item.data.as_ref(), Some(&data));
         assert_eq!(item.is_released, false);
         assert_eq!(
@@ -72,8 +84,9 @@ mod dynamodb {
 
     #[tokio::test]
     async fn test_acquire_expired_lock() {
-        let c1 = create_dynamo_lock("test_acquire_expired_lock", "w1").await;
-        let c2 = create_dynamo_lock("test_acquire_expired_lock", "w2").await;
+        let key = "test_acquire_expired_lock";
+        let c1 = create_dynamo_lock(key, "w1").await;
+        let c2 = create_dynamo_lock(key, "w2").await;
 
         let l1 = c1.acquire_lock(None).await.unwrap();
 
@@ -92,9 +105,10 @@ mod dynamodb {
 
     #[tokio::test]
     async fn test_acquire_expired_lock_multiple_workers() {
-        let origin = create_dynamo_lock("test_acquire_expired_lock_multiple_workers", "o").await;
-        let c1 = create_dynamo_lock("test_acquire_expired_lock_multiple_workers", "w1").await;
-        let c2 = create_dynamo_lock("test_acquire_expired_lock_multiple_workers", "w2").await;
+        let key = "test_acquire_expired_lock_multiple_workers";
+        let origin = create_dynamo_lock(key, "o").await;
+        let c1 = create_dynamo_lock(key, "w1").await;
+        let c2 = create_dynamo_lock(key, "w2").await;
 
         let _ = origin.acquire_lock(None).await.unwrap();
         let f1 = tokio::spawn(async move { c1.try_acquire_lock(None).await });
@@ -122,5 +136,62 @@ mod dynamodb {
             acquired.record_version_number,
             current.record_version_number
         );
+    }
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_non_expirable_lock() {
+        let key = "test_non_expirable_lock";
+
+        let opts = |owner: &str| Options {
+            partition_key_value: key.to_string(),
+            table_name: TABLE.to_string(),
+            owner_name: owner.to_string(),
+            lease_duration: 1,
+            refresh_period: Duration::from_millis(100),
+            additional_time_to_wait_for_lock: Duration::from_millis(100),
+        };
+
+        let w1 = create_dynamo_lock_with(key, opts("w1")).await;
+        let w2 = create_dynamo_lock_with(key, opts("w2")).await;
+
+        let dynamodb_client = DynamoDbClient::new(crate::s3_common::region());
+
+        // manual acquire without setting lease_duration so it's considered as non-expirable
+        let w1_rnv = "rvn_w1";
+        dynamodb_client
+            .put_item(PutItemInput {
+                table_name: TABLE.to_string(),
+                item: hashmap! {
+                    PARTITION_KEY_NAME.to_string() => attr_val(key),
+                    OWNER_NAME.to_string() => attr_val("w1"),
+                    RECORD_VERSION_NUMBER.to_string() => attr_val(w1_rnv),
+                },
+                ..Default::default()
+            })
+            .await
+            .unwrap();
+
+        let current = w1.get_lock().await.unwrap().unwrap();
+        assert_eq!(current.lease_duration, None);
+
+        // start w2 to try to acquire the lock
+        let acquire_lock = tokio::spawn(async move { w2.acquire_lock(None).await });
+
+        tokio::time::sleep(Duration::from_secs(2)).await;
+
+        let current = w1.get_lock().await.unwrap().unwrap();
+        // verify that event after 2 sec (2x than lease_duration) that the non expirable lock
+        // is still in dynamo and not expired
+        assert_eq!(current.owner_name, "w1");
+        assert_eq!(current.record_version_number, w1_rnv);
+
+        // release w1, so w2 will acquire it
+        assert!(w1.release_lock(&current).await.unwrap());
+        let lock_w2 = acquire_lock.await.unwrap().unwrap();
+
+        // check that it's actually another/new lock in dynamo
+        let current = w1.get_lock().await.unwrap().unwrap();
+        assert_ne!(w1_rnv, lock_w2.record_version_number);
+        assert_eq!(current.record_version_number, lock_w2.record_version_number);
     }
 }

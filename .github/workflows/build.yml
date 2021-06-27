@@ -83,6 +83,6 @@ jobs:
         # Using `cargo test s3` requires tests to include _s3_ part in a name which is easily human error prone.
         run: |
          cargo test s3 --test simple_commit_test --features s3
-         cargo test s3 --test dynamodb_lock_test --features s3
          cargo test s3 --test concurrent_writes_test --features s3
-         cargo test s3 --test repair_s3_rename_test --features s3
+         cargo test --test dynamodb_lock_test --features s3
+         cargo test --test repair_s3_rename_test --features s3
