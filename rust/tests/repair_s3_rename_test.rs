@@ -132,7 +132,7 @@ mod s3 {
         );
 
         (
-            S3StorageBackend::new_with(client, Box::new(lock_client)),
+            S3StorageBackend::new_with(client, Some(Box::new(lock_client))),
             pause_until_true,
         )
     }
