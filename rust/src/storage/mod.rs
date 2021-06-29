@@ -14,7 +14,7 @@ use std::error::Error;
 #[cfg(feature = "azure")]
 pub mod azure;
 pub mod file;
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 pub mod s3;
 
 /// Error enum that represents an invalid URI.
@@ -28,15 +28,15 @@ pub enum UriError {
     ExpectedSLocalPathUri(String),
 
     /// Error returned when the URI is expected to be an S3 path, but does not include a bucket part.
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[error("Object URI missing bucket")]
     MissingObjectBucket,
     /// Error returned when the URI is expected to be an S3 path, but does not include a key part.
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[error("Object URI missing key")]
     MissingObjectKey,
     /// Error returned when an S3 path is expected, but the URI is not an S3 URI.
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[error("Expected S3 URI, found: {0}")]
     ExpectedS3Uri(String),
 
@@ -79,7 +79,7 @@ pub enum Uri<'a> {
     /// URI for local file system backend.
     LocalPath(&'a str),
     /// URI for S3 backend.
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     S3Object(s3::S3Object<'a>),
     /// URI for Azure backend.
     #[cfg(feature = "azure")]
@@ -89,7 +89,7 @@ pub enum Uri<'a> {
 impl<'a> Uri<'a> {
     /// Converts the URI to an S3Object. Returns UriError if the URI is not valid for the S3
     /// backend.
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     pub fn into_s3object(self) -> Result<s3::S3Object<'a>, UriError> {
         match self {
             Uri::S3Object(x) => Ok(x),
@@ -105,7 +105,7 @@ impl<'a> Uri<'a> {
     pub fn into_adlsgen2_object(self) -> Result<azure::AdlsGen2Object<'a>, UriError> {
         match self {
             Uri::AdlsGen2Object(x) => Ok(x),
-            #[cfg(feature = "s3")]
+            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
             Uri::S3Object(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
             Uri::LocalPath(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
         }
@@ -116,7 +116,7 @@ impl<'a> Uri<'a> {
     pub fn into_localpath(self) -> Result<&'a str, UriError> {
         match self {
             Uri::LocalPath(x) => Ok(x),
-            #[cfg(feature = "s3")]
+            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
             Uri::S3Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
             #[cfg(feature = "azure")]
             Uri::AdlsGen2Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
@@ -128,7 +128,7 @@ impl<'a> Uri<'a> {
     pub fn path(&self) -> String {
         match self {
             Uri::LocalPath(x) => x.to_string(),
-            #[cfg(feature = "s3")]
+            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
             Uri::S3Object(x) => x.key.to_string(),
             #[cfg(feature = "azure")]
             Uri::AdlsGen2Object(x) => x.path.to_string(),
@@ -148,7 +148,7 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
     match parts[0] {
         "s3" => {
             cfg_if::cfg_if! {
-                if #[cfg(feature = "s3")] {
+                if #[cfg(any(feature = "s3", feature = "s3-rustls"))] {
                     let mut path_parts = parts[1].splitn(2, '/');
                     let bucket = match path_parts.next() {
                         Some(x) => x,
@@ -217,35 +217,35 @@ pub enum StorageError {
     Generic(String),
 
     /// Error representing an S3 GET failure.
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[error("Failed to read S3 object content: {source}")]
     S3Get {
         /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::GetObjectError>,
     },
     /// Error representing a failure when executing an S3 HEAD request.
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[error("Failed to read S3 object metadata: {source}")]
     S3Head {
         /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::HeadObjectError>,
     },
     /// Error representing a failure when executing an S3 list operation.
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[error("Failed to list S3 objects: {source}")]
     S3List {
         /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::ListObjectsV2Error>,
     },
     /// Error representing a failure when executing an S3 PUT request.
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[error("Failed to put S3 object: {source}")]
     S3Put {
         /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::PutObjectError>,
     },
     /// Error returned when an S3 response for a requested URI does not include body bytes.
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[error("Failed to delete S3 object: {source}")]
     S3Delete {
         /// The underlying Rusoto S3 error.
@@ -253,21 +253,21 @@ pub enum StorageError {
         source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectError>,
     },
     /// Error representing a failure when copying a S3 object
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[error("Failed to copy S3 object: {source}")]
     S3Copy {
         /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::CopyObjectError>,
     },
     /// Error returned when S3 object get response contains empty body
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[error("S3 Object missing body content: {0}")]
     S3MissingObjectBody(String),
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     /// Represents a generic S3 error. The wrapped error string describes the details.
     #[error("S3 error: {0}")]
     S3Generic(String),
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     /// Wraps the DynamoDB error
     #[error("DynamoDB error: {source}")]
     DynamoDb {
@@ -414,7 +414,7 @@ pub trait StorageBackend: Send + Sync + Debug {
 pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, StorageError> {
     match parse_uri(uri)? {
         Uri::LocalPath(root) => Ok(Box::new(file::FileStorageBackend::new(root))),
-        #[cfg(feature = "s3")]
+        #[cfg(any(feature = "s3", feature = "s3-rustls"))]
         Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new()?)),
         #[cfg(feature = "azure")]
         Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
