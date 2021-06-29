@@ -184,10 +184,10 @@ impl S3StorageBackend {
     }
 
     /// Creates a new S3StorageBackend with given s3 and lock clients.
-    pub fn new_with(client: rusoto_s3::S3Client, lock_client: Box<dyn LockClient>) -> Self {
+    pub fn new_with(client: rusoto_s3::S3Client, lock_client: Option<Box<dyn LockClient>>) -> Self {
         Self {
             client,
-            lock_client: Some(lock_client),
+            lock_client,
         }
     }
 
