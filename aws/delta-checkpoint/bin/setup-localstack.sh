@@ -43,7 +43,7 @@ aws iam attach-role-policy --endpoint-url=$ENDPOINT \
 aws lambda create-function --endpoint-url=$ENDPOINT \
   --function-name deltaCheckpoint \
   --handler delta.checkpoint \
-  --zip-file fileb:///target/lambda/lambda-delta-checkpoint.zip \
+  --zip-file fileb:///lambda-delta-checkpoint.zip \
   --runtime provided.al2 \
   --role $LAMBDA_ROLE \
   --environment "Variables={RUST_LOG=debug,RUST_BACKTRACE=1,AWS_REGION=$AWS_DEFAULT_REGION,AWS_ENDPOINT_URL=$ENDPOINT,AWS_ACCESS_KEY_ID=$AWS_ACCESS_KEY_ID,AWS_SECRET_ACCESS_KEY=$AWS_SECRET_ACCESS_KEY}" \

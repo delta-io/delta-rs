@@ -1,18 +1,20 @@
 #!/bin/bash
 
-RELEASE_PATH="$(pwd)/builder/target/x86_64-unknown-linux-musl/release"
+set -eu
+
+RELEASE_PATH="$PWD/builder/target/x86_64-unknown-linux-musl/release"
 PACKAGE=lambda-delta-checkpoint
 
+mkdir -p "$PWD/builder/registry" \
+  "$PWD/builder/git" \
+  "$PWD/builder/target"
+
 docker run --rm \
-  -v ${PWD}/../..:/home/rust/src \
-  -v ${PWD}/builder/registry:/root/.cargo/registry \
-  -v ${PWD}/builder/git:/root/.cargo/git \
-  -v ${PWD}/builder/target:/home/rust/src/target \
+  -v "$PWD/../..":/home/rust/src \
+  -v "$PWD/builder/registry":/root/.cargo/registry \
+  -v "$PWD/builder/git":/root/.cargo/git \
+  -v "$PWD/builder/target":/home/rust/src/target \
     ekidd/rust-musl-builder cargo build -p $PACKAGE --release
 
-mkdir -p ./target/lambda/$PACKAGE
-
-(cd ./target/lambda && \
-  cp $RELEASE_PATH/$PACKAGE ./bootstrap && \
-  zip $PACKAGE.zip bootstrap && rm bootstrap)
+zip -j lambda-delta-checkpoint.zip ./builder/target/x86_64-unknown-linux-musl/release/bootstrap
 

@@ -1,4 +1,4 @@
-name: aws_build
+name: lambda_checkpoint_build
 
 on:
   push:
@@ -35,18 +35,30 @@ jobs:
     - name: build and lint with clippy
       run: cargo clippy -p lambda-delta-checkpoint
 
+
   test:
     strategy:
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
-    - name: Install minimal stable with clippy and rustfmt
-      uses: actions-rs/toolchain@v1
+    - name: Build musl
+      uses: docker://messense/rust-musl-cross:x86_64-musl
       with:
-        profile: default
-        toolchain: stable
-        override: true
+        args: cargo build -p lambda-delta-checkpoint --release
+    - name: Zip lambda bin
+      run: |
+        zip -j lambda-delta-checkpoint.zip ./target/x86_64-unknown-linux-musl/release/bootstrap
+    - name: Setup localstack
+      run: |
+        cp lambda-delta-checkpoint.zip ./aws/delta-checkpoint/
+        docker network create delta-checkpoint
+        (cd ./aws/delta-checkpoint && docker-compose up setup)
     - name: Run tests
-      run: cargo test -p lambda-delta-checkpoint
+      run: |
+        docker run --rm \
+          --network delta-checkpoint \
+          --env "AWS_ENDPOINT_URL=http://localstack:4566" \
+          -v "$(pwd)":/home/rust/src messense/rust-musl-cross:x86_64-musl  \
+          cargo test -p lambda-delta-checkpoint --release
 
