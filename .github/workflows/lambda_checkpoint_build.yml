@@ -59,6 +59,7 @@ jobs:
         docker run --rm \
           --network delta-checkpoint \
           --env "AWS_ENDPOINT_URL=http://localstack:4566" \
-          -v "$(pwd)":/home/rust/src messense/rust-musl-cross:x86_64-musl  \
-          cargo test -p lambda-delta-checkpoint --release
+          -v "$(pwd)":/home/rust/src \
+          messense/rust-musl-cross:x86_64-musl \
+          cargo test -p lambda-delta-checkpoint
 
