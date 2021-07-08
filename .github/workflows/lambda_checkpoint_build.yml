@@ -45,7 +45,7 @@ jobs:
     - name: Build musl
       uses: docker://messense/rust-musl-cross:x86_64-musl
       with:
-        args: cargo build -p lambda-delta-checkpoint --release
+        args: cargo build -p lambda-delta-checkpoint
     - name: Zip lambda bin
       run: |
         zip -j lambda-delta-checkpoint.zip ./target/x86_64-unknown-linux-musl/release/bootstrap
