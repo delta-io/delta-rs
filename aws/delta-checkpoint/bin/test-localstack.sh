@@ -14,3 +14,8 @@ aws s3 cp $TEST_DATA_PATH s3://delta-checkpoint/checkpoint-test/_delta_log/ \
   --include "*.json" \
   --endpoint-url=$ENDPOINT
 
+sleep 5
+
+aws s3 ls s3://delta-checkpoint/checkpoint-test/_delta_log/ --endpoint-url=$ENDPOINT
+
+

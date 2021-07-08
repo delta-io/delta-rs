@@ -12,6 +12,7 @@ thiserror = "1"
 lambda_runtime = { version = "0.3" }
 lazy_static = "1"
 log = "0.4"
+openssl = { version = "0.10", features = ["vendored"] }
 pretty_env_logger = "0.4"
 regex = "1"
 serde = { version = "1", features = ["derive"] }
@@ -24,3 +25,11 @@ path = "../../rust"
 version = "0"
 features = ["s3"]
 
+[dev-dependencies]
+rusoto_core = "0.46"
+rusoto_credential = "0.46"
+rusoto_s3 = "0.46"
+
+[[bin]]
+name = "bootstrap"
+path = "src/main.rs"
