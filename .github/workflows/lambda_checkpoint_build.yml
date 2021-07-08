@@ -48,7 +48,7 @@ jobs:
         args: cargo build -p lambda-delta-checkpoint
     - name: Zip lambda bin
       run: |
-        zip -j lambda-delta-checkpoint.zip ./target/x86_64-unknown-linux-musl/release/bootstrap
+        zip -j lambda-delta-checkpoint.zip ./target/x86_64-unknown-linux-musl/debug/bootstrap
     - name: Setup localstack
       run: |
         cp lambda-delta-checkpoint.zip ./aws/delta-checkpoint/
