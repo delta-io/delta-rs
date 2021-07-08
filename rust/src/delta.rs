@@ -1142,12 +1142,15 @@ impl Default for DeltaTransactionOptions {
 
 /// Object representing a delta transaction.
 /// Clients that do not need to mutate action content in case a transaction conflict is encountered
-/// may use the `commit_with` method and rely on optimistic concurrency to determine the
+/// may use the `commit` method and rely on optimistic concurrency to determine the
 /// appropriate Delta version number for a commit. A good example of this type of client is an
 /// append only client that does not need to maintain transaction state with external systems.
-/// Clients that may need to do conflict resolution if the Delta version changes should use the `commit_version`
-/// method and manage the Delta version themselves so that they can resolve data conflicts that may
-/// occur between Delta versions.
+/// Clients that may need to do conflict resolution if the Delta version changes should use
+/// the `prepare_commit` and `try_commit` methods and manage the Delta version themselves so
+/// that they can resolve data conflicts that may occur between Delta versions.
+///
+/// Please not that in case of non-retryable error the temporary commit file such as
+/// `_delta_log/_commit_<uuid>.json` will orphaned in storage.
 #[derive(Debug)]
 pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
