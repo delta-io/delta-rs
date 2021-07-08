@@ -85,7 +85,9 @@ mod simple_commit_fs {
 
         let mut tx1 = table.create_transaction(None);
         tx1.add_actions(tx1_actions());
-        let result = tx1.commit_version(1, None).await.unwrap();
+        let commit = tx1.prepare_commit(None).await.unwrap();
+        let result = tx1.try_commit(&commit, 1).await.unwrap();
+        table.update().await.unwrap();
 
         assert_eq!(1, result);
         assert_eq!(1, table.version);
@@ -105,12 +107,16 @@ mod simple_commit_fs {
 
         let mut tx1 = table.create_transaction(None);
         tx1.add_actions(tx1_actions());
-        let _ = tx1.commit_version(1, None).await.unwrap();
+        let commit = tx1.prepare_commit(None).await.unwrap();
+        let _ = tx1.try_commit(&commit, 1).await.unwrap();
+        table.update().await.unwrap();
 
         let mut tx2 = table.create_transaction(None);
         tx2.add_actions(tx2_actions());
         // we already committed version 1 - this should fail and return error for caller to handle.
-        let result = tx2.commit_version(1, None).await;
+        let commit = tx2.prepare_commit(None).await.unwrap();
+        let result = tx2.try_commit(&commit, 1).await;
+        table.update().await.unwrap();
 
         match result {
             Err(deltalake::DeltaTransactionError::VersionAlreadyExists { .. }) => {
