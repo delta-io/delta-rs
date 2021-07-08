@@ -407,11 +407,6 @@ impl DeltaTable {
         self.storage.join_path(&self.log_uri, &version)
     }
 
-    fn tmp_commit_uri(&self, token: &str) -> String {
-        let path = format!("_commit_{}.json", token);
-        self.storage.join_path(&self.log_uri, &path)
-    }
-
     fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<String> {
         let checkpoint_prefix_pattern = format!("{:020}", check_point.version);
         let checkpoint_prefix = self
@@ -1069,20 +1064,12 @@ impl std::fmt::Debug for DeltaTable {
 /// Error returned by the DeltaTransaction struct
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTransactionError {
-    /// Error that indicates the transaction commit attempt failed. The wrapped inner error
-    /// contains details.
-    #[error("Transaction commit attempt failed. Last error: {inner}")]
-    TransactionCommitAttempt {
-        /// The wrapped TransactionCommitAttemptError.
-        inner: TransactionCommitAttemptError,
-    },
-
     /// Error that indicates a Delta version conflict. i.e. a writer tried to write version _N_ but
     /// version _N_ already exists in the delta log.
-    #[error("Version already existed when writing transaction. Last error: {inner}")]
+    #[error("Version already existed when writing transaction. Last error: {source}")]
     VersionAlreadyExists {
         /// The wrapped TransactionCommitAttemptError.
-        inner: TransactionCommitAttemptError,
+        source: StorageError,
     },
 
     /// Error that indicates the record batch is missing a partition column required by the Delta
@@ -1116,52 +1103,13 @@ pub enum DeltaTransactionError {
     },
 }
 
-/// Error that occurs when a single transaction commit attempt fails
-#[derive(thiserror::Error, Debug)]
-pub enum TransactionCommitAttemptError {
-    // NOTE: it would be nice to add a `num_retries` prop to this error so we can identify how frequently we hit optimistic concurrency retries and look for optimization paths
-    /// Error indicating the transaction commit attempt failed because the Delta table version has already been committed.
-    /// This is expected in the case of multiple writers to the same table and retried within the
-    /// optimistic concurrency loop.
-    #[error("Version already exists: {source}")]
-    VersionExists {
-        /// The wrapped StorageError.
-        source: StorageError,
-    },
-
-    /// Error indicating a general DeltaTable error occurred during a transaction commit attempt.
-    #[error("Commit Failed due to DeltaTable error: {source}")]
-    DeltaTable {
-        /// The wrapped DeltaTableError
-        #[from]
-        source: DeltaTableError,
-    },
-
-    /// Error indicating a general StorageError occurred during a transaction commit attempt.
-    #[error("Commit Failed due to StorageError: {source}")]
-    Storage {
-        /// The wrapped StorageError
-        source: StorageError,
-    },
-}
-
-impl From<TransactionCommitAttemptError> for DeltaTransactionError {
-    fn from(error: TransactionCommitAttemptError) -> Self {
-        match error {
-            TransactionCommitAttemptError::VersionExists { .. } => {
-                DeltaTransactionError::VersionAlreadyExists { inner: error }
-            }
-            _ => DeltaTransactionError::TransactionCommitAttempt { inner: error },
-        }
-    }
-}
-impl From<StorageError> for TransactionCommitAttemptError {
+impl From<StorageError> for DeltaTransactionError {
     fn from(error: StorageError) -> Self {
         match error {
             StorageError::AlreadyExists(_) => {
-                TransactionCommitAttemptError::VersionExists { source: error }
+                DeltaTransactionError::VersionAlreadyExists { source: error }
             }
-            _ => TransactionCommitAttemptError::Storage { source: error },
+            _ => DeltaTransactionError::Storage { source: error },
         }
     }
 }
@@ -1194,12 +1142,15 @@ impl Default for DeltaTransactionOptions {
 
 /// Object representing a delta transaction.
 /// Clients that do not need to mutate action content in case a transaction conflict is encountered
-/// may use the `commit_with` method and rely on optimistic concurrency to determine the
+/// may use the `commit` method and rely on optimistic concurrency to determine the
 /// appropriate Delta version number for a commit. A good example of this type of client is an
 /// append only client that does not need to maintain transaction state with external systems.
-/// Clients that may need to do conflict resolution if the Delta version changes should use the `commit_version`
-/// method and manage the Delta version themselves so that they can resolve data conflicts that may
-/// occur between Delta versions.
+/// Clients that may need to do conflict resolution if the Delta version changes should use
+/// the `prepare_commit` and `try_commit` methods and manage the Delta version themselves so
+/// that they can resolve data conflicts that may occur between Delta versions.
+///
+/// Please not that in case of non-retryable error the temporary commit file such as
+/// `_delta_log/_commit_<uuid>.json` will orphaned in storage.
 #[derive(Debug)]
 pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
@@ -1329,13 +1280,58 @@ impl<'a> DeltaTransaction<'a> {
         //     IsolationLevel::Serializable
         // };
 
-        // TODO: create a CommitInfo action and prepend it to actions.
+        let prepared_commit = self.prepare_commit(_operation).await?;
 
+        // try to commit in a loop in case other writers write the next version first
+        let version = self.try_commit_loop(&prepared_commit).await?;
+
+        Ok(version)
+    }
+
+    /// Low-level transaction API. Creates a temporary commit file.
+    /// Once created, the actual commit could be executed with `try_commit`.
+    pub async fn prepare_commit(
+        &self,
+        _operation: Option<DeltaOperation>,
+    ) -> Result<PreparedCommit, DeltaTransactionError> {
+        let token = Uuid::new_v4().to_string();
+
+        // TODO: create a CommitInfo action and prepend it to actions.
         // Serialize all actions that are part of this log entry.
         let log_entry = log_entry_from_actions(&self.actions)?;
 
-        // try to commit in a loop in case other writers write the next version first
-        let version = self.try_commit_loop(log_entry.as_bytes()).await?;
+        let file_name = format!("_commit_{}.json", token);
+        let uri = self
+            .delta_table
+            .storage
+            .join_path(&self.delta_table.log_uri, &file_name);
+
+        self.delta_table
+            .storage
+            .put_obj(&uri, log_entry.as_bytes())
+            .await?;
+
+        Ok(PreparedCommit { uri })
+    }
+
+    /// Low-level transaction API. Try to commit a prepared commit file.
+    /// Returns `DeltaTransactionError::VersionAlreadyExists` if the given `version`
+    /// already exists. The caller should handle the retry logic itself. Otherwise, if there's no
+    /// additional behavior required then one might rely on `commit` which handles the commit loop itself.
+    pub async fn try_commit(
+        &mut self,
+        commit: &PreparedCommit,
+        version: DeltaDataTypeVersion,
+    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+        // move temporary commit file to delta log directory
+        // rely on storage to fail if the file already exists -
+        self.delta_table
+            .storage
+            .rename_obj(
+                &commit.uri,
+                &self.delta_table.commit_uri_from_version(version),
+            )
+            .await?;
 
         // NOTE: since we have the log entry in memory already,
         // we could optimize this further by merging the log entry instead of updating from storage.
@@ -1344,35 +1340,15 @@ impl<'a> DeltaTransaction<'a> {
         Ok(version)
     }
 
-    /// Commits the delta transaction at the specified version.
-    /// Propagates version conflict errors back to the caller immediately.
-    pub async fn commit_version(
-        &mut self,
-        version: DeltaDataTypeVersion,
-        _operation: Option<DeltaOperation>,
-    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
-        // TODO: create a CommitInfo action and prepend it to actions.
-
-        let log_entry = log_entry_from_actions(&self.actions)?;
-        let tmp_commit_uri = self.prepare_commit(log_entry.as_bytes()).await?;
-        let version = self.try_commit(&tmp_commit_uri, version).await?;
-
-        self.delta_table.update().await?;
-
-        Ok(version)
-    }
-
     async fn try_commit_loop(
         &mut self,
-        log_entry: &[u8],
-    ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
+        commit: &PreparedCommit,
+    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         let mut attempt_number: u32 = 0;
-
-        let tmp_commit_uri = self.prepare_commit(log_entry).await?;
         loop {
             let version = self.next_attempt_version().await?;
 
-            let commit_result = self.try_commit(&tmp_commit_uri, version).await;
+            let commit_result = self.try_commit(commit, version).await;
 
             match commit_result {
                 Ok(v) => {
@@ -1380,13 +1356,13 @@ impl<'a> DeltaTransaction<'a> {
                 }
                 Err(e) => {
                     match e {
-                        TransactionCommitAttemptError::VersionExists { .. }
+                        DeltaTransactionError::VersionAlreadyExists { .. }
                             if attempt_number > self.options.max_retry_commit_attempts + 1 =>
                         {
                             debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
                             return Err(e);
                         }
-                        TransactionCommitAttemptError::VersionExists { .. } => {
+                        DeltaTransactionError::VersionAlreadyExists { .. } => {
                             attempt_number += 1;
                             debug!("Transaction attempt failed. Incrementing attempt number to {} and retrying.", attempt_number);
                         }
@@ -1400,44 +1376,19 @@ impl<'a> DeltaTransaction<'a> {
         }
     }
 
-    async fn prepare_commit(
-        &mut self,
-        log_entry: &[u8],
-    ) -> Result<String, TransactionCommitAttemptError> {
-        let token = Uuid::new_v4().to_string();
-        let tmp_commit_uri = self.delta_table.tmp_commit_uri(&token);
-
-        self.delta_table
-            .storage
-            .put_obj(&tmp_commit_uri, log_entry)
-            .await?;
-
-        Ok(tmp_commit_uri)
-    }
-
-    async fn try_commit(
-        &mut self,
-        tmp_commit_uri: &str,
-        version: DeltaDataTypeVersion,
-    ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
-        let commit_uri = self.delta_table.commit_uri_from_version(version);
-
-        // move temporary commit file to delta log directory
-        // rely on storage to fail if the file already exists -
-        self.delta_table
-            .storage
-            .rename_obj(tmp_commit_uri, &commit_uri)
-            .await?;
-
-        Ok(version)
-    }
-
     async fn next_attempt_version(
         &mut self,
-    ) -> Result<DeltaDataTypeVersion, TransactionCommitAttemptError> {
+    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         self.delta_table.update().await?;
         Ok(self.delta_table.version + 1)
     }
+}
+
+/// Holds the uri to prepared commit temporary file created with `DeltaTransaction.prepare_commit`.
+/// Once created, the actual commit could be executed with `DeltaTransaction.try_commit`.
+#[derive(Debug)]
+pub struct PreparedCommit {
+    uri: String,
 }
 
 fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Error> {
