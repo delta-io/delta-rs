@@ -31,19 +31,17 @@ mod simple_commit_s3 {
     #[tokio::test]
     #[serial]
     async fn test_two_commits_s3_fails_with_no_lock() {
-        use deltalake::{StorageError, TransactionCommitAttemptError};
+        use deltalake::StorageError;
 
         let path = "s3://deltars/simple_commit_rw2";
         prepare_s3(path).await;
         std::env::set_var("AWS_S3_LOCKING_PROVIDER", "none  ");
 
         let result = test_two_commits(path).await;
-        if let Err(DeltaTransactionError::TransactionCommitAttempt { ref inner }) = result {
-            if let TransactionCommitAttemptError::Storage { source } = inner {
-                if let StorageError::S3Generic(err) = source {
-                    assert_eq!(err, "dynamodb locking is not enabled");
-                    return;
-                }
+        if let Err(DeltaTransactionError::Storage { ref source }) = result {
+            if let StorageError::S3Generic(err) = source {
+                assert_eq!(err, "dynamodb locking is not enabled");
+                return;
             }
         }
 
