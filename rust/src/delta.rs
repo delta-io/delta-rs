@@ -1282,10 +1282,6 @@ impl<'a> DeltaTransaction<'a> {
         // try to commit in a loop in case other writers write the next version first
         let version = self.try_commit_loop(&prepared_commit).await?;
 
-        // NOTE: since we have the log entry in memory already,
-        // we could optimize this further by merging the log entry instead of updating from storage.
-        self.delta_table.update().await?;
-
         Ok(version)
     }
 
@@ -1333,6 +1329,10 @@ impl<'a> DeltaTransaction<'a> {
                 &self.delta_table.commit_uri_from_version(version),
             )
             .await?;
+
+        // NOTE: since we have the log entry in memory already,
+        // we could optimize this further by merging the log entry instead of updating from storage.
+        self.delta_table.update().await?;
 
         Ok(version)
     }
