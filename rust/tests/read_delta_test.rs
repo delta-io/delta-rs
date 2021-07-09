@@ -109,6 +109,27 @@ async fn read_delta_8_0_table_without_version() {
             "part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet"
         ]
     );
+    assert_eq!(table.get_stats().unwrap().len(), 2);
+
+    assert_eq!(
+        table
+            .get_stats()
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap().num_records)
+            .sum::<i64>(),
+        4
+    );
+
+    assert_eq!(
+        table
+            .get_stats()
+            .unwrap()
+            .into_iter()
+            .map(|x| x.unwrap().null_count["value"].as_value().unwrap())
+            .collect::<Vec<i64>>(),
+        vec![0, 0]
+    );
     let tombstones = table.get_tombstones();
     assert_eq!(tombstones.len(), 1);
     assert_eq!(
