@@ -827,7 +827,7 @@ impl DeltaTable {
     }
 
     /// Returns statistics for files, in order
-    pub fn get_stats(&self) -> Result<Vec<Option<Stats>>, DeltaTableError> {
+    pub fn get_stats(&self) -> Vec<Result<Option<Stats>, DeltaTableError>> {
         self.state
             .files
             .iter()
