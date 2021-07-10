@@ -24,6 +24,8 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use std::{cmp::Ordering, collections::HashSet};
 use uuid::Uuid;
 
+use crate::action::Stats;
+
 use super::action;
 use super::action::{Action, DeltaOperation};
 use super::partitions::{DeltaTablePartition, PartitionFilter};
@@ -821,6 +823,15 @@ impl DeltaTable {
             .files
             .iter()
             .map(|add| self.storage.join_path(&self.table_uri, &add.path))
+            .collect()
+    }
+
+    /// Returns statistics for files, in order
+    pub fn get_stats(&self) -> Vec<Result<Option<Stats>, DeltaTableError>> {
+        self.state
+            .files
+            .iter()
+            .map(|add| add.get_stats().map_err(DeltaTableError::from))
             .collect()
     }
 
