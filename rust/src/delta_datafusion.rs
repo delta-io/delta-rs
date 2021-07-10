@@ -94,8 +94,26 @@ impl TableProvider for delta::DeltaTable {
     }
 
     fn statistics(&self) -> Statistics {
-        // TODO: proxy delta table stats after https://github.com/delta-io/delta.rs/issues/45 has
-        // been completed
-        Statistics::default()
+        self.get_stats()
+            .into_iter()
+            .fold(
+                Some(Statistics {
+                    num_rows: Some(0),
+                    total_byte_size: None,
+                    column_statistics: None,
+                }),
+                |acc, stats| {
+                    let acc = acc?;
+                    let new_stats = stats.unwrap_or(None)?;
+                    Some(Statistics {
+                        num_rows: acc
+                            .num_rows
+                            .map(|rows| rows + new_stats.num_records as usize),
+                        total_byte_size: None,
+                        column_statistics: None, // TODO: add column statistics
+                    })
+                },
+            )
+            .unwrap_or_default()
     }
 }
