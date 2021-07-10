@@ -59,10 +59,7 @@ mod datafusion {
             .unwrap();
         let statistics = table.statistics();
 
-        assert_eq!(
-            statistics.num_rows,
-            Some(4),
-        );
+        assert_eq!(statistics.num_rows, Some(4),);
 
         Ok(())
     }
