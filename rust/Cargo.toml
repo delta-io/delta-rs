@@ -46,7 +46,6 @@ parquet-format = "~2.6.1"
 arrow  = { version = "4" }
 datafusion = { version = "4", optional = true }
 parquet = { version = "4" }
-crossbeam = { version = "0", optional = true }
 cfg-if = "1"
 async-trait = "0.1"
 # NOTE: disable rust-dataframe integration since it currently doesn't have a
@@ -55,7 +54,7 @@ async-trait = "0.1"
 
 [features]
 rust-dataframe-ext = []
-datafusion-ext = ["datafusion", "crossbeam"]
+datafusion-ext = ["datafusion"]
 azure = ["azure_core", "azure_storage", "reqwest"]
 s3 = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_s3/native-tls", "rusoto_sts/native-tls", "rusoto_dynamodb/native-tls", "maplit"]
 s3-rustls = ["rusoto_core/rustls", "rusoto_credential", "rusoto_s3/rustls", "rusoto_sts/rustls", "rusoto_dynamodb/rustls", "maplit"]

@@ -3,6 +3,7 @@ mod datafusion {
     use std::sync::Arc;
 
     use arrow::array::*;
+    use datafusion::datasource::TableProvider;
     use datafusion::error::Result;
     use datafusion::execution::context::ExecutionContext;
 
@@ -47,6 +48,18 @@ mod datafusion {
             batches[0].column(0).as_ref(),
             Arc::new(Date32Array::from(vec![18629])).as_ref(),
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_datafusion_stats() -> Result<()> {
+        let table = deltalake::open_table("./tests/data/delta-0.8.0")
+            .await
+            .unwrap();
+        let statistics = table.statistics();
+
+        assert_eq!(statistics.num_rows, Some(4),);
 
         Ok(())
     }
