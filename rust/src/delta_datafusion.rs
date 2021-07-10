@@ -110,7 +110,7 @@ impl TableProvider for delta::DeltaTable {
                             .num_rows
                             .map(|rows| rows + new_stats.num_records as usize),
                         total_byte_size: None,
-                        column_statistics: None,
+                        column_statistics: None, // TODO: add column statistics
                     })
                 },
             )
