@@ -547,7 +547,7 @@ impl DeltaTable {
 
     async fn get_latest_version(&mut self) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         let mut version = match self.get_last_checkpoint().await {
-            Ok(last_check_point) => last_check_point.version,
+            Ok(last_check_point) => last_check_point.version + 1,
             Err(LoadCheckpointError::NotFound) => {
                 // no checkpoint, start with version 0
                 0
