@@ -84,7 +84,7 @@ mod simple_commit_fs {
         let mut tx1 = table.create_transaction(None);
         tx1.add_actions(tx1_actions());
         let commit = tx1.prepare_commit(None).await.unwrap();
-        let result = tx1.try_commit(&commit, 1).await.unwrap();
+        let result = table.try_commit_transaction(&commit, 1).await.unwrap();
 
         assert_eq!(1, result);
         assert_eq!(1, table.version);
@@ -105,13 +105,13 @@ mod simple_commit_fs {
         let mut tx1 = table.create_transaction(None);
         tx1.add_actions(tx1_actions());
         let commit = tx1.prepare_commit(None).await.unwrap();
-        let _ = tx1.try_commit(&commit, 1).await.unwrap();
+        let _ = table.try_commit_transaction(&commit, 1).await.unwrap();
 
         let mut tx2 = table.create_transaction(None);
         tx2.add_actions(tx2_actions());
         // we already committed version 1 - this should fail and return error for caller to handle.
         let commit = tx2.prepare_commit(None).await.unwrap();
-        let result = tx2.try_commit(&commit, 1).await;
+        let result = table.try_commit_transaction(&commit, 1).await;
 
         match result {
             Err(deltalake::DeltaTransactionError::VersionAlreadyExists { .. }) => {
@@ -123,6 +123,51 @@ mod simple_commit_fs {
         }
 
         assert!(result.is_err());
+        assert_eq!(1, table.version);
+        assert_eq!(2, table.get_files().len());
+    }
+
+    // This test shows an example on how to use low-level transaction API with custom optimistic
+    // concurrency loop and retry logic.
+    #[tokio::test]
+    #[serial]
+    async fn test_low_level_tx_api() {
+        prepare_fs();
+
+        let table_path = "./tests/data/simple_commit";
+        let mut table = deltalake::open_table(table_path).await.unwrap();
+
+        assert_eq!(0, table.version);
+        assert_eq!(0, table.get_files().len());
+
+        let mut attempt = 0;
+        let prepared_commit = {
+            let mut tx = table.create_transaction(None);
+            tx.add_actions(tx1_actions());
+            tx.prepare_commit(None).await.unwrap()
+        };
+
+        loop {
+            table.update().await.unwrap();
+
+            let version = table.version + 1;
+            match table
+                .try_commit_transaction(&prepared_commit, version)
+                .await
+            {
+                Ok(_) => {
+                    break;
+                }
+                Err(DeltaTransactionError::VersionAlreadyExists { .. }) => {
+                    attempt += 1;
+                }
+                Err(e) => {
+                    panic!("{}", e)
+                }
+            }
+        }
+
+        assert_eq!(0, attempt);
         assert_eq!(1, table.version);
         assert_eq!(2, table.get_files().len());
     }
