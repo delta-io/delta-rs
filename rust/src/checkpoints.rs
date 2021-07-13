@@ -184,9 +184,8 @@ impl CheckPointWriter {
             })
             .collect();
 
-        let mut jsons = 
         // protocol
-        std::iter::once(action::Action::protocol(action::Protocol {
+        let mut jsons = std::iter::once(action::Action::protocol(action::Protocol {
             min_reader_version: state.min_reader_version(),
             min_writer_version: state.min_writer_version(),
         }))
@@ -255,7 +254,7 @@ fn checkpoint_add_from_state(
 ) -> Result<Value, ArrowError> {
     let mut v = serde_json::to_value(action::Action::add(add.clone()))?;
 
-    if add.partition_values.len() > 0 && add.partition_values_parsed.is_none() {
+    if !add.partition_values.is_empty() && add.partition_values_parsed.is_none() {
         let mut partition_values_parsed: HashMap<String, Value> = HashMap::new();
 
         for (field_name, data_type) in data_types.iter() {
@@ -277,22 +276,22 @@ fn checkpoint_add_from_state(
 }
 
 fn typed_partition_value_from_string(
-    _string_value: &String,
-    _data_type: &SchemaDataType,
+    string_value: &str,
+    data_type: &SchemaDataType,
 ) -> Result<Value, CheckPointWriterError> {
-    match _data_type {
-        SchemaDataType::primitive(_primitive_type) => match _primitive_type.as_str() {
-            "string" => Ok(_string_value.to_owned().into()),
-            "long" | "integer" | "short" | "byte" => Ok(_string_value
+    match data_type {
+        SchemaDataType::primitive(primitive_type) => match primitive_type.as_str() {
+            "string" => Ok(string_value.to_owned().into()),
+            "long" | "integer" | "short" | "byte" => Ok(string_value
                 .parse::<i64>()
                 .map_err(|_| {
-                    CheckPointWriterError::PartitionValueNotParseable(_string_value.to_owned())
+                    CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
                 })?
                 .into()),
-            "boolean" => Ok(_string_value
+            "boolean" => Ok(string_value
                 .parse::<bool>()
                 .map_err(|_| {
-                    CheckPointWriterError::PartitionValueNotParseable(_string_value.to_owned())
+                    CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
                 })?
                 .into()),
             s => unimplemented!(
@@ -314,14 +313,33 @@ mod tests {
     #[test]
     fn typed_partition_value_from_string_test() {
         let string_value: Value = "Hello World!".into();
-        assert_eq!(string_value, typed_partition_value_from_string(&"Hello World!".to_string(), &SchemaDataType::primitive("string".to_string())).unwrap());
+        assert_eq!(
+            string_value,
+            typed_partition_value_from_string(
+                &"Hello World!".to_string(),
+                &SchemaDataType::primitive("string".to_string())
+            )
+            .unwrap()
+        );
 
         let bool_value: Value = true.into();
-        assert_eq!(bool_value, typed_partition_value_from_string(&"true".to_string(), &SchemaDataType::primitive("boolean".to_string())).unwrap());
+        assert_eq!(
+            bool_value,
+            typed_partition_value_from_string(
+                &"true".to_string(),
+                &SchemaDataType::primitive("boolean".to_string())
+            )
+            .unwrap()
+        );
 
         let number_value: Value = 42.into();
-        assert_eq!(number_value, typed_partition_value_from_string(&"42".to_string(), &SchemaDataType::primitive("integer".to_string())).unwrap());
-
-
+        assert_eq!(
+            number_value,
+            typed_partition_value_from_string(
+                &"42".to_string(),
+                &SchemaDataType::primitive("integer".to_string())
+            )
+            .unwrap()
+        );
     }
 }
