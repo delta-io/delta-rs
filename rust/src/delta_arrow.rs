@@ -211,7 +211,7 @@ pub(crate) fn delta_log_schema_for_table(
         vec![ArrowField::new("numRecords", ArrowDataType::Int64, true)];
 
     if !non_partition_fields.is_empty() {
-        stats_parsed_fields.extend(["minValues", "maxValues", "nullCounts"].iter().map(|name| {
+        stats_parsed_fields.extend(["minValues", "maxValues", "nullCount"].iter().map(|name| {
             ArrowField::new(
                 name,
                 ArrowDataType::Struct(non_partition_fields.clone()),
