@@ -25,12 +25,13 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::datatypes::Schema as ArrowSchema;
-use datafusion::datasource::datasource::Statistics;
+use datafusion::datasource::datasource::{ColumnStatistics, Statistics};
 use datafusion::datasource::TableProvider;
 use datafusion::logical_plan::{combine_filters, Expr};
 use datafusion::physical_plan::parquet::{ParquetExec, ParquetPartition, RowGroupPredicateBuilder};
 use datafusion::physical_plan::ExecutionPlan;
 
+use crate::action::ColumnCountStat;
 use crate::delta;
 use crate::schema;
 
@@ -64,8 +65,22 @@ impl TableProvider for delta::DeltaTable {
                     Statistics {
                         num_rows: Some(statistics.num_records as usize),
                         total_byte_size: None,
-                        // TODO map column statistics
-                        column_statistics: None,
+                        column_statistics: Some(
+                            self.schema()
+                                .unwrap()
+                                .get_fields()
+                                .iter()
+                                .map(|field| ColumnStatistics {
+                                    null_count: statistics
+                                        .null_count
+                                        .get(field.get_name())
+                                        .and_then(stat_to_val),
+                                    max_value: None, // TODO: max/min/distinct
+                                    min_value: None,
+                                    distinct_count: None,
+                                })
+                                .collect(),
+                        ),
                     }
                 } else {
                     Statistics::default()
@@ -100,7 +115,15 @@ impl TableProvider for delta::DeltaTable {
                 Some(Statistics {
                     num_rows: Some(0),
                     total_byte_size: None,
-                    column_statistics: None,
+                    column_statistics: Some(vec![
+                        ColumnStatistics {
+                            null_count: Some(0),
+                            max_value: None,
+                            min_value: None,
+                            distinct_count: None
+                        };
+                        self.schema().unwrap().get_fields().len()
+                    ]),
                 }),
                 |acc, stats| {
                     let acc = acc?;
@@ -110,10 +133,37 @@ impl TableProvider for delta::DeltaTable {
                             .num_rows
                             .map(|rows| rows + new_stats.num_records as usize),
                         total_byte_size: None,
-                        column_statistics: None, // TODO: add column statistics
+                        column_statistics: acc.column_statistics.map(|col_stats| {
+                            self.schema()
+                                .unwrap()
+                                .get_fields()
+                                .iter()
+                                .zip(col_stats)
+                                .map(|(field, stats)| ColumnStatistics {
+                                    null_count: new_stats
+                                        .null_count
+                                        .get(field.get_name())
+                                        .and_then(|x| {
+                                            let null_count_acc = stats.null_count?;
+                                            let null_count = stat_to_val(x)?;
+                                            Some(null_count_acc + null_count)
+                                        }),
+                                    max_value: None,
+                                    min_value: None,
+                                    distinct_count: None,
+                                })
+                                .collect()
+                        }),
                     })
                 },
             )
             .unwrap_or_default()
+    }
+}
+
+fn stat_to_val(stat: &ColumnCountStat) -> Option<usize> {
+    match stat {
+        ColumnCountStat::Value(val) => Some(*val as usize),
+        ColumnCountStat::Column(_) => None,
     }
 }
