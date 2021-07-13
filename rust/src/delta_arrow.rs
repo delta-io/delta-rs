@@ -309,7 +309,7 @@ mod tests {
 
             for (k, v) in field_map.iter() {
                 match k.as_ref() {
-                    "minValues" | "maxValues" | "nullCounts" => match v.data_type() {
+                    "minValues" | "maxValues" | "nullCount" => match v.data_type() {
                         ArrowDataType::Struct(fields) => {
                             assert_eq!(1, fields.len());
                             let field = fields.get(0).unwrap().to_owned();
