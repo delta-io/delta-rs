@@ -61,6 +61,15 @@ mod datafusion {
 
         assert_eq!(statistics.num_rows, Some(4),);
 
+        assert_eq!(
+            statistics
+                .column_statistics
+                .unwrap()
+                .iter()
+                .map(|x| x.null_count)
+                .collect::<Vec<Option<usize>>>(),
+            vec![Some(0)],
+        );
         Ok(())
     }
 }
