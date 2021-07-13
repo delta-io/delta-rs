@@ -602,12 +602,13 @@ impl DeltaTable {
             }
         }
 
-        self.apply_logs_after_current_version().await?;
+        self.apply_logs_from_current_version().await?;
 
         Ok(())
     }
 
-    /// Updates the DeltaTable to the most recent state committed to the transaction log.
+    /// Updates the DeltaTable to the most recent state committed to the transaction log by
+    /// loading the last checkpoint and incrementally applying each version since.
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
@@ -625,12 +626,19 @@ impl DeltaTable {
             }
         }
 
-        self.apply_logs_after_current_version().await?;
+        self.apply_logs_from_current_version().await?;
 
         Ok(())
     }
 
-    async fn apply_logs_after_current_version(&mut self) -> Result<(), DeltaTableError> {
+    /// Updates the DeltaTable to the most recent state committed to the transaction by
+    /// incrementally applying each version since current.
+    pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
+        self.version += 1;
+        self.apply_logs_from_current_version().await
+    }
+
+    async fn apply_logs_from_current_version(&mut self) -> Result<(), DeltaTableError> {
         // replay logs after checkpoint
         loop {
             match self.apply_log(self.version).await {
@@ -1355,7 +1363,9 @@ impl<'a> DeltaTransaction<'a> {
     ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         let mut attempt_number: u32 = 0;
         loop {
-            let version = self.next_attempt_version().await?;
+            self.delta_table.update_incremental().await?;
+
+            let version = self.delta_table.version + 1;
 
             match self
                 .delta_table
@@ -1385,13 +1395,6 @@ impl<'a> DeltaTransaction<'a> {
                 }
             }
         }
-    }
-
-    async fn next_attempt_version(
-        &mut self,
-    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
-        self.delta_table.update().await?;
-        Ok(self.delta_table.version + 1)
     }
 }
 
