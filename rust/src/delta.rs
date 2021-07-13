@@ -635,8 +635,7 @@ impl DeltaTable {
     /// incrementally applying each version since current.
     pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
         self.version += 1;
-        self.apply_logs_from_current_version().await?;
-        Ok(())
+        self.apply_logs_from_current_version().await
     }
 
     async fn apply_logs_from_current_version(&mut self) -> Result<(), DeltaTableError> {
