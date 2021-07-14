@@ -28,7 +28,8 @@ use arrow::datatypes::Schema as ArrowSchema;
 use datafusion::datasource::datasource::{ColumnStatistics, Statistics};
 use datafusion::datasource::TableProvider;
 use datafusion::logical_plan::{combine_filters, Expr};
-use datafusion::physical_plan::parquet::{ParquetExec, ParquetPartition, RowGroupPredicateBuilder};
+use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_plan::parquet::{ParquetExec, ParquetPartition};
 use datafusion::physical_plan::ExecutionPlan;
 
 use crate::action::ColumnCountStat;
@@ -91,12 +92,12 @@ impl TableProvider for delta::DeltaTable {
             .collect::<datafusion::error::Result<_>>()?;
 
         let predicate_builder = combine_filters(filters).and_then(|predicate_expr| {
-            RowGroupPredicateBuilder::try_new(&predicate_expr, schema.clone()).ok()
+            PredicateBuilder::try_new(&predicate_expr, schema.clone().into()).ok()
         });
 
         Ok(Arc::new(ParquetExec::new(
             partitions,
-            schema,
+            schema.into(),
             projection.clone(),
             predicate_builder,
             batch_size,
