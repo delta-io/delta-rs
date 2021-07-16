@@ -107,7 +107,7 @@ impl StorageBackend for FileStorageBackend {
             .open(path)
             .await?;
 
-        f.write(obj_bytes).await?;
+        f.write_all(obj_bytes).await?;
 
         Ok(())
     }
