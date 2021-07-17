@@ -19,7 +19,8 @@ env_logger = "0"
 # for binary wheel best practice, statically link openssl
 reqwest = { version = "*", features = ["native-tls-vendored"] }
 serde_json = "1"
-arrow  = { version = "4" }
+#arrow  = { version = "4" }
+arrow = { git = "https://github.com/nevi-me/arrow-rs", branch = "map-support" }
 
 [dependencies.pyo3]
 version = "0.13"
