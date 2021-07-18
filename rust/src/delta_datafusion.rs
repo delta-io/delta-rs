@@ -59,12 +59,12 @@ impl TableProvider for delta::DeltaTable {
 
         let partitions = filenames
             .into_iter()
-            .zip(self.get_stats())
-            .map(|(fname, stats)| {
-                let statistics = if let Ok(Some(statistics)) = stats {
+            .zip(self.get_actions())
+            .map(|(fname, action)| {
+                let statistics = if let Ok(Some(statistics)) = action.get_stats() {
                     Statistics {
                         num_rows: Some(statistics.num_records as usize),
-                        total_byte_size: None,
+                        total_byte_size: Some(action.size as usize),
                         column_statistics: Some(
                             self.schema()
                                 .unwrap()
@@ -109,12 +109,12 @@ impl TableProvider for delta::DeltaTable {
     }
 
     fn statistics(&self) -> Statistics {
-        self.get_stats()
-            .into_iter()
+        self.get_actions()
+            .iter()
             .fold(
                 Some(Statistics {
                     num_rows: Some(0),
-                    total_byte_size: None,
+                    total_byte_size: Some(0),
                     column_statistics: Some(vec![
                         ColumnStatistics {
                             null_count: Some(0),
@@ -125,14 +125,16 @@ impl TableProvider for delta::DeltaTable {
                         self.schema().unwrap().get_fields().len()
                     ]),
                 }),
-                |acc, stats| {
+                |acc, action| {
                     let acc = acc?;
-                    let new_stats = stats.unwrap_or(None)?;
+                    let new_stats = action.get_stats().unwrap_or(None)?;
                     Some(Statistics {
                         num_rows: acc
                             .num_rows
                             .map(|rows| rows + new_stats.num_records as usize),
-                        total_byte_size: None,
+                        total_byte_size: acc
+                            .total_byte_size
+                            .map(|total_size| total_size + action.size as usize),
                         column_statistics: acc.column_statistics.map(|col_stats| {
                             self.schema()
                                 .unwrap()
