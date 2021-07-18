@@ -110,7 +110,7 @@ impl TableProvider for delta::DeltaTable {
 
     fn statistics(&self) -> Statistics {
         self.get_actions()
-            .into_iter()
+            .iter()
             .fold(
                 Some(Statistics {
                     num_rows: Some(0),
