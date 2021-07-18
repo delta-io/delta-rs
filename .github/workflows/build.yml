@@ -42,7 +42,7 @@ jobs:
         toolchain: stable
         override: true
     - name: build and lint with clippy
-      run: cargo clippy --features azure,datafusion-ext,s3
+      run: cargo clippy --features datafusion-ext,s3
     - name: Spot-check build for rustls features
       run: cargo clippy --features s3-rustls
 
@@ -64,7 +64,7 @@ jobs:
         toolchain: stable
         override: true
     - name: Run tests
-      run: cargo test --verbose --features datafusion-ext,azure
+      run: cargo test --verbose --features datafusion-ext
 
   s3_test:
     runs-on: ubuntu-latest

@@ -28,9 +28,9 @@ uuid = { version = "0.8", features = ["serde", "v4"] }
 lazy_static = "1"
 
 # Azure
-reqwest = { version = "0", optional = true }
-azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "536da42ebefd411feff8ba6a0965865e2741267e" }
-azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "536da42ebefd411feff8ba6a0965865e2741267e", features = ["blob", "account", "adls_gen2"] }
+# reqwest = { version = "0", optional = true }
+# azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "536da42ebefd411feff8ba6a0965865e2741267e" }
+# azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "536da42ebefd411feff8ba6a0965865e2741267e", features = ["blob", "account", "adls_gen2"] }
 
 # S3
 rusoto_core = { version = "0.46", default-features = false, optional = true }
@@ -55,7 +55,8 @@ async-trait = "0.1"
 [features]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion"]
-azure = ["azure_core", "azure_storage", "reqwest"]
+# azure = ["azure_core", "azure_storage", "reqwest"]
+azure = []
 s3 = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_s3/native-tls", "rusoto_sts/native-tls", "rusoto_dynamodb/native-tls", "maplit"]
 s3-rustls = ["rusoto_core/rustls", "rusoto_credential", "rusoto_s3/rustls", "rusoto_sts/rustls", "rusoto_dynamodb/rustls", "maplit"]
 
