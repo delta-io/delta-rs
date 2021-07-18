@@ -61,6 +61,8 @@ mod datafusion {
 
         assert_eq!(statistics.num_rows, Some(4),);
 
+        assert_eq!(statistics.total_byte_size, Some(440 + 440));
+
         assert_eq!(
             statistics
                 .column_statistics
