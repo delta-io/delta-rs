@@ -63,4 +63,16 @@ mod datafusion {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_datafusion_size() -> Result<()> {
+        let table = deltalake::open_table("./tests/data/delta-0.8.0")
+            .await
+            .unwrap();
+        let statistics = table.statistics();
+
+        assert_eq!(statistics.total_byte_size, Some(440 + 440),);
+
+        Ok(())
+    }
 }
