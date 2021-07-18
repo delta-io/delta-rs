@@ -61,6 +61,8 @@ mod datafusion {
 
         assert_eq!(statistics.num_rows, Some(4),);
 
+        assert_eq!(statistics.total_byte_size, Some(440 + 440));
+
         assert_eq!(
             statistics
                 .column_statistics
@@ -70,18 +72,6 @@ mod datafusion {
                 .collect::<Vec<Option<usize>>>(),
             vec![Some(0)],
         );
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_datafusion_size() -> Result<()> {
-        let table = deltalake::open_table("./tests/data/delta-0.8.0")
-            .await
-            .unwrap();
-        let statistics = table.statistics();
-
-        assert_eq!(statistics.total_byte_size, Some(440 + 440),);
-
         Ok(())
     }
 }
