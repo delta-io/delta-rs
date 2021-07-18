@@ -5,8 +5,9 @@ Deltalake-python
 [![userdoc](https://img.shields.io/badge/docs-user-blue)](https://delta-io.github.io/delta-rs/python/)
 [![apidoc](https://img.shields.io/badge/docs-api-blue)](https://delta-io.github.io/delta-rs/python/api_reference.html)
 
-Native [Delta Lake](https://delta.io/) binding for Python based on
-[delta-rs](https://github.com/delta-io/delta-rs).
+Native [Delta Lake](https://delta.io/) Python binding based on
+[delta-rs](https://github.com/delta-io/delta-rs) with
+[Pandas](https://pandas.pydata.org/) integration.
 
 
 Installation
