@@ -602,12 +602,13 @@ impl DeltaTable {
             }
         }
 
-        self.apply_logs_after_current_version().await?;
+        self.apply_logs_from_current_version().await?;
 
         Ok(())
     }
 
-    /// Updates the DeltaTable to the most recent state committed to the transaction log.
+    /// Updates the DeltaTable to the most recent state committed to the transaction log by
+    /// loading the last checkpoint and incrementally applying each version since.
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
@@ -625,12 +626,19 @@ impl DeltaTable {
             }
         }
 
-        self.apply_logs_after_current_version().await?;
+        self.apply_logs_from_current_version().await?;
 
         Ok(())
     }
 
-    async fn apply_logs_after_current_version(&mut self) -> Result<(), DeltaTableError> {
+    /// Updates the DeltaTable to the most recent state committed to the transaction by
+    /// incrementally applying each version since current.
+    pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
+        self.version += 1;
+        self.apply_logs_from_current_version().await
+    }
+
+    async fn apply_logs_from_current_version(&mut self) -> Result<(), DeltaTableError> {
         // replay logs after checkpoint
         loop {
             match self.apply_log(self.version).await {
@@ -983,6 +991,29 @@ impl DeltaTable {
         DeltaTransaction::new(self, options)
     }
 
+    /// Tries to commit a prepared commit file. Returns `DeltaTransactionError::VersionAlreadyExists`
+    /// if the given `version` already exists. The caller should handle the retry logic itself.
+    /// This is low-level transaction API. If user does not want to maintain the commit loop then
+    /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
+    /// with retry logic.
+    pub async fn try_commit_transaction(
+        &mut self,
+        commit: &PreparedCommit,
+        version: DeltaDataTypeVersion,
+    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+        // move temporary commit file to delta log directory
+        // rely on storage to fail if the file already exists -
+        self.storage
+            .rename_obj(&commit.uri, &self.commit_uri_from_version(version))
+            .await?;
+
+        // NOTE: since we have the log entry in memory already,
+        // we could optimize this further by merging the log entry instead of updating from storage.
+        self.update().await?;
+
+        Ok(version)
+    }
+
     /// Create a new Delta Table struct without loading any data from backing storage.
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
@@ -1157,8 +1188,8 @@ impl Default for DeltaTransactionOptions {
 /// appropriate Delta version number for a commit. A good example of this type of client is an
 /// append only client that does not need to maintain transaction state with external systems.
 /// Clients that may need to do conflict resolution if the Delta version changes should use
-/// the `prepare_commit` and `try_commit` methods and manage the Delta version themselves so
-/// that they can resolve data conflicts that may occur between Delta versions.
+/// the `prepare_commit` and `try_commit_transaction` methods and manage the Delta version
+/// themselves so that they can resolve data conflicts that may occur between Delta versions.
 ///
 /// Please not that in case of non-retryable error the temporary commit file such as
 /// `_delta_log/_commit_<uuid>.json` will orphaned in storage.
@@ -1299,8 +1330,9 @@ impl<'a> DeltaTransaction<'a> {
         Ok(version)
     }
 
-    /// Low-level transaction API. Creates a temporary commit file.
-    /// Once created, the actual commit could be executed with `try_commit`.
+    /// Low-level transaction API. Creates a temporary commit file. Once created,
+    /// the transaction object could be dropped and the actual commit could be executed
+    /// with `DeltaTable.try_commit_transaction`.
     pub async fn prepare_commit(
         &self,
         _operation: Option<DeltaOperation>,
@@ -1325,43 +1357,21 @@ impl<'a> DeltaTransaction<'a> {
         Ok(PreparedCommit { uri })
     }
 
-    /// Low-level transaction API. Try to commit a prepared commit file.
-    /// Returns `DeltaTransactionError::VersionAlreadyExists` if the given `version`
-    /// already exists. The caller should handle the retry logic itself. Otherwise, if there's no
-    /// additional behavior required then one might rely on `commit` which handles the commit loop itself.
-    pub async fn try_commit(
-        &mut self,
-        commit: &PreparedCommit,
-        version: DeltaDataTypeVersion,
-    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
-        // move temporary commit file to delta log directory
-        // rely on storage to fail if the file already exists -
-        self.delta_table
-            .storage
-            .rename_obj(
-                &commit.uri,
-                &self.delta_table.commit_uri_from_version(version),
-            )
-            .await?;
-
-        // NOTE: since we have the log entry in memory already,
-        // we could optimize this further by merging the log entry instead of updating from storage.
-        self.delta_table.update().await?;
-
-        Ok(version)
-    }
-
     async fn try_commit_loop(
         &mut self,
         commit: &PreparedCommit,
     ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
         let mut attempt_number: u32 = 0;
         loop {
-            let version = self.next_attempt_version().await?;
+            self.delta_table.update_incremental().await?;
 
-            let commit_result = self.try_commit(commit, version).await;
+            let version = self.delta_table.version + 1;
 
-            match commit_result {
+            match self
+                .delta_table
+                .try_commit_transaction(commit, version)
+                .await
+            {
                 Ok(v) => {
                     return Ok(v);
                 }
@@ -1385,13 +1395,6 @@ impl<'a> DeltaTransaction<'a> {
                 }
             }
         }
-    }
-
-    async fn next_attempt_version(
-        &mut self,
-    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
-        self.delta_table.update().await?;
-        Ok(self.delta_table.version + 1)
     }
 }
 

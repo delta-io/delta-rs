@@ -7,6 +7,8 @@ use log::*;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use parquet::file::writer::InMemoryWriteableCursor;
+use serde_json::Value;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 
 use super::action;
@@ -23,6 +25,10 @@ pub enum CheckPointWriterError {
     /// Error returned when the DeltaTableState does not contain a metadata action.
     #[error("DeltaTableMetadata not present in DeltaTableState")]
     MissingMetaData,
+    /// Error returned when a string formatted partition value cannot be parsed to its appropriate
+    /// data type.
+    #[error("Partition value {0} cannot be parsed from string.")]
+    PartitionValueNotParseable(String),
     /// Passthrough error returned when calling DeltaTable.
     #[error("DeltaTableError: {source}")]
     DeltaTable {
@@ -58,6 +64,12 @@ pub enum CheckPointWriterError {
         #[from]
         source: serde_json::Error,
     },
+}
+
+impl From<CheckPointWriterError> for ArrowError {
+    fn from(error: CheckPointWriterError) -> Self {
+        ArrowError::from_external_error(Box::new(error))
+    }
 }
 
 /// Struct for writing checkpoints to the delta log.
@@ -127,7 +139,7 @@ impl CheckPointWriter {
             .put_obj(&checkpoint_uri, &parquet_bytes)
             .await?;
 
-        let last_checkpoint_content: serde_json::Value = serde_json::to_value(&checkpoint)?;
+        let last_checkpoint_content: Value = serde_json::to_value(&checkpoint)?;
         let last_checkpoint_content = serde_json::to_string(&last_checkpoint_content)?;
 
         info!(
@@ -152,20 +164,36 @@ impl CheckPointWriter {
             .current_metadata()
             .ok_or(CheckPointWriterError::MissingMetaData)?;
 
+        // Collect partition fields along with their data type from the current schema.
+        // JSON add actions contain a `partitionValues` field which is a map<string, string>.
+        // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
+        let data_types: Vec<(&str, &SchemaDataType)> = current_metadata
+            .schema
+            .get_fields()
+            .iter()
+            .filter_map(|f| {
+                if current_metadata
+                    .partition_columns
+                    .iter()
+                    .any(|s| s.as_str() == f.get_name())
+                {
+                    Some((f.get_name(), f.get_type()))
+                } else {
+                    None
+                }
+            })
+            .collect();
+
+        // protocol
         let mut jsons = std::iter::once(action::Action::protocol(action::Protocol {
             min_reader_version: state.min_reader_version(),
             min_writer_version: state.min_writer_version(),
         }))
+        // metadata
         .chain(std::iter::once(action::Action::metaData(
             action::MetaData::try_from(current_metadata.clone())?,
         )))
-        .chain(state.files().iter().map(|f| action::Action::add(f.clone())))
-        .chain(
-            state
-                .tombstones()
-                .iter()
-                .map(|f| action::Action::remove(f.clone())),
-        )
+        // txns
         .chain(
             state
                 .app_transaction_version()
@@ -178,22 +206,37 @@ impl CheckPointWriter {
                     })
                 }),
         )
-        .map(|a| serde_json::to_value(a).map_err(ArrowError::from));
+        // removes
+        .chain(
+            state
+                .tombstones()
+                .iter()
+                .map(|f| action::Action::remove(f.clone())),
+        )
+        .map(|a| serde_json::to_value(a).map_err(ArrowError::from))
+        // adds
+        .chain(
+            state
+                .files()
+                .iter()
+                .map(|f| checkpoint_add_from_state(f, data_types.as_slice())),
+        );
 
         debug!("Preparing checkpoint parquet buffer.");
+        // Create the arrow schema that represents the Checkpoint parquet file.
         let arrow_schema = delta_log_schema_for_table(
             <ArrowSchema as TryFrom<&Schema>>::try_from(&current_metadata.schema)?,
             current_metadata.partition_columns.as_slice(),
         );
+        debug!("Writing to checkpoint parquet buffer...");
+        // Write the Checkpoint parquet file.
         let writeable_cursor = InMemoryWriteableCursor::default();
         let mut writer =
             ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
-
-        debug!("Writing to checkpoint parquet buffer...");
         let batch_size = state.app_transaction_version().len()
             + state.tombstones().len()
             + state.files().len()
-            + 2;
+            + 2; // 1 (protocol) + 1 (metadata)
         let decoder = Decoder::new(arrow_schema, batch_size, None);
         while let Some(batch) = decoder.next_batch(&mut jsons)? {
             writer.write(&batch)?;
@@ -202,5 +245,101 @@ impl CheckPointWriter {
         debug!("Finished writing checkpoint parquet buffer.");
 
         Ok(writeable_cursor.data())
+    }
+}
+
+fn checkpoint_add_from_state(
+    add: &action::Add,
+    data_types: &[(&str, &SchemaDataType)],
+) -> Result<Value, ArrowError> {
+    let mut v = serde_json::to_value(action::Action::add(add.clone()))?;
+
+    if !add.partition_values.is_empty() && add.partition_values_parsed.is_none() {
+        let mut partition_values_parsed: HashMap<String, Value> = HashMap::new();
+
+        for (field_name, data_type) in data_types.iter() {
+            if let Some(string_value) = add.partition_values.get(*field_name) {
+                let v = typed_partition_value_from_string(string_value, data_type)?;
+
+                partition_values_parsed.insert(field_name.to_string(), v);
+            }
+        }
+
+        let partition_values_parsed = serde_json::to_value(partition_values_parsed)?;
+        v["add"]["partitionValues_parsed"] = partition_values_parsed;
+    }
+    if let Ok(Some(stats)) = add.get_stats() {
+        let stats = serde_json::to_value(stats)?;
+        v["add"]["stats_parsed"] = stats;
+    }
+    Ok(v)
+}
+
+fn typed_partition_value_from_string(
+    string_value: &str,
+    data_type: &SchemaDataType,
+) -> Result<Value, CheckPointWriterError> {
+    match data_type {
+        SchemaDataType::primitive(primitive_type) => match primitive_type.as_str() {
+            "string" => Ok(string_value.to_owned().into()),
+            "long" | "integer" | "short" | "byte" => Ok(string_value
+                .parse::<i64>()
+                .map_err(|_| {
+                    CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
+                })?
+                .into()),
+            "boolean" => Ok(string_value
+                .parse::<bool>()
+                .map_err(|_| {
+                    CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
+                })?
+                .into()),
+            s => unimplemented!(
+                "Primitive type {} is not supported for partition column values.",
+                s
+            ),
+        },
+        d => unimplemented!(
+            "Data type {:?} is not supported for partition column values.",
+            d
+        ),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn typed_partition_value_from_string_test() {
+        let string_value: Value = "Hello World!".into();
+        assert_eq!(
+            string_value,
+            typed_partition_value_from_string(
+                &"Hello World!".to_string(),
+                &SchemaDataType::primitive("string".to_string())
+            )
+            .unwrap()
+        );
+
+        let bool_value: Value = true.into();
+        assert_eq!(
+            bool_value,
+            typed_partition_value_from_string(
+                &"true".to_string(),
+                &SchemaDataType::primitive("boolean".to_string())
+            )
+            .unwrap()
+        );
+
+        let number_value: Value = 42.into();
+        assert_eq!(
+            number_value,
+            typed_partition_value_from_string(
+                &"42".to_string(),
+                &SchemaDataType::primitive("integer".to_string())
+            )
+            .unwrap()
+        );
     }
 }
