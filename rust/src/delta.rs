@@ -790,8 +790,8 @@ impl DeltaTable {
             .collect())
     }
 
-    /// Return a refernece to the "add" actions present in the loaded state
-    pub fn get_actions(&self) -> &Vec<action::Add> {
+    /// Return a refernece to all active "add" actions present in the loaded state
+    pub fn get_active_add_actions(&self) -> &Vec<action::Add> {
         &self.state.files
     }
 

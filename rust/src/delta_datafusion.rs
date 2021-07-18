@@ -59,7 +59,7 @@ impl TableProvider for delta::DeltaTable {
 
         let partitions = filenames
             .into_iter()
-            .zip(self.get_actions())
+            .zip(self.get_active_add_actions())
             .map(|(fname, action)| {
                 let statistics = if let Ok(Some(statistics)) = action.get_stats() {
                     Statistics {
@@ -109,7 +109,7 @@ impl TableProvider for delta::DeltaTable {
     }
 
     fn statistics(&self) -> Statistics {
-        self.get_actions()
+        self.get_active_add_actions()
             .iter()
             .fold(
                 Some(Statistics {
