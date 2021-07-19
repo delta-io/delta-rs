@@ -30,8 +30,8 @@ use datafusion::datasource::TableProvider;
 use datafusion::logical_plan::{combine_filters, Expr};
 use datafusion::physical_plan::parquet::{ParquetExec, ParquetPartition, RowGroupPredicateBuilder};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::scalar::ScalarValue;
 
-use crate::action::ColumnCountStat;
 use crate::delta;
 use crate::schema;
 
@@ -74,10 +74,16 @@ impl TableProvider for delta::DeltaTable {
                                     null_count: statistics
                                         .null_count
                                         .get(field.get_name())
-                                        .and_then(stat_to_val),
-                                    max_value: None, // TODO: max/min/distinct
-                                    min_value: None,
-                                    distinct_count: None,
+                                        .and_then(|f| f.as_value().map(|v| v as usize)),
+                                    max_value: statistics
+                                        .max_values
+                                        .get(field.get_name())
+                                        .and_then(|f| to_scalar_value(f.as_value()?)),
+                                    min_value: statistics
+                                        .min_values
+                                        .get(field.get_name())
+                                        .and_then(|f| to_scalar_value(f.as_value()?)),
+                                    distinct_count: None, // TODO: distinct
                                 })
                                 .collect(),
                         ),
@@ -147,12 +153,52 @@ impl TableProvider for delta::DeltaTable {
                                         .get(field.get_name())
                                         .and_then(|x| {
                                             let null_count_acc = stats.null_count?;
-                                            let null_count = stat_to_val(x)?;
+                                            let null_count = x.as_value()? as usize;
                                             Some(null_count_acc + null_count)
                                         }),
-                                    max_value: None,
-                                    min_value: None,
-                                    distinct_count: None,
+                                    max_value: new_stats
+                                        .max_values
+                                        .get(field.get_name())
+                                        .and_then(|x| {
+                                            let old_stats = stats.clone();
+                                            let max_value = to_scalar_value(x.as_value()?);
+
+                                            match max_value {
+                                                Some(max_value) => match old_stats.max_value {
+                                                    Some(old_max_value) => {
+                                                       if compare_scalar_value(old_max_value.clone(), max_value.clone()) == 1 {
+                                                          Some(old_max_value)
+                                                       } else {
+                                                          Some(max_value)
+                                                       }
+                                                    }
+                                                    _ => Some(max_value)
+                                                }
+                                                _ => old_stats.max_value
+                                            }
+                                        }),
+                                    min_value: new_stats
+                                        .min_values
+                                        .get(field.get_name())
+                                        .and_then(|x| {
+                                            let old_stats = stats.clone();
+                                            let min_value = to_scalar_value(x.as_value()?);
+
+                                            match min_value {
+                                                Some(min_value) => match old_stats.min_value {
+                                                    Some(old_min_value) => {
+                                                        if compare_scalar_value(min_value.clone(), old_min_value.clone()) == 1 {
+                                                            Some(old_min_value)
+                                                        } else {
+                                                            Some(min_value)
+                                                        }
+                                                    }
+                                                    _ => Some(min_value)
+                                                }
+                                                _ => old_stats.min_value
+                                            }
+                                        }),
+                                    distinct_count: None, // TODO: distinct
                                 })
                                 .collect()
                         }),
@@ -163,9 +209,84 @@ impl TableProvider for delta::DeltaTable {
     }
 }
 
-fn stat_to_val(stat: &ColumnCountStat) -> Option<usize> {
-    match stat {
-        ColumnCountStat::Value(val) => Some(*val as usize),
-        ColumnCountStat::Column(_) => None,
+fn to_scalar_value(stat_val: &serde_json::Value) -> Option<datafusion::scalar::ScalarValue> {
+    if stat_val.is_number() {
+        if stat_val.is_i64() {
+            Some(ScalarValue::from(stat_val.as_i64()?))
+        } else if stat_val.is_u64() {
+            Some(ScalarValue::from(stat_val.as_u64()?))
+        } else if stat_val.is_f64() {
+            Some(ScalarValue::from(stat_val.as_f64()?))
+        } else {
+            None
+        }
+    } else {
+       None
+    }
+}
+
+fn compare_scalar_value(left: datafusion::scalar::ScalarValue, right: datafusion::scalar::ScalarValue) -> i8 {
+    match left {
+        ScalarValue::Float64(Some(v)) => {
+            let f_right = f64::try_from(right).unwrap();
+            if v > f_right {
+                1
+            } else if v == f_right {
+                0
+            } else {
+                -1
+            }
+        }
+        ScalarValue::Float32(Some(v)) => {
+            let f_right = f32::try_from(right).unwrap();
+            if v > f_right {
+                1
+            } else if v == f_right {
+                0
+            } else {
+                -1
+            }
+        }
+        ScalarValue::Int8(Some(v)) => {
+            let i_right = i8::try_from(right).unwrap();
+            if v > i_right {
+                1
+            } else if v == i_right {
+                0
+            } else {
+                -1
+            }
+        }
+        ScalarValue::Int16(Some(v)) => {
+            let i_right = i16::try_from(right).unwrap();
+            if v > i_right {
+                1
+            } else if v == i_right {
+                0
+            } else {
+                -1
+            }
+        }
+        ScalarValue::Int32(Some(v)) => {
+            let i_right = i32::try_from(right).unwrap();
+            if v > i_right {
+                1
+            } else if v == i_right {
+                0
+            } else {
+                -1
+            }
+        }
+        ScalarValue::Int64(Some(v)) => {
+            let i_right = i64::try_from(right).unwrap();
+            if v > i_right {
+                1
+            } else if v == i_right {
+                0
+            } else {
+                -1
+            }
+        }
+        _ => panic!("Cannot run arithmetic negate on scalar value"),
     }
 }
