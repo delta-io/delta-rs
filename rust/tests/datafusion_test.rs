@@ -6,6 +6,7 @@ mod datafusion {
     use datafusion::datasource::TableProvider;
     use datafusion::error::Result;
     use datafusion::execution::context::ExecutionContext;
+    use datafusion::scalar::ScalarValue;
 
     #[tokio::test]
     async fn test_datafusion_simple_query() -> Result<()> {
@@ -66,12 +67,56 @@ mod datafusion {
         assert_eq!(
             statistics
                 .column_statistics
+                .clone()
                 .unwrap()
                 .iter()
                 .map(|x| x.null_count)
                 .collect::<Vec<Option<usize>>>(),
             vec![Some(0)],
         );
+
+        let mut ctx = ExecutionContext::new();
+        ctx.register_table("test_table", Arc::new(table))?;
+
+        let batches = ctx
+            .sql("SELECT max(value), min(value) FROM test_table")?
+            .collect()
+            .await?;
+
+        assert_eq!(batches.len(), 1);
+        let batch = &batches[0];
+        assert_eq!(
+            batch.column(0).as_ref(),
+            Arc::new(Int32Array::from(vec![4])).as_ref(),
+        );
+
+        assert_eq!(
+            batch.column(1).as_ref(),
+            Arc::new(Int32Array::from(vec![0])).as_ref(),
+        );
+
+        assert_eq!(
+            statistics
+                .column_statistics
+                .clone()
+                .unwrap()
+                .iter()
+                .map(|x| x.max_value.as_ref())
+                .collect::<Vec<Option<&ScalarValue>>>(),
+            vec![Some(&ScalarValue::from(4 as i64))],
+        );
+
+        assert_eq!(
+            statistics
+                .column_statistics
+                .clone()
+                .unwrap()
+                .iter()
+                .map(|x| x.min_value.as_ref())
+                .collect::<Vec<Option<&ScalarValue>>>(),
+            vec![Some(&ScalarValue::from(0 as i64))],
+        );
+
         Ok(())
     }
 }
