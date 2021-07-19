@@ -161,21 +161,19 @@ impl TableProvider for delta::DeltaTable {
                                             let old_stats = stats.clone();
                                             let max_value = to_scalar_value(x.as_value()?);
 
-                                            match max_value {
-                                                Some(max_value) => match old_stats.max_value {
-                                                    Some(old_max_value) => {
-                                                        if left_larger_than_right(
-                                                            old_max_value.clone(),
-                                                            max_value.clone(),
-                                                        ) {
-                                                            Some(old_max_value)
-                                                        } else {
-                                                            Some(max_value)
-                                                        }
+                                            match (max_value, old_stats.max_value) {
+                                                (Some(max_value), Some(old_max_value)) => {
+                                                    if left_larger_than_right(
+                                                        old_max_value.clone(),
+                                                        max_value.clone(),
+                                                    ) {
+                                                        Some(old_max_value)
+                                                    } else {
+                                                        Some(max_value)
                                                     }
-                                                    _ => Some(max_value),
-                                                },
-                                                _ => old_stats.max_value,
+                                                }
+                                                (Some(max_value), None) => Some(max_value),
+                                                (None, old) => old,
                                             }
                                         },
                                     ),
@@ -184,21 +182,19 @@ impl TableProvider for delta::DeltaTable {
                                             let old_stats = stats.clone();
                                             let min_value = to_scalar_value(x.as_value()?);
 
-                                            match min_value {
-                                                Some(min_value) => match old_stats.min_value {
-                                                    Some(old_min_value) => {
-                                                        if left_larger_than_right(
-                                                            min_value.clone(),
-                                                            old_min_value.clone(),
-                                                        ) {
-                                                            Some(old_min_value)
-                                                        } else {
-                                                            Some(min_value)
-                                                        }
+                                            match (min_value, old_stats.min_value) {
+                                                (Some(min_value), Some(old_min_value)) => {
+                                                    if left_larger_than_right(
+                                                        min_value.clone(),
+                                                        old_min_value.clone(),
+                                                    ) {
+                                                        Some(old_min_value)
+                                                    } else {
+                                                        Some(min_value)
                                                     }
-                                                    _ => Some(min_value),
-                                                },
-                                                _ => old_stats.min_value,
+                                                }
+                                                (Some(min_value), None) => Some(min_value),
+                                                (None, old) => old,
                                             }
                                         },
                                     ),
@@ -215,12 +211,12 @@ impl TableProvider for delta::DeltaTable {
 
 fn to_scalar_value(stat_val: &serde_json::Value) -> Option<datafusion::scalar::ScalarValue> {
     if stat_val.is_number() {
-        if stat_val.is_i64() {
-            Some(ScalarValue::from(stat_val.as_i64()?))
-        } else if stat_val.is_u64() {
-            Some(ScalarValue::from(stat_val.as_u64()?))
-        } else if stat_val.is_f64() {
-            Some(ScalarValue::from(stat_val.as_f64()?))
+        if let Some(val) = stat_val.as_i64() {
+            Some(ScalarValue::from(val))
+        } else if let Some(val) = stat_val.as_u64() {
+            Some(ScalarValue::from(val))
+        } else if let Some(val) = stat_val.as_f64() {
+            Some(ScalarValue::from(val))
         } else {
             None
         }
@@ -258,6 +254,10 @@ fn left_larger_than_right(
             let i_right = i64::try_from(right).unwrap();
             v > i_right
         }
-        _ => unimplemented!("Unimplemented for {:?}", left),
+        _ => unimplemented!(
+            "Scalar value comparison unimplemented for {:?} and {:?}",
+            left,
+            right
+        ),
     }
 }
