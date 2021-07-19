@@ -38,9 +38,10 @@ jobs:
           toolchain: stable
           override: true
 
-      - uses: actions-rs/cargo@v1
+      - name: cargo publish
+        uses: actions-rs/cargo@v1
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
         with:
           command: publish
-          args: --manifest-path ./rust/Cargo.toml
+          args: --token "${CARGO_REGISTRY_TOKEN}" --manifest-path ./rust/Cargo.toml
