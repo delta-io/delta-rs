@@ -167,8 +167,7 @@ impl TableProvider for delta::DeltaTable {
                                                         if left_larger_than_right(
                                                             old_max_value.clone(),
                                                             max_value.clone(),
-                                                        )
-                                                        {
+                                                        ) {
                                                             Some(old_max_value)
                                                         } else {
                                                             Some(max_value)
@@ -191,8 +190,7 @@ impl TableProvider for delta::DeltaTable {
                                                         if left_larger_than_right(
                                                             min_value.clone(),
                                                             old_min_value.clone(),
-                                                        )
-                                                        {
+                                                        ) {
                                                             Some(old_min_value)
                                                         } else {
                                                             Some(min_value)
