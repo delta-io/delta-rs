@@ -156,48 +156,54 @@ impl TableProvider for delta::DeltaTable {
                                             let null_count = x.as_value()? as usize;
                                             Some(null_count_acc + null_count)
                                         }),
-                                    max_value: new_stats
-                                        .max_values
-                                        .get(field.get_name())
-                                        .and_then(|x| {
+                                    max_value: new_stats.max_values.get(field.get_name()).and_then(
+                                        |x| {
                                             let old_stats = stats.clone();
                                             let max_value = to_scalar_value(x.as_value()?);
 
                                             match max_value {
                                                 Some(max_value) => match old_stats.max_value {
                                                     Some(old_max_value) => {
-                                                       if compare_scalar_value(old_max_value.clone(), max_value.clone()) == 1 {
-                                                          Some(old_max_value)
-                                                       } else {
-                                                          Some(max_value)
-                                                       }
+                                                        if compare_scalar_value(
+                                                            old_max_value.clone(),
+                                                            max_value.clone(),
+                                                        ) == 1
+                                                        {
+                                                            Some(old_max_value)
+                                                        } else {
+                                                            Some(max_value)
+                                                        }
                                                     }
-                                                    _ => Some(max_value)
-                                                }
-                                                _ => old_stats.max_value
+                                                    _ => Some(max_value),
+                                                },
+                                                _ => old_stats.max_value,
                                             }
-                                        }),
-                                    min_value: new_stats
-                                        .min_values
-                                        .get(field.get_name())
-                                        .and_then(|x| {
+                                        },
+                                    ),
+                                    min_value: new_stats.min_values.get(field.get_name()).and_then(
+                                        |x| {
                                             let old_stats = stats.clone();
                                             let min_value = to_scalar_value(x.as_value()?);
 
                                             match min_value {
                                                 Some(min_value) => match old_stats.min_value {
                                                     Some(old_min_value) => {
-                                                        if compare_scalar_value(min_value.clone(), old_min_value.clone()) == 1 {
+                                                        if compare_scalar_value(
+                                                            min_value.clone(),
+                                                            old_min_value.clone(),
+                                                        ) == 1
+                                                        {
                                                             Some(old_min_value)
                                                         } else {
                                                             Some(min_value)
                                                         }
                                                     }
-                                                    _ => Some(min_value)
-                                                }
-                                                _ => old_stats.min_value
+                                                    _ => Some(min_value),
+                                                },
+                                                _ => old_stats.min_value,
                                             }
-                                        }),
+                                        },
+                                    ),
                                     distinct_count: None, // TODO: distinct
                                 })
                                 .collect()
@@ -221,11 +227,14 @@ fn to_scalar_value(stat_val: &serde_json::Value) -> Option<datafusion::scalar::S
             None
         }
     } else {
-       None
+        None
     }
 }
 
-fn compare_scalar_value(left: datafusion::scalar::ScalarValue, right: datafusion::scalar::ScalarValue) -> i8 {
+fn compare_scalar_value(
+    left: datafusion::scalar::ScalarValue,
+    right: datafusion::scalar::ScalarValue,
+) -> i8 {
     match left {
         ScalarValue::Float64(Some(v)) => {
             let f_right = f64::try_from(right).unwrap();

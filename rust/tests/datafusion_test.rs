@@ -75,7 +75,6 @@ mod datafusion {
             vec![Some(0)],
         );
 
-
         let mut ctx = ExecutionContext::new();
         ctx.register_table("test_table", Arc::new(table))?;
 
