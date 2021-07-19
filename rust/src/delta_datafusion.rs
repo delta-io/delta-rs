@@ -215,10 +215,8 @@ fn to_scalar_value(stat_val: &serde_json::Value) -> Option<datafusion::scalar::S
             Some(ScalarValue::from(val))
         } else if let Some(val) = stat_val.as_u64() {
             Some(ScalarValue::from(val))
-        } else if let Some(val) = stat_val.as_f64() {
-            Some(ScalarValue::from(val))
         } else {
-            None
+            stat_val.as_f64().map(ScalarValue::from)
         }
     } else {
         None
