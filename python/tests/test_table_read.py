@@ -18,6 +18,14 @@ def test_read_simple_table_by_version_to_dict():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
 
+def test_read_simple_table_update_incremental():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path, version=0)
+    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [0, 1, 2, 3, 4]}
+    dt.update_incremental()
+    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
+
+
 def test_read_partitioned_table_to_dict():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
