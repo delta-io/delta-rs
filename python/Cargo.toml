@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "0.5.1"
+version = "0.5.2"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
@@ -45,7 +45,7 @@ requires-dist = [
     'numpy<1.20.0;python_version<="3.6"',
     'dataclasses;python_version<="3.6"',
     'types-dataclasses;python_version<="3.6" and extra == "pandas"',
-    "pandas; extra == 'pandas'",
+    "pandas; extra == 'pandas' or extra == 'devel'",
     "mypy; extra == 'devel'",
     "isort; extra == 'devel'",
     "pytest; extra == 'devel'",
