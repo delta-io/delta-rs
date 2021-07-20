@@ -58,3 +58,8 @@ cd /io/python
 export PATH=/opt/python/cp37-cp37m/bin:/opt/python/cp38-cp38/bin:$PATH
 maturin publish -b pyo3 --target x86_64-unknown-linux-gnu --no-sdist
 ```
+
+#### PyPI release
+
+Publish a new GitHub release with name and tag version set to `python-vx.y.z`.
+This will trigger our automated release pipeline.
