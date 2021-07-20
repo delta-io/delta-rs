@@ -8,7 +8,7 @@ Resolve partitions for current version of the DeltaTable
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../../rust/tests/data/delta-0.2.0")
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0")
     >>> dt.version()
     3
     >>> dt.files()
@@ -20,7 +20,7 @@ Apply filtering on partitions for current version of the partitioned DeltaTable
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../../rust/tests/data/delta-0.8.0-partitioned")
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0-partitioned")
     >>> dt.version()
     0
     >>> dt.files()
@@ -34,8 +34,8 @@ Convert DeltaTable into PyArrow Table and Pandas Dataframe
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../../rust/tests/data/simple_table")
-    >>> df = dt.to_pyarrow_table().to_pandas()
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> df = dt.to_pandas()
     >>> df
        id
     0   5
@@ -51,18 +51,10 @@ Time travel
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../../rust/tests/data/simple_table")
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
     >>> dt.load_version(2)
-    >>> dt.to_pyarrow_table().to_pandas()
-       id
-    0   5
-    1   7
-    2   9
-    3   5
-    4   6
-    5   7
-    6   8
-    7   9
+    >>> dt.to_pyarrow_table().to_pydict()
+    {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
 
 
 DeltaSchema
@@ -73,7 +65,7 @@ Delta format
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../../rust/tests/data/simple_table")
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
     >>> dt.schema()
     Schema(Field(id: DataType(long) nullable(True) metadata({})))
 
@@ -82,7 +74,7 @@ PyArrow format
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../../rust/tests/data/simple_table")
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
     >>> dt.pyarrow_schema()
     id: int64
 
@@ -92,6 +84,6 @@ Metadata
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../../rust/tests/data/simple_table")
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
     >>> dt.metadata()
     Metadata(id: 5fba94ed-9794-4965-ba6e-6ee3c0d22af9, name: None, description: None, partitionColumns: [], created_time: 1587968585495, configuration={})
