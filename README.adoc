@@ -43,7 +43,7 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 
 | Stream table update
 | :heavy_check_mark: 
-|
+| :heavy_check_mark: 
 |
 
 | Filter files with partitions
