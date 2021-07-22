@@ -102,7 +102,8 @@ impl StorageBackend for FileStorageBackend {
             fs::create_dir_all(parent).await?;
         }
         let mut f = fs::OpenOptions::new()
-            .create_new(true)
+            .create(true)
+            .truncate(true)
             .write(true)
             .open(path)
             .await?;
