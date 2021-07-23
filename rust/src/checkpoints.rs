@@ -254,7 +254,7 @@ fn checkpoint_add_from_state(
 ) -> Result<Value, ArrowError> {
     let mut v = serde_json::to_value(action::Action::add(add.clone()))?;
 
-    if !add.partition_values.is_empty() && add.partition_values_parsed.is_none() {
+    if !add.partition_values.is_empty() {
         let mut partition_values_parsed: HashMap<String, Value> = HashMap::new();
 
         for (field_name, data_type) in data_types.iter() {
