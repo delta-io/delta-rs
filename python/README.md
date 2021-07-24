@@ -5,8 +5,9 @@ Deltalake-python
 [![userdoc](https://img.shields.io/badge/docs-user-blue)](https://delta-io.github.io/delta-rs/python/)
 [![apidoc](https://img.shields.io/badge/docs-api-blue)](https://delta-io.github.io/delta-rs/python/api_reference.html)
 
-Native [Delta Lake](https://delta.io/) binding for Python based on
-[delta-rs](https://github.com/delta-io/delta-rs).
+Native [Delta Lake](https://delta.io/) Python binding based on
+[delta-rs](https://github.com/delta-io/delta-rs) with
+[Pandas](https://pandas.pydata.org/) integration.
 
 
 Installation
@@ -57,3 +58,8 @@ cd /io/python
 export PATH=/opt/python/cp37-cp37m/bin:/opt/python/cp38-cp38/bin:$PATH
 maturin publish -b pyo3 --target x86_64-unknown-linux-gnu --no-sdist
 ```
+
+#### PyPI release
+
+Publish a new GitHub release with name and tag version set to `python-vx.y.z`.
+This will trigger our automated release pipeline.

@@ -275,6 +275,22 @@ pub enum StorageError {
         #[from]
         source: s3::dynamodb_lock::DynamoError,
     },
+    /// Error representing a failure to retrieve AWS credentials.
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    #[error("Failed to retrieve AWS credentials: {source}")]
+    AWSCredentials {
+        /// The underlying Rusoto CredentialsError
+        #[from]
+        source: rusoto_credential::CredentialsError,
+    },
+    /// Error caused by the http request dispatcher not being able to be created.
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    #[error("Failed to create request dispatcher: {source}")]
+    AWSHttpClient {
+        /// The underlying Rusoto TlsError
+        #[from]
+        source: rusoto_core::request::TlsError,
+    },
 
     /// Azure error
     #[cfg(feature = "azure")]

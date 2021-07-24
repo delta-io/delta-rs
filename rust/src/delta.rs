@@ -631,8 +631,7 @@ impl DeltaTable {
         Ok(())
     }
 
-    /// Updates the DeltaTable to the most recent state committed to the transaction by
-    /// incrementally applying each version since current.
+    /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
         self.version += 1;
         self.apply_logs_from_current_version().await
