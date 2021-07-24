@@ -8,7 +8,7 @@ mod platform_cfg {
         } else {
             let more_info = "https://docs.rs/deltalake/latest/deltalake/storage/file/struct.FileStorageBackend.html";
             println!(
-                "cargo:warning=glibc versions < 2.28 are currently unsupported, glibc version found {}.{}. For more information: {}", 
+                "cargo:warning=glibc version >= 2.28 is required for performing commits to local file system, glibc version found {}.{}. For more information: {}", 
                 ver.major, ver.minor, more_info
             );
         }
