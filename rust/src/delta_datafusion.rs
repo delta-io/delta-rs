@@ -28,7 +28,8 @@ use arrow::datatypes::Schema as ArrowSchema;
 use datafusion::datasource::datasource::{ColumnStatistics, Statistics};
 use datafusion::datasource::TableProvider;
 use datafusion::logical_plan::{combine_filters, Expr};
-use datafusion::physical_plan::parquet::{ParquetExec, ParquetPartition, RowGroupPredicateBuilder};
+use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_plan::parquet::{ParquetExec, ParquetExecMetrics, ParquetPartition};
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::scalar::ScalarValue;
 
@@ -52,9 +53,9 @@ impl TableProvider for delta::DeltaTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        let schema = <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
+        let schema = Arc::new(<ArrowSchema as TryFrom<&schema::Schema>>::try_from(
             delta::DeltaTable::schema(&self).unwrap(),
-        )?;
+        )?);
         let filenames = self.get_file_uris();
 
         let partitions = filenames
@@ -95,15 +96,15 @@ impl TableProvider for delta::DeltaTable {
                 Ok(ParquetPartition::new(vec![fname], statistics))
             })
             .collect::<datafusion::error::Result<_>>()?;
-
         let predicate_builder = combine_filters(filters).and_then(|predicate_expr| {
-            RowGroupPredicateBuilder::try_new(&predicate_expr, schema.clone()).ok()
+            PruningPredicate::try_new(&predicate_expr, schema.clone()).ok()
         });
 
         Ok(Arc::new(ParquetExec::new(
             partitions,
             schema,
             projection.clone(),
+            ParquetExecMetrics::new(),
             predicate_builder,
             batch_size,
             limit,
