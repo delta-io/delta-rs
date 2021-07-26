@@ -24,7 +24,7 @@ use std::any::Any;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use arrow::datatypes::Schema as ArrowSchema;
+use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
 use datafusion::datasource::datasource::{ColumnStatistics, Statistics};
 use datafusion::datasource::TableProvider;
 use datafusion::logical_plan::{combine_filters, Expr};
@@ -116,7 +116,8 @@ impl TableProvider for delta::DeltaTable {
     }
 
     fn statistics(&self) -> Statistics {
-        self.get_active_add_actions()
+        let stats = self
+            .get_active_add_actions()
             .iter()
             .fold(
                 Some(Statistics {
@@ -206,7 +207,39 @@ impl TableProvider for delta::DeltaTable {
                     })
                 },
             )
-            .unwrap_or_default()
+            .unwrap_or_default();
+        // Convert column max/min scalar values to correct types based on arrow types.
+        Statistics {
+            num_rows: stats.num_rows,
+            total_byte_size: stats.total_byte_size,
+            column_statistics: stats.column_statistics.map(|col_stats| {
+                let fields = self.schema().unwrap().get_fields();
+                col_stats
+                    .iter()
+                    .zip(fields)
+                    .map(|(col_states, field)| {
+                        let dt = (self as &dyn TableProvider)
+                            .schema()
+                            .field_with_name(field.get_name())
+                            .unwrap()
+                            .data_type()
+                            .clone();
+                        ColumnStatistics {
+                            null_count: col_states.null_count,
+                            max_value: col_states
+                                .max_value
+                                .as_ref()
+                                .and_then(|scalar| correct_scalar_value_type(scalar.clone(), &dt)),
+                            min_value: col_states
+                                .min_value
+                                .as_ref()
+                                .and_then(|scalar| correct_scalar_value_type(scalar.clone(), &dt)),
+                            distinct_count: col_states.distinct_count,
+                        }
+                    })
+                    .collect()
+            }),
+        }
     }
 }
 
@@ -221,6 +254,70 @@ fn to_scalar_value(stat_val: &serde_json::Value) -> Option<datafusion::scalar::S
         }
     } else {
         None
+    }
+}
+
+fn correct_scalar_value_type(
+    value: datafusion::scalar::ScalarValue,
+    field_dt: &ArrowDataType,
+) -> Option<datafusion::scalar::ScalarValue> {
+    match field_dt {
+        ArrowDataType::Int64 => {
+            let raw_value = i64::try_from(value).unwrap();
+            Some(ScalarValue::from(raw_value))
+        }
+        ArrowDataType::Int32 => {
+            let raw_value = i64::try_from(value).unwrap() as i32;
+            Some(ScalarValue::from(raw_value))
+        }
+        ArrowDataType::Int16 => {
+            let raw_value = i64::try_from(value).unwrap() as i16;
+            Some(ScalarValue::from(raw_value))
+        }
+        ArrowDataType::Int8 => {
+            let raw_value = i64::try_from(value).unwrap() as i8;
+            Some(ScalarValue::from(raw_value))
+        }
+        ArrowDataType::Float32 => {
+            let raw_value = f64::try_from(value).unwrap() as f32;
+            Some(ScalarValue::from(raw_value))
+        }
+        ArrowDataType::Float64 => {
+            let raw_value = f64::try_from(value).unwrap();
+            Some(ScalarValue::from(raw_value))
+        }
+        ArrowDataType::Decimal(_, _) => {
+            let raw_value = f64::try_from(value).unwrap();
+            Some(ScalarValue::from(raw_value))
+        }
+        ArrowDataType::Date32 => {
+            let raw_value = i64::try_from(value).unwrap() as i32;
+            Some(ScalarValue::Date32(Some(raw_value)))
+        }
+        ArrowDataType::Date64 => {
+            let raw_value = i64::try_from(value).unwrap();
+            Some(ScalarValue::Date64(Some(raw_value)))
+        }
+        ArrowDataType::Timestamp(TimeUnit::Nanosecond, None) => {
+            let raw_value = i64::try_from(value).unwrap();
+            Some(ScalarValue::TimestampNanosecond(Some(raw_value)))
+        }
+        ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
+            let raw_value = i64::try_from(value).unwrap();
+            Some(ScalarValue::TimestampMicrosecond(Some(raw_value)))
+        }
+        ArrowDataType::Timestamp(TimeUnit::Millisecond, None) => {
+            let raw_value = i64::try_from(value).unwrap();
+            Some(ScalarValue::TimestampMillisecond(Some(raw_value)))
+        }
+        _ => {
+            log::error!(
+                "Scalar value of arrow type unimplemented for {:?} and {:?}",
+                value,
+                field_dt
+            );
+            None
+        }
     }
 }
 
