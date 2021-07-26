@@ -103,7 +103,7 @@ mod datafusion {
                 .iter()
                 .map(|x| x.max_value.as_ref())
                 .collect::<Vec<Option<&ScalarValue>>>(),
-            vec![Some(&ScalarValue::from(4 as i64))],
+            vec![Some(&ScalarValue::from(4 as i32))],
         );
 
         assert_eq!(
@@ -114,7 +114,7 @@ mod datafusion {
                 .iter()
                 .map(|x| x.min_value.as_ref())
                 .collect::<Vec<Option<&ScalarValue>>>(),
-            vec![Some(&ScalarValue::from(0 as i64))],
+            vec![Some(&ScalarValue::from(0 as i32))],
         );
 
         Ok(())
