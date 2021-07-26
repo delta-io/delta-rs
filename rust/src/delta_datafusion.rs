@@ -310,7 +310,14 @@ fn correct_scalar_value_type(
             let raw_value = i64::try_from(value).unwrap();
             Some(ScalarValue::TimestampMillisecond(Some(raw_value)))
         }
-        _ => None,
+        _ => {
+            log::error!(
+                "Scalar value of arrow type unimplemented for {:?} and {:?}",
+                value,
+                field_dt
+            );
+            None
+        }
     }
 }
 
