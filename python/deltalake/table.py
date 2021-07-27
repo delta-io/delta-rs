@@ -269,3 +269,10 @@ class DeltaTable:
         :return: a pandas dataframe
         """
         return self.to_pyarrow_table(partitions, columns).to_pandas()
+
+    def update_incremental(self) -> None:
+        """
+        Updates the DeltaTable to the latest version by incrementally applying
+        newer versions.
+        """
+        self._table.update_incremental()

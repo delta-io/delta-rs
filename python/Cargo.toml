@@ -1,12 +1,13 @@
 [package]
 name = "deltalake-python"
-version = "0.5.0"
+version = "0.5.2"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
-description = "Python binding for delta-rs"
+description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
 edition = "2018"
+keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 
 [lib]
 name = "deltalake"
@@ -23,7 +24,7 @@ serde_json = "1"
 arrow = { git = "https://github.com/nevi-me/arrow-rs", branch = "map-support" }
 
 [dependencies.pyo3]
-version = "0.13"
+version = "0.14"
 features = ["extension-module", "abi3", "abi3-py36"]
 
 [dependencies.deltalake]
@@ -39,13 +40,13 @@ classifier = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3 :: Only"
 ]
-project-url = { Repo = "https://github.com/delta-io/delta-rs" }
+project-url = { Repo = "https://github.com/delta-io/delta-rs", Documentation = "https://delta-io.github.io/delta-rs/python/", "Bug Tracker" = "https://github.com/delta-io/delta-rs/issues" }
 requires-dist = [
     "pyarrow>=4",
     'numpy<1.20.0;python_version<="3.6"',
     'dataclasses;python_version<="3.6"',
     'types-dataclasses;python_version<="3.6" and extra == "pandas"',
-    "pandas; extra == 'pandas'",
+    "pandas; extra == 'pandas' or extra == 'devel'",
     "mypy; extra == 'devel'",
     "isort; extra == 'devel'",
     "pytest; extra == 'devel'",

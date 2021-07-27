@@ -71,21 +71,17 @@ impl From<RusotoError<rusoto_s3::CopyObjectError>> for StorageError {
     }
 }
 
+fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvider>, StorageError>
+{
+    let provider = WebIdentityProvider::from_k8s_env();
+    Ok(AutoRefreshingProvider::new(provider)?)
+}
+
 fn create_s3_client(region: Region) -> Result<S3Client, StorageError> {
-    let dispatcher = HttpClient::new()
-        .map_err(|_| StorageError::S3Generic("Failed to create request dispatcher".to_string()))?;
+    let dispatcher = HttpClient::new()?;
 
     let client = match std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE") {
-        Ok(_) => {
-            let provider = WebIdentityProvider::from_k8s_env();
-            let provider = AutoRefreshingProvider::new(provider).map_err(|e| {
-                StorageError::S3Generic(format!(
-                    "Failed to retrieve S3 credentials with message: {}",
-                    e.message
-                ))
-            })?;
-            S3Client::new_with(dispatcher, provider, region)
-        }
+        Ok(_) => S3Client::new_with(dispatcher, get_web_identity_provider()?, region),
         Err(_) => S3Client::new_with(dispatcher, ChainProvider::new(), region),
     };
 
@@ -451,14 +447,21 @@ impl LockData {
     }
 }
 
-#[allow(clippy::unnecessary_wraps)]
-fn try_create_lock_client(_region: Region) -> Result<Option<Box<dyn LockClient>>, StorageError> {
+fn try_create_lock_client(region: Region) -> Result<Option<Box<dyn LockClient>>, StorageError> {
+    let dispatcher = HttpClient::new()?;
+
     match std::env::var("AWS_S3_LOCKING_PROVIDER") {
         Ok(p) if p.to_lowercase() == "dynamodb" => {
-            let client = dynamodb_lock::DynamoDbLockClient::new(
-                rusoto_dynamodb::DynamoDbClient::new(_region),
-                dynamodb_lock::Options::default(),
-            );
+            let client = match std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE") {
+                Ok(_) => rusoto_dynamodb::DynamoDbClient::new_with(
+                    dispatcher,
+                    get_web_identity_provider()?,
+                    region,
+                ),
+                Err(_) => rusoto_dynamodb::DynamoDbClient::new(region),
+            };
+            let client =
+                dynamodb_lock::DynamoDbLockClient::new(client, dynamodb_lock::Options::default());
             Ok(Some(Box::new(client)))
         }
         _ => Ok(None),

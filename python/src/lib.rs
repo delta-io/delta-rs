@@ -165,6 +165,12 @@ impl RawDeltaTable {
         )
         .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))
     }
+
+    pub fn update_incremental(&mut self) -> PyResult<()> {
+        rt()?
+            .block_on(self._table.update_incremental())
+            .map_err(PyDeltaTableError::from_raw)
+    }
 }
 
 #[pyfunction]

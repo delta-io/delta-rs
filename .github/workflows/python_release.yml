@@ -23,9 +23,9 @@ jobs:
             exit 1
           fi
 
-  release-github-pypi:
+  release-pypi-manc-windows:
     needs: validate-release-tag
-    name: PyPI release
+    name: PyPI release Mac & Windows
     strategy:
       fail-fast: false
       matrix:
@@ -60,7 +60,7 @@ jobs:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         run: make publish TARGET="${{ matrix.target }}" EXTRA_ARGS="--no-sdist"
 
-  release-github-pypi-manylinux:
+  release-pypi-manylinux:
     needs: validate-release-tag
     name: PyPI release manylinux
     runs-on: ubuntu-20.04
@@ -95,9 +95,10 @@ jobs:
         run: make publish TARGET="x86_64-unknown-linux-gnu" EXTRA_ARGS=""
 
   release-docs:
+    needs: [validate-release-tag, relesae-pypi-manylinux, release-pypi-mac-windows]
     runs-on: ubuntu-latest
     permissions:
-      contents: write 
+      contents: write
     steps:
     - uses: actions/checkout@v2
       with:
