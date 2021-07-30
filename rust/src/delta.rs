@@ -207,6 +207,29 @@ pub struct DeltaTableMetaData {
     pub configuration: HashMap<String, String>,
 }
 
+impl DeltaTableMetaData {
+    fn new(
+        name: Option<String>, 
+        description: Option<String>, 
+        schema: Schema, 
+        partition: Vec<String>, 
+        config: HashMap<String, String>
+    ) -> Self {
+        //use inputs
+        
+        Self {
+            id: Uuid::new_v4().to_string(), //create a new GUID
+            name: name,
+            description: description,
+            format: action::Format::new("parquet".to_string(), None),
+            schema: schema,
+            partition_columns: partition,
+            created_time: Utc::now().timestamp(),  //create a timestamp for current timestamp
+            configuration: config
+        }
+    }
+}
+
 impl fmt::Display for DeltaTableMetaData {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         write!(
@@ -384,6 +407,17 @@ fn extract_rel_path<'a, 'b>(
         )))
     }
 }
+
+
+// TODO
+pub fn create_delta_table(table_uri: String, metadata: DeltaTableMetaData) {
+    // create a new table at the target location with the given DeltaTableMetaData
+    // need commit info, version 0
+    println!("{}", table_uri);
+    let meta = action::MetaData::try_from(metadata).unwrap();
+    println!("{:?}", meta);
+}
+
 
 /// In memory representation of a Delta Table
 pub struct DeltaTable {
@@ -1576,5 +1610,38 @@ mod tests {
         } else {
             assert!(parquet_filename.contains("col1=a/col2=b/part-00000-"));
         }
+    }
+
+    #[test]
+    fn test_create_delta_table() {
+
+        let test_schema = Schema::new(
+            "test".to_string(),
+            vec![
+                SchemaField::new(
+                    "Id".to_string(), 
+                    SchemaDataType::primitive("integer".to_string()),
+                    true,
+                    HashMap::new()
+                ),
+                SchemaField::new(
+                    "Name".to_string(), 
+                    SchemaDataType::primitive("string".to_string()),
+                    true,
+                    HashMap::new()
+                )
+            ]
+        );
+
+        let deltamd = DeltaTableMetaData::new(
+            None, 
+            None, 
+            test_schema, 
+            vec![], 
+            HashMap::new()
+        );
+
+        let _new_delta_table = create_delta_table("new_table".to_string(), deltamd);
+
     }
 }

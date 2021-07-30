@@ -362,6 +362,14 @@ pub struct Format {
     options: Option<HashMap<String, String>>,
 }
 
+impl Format {
+    pub fn new(provider: String, options: Option<HashMap<String,String>>) -> Self {
+        Self {
+            provider,
+            options
+        }
+    }
+}
 /// Action that describes the metadata of the table.
 /// This is a top-level action in Delta log entries.
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]

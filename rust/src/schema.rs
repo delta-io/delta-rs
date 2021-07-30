@@ -44,6 +44,21 @@ pub struct SchemaField {
 }
 
 impl SchemaField {
+
+    pub fn new(
+        name: String, 
+        r#type: SchemaDataType,
+        nullable: bool, 
+        metadata: HashMap<String, String>
+    ) -> Self {
+        Self {
+            name,
+            r#type,
+            nullable,
+            metadata
+        }
+    }
+
     /// The column name of the schema field.
     pub fn get_name(&self) -> &str {
         &self.name
@@ -157,5 +172,12 @@ impl Schema {
     /// Returns the list of fields that make up the schema definition of the table.
     pub fn get_fields(&self) -> &Vec<SchemaField> {
         &self.fields
+    }
+
+    pub fn new(r#type: String, fields: Vec<SchemaField>) -> Self {
+        Self {
+            r#type,
+            fields
+        }
     }
 }
