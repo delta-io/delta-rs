@@ -215,16 +215,17 @@ impl DeltaTableMetaData {
         partition: Vec<String>, 
         config: HashMap<String, String>
     ) -> Self {
-        //use inputs
         
         Self {
-            id: Uuid::new_v4().to_string(), //create a new GUID
+
+            // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L350
+            id: Uuid::new_v4().to_string(), // create a new GUID
             name: name,
             description: description,
             format: action::Format::new("parquet".to_string(), None),
             schema: schema,
             partition_columns: partition,
-            created_time: Utc::now().timestamp_millis(),  //create a timestamp for current timestamp
+            created_time: Utc::now().timestamp_millis(),  // create a timestamp for current timestamp
             configuration: config
         }
     }
@@ -1057,18 +1058,18 @@ impl DeltaTable {
         })
     }
 
+
+    /// Create a DeltaTable at version 0 given the provided MetaData and Protocol
     pub async fn create(
         &mut self, 
         metadata: DeltaTableMetaData, 
         protocol: action::Protocol
     ) -> Result<(), DeltaTableError> {
-        // need to check if table already exists so that protocal and metaData arent overwritten on second create
         
-        let meta = action::MetaData::try_from(metadata)?;
-
+        let meta = action::MetaData::try_from(metadata).unwrap();
         let mut transaction = self.create_transaction(None);
 
-        //add commit info action
+        // TODO add commit info action
         transaction.add_actions(
             vec![
                 Action::protocol(protocol), 
@@ -1076,10 +1077,13 @@ impl DeltaTable {
             ]
         );
 
-        let prepared_commit = transaction.prepare_commit(None).await?;
-        self.try_commit_transaction(prepared_commit, 0);
+        let prepared_commit = transaction.prepare_commit(None).await.unwrap();
+        self.try_commit_transaction(&prepared_commit, 0).await.unwrap();
 
         //possible need to refresh state to give an accurate DeltaTable reference back at the end of creation
+        //update needs DeltaTableState which current obj does not have
+        self.update().await?;
+
         Ok(())
     }
 
@@ -1648,7 +1652,7 @@ mod tests {
             ]
         );
 
-        let deltamd = DeltaTableMetaData::new(
+        let delta_md = DeltaTableMetaData::new(
             None, 
             None, 
             test_schema, 
@@ -1656,18 +1660,30 @@ mod tests {
             HashMap::new()
         );
 
+        //assert delta_md auto generated values [id, format, created_time] are of the correct type
+
         let protocol = action::Protocol{
             min_reader_version: 1,
             min_writer_version: 2
         };
 
+        let tmp_dir = tempdir::TempDir::new("create_table_test").unwrap(); 
+        let table_dir = tmp_dir.path().join("test_create");
+
+        let path = table_dir.to_str().unwrap();
+        let backend = Box::new(
+            storage::file::FileStorageBackend::new(tmp_dir.path().to_str().unwrap())
+        );
+        
         let mut dt = DeltaTable::new(
-            "./test_create/", 
-            Box::new(storage::file::FileStorageBackend::new("./"))
+            path, 
+            backend
         ).unwrap();
 
-        let _new_delta_table = dt.create(deltamd, protocol).await.unwrap();
-
-        //clean up data created
+        dt.create(delta_md, protocol).await.unwrap();
+        // assert new log file created and checkpoint before deletion
+        // assert DeltaTable version is now 0
+        println!("{}", dt);
+        
     }
 }
