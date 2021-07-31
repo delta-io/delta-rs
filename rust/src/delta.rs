@@ -1008,7 +1008,7 @@ impl DeltaTable {
 
         // NOTE: since we have the log entry in memory already,
         // we could optimize this further by merging the log entry instead of updating from storage.
-        self.update().await?;
+        self.update_incremental().await?;
 
         Ok(version)
     }
