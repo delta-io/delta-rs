@@ -48,7 +48,7 @@ impl BufferedJsonWriter {
 
     /// Return the total Values pending in the buffer
     pub fn count(&self, partitions: &WriterPartition) -> Option<usize> {
-        self.buffer.get(&partitions).map(|b| b.len())
+        self.buffer.get(partitions).map(|b| b.len())
     }
 
     /// Add a txn action to the buffer
@@ -97,8 +97,8 @@ impl BufferedJsonWriter {
         let mut parquet_bufs = vec![];
 
         for (partitions, values) in self.buffer.iter() {
-            let count = self.count(&partitions).unwrap_or(0);
-            let mut value_iter = InMemValueIter::from_vec(&values);
+            let count = self.count(partitions).unwrap_or(0);
+            let mut value_iter = InMemValueIter::from_vec(values);
             let decoder = Decoder::new(self.schema.clone(), count, None);
 
             let record_batch = decoder
