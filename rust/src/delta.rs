@@ -1064,7 +1064,7 @@ impl DeltaTable {
     ) -> Result<(), DeltaTableError> {
         // need to check if table already exists so that protocal and metaData arent overwritten on second create
         
-        let meta = action::MetaData::try_from(metadata).unwrap();
+        let meta = action::MetaData::try_from(metadata)?;
 
         let mut transaction = self.create_transaction(None);
 
@@ -1075,7 +1075,9 @@ impl DeltaTable {
                 Action::metaData(meta)
             ]
         );
-        transaction.commit(None).await.unwrap();
+
+        let prepared_commit = transaction.prepare_commit(None).await?;
+        self.try_commit_transaction(prepared_commit, 0);
 
         //possible need to refresh state to give an accurate DeltaTable reference back at the end of creation
         Ok(())
