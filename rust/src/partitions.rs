@@ -47,7 +47,7 @@ impl<'a> PartitionFilter<'a, &str> {
     pub fn match_partitions(&self, partitions: &[DeltaTablePartition<'a>]) -> bool {
         partitions
             .iter()
-            .any(|partition| self.match_partition(&partition))
+            .any(|partition| self.match_partition(partition))
     }
 }
 
@@ -117,8 +117,8 @@ impl<'a> TryFrom<&'a str> for DeltaTablePartition<'a> {
         let partition_splitted: Vec<&str> = partition.split('=').collect();
         match partition_splitted {
             partition_splitted if partition_splitted.len() == 2 => Ok(DeltaTablePartition {
-                key: &partition_splitted[0],
-                value: &partition_splitted[1],
+                key: partition_splitted[0],
+                value: partition_splitted[1],
             }),
             _ => Err(DeltaTableError::PartitionError {
                 partition: partition.to_string(),
