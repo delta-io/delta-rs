@@ -224,7 +224,7 @@ impl DeltaTableMetaData {
             format: action::Format::new("parquet".to_string(), None),
             schema: schema,
             partition_columns: partition,
-            created_time: Utc::now().timestamp(),  //create a timestamp for current timestamp
+            created_time: Utc::now().timestamp_millis(),  //create a timestamp for current timestamp
             configuration: config
         }
     }
