@@ -40,7 +40,7 @@ impl TableProvider for delta::DeltaTable {
     fn schema(&self) -> Arc<ArrowSchema> {
         Arc::new(
             <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
-                delta::DeltaTable::schema(&self).unwrap(),
+                delta::DeltaTable::schema(self).unwrap(),
             )
             .unwrap(),
         )
@@ -54,7 +54,7 @@ impl TableProvider for delta::DeltaTable {
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(<ArrowSchema as TryFrom<&schema::Schema>>::try_from(
-            delta::DeltaTable::schema(&self).unwrap(),
+            delta::DeltaTable::schema(self).unwrap(),
         )?);
         let filenames = self.get_file_uris();
 
