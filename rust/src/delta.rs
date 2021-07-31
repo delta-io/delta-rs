@@ -408,17 +408,6 @@ fn extract_rel_path<'a, 'b>(
     }
 }
 
-
-// TODO
-pub fn create_delta_table(table_uri: String, metadata: DeltaTableMetaData) {
-    // create a new table at the target location with the given DeltaTableMetaData
-    // need commit info, version 0
-    println!("{}", table_uri);
-    let meta = action::MetaData::try_from(metadata).unwrap();
-    println!("{:?}", meta);
-}
-
-
 /// In memory representation of a Delta Table
 pub struct DeltaTable {
     /// The version of the table as of the most recent loaded Delta log entry.
@@ -1068,6 +1057,30 @@ impl DeltaTable {
         })
     }
 
+    pub async fn create(
+        &mut self, 
+        metadata: DeltaTableMetaData, 
+        protocol: action::Protocol
+    ) -> Result<(), DeltaTableError> {
+        // need to check if table already exists so that protocal and metaData arent overwritten on second create
+        
+        let meta = action::MetaData::try_from(metadata).unwrap();
+
+        let mut transaction = self.create_transaction(None);
+
+        //add commit info action
+        transaction.add_actions(
+            vec![
+                Action::protocol(protocol), 
+                Action::metaData(meta)
+            ]
+        );
+        transaction.commit(None).await.unwrap();
+
+        //possible need to refresh state to give an accurate DeltaTable reference back at the end of creation
+        Ok(())
+    }
+
     /// Time travel Delta table to latest version that's created at or before provided `datetime`
     /// argument.
     ///
@@ -1612,8 +1625,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_create_delta_table() {
+    #[tokio::test]
+    async fn test_create_delta_table() {
 
         let test_schema = Schema::new(
             "test".to_string(),
@@ -1641,7 +1654,18 @@ mod tests {
             HashMap::new()
         );
 
-        let _new_delta_table = create_delta_table("new_table".to_string(), deltamd);
+        let protocol = action::Protocol{
+            min_reader_version: 1,
+            min_writer_version: 2
+        };
 
+        let mut dt = DeltaTable::new(
+            "./test_create/", 
+            Box::new(storage::file::FileStorageBackend::new("./"))
+        ).unwrap();
+
+        let _new_delta_table = dt.create(deltamd, protocol).await.unwrap();
+
+        //clean up data created
     }
 }
