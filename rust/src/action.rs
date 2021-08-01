@@ -363,6 +363,7 @@ pub struct Format {
 }
 
 impl Format {
+    /// Allows creation of a new action::Format
     pub fn new(provider: String, options: Option<HashMap<String,String>>) -> Self {
         Self {
             provider,
@@ -370,6 +371,7 @@ impl Format {
         }
     }
 }
+
 /// Action that describes the metadata of the table.
 /// This is a top-level action in Delta log entries.
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]

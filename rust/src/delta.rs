@@ -208,17 +208,17 @@ pub struct DeltaTableMetaData {
 }
 
 impl DeltaTableMetaData {
-    fn new(
+    ///
+    pub fn new(
         name: Option<String>, 
         description: Option<String>, 
         schema: Schema, 
         partition: Vec<String>, 
         config: HashMap<String, String>
     ) -> Self {
+        // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L350
         
         Self {
-
-            // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L350
             id: Uuid::new_v4().to_string(), // create a new GUID
             name: name,
             description: description,
@@ -1058,32 +1058,31 @@ impl DeltaTable {
         })
     }
 
-
-    /// Create a DeltaTable at version 0 given the provided MetaData and Protocol
+    /// Create a DeltaTable with version 0 given the provided MetaData and Protocol
     pub async fn create(
         &mut self, 
         metadata: DeltaTableMetaData, 
         protocol: action::Protocol
     ) -> Result<(), DeltaTableError> {
         
-        let meta = action::MetaData::try_from(metadata).unwrap();
-        let mut transaction = self.create_transaction(None);
+        let meta = action::MetaData::try_from(metadata)?;
 
         // TODO add commit info action
-        transaction.add_actions(
-            vec![
-                Action::protocol(protocol), 
-                Action::metaData(meta)
-            ]
-        );
+        let actions = vec![
+            Action::protocol(protocol), 
+            Action::metaData(meta)
+        ];
+        
+        let mut transaction = self.create_transaction(None);
+        transaction.add_actions(actions);
 
+        // Need better error handling here
         let prepared_commit = transaction.prepare_commit(None).await.unwrap();
         self.try_commit_transaction(&prepared_commit, 0).await.unwrap();
 
-        //possible need to refresh state to give an accurate DeltaTable reference back at the end of creation
-        //update needs DeltaTableState which current obj does not have
-        self.update().await?;
-
+        // Can we mutate the DeltaTable's state using process_action()
+        // in order to get most up-to-date state based on the commit above
+        
         Ok(())
     }
 
@@ -1681,9 +1680,10 @@ mod tests {
         ).unwrap();
 
         dt.create(delta_md, protocol).await.unwrap();
-        // assert new log file created and checkpoint before deletion
+
+        // assert new log file created before deletion
         // assert DeltaTable version is now 0
-        println!("{}", dt);
+        assert_eq!(dt.version, 0);
         
     }
 }
