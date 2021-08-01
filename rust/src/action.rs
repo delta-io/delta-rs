@@ -614,7 +614,7 @@ impl Remove {
 
 /// Action used by streaming systems to track progress using application-specific versions to
 /// enable idempotency.
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Txn {
     /// A unique identifier for the application performing the transaction.
@@ -667,7 +667,7 @@ impl Txn {
 
 /// Action used to increase the version of the Delta protocol required to read or write to the
 /// table.
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Protocol {
     /// Minimum version of the Delta read protocol a client must implement to correctly read the
@@ -712,7 +712,7 @@ impl Protocol {
 
 /// Represents an action in the Delta log. The Delta log is an aggregate of all actions performed
 /// on the table, so the full list of actions is required to properly read a table.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Action {
     /// Changes the current metadata of the table. Must be present in the first version of a table.
     /// Subsequent `metaData` actions completely overwrite previous metadata.

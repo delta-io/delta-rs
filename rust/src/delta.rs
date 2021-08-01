@@ -1074,7 +1074,7 @@ impl DeltaTable {
         ];
         
         let mut transaction = self.create_transaction(None);
-        transaction.add_actions(actions);
+        transaction.add_actions(actions.clone());
 
         // Need better error handling here
         let prepared_commit = transaction.prepare_commit(None).await.unwrap();
@@ -1082,7 +1082,10 @@ impl DeltaTable {
 
         // Can we mutate the DeltaTable's state using process_action()
         // in order to get most up-to-date state based on the commit above
-        
+        for action in actions {
+            let _ = process_action(&mut self.state, action)?;
+        }
+
         Ok(())
     }
 
@@ -1680,7 +1683,7 @@ mod tests {
         ).unwrap();
 
         dt.create(delta_md, protocol).await.unwrap();
-
+        println!("{}", dt);
         // assert new log file created before deletion
         // assert DeltaTable version is now 0
         assert_eq!(dt.version, 0);
