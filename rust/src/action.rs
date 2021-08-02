@@ -370,6 +370,11 @@ impl Format {
             options
         }
     }
+
+    /// Return the Format provider
+    pub fn get_provider(self) -> String {
+        self.provider
+    }
 }
 
 /// Action that describes the metadata of the table.

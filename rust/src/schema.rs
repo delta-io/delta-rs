@@ -45,6 +45,7 @@ pub struct SchemaField {
 
 impl SchemaField {
 
+    /// Create a new SchemaField from scratch
     pub fn new(
         name: String, 
         r#type: SchemaDataType,
@@ -174,6 +175,7 @@ impl Schema {
         &self.fields
     }
 
+    /// Create a new Schema using a vector of SchemaFields
     pub fn new(r#type: String, fields: Vec<SchemaField>) -> Self {
         Self {
             r#type,

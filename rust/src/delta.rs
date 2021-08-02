@@ -1547,7 +1547,7 @@ pub fn crate_version() -> &'static str {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, path::Path};
 
     #[test]
     fn state_records_new_txn_version() {
@@ -1655,14 +1655,15 @@ mod tests {
         );
 
         let delta_md = DeltaTableMetaData::new(
-            None, 
-            None, 
+            Some("Test Table Create".to_string()), 
+            Some("This table is made to test the create function for a DeltaTable".to_string()), 
             test_schema, 
             vec![], 
             HashMap::new()
         );
 
         //assert delta_md auto generated values [id, format, created_time] are of the correct type
+        assert_eq!(delta_md.format.clone().get_provider(), "parquet".to_string());
 
         let protocol = action::Protocol{
             min_reader_version: 1,
@@ -1684,9 +1685,23 @@ mod tests {
 
         dt.create(delta_md, protocol).await.unwrap();
         println!("{}", dt);
-        // assert new log file created before deletion
-        // assert DeltaTable version is now 0
+
+        // assert DeltaTable version is now 0 and data files have been added
         assert_eq!(dt.version, 0);
-        
+        assert_eq!(dt.state.files.len(), 0);
+
+        // assert new _delta_log file created in tempDir
+        let table_path = Path::new(&dt.table_uri);
+        assert!(table_path.exists());
+
+        let delta_log = table_path.join("_delta_log");
+
+        assert!(delta_log.exists());
+        assert!(delta_log.join("00000000000000000000.json").exists());
+
+        // assert DeltaTableState metadata matches fields in above DeltaTableMetaData
+        // assert metadata name
+        // assert partitions is none
+        // assert no configs
     }
 }
