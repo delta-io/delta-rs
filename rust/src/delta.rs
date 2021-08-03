@@ -217,6 +217,7 @@ impl DeltaTableMetaData {
         partition: Vec<String>, 
         config: HashMap<String, String>
     ) -> Self {
+        // Reference implementation uses uuid v4 to create GUID:
         // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L350
         
         Self {
