@@ -311,7 +311,7 @@ pub(crate) fn delta_log_schema_for_table(
         .fields()
         .iter()
         .map(|f| f.to_owned())
-        .partition(|field| partition_columns.contains(&field.name()));
+        .partition(|field| partition_columns.contains(field.name()));
 
     let mut stats_parsed_fields: Vec<ArrowField> =
         vec![ArrowField::new("numRecords", ArrowDataType::Int64, true)];

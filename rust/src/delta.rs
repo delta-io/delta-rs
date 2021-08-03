@@ -526,7 +526,7 @@ impl DeltaTable {
         // process actions from checkpoint
         self.state = DeltaTableState::default();
         for f in &checkpoint_data_paths {
-            let obj = self.storage.get_obj(&f).await?;
+            let obj = self.storage.get_obj(f).await?;
             let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
@@ -537,7 +537,7 @@ impl DeltaTable {
             for record in preader.get_row_iter(None)? {
                 process_action(
                     &mut self.state,
-                    Action::from_parquet_record(&schema, &record)?,
+                    Action::from_parquet_record(schema, &record)?,
                 )?;
             }
         }
@@ -1008,7 +1008,7 @@ impl DeltaTable {
 
         // NOTE: since we have the log entry in memory already,
         // we could optimize this further by merging the log entry instead of updating from storage.
-        self.update().await?;
+        self.update_incremental().await?;
 
         Ok(version)
     }
@@ -1252,7 +1252,7 @@ impl<'a> DeltaTransaction<'a> {
         debug!("Writing a parquet file to {}", &parquet_uri);
         self.delta_table
             .storage
-            .put_obj(&parquet_uri, &bytes)
+            .put_obj(&parquet_uri, bytes)
             .await
             .map_err(|source| DeltaTransactionError::Storage { source })?;
 
