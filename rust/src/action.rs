@@ -364,11 +364,8 @@ pub struct Format {
 
 impl Format {
     /// Allows creation of a new action::Format
-    pub fn new(provider: String, options: Option<HashMap<String,String>>) -> Self {
-        Self {
-            provider,
-            options
-        }
+    pub fn new(provider: String, options: Option<HashMap<String, String>>) -> Self {
+        Self { provider, options }
     }
 
     /// Return the Format provider
@@ -382,7 +379,7 @@ impl Default for Format {
     fn default() -> Self {
         Self {
             provider: "parquet".to_string(),
-            options: Default::default()
+            options: Default::default(),
         }
     }
 }

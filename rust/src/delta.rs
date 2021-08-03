@@ -208,27 +208,26 @@ pub struct DeltaTableMetaData {
 }
 
 impl DeltaTableMetaData {
-    ///
+    /// Create metadata for a DeltaTable from scratch
     pub fn new(
-        name: Option<String>, 
-        description: Option<String>, 
+        name: Option<String>,
+        description: Option<String>,
         format: Option<action::Format>,
-        schema: Schema, 
-        partition: Vec<String>, 
-        config: HashMap<String, String>
+        schema: Schema,
+        partition_columns: Vec<String>,
+        configuration: HashMap<String, String>,
     ) -> Self {
         // Reference implementation uses uuid v4 to create GUID:
         // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L350
-        
         Self {
-            id: Uuid::new_v4().to_string(), // create a new GUID
-            name: name,
-            description: description,
+            id: Uuid::new_v4().to_string(),
+            name,
+            description,
             format: format.unwrap_or_default(),
-            schema: schema,
-            partition_columns: partition,
-            created_time: Utc::now().timestamp_millis(),  // create a timestamp for current timestamp
-            configuration: config
+            schema,
+            partition_columns,
+            created_time: Utc::now().timestamp_millis(),
+            configuration,
         }
     }
 }
@@ -1062,26 +1061,21 @@ impl DeltaTable {
 
     /// Create a DeltaTable with version 0 given the provided MetaData and Protocol
     pub async fn create(
-        &mut self, 
-        metadata: DeltaTableMetaData, 
-        protocol: action::Protocol
+        &mut self,
+        metadata: DeltaTableMetaData,
+        protocol: action::Protocol,
     ) -> Result<(), DeltaTransactionError> {
-        
         let meta = action::MetaData::try_from(metadata)?;
 
         // TODO add commit info action
-        let actions = vec![
-            Action::protocol(protocol), 
-            Action::metaData(meta)
-        ];
-        
+        let actions = vec![Action::protocol(protocol), Action::metaData(meta)];
         let mut transaction = self.create_transaction(None);
         transaction.add_actions(actions.clone());
 
         let prepared_commit = transaction.prepare_commit(None).await?;
         self.try_commit_transaction(&prepared_commit, 0).await?;
 
-        // Can we mutate the DeltaTable's state using process_action()
+        // Mutate the DeltaTable's state using process_action()
         // in order to get most up-to-date state based on the commit above
         for action in actions {
             let _ = process_action(&mut self.state, action)?;
@@ -1636,59 +1630,56 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_delta_table() {
-
         let test_schema = Schema::new(
             "test".to_string(),
             vec![
                 SchemaField::new(
-                    "Id".to_string(), 
+                    "Id".to_string(),
                     SchemaDataType::primitive("integer".to_string()),
                     true,
-                    HashMap::new()
+                    HashMap::new(),
                 ),
                 SchemaField::new(
-                    "Name".to_string(), 
+                    "Name".to_string(),
                     SchemaDataType::primitive("string".to_string()),
                     true,
-                    HashMap::new()
-                )
-            ]
+                    HashMap::new(),
+                ),
+            ],
         );
 
         let delta_md = DeltaTableMetaData::new(
-            Some("Test Table Create".to_string()), 
-            Some("This table is made to test the create function for a DeltaTable".to_string()), 
+            Some("Test Table Create".to_string()),
+            Some("This table is made to test the create function for a DeltaTable".to_string()),
             None,
-            test_schema, 
-            vec![], 
-            HashMap::new()
+            test_schema,
+            vec![],
+            HashMap::new(),
         );
 
         //assert delta_md auto generated values [id, format, created_time] are of the correct type
-        assert_eq!(delta_md.format.clone().get_provider(), "parquet".to_string());
+        assert_eq!(
+            delta_md.format.clone().get_provider(),
+            "parquet".to_string()
+        );
 
-        let protocol = action::Protocol{
+        let protocol = action::Protocol {
             min_reader_version: 1,
-            min_writer_version: 2
+            min_writer_version: 2,
         };
 
-        let tmp_dir = tempdir::TempDir::new("create_table_test").unwrap(); 
+        let tmp_dir = tempdir::TempDir::new("create_table_test").unwrap();
         let table_dir = tmp_dir.path().join("test_create");
 
         let path = table_dir.to_str().unwrap();
-        let backend = Box::new(
-            storage::file::FileStorageBackend::new(tmp_dir.path().to_str().unwrap())
-        );
-        
-        let mut dt = DeltaTable::new(
-            path, 
-            backend
-        ).unwrap();
+        let backend = Box::new(storage::file::FileStorageBackend::new(
+            tmp_dir.path().to_str().unwrap(),
+        ));
+        let mut dt = DeltaTable::new(path, backend).unwrap();
 
         dt.create(delta_md, protocol).await.unwrap();
-        println!("{}", dt);
 
-        // assert DeltaTable version is now 0 and data files have been added
+        // assert DeltaTable version is now 0 and no data files have been added
         assert_eq!(dt.version, 0);
         assert_eq!(dt.state.files.len(), 0);
 

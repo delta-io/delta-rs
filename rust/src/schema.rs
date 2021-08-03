@@ -44,19 +44,18 @@ pub struct SchemaField {
 }
 
 impl SchemaField {
-
     /// Create a new SchemaField from scratch
     pub fn new(
-        name: String, 
+        name: String,
         r#type: SchemaDataType,
-        nullable: bool, 
-        metadata: HashMap<String, String>
+        nullable: bool,
+        metadata: HashMap<String, String>,
     ) -> Self {
         Self {
             name,
             r#type,
             nullable,
-            metadata
+            metadata,
         }
     }
 
@@ -177,9 +176,6 @@ impl Schema {
 
     /// Create a new Schema using a vector of SchemaFields
     pub fn new(r#type: String, fields: Vec<SchemaField>) -> Self {
-        Self {
-            r#type,
-            fields
-        }
+        Self { r#type, fields }
     }
 }
