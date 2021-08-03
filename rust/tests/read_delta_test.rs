@@ -145,6 +145,34 @@ async fn read_delta_8_0_table_without_version() {
 }
 
 #[tokio::test]
+async fn read_delta_8_0_table_with_load_version() {
+    let mut table = deltalake::open_table("./tests/data/delta-0.8.0")
+        .await
+        .unwrap();
+    assert_eq!(table.version, 1);
+    assert_eq!(table.get_min_writer_version(), 2);
+    assert_eq!(table.get_min_reader_version(), 1);
+    assert_eq!(
+        table.get_files(),
+        vec![
+            "part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet",
+            "part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet",
+        ]
+    );
+    table.load_version(0).await.unwrap();
+    assert_eq!(table.version, 0);
+    assert_eq!(table.get_min_writer_version(), 2);
+    assert_eq!(table.get_min_reader_version(), 1);
+    assert_eq!(
+        table.get_files(),
+        vec![
+            "part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet",
+            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet",
+        ]
+    );
+}
+
+#[tokio::test]
 async fn read_delta_8_0_table_with_partitions() {
     let table = deltalake::open_table("./tests/data/delta-0.8.0-partitioned")
         .await
