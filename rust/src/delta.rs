@@ -694,7 +694,8 @@ impl DeltaTable {
                 next_version = check_point.version + 1;
             }
             None => {
-                // no checkpoint found, start from the beginning
+                // no checkpoint found, clear table state and start from the beginning
+                self.state = DeltaTableState::default();
                 next_version = 0;
             }
         }
