@@ -47,9 +47,9 @@ parquet-format = "~2.6.1"
 # arrow  = { version = "4" }
 # datafusion = { version = "4", optional = true }
 # parquet = { version = "4" }
-arrow  = { git = "https://github.com/apache/arrow-rs", rev = "9be938e8d2847cf8d41bc59f0c907f23ff61cc3c" }
+arrow  = { git = "https://github.com/apache/arrow-rs", rev = "6bf1988852f87da21a163203eec4c83a7b692901" }
 datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "979dc3139c3e2aa1f2995c018375aea36cdf6274", optional = true }
-parquet = {  git = "https://github.com/apache/arrow-rs", rev = "9be938e8d2847cf8d41bc59f0c907f23ff61cc3c" }
+parquet = {  git = "https://github.com/apache/arrow-rs", rev = "6bf1988852f87da21a163203eec4c83a7b692901" }
 crossbeam = { version = "0", optional = true }
 
 cfg-if = "1"
