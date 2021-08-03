@@ -354,7 +354,7 @@ impl Add {
 }
 
 /// Describes the data format of files in the table.
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct Format {
     /// Name of the encoding for files in this table.
     provider: String,
@@ -374,6 +374,16 @@ impl Format {
     /// Return the Format provider
     pub fn get_provider(self) -> String {
         self.provider
+    }
+}
+
+// Assuming this is a more appropriate default than derived Default
+impl Default for Format {
+    fn default() -> Self {
+        Self {
+            provider: "parquet".to_string(),
+            options: Default::default()
+        }
     }
 }
 

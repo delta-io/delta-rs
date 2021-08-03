@@ -212,6 +212,7 @@ impl DeltaTableMetaData {
     pub fn new(
         name: Option<String>, 
         description: Option<String>, 
+        format: Option<action::Format>,
         schema: Schema, 
         partition: Vec<String>, 
         config: HashMap<String, String>
@@ -222,7 +223,7 @@ impl DeltaTableMetaData {
             id: Uuid::new_v4().to_string(), // create a new GUID
             name: name,
             description: description,
-            format: action::Format::new("parquet".to_string(), None),
+            format: format.unwrap_or_default(),
             schema: schema,
             partition_columns: partition,
             created_time: Utc::now().timestamp_millis(),  // create a timestamp for current timestamp
@@ -1063,7 +1064,7 @@ impl DeltaTable {
         &mut self, 
         metadata: DeltaTableMetaData, 
         protocol: action::Protocol
-    ) -> Result<(), DeltaTableError> {
+    ) -> Result<(), DeltaTransactionError> {
         
         let meta = action::MetaData::try_from(metadata)?;
 
@@ -1076,9 +1077,8 @@ impl DeltaTable {
         let mut transaction = self.create_transaction(None);
         transaction.add_actions(actions.clone());
 
-        // Need better error handling here
-        let prepared_commit = transaction.prepare_commit(None).await.unwrap();
-        self.try_commit_transaction(&prepared_commit, 0).await.unwrap();
+        let prepared_commit = transaction.prepare_commit(None).await?;
+        self.try_commit_transaction(&prepared_commit, 0).await?;
 
         // Can we mutate the DeltaTable's state using process_action()
         // in order to get most up-to-date state based on the commit above
@@ -1657,6 +1657,7 @@ mod tests {
         let delta_md = DeltaTableMetaData::new(
             Some("Test Table Create".to_string()), 
             Some("This table is made to test the create function for a DeltaTable".to_string()), 
+            None,
             test_schema, 
             vec![], 
             HashMap::new()
