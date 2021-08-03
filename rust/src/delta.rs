@@ -1694,7 +1694,8 @@ mod tests {
 
         // assert DeltaTableState metadata matches fields in above DeltaTableMetaData
         // assert metadata name
-        // assert partitions is none
-        // assert no configs
+        let current_metadata = dt.get_metadata().unwrap();
+        assert!(current_metadata.partition_columns.is_empty());
+        assert!(current_metadata.configuration.is_empty());
     }
 }
