@@ -354,12 +354,34 @@ impl Add {
 }
 
 /// Describes the data format of files in the table.
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Format {
     /// Name of the encoding for files in this table.
     provider: String,
     /// A map containing configuration options for the format.
     options: Option<HashMap<String, String>>,
+}
+
+impl Format {
+    /// Allows creation of a new action::Format
+    pub fn new(provider: String, options: Option<HashMap<String, String>>) -> Self {
+        Self { provider, options }
+    }
+
+    /// Return the Format provider
+    pub fn get_provider(self) -> String {
+        self.provider
+    }
+}
+
+// Assuming this is a more appropriate default than derived Default
+impl Default for Format {
+    fn default() -> Self {
+        Self {
+            provider: "parquet".to_string(),
+            options: Default::default(),
+        }
+    }
 }
 
 /// Action that describes the metadata of the table.
@@ -604,7 +626,7 @@ impl Remove {
 
 /// Action used by streaming systems to track progress using application-specific versions to
 /// enable idempotency.
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct Txn {
     /// A unique identifier for the application performing the transaction.
@@ -657,7 +679,7 @@ impl Txn {
 
 /// Action used to increase the version of the Delta protocol required to read or write to the
 /// table.
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Protocol {
     /// Minimum version of the Delta read protocol a client must implement to correctly read the
@@ -702,7 +724,7 @@ impl Protocol {
 
 /// Represents an action in the Delta log. The Delta log is an aggregate of all actions performed
 /// on the table, so the full list of actions is required to properly read a table.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum Action {
     /// Changes the current metadata of the table. Must be present in the first version of a table.
     /// Subsequent `metaData` actions completely overwrite previous metadata.
