@@ -162,7 +162,7 @@ pub enum SchemaDataType {
 }
 
 /// Represents the schema of the delta table.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Schema {
     r#type: String,
     fields: Vec<SchemaField>,

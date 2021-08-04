@@ -187,7 +187,7 @@ pub enum DeltaTableError {
 }
 
 /// Delta table metadata
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DeltaTableMetaData {
     /// Unique identifier for this table
     pub id: Guid,
@@ -1542,7 +1542,7 @@ pub fn crate_version() -> &'static str {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::{collections::HashMap, path::Path};
+    use std::{collections::HashMap, fs::File, path::Path};
 
     #[test]
     fn state_records_new_txn_version() {
@@ -1630,6 +1630,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_delta_table() {
+        // Setup
         let test_schema = Schema::new(
             "test".to_string(),
             vec![
@@ -1657,12 +1658,6 @@ mod tests {
             HashMap::new(),
         );
 
-        //assert delta_md auto generated values [id, format, created_time] are of the correct type
-        assert_eq!(
-            delta_md.format.clone().get_provider(),
-            "parquet".to_string()
-        );
-
         let protocol = action::Protocol {
             min_reader_version: 1,
             min_writer_version: 2,
@@ -1677,8 +1672,10 @@ mod tests {
         ));
         let mut dt = DeltaTable::new(path, backend).unwrap();
 
-        dt.create(delta_md, protocol).await.unwrap();
+        // Action
+        dt.create(delta_md.clone(), protocol.clone()).await.unwrap();
 
+        // Validation
         // assert DeltaTable version is now 0 and no data files have been added
         assert_eq!(dt.version, 0);
         assert_eq!(dt.state.files.len(), 0);
@@ -1688,9 +1685,27 @@ mod tests {
         assert!(table_path.exists());
 
         let delta_log = table_path.join("_delta_log");
-
         assert!(delta_log.exists());
-        assert!(delta_log.join("00000000000000000000.json").exists());
+
+        let version_file = delta_log.join("00000000000000000000.json");
+        assert!(version_file.exists());
+
+        // Checking the data written to delta table is the same when read back
+        let version_data = File::open(version_file).unwrap();
+        let lines = BufReader::new(version_data).lines();
+
+        for line in lines {
+            let action: Action = serde_json::from_str(line.unwrap().as_str()).unwrap();
+            match action {
+                Action::protocol(action) => {
+                    assert_eq!(action, protocol);
+                }
+                Action::metaData(action) => {
+                    assert_eq!(DeltaTableMetaData::try_from(action).unwrap(), delta_md);
+                }
+                _ => (),
+            }
+        }
 
         // assert DeltaTableState metadata matches fields in above DeltaTableMetaData
         // assert metadata name

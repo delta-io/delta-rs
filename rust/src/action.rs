@@ -354,7 +354,7 @@ impl Add {
 }
 
 /// Describes the data format of files in the table.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Format {
     /// Name of the encoding for files in this table.
     provider: String,
@@ -679,7 +679,7 @@ impl Txn {
 
 /// Action used to increase the version of the Delta protocol required to read or write to the
 /// table.
-#[derive(Serialize, Deserialize, Debug, Default, Clone)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct Protocol {
     /// Minimum version of the Delta read protocol a client must implement to correctly read the
