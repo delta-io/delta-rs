@@ -187,7 +187,7 @@ pub enum DeltaTableError {
 }
 
 /// Delta table metadata
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub struct DeltaTableMetaData {
     /// Unique identifier for this table
     pub id: Guid,
@@ -205,6 +205,31 @@ pub struct DeltaTableMetaData {
     pub created_time: DeltaDataTypeTimestamp,
     /// table properties
     pub configuration: HashMap<String, String>,
+}
+
+impl DeltaTableMetaData {
+    /// Create metadata for a DeltaTable from scratch
+    pub fn new(
+        name: Option<String>,
+        description: Option<String>,
+        format: Option<action::Format>,
+        schema: Schema,
+        partition_columns: Vec<String>,
+        configuration: HashMap<String, String>,
+    ) -> Self {
+        // Reference implementation uses uuid v4 to create GUID:
+        // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L350
+        Self {
+            id: Uuid::new_v4().to_string(),
+            name,
+            description,
+            format: format.unwrap_or_default(),
+            schema,
+            partition_columns,
+            created_time: Utc::now().timestamp_millis(),
+            configuration,
+        }
+    }
 }
 
 impl fmt::Display for DeltaTableMetaData {
@@ -694,7 +719,8 @@ impl DeltaTable {
                 next_version = check_point.version + 1;
             }
             None => {
-                // no checkpoint found, start from the beginning
+                // no checkpoint found, clear table state and start from the beginning
+                self.state = DeltaTableState::default();
                 next_version = 0;
             }
         }
@@ -1032,6 +1058,31 @@ impl DeltaTable {
             log_uri: log_uri_normalized,
             version_timestamp: HashMap::new(),
         })
+    }
+
+    /// Create a DeltaTable with version 0 given the provided MetaData and Protocol
+    pub async fn create(
+        &mut self,
+        metadata: DeltaTableMetaData,
+        protocol: action::Protocol,
+    ) -> Result<(), DeltaTransactionError> {
+        let meta = action::MetaData::try_from(metadata)?;
+
+        // TODO add commit info action
+        let actions = vec![Action::protocol(protocol), Action::metaData(meta)];
+        let mut transaction = self.create_transaction(None);
+        transaction.add_actions(actions.clone());
+
+        let prepared_commit = transaction.prepare_commit(None).await?;
+        self.try_commit_transaction(&prepared_commit, 0).await?;
+
+        // Mutate the DeltaTable's state using process_action()
+        // in order to get most up-to-date state based on the commit above
+        for action in actions {
+            let _ = process_action(&mut self.state, action)?;
+        }
+
+        Ok(())
     }
 
     /// Time travel Delta table to latest version that's created at or before provided `datetime`
@@ -1492,7 +1543,7 @@ pub fn crate_version() -> &'static str {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
+    use std::{collections::HashMap, fs::File, path::Path};
 
     #[test]
     fn state_records_new_txn_version() {
@@ -1576,5 +1627,91 @@ mod tests {
         } else {
             assert!(parquet_filename.contains("col1=a/col2=b/part-00000-"));
         }
+    }
+
+    #[tokio::test]
+    async fn test_create_delta_table() {
+        // Setup
+        let test_schema = Schema::new(
+            "test".to_string(),
+            vec![
+                SchemaField::new(
+                    "Id".to_string(),
+                    SchemaDataType::primitive("integer".to_string()),
+                    true,
+                    HashMap::new(),
+                ),
+                SchemaField::new(
+                    "Name".to_string(),
+                    SchemaDataType::primitive("string".to_string()),
+                    true,
+                    HashMap::new(),
+                ),
+            ],
+        );
+
+        let delta_md = DeltaTableMetaData::new(
+            Some("Test Table Create".to_string()),
+            Some("This table is made to test the create function for a DeltaTable".to_string()),
+            None,
+            test_schema,
+            vec![],
+            HashMap::new(),
+        );
+
+        let protocol = action::Protocol {
+            min_reader_version: 1,
+            min_writer_version: 2,
+        };
+
+        let tmp_dir = tempdir::TempDir::new("create_table_test").unwrap();
+        let table_dir = tmp_dir.path().join("test_create");
+
+        let path = table_dir.to_str().unwrap();
+        let backend = Box::new(storage::file::FileStorageBackend::new(
+            tmp_dir.path().to_str().unwrap(),
+        ));
+        let mut dt = DeltaTable::new(path, backend).unwrap();
+
+        // Action
+        dt.create(delta_md.clone(), protocol.clone()).await.unwrap();
+
+        // Validation
+        // assert DeltaTable version is now 0 and no data files have been added
+        assert_eq!(dt.version, 0);
+        assert_eq!(dt.state.files.len(), 0);
+
+        // assert new _delta_log file created in tempDir
+        let table_path = Path::new(&dt.table_uri);
+        assert!(table_path.exists());
+
+        let delta_log = table_path.join("_delta_log");
+        assert!(delta_log.exists());
+
+        let version_file = delta_log.join("00000000000000000000.json");
+        assert!(version_file.exists());
+
+        // Checking the data written to delta table is the same when read back
+        let version_data = File::open(version_file).unwrap();
+        let lines = BufReader::new(version_data).lines();
+
+        for line in lines {
+            let action: Action = serde_json::from_str(line.unwrap().as_str()).unwrap();
+            match action {
+                Action::protocol(action) => {
+                    assert_eq!(action, protocol);
+                }
+                Action::metaData(action) => {
+                    assert_eq!(DeltaTableMetaData::try_from(action).unwrap(), delta_md);
+                }
+                _ => (),
+            }
+        }
+
+        // assert DeltaTableState metadata matches fields in above DeltaTableMetaData
+        // assert metadata name
+        let current_metadata = dt.get_metadata().unwrap();
+        assert!(current_metadata.partition_columns.is_empty());
+        assert!(current_metadata.configuration.is_empty());
     }
 }

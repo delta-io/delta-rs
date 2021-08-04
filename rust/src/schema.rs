@@ -44,6 +44,21 @@ pub struct SchemaField {
 }
 
 impl SchemaField {
+    /// Create a new SchemaField from scratch
+    pub fn new(
+        name: String,
+        r#type: SchemaDataType,
+        nullable: bool,
+        metadata: HashMap<String, String>,
+    ) -> Self {
+        Self {
+            name,
+            r#type,
+            nullable,
+            metadata,
+        }
+    }
+
     /// The column name of the schema field.
     pub fn get_name(&self) -> &str {
         &self.name
@@ -147,7 +162,7 @@ pub enum SchemaDataType {
 }
 
 /// Represents the schema of the delta table.
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub struct Schema {
     r#type: String,
     fields: Vec<SchemaField>,
@@ -157,5 +172,10 @@ impl Schema {
     /// Returns the list of fields that make up the schema definition of the table.
     pub fn get_fields(&self) -> &Vec<SchemaField> {
         &self.fields
+    }
+
+    /// Create a new Schema using a vector of SchemaFields
+    pub fn new(r#type: String, fields: Vec<SchemaField>) -> Self {
+        Self { r#type, fields }
     }
 }
