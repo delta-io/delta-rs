@@ -301,23 +301,29 @@ fn typed_partition_value_from_option_string(
         SchemaDataType::primitive(primitive_type) => match primitive_type.as_str() {
             "string" => Ok(match string_value {
                 Some(s) => s.to_owned().into(),
-                None => Value::Null
+                None => Value::Null,
             }),
             "long" | "integer" | "short" | "byte" => Ok(match string_value {
-                Some(s) => s.parse::<i64>()
+                Some(s) => s
+                    .parse::<i64>()
                     .map_err(|_| {
-                        CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned().unwrap())
+                        CheckPointWriterError::PartitionValueNotParseable(
+                            string_value.to_owned().unwrap(),
+                        )
                     })?
                     .into(),
-                None => Value::Null
+                None => Value::Null,
             }),
             "boolean" => Ok(match string_value {
-                Some(s) => s.parse::<bool>()
+                Some(s) => s
+                    .parse::<bool>()
                     .map_err(|_| {
-                        CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned().unwrap())
+                        CheckPointWriterError::PartitionValueNotParseable(
+                            string_value.to_owned().unwrap(),
+                        )
                     })?
                     .into(),
-                None => Value::Null
+                None => Value::Null,
             }),
             s => unimplemented!(
                 "Primitive type {} is not supported for partition column values.",

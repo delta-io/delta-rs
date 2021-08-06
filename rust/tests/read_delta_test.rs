@@ -261,25 +261,19 @@ async fn read_delta_8_0_table_with_null_partition() {
         .await
         .unwrap();
 
-    let filters = vec![
-        deltalake::PartitionFilter {
-            key: "k",
-            value: deltalake::PartitionValue::Equal("A"),
-        },
-    ];
+    let filters = vec![deltalake::PartitionFilter {
+        key: "k",
+        value: deltalake::PartitionValue::Equal("A"),
+    }];
     assert_eq!(
         table.get_files_by_partitions(&filters).unwrap(),
-        vec![
-            "k=A/part-00000-b1f1dbbb-70bc-4970-893f-9bb772bf246e.c000.snappy.parquet".to_string()
-        ]
+        vec!["k=A/part-00000-b1f1dbbb-70bc-4970-893f-9bb772bf246e.c000.snappy.parquet".to_string()]
     );
 
-    let filters = vec![
-        deltalake::PartitionFilter {
-            key: "k",
-            value: deltalake::PartitionValue::Equal("__HIVE_DEFAULT_PARTITION__"),
-        },
-    ];
+    let filters = vec![deltalake::PartitionFilter {
+        key: "k",
+        value: deltalake::PartitionValue::Equal("__HIVE_DEFAULT_PARTITION__"),
+    }];
     assert_eq!(
         table.get_files_by_partitions(&filters).unwrap(),
         vec![

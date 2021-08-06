@@ -59,11 +59,12 @@ fn populate_hashmap_with_option_from_parquet_map(
                 .map_err(|_| "key for HashMap in parquet has to be a string")?
                 .clone(),
         )
-        .or_insert(
-            Some(values.get_string(j)
+        .or_insert(Some(
+            values
+                .get_string(j)
                 .map_err(|_| "key for HashMap in parquet has to be a string")?
-                .clone())
-        );
+                .clone(),
+        ));
     }
 
     Ok(())
@@ -236,13 +237,16 @@ impl Add {
                     let parquetMap = record
                         .get_map(i)
                         .map_err(|_| gen_action_type_error("add", "partitionValues", "map"))?;
-                    populate_hashmap_with_option_from_parquet_map(&mut re.partition_values, parquetMap)
-                        .map_err(|estr| {
-                            ActionError::InvalidField(format!(
-                                "Invalid partitionValues for add action: {}",
-                                estr,
-                            ))
-                        })?;
+                    populate_hashmap_with_option_from_parquet_map(
+                        &mut re.partition_values,
+                        parquetMap,
+                    )
+                    .map_err(|estr| {
+                        ActionError::InvalidField(format!(
+                            "Invalid partitionValues for add action: {}",
+                            estr,
+                        ))
+                    })?;
                 }
                 "partitionValues_parsed" => {
                     re.partition_values_parsed = Some(
@@ -598,13 +602,16 @@ impl Remove {
                             gen_action_type_error("remove", "partitionValues", "map")
                         })?;
                         let mut partitionValues = HashMap::new();
-                        populate_hashmap_with_option_from_parquet_map(&mut partitionValues, parquetMap)
-                            .map_err(|estr| {
-                                ActionError::InvalidField(format!(
-                                    "Invalid partitionValues for remove action: {}",
-                                    estr,
-                                ))
-                            })?;
+                        populate_hashmap_with_option_from_parquet_map(
+                            &mut partitionValues,
+                            parquetMap,
+                        )
+                        .map_err(|estr| {
+                            ActionError::InvalidField(format!(
+                                "Invalid partitionValues for remove action: {}",
+                                estr,
+                            ))
+                        })?;
                         re.partition_values = Some(partitionValues);
                     }
                     _ => re.partition_values = None,

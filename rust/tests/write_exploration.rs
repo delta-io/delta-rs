@@ -175,12 +175,13 @@ impl DeltaWriter {
             let mut first = true;
 
             for k in partition_cols.iter() {
-                let partition_value =
-                    partition_values
-                        .get(k)
-                        .ok_or(DeltaWriterError::MissingPartitionColumn {
-                            col_name: k.to_string(),
-                        })?.clone().unwrap_or("__HIVE_DEFAULT_PARTITION__".to_string());
+                let partition_value = partition_values
+                    .get(k)
+                    .ok_or(DeltaWriterError::MissingPartitionColumn {
+                        col_name: k.to_string(),
+                    })?
+                    .clone()
+                    .unwrap_or("__HIVE_DEFAULT_PARTITION__".to_string());
 
                 if first {
                     first = false;
@@ -348,11 +349,7 @@ fn stringified_partition_value(arr: &Arc<dyn Array>) -> Result<Option<String>, D
 
     // according to delta spec: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
     // empty string should convert to null
-    let partition_value = if s.is_empty() {
-        None
-    } else{
-        Some(s)
-    };
+    let partition_value = if s.is_empty() { None } else { Some(s) };
 
     Ok(partition_value)
 }
