@@ -42,6 +42,7 @@ maplit = { version = "1", optional = true }
 
 # GCS
 cloud-storage = { version = "0.10", default-features = true, optional = true }
+async-stream = { version = "0.3.2", default-features = true, optional = true }
 
 # High-level writer
 parquet-format = "~2.6.1"
@@ -61,7 +62,7 @@ datafusion-ext = ["datafusion"]
 azure = ["azure_core", "azure_storage", "reqwest"]
 s3 = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_s3/native-tls", "rusoto_sts/native-tls", "rusoto_dynamodb/native-tls", "maplit"]
 s3-rustls = ["rusoto_core/rustls", "rusoto_credential", "rusoto_s3/rustls", "rusoto_sts/rustls", "rusoto_dynamodb/rustls", "maplit"]
-gcs = ["cloud-storage"]
+gcs = ["async-stream", "cloud-storage"]
 
 [build-dependencies]
 glibc_version = "0"
