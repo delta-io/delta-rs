@@ -1305,7 +1305,7 @@ impl<'a> DeltaTransaction<'a> {
         let mut partition_values = HashMap::new();
         if let Some(partitions) = &partitions {
             for (key, value) in partitions {
-                partition_values.insert(key.clone(), value.clone());
+                partition_values.insert(key.clone(), Some(value.clone()));
             }
         }
 

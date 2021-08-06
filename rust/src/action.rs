@@ -47,6 +47,28 @@ fn populate_hashmap_from_parquet_map(
     Ok(())
 }
 
+fn populate_hashmap_with_option_from_parquet_map(
+    map: &mut HashMap<String, Option<String>>,
+    pmap: &parquet::record::Map,
+) -> Result<(), &'static str> {
+    let keys = pmap.get_keys();
+    let values = pmap.get_values();
+    for j in 0..pmap.len() {
+        map.entry(
+            keys.get_string(j)
+                .map_err(|_| "key for HashMap in parquet has to be a string")?
+                .clone(),
+        )
+        .or_insert(
+            Some(values.get_string(j)
+                .map_err(|_| "key for HashMap in parquet has to be a string")?
+                .clone())
+        );
+    }
+
+    Ok(())
+}
+
 fn gen_action_type_error(action: &str, field: &str, expected_type: &str) -> ActionError {
     ActionError::InvalidField(format!(
         "type for {} in {} action should be {}",
@@ -150,7 +172,7 @@ pub struct Add {
     /// The size of this file in bytes
     pub size: DeltaDataTypeLong,
     /// A map from partition column to value for this file
-    pub partition_values: HashMap<String, String>,
+    pub partition_values: HashMap<String, Option<String>>,
     /// Partition values stored in raw parquet struct format. In this struct, the column names
     /// correspond to the partition columns and the values are stored in their corresponding data
     /// type. This is a required field when the table is partitioned and the table property
@@ -214,7 +236,7 @@ impl Add {
                     let parquetMap = record
                         .get_map(i)
                         .map_err(|_| gen_action_type_error("add", "partitionValues", "map"))?;
-                    populate_hashmap_from_parquet_map(&mut re.partition_values, parquetMap)
+                    populate_hashmap_with_option_from_parquet_map(&mut re.partition_values, parquetMap)
                         .map_err(|estr| {
                             ActionError::InvalidField(format!(
                                 "Invalid partitionValues for add action: {}",
@@ -302,7 +324,7 @@ impl Add {
                     }
                     "minValues" => match record.get_group(i) {
                         Ok(row) => {
-                            for (name, field) in  row.get_column_iter() {
+                            for (name, field) in row.get_column_iter() {
                                 stats.min_values.insert(name.clone(), field.clone());
                             }
                         }
@@ -312,7 +334,7 @@ impl Add {
                     }
                     "maxValues" => match record.get_group(i) {
                         Ok(row) => {
-                            for (name, field) in  row.get_column_iter() {
+                            for (name, field) in row.get_column_iter() {
                                 stats.max_values.insert(name.clone(), field.clone());
                             }
                         }
@@ -322,7 +344,7 @@ impl Add {
                     }
                     "nullCount" => match record.get_group(i) {
                         Ok(row) => {
-                            for (i, (name, _)) in  row.get_column_iter().enumerate() {
+                            for (i, (name, _)) in row.get_column_iter().enumerate() {
                                 match row.get_long(i) {
                                     Ok(v) => {
                                         stats.null_count.insert(name.clone(), v);
@@ -344,7 +366,6 @@ impl Add {
                             record,
                         );
                     }
-
                 }
             }
 
@@ -535,7 +556,7 @@ pub struct Remove {
     /// When true the fields partitionValues, size, and tags are present
     pub extended_file_metadata: Option<bool>,
     /// A map from partition column to value for this file.
-    pub partition_values: Option<HashMap<String, String>>,
+    pub partition_values: Option<HashMap<String, Option<String>>>,
     /// Size of this file in bytes
     pub size: Option<DeltaDataTypeLong>,
     /// Map containing metadata about this file
@@ -577,7 +598,7 @@ impl Remove {
                             gen_action_type_error("remove", "partitionValues", "map")
                         })?;
                         let mut partitionValues = HashMap::new();
-                        populate_hashmap_from_parquet_map(&mut partitionValues, parquetMap)
+                        populate_hashmap_with_option_from_parquet_map(&mut partitionValues, parquetMap)
                             .map_err(|estr| {
                                 ActionError::InvalidField(format!(
                                     "Invalid partitionValues for remove action: {}",
