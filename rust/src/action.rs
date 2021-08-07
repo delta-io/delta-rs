@@ -24,29 +24,6 @@ pub enum ActionError {
     Generic(String),
 }
 
-fn populate_hashmap_from_parquet_map(
-    map: &mut HashMap<String, String>,
-    pmap: &parquet::record::Map,
-) -> Result<(), &'static str> {
-    let keys = pmap.get_keys();
-    let values = pmap.get_values();
-    for j in 0..pmap.len() {
-        map.entry(
-            keys.get_string(j)
-                .map_err(|_| "key for HashMap in parquet has to be a string")?
-                .clone(),
-        )
-        .or_insert(
-            values
-                .get_string(j)
-                .map_err(|_| "value for HashMap in parquet has to be a string")?
-                .clone(),
-        );
-    }
-
-    Ok(())
-}
-
 fn populate_hashmap_with_option_from_parquet_map(
     map: &mut HashMap<String, Option<String>>,
     pmap: &parquet::record::Map,
@@ -201,7 +178,7 @@ pub struct Add {
     #[serde(skip_serializing, skip_deserializing)]
     pub stats_parsed: Option<parquet::record::Row>,
     /// Map containing metadata about this file
-    pub tags: Option<HashMap<String, String>>,
+    pub tags: Option<HashMap<String, Option<String>>>,
 }
 
 impl Add {
@@ -261,12 +238,13 @@ impl Add {
                 "tags" => match record.get_map(i) {
                     Ok(tags_map) => {
                         let mut tags = HashMap::new();
-                        populate_hashmap_from_parquet_map(&mut tags, tags_map).map_err(|estr| {
-                            ActionError::InvalidField(format!(
-                                "Invalid tags for add action: {}",
-                                estr,
-                            ))
-                        })?;
+                        populate_hashmap_with_option_from_parquet_map(&mut tags, tags_map)
+                            .map_err(|estr| {
+                                ActionError::InvalidField(format!(
+                                    "Invalid tags for add action: {}",
+                                    estr,
+                                ))
+                            })?;
                         re.tags = Some(tags);
                     }
                     _ => {
@@ -384,12 +362,12 @@ pub struct Format {
     /// Name of the encoding for files in this table.
     provider: String,
     /// A map containing configuration options for the format.
-    options: Option<HashMap<String, String>>,
+    options: Option<HashMap<String, Option<String>>>,
 }
 
 impl Format {
     /// Allows creation of a new action::Format
-    pub fn new(provider: String, options: Option<HashMap<String, String>>) -> Self {
+    pub fn new(provider: String, options: Option<HashMap<String, Option<String>>>) -> Self {
         Self { provider, options }
     }
 
@@ -429,7 +407,7 @@ pub struct MetaData {
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
     pub created_time: DeltaDataTypeTimestamp,
     /// A map containing configuration options for the table
-    pub configuration: HashMap<String, String>,
+    pub configuration: HashMap<String, Option<String>>,
 }
 
 impl MetaData {
@@ -488,13 +466,16 @@ impl MetaData {
                     let configuration_map = record
                         .get_map(i)
                         .map_err(|_| gen_action_type_error("metaData", "configuration", "map"))?;
-                    populate_hashmap_from_parquet_map(&mut re.configuration, configuration_map)
-                        .map_err(|estr| {
-                            ActionError::InvalidField(format!(
-                                "Invalid configuration for metaData action: {}",
-                                estr,
-                            ))
-                        })?;
+                    populate_hashmap_with_option_from_parquet_map(
+                        &mut re.configuration,
+                        configuration_map,
+                    )
+                    .map_err(|estr| {
+                        ActionError::InvalidField(format!(
+                            "Invalid configuration for metaData action: {}",
+                            estr,
+                        ))
+                    })?;
                 }
                 "format" => {
                     let format_record = record
@@ -510,14 +491,16 @@ impl MetaData {
                     match record.get_map(1) {
                         Ok(options_map) => {
                             let mut options = HashMap::new();
-                            populate_hashmap_from_parquet_map(&mut options, options_map).map_err(
-                                |estr| {
-                                    ActionError::InvalidField(format!(
-                                        "Invalid format.options for metaData action: {}",
-                                        estr,
-                                    ))
-                                },
-                            )?;
+                            populate_hashmap_with_option_from_parquet_map(
+                                &mut options,
+                                options_map,
+                            )
+                            .map_err(|estr| {
+                                ActionError::InvalidField(format!(
+                                    "Invalid format.options for metaData action: {}",
+                                    estr,
+                                ))
+                            })?;
                             re.format.options = Some(options);
                         }
                         _ => {
@@ -564,7 +547,7 @@ pub struct Remove {
     /// Size of this file in bytes
     pub size: Option<DeltaDataTypeLong>,
     /// Map containing metadata about this file
-    pub tags: Option<HashMap<String, String>>,
+    pub tags: Option<HashMap<String, Option<String>>>,
 }
 
 impl Remove {
@@ -619,12 +602,13 @@ impl Remove {
                 "tags" => match record.get_map(i) {
                     Ok(tags_map) => {
                         let mut tags = HashMap::new();
-                        populate_hashmap_from_parquet_map(&mut tags, tags_map).map_err(|estr| {
-                            ActionError::InvalidField(format!(
-                                "Invalid tags for remove action: {}",
-                                estr,
-                            ))
-                        })?;
+                        populate_hashmap_with_option_from_parquet_map(&mut tags, tags_map)
+                            .map_err(|estr| {
+                                ActionError::InvalidField(format!(
+                                    "Invalid tags for remove action: {}",
+                                    estr,
+                                ))
+                            })?;
                         re.tags = Some(tags);
                     }
                     _ => {

@@ -501,10 +501,11 @@ async fn smoke_test() {
 
     let files = delta_table.get_files();
     assert_eq!(files.len(), 1);
-    assert_eq!(
-        files[0].split("/").next().unwrap(),
-        "modified=__HIVE_DEFAULT_PARTITION__"
-    );
+
+    let partition_values = extract_partition_values(&metadata, &record_batch).unwrap();
+    let mut expected_partition_values = HashMap::new();
+    expected_partition_values.insert(String::from("modified"), None);
+    assert_eq!(partition_values, expected_partition_values);
 
     // A notable thing to mention:
     // This implementation treats the DeltaTable instance as a single snapshot of the current log.

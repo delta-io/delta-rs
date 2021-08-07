@@ -204,7 +204,7 @@ pub struct DeltaTableMetaData {
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
     pub created_time: DeltaDataTypeTimestamp,
     /// table properties
-    pub configuration: HashMap<String, String>,
+    pub configuration: HashMap<String, Option<String>>,
 }
 
 impl DeltaTableMetaData {
@@ -215,7 +215,7 @@ impl DeltaTableMetaData {
         format: Option<action::Format>,
         schema: Schema,
         partition_columns: Vec<String>,
-        configuration: HashMap<String, String>,
+        configuration: HashMap<String, Option<String>>,
     ) -> Self {
         // Reference implementation uses uuid v4 to create GUID:
         // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L350
