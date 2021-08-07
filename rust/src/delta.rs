@@ -230,6 +230,11 @@ impl DeltaTableMetaData {
             configuration,
         }
     }
+
+    /// Return the configurations of the DeltaTableMetaData; could be empty
+    pub fn get_configuration(&self) -> &HashMap<String, String> {
+        &self.configuration
+    }
 }
 
 impl fmt::Display for DeltaTableMetaData {
@@ -1004,6 +1009,16 @@ impl DeltaTable {
     /// been loaded or no metadata was found in the log.
     pub fn get_schema(&self) -> Result<&Schema, DeltaTableError> {
         self.schema().ok_or(DeltaTableError::NoSchema)
+    }
+
+    /// Return the tables configurations that are encapsulated in the DeltaTableStates currentMetaData field
+    pub fn get_configurations(&self) -> Result<&HashMap<String, String>, DeltaTableError> {
+        Ok(self
+            .state
+            .current_metadata
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .get_configuration())
     }
 
     /// Creates a new DeltaTransaction for the DeltaTable.
