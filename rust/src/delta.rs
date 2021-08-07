@@ -232,7 +232,7 @@ impl DeltaTableMetaData {
     }
 
     /// Return the configurations of the DeltaTableMetaData; could be empty
-    pub fn get_configuration(&self) -> &HashMap<String, String> {
+    pub fn get_configuration(&self) -> &HashMap<String, Option<String>> {
         &self.configuration
     }
 }
@@ -1012,7 +1012,7 @@ impl DeltaTable {
     }
 
     /// Return the tables configurations that are encapsulated in the DeltaTableStates currentMetaData field
-    pub fn get_configurations(&self) -> Result<&HashMap<String, String>, DeltaTableError> {
+    pub fn get_configurations(&self) -> Result<&HashMap<String, Option<String>>, DeltaTableError> {
         Ok(self
             .state
             .current_metadata
