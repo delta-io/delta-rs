@@ -458,9 +458,53 @@ async fn smoke_test() {
     // TODO: removes should be calculated based on files containing a match for the update key.
     let remove = create_remove(remove_path);
 
+    // HACK: cloning the add path to remove later in test. Ultimately, an "UpdateCommmand" will need to handle this differently
+    let remove_path = add.path.clone();
+
     transaction.add_actions(vec![Action::add(add), Action::remove(remove)]);
     // commit the transaction
     transaction.commit(None).await.unwrap();
+
+    //
+    // tx 3 - an update with null and empty string as partition values
+    // NOTE: this is not a _real_ update since we don't rewrite the previous file, but it tests the transaction logic well enough for now.
+    //
+
+    // start a transaction
+    let metadata = delta_table.get_metadata().unwrap().clone();
+    let mut transaction = delta_table.create_transaction(None);
+
+    // test data set #3 - updates
+    let json_rows = vec![
+        json!({ "id": "G", "value": 154, "modified": null }),
+        json!({ "id": "H", "value": 156, "modified": "" }),
+    ];
+
+    let arrow_schema_ref =
+        Arc::new(<ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema).unwrap());
+    let record_batch =
+        record_batch_from_json_buffer(arrow_schema_ref, json_rows.as_slice()).unwrap();
+
+    // write data and collect add
+    // TODO: update adds should re-write the original add contents changing only the modified records
+    let add = delta_writer
+        .write_record_batch(&metadata, &record_batch)
+        .await
+        .unwrap();
+
+    // TODO: removes should be calculated based on files containing a match for the update key.
+    let remove = create_remove(remove_path);
+
+    transaction.add_actions(vec![Action::add(add), Action::remove(remove)]);
+    // commit the transaction
+    transaction.commit(None).await.unwrap();
+
+    let files = delta_table.get_files();
+    assert_eq!(files.len(), 1);
+    assert_eq!(
+        files[0].split("/").next().unwrap(),
+        "modified=__HIVE_DEFAULT_PARTITION__"
+    );
 
     // A notable thing to mention:
     // This implementation treats the DeltaTable instance as a single snapshot of the current log.

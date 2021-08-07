@@ -62,7 +62,7 @@ fn populate_hashmap_with_option_from_parquet_map(
         .or_insert(Some(
             values
                 .get_string(j)
-                .map_err(|_| "key for HashMap in parquet has to be a string")?
+                .map_err(|_| "value for HashMap in parquet has to be a string")?
                 .clone(),
         ));
     }

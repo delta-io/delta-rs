@@ -293,38 +293,25 @@ fn checkpoint_add_from_state(
     Ok(v)
 }
 
-fn typed_partition_value_from_option_string(
-    string_value: &Option<String>,
+fn typed_partition_value_from_string(
+    string_value: &str,
     data_type: &SchemaDataType,
 ) -> Result<Value, CheckPointWriterError> {
     match data_type {
         SchemaDataType::primitive(primitive_type) => match primitive_type.as_str() {
-            "string" => Ok(match string_value {
-                Some(s) => s.to_owned().into(),
-                None => Value::Null,
-            }),
-            "long" | "integer" | "short" | "byte" => Ok(match string_value {
-                Some(s) => s
-                    .parse::<i64>()
-                    .map_err(|_| {
-                        CheckPointWriterError::PartitionValueNotParseable(
-                            string_value.to_owned().unwrap(),
-                        )
-                    })?
-                    .into(),
-                None => Value::Null,
-            }),
-            "boolean" => Ok(match string_value {
-                Some(s) => s
-                    .parse::<bool>()
-                    .map_err(|_| {
-                        CheckPointWriterError::PartitionValueNotParseable(
-                            string_value.to_owned().unwrap(),
-                        )
-                    })?
-                    .into(),
-                None => Value::Null,
-            }),
+            "string" => Ok(string_value.to_owned().into()),
+            "long" | "integer" | "short" | "byte" => Ok(string_value
+                .parse::<i64>()
+                .map_err(|_| {
+                    CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
+                })?
+                .into()),
+            "boolean" => Ok(string_value
+                .parse::<bool>()
+                .map_err(|_| {
+                    CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
+                })?
+                .into()),
             s => unimplemented!(
                 "Primitive type {} is not supported for partition column values.",
                 s
@@ -334,6 +321,22 @@ fn typed_partition_value_from_option_string(
             "Data type {:?} is not supported for partition column values.",
             d
         ),
+    }
+}
+
+fn typed_partition_value_from_option_string(
+    string_value: &Option<String>,
+    data_type: &SchemaDataType,
+) -> Result<Value, CheckPointWriterError> {
+    match string_value {
+        Some(s) => {
+            if s.is_empty() {
+                Ok(Value::Null) // empty string should be deserialized as null
+            } else {
+                typed_partition_value_from_string(s, data_type)
+            }
+        }
+        None => Ok(Value::Null),
     }
 }
 
