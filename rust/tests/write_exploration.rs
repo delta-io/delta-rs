@@ -156,7 +156,7 @@ impl DeltaWriter {
     fn next_data_path(
         &self,
         metadata: &DeltaTableMetaData,
-        partition_values: &HashMap<String, String>,
+        partition_values: &HashMap<String, Option<String>>,
     ) -> Result<String, DeltaWriterError> {
         // TODO: what does 00000 mean?
         let first_part = "00000";
@@ -175,12 +175,13 @@ impl DeltaWriter {
             let mut first = true;
 
             for k in partition_cols.iter() {
-                let partition_value =
-                    partition_values
-                        .get(k)
-                        .ok_or(DeltaWriterError::MissingPartitionColumn {
-                            col_name: k.to_string(),
-                        })?;
+                let partition_value = partition_values
+                    .get(k)
+                    .ok_or(DeltaWriterError::MissingPartitionColumn {
+                        col_name: k.to_string(),
+                    })?
+                    .clone()
+                    .unwrap_or("__HIVE_DEFAULT_PARTITION__".to_string());
 
                 if first {
                     first = false;
@@ -190,7 +191,7 @@ impl DeltaWriter {
 
                 path_part.push_str(k);
                 path_part.push_str("=");
-                path_part.push_str(partition_value);
+                path_part.push_str(&partition_value);
             }
 
             format!("{}/{}", path_part, file_name)
@@ -246,7 +247,7 @@ pub fn record_batch_from_json_buffer(
 pub fn extract_partition_values(
     metadata: &DeltaTableMetaData,
     record_batch: &RecordBatch,
-) -> Result<HashMap<String, String>, DeltaWriterError> {
+) -> Result<HashMap<String, Option<String>>, DeltaWriterError> {
     let partition_cols = metadata.partition_columns.as_slice();
 
     let mut partition_values = HashMap::new();
@@ -266,7 +267,7 @@ pub fn extract_partition_values(
 }
 
 pub fn create_add(
-    partition_values: &HashMap<String, String>,
+    partition_values: &HashMap<String, Option<String>>,
     path: String,
     size: i64,
     record_batch: &RecordBatch,
@@ -323,7 +324,7 @@ pub fn create_remove(path: String) -> Remove {
 // however, stats are optional and can be added later with `dataChange` false log entries, and it may be more appropriate to add stats _later_ to speed up the initial write.
 // a happy middle-road might be to compute stats for partition columns only on the initial write since we should validate partition values anyway, and compute additional stats later (at checkpoint time perhaps?).
 // also this does not currently support nested partition columns and many other data types.
-fn stringified_partition_value(arr: &Arc<dyn Array>) -> Result<String, DeltaWriterError> {
+fn stringified_partition_value(arr: &Arc<dyn Array>) -> Result<Option<String>, DeltaWriterError> {
     let data_type = arr.data_type();
 
     let s = match data_type {
@@ -346,7 +347,11 @@ fn stringified_partition_value(arr: &Arc<dyn Array>) -> Result<String, DeltaWrit
         }
     };
 
-    Ok(s)
+    // according to delta spec: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
+    // empty string should convert to null
+    let partition_value = if s.is_empty() { None } else { Some(s) };
+
+    Ok(partition_value)
 }
 
 #[tokio::test]
@@ -453,9 +458,54 @@ async fn smoke_test() {
     // TODO: removes should be calculated based on files containing a match for the update key.
     let remove = create_remove(remove_path);
 
+    // HACK: cloning the add path to remove later in test. Ultimately, an "UpdateCommmand" will need to handle this differently
+    let remove_path = add.path.clone();
+
     transaction.add_actions(vec![Action::add(add), Action::remove(remove)]);
     // commit the transaction
     transaction.commit(None).await.unwrap();
+
+    //
+    // tx 3 - an update with null and empty string as partition values
+    // NOTE: this is not a _real_ update since we don't rewrite the previous file, but it tests the transaction logic well enough for now.
+    //
+
+    // start a transaction
+    let metadata = delta_table.get_metadata().unwrap().clone();
+    let mut transaction = delta_table.create_transaction(None);
+
+    // test data set #3 - updates
+    let json_rows = vec![
+        json!({ "id": "G", "value": 154, "modified": null }),
+        json!({ "id": "H", "value": 156, "modified": "" }),
+    ];
+
+    let arrow_schema_ref =
+        Arc::new(<ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema).unwrap());
+    let record_batch =
+        record_batch_from_json_buffer(arrow_schema_ref, json_rows.as_slice()).unwrap();
+
+    // write data and collect add
+    // TODO: update adds should re-write the original add contents changing only the modified records
+    let add = delta_writer
+        .write_record_batch(&metadata, &record_batch)
+        .await
+        .unwrap();
+
+    // TODO: removes should be calculated based on files containing a match for the update key.
+    let remove = create_remove(remove_path);
+
+    transaction.add_actions(vec![Action::add(add), Action::remove(remove)]);
+    // commit the transaction
+    transaction.commit(None).await.unwrap();
+
+    let files = delta_table.get_files();
+    assert_eq!(files.len(), 1);
+
+    let partition_values = extract_partition_values(&metadata, &record_batch).unwrap();
+    let mut expected_partition_values = HashMap::new();
+    expected_partition_values.insert(String::from("modified"), None);
+    assert_eq!(partition_values, expected_partition_values);
 
     // A notable thing to mention:
     // This implementation treats the DeltaTable instance as a single snapshot of the current log.

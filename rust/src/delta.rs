@@ -204,7 +204,7 @@ pub struct DeltaTableMetaData {
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
     pub created_time: DeltaDataTypeTimestamp,
     /// table properties
-    pub configuration: HashMap<String, String>,
+    pub configuration: HashMap<String, Option<String>>,
 }
 
 impl DeltaTableMetaData {
@@ -215,7 +215,7 @@ impl DeltaTableMetaData {
         format: Option<action::Format>,
         schema: Schema,
         partition_columns: Vec<String>,
-        configuration: HashMap<String, String>,
+        configuration: HashMap<String, Option<String>>,
     ) -> Self {
         // Reference implementation uses uuid v4 to create GUID:
         // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L350
@@ -232,7 +232,7 @@ impl DeltaTableMetaData {
     }
 
     /// Return the configurations of the DeltaTableMetaData; could be empty
-    pub fn get_configuration(&self) -> &HashMap<String, String> {
+    pub fn get_configuration(&self) -> &HashMap<String, Option<String>> {
         &self.configuration
     }
 }
@@ -1012,7 +1012,7 @@ impl DeltaTable {
     }
 
     /// Return the tables configurations that are encapsulated in the DeltaTableStates currentMetaData field
-    pub fn get_configurations(&self) -> Result<&HashMap<String, String>, DeltaTableError> {
+    pub fn get_configurations(&self) -> Result<&HashMap<String, Option<String>>, DeltaTableError> {
         Ok(self
             .state
             .current_metadata
@@ -1305,7 +1305,7 @@ impl<'a> DeltaTransaction<'a> {
         let mut partition_values = HashMap::new();
         if let Some(partitions) = &partitions {
             for (key, value) in partitions {
-                partition_values.insert(key.clone(), value.clone());
+                partition_values.insert(key.clone(), Some(value.clone()));
             }
         }
 
