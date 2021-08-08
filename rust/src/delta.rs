@@ -765,26 +765,15 @@ impl DeltaTable {
         &self,
         filters: &[PartitionFilter<&str>],
     ) -> Result<Vec<String>, DeltaTableError> {
-        let partitions_number = match &self
-            .state
-            .current_metadata
-            .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns
-        {
-            partitions if !partitions.is_empty() => partitions.len(),
-            _ => return Err(DeltaTableError::LoadPartitions),
-        };
-        let separator = "/";
         let files = self
             .state
             .files
             .iter()
             .filter(|add| {
                 let partitions = add
-                    .path
-                    .splitn(partitions_number + 1, separator)
-                    .filter_map(|p: &str| DeltaTablePartition::try_from(p).ok())
+                    .partition_values
+                    .iter()
+                    .map(|p| DeltaTablePartition::from_partition_value(p, ""))
                     .collect::<Vec<DeltaTablePartition>>();
                 filters
                     .iter()
