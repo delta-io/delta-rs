@@ -109,6 +109,7 @@ impl StorageBackend for FileStorageBackend {
             .await?;
 
         f.write_all(obj_bytes).await?;
+        f.flush().await?;
 
         Ok(())
     }
