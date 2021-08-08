@@ -105,7 +105,7 @@ class DeltaTable:
         Each tuple has format: (key, op, value) and compares the key with the value.
         The supported op are: `=`, `!=`, `in`, and `not in`.
         If the op is in or not in, the value must be a collection such as a list, a set or a tuple.
-        The supported type for value is str.
+        The supported type for value is str. Use empty string `''` for Null partition value.
 
         Examples:
         ("x", "=", "a")

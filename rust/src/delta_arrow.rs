@@ -90,7 +90,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                     }
                     "date" => {
                         // A calendar date, represented as a year-month-day triple without a
-                        // timezone.
+                        // timezone. Stored as 4 bytes integer representing days sinece 1970-01-01
                         Ok(ArrowDataType::Date32)
                     }
                     "timestamp" => {
