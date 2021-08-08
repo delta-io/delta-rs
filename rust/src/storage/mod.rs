@@ -411,6 +411,12 @@ pub trait StorageBackend: Send + Sync + Debug {
     >;
 
     /// Create new object with `obj_bytes` as content.
+    ///
+    /// Implementation note:
+    ///
+    /// To support safe concurrent read, if `path` already exists, `put_obj` needs to update object
+    /// content in backing store atomically, i.e. reader of the object should never read a partial
+    /// write.
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError>;
 
     /// Moves object from `src` to `dst`.
