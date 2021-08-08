@@ -272,7 +272,7 @@ async fn read_delta_8_0_table_with_null_partition() {
 
     let filters = vec![deltalake::PartitionFilter {
         key: "k",
-        value: deltalake::PartitionValue::Equal("__HIVE_DEFAULT_PARTITION__"),
+        value: deltalake::PartitionValue::Equal(""),
     }];
     assert_eq!(
         table.get_files_by_partitions(&filters).unwrap(),

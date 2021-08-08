@@ -126,3 +126,18 @@ impl<'a> TryFrom<&'a str> for DeltaTablePartition<'a> {
         }
     }
 }
+
+impl<'a> DeltaTablePartition<'a> {
+    /// Try to create a DeltaTable partition from a partition value kv pair.
+    pub fn from_partition_value(
+        partition_value: (&'a String, &'a Option<String>),
+        default_for_null: &'a str,
+    ) -> Self {
+        let (k, v) = partition_value;
+        let v = match v {
+            Some(s) => s,
+            None => default_for_null,
+        };
+        DeltaTablePartition { key: k, value: v }
+    }
+}
