@@ -24,8 +24,8 @@ pub enum ActionError {
     Generic(String),
 }
 
-fn populate_hashmap_from_parquet_map(
-    map: &mut HashMap<String, String>,
+fn populate_hashmap_with_option_from_parquet_map(
+    map: &mut HashMap<String, Option<String>>,
     pmap: &parquet::record::Map,
 ) -> Result<(), &'static str> {
     let keys = pmap.get_keys();
@@ -36,12 +36,12 @@ fn populate_hashmap_from_parquet_map(
                 .map_err(|_| "key for HashMap in parquet has to be a string")?
                 .clone(),
         )
-        .or_insert(
+        .or_insert(Some(
             values
                 .get_string(j)
                 .map_err(|_| "value for HashMap in parquet has to be a string")?
                 .clone(),
-        );
+        ));
     }
 
     Ok(())
@@ -150,7 +150,7 @@ pub struct Add {
     /// The size of this file in bytes
     pub size: DeltaDataTypeLong,
     /// A map from partition column to value for this file
-    pub partition_values: HashMap<String, String>,
+    pub partition_values: HashMap<String, Option<String>>,
     /// Partition values stored in raw parquet struct format. In this struct, the column names
     /// correspond to the partition columns and the values are stored in their corresponding data
     /// type. This is a required field when the table is partitioned and the table property
@@ -178,7 +178,7 @@ pub struct Add {
     #[serde(skip_serializing, skip_deserializing)]
     pub stats_parsed: Option<parquet::record::Row>,
     /// Map containing metadata about this file
-    pub tags: Option<HashMap<String, String>>,
+    pub tags: Option<HashMap<String, Option<String>>>,
 }
 
 impl Add {
@@ -214,13 +214,16 @@ impl Add {
                     let parquetMap = record
                         .get_map(i)
                         .map_err(|_| gen_action_type_error("add", "partitionValues", "map"))?;
-                    populate_hashmap_from_parquet_map(&mut re.partition_values, parquetMap)
-                        .map_err(|estr| {
-                            ActionError::InvalidField(format!(
-                                "Invalid partitionValues for add action: {}",
-                                estr,
-                            ))
-                        })?;
+                    populate_hashmap_with_option_from_parquet_map(
+                        &mut re.partition_values,
+                        parquetMap,
+                    )
+                    .map_err(|estr| {
+                        ActionError::InvalidField(format!(
+                            "Invalid partitionValues for add action: {}",
+                            estr,
+                        ))
+                    })?;
                 }
                 "partitionValues_parsed" => {
                     re.partition_values_parsed = Some(
@@ -235,12 +238,13 @@ impl Add {
                 "tags" => match record.get_map(i) {
                     Ok(tags_map) => {
                         let mut tags = HashMap::new();
-                        populate_hashmap_from_parquet_map(&mut tags, tags_map).map_err(|estr| {
-                            ActionError::InvalidField(format!(
-                                "Invalid tags for add action: {}",
-                                estr,
-                            ))
-                        })?;
+                        populate_hashmap_with_option_from_parquet_map(&mut tags, tags_map)
+                            .map_err(|estr| {
+                                ActionError::InvalidField(format!(
+                                    "Invalid tags for add action: {}",
+                                    estr,
+                                ))
+                            })?;
                         re.tags = Some(tags);
                     }
                     _ => {
@@ -302,7 +306,7 @@ impl Add {
                     }
                     "minValues" => match record.get_group(i) {
                         Ok(row) => {
-                            for (name, field) in  row.get_column_iter() {
+                            for (name, field) in row.get_column_iter() {
                                 stats.min_values.insert(name.clone(), field.clone());
                             }
                         }
@@ -312,7 +316,7 @@ impl Add {
                     }
                     "maxValues" => match record.get_group(i) {
                         Ok(row) => {
-                            for (name, field) in  row.get_column_iter() {
+                            for (name, field) in row.get_column_iter() {
                                 stats.max_values.insert(name.clone(), field.clone());
                             }
                         }
@@ -322,7 +326,7 @@ impl Add {
                     }
                     "nullCount" => match record.get_group(i) {
                         Ok(row) => {
-                            for (i, (name, _)) in  row.get_column_iter().enumerate() {
+                            for (i, (name, _)) in row.get_column_iter().enumerate() {
                                 match row.get_long(i) {
                                     Ok(v) => {
                                         stats.null_count.insert(name.clone(), v);
@@ -344,7 +348,6 @@ impl Add {
                             record,
                         );
                     }
-
                 }
             }
 
@@ -359,12 +362,12 @@ pub struct Format {
     /// Name of the encoding for files in this table.
     provider: String,
     /// A map containing configuration options for the format.
-    options: Option<HashMap<String, String>>,
+    options: Option<HashMap<String, Option<String>>>,
 }
 
 impl Format {
     /// Allows creation of a new action::Format
-    pub fn new(provider: String, options: Option<HashMap<String, String>>) -> Self {
+    pub fn new(provider: String, options: Option<HashMap<String, Option<String>>>) -> Self {
         Self { provider, options }
     }
 
@@ -404,7 +407,7 @@ pub struct MetaData {
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
     pub created_time: DeltaDataTypeTimestamp,
     /// A map containing configuration options for the table
-    pub configuration: HashMap<String, String>,
+    pub configuration: HashMap<String, Option<String>>,
 }
 
 impl MetaData {
@@ -463,13 +466,16 @@ impl MetaData {
                     let configuration_map = record
                         .get_map(i)
                         .map_err(|_| gen_action_type_error("metaData", "configuration", "map"))?;
-                    populate_hashmap_from_parquet_map(&mut re.configuration, configuration_map)
-                        .map_err(|estr| {
-                            ActionError::InvalidField(format!(
-                                "Invalid configuration for metaData action: {}",
-                                estr,
-                            ))
-                        })?;
+                    populate_hashmap_with_option_from_parquet_map(
+                        &mut re.configuration,
+                        configuration_map,
+                    )
+                    .map_err(|estr| {
+                        ActionError::InvalidField(format!(
+                            "Invalid configuration for metaData action: {}",
+                            estr,
+                        ))
+                    })?;
                 }
                 "format" => {
                     let format_record = record
@@ -485,14 +491,16 @@ impl MetaData {
                     match record.get_map(1) {
                         Ok(options_map) => {
                             let mut options = HashMap::new();
-                            populate_hashmap_from_parquet_map(&mut options, options_map).map_err(
-                                |estr| {
-                                    ActionError::InvalidField(format!(
-                                        "Invalid format.options for metaData action: {}",
-                                        estr,
-                                    ))
-                                },
-                            )?;
+                            populate_hashmap_with_option_from_parquet_map(
+                                &mut options,
+                                options_map,
+                            )
+                            .map_err(|estr| {
+                                ActionError::InvalidField(format!(
+                                    "Invalid format.options for metaData action: {}",
+                                    estr,
+                                ))
+                            })?;
                             re.format.options = Some(options);
                         }
                         _ => {
@@ -535,11 +543,11 @@ pub struct Remove {
     /// When true the fields partitionValues, size, and tags are present
     pub extended_file_metadata: Option<bool>,
     /// A map from partition column to value for this file.
-    pub partition_values: Option<HashMap<String, String>>,
+    pub partition_values: Option<HashMap<String, Option<String>>>,
     /// Size of this file in bytes
     pub size: Option<DeltaDataTypeLong>,
     /// Map containing metadata about this file
-    pub tags: Option<HashMap<String, String>>,
+    pub tags: Option<HashMap<String, Option<String>>>,
 }
 
 impl Remove {
@@ -577,13 +585,16 @@ impl Remove {
                             gen_action_type_error("remove", "partitionValues", "map")
                         })?;
                         let mut partitionValues = HashMap::new();
-                        populate_hashmap_from_parquet_map(&mut partitionValues, parquetMap)
-                            .map_err(|estr| {
-                                ActionError::InvalidField(format!(
-                                    "Invalid partitionValues for remove action: {}",
-                                    estr,
-                                ))
-                            })?;
+                        populate_hashmap_with_option_from_parquet_map(
+                            &mut partitionValues,
+                            parquetMap,
+                        )
+                        .map_err(|estr| {
+                            ActionError::InvalidField(format!(
+                                "Invalid partitionValues for remove action: {}",
+                                estr,
+                            ))
+                        })?;
                         re.partition_values = Some(partitionValues);
                     }
                     _ => re.partition_values = None,
@@ -591,12 +602,13 @@ impl Remove {
                 "tags" => match record.get_map(i) {
                     Ok(tags_map) => {
                         let mut tags = HashMap::new();
-                        populate_hashmap_from_parquet_map(&mut tags, tags_map).map_err(|estr| {
-                            ActionError::InvalidField(format!(
-                                "Invalid tags for remove action: {}",
-                                estr,
-                            ))
-                        })?;
+                        populate_hashmap_with_option_from_parquet_map(&mut tags, tags_map)
+                            .map_err(|estr| {
+                                ActionError::InvalidField(format!(
+                                    "Invalid tags for remove action: {}",
+                                    estr,
+                                ))
+                            })?;
                         re.tags = Some(tags);
                     }
                     _ => {
