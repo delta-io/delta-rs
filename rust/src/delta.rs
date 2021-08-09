@@ -204,7 +204,7 @@ pub struct DeltaTableMetaData {
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
     pub created_time: DeltaDataTypeTimestamp,
     /// table properties
-    pub configuration: HashMap<String, String>,
+    pub configuration: HashMap<String, Option<String>>,
 }
 
 impl DeltaTableMetaData {
@@ -215,7 +215,7 @@ impl DeltaTableMetaData {
         format: Option<action::Format>,
         schema: Schema,
         partition_columns: Vec<String>,
-        configuration: HashMap<String, String>,
+        configuration: HashMap<String, Option<String>>,
     ) -> Self {
         // Reference implementation uses uuid v4 to create GUID:
         // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L350
@@ -229,6 +229,11 @@ impl DeltaTableMetaData {
             created_time: Utc::now().timestamp_millis(),
             configuration,
         }
+    }
+
+    /// Return the configurations of the DeltaTableMetaData; could be empty
+    pub fn get_configuration(&self) -> &HashMap<String, Option<String>> {
+        &self.configuration
     }
 }
 
@@ -599,6 +604,13 @@ impl DeltaTable {
                     match e {
                         StorageError::NotFound => {
                             version -= 1;
+                            if version < 0 {
+                                let err = format!(
+                                    "No snapshot or version 0 found, perhaps {} is an empty dir?",
+                                    self.table_uri
+                                );
+                                return Err(DeltaTableError::NotATable(err));
+                            }
                         }
                         _ => return Err(DeltaTableError::from(e)),
                     }
@@ -760,26 +772,15 @@ impl DeltaTable {
         &self,
         filters: &[PartitionFilter<&str>],
     ) -> Result<Vec<String>, DeltaTableError> {
-        let partitions_number = match &self
-            .state
-            .current_metadata
-            .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns
-        {
-            partitions if !partitions.is_empty() => partitions.len(),
-            _ => return Err(DeltaTableError::LoadPartitions),
-        };
-        let separator = "/";
         let files = self
             .state
             .files
             .iter()
             .filter(|add| {
                 let partitions = add
-                    .path
-                    .splitn(partitions_number + 1, separator)
-                    .filter_map(|p: &str| DeltaTablePartition::try_from(p).ok())
+                    .partition_values
+                    .iter()
+                    .map(|p| DeltaTablePartition::from_partition_value(p, ""))
                     .collect::<Vec<DeltaTablePartition>>();
                 filters
                     .iter()
@@ -1004,6 +1005,16 @@ impl DeltaTable {
     /// been loaded or no metadata was found in the log.
     pub fn get_schema(&self) -> Result<&Schema, DeltaTableError> {
         self.schema().ok_or(DeltaTableError::NoSchema)
+    }
+
+    /// Return the tables configurations that are encapsulated in the DeltaTableStates currentMetaData field
+    pub fn get_configurations(&self) -> Result<&HashMap<String, Option<String>>, DeltaTableError> {
+        Ok(self
+            .state
+            .current_metadata
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .get_configuration())
     }
 
     /// Creates a new DeltaTransaction for the DeltaTable.
@@ -1290,7 +1301,7 @@ impl<'a> DeltaTransaction<'a> {
         let mut partition_values = HashMap::new();
         if let Some(partitions) = &partitions {
             for (key, value) in partitions {
-                partition_values.insert(key.clone(), value.clone());
+                partition_values.insert(key.clone(), Some(value.clone()));
             }
         }
 

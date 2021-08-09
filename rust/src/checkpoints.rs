@@ -261,7 +261,7 @@ fn checkpoint_add_from_state(
 
         for (field_name, data_type) in partition_col_data_types.iter() {
             if let Some(string_value) = add.partition_values.get(*field_name) {
-                let v = typed_partition_value_from_string(string_value, data_type)?;
+                let v = typed_partition_value_from_option_string(string_value, data_type)?;
 
                 partition_values_parsed.insert(field_name.to_string(), v);
             }
@@ -321,6 +321,22 @@ fn typed_partition_value_from_string(
             "Data type {:?} is not supported for partition column values.",
             d
         ),
+    }
+}
+
+fn typed_partition_value_from_option_string(
+    string_value: &Option<String>,
+    data_type: &SchemaDataType,
+) -> Result<Value, CheckPointWriterError> {
+    match string_value {
+        Some(s) => {
+            if s.is_empty() {
+                Ok(Value::Null) // empty string should be deserialized as null
+            } else {
+                typed_partition_value_from_string(s, data_type)
+            }
+        }
+        None => Ok(Value::Null),
     }
 }
 
@@ -403,9 +419,9 @@ mod tests {
         let string_value: Value = "Hello World!".into();
         assert_eq!(
             string_value,
-            typed_partition_value_from_string(
-                &"Hello World!".to_string(),
-                &SchemaDataType::primitive("string".to_string())
+            typed_partition_value_from_option_string(
+                &Some("Hello World!".to_string()),
+                &SchemaDataType::primitive("string".to_string()),
             )
             .unwrap()
         );
@@ -413,9 +429,9 @@ mod tests {
         let bool_value: Value = true.into();
         assert_eq!(
             bool_value,
-            typed_partition_value_from_string(
-                &"true".to_string(),
-                &SchemaDataType::primitive("boolean".to_string())
+            typed_partition_value_from_option_string(
+                &Some("true".to_string()),
+                &SchemaDataType::primitive("boolean".to_string()),
             )
             .unwrap()
         );
@@ -423,9 +439,9 @@ mod tests {
         let number_value: Value = 42.into();
         assert_eq!(
             number_value,
-            typed_partition_value_from_string(
-                &"42".to_string(),
-                &SchemaDataType::primitive("integer".to_string())
+            typed_partition_value_from_option_string(
+                &Some("42".to_string()),
+                &SchemaDataType::primitive("integer".to_string()),
             )
             .unwrap()
         );

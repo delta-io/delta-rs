@@ -56,7 +56,7 @@ struct RawDeltaTableMetaData {
     #[pyo3(get)]
     created_time: deltalake::DeltaDataTypeTimestamp,
     #[pyo3(get)]
-    configuration: HashMap<String, String>,
+    configuration: HashMap<String, Option<String>>,
 }
 
 #[pymethods]

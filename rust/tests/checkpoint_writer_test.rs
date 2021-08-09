@@ -18,7 +18,7 @@ async fn write_simple_checkpoint() {
     cleanup_checkpoint_files(log_path.as_path());
 
     // Load the delta table at version 5
-    let mut table = deltalake::open_table_with_version(table_location, 5)
+    let table = deltalake::open_table_with_version(table_location, 5)
         .await
         .unwrap();
 
@@ -34,11 +34,6 @@ async fn write_simple_checkpoint() {
     let checkpoint_path = log_path.join("00000000000000000005.checkpoint.parquet");
     assert!(checkpoint_path.as_path().exists());
 
-    // HACK: seems like a race condition exists reading the file back in.
-    // Without the sleep, frequently fails with:
-    // Error("EOF while parsing a value", line: 1, column: 0)'
-    std::thread::sleep(std::time::Duration::from_secs(1));
-
     // _last_checkpoint should exist and point to the correct version
     let version = get_last_checkpoint_version(&log_path);
     assert_eq!(5, version);
@@ -53,9 +48,6 @@ async fn write_simple_checkpoint() {
     // checkpoint should exist
     let checkpoint_path = log_path.join("00000000000000000010.checkpoint.parquet");
     assert!(checkpoint_path.as_path().exists());
-
-    // see above
-    std::thread::sleep(std::time::Duration::from_secs(1));
 
     // _last_checkpoint should exist and point to the correct version
     let version = get_last_checkpoint_version(&log_path);

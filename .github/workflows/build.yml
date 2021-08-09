@@ -35,6 +35,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v2
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+        restore-keys: |
+          ${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          ${{ runner.os }}-cargo-
     - name: Install minimal stable with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
@@ -57,6 +69,18 @@ jobs:
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v2
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: test-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+        restore-keys: |
+          test-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          test-${{ runner.os }}-cargo-
     - name: Install minimal stable with clippy and rustfmt
       uses: actions-rs/toolchain@v1
       with:
@@ -69,20 +93,32 @@ jobs:
   s3_test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
-      - name: Install minimal stable with clippy and rustfmt
-        uses: actions-rs/toolchain@v1
-        with:
-          profile: default
-          toolchain: stable
-          override: true
-      - name: Setup localstack
-        run: docker-compose up setup
-      - name: Run tests
-        # As there's no way to run tests which are feature only, one should explicitly tell which tests to execute.
-        # Using `cargo test s3` requires tests to include _s3_ part in a name which is easily human error prone.
-        run: |
-         cargo test s3 --test simple_commit_test --features s3
-         cargo test s3 --test concurrent_writes_test --features s3
-         cargo test --test dynamodb_lock_test --features s3
-         cargo test --test repair_s3_rename_test --features s3
+    - uses: actions/checkout@v2
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: s3-test-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+        restore-keys: |
+          s3-test-${{ runner.os }}-cargo-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+          s3-test-${{ runner.os }}-cargo-
+    - name: Install minimal stable with clippy and rustfmt
+      uses: actions-rs/toolchain@v1
+      with:
+        profile: default
+        toolchain: stable
+        override: true
+    - name: Setup localstack
+      run: docker-compose up setup
+    - name: Run tests
+      # As there's no way to run tests which are feature only, one should explicitly tell which tests to execute.
+      # Using `cargo test s3` requires tests to include _s3_ part in a name which is easily human error prone.
+      run: |
+       cargo test s3 --test simple_commit_test --features s3
+       cargo test s3 --test concurrent_writes_test --features s3
+       cargo test --test dynamodb_lock_test --features s3
+       cargo test --test repair_s3_rename_test --features s3
