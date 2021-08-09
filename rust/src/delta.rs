@@ -1342,7 +1342,7 @@ impl<'a> DeltaTransaction<'a> {
         // Serialize all actions that are part of this log entry.
         let log_entry = log_entry_from_actions(&self.actions)?;
 
-        let file_name = format!("_commit_{}.json", token);
+        let file_name = format!("_commit_{}.json.tmp", token);
         let uri = self
             .delta_table
             .storage
