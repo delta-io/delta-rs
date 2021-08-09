@@ -5,7 +5,7 @@
 //! parquet files
 
 use crate::action::Txn;
-use crate::{DeltaTableError, DeltaTransactionError};
+use crate::DeltaTableError;
 use arrow::record_batch::RecordBatch;
 use log::*;
 use parquet::arrow::ArrowWriter;
@@ -91,7 +91,7 @@ impl BufferedJsonWriter {
     /// as well as any buffered txn actions
     ///
     /// This will create a single transaction in the delta transaction log
-    pub async fn flush(&mut self) -> Result<(), DeltaTransactionError> {
+    pub async fn flush(&mut self) -> Result<(), DeltaTableError> {
         use arrow::json::reader::Decoder;
 
         let mut parquet_bufs = vec![];
