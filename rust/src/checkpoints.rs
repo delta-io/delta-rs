@@ -3,6 +3,7 @@
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
 use arrow::json::reader::Decoder;
+use chrono::Datelike;
 use log::*;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
@@ -312,6 +313,20 @@ fn typed_partition_value_from_string(
                     CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
                 })?
                 .into()),
+            "float" | "double" => Ok(string_value
+                .parse::<f64>()
+                .map_err(|_| {
+                    CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
+                })?
+                .into()),
+            "date" => {
+                let d = chrono::naive::NaiveDate::parse_from_str(string_value, "%Y-%m-%d")
+                    .map_err(|_| {
+                        CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
+                    })?;
+                // day 0 is 1970-01-01 (719163 days from ce)
+                Ok((d.num_days_from_ce() - 719_163).into())
+            }
             s => unimplemented!(
                 "Primitive type {} is not supported for partition column values.",
                 s
@@ -441,6 +456,46 @@ mod tests {
             number_value,
             typed_partition_value_from_option_string(
                 &Some("42".to_string()),
+                &SchemaDataType::primitive("integer".to_string()),
+            )
+            .unwrap()
+        );
+
+        for (s, v) in [
+            ("2021-08-08", 18_847),
+            ("1970-01-02", 1),
+            ("1970-01-01", 0),
+            ("1969-12-31", -1),
+            ("1-01-01", -719_162),
+        ] {
+            let date_value: Value = v.into();
+            assert_eq!(
+                date_value,
+                typed_partition_value_from_option_string(
+                    &Some(s.to_string()),
+                    &SchemaDataType::primitive("date".to_string()),
+                )
+                .unwrap()
+            );
+        }
+    }
+
+    #[test]
+    fn null_partition_value_from_string_test() {
+        assert_eq!(
+            Value::Null,
+            typed_partition_value_from_option_string(
+                &None,
+                &SchemaDataType::primitive("integer".to_string()),
+            )
+            .unwrap()
+        );
+
+        // empty string should be treated as null
+        assert_eq!(
+            Value::Null,
+            typed_partition_value_from_option_string(
+                &Some("".to_string()),
                 &SchemaDataType::primitive("integer".to_string()),
             )
             .unwrap()
