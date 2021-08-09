@@ -23,7 +23,7 @@ jobs:
             exit 1
           fi
 
-  release-pypi-manc-windows:
+  release-pypi-mac-windows:
     needs: validate-release-tag
     name: PyPI release Mac & Windows
     strategy:
@@ -95,7 +95,7 @@ jobs:
         run: make publish TARGET="x86_64-unknown-linux-gnu" EXTRA_ARGS=""
 
   release-docs:
-    needs: [validate-release-tag, relesae-pypi-manylinux, release-pypi-mac-windows]
+    needs: [validate-release-tag, release-pypi-manylinux, release-pypi-mac-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
