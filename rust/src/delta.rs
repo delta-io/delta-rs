@@ -604,6 +604,13 @@ impl DeltaTable {
                     match e {
                         StorageError::NotFound => {
                             version -= 1;
+                            if version < 0 {
+                                let err = format!(
+                                    "No snapshot or version 0 found, perhaps {} is an empty dir?",
+                                    self.table_uri
+                                );
+                                return Err(DeltaTableError::NotATable(err));
+                            }
                         }
                         _ => return Err(DeltaTableError::from(e)),
                     }
