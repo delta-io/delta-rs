@@ -12,6 +12,7 @@ use tokio::io::AsyncWriteExt;
 use tokio_stream::wrappers::ReadDirStream;
 
 use super::{ObjectMeta, StorageBackend, StorageError};
+use uuid::Uuid;
 
 mod rename;
 
@@ -101,17 +102,26 @@ impl StorageBackend for FileStorageBackend {
         if let Some(parent) = Path::new(path).parent() {
             fs::create_dir_all(parent).await?;
         }
+        let tmp_path = &format!("{}_{}", path, Uuid::new_v4().to_string());
         let mut f = fs::OpenOptions::new()
             .create(true)
             .truncate(true)
             .write(true)
-            .open(path)
+            .open(tmp_path)
             .await?;
 
         f.write_all(obj_bytes).await?;
         f.flush().await?;
+        drop(f);
 
-        Ok(())
+        match fs::rename(tmp_path, path).await {
+            Ok(_) => Ok(()),
+            Err(e) => {
+                // If rename failed, clean up the temp file.
+                let _ = fs::remove_file(tmp_path).await?;
+                Err(StorageError::from(e))
+            }
+        }
     }
 
     async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError> {
