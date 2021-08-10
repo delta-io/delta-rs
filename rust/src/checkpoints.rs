@@ -312,6 +312,17 @@ fn typed_partition_value_from_string(
                 // day 0 is 1970-01-01 (719163 days from ce)
                 Ok((d.num_days_from_ce() - 719_163).into())
             }
+            "timestamp" => {
+                let ts =
+                    chrono::naive::NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S")
+                        .map_err(|_| {
+                            CheckPointWriterError::PartitionValueNotParseable(
+                                string_value.to_owned(),
+                            )
+                        })?;
+                // Use nanosecond precision for timestamp: https://github.com/delta-io/delta-rs/pull/194
+                Ok(ts.timestamp_nanos().into())
+            }
             s => unimplemented!(
                 "Primitive type {} is not supported for partition column values.",
                 s
@@ -458,6 +469,24 @@ mod tests {
                 typed_partition_value_from_option_string(
                     &Some(s.to_string()),
                     &SchemaDataType::primitive("date".to_string()),
+                )
+                .unwrap()
+            );
+        }
+
+        for (s, v) in [
+            ("2021-08-08 01:00:01", 1628384401000000000i64),
+            ("1970-01-02 12:59:59", 133199000000000i64),
+            ("1970-01-01 13:00:01", 46801000000000i64),
+            ("1969-12-31 00:00:00", -86400000000000i64),
+            ("1677-09-21 00:12:44", -9223372036000000000i64),
+        ] {
+            let timestamp_value: Value = v.into();
+            assert_eq!(
+                timestamp_value,
+                typed_partition_value_from_option_string(
+                    &Some(s.to_string()),
+                    &SchemaDataType::primitive("timestamp".to_string()),
                 )
                 .unwrap()
             );
