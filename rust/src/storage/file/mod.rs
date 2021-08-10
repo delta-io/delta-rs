@@ -111,15 +111,15 @@ impl StorageBackend for FileStorageBackend {
             .await?;
 
         f.write_all(obj_bytes).await?;
-        f.flush().await?;
+        f.sync_all().await?;
         drop(f);
 
-        match fs::rename(tmp_path, path).await {
+        match self.rename_obj(tmp_path, path).await {
             Ok(_) => Ok(()),
             Err(e) => {
                 // If rename failed, clean up the temp file.
-                let _ = fs::remove_file(tmp_path).await?;
-                Err(StorageError::from(e))
+                self.delete_obj(tmp_path).await?;
+                Err(e)
             }
         }
     }
