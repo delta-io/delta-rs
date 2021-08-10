@@ -323,6 +323,7 @@ fn typed_partition_value_from_string(
                 // Use nanosecond precision for timestamp: https://github.com/delta-io/delta-rs/pull/194
                 Ok(ts.timestamp_nanos().into())
             }
+            "binary" => Ok(string_value.to_owned().into()),
             s => unimplemented!(
                 "Primitive type {} is not supported for partition column values.",
                 s
@@ -491,6 +492,16 @@ mod tests {
                 .unwrap()
             );
         }
+
+        let binary_value: Value = "\u{2081}\u{2082}\u{2083}\u{2084}".into();
+        assert_eq!(
+            binary_value,
+            typed_partition_value_from_option_string(
+                &Some("₁₂₃₄".to_string()),
+                &SchemaDataType::primitive("binary".to_string()),
+            )
+            .unwrap()
+        );
     }
 
     #[test]
