@@ -362,12 +362,13 @@ pub struct Format {
     /// Name of the encoding for files in this table.
     provider: String,
     /// A map containing configuration options for the format.
-    options: Option<HashMap<String, Option<String>>>,
+    options: HashMap<String, Option<String>>,
 }
 
 impl Format {
     /// Allows creation of a new action::Format
     pub fn new(provider: String, options: Option<HashMap<String, Option<String>>>) -> Self {
+        let options = options.unwrap_or_default();
         Self { provider, options }
     }
 
@@ -501,10 +502,10 @@ impl MetaData {
                                     estr,
                                 ))
                             })?;
-                            re.format.options = Some(options);
+                            re.format.options = options;
                         }
                         _ => {
-                            re.format.options = None;
+                            re.format.options = HashMap::new();
                         }
                     }
                 }
