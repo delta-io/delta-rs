@@ -18,7 +18,7 @@ async fn write_simple_checkpoint() {
     cleanup_checkpoint_files(log_path.as_path());
 
     // Load the delta table at version 5
-    let table = deltalake::open_table_with_version(table_location, 5)
+    let mut table = deltalake::open_table_with_version(table_location, 5)
         .await
         .unwrap();
 
@@ -38,7 +38,6 @@ async fn write_simple_checkpoint() {
     let version = get_last_checkpoint_version(&log_path);
     assert_eq!(5, version);
 
-    /* uncomment once map support is merged to arrow
     // Setting table version to 10 for another checkpoint
     table.load_version(10).await.unwrap();
     checkpoint_writer
@@ -59,7 +58,6 @@ async fn write_simple_checkpoint() {
     let table = table_result;
     let files = table.get_files();
     assert_eq!(11, files.len());
-    */
 }
 
 fn get_last_checkpoint_version(log_path: &PathBuf) -> i64 {

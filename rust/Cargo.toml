@@ -43,9 +43,9 @@ maplit = { version = "1", optional = true }
 # High-level writer
 parquet-format = "~2.6.1"
 
-arrow = { version = "5" }
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev="2a4f94e622a9c3db88eeb5c5ec7dd12efb98b546", optional = true }
-parquet = { version = "5" }
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev= "fa5acd971c973161f17e69d5c6b50d6e77c7da03" }
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "a4f628221197030cd6d6ebbcb666478ece078e71", optional = true }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev= "fa5acd971c973161f17e69d5c6b50d6e77c7da03"  }
 cfg-if = "1"
 async-trait = "0.1"
 # NOTE: disable rust-dataframe integration since it currently doesn't have a

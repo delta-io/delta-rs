@@ -87,9 +87,9 @@ checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
 
 [[package]]
 name = "arrow"
-version = "5.0.0"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06d2bd50fddbdcecd832742b388228eec02eb3aabd33144ef46f6bc5420bf662"
+checksum = "ddf189dff0c7e0f40588fc25adbe5bb6837b82fc61bb7cadf5d76de030f710bb"
 dependencies = [
  "bitflags",
  "chrono",
@@ -102,6 +102,28 @@ dependencies = [
  "multiversion",
  "num",
  "prettytable-rs",
+ "rand 0.8.3",
+ "regex",
+ "serde",
+ "serde_derive",
+ "serde_json",
+]
+
+[[package]]
+name = "arrow"
+version = "6.0.0-SNAPSHOT"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fa5acd971c973161f17e69d5c6b50d6e77c7da03#fa5acd971c973161f17e69d5c6b50d6e77c7da03"
+dependencies = [
+ "bitflags",
+ "chrono",
+ "csv",
+ "flatbuffers",
+ "hex",
+ "indexmap",
+ "lazy_static",
+ "lexical-core",
+ "multiversion",
+ "num",
  "rand 0.8.3",
  "regex",
  "serde",
@@ -495,11 +517,11 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "4.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow-datafusion.git?rev=2a4f94e622a9c3db88eeb5c5ec7dd12efb98b546#2a4f94e622a9c3db88eeb5c5ec7dd12efb98b546"
+version = "5.0.0"
+source = "git+https://github.com/apache/arrow-datafusion.git?rev=a4f628221197030cd6d6ebbcb666478ece078e71#a4f628221197030cd6d6ebbcb666478ece078e71"
 dependencies = [
  "ahash",
- "arrow",
+ "arrow 5.1.0",
  "async-trait",
  "chrono",
  "futures",
@@ -509,7 +531,7 @@ dependencies = [
  "md-5",
  "num_cpus",
  "ordered-float 2.1.1",
- "parquet",
+ "parquet 5.1.0",
  "paste 1.0.5",
  "pin-project-lite",
  "rand 0.8.3",
@@ -527,7 +549,7 @@ name = "deltalake"
 version = "0.4.1"
 dependencies = [
  "anyhow",
- "arrow",
+ "arrow 6.0.0-SNAPSHOT",
  "async-trait",
  "azure_core",
  "azure_storage",
@@ -544,7 +566,7 @@ dependencies = [
  "libc",
  "log",
  "maplit",
- "parquet",
+ "parquet 6.0.0-SNAPSHOT",
  "parquet-format",
  "pretty_assertions",
  "regex",
@@ -569,7 +591,7 @@ dependencies = [
 name = "deltalake-python"
 version = "0.5.2"
 dependencies = [
- "arrow",
+ "arrow 6.0.0-SNAPSHOT",
  "deltalake",
  "env_logger",
  "pyo3",
@@ -1634,11 +1656,31 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "5.0.0"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9297cb17ef7287f6105685d230abbb2b37247657edf2b4a99271088e7d5b0ddd"
+checksum = "db54d10313f64ea22e1fe0332864abefb19aa1c322bfbc67999ff743aebf868d"
 dependencies = [
- "arrow",
+ "arrow 5.1.0",
+ "base64 0.13.0",
+ "brotli",
+ "byteorder",
+ "chrono",
+ "flate2",
+ "lz4",
+ "num-bigint",
+ "parquet-format",
+ "rand 0.8.3",
+ "snap",
+ "thrift",
+ "zstd",
+]
+
+[[package]]
+name = "parquet"
+version = "6.0.0-SNAPSHOT"
+source = "git+https://github.com/apache/arrow-rs.git?rev=fa5acd971c973161f17e69d5c6b50d6e77c7da03#fa5acd971c973161f17e69d5c6b50d6e77c7da03"
+dependencies = [
+ "arrow 6.0.0-SNAPSHOT",
  "base64 0.13.0",
  "brotli",
  "byteorder",
