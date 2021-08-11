@@ -38,7 +38,10 @@ mod simple_commit_s3 {
         std::env::set_var("AWS_S3_LOCKING_PROVIDER", "none  ");
 
         let result = test_two_commits(path).await;
-        if let Err(DeltaTransactionError::Storage { ref source }) = result {
+        if let Err(DeltaTableError::TransactionError {
+            source: DeltaTransactionError::Storage { ref source },
+        }) = result
+        {
             if let StorageError::S3Generic(err) = source {
                 assert_eq!(err, "dynamodb locking is not enabled");
                 return;
