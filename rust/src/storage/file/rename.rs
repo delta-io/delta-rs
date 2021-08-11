@@ -4,7 +4,7 @@ use crate::StorageError;
 mod imp {
     use super::*;
 
-    pub fn atomic_rename(from: &str, to: &str) -> Result<(), StorageError> {
+    pub fn atomic_rename(from: &str, to: &str, swap: bool) -> Result<(), StorageError> {
         // doing best effort in windows since there is no native atomic rename support
         if std::fs::metadata(to).is_ok() {
             return Err(StorageError::AlreadyExists(to.to_string()));
