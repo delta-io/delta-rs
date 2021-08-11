@@ -1441,15 +1441,14 @@ impl<'a> DeltaTransaction<'a> {
                     match e {
                         DeltaTableError::TransactionError {
                             source: DeltaTransactionError::VersionAlreadyExists { .. },
-                        } if attempt_number > self.options.max_retry_commit_attempts + 1 => {
-                            debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
-                            return Err(e);
-                        }
-                        DeltaTableError::TransactionError {
-                            source: DeltaTransactionError::VersionAlreadyExists { .. },
                         } => {
-                            attempt_number += 1;
-                            debug!("Transaction attempt failed. Incrementing attempt number to {} and retrying.", attempt_number);
+                            if attempt_number > self.options.max_retry_commit_attempts + 1 {
+                                debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
+                                return Err(e);
+                            } else {
+                                attempt_number += 1;
+                                debug!("Transaction attempt failed. Incrementing attempt number to {} and retrying.", attempt_number);
+                            }
                         }
                         // NOTE: Add other retryable errors as needed here
                         _ => {
