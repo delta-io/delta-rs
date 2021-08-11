@@ -176,37 +176,12 @@ pub(crate) fn delta_log_schema_for_table(
                     ArrowField::new("description", ArrowDataType::Utf8, true),
                     ArrowField::new("schemaString", ArrowDataType::Utf8, true),
                     ArrowField::new("createdTime", ArrowDataType::Int64, true),
-                    ArrowField::new(
-                        "partitionColumns",
-                        ArrowDataType::List(Box::new(ArrowField::new(
-                            "element",
-                            ArrowDataType::Utf8,
-                            true
-                        ))),
-                        true
-                    ),
-                    ArrowField::new(
-                        "format",
-                        ArrowDataType::Struct(vec![
-                            ArrowField::new("provider", ArrowDataType::Utf8, true),
-                            ArrowField::new(
-                                "options",
-                                ArrowDataType::Map(
-                                    Box::new(ArrowField::new(
-                                        "key_value",
-                                        ArrowDataType::Struct(vec![
-                                            ArrowField::new("key", ArrowDataType::Utf8, false),
-                                            ArrowField::new("value", ArrowDataType::Utf8, true),
-                                        ]),
-                                        false
-                                    )),
-                                    false
-                                ),
-                                true
-                            )
-                        ]),
-                        true
-                    ),
+                    ArrowField::new("partitionColumns", ArrowDataType::List(Box::new(
+                        ArrowField::new("element", ArrowDataType::Utf8, true))), true),
+                    ArrowField::new("format", ArrowDataType::Struct(vec![
+                        ArrowField::new("provider", ArrowDataType::Utf8, true),
+                        // TODO: Add "options" after ArrowDataType::Map support
+                        ]), true),
                 ]),
                 true
             ),
@@ -234,36 +209,8 @@ pub(crate) fn delta_log_schema_for_table(
                     ArrowField::new("dataChange", ArrowDataType::Boolean, true),
                     ArrowField::new("extendedFileMetadata", ArrowDataType::Boolean, true),
                     ArrowField::new("size", ArrowDataType::Int64, true),
-                    ArrowField::new(
-                        "partitionValues",
-                        ArrowDataType::Map(
-                            Box::new(ArrowField::new(
-                                "key_value",
-                                ArrowDataType::Struct(vec![
-                                    ArrowField::new("key", ArrowDataType::Utf8, false),
-                                    ArrowField::new("value", ArrowDataType::Utf8, true),
-                                ]),
-                                false
-                            )),
-                            false
-                        ),
-                        true
-                    ),
-                    ArrowField::new(
-                        "tags",
-                        ArrowDataType::Map(
-                            Box::new(ArrowField::new(
-                                "key_value",
-                                ArrowDataType::Struct(vec![
-                                    ArrowField::new("key", ArrowDataType::Utf8, false),
-                                    ArrowField::new("value", ArrowDataType::Utf8, true),
-                                ]),
-                                false
-                            )),
-                            false
-                        ),
-                        true
-                    )
+                    // TODO: Add "partitionValues" after ArrowDataType::Map support
+                    // TODO: Add "tags" after ArrowDataType::Map support
                 ]),
                 true
             )
@@ -274,36 +221,8 @@ pub(crate) fn delta_log_schema_for_table(
             ArrowField::new("modificationTime", ArrowDataType::Int64, true),
             ArrowField::new("dataChange", ArrowDataType::Boolean, true),
             ArrowField::new("stats", ArrowDataType::Utf8, true),
-            ArrowField::new(
-                "partitionValues",
-                ArrowDataType::Map(
-                    Box::new(ArrowField::new(
-                        "key_value",
-                        ArrowDataType::Struct(vec![
-                            ArrowField::new("key", ArrowDataType::Utf8, false),
-                            ArrowField::new("value", ArrowDataType::Utf8, true),
-                        ]),
-                        false
-                    )),
-                    false
-                ),
-                true
-            ),
-            ArrowField::new(
-                "tags",
-                ArrowDataType::Map(
-                    Box::new(ArrowField::new(
-                        "key_value",
-                        ArrowDataType::Struct(vec![
-                            ArrowField::new("key", ArrowDataType::Utf8, false),
-                            ArrowField::new("value", ArrowDataType::Utf8, true),
-                        ]),
-                        false
-                    )),
-                    false
-                ),
-                true
-            )
+            // TODO: Add "partitionValues" after ArrowDataType::Map support
+            // TODO: Add "tags" after ArrowDataType::Map support
         ];
     }
 
@@ -388,7 +307,7 @@ mod tests {
             })
             .flatten()
             .collect();
-        assert_eq!(9, add_fields.len());
+        assert_eq!(7, add_fields.len());
 
         let add_field_map: HashMap<_, _> = add_fields
             .iter()

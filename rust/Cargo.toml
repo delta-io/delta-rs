@@ -43,15 +43,9 @@ maplit = { version = "1", optional = true }
 # High-level writer
 parquet-format = "~2.6.1"
 
-# Use @nevi-me's map-support branch so we can write schemas that include maps
-# arrow  = { version = "4" }
-# datafusion = { version = "4", optional = true }
-# parquet = { version = "4" }
-arrow  = { git = "https://github.com/apache/arrow-rs", rev = "6bf1988852f87da21a163203eec4c83a7b692901" }
-datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "979dc3139c3e2aa1f2995c018375aea36cdf6274", optional = true }
-parquet = {  git = "https://github.com/apache/arrow-rs", rev = "6bf1988852f87da21a163203eec4c83a7b692901" }
-crossbeam = { version = "0", optional = true }
-
+arrow = { git = "https://github.com/apache/arrow-rs.git", rev= "fa5acd971c973161f17e69d5c6b50d6e77c7da03" }
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "a4f628221197030cd6d6ebbcb666478ece078e71", optional = true }
+parquet = { git = "https://github.com/apache/arrow-rs.git", rev= "fa5acd971c973161f17e69d5c6b50d6e77c7da03"  }
 cfg-if = "1"
 async-trait = "0.1"
 # NOTE: disable rust-dataframe integration since it currently doesn't have a
