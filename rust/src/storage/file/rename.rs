@@ -137,6 +137,15 @@ mod tests {
         assert!(b.exists());
         assert_eq!(std::fs::read_to_string(c).unwrap(), "a");
 
+        // until https://github.com/delta-io/delta-rs/issues/377 is resolved
+        cfg_if::cfg_if! {
+            if #[cfg(target_os = "windows")] {
+                if true {
+                    return;
+                }
+            }
+        }
+
         // successful swaps B to C
         atomic_rename(b.to_str().unwrap(), c.to_str().unwrap(), true).unwrap();
         assert!(b.exists());
