@@ -4,11 +4,21 @@ use crate::StorageError;
 mod imp {
     use super::*;
 
-    pub fn atomic_rename(from: &str, to: &str, _swap: bool) -> Result<(), StorageError> {
+    pub fn atomic_rename(from: &str, to: &str, swap: bool) -> Result<(), StorageError> {
         // doing best effort in windows since there is no native atomic rename support
-        if std::fs::metadata(to).is_ok() {
+        let to_exists = std::fs::metadata(to).is_ok();
+        // consistent behavior with Linux
+        if !to_exists && swap {
+            return Err(StorageError::other_std_io_err(format!(
+                "failed to rename {} to {}: {} not exists and swap is set to true.",
+                from, to, to
+            )));
+        } else if to_exists && !swap {
             return Err(StorageError::AlreadyExists(to.to_string()));
         }
+        // rename in Windows already set the MOVEFILE_REPLACE_EXISTING flag
+        // it should always succeed no matter destination file exists or not
+        // TODO: with swap set to true, we should keep the from file in Windows?
         std::fs::rename(from, to).map_err(|e| {
             StorageError::other_std_io_err(format!("failed to rename {} to {}: {}", from, to, e))
         })
@@ -137,20 +147,17 @@ mod tests {
         assert!(b.exists());
         assert_eq!(std::fs::read_to_string(c).unwrap(), "a");
 
-        // until https://github.com/delta-io/delta-rs/issues/377 is resolved
-        cfg_if::cfg_if! {
-            if #[cfg(target_os = "windows")] {
-                if true {
-                    return;
-                }
-            }
-        }
-
         // successful swaps B to C
         atomic_rename(b.to_str().unwrap(), c.to_str().unwrap(), true).unwrap();
-        assert!(b.exists());
+        cfg_if::cfg_if! {
+            if #[cfg(target_os = "windows")] {
+                assert!(!b.exists());
+            } else{
+                assert!(b.exists());
+                assert_eq!(std::fs::read_to_string(b).unwrap(), "a");
+            }
+        }
         assert!(c.exists());
-        assert_eq!(std::fs::read_to_string(b).unwrap(), "a");
         assert_eq!(std::fs::read_to_string(c).unwrap(), "b");
 
         // unsuccessful swap C to D, D does not exist
