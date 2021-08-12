@@ -406,7 +406,7 @@ pub struct MetaData {
     /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
-    pub created_time: DeltaDataTypeTimestamp,
+    pub created_time: Option<DeltaDataTypeTimestamp>,
     /// A map containing configuration options for the table
     pub configuration: HashMap<String, Option<String>>,
 }
@@ -459,9 +459,10 @@ impl MetaData {
                         .clone();
                 }
                 "createdTime" => {
-                    re.created_time = record
-                        .get_long(i)
-                        .map_err(|_| gen_action_type_error("metaData", "createdTime", "long"))?;
+                    re.created_time =
+                        Some(record.get_long(i).map_err(|_| {
+                            gen_action_type_error("metaData", "createdTime", "long")
+                        })?);
                 }
                 "configuration" => {
                     let configuration_map = record
@@ -537,7 +538,7 @@ pub struct Remove {
     /// The path of the file that is removed from the table.
     pub path: String,
     /// The timestamp when the remove was added to table state.
-    pub deletion_timestamp: DeltaDataTypeTimestamp,
+    pub deletion_timestamp: Option<DeltaDataTypeTimestamp>,
     /// Whether data is changed by the remove. A table optimize will report this as false for
     /// example, since it adds and removes files by combining many files into one.
     pub data_change: bool,
@@ -554,6 +555,8 @@ pub struct Remove {
 impl Remove {
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
         let mut re = Self {
+            data_change: true,
+            extended_file_metadata: Some(false),
             ..Default::default()
         };
 
@@ -576,9 +579,9 @@ impl Remove {
                     })?);
                 }
                 "deletionTimestamp" => {
-                    re.deletion_timestamp = record.get_long(i).map_err(|_| {
+                    re.deletion_timestamp = Some(record.get_long(i).map_err(|_| {
                         gen_action_type_error("remove", "deletionTimestamp", "long")
-                    })?;
+                    })?);
                 }
                 "partitionValues" => match record.get_map(i) {
                     Ok(_) => {
