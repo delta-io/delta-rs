@@ -121,7 +121,7 @@ impl StorageBackend for FileStorageBackend {
             Ok(_) => Ok(()),
             Err(e) => {
                 // If rename failed, clean up the temp file.
-                //self.delete_obj(tmp_path).await?;
+                self.delete_obj(tmp_path).await?;
                 Err(e)
             }
         }
