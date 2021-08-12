@@ -18,8 +18,8 @@ toc::[]
 
 This library provides low level access to Delta tables in Rust, which can be
 used with data processing frameworks like
-link:https://github.com/apache/arrow/tree/master/rust/datafusion[datafusion],
-link:https://github.com/ballista-compute/ballista[ballista],
+link:https://github.com/apache/arrow-datafusion[datafusion],
+link:https://github.com/apache/arrow-datafusion/tree/master/ballista[ballista],
 link:https://github.com/nevi-me/rust-dataframe[rust-dataframe],
 link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to other higher level languages such as link:https://delta-io.github.io/delta-rs/python/[Python], Ruby, or Golang.
 
