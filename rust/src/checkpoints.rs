@@ -18,6 +18,7 @@ use super::open_table_with_version;
 use super::schema::*;
 use super::storage;
 use super::storage::{StorageBackend, StorageError};
+use super::writer::time_utils;
 use super::{CheckPoint, DeltaTableError, DeltaTableState};
 
 /// Error returned when the CheckPointWriter is unable to write a checkpoint.
@@ -194,7 +195,7 @@ impl CheckPointWriter {
             min_reader_version: state.min_reader_version(),
             min_writer_version: state.min_writer_version(),
         }))
-        // metadata
+        // metaData
         .chain(std::iter::once(action::Action::metaData(
             action::MetaData::try_from(current_metadata.clone())?,
         )))
@@ -256,6 +257,8 @@ fn checkpoint_add_from_state(
     stats_conversions: &[(SchemaPath, SchemaDataType)],
 ) -> Result<Value, ArrowError> {
     let mut v = serde_json::to_value(action::Action::add(add.clone()))?;
+
+    v["add"]["dataChange"] = Value::Bool(false);
 
     if !add.partition_values.is_empty() {
         let mut partition_values_parsed: HashMap<String, Value> = HashMap::new();
@@ -405,9 +408,8 @@ fn apply_stats_conversion(
                 if let Some(v) = v {
                     let ts = v
                         .as_str()
-                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                        .map(|dt| serde_json::Number::from(dt.timestamp_nanos()))
-                        .map(Value::Number);
+                        .and_then(|s| time_utils::timestamp_micros_from_stats_string(s).ok())
+                        .map(|n| Value::Number(serde_json::Number::from(n)));
 
                     if let Some(ts) = ts {
                         *v = ts;
