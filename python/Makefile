@@ -1,8 +1,7 @@
 .DEFAULT_GOAL := help
 
 VENV := venv
-PY_SOURCE_DIR := deltalake tests
-
+MATURIN_VERSION := $(shell awk -F '[ ="]+' '$$1 == "requires" { print $$4 }' pyproject.toml)
 
 .PHONY: setup-venv
 setup-venv: ## Setup the virtualenv
@@ -12,7 +11,7 @@ setup-venv: ## Setup the virtualenv
 .PHONY: setup
 setup: ## Setup the requirements
 	$(info --- Setup dependencies ---)
-	pip install maturin==0.10.6
+	pip install maturin==$(MATURIN_VERSION)
 
 .PHONY: develop
 develop: setup ## Install Python binding of delta-rs
@@ -24,7 +23,7 @@ format: ## Format the code
 	$(info --- Rust format ---)
 	cargo fmt
 	$(info --- Python format ---)
-	black deltalake tests *.py
+	black
 	isort .
 
 .PHONY: check-rust
@@ -37,11 +36,11 @@ check-rust: ## Run check on Rust
 .PHONY: check-python
 check-python: ## Run check on Python
 	$(info Check Python isort)
-	isort --diff --check-only $(PY_SOURCE_DIR)
+	isort --diff --check-only .
 	$(info Check Python black)
-	black --check $(PY_SOURCE_DIR)
+	black --check
 	$(info Check Python mypy)
-	mypy --config-file setup.cfg $(PY_SOURCE_DIR)
+	mypy
 
 .PHONY: unit-test
 unit-test: ## Run unit test

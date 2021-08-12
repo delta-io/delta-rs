@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin==0.10.6"]
+requires = ["maturin==0.11.2"]
 build-backend = "maturin"
 
 [project]
@@ -29,8 +29,28 @@ requires-dist = [
 ]
 provides-extra = ["pandas", "devel"]
 
+[tool.mypy]
+files = "deltalake/*.py"
+exclude = "^tests"
+mypy_path = "./stubs"
+disallow_any_generics = true
+disallow_subclassing_any = true
+disallow_untyped_calls = true
+disallow_untyped_defs = true
+disallow_incomplete_defs = true
+check_untyped_defs = true
+disallow_untyped_decorators = true
+no_implicit_optional = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_return_any = false
+implicit_reexport = false
+strict_equality = true
+
 [tool.isort]
 profile = "black"
+src_paths = ["deltalake", "tests"]
 
 [tool.black]
+include = "deltalake,tests"
 exclude = "venv"
