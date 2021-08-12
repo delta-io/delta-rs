@@ -2,6 +2,33 @@
 requires = ["maturin==0.10.6"]
 build-backend = "maturin"
 
+[project]
+name = "deltalake"
+requires-python = ">=3.6"
+classifier = [
+    "Development Status :: 3 - Alpha",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3 :: Only"
+]
+project-url = { Repo = "https://github.com/delta-io/delta-rs", Documentation = "https://delta-io.github.io/delta-rs/python/", "Bug Tracker" = "https://github.com/delta-io/delta-rs/issues" }
+requires-dist = [
+    "pyarrow>=4",
+    'numpy<1.20.0;python_version<="3.6"',
+    'dataclasses;python_version<="3.6"',
+    'types-dataclasses;python_version<="3.6" and extra == "pandas"',
+    "pandas; extra == 'pandas' or extra == 'devel'",
+    "mypy; extra == 'devel'",
+    "isort; extra == 'devel'",
+    "pytest; extra == 'devel'",
+    "pytest-mock; extra == 'devel'",
+    "pytest-cov; extra == 'devel'",
+    "pytest-timeout; extra == 'devel'",
+    "sphinx; extra == 'devel'",
+    "sphinx-rtd-theme; extra == 'devel'",
+    "toml; extra == 'devel'",
+]
+provides-extra = ["pandas", "devel"]
+
 [tool.isort]
 profile = "black"
 
