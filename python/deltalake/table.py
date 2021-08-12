@@ -10,7 +10,7 @@ from pyarrow.dataset import dataset, partitioning
 if TYPE_CHECKING:
     import pandas
 
-from .deltalake import RawDeltaTable, RawDeltaTableMetaData
+from .deltalake import RawDeltaTable
 from .schema import Schema, pyarrow_schema_from_json
 
 
