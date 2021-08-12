@@ -337,13 +337,11 @@ pub(crate) fn delta_log_schema_for_table(
             .iter()
             .for_each(|f| max_min_schema_for_fields(&mut max_min_vec, f));
 
-        stats_parsed_fields.extend(["minValues", "maxValues"].iter().map(|name| {
-            ArrowField::new(
-                name,
-                ArrowDataType::Struct(max_min_vec.clone()),
-                true,
-            )
-        }));
+        stats_parsed_fields.extend(
+            ["minValues", "maxValues"].iter().map(|name| {
+                ArrowField::new(name, ArrowDataType::Struct(max_min_vec.clone()), true)
+            }),
+        );
 
         let mut null_count_vec = Vec::new();
         non_partition_fields
@@ -494,7 +492,12 @@ mod tests {
                         ArrowDataType::Struct(fields) => {
                             assert_eq!(1, fields.len());
                             let field = fields.get(0).unwrap().to_owned();
-                            assert_eq!(ArrowField::new("col1", ArrowDataType::Int32, true), field);
+                            let data_type = if k == "nullCount" {
+                                ArrowDataType::Int64
+                            } else {
+                                ArrowDataType::Int32
+                            };
+                            assert_eq!(ArrowField::new("col1", data_type, true), field);
                         }
                         _ => unreachable!(),
                     },

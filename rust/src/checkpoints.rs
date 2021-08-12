@@ -587,14 +587,14 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(
-            1627668684594000000i64,
+            1627668684594000i64,
             stats["minValues"]["some_struct"]["struct_timestamp"]
                 .as_i64()
                 .unwrap()
         );
         assert_eq!("P", stats["minValues"]["some_string"].as_str().unwrap());
         assert_eq!(
-            1627668684594000000i64,
+            1627668684594000i64,
             stats["minValues"]["some_timestamp"].as_i64().unwrap()
         );
 
@@ -606,14 +606,14 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(
-            1627668685594000000i64,
+            1627668685594000i64,
             stats["maxValues"]["some_struct"]["struct_timestamp"]
                 .as_i64()
                 .unwrap()
         );
         assert_eq!("Q", stats["maxValues"]["some_string"].as_str().unwrap());
         assert_eq!(
-            1627668685594000000i64,
+            1627668685594000i64,
             stats["maxValues"]["some_timestamp"].as_i64().unwrap()
         );
     }
