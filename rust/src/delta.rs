@@ -184,6 +184,15 @@ pub enum DeltaTableError {
     /// Generic Delta Table error
     #[error("Generic DeltaTable error: {0}")]
     Generic(String),
+
+    /// Error that wraps an underlying DeltaTransaction error.
+    /// The wrapped error describes the specific cause.
+    #[error("Delta transaction failed: {source}")]
+    TransactionError {
+        /// The wrapped DeltaTransaction error.
+        #[from]
+        source: DeltaTransactionError,
+    },
 }
 
 /// Delta table metadata
@@ -1036,12 +1045,13 @@ impl DeltaTable {
         &mut self,
         commit: &PreparedCommit,
         version: DeltaDataTypeVersion,
-    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
         self.storage
             .rename_obj(&commit.uri, &self.commit_uri_from_version(version))
-            .await?;
+            .await
+            .map_err(|e| DeltaTableError::from(DeltaTransactionError::from(e)))?;
 
         // NOTE: since we have the log entry in memory already,
         // we could optimize this further by merging the log entry instead of updating from storage.
@@ -1076,7 +1086,7 @@ impl DeltaTable {
         &mut self,
         metadata: DeltaTableMetaData,
         protocol: action::Protocol,
-    ) -> Result<(), DeltaTransactionError> {
+    ) -> Result<(), DeltaTableError> {
         let meta = action::MetaData::try_from(metadata)?;
 
         // TODO add commit info action
@@ -1186,15 +1196,6 @@ pub enum DeltaTransactionError {
     Storage {
         /// The wrapped StorageError.
         source: StorageError,
-    },
-
-    /// Error that wraps an underlying DeltaTable error.
-    /// The wrapped error describes the specific cause.
-    #[error("DeltaTable interaction failed: {source}")]
-    DeltaTable {
-        /// The wrapped DeltaTable error.
-        #[from]
-        source: DeltaTableError,
     },
 
     /// Error caused by a problem while using serde_json to serialize an action.
@@ -1364,7 +1365,7 @@ impl<'a> DeltaTransaction<'a> {
     pub async fn commit(
         &mut self,
         _operation: Option<DeltaOperation>,
-    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action), but leaving it unused for now.
         // `CommitInfo` is a fairly dynamic data structure so we should work out the data structure approach separately.
 
@@ -1421,7 +1422,7 @@ impl<'a> DeltaTransaction<'a> {
     async fn try_commit_loop(
         &mut self,
         commit: &PreparedCommit,
-    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         let mut attempt_number: u32 = 0;
         loop {
             self.delta_table.update_incremental().await?;
@@ -1438,15 +1439,16 @@ impl<'a> DeltaTransaction<'a> {
                 }
                 Err(e) => {
                     match e {
-                        DeltaTransactionError::VersionAlreadyExists { .. }
-                            if attempt_number > self.options.max_retry_commit_attempts + 1 =>
-                        {
-                            debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
-                            return Err(e);
-                        }
-                        DeltaTransactionError::VersionAlreadyExists { .. } => {
-                            attempt_number += 1;
-                            debug!("Transaction attempt failed. Incrementing attempt number to {} and retrying.", attempt_number);
+                        DeltaTableError::TransactionError {
+                            source: DeltaTransactionError::VersionAlreadyExists { .. },
+                        } => {
+                            if attempt_number > self.options.max_retry_commit_attempts + 1 {
+                                debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
+                                return Err(e);
+                            } else {
+                                attempt_number += 1;
+                                debug!("Transaction attempt failed. Incrementing attempt number to {} and retrying.", attempt_number);
+                            }
                         }
                         // NOTE: Add other retryable errors as needed here
                         _ => {
