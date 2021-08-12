@@ -51,6 +51,7 @@ requires-dist = [
     "pytest; extra == 'devel'",
     "pytest-mock; extra == 'devel'",
     "pytest-cov; extra == 'devel'",
+    "pytest-clarity; extra == 'devel'",
     "pytest-timeout; extra == 'devel'",
     "sphinx; extra == 'devel'",
     "sphinx-rtd-theme; extra == 'devel'",

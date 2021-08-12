@@ -9,7 +9,7 @@ mod s3_common;
 #[allow(dead_code)]
 mod fs_common;
 
-use deltalake::{action, DeltaTransactionError};
+use deltalake::{action, DeltaTableError, DeltaTransactionError};
 use std::collections::HashMap;
 
 use serial_test::serial;
@@ -38,7 +38,10 @@ mod simple_commit_s3 {
         std::env::set_var("AWS_S3_LOCKING_PROVIDER", "none  ");
 
         let result = test_two_commits(path).await;
-        if let Err(DeltaTransactionError::Storage { ref source }) = result {
+        if let Err(DeltaTableError::TransactionError {
+            source: DeltaTransactionError::Storage { ref source },
+        }) = result
+        {
             if let StorageError::S3Generic(err) = source {
                 assert_eq!(err, "dynamodb locking is not enabled");
                 return;
@@ -114,7 +117,9 @@ mod simple_commit_fs {
         let result = table.try_commit_transaction(&commit, 1).await;
 
         match result {
-            Err(deltalake::DeltaTransactionError::VersionAlreadyExists { .. }) => {
+            Err(deltalake::DeltaTableError::TransactionError {
+                source: DeltaTransactionError::VersionAlreadyExists { .. },
+            }) => {
                 assert!(true, "Delta version already exists.");
             }
             _ => {
@@ -158,7 +163,9 @@ mod simple_commit_fs {
                 Ok(_) => {
                     break;
                 }
-                Err(DeltaTransactionError::VersionAlreadyExists { .. }) => {
+                Err(DeltaTableError::TransactionError {
+                    source: DeltaTransactionError::VersionAlreadyExists { .. },
+                }) => {
                     attempt += 1;
                 }
                 Err(e) => {
@@ -180,7 +187,7 @@ mod simple_commit_fs {
     }
 }
 
-async fn test_two_commits(table_path: &str) -> Result<(), DeltaTransactionError> {
+async fn test_two_commits(table_path: &str) -> Result<(), DeltaTableError> {
     let mut table = deltalake::open_table(table_path).await?;
 
     assert_eq!(0, table.version);

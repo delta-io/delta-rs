@@ -114,7 +114,10 @@ impl StorageBackend for FileStorageBackend {
         f.sync_all().await?;
         drop(f);
 
-        match self.rename_obj(tmp_path, path).await {
+        // atomic rename with swap=true only possible if both paths exists.
+        let swap = Path::new(path).exists();
+
+        match rename::atomic_rename(tmp_path, path, swap) {
             Ok(_) => Ok(()),
             Err(e) => {
                 // If rename failed, clean up the temp file.
@@ -125,7 +128,7 @@ impl StorageBackend for FileStorageBackend {
     }
 
     async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError> {
-        rename::atomic_rename(src, dst)
+        rename::atomic_rename(src, dst, false)
     }
 
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
