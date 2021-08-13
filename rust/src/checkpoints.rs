@@ -16,13 +16,13 @@ use super::action;
 use super::delta_arrow::delta_log_schema_for_table;
 use super::open_table_with_version;
 use super::schema::*;
-use super::storage;
 use super::storage::{StorageBackend, StorageError};
 use super::{CheckPoint, DeltaTableError, DeltaTableState};
+use crate::DeltaTable;
 
-/// Error returned when the CheckPointWriter is unable to write a checkpoint.
+/// Error returned when there is an error during creating a checkpoint.
 #[derive(thiserror::Error, Debug)]
-pub enum CheckPointWriterError {
+pub enum CheckpointError {
     /// Error returned when the DeltaTableState does not contain a metadata action.
     #[error("DeltaTableMetadata not present in DeltaTableState")]
     MissingMetaData,
@@ -67,187 +67,170 @@ pub enum CheckPointWriterError {
     },
 }
 
-impl From<CheckPointWriterError> for ArrowError {
-    fn from(error: CheckPointWriterError) -> Self {
+impl From<CheckpointError> for ArrowError {
+    fn from(error: CheckpointError) -> Self {
         ArrowError::from_external_error(Box::new(error))
     }
 }
 
-/// Struct for writing checkpoints to the delta log.
-pub struct CheckPointWriter {
-    table_uri: String,
-    delta_log_uri: String,
-    last_checkpoint_uri: String,
-    storage: Box<dyn StorageBackend>,
+/// Loads table from given `table_uri` at given `version` and creates checkpoints for it.
+pub async fn create_checkpoint_from_table_uri(
+    table_uri: &str,
+    version: DeltaDataTypeVersion,
+) -> Result<(), CheckpointError> {
+    let table = open_table_with_version(table_uri, version).await?;
+    create_checkpoint(
+        version,
+        table.get_state(),
+        table.storage.as_ref(),
+        table_uri,
+    )
+    .await?;
+    Ok(())
 }
 
-impl CheckPointWriter {
-    /// Creates a new CheckPointWriter.
-    pub fn new(table_uri: &str, storage: Box<dyn StorageBackend>) -> Self {
-        let delta_log_uri = storage.join_path(table_uri, "_delta_log");
-        let last_checkpoint_uri = storage.join_path(delta_log_uri.as_str(), "_last_checkpoint");
-
-        Self {
-            table_uri: table_uri.to_string(),
-            delta_log_uri,
-            last_checkpoint_uri,
-            storage,
-        }
+/// Loads given `table` at given `version` and creates checkpoints for it.
+/// If given table's version does not match given `version`, then `table` is re-loaded with appropriate one.
+/// Once checkpoint is created, then the `table` is updated to the latest version.
+pub async fn create_checkpoint_from_table(
+    table: &mut DeltaTable,
+    version: DeltaDataTypeVersion,
+) -> Result<(), CheckpointError> {
+    if table.version != version {
+        table.load_version(version).await?;
     }
+    create_checkpoint(
+        version,
+        table.get_state(),
+        table.storage.as_ref(),
+        &table.table_uri,
+    )
+    .await?;
+    table.update_incremental().await?;
+    Ok(())
+}
 
-    /// Creates a new CheckPointWriter for the table URI.
-    pub fn new_for_table_uri(table_uri: &str) -> Result<Self, CheckPointWriterError> {
-        let storage_backend = storage::get_backend_for_uri(table_uri)?;
+async fn create_checkpoint(
+    version: DeltaDataTypeVersion,
+    state: &DeltaTableState,
+    storage: &dyn StorageBackend,
+    table_uri: &str,
+) -> Result<(), CheckpointError> {
+    // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
+    // an appropriate split point yet though so only writing a single part currently.
+    // See https://github.com/delta-io/delta-rs/issues/288
 
-        Ok(Self::new(table_uri, storage_backend))
-    }
+    let delta_log_uri = storage.join_path(table_uri, "_delta_log");
+    let last_checkpoint_uri = storage.join_path(&delta_log_uri, "_last_checkpoint");
 
-    /// Creates a new checkpoint at the specified version.
-    /// NOTE: This method loads a new instance of delta table to determine the state to
-    /// checkpoint.
-    pub async fn create_checkpoint_for_version(
-        &self,
-        version: DeltaDataTypeVersion,
-    ) -> Result<(), CheckPointWriterError> {
-        let table = open_table_with_version(self.table_uri.as_str(), version).await?;
+    info!("Writing parquet bytes to checkpoint buffer.");
+    let parquet_bytes = parquet_bytes_from_state(state)?;
 
-        self.create_checkpoint_from_state(version, table.get_state())
-            .await
-    }
+    let size = parquet_bytes.len() as i64;
 
-    /// Creates a new checkpoint at the specified version from the given DeltaTableState.
-    pub async fn create_checkpoint_from_state(
-        &self,
-        version: DeltaDataTypeVersion,
-        state: &DeltaTableState,
-    ) -> Result<(), CheckPointWriterError> {
-        // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
-        // an appropriate split point yet though so only writing a single part currently.
-        // See https://github.com/delta-io/delta-rs/issues/288
+    let checkpoint = CheckPoint::new(version, size, None);
 
-        info!("Writing parquet bytes to checkpoint buffer.");
-        let parquet_bytes = self.parquet_bytes_from_state(state)?;
+    let file_name = format!("{:020}.checkpoint.parquet", version);
+    let checkpoint_uri = storage.join_path(&delta_log_uri, &file_name);
 
-        let size = parquet_bytes.len() as i64;
+    info!("Writing checkpoint to {:?}.", checkpoint_uri);
+    storage.put_obj(&checkpoint_uri, &parquet_bytes).await?;
 
-        let checkpoint = CheckPoint::new(version, size, None);
+    let last_checkpoint_content: Value = serde_json::to_value(&checkpoint)?;
+    let last_checkpoint_content = serde_json::to_string(&last_checkpoint_content)?;
 
-        let file_name = format!("{:020}.checkpoint.parquet", version);
-        let checkpoint_uri = self.storage.join_path(&self.delta_log_uri, &file_name);
+    info!("Writing _last_checkpoint to {:?}.", last_checkpoint_uri);
+    storage
+        .put_obj(&last_checkpoint_uri, last_checkpoint_content.as_bytes())
+        .await?;
 
-        info!("Writing checkpoint to {:?}.", checkpoint_uri);
-        self.storage
-            .put_obj(&checkpoint_uri, &parquet_bytes)
-            .await?;
+    Ok(())
+}
 
-        let last_checkpoint_content: Value = serde_json::to_value(&checkpoint)?;
-        let last_checkpoint_content = serde_json::to_string(&last_checkpoint_content)?;
+fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, CheckpointError> {
+    let current_metadata = state
+        .current_metadata()
+        .ok_or(CheckpointError::MissingMetaData)?;
 
-        info!(
-            "Writing _last_checkpoint to {:?}.",
-            self.last_checkpoint_uri
-        );
-        self.storage
-            .put_obj(
-                self.last_checkpoint_uri.as_str(),
-                last_checkpoint_content.as_bytes(),
-            )
-            .await?;
+    // Collect partition fields along with their data type from the current schema.
+    // JSON add actions contain a `partitionValues` field which is a map<string, string>.
+    // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
+    let partition_col_data_types: Vec<(&str, &SchemaDataType)> = current_metadata
+        .schema
+        .get_fields()
+        .iter()
+        .filter_map(|f| {
+            if current_metadata
+                .partition_columns
+                .iter()
+                .any(|s| s.as_str() == f.get_name())
+            {
+                Some((f.get_name(), f.get_type()))
+            } else {
+                None
+            }
+        })
+        .collect();
 
-        Ok(())
-    }
+    // Collect a map of paths that require special stats conversion.
+    let mut stats_conversions: Vec<(SchemaPath, SchemaDataType)> = Vec::new();
+    collect_stats_conversions(&mut stats_conversions, current_metadata.schema.get_fields());
 
-    fn parquet_bytes_from_state(
-        &self,
-        state: &DeltaTableState,
-    ) -> Result<Vec<u8>, CheckPointWriterError> {
-        let current_metadata = state
-            .current_metadata()
-            .ok_or(CheckPointWriterError::MissingMetaData)?;
-
-        // Collect partition fields along with their data type from the current schema.
-        // JSON add actions contain a `partitionValues` field which is a map<string, string>.
-        // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
-        let partition_col_data_types: Vec<(&str, &SchemaDataType)> = current_metadata
-            .schema
-            .get_fields()
+    // protocol
+    let mut jsons = std::iter::once(action::Action::protocol(action::Protocol {
+        min_reader_version: state.min_reader_version(),
+        min_writer_version: state.min_writer_version(),
+    }))
+    // metadata
+    .chain(std::iter::once(action::Action::metaData(
+        action::MetaData::try_from(current_metadata.clone())?,
+    )))
+    // txns
+    .chain(
+        state
+            .app_transaction_version()
             .iter()
-            .filter_map(|f| {
-                if current_metadata
-                    .partition_columns
-                    .iter()
-                    .any(|s| s.as_str() == f.get_name())
-                {
-                    Some((f.get_name(), f.get_type()))
-                } else {
-                    None
-                }
-            })
-            .collect();
+            .map(|(app_id, version)| {
+                action::Action::txn(action::Txn {
+                    app_id: app_id.clone(),
+                    version: *version,
+                    last_updated: None,
+                })
+            }),
+    )
+    // removes
+    .chain(
+        state
+            .tombstones()
+            .iter()
+            .map(|f| action::Action::remove(f.clone())),
+    )
+    .map(|a| serde_json::to_value(a).map_err(ArrowError::from))
+    // adds
+    .chain(state.files().iter().map(|f| {
+        checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
+    }));
 
-        // Collect a map of paths that require special stats conversion.
-        let mut stats_conversions: Vec<(SchemaPath, SchemaDataType)> = Vec::new();
-        collect_stats_conversions(&mut stats_conversions, current_metadata.schema.get_fields());
+    // Create the arrow schema that represents the Checkpoint parquet file.
+    let arrow_schema = delta_log_schema_for_table(
+        <ArrowSchema as TryFrom<&Schema>>::try_from(&current_metadata.schema)?,
+        current_metadata.partition_columns.as_slice(),
+    );
 
-        // protocol
-        let mut jsons = std::iter::once(action::Action::protocol(action::Protocol {
-            min_reader_version: state.min_reader_version(),
-            min_writer_version: state.min_writer_version(),
-        }))
-        // metadata
-        .chain(std::iter::once(action::Action::metaData(
-            action::MetaData::try_from(current_metadata.clone())?,
-        )))
-        // txns
-        .chain(
-            state
-                .app_transaction_version()
-                .iter()
-                .map(|(app_id, version)| {
-                    action::Action::txn(action::Txn {
-                        app_id: app_id.clone(),
-                        version: *version,
-                        last_updated: None,
-                    })
-                }),
-        )
-        // removes
-        .chain(
-            state
-                .tombstones()
-                .iter()
-                .map(|f| action::Action::remove(f.clone())),
-        )
-        .map(|a| serde_json::to_value(a).map_err(ArrowError::from))
-        // adds
-        .chain(state.files().iter().map(|f| {
-            checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
-        }));
-
-        // Create the arrow schema that represents the Checkpoint parquet file.
-        let arrow_schema = delta_log_schema_for_table(
-            <ArrowSchema as TryFrom<&Schema>>::try_from(&current_metadata.schema)?,
-            current_metadata.partition_columns.as_slice(),
-        );
-
-        debug!("Writing to checkpoint parquet buffer...");
-        // Write the Checkpoint parquet file.
-        let writeable_cursor = InMemoryWriteableCursor::default();
-        let mut writer =
-            ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
-        let batch_size = state.app_transaction_version().len()
-            + state.tombstones().len()
-            + state.files().len()
-            + 2; // 1 (protocol) + 1 (metadata)
-        let decoder = Decoder::new(arrow_schema, batch_size, None);
-        while let Some(batch) = decoder.next_batch(&mut jsons)? {
-            writer.write(&batch)?;
-        }
-        let _ = writer.close()?;
-        debug!("Finished writing checkpoint parquet buffer.");
-
-        Ok(writeable_cursor.data())
+    debug!("Writing to checkpoint parquet buffer...");
+    // Write the Checkpoint parquet file.
+    let writeable_cursor = InMemoryWriteableCursor::default();
+    let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
+    let batch_size =
+        state.app_transaction_version().len() + state.tombstones().len() + state.files().len() + 2; // 1 (protocol) + 1 (metadata)
+    let decoder = Decoder::new(arrow_schema, batch_size, None);
+    while let Some(batch) = decoder.next_batch(&mut jsons)? {
+        writer.write(&batch)?;
     }
+    let _ = writer.close()?;
+    debug!("Finished writing checkpoint parquet buffer.");
+
+    Ok(writeable_cursor.data())
 }
 
 fn checkpoint_add_from_state(
@@ -297,32 +280,26 @@ fn checkpoint_add_from_state(
 fn typed_partition_value_from_string(
     string_value: &str,
     data_type: &SchemaDataType,
-) -> Result<Value, CheckPointWriterError> {
+) -> Result<Value, CheckpointError> {
     match data_type {
         SchemaDataType::primitive(primitive_type) => match primitive_type.as_str() {
             "string" => Ok(string_value.to_owned().into()),
             "long" | "integer" | "short" | "byte" => Ok(string_value
                 .parse::<i64>()
-                .map_err(|_| {
-                    CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
-                })?
+                .map_err(|_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()))?
                 .into()),
             "boolean" => Ok(string_value
                 .parse::<bool>()
-                .map_err(|_| {
-                    CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
-                })?
+                .map_err(|_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()))?
                 .into()),
             "float" | "double" => Ok(string_value
                 .parse::<f64>()
-                .map_err(|_| {
-                    CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
-                })?
+                .map_err(|_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()))?
                 .into()),
             "date" => {
                 let d = chrono::naive::NaiveDate::parse_from_str(string_value, "%Y-%m-%d")
                     .map_err(|_| {
-                        CheckPointWriterError::PartitionValueNotParseable(string_value.to_owned())
+                        CheckpointError::PartitionValueNotParseable(string_value.to_owned())
                     })?;
                 // day 0 is 1970-01-01 (719163 days from ce)
                 Ok((d.num_days_from_ce() - 719_163).into())
@@ -342,7 +319,7 @@ fn typed_partition_value_from_string(
 fn typed_partition_value_from_option_string(
     string_value: &Option<String>,
     data_type: &SchemaDataType,
-) -> Result<Value, CheckPointWriterError> {
+) -> Result<Value, CheckpointError> {
     match string_value {
         Some(s) => {
             if s.is_empty() {
