@@ -8,7 +8,8 @@
 // https://docs.aws.amazon.com/lambda/latest/dg/with-s3.html
 // https://docs.aws.amazon.com/AmazonS3/latest/userguide/notification-how-to-filtering.html
 
-use deltalake::checkpoints::{CheckPointWriter, CheckPointWriterError};
+use deltalake::checkpoints;
+use deltalake::checkpoints::CheckpointError;
 use deltalake::DeltaDataTypeVersion;
 use lambda_runtime::{handler_fn, Context, Error};
 use lazy_static::lazy_static;
@@ -45,11 +46,7 @@ async fn process_event(event: &Value) -> Result<(), CheckPointLambdaError> {
             table_uri, version
         );
 
-        let checkpoint_writer = CheckPointWriter::new_for_table_uri(table_uri.as_str())?;
-
-        let _ = checkpoint_writer
-            .create_checkpoint_for_version(version)
-            .await?;
+        checkpoints::create_checkpoint_from_table_uri(&table_uri, version).await?;
     } else {
         info!(
             "Not writing checkpoint for table uri {} at delta version {}.",
@@ -147,10 +144,10 @@ enum CheckPointLambdaError {
         source: serde_json::Error,
     },
 
-    #[error("CheckPointWriter invocation failed {}", .source)]
-    CheckPointWriter {
+    #[error("CheckpointError invocation failed {}", .source)]
+    CheckpointError {
         #[from]
-        source: CheckPointWriterError,
+        source: CheckpointError,
     },
 }
 
