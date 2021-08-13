@@ -136,12 +136,12 @@ mod tests {
         // successful move A to C
         assert!(a.exists());
         assert!(!c.exists());
-        match atomic_rename(a.to_str().unwrap(), c.to_str().unwrap(), false) {
+        match atomic_rename(a.to_str().unwrap(), c.to_str().unwrap()) {
             Err(StorageError::Generic(e)) if e == "atomic_rename failed with message 'Invalid argument'" => {
                 panic!("expected success, got: {:?}. Note: atomically renaming Windows files from WSL2 is not supported.", e);
             },
             Err(e) => {
-                panic!("expected success, got: {:?}", e)
+                panic!("expected success, got: {:#}", e)
             },
             _ => {}
         }
