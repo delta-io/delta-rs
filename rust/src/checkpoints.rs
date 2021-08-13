@@ -79,7 +79,13 @@ pub async fn create_checkpoint_from_table_uri(
     version: DeltaDataTypeVersion,
 ) -> Result<(), CheckpointError> {
     let table = open_table_with_version(table_uri, version).await?;
-    create_checkpoint(version, table.get_state(), &table.storage, table_uri).await?;
+    create_checkpoint(
+        version,
+        table.get_state(),
+        table.storage.as_ref(),
+        table_uri,
+    )
+    .await?;
     Ok(())
 }
 
@@ -93,7 +99,13 @@ pub async fn create_checkpoint_from_table(
     if table.version != version {
         table.load_version(version).await?;
     }
-    create_checkpoint(version, table.get_state(), &table.storage, &table.table_uri).await?;
+    create_checkpoint(
+        version,
+        table.get_state(),
+        table.storage.as_ref(),
+        &table.table_uri,
+    )
+    .await?;
     table.update_incremental().await?;
     Ok(())
 }
@@ -101,7 +113,7 @@ pub async fn create_checkpoint_from_table(
 async fn create_checkpoint(
     version: DeltaDataTypeVersion,
     state: &DeltaTableState,
-    storage: &Box<dyn StorageBackend>,
+    storage: &dyn StorageBackend,
     table_uri: &str,
 ) -> Result<(), CheckpointError> {
     // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
