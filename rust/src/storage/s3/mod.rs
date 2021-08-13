@@ -7,20 +7,24 @@ use std::{fmt, pin::Pin};
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::Stream;
 use log::debug;
-use rusoto_core::credential::ChainProvider;
 use rusoto_core::{HttpClient, Region, RusotoError};
 use rusoto_credential::AutoRefreshingProvider;
 use rusoto_s3::{
     CopyObjectRequest, DeleteObjectRequest, GetObjectRequest, HeadObjectRequest,
     ListObjectsV2Request, PutObjectRequest, S3Client, S3,
 };
-use rusoto_sts::WebIdentityProvider;
+use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient, WebIdentityProvider};
 use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
+use uuid::Uuid;
 
 pub mod dynamodb_lock;
+
+const AWS_S3_ASSUME_ROLE_ARN: &str = "AWS_S3_ASSUME_ROLE_ARN";
+const AWS_S3_ROLE_SESSION_NAME: &str = "AWS_S3_ROLE_SESSION_NAME";
+const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
 
 impl From<RusotoError<rusoto_s3::GetObjectError>> for StorageError {
     fn from(error: RusotoError<rusoto_s3::GetObjectError>) -> Self {
@@ -77,15 +81,36 @@ fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvi
     Ok(AutoRefreshingProvider::new(provider)?)
 }
 
+fn get_sts_assume_role_provider(
+    region: Region,
+) -> Result<AutoRefreshingProvider<StsAssumeRoleSessionCredentialsProvider>, StorageError> {
+    let sts_client = StsClient::new(region);
+    let role_arn = std::env::var(AWS_S3_ASSUME_ROLE_ARN)
+        .map_err(|_| StorageError::S3Generic(format!("{} is not set", AWS_S3_ASSUME_ROLE_ARN)))?;
+    let session_name = std::env::var(AWS_S3_ROLE_SESSION_NAME)
+        .unwrap_or_else(|_| format!("delta-rs-{}", Uuid::new_v4()));
+    let provider = StsAssumeRoleSessionCredentialsProvider::new(
+        sts_client,
+        role_arn,
+        session_name,
+        None,
+        None,
+        None,
+        None,
+    );
+    Ok(AutoRefreshingProvider::new(provider)?)
+}
+
 fn create_s3_client(region: Region) -> Result<S3Client, StorageError> {
-    let dispatcher = HttpClient::new()?;
-
-    let client = match std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE") {
-        Ok(_) => S3Client::new_with(dispatcher, get_web_identity_provider()?, region),
-        Err(_) => S3Client::new_with(dispatcher, ChainProvider::new(), region),
-    };
-
-    Ok(client)
+    if std::env::var(AWS_WEB_IDENTITY_TOKEN_FILE).is_ok() {
+        let provider = get_web_identity_provider()?;
+        Ok(S3Client::new_with(HttpClient::new()?, provider, region))
+    } else if std::env::var(AWS_S3_ASSUME_ROLE_ARN).is_ok() {
+        let provider = get_sts_assume_role_provider(region.clone())?;
+        Ok(S3Client::new_with(HttpClient::new()?, provider, region))
+    } else {
+        Ok(S3Client::new(region))
+    }
 }
 
 fn parse_obj_last_modified_time(
