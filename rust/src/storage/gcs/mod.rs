@@ -1,4 +1,4 @@
-//! Google Cloud Storage backend. It currently only supports read operations.
+//! Google Cloud Storage backend.
 //!
 //! This module is gated behind the "gcs" feature. Its usage also requires
 //! the `SERVICE_ACCOUNT` environment variables to be set to the path of
