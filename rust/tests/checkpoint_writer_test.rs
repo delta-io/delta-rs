@@ -1,7 +1,6 @@
 extern crate deltalake;
 
-use deltalake::checkpoints::CheckPointWriter;
-use deltalake::storage;
+use deltalake::checkpoints;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,10 +22,7 @@ async fn write_simple_checkpoint() {
         .unwrap();
 
     // Write a checkpoint
-    let storage_backend = storage::get_backend_for_uri(table_location).unwrap();
-    let checkpoint_writer = CheckPointWriter::new(table_location, storage_backend);
-    let _ = checkpoint_writer
-        .create_checkpoint_from_state(table.version, table.get_state())
+    checkpoints::create_checkpoint_from_table(&mut table, 5)
         .await
         .unwrap();
 
