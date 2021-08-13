@@ -165,7 +165,7 @@ impl<'a> Uri<'a> {
             #[cfg(feature = "azure")]
             Uri::AdlsGen2Object(x) => x.path.to_string(),
             #[cfg(feature = "gcs")]
-            Uri::GCSObject(x) => x.key.to_string(),
+            Uri::GCSObject(x) => x.path.to_string(),
         }
     }
 }
@@ -216,14 +216,14 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
                             return Err(UriError::MissingObjectBucket);
                         }
                     };
-                    let key = match path_parts.next() {
+                    let path = match path_parts.next() {
                         Some(x) => x,
                         None => {
                             return Err(UriError::MissingObjectKey);
                         }
                     };
 
-                    Ok(Uri::GCSObject(gcs::GCSObject { bucket, key }))
+                    Ok(Uri::GCSObject(gcs::GCSObject::new(bucket, path)))
                 } else {
                     Err(UriError::InvalidScheme(String::from(parts[0])))
                 }
@@ -383,7 +383,7 @@ pub enum StorageError {
     GCSError {
         /// The underlying Google Cloud Error
         #[from]
-        source: cloud_storage::Error,
+        source: gcs::GCSClientError,
     },
 
     /// Error returned when the URI is invalid.

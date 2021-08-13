@@ -27,8 +27,10 @@ chrono = "0"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 lazy_static = "1"
 
+# HTTP Client
+reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "stream"], optional = true}
+
 # Azure
-reqwest = { version = "0", optional = true }
 azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "536da42ebefd411feff8ba6a0965865e2741267e" }
 azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "536da42ebefd411feff8ba6a0965865e2741267e", features = ["blob", "account", "adls_gen2"] }
 
@@ -41,7 +43,8 @@ rusoto_dynamodb = { version = "0.46", default-features = false, optional = true 
 maplit = { version = "1", optional = true }
 
 # GCS
-cloud-storage = { version = "0.10", default-features = true, optional = true }
+tame-gcs = { version = "0.10.0", optional = true }
+tame-oauth = { version = "0.4.0", features = ["gcp"], optional = true }
 async-stream = { version = "0.3.2", default-features = true, optional = true }
 
 # High-level writer
@@ -62,7 +65,7 @@ datafusion-ext = ["datafusion"]
 azure = ["azure_core", "azure_storage", "reqwest"]
 s3 = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_s3/native-tls", "rusoto_sts/native-tls", "rusoto_dynamodb/native-tls", "maplit"]
 s3-rustls = ["rusoto_core/rustls", "rusoto_credential", "rusoto_s3/rustls", "rusoto_sts/rustls", "rusoto_dynamodb/rustls", "maplit"]
-gcs = ["async-stream", "cloud-storage"]
+gcs = ["async-stream", "tame-gcs", "tame-oauth", "reqwest"]
 
 [build-dependencies]
 glibc_version = "0"
