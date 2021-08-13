@@ -291,7 +291,7 @@ fn typed_partition_value_from_string(
 ) -> Result<Value, CheckpointError> {
     match data_type {
         SchemaDataType::primitive(primitive_type) => match primitive_type.as_str() {
-            "string" => Ok(string_value.to_owned().into()),
+            "string" | "binary" => Ok(string_value.to_owned().into()),
             "long" | "integer" | "short" | "byte" => Ok(string_value
                 .parse::<i64>()
                 .map_err(|_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()))?
@@ -323,7 +323,6 @@ fn typed_partition_value_from_string(
                 // Use nanosecond precision for timestamp: https://github.com/delta-io/delta-rs/pull/194
                 Ok(ts.timestamp_nanos().into())
             }
-            "binary" => Ok(string_value.to_owned().into()),
             s => unimplemented!(
                 "Primitive type {} is not supported for partition column values.",
                 s

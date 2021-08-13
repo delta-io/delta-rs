@@ -85,7 +85,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                     "float" => Ok(ArrowDataType::Float32),
                     "double" => Ok(ArrowDataType::Float64),
                     "boolean" => Ok(ArrowDataType::Boolean),
-                    "binary" => Ok(ArrowDataType::Binary),
+                    "binary" => Ok(ArrowDataType::Utf8),
                     decimal if DECIMAL_REGEX.is_match(decimal) => {
                         let extract = DECIMAL_REGEX.captures(decimal).ok_or_else(|| {
                             ArrowError::SchemaError(format!(
