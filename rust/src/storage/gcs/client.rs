@@ -8,6 +8,7 @@ use super::{ util, GCSObject, GCSClientError };
 use futures::Stream;
 use std::convert::{TryFrom, TryInto};
 
+use log::debug;
 
 /// Struct maintaining the state responsible for communicating
 /// with the google cloud storage service
@@ -48,17 +49,23 @@ impl TryFrom<PathBuf> for GCSStorageBackend {
 impl GCSStorageBackend {
 
     pub async fn metadata<'a>(&self, path: GCSObject<'a>) -> Result<objects::Metadata, GCSClientError> {
-	  let get_meta_request = Object::get(&path, None)?;
-      let response = util::execute::<_, objects::GetObjectResponse>(
-          self, get_meta_request).await?;
+        debug!("creating request");
+        let get_meta_request = Object::get(&path, None)?;
+        debug!("executing request");
+        let response = util::execute::<_, objects::GetObjectResponse>(
+            self, get_meta_request).await?;
 
-      Ok(response.metadata)
+        debug!("returning meta");
+        Ok(response.metadata)
     }
 
     pub async fn download<'a>(&self, path: GCSObject<'a>) -> Result<bytes::Bytes, GCSClientError> {
         let download_request = Object::download(&path, None)?;
+
         let response = util::execute::<_, objects::DownloadObjectResponse>(
-            self, download_request).await?;
+            self, download_request).await
+            .map_err(util::check_object_not_found)?;
+
         Ok(response.consume())
     }
 
@@ -98,7 +105,7 @@ impl GCSStorageBackend {
             }
         }
 
-    
+
     }
 
     pub async fn insert<'a, 'b>(&self, uri: GCSObject<'a>, content: Vec<u8>) -> Result<(), GCSClientError> {

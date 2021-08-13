@@ -1,10 +1,10 @@
-/// Error enum that represents an issue encountered 
+/// Error enum that represents an issue encountered
 /// during interaction with the GCS service
 #[derive(thiserror::Error, Debug)]
 pub enum GCSClientError {
 
     #[error("Authentication error: {source}")]
-    AuthError { 
+    AuthError {
         #[from]
         source: tame_oauth::Error
     },
@@ -16,11 +16,10 @@ pub enum GCSClientError {
     },
 
     #[error("Reqwest error: {source}")]
-    Reqwest {
+    ReqwestError {
         #[from]
         source: reqwest::Error
     },
-
 
     #[error("IO error: {source}")]
     IOError {
@@ -34,6 +33,9 @@ pub enum GCSClientError {
         #[from]
         source: tame_gcs::http::Error
     },
+
+    #[error("Resource Not Found")]
+    NotFound,
 
     #[error("Error: {0}")]
     Other(String)

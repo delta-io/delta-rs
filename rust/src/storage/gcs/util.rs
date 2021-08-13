@@ -9,6 +9,7 @@ use std::iter::Iterator;
 use futures::StreamExt;
 
 
+
 async fn get_token(backend: &GCSStorageBackend) -> Result<tame_oauth::Token, GCSClientError> {
 
     Ok(match backend.auth.get_token(&[tame_gcs::Scopes::ReadWrite])? {
@@ -25,7 +26,7 @@ async fn get_token(backend: &GCSStorageBackend) -> Result<tame_oauth::Token, GCS
             let req = convert_request(new_request, &backend.client)
                 .await?;
                 //.context("failed to create token request")?;
-            
+
             let res = backend
                 .client
                 .execute(req)
@@ -91,10 +92,10 @@ async fn convert_response(res: reqwest::Response) -> Result<http::Response<bytes
 
     let headers = builder
         .headers_mut()
-        .ok_or_else(|| 
+        .ok_or_else(||
             GCSClientError::Other("failed to convert response headers".to_string())
         )?;
-    
+
     headers.extend(
         res.headers()
             .into_iter()
@@ -132,7 +133,21 @@ where
     let request = convert_request(req, &ctx.client).await?;
     let response = ctx.client.execute(request).await?;
     let response = convert_response(response).await?;
-        //.context("failed to convert response")?;
+
+    //.context("failed to convert response")?;
 
     Ok(R::try_from_parts(response)?)
+}
+
+use http::status::StatusCode;
+use tame_gcs::error::HttpStatusError;
+pub fn check_object_not_found(err: GCSClientError) -> GCSClientError {
+    match err {
+        GCSClientError::GCSError {
+            source: tame_gcs::error::Error::HttpStatus(
+                    HttpStatusError(StatusCode::NOT_FOUND)
+                    )
+        } => GCSClientError::NotFound,
+        err => err
+    }
 }

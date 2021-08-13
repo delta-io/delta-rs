@@ -5,7 +5,7 @@
 //! credentials with permission to read from the bucket.
 
 mod client;
-mod error; 
+mod error;
 mod object;
 mod util;
 
@@ -17,6 +17,8 @@ pub(crate) use error::GCSClientError;
 use std::pin::Pin;
 use futures::Stream;
 use std::convert::TryInto;
+
+use log::debug;
 
 use super::{ parse_uri, ObjectMeta, StorageBackend, StorageError};
 
@@ -44,9 +46,10 @@ impl From<tame_gcs::objects::Metadata> for ObjectMeta {
 
 #[async_trait::async_trait]
 impl StorageBackend for GCSStorageBackend {
-    
+
     /// Fetch object metadata without reading the actual content
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
+        debug!("getting meta for: {}", path);
         let obj_uri = parse_uri(path)?.into_gcs_object()?;
         let metadata = self.metadata(obj_uri).await?;
         Ok(metadata.into())
@@ -54,9 +57,12 @@ impl StorageBackend for GCSStorageBackend {
 
     /// Fetch object content
     async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
+        debug!("getting object at: {}", path);
         let obj_uri = parse_uri(path)?.into_gcs_object()?;
-        let object = self.download(obj_uri).await?;
-        Ok(object.to_vec())
+        match self.download(obj_uri).await {
+            Err(GCSClientError::NotFound) => return Err(StorageError::NotFound),
+            res => Ok(res?.to_vec())
+        }
     }
 
     /// Return a list of objects by `path` prefix in an async stream.
@@ -64,7 +70,7 @@ impl StorageBackend for GCSStorageBackend {
     -> Result<
         Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
         StorageError,
-    > 
+    >
     {
         let prefix = parse_uri(path)?.into_gcs_object()?;
         let obj_meta_stream = async_stream::stream! {
