@@ -2,36 +2,34 @@
 /// during interaction with the GCS service
 #[derive(thiserror::Error, Debug)]
 pub enum GCSClientError {
-
     #[error("Authentication error: {source}")]
     AuthError {
         #[from]
-        source: tame_oauth::Error
+        source: tame_oauth::Error,
     },
 
     #[error("Error interacting with GCS: {source}")]
     GCSError {
         #[from]
-        source: tame_gcs::Error
+        source: tame_gcs::Error,
     },
 
     #[error("Reqwest error: {source}")]
     ReqwestError {
         #[from]
-        source: reqwest::Error
+        source: reqwest::Error,
     },
 
     #[error("IO error: {source}")]
     IOError {
         #[from]
-        source: std::io::Error
+        source: std::io::Error,
     },
-
 
     #[error("HTTP error: {source}")]
     HttpError {
         #[from]
-        source: tame_gcs::http::Error
+        source: tame_gcs::http::Error,
     },
 
     #[error("Resource Not Found")]
@@ -41,5 +39,5 @@ pub enum GCSClientError {
     PreconditionFailed,
 
     #[error("Error: {0}")]
-    Other(String)
+    Other(String),
 }

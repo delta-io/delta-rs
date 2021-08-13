@@ -11,24 +11,26 @@ mod util;
 
 // Exports
 pub(crate) use client::GCSStorageBackend;
-pub(crate) use object::GCSObject;
 pub(crate) use error::GCSClientError;
+pub(crate) use object::GCSObject;
 
-use std::pin::Pin;
 use futures::Stream;
 use std::convert::TryInto;
+use std::pin::Pin;
 
 use log::debug;
 
-use super::{ parse_uri, ObjectMeta, StorageBackend, StorageError};
+use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
 
 impl GCSStorageBackend {
     pub(crate) fn new() -> Result<Self, StorageError> {
         let cred_path = std::env::var("SERVICE_ACCOUNT")
             .map(std::path::PathBuf::from)
-            .map_err(|_err| StorageError::GCSConfig(
-                "SERVICE_ACCOUNT environment variable must be set".to_string()
-            ))?;
+            .map_err(|_err| {
+                StorageError::GCSConfig(
+                    "SERVICE_ACCOUNT environment variable must be set".to_string(),
+                )
+            })?;
 
         Ok(cred_path.try_into()?)
     }
@@ -38,15 +40,13 @@ impl From<tame_gcs::objects::Metadata> for ObjectMeta {
     fn from(metadata: tame_gcs::objects::Metadata) -> ObjectMeta {
         ObjectMeta {
             path: metadata.name.unwrap(),
-            modified: metadata.updated.unwrap()
+            modified: metadata.updated.unwrap(),
         }
     }
 }
 
-
 #[async_trait::async_trait]
 impl StorageBackend for GCSStorageBackend {
-
     /// Fetch object metadata without reading the actual content
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
         debug!("getting meta for: {}", path);
@@ -61,17 +61,18 @@ impl StorageBackend for GCSStorageBackend {
         let obj_uri = parse_uri(path)?.into_gcs_object()?;
         match self.download(obj_uri).await {
             Err(GCSClientError::NotFound) => return Err(StorageError::NotFound),
-            res => Ok(res?.to_vec())
+            res => Ok(res?.to_vec()),
         }
     }
 
     /// Return a list of objects by `path` prefix in an async stream.
-    async fn list_objs<'a>(&'a self, path: &'a str,)
-    -> Result<
+    async fn list_objs<'a>(
+        &'a self,
+        path: &'a str,
+    ) -> Result<
         Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
         StorageError,
-    >
-    {
+    > {
         let prefix = parse_uri(path)?.into_gcs_object()?;
         let obj_meta_stream = async_stream::stream! {
             for await meta in self.list(prefix) {
@@ -100,9 +101,10 @@ impl StorageBackend for GCSStorageBackend {
         let src_uri = parse_uri(src)?.into_gcs_object()?;
         let dst_uri = parse_uri(dst)?.into_gcs_object()?;
         match self.rename(src_uri, dst_uri).await {
-            Err(GCSClientError::PreconditionFailed) =>
-                return Err(StorageError::AlreadyExists(dst.to_string())),
-            res => Ok(res?)
+            Err(GCSClientError::PreconditionFailed) => {
+                return Err(StorageError::AlreadyExists(dst.to_string()))
+            }
+            res => Ok(res?),
         }
     }
 
@@ -111,5 +113,4 @@ impl StorageBackend for GCSStorageBackend {
         let uri = parse_uri(path)?.into_gcs_object()?;
         Ok(self.delete(uri).await?)
     }
-
 }

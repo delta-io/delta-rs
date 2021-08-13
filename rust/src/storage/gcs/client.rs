@@ -1,12 +1,11 @@
-/// Google Cloud Storage http client
-
-use std::sync::Arc;
-use std::path::PathBuf;
-use tame_oauth::gcp as oauth;
-use tame_gcs::objects::{self, Object};
-use super::{ util, GCSObject, GCSClientError };
+use super::{util, GCSClientError, GCSObject};
 use futures::Stream;
 use std::convert::{TryFrom, TryInto};
+use std::path::PathBuf;
+/// Google Cloud Storage http client
+use std::sync::Arc;
+use tame_gcs::objects::{self, Object};
+use tame_oauth::gcp as oauth;
 
 use log::debug;
 
@@ -14,28 +13,26 @@ use log::debug;
 /// with the google cloud storage service
 pub struct GCSStorageBackend {
     /// The reqwest client used for handling http requests
-	pub client: reqwest::Client,
+    pub client: reqwest::Client,
     /// The path to the path to the credentials file
-	pub cred_path: PathBuf,
+    pub cred_path: PathBuf,
     /// The handle to our oauth token
-	pub auth: Arc<oauth::ServiceAccountAccess>,
+    pub auth: Arc<oauth::ServiceAccountAccess>,
 }
 
 impl std::fmt::Debug for GCSStorageBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        f.debug_struct("GCSStorageBackend {...}")
-         .finish()
+        f.debug_struct("GCSStorageBackend {...}").finish()
     }
 }
-
 
 impl TryFrom<PathBuf> for GCSStorageBackend {
     type Error = GCSClientError;
     fn try_from(cred_path: PathBuf) -> Result<Self, Self::Error> {
-		let client = reqwest::Client::builder().build()?;
+        let client = reqwest::Client::builder().build()?;
         let cred_contents = std::fs::read_to_string(&cred_path)?;
-		let svc_account_info = oauth::ServiceAccountInfo::deserialize(cred_contents)?;
-		let svc_account_access = oauth::ServiceAccountAccess::new(svc_account_info)?;
+        let svc_account_info = oauth::ServiceAccountInfo::deserialize(cred_contents)?;
+        let svc_account_access = oauth::ServiceAccountAccess::new(svc_account_info)?;
 
         Ok(Self {
             client,
@@ -45,15 +42,16 @@ impl TryFrom<PathBuf> for GCSStorageBackend {
     }
 }
 
-
 impl GCSStorageBackend {
-
-    pub async fn metadata<'a>(&self, path: GCSObject<'a>) -> Result<objects::Metadata, GCSClientError> {
+    pub async fn metadata<'a>(
+        &self,
+        path: GCSObject<'a>,
+    ) -> Result<objects::Metadata, GCSClientError> {
         debug!("creating request");
         let get_meta_request = Object::get(&path, None)?;
         debug!("executing request");
-        let response = util::execute::<_, objects::GetObjectResponse>(
-            self, get_meta_request).await?;
+        let response =
+            util::execute::<_, objects::GetObjectResponse>(self, get_meta_request).await?;
 
         debug!("returning meta");
         Ok(response.metadata)
@@ -62,15 +60,17 @@ impl GCSStorageBackend {
     pub async fn download<'a>(&self, path: GCSObject<'a>) -> Result<bytes::Bytes, GCSClientError> {
         let download_request = Object::download(&path, None)?;
 
-        let response = util::execute::<_, objects::DownloadObjectResponse>(
-            self, download_request).await
+        let response = util::execute::<_, objects::DownloadObjectResponse>(self, download_request)
+            .await
             .map_err(util::check_object_not_found)?;
 
         Ok(response.consume())
     }
 
-    pub fn list<'a>(&'a self, uri: GCSObject<'a>) -> impl Stream<Item = Result<objects::Metadata, GCSClientError>> + 'a
-    {
+    pub fn list<'a>(
+        &'a self,
+        uri: GCSObject<'a>,
+    ) -> impl Stream<Item = Result<objects::Metadata, GCSClientError>> + 'a {
         let mut page_token: Option<String> = None;
 
         async_stream::try_stream! {
@@ -104,27 +104,30 @@ impl GCSStorageBackend {
                 }
             }
         }
-
-
     }
 
-    pub async fn insert<'a, 'b>(&self, uri: GCSObject<'a>, content: Vec<u8>) -> Result<(), GCSClientError> {
-
+    pub async fn insert<'a, 'b>(
+        &self,
+        uri: GCSObject<'a>,
+        content: Vec<u8>,
+    ) -> Result<(), GCSClientError> {
         let content_len = content.len().try_into().unwrap();
         let content_body = std::io::Cursor::new(content);
 
         let insert_request = Object::insert_simple(&uri, content_body, content_len, None)?;
-        let _response = util::execute::<_, objects::InsertResponse>(
-            self, insert_request).await?;
+        let _response = util::execute::<_, objects::InsertResponse>(self, insert_request).await?;
 
         Ok(())
     }
 
-    pub async fn rename<'a>(&self, src: GCSObject<'a>, dst: GCSObject<'a>) -> Result<(), GCSClientError> {
+    pub async fn rename<'a>(
+        &self,
+        src: GCSObject<'a>,
+        dst: GCSObject<'a>,
+    ) -> Result<(), GCSClientError> {
         let mut rewrite_token = None;
 
         loop {
-
             let metadata = None;
             let precondition = Some(objects::RewriteObjectOptional {
                 destination_conditionals: Some(tame_gcs::common::Conditionals {
@@ -134,10 +137,12 @@ impl GCSStorageBackend {
                 ..Default::default()
             });
 
-            let rewrite_http_request = Object::rewrite(&src, &dst, rewrite_token, metadata, precondition)?;
-            let response = util::execute::<_, objects::RewriteObjectResponse>(
-                self, rewrite_http_request).await
-                .map_err(util::check_precondition_status)?;
+            let rewrite_http_request =
+                Object::rewrite(&src, &dst, rewrite_token, metadata, precondition)?;
+            let response =
+                util::execute::<_, objects::RewriteObjectResponse>(self, rewrite_http_request)
+                    .await
+                    .map_err(util::check_precondition_status)?;
 
             rewrite_token = response.rewrite_token;
             if rewrite_token.is_none() {
@@ -148,12 +153,10 @@ impl GCSStorageBackend {
         self.delete(src).await
     }
 
-
     pub async fn delete<'a>(&self, uri: GCSObject<'a>) -> Result<(), GCSClientError> {
         let delete_request = Object::delete(&uri, None)?;
-        let _response = util::execute::<_, objects::DeleteObjectResponse>(
-            self, delete_request).await?;
+        let _response =
+            util::execute::<_, objects::DeleteObjectResponse>(self, delete_request).await?;
         Ok(())
     }
 }
-

@@ -1,51 +1,46 @@
+use super::{GCSClientError, GCSStorageBackend};
 /// This code is largely duplicated from https://github.com/EmbarkStudios/gsutil
-
 use bytes::BufMut;
+use futures::StreamExt;
 use std::convert::TryInto;
+use std::iter::Iterator;
 use tame_gcs::http;
 use tame_oauth::gcp as oauth;
-use super::{GCSStorageBackend, GCSClientError};
-use std::iter::Iterator;
-use futures::StreamExt;
-
-
 
 async fn get_token(backend: &GCSStorageBackend) -> Result<tame_oauth::Token, GCSClientError> {
+    Ok(
+        match backend.auth.get_token(&[tame_gcs::Scopes::ReadWrite])? {
+            oauth::TokenOrRequest::Token(token) => token,
+            oauth::TokenOrRequest::Request {
+                request,
+                scope_hash,
+                ..
+            } => {
+                let (parts, body) = request.into_parts();
+                let read_body = std::io::Cursor::new(body);
+                let new_request = http::Request::from_parts(parts, read_body);
 
-    Ok(match backend.auth.get_token(&[tame_gcs::Scopes::ReadWrite])? {
-        oauth::TokenOrRequest::Token(token) => token,
-        oauth::TokenOrRequest::Request {
-            request,
-            scope_hash,
-            ..
-        } => {
-            let (parts, body) = request.into_parts();
-            let read_body = std::io::Cursor::new(body);
-            let new_request = http::Request::from_parts(parts, read_body);
-
-            let req = convert_request(new_request, &backend.client)
-                .await?;
+                let req = convert_request(new_request, &backend.client).await?;
                 //.context("failed to create token request")?;
 
-            let res = backend
-                .client
-                .execute(req)
-                .await?;
-            //    //.context("failed to send token request")?;
+                let res = backend.client.execute(req).await?;
+                //    //.context("failed to send token request")?;
 
-            let response = convert_response(res)
-                .await?;
-            //    //.context("failed to convert token response")?;
+                let response = convert_response(res).await?;
+                //    //.context("failed to convert token response")?;
 
-            backend.auth
-                .parse_token_response(scope_hash, response)?
-            //    //.context("failed to parse token response")?
-        }
-    })
+                backend.auth.parse_token_response(scope_hash, response)?
+                //    //.context("failed to parse token response")?
+            }
+        },
+    )
 }
 
 /// Converts a vanilla `http::Request` into a `reqwest::Request`
-async fn convert_request<B>(req: http::Request<B>, client: &reqwest::Client,) -> Result<reqwest::Request, GCSClientError>
+async fn convert_request<B>(
+    req: http::Request<B>,
+    client: &reqwest::Client,
+) -> Result<reqwest::Request, GCSClientError>
 where
     B: std::io::Read + Send + 'static,
 {
@@ -85,16 +80,16 @@ where
 
 /// Converts a `reqwest::Response` into a vanilla `http::Response`. This currently copies
 /// the entire response body into a single buffer with no streaming
-async fn convert_response(res: reqwest::Response) -> Result<http::Response<bytes::Bytes>, GCSClientError> {
+async fn convert_response(
+    res: reqwest::Response,
+) -> Result<http::Response<bytes::Bytes>, GCSClientError> {
     let mut builder = http::Response::builder()
         .status(res.status())
         .version(res.version());
 
     let headers = builder
         .headers_mut()
-        .ok_or_else(||
-            GCSClientError::Other("failed to convert response headers".to_string())
-        )?;
+        .ok_or_else(|| GCSClientError::Other("failed to convert response headers".to_string()))?;
 
     headers.extend(
         res.headers()
@@ -107,7 +102,6 @@ async fn convert_response(res: reqwest::Response) -> Result<http::Response<bytes
 
     let mut stream = res.bytes_stream();
 
-
     while let Some(item) = stream.next().await {
         buffer.put(item?);
     }
@@ -116,7 +110,10 @@ async fn convert_response(res: reqwest::Response) -> Result<http::Response<bytes
 }
 
 /// Executes a GCS request via a reqwest client and returns the parsed response/API error
-pub async fn execute<B, R>(ctx: &GCSStorageBackend, mut req: http::Request<B>) -> Result<R, GCSClientError>
+pub async fn execute<B, R>(
+    ctx: &GCSStorageBackend,
+    mut req: http::Request<B>,
+) -> Result<R, GCSClientError>
 where
     R: tame_gcs::ApiResponse<bytes::Bytes>,
     B: std::io::Read + Send + 'static,
@@ -144,21 +141,18 @@ use tame_gcs::error::HttpStatusError;
 pub fn check_object_not_found(err: GCSClientError) -> GCSClientError {
     match err {
         GCSClientError::GCSError {
-            source: tame_gcs::error::Error::HttpStatus(
-                    HttpStatusError(StatusCode::NOT_FOUND)
-                    )
+            source: tame_gcs::error::Error::HttpStatus(HttpStatusError(StatusCode::NOT_FOUND)),
         } => GCSClientError::NotFound,
-        err => err
+        err => err,
     }
 }
 
 pub fn check_precondition_status(err: GCSClientError) -> GCSClientError {
     match err {
         GCSClientError::GCSError {
-            source: tame_gcs::error::Error::HttpStatus(
-                    HttpStatusError(StatusCode::PRECONDITION_FAILED)
-                    )
+            source:
+                tame_gcs::error::Error::HttpStatus(HttpStatusError(StatusCode::PRECONDITION_FAILED)),
         } => GCSClientError::PreconditionFailed,
-        err => err
+        err => err,
     }
 }

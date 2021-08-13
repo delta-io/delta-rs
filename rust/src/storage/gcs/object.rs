@@ -38,5 +38,4 @@ impl<'a> AsRef<tame_gcs::ObjectName<'a>> for GCSObject<'a> {
     fn as_ref(&self) -> &tame_gcs::ObjectName<'a> {
         &self.path
     }
-
 }

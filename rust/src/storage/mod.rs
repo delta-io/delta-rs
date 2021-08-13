@@ -94,7 +94,7 @@ pub enum Uri<'a> {
     AdlsGen2Object(azure::AdlsGen2Object<'a>),
     /// URI for GCS backend
     #[cfg(feature = "gcs")]
-    GCSObject(gcs::GCSObject<'a>)
+    GCSObject(gcs::GCSObject<'a>),
 }
 
 impl<'a> Uri<'a> {
@@ -125,7 +125,6 @@ impl<'a> Uri<'a> {
             Uri::LocalPath(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
         }
     }
-
 
     /// Converts the URI to an GCSObject. Returns UriError if the URI is not valid for the
     /// Google Cloud Storage backend.
@@ -202,8 +201,7 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
                     Err(UriError::InvalidScheme(String::from(parts[0])))
                 }
             }
-        },
-
+        }
 
         // This can probably be refactored into the above match arm
         "gs" => {
