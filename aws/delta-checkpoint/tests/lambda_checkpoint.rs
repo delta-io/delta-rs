@@ -48,7 +48,7 @@ async fn lambda_checkpoint_smoke_test() {
     };
     let result = client.get_object(request).await;
 
-    assert!(result.is_ok());
+    let _ = result.unwrap();
 
     // verify the _last_checkpoint file was created
     let request = GetObjectRequest {

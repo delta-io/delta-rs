@@ -23,6 +23,7 @@ function wait_for() {
 wait_for "S3" "aws s3api list-buckets --endpoint-url=$ENDPOINT"
 
 echo "Uploading S3 test delta tables..."
+aws s3api create-bucket --bucket delta-checkpoint --endpoint-url=$ENDPOINT > /dev/null 2>&1
 aws s3api create-bucket --bucket deltars --endpoint-url=$ENDPOINT > /dev/null 2>&1
 aws s3 sync /data/golden s3://deltars/golden/ --delete --endpoint-url=$ENDPOINT > /dev/null
 aws s3 sync /data/simple_table s3://deltars/simple/ --delete --endpoint-url=$ENDPOINT > /dev/null

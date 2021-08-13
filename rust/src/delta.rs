@@ -435,7 +435,7 @@ pub struct DeltaTable {
 
     // metadata
     // application_transactions
-    storage: Box<dyn StorageBackend>,
+    pub(crate) storage: Box<dyn StorageBackend>,
 
     last_check_point: Option<CheckPoint>,
     log_uri: String,
