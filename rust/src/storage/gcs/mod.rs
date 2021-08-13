@@ -97,9 +97,13 @@ impl StorageBackend for GCSStorageBackend {
     /// In other words, if the destination path already exists, rename should return a
     /// [StorageError::AlreadyExists] error.
     async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError> {
-        let src = parse_uri(src)?.into_gcs_object()?;
-        let dst = parse_uri(dst)?.into_gcs_object()?;
-        Ok(self.rename(src, dst).await?)
+        let src_uri = parse_uri(src)?.into_gcs_object()?;
+        let dst_uri = parse_uri(dst)?.into_gcs_object()?;
+        match self.rename(src_uri, dst_uri).await {
+            Err(GCSClientError::PreconditionFailed) =>
+                return Err(StorageError::AlreadyExists(dst.to_string())),
+            res => Ok(res?)
+        }
     }
 
     /// Deletes object by `path`.

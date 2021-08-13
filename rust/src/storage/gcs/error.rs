@@ -37,6 +37,9 @@ pub enum GCSClientError {
     #[error("Resource Not Found")]
     NotFound,
 
+    #[error("Precondition Failed")]
+    PreconditionFailed,
+
     #[error("Error: {0}")]
     Other(String)
 }

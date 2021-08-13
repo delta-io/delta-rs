@@ -151,3 +151,14 @@ pub fn check_object_not_found(err: GCSClientError) -> GCSClientError {
         err => err
     }
 }
+
+pub fn check_precondition_status(err: GCSClientError) -> GCSClientError {
+    match err {
+        GCSClientError::GCSError {
+            source: tame_gcs::error::Error::HttpStatus(
+                    HttpStatusError(StatusCode::PRECONDITION_FAILED)
+                    )
+        } => GCSClientError::PreconditionFailed,
+        err => err
+    }
+}

@@ -136,7 +136,8 @@ impl GCSStorageBackend {
 
             let rewrite_http_request = Object::rewrite(&src, &dst, rewrite_token, metadata, precondition)?;
             let response = util::execute::<_, objects::RewriteObjectResponse>(
-                self, rewrite_http_request).await?;
+                self, rewrite_http_request).await
+                .map_err(util::check_precondition_status)?;
 
             rewrite_token = response.rewrite_token;
             if rewrite_token.is_none() {
