@@ -34,12 +34,14 @@ async fn write_simple_checkpoint() {
     let version = get_last_checkpoint_version(&log_path);
     assert_eq!(5, version);
 
-    // Setting table version to 10 for another checkpoint
-    table.load_version(10).await.unwrap();
-    checkpoint_writer
-        .create_checkpoint_from_state(table.version, table.get_state())
+    // Setting table version to 11, but creating a checkpoint for 10
+    // simulating multi writer behaviour where the latest version could be incremented
+    // by the concurrent writers.
+    table.load_version(11).await.unwrap();
+    checkpoints::create_checkpoint_from_table(&mut table, 10)
         .await
         .unwrap();
+    assert_eq!(table.version, 12);
 
     // checkpoint should exist
     let checkpoint_path = log_path.join("00000000000000000010.checkpoint.parquet");
@@ -53,7 +55,7 @@ async fn write_simple_checkpoint() {
     let table_result = deltalake::open_table(table_location).await.unwrap();
     let table = table_result;
     let files = table.get_files();
-    assert_eq!(11, files.len());
+    assert_eq!(12, files.len());
 }
 
 fn get_last_checkpoint_version(log_path: &PathBuf) -> i64 {
