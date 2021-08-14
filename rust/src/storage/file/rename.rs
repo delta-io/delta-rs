@@ -44,7 +44,12 @@ mod imp {
             if let libc::EEXIST = e.0 {
                 return Err(StorageError::AlreadyExists(String::from(to)));
             }
-
+            if let libc::EINVAL = e.0 {
+                return Err(StorageError::Generic(format!(
+                    "atomic_rename failed with message '{}'",
+                    e
+                )));
+            }
             return Err(StorageError::other_std_io_err(format!(
                 "failed to rename {} to {}: {}",
                 from, to, e
@@ -134,7 +139,12 @@ mod tests {
         // successful move A to C
         assert!(a.exists());
         assert!(!c.exists());
-        atomic_rename(a.to_str().unwrap(), c.to_str().unwrap(), false).unwrap();
+        match atomic_rename(a.to_str().unwrap(), c.to_str().unwrap(), false) {
+            Err(StorageError::Generic(e)) if e == "atomic_rename failed with message 'Invalid argument'" =>
+                panic!("expected success, got: {:?}. Note: atomically renaming Windows files from WSL2 is not supported.", e),
+            Err(e) => panic!("expected success, got: {:?}", e),
+            _ => {}
+        }
         assert!(!a.exists());
         assert!(c.exists());
 
