@@ -1081,16 +1081,36 @@ impl DeltaTable {
         })
     }
 
-    /// Create a DeltaTable with version 0 given the provided MetaData and Protocol
+    /// Create a DeltaTable with version 0 given the provided MetaData, Protocol, and CommitInfo
     pub async fn create(
         &mut self,
         metadata: DeltaTableMetaData,
         protocol: action::Protocol,
+        commit_info: &mut Value,
     ) -> Result<(), DeltaTableError> {
         let meta = action::MetaData::try_from(metadata)?;
 
-        // TODO add commit info action
-        let actions = vec![Action::protocol(protocol), Action::metaData(meta)];
+        // delta-rs commit info will include the delta-rs version and timestamp as of now
+        let altered_commit_info = if commit_info.is_object() {
+            let temp = commit_info.as_object_mut().unwrap();
+            temp.insert(
+                "delta-rs".to_string(),
+                Value::String(crate_version().to_string()),
+            );
+            temp.insert(
+                "timestamp".to_string(),
+                Value::String(Utc::now().timestamp_millis().to_string()),
+            );
+            Some(Value::Object(temp.clone()))
+        } else {
+            None
+        };
+
+        let actions = vec![
+            Action::commitInfo(altered_commit_info.unwrap()),
+            Action::protocol(protocol),
+            Action::metaData(meta),
+        ];
         let mut transaction = self.create_transaction(None);
         transaction.add_actions(actions.clone());
 
@@ -1686,8 +1706,11 @@ mod tests {
         ));
         let mut dt = DeltaTable::new(path, backend).unwrap();
 
+        let mut commit_info = json!({"operation": "CREATE TABLE", "userName": "test user"});
         // Action
-        dt.create(delta_md.clone(), protocol.clone()).await.unwrap();
+        dt.create(delta_md.clone(), protocol.clone(), &mut commit_info)
+            .await
+            .unwrap();
 
         // Validation
         // assert DeltaTable version is now 0 and no data files have been added
@@ -1708,6 +1731,7 @@ mod tests {
         let version_data = File::open(version_file).unwrap();
         let lines = BufReader::new(version_data).lines();
 
+        // TODO add check for commitInfo
         for line in lines {
             let action: Action = serde_json::from_str(line.unwrap().as_str()).unwrap();
             match action {
