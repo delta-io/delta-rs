@@ -87,9 +87,9 @@ checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
 
 [[package]]
 name = "arrow"
-version = "5.0.0"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "06d2bd50fddbdcecd832742b388228eec02eb3aabd33144ef46f6bc5420bf662"
+checksum = "ddf189dff0c7e0f40588fc25adbe5bb6837b82fc61bb7cadf5d76de030f710bb"
 dependencies = [
  "bitflags",
  "chrono",
@@ -495,8 +495,9 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "4.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow-datafusion.git?rev=2a4f94e622a9c3db88eeb5c5ec7dd12efb98b546#2a4f94e622a9c3db88eeb5c5ec7dd12efb98b546"
+version = "5.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aab48ee19b13cfe7523ae84ec203a1ca05ce1fda52f1ac0e45d87df90c548732"
 dependencies = [
  "ahash",
  "arrow",
@@ -1634,9 +1635,9 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "5.0.0"
+version = "5.1.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9297cb17ef7287f6105685d230abbb2b37247657edf2b4a99271088e7d5b0ddd"
+checksum = "db54d10313f64ea22e1fe0332864abefb19aa1c322bfbc67999ff743aebf868d"
 dependencies = [
  "arrow",
  "base64 0.13.0",
