@@ -1741,6 +1741,20 @@ mod tests {
                 Action::metaData(action) => {
                     assert_eq!(DeltaTableMetaData::try_from(action).unwrap(), delta_md);
                 }
+                Action::commitInfo(mut action) => {
+                    let modified_action = if action.is_object() {
+                        let temp = action.as_object_mut().unwrap();
+                        temp["timestamp"] = Value::String("".to_string());
+                        Some(Value::Object(temp.clone()))
+                    } else {
+                        None
+                    };
+
+                    assert_eq!(
+                        modified_action.unwrap(),
+                        json!({"operation": "CREATE TABLE", "userName": "test user", "delta-rs": crate_version().to_string(), "timestamp": "".to_string()})
+                    )
+                }
                 _ => (),
             }
         }
