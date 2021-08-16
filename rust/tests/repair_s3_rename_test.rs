@@ -6,7 +6,7 @@ mod s3_common;
 mod s3 {
 
     use crate::s3_common;
-    use deltalake::storage::s3::{dynamodb_lock, S3StorageBackend};
+    use deltalake::storage::s3::{dynamodb_lock, RenameStatus, S3StorageBackend};
     use deltalake::{StorageBackend, StorageError};
     use rusoto_core::credential::ChainProvider;
     use rusoto_core::request::DispatchSignedRequestFuture;
@@ -33,13 +33,13 @@ mod s3 {
     #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn repair_when_worker_pauses_after_rename_test() {
-        let err = run_repair_test_case("s3://deltars/repair_test_2", false)
+        let re = run_repair_test_case("s3://deltars/repair_test_2", false)
             .await
-            .unwrap_err();
+            .unwrap();
         // here worker is paused after copy but before delete,
         // so when it wakes up the delete operation will succeed since the file is already deleted,
         // but it'll fail on releasing a lock, since it's expired
-        assert_eq!(format!("{:?}", err), "S3Generic(\"Lock is not released\")");
+        assert!(matches!(re, RenameStatus::Repaired));
     }
 
     async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), StorageError> {

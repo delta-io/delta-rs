@@ -493,6 +493,16 @@ fn try_create_lock_client(region: Region) -> Result<Option<Box<dyn LockClient>>,
     }
 }
 
+/// Statuses for successful rename operation
+pub enum RenameStatus {
+    /// Rename completed by the current process without any error.
+    NoError,
+    /// Rename went through, but it was completed/repaired by external process. This happens when
+    /// the current process paused too long during a rename, resulting in expired lock obtained by
+    /// external process.
+    Repaired,
+}
+
 /// Abstraction over a distributive lock provider
 #[async_trait::async_trait]
 pub trait LockClient: Send + Sync + Debug {
@@ -522,7 +532,7 @@ impl dyn LockClient {
         s3: &S3StorageBackend,
         src: &str,
         dst: &str,
-    ) -> Result<(), StorageError> {
+    ) -> Result<RenameStatus, StorageError> {
         let mut lock = self.acquire_lock_loop(src, dst).await?;
 
         if let Some(ref data) = lock.data {
@@ -560,12 +570,18 @@ impl dyn LockClient {
             // no longer hold the lock
             rename_result?;
 
-            if !release_result? {
-                log::error!("Could not release lock {:?}", &lock);
-                return Err(StorageError::S3Generic("Lock is not released".to_string()));
+            match release_result? {
+                true => Ok(RenameStatus::NoError),
+                // this happens when current process paused too long while holding the lock,
+                // resulting in expired lock being acquired by external process.
+                false => {
+                    log::warn!(
+                        "Could not release lock {:?}, likely due to lock expiration caused by unexpected long pause",
+                        &lock
+                    );
+                    Ok(RenameStatus::Repaired)
+                }
             }
-
-            Ok(())
         } else {
             Err(StorageError::S3Generic(
                 "Acquired lock with no lock data".to_string(),
