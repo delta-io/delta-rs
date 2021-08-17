@@ -1093,7 +1093,9 @@ impl DeltaTable {
         // delta-rs commit info will include the delta-rs version and timestamp as of now
         let mut enriched_commit_info = match commit_info {
             Some(Value::Object(map)) => Ok(map),
-            Some(_) => Err(DeltaTableError::Generic(format!("Expected a json object"))),
+            Some(_) => Err(DeltaTableError::Generic(
+                "Expected a json object".to_string(),
+            )),
             None => Ok(serde_json::Map::new()),
         }?;
         enriched_commit_info.insert(
