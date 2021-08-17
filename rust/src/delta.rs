@@ -1086,31 +1086,31 @@ impl DeltaTable {
         &mut self,
         metadata: DeltaTableMetaData,
         protocol: action::Protocol,
-        commit_info: &mut Value,
+        commit_info: Option<Value>,
     ) -> Result<(), DeltaTableError> {
         let meta = action::MetaData::try_from(metadata)?;
 
         // delta-rs commit info will include the delta-rs version and timestamp as of now
-        let altered_commit_info = if commit_info.is_object() {
-            let temp = commit_info.as_object_mut().unwrap();
-            temp.insert(
-                "delta-rs".to_string(),
-                Value::String(crate_version().to_string()),
-            );
-            temp.insert(
-                "timestamp".to_string(),
-                Value::String(Utc::now().timestamp_millis().to_string()),
-            );
-            Some(Value::Object(temp.clone()))
-        } else {
-            None
-        };
+        let mut enriched_commit_info = match commit_info {
+            Some(Value::Object(map)) => Ok(map),
+            Some(_) => Err(DeltaTableError::Generic(format!("Expected a json object"))),
+            None => Ok(serde_json::Map::new()),
+        }?;
+        enriched_commit_info.insert(
+            "delta-rs".to_string(),
+            Value::String(crate_version().to_string()),
+        );
+        enriched_commit_info.insert(
+            "timestamp".to_string(),
+            Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
+        );
 
         let actions = vec![
-            Action::commitInfo(altered_commit_info.unwrap()),
+            Action::commitInfo(Value::Object(enriched_commit_info)),
             Action::protocol(protocol),
             Action::metaData(meta),
         ];
+
         let mut transaction = self.create_transaction(None);
         transaction.add_actions(actions.clone());
 
@@ -1706,9 +1706,9 @@ mod tests {
         ));
         let mut dt = DeltaTable::new(path, backend).unwrap();
 
-        let mut commit_info = json!({"operation": "CREATE TABLE", "userName": "test user"});
+        let commit_info = json!({"operation": "CREATE TABLE", "userName": "test user"});
         // Action
-        dt.create(delta_md.clone(), protocol.clone(), &mut commit_info)
+        dt.create(delta_md.clone(), protocol.clone(), Some(commit_info))
             .await
             .unwrap();
 
@@ -1731,7 +1731,6 @@ mod tests {
         let version_data = File::open(version_file).unwrap();
         let lines = BufReader::new(version_data).lines();
 
-        // TODO add check for commitInfo
         for line in lines {
             let action: Action = serde_json::from_str(line.unwrap().as_str()).unwrap();
             match action {
@@ -1744,7 +1743,7 @@ mod tests {
                 Action::commitInfo(mut action) => {
                     let modified_action = if action.is_object() {
                         let temp = action.as_object_mut().unwrap();
-                        temp["timestamp"] = Value::String("".to_string());
+                        temp["timestamp"] = Value::Number(serde_json::Number::from(0i64));
                         Some(Value::Object(temp.clone()))
                     } else {
                         None
@@ -1752,7 +1751,7 @@ mod tests {
 
                     assert_eq!(
                         modified_action.unwrap(),
-                        json!({"operation": "CREATE TABLE", "userName": "test user", "delta-rs": crate_version().to_string(), "timestamp": "".to_string()})
+                        json!({"operation": "CREATE TABLE", "userName": "test user", "delta-rs": crate_version().to_string(), "timestamp": 0i64})
                     )
                 }
                 _ => (),
