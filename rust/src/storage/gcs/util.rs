@@ -21,16 +21,9 @@ async fn get_token(backend: &GCSStorageBackend) -> Result<tame_oauth::Token, GCS
                 let new_request = http::Request::from_parts(parts, read_body);
 
                 let req = convert_request(new_request, &backend.client).await?;
-                //.context("failed to create token request")?;
-
                 let res = backend.client.execute(req).await?;
-                //    //.context("failed to send token request")?;
-
                 let response = convert_response(res).await?;
-                //    //.context("failed to convert token response")?;
-
                 backend.auth.parse_token_response(scope_hash, response)?
-                //    //.context("failed to parse token response")?
             }
         },
     )
@@ -130,8 +123,6 @@ where
     let request = convert_request(req, &ctx.client).await?;
     let response = ctx.client.execute(request).await?;
     let response = convert_response(response).await?;
-
-    //.context("failed to convert response")?;
 
     Ok(R::try_from_parts(response)?)
 }
