@@ -440,7 +440,7 @@ pub trait StorageBackend: Send + Sync + Debug {
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError>;
 
     /// Deletes object by `path`.
-    async fn delete_objs(&self, paths: &[&str]) -> Result<(), StorageError>;
+    async fn delete_objs(&self, paths: &[String]) -> Result<(), StorageError>;
 }
 
 /// Dynamically construct a Storage backend trait object based on scheme for provided URI

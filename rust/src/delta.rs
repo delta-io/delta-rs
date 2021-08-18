@@ -989,19 +989,14 @@ impl DeltaTable {
             return Ok(files_to_delete);
         }
 
-        for rel_path in &files_to_delete {
-            match self
-                .storage
-                .delete_obj(&self.storage.join_path(&self.table_uri, rel_path))
-                .await
-            {
-                Ok(_) => continue,
-                Err(StorageError::NotFound) => continue,
-                Err(err) => return Err(DeltaTableError::StorageError { source: err }),
-            }
+        let paths = &files_to_delete
+            .iter()
+            .map(|rel_path| self.storage.join_path(&self.table_uri, rel_path))
+            .collect::<Vec<_>>();
+        match self.storage.delete_objs(paths).await {
+            Ok(_) => Ok(files_to_delete),
+            Err(err) => Err(DeltaTableError::StorageError { source: err }),
         }
-
-        Ok(files_to_delete)
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or

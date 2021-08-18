@@ -6,7 +6,7 @@ use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
 use chrono::DateTime;
-use futures::{future, Stream, TryStreamExt};
+use futures::{Stream, TryStreamExt};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
 use tokio_stream::wrappers::ReadDirStream;
@@ -135,12 +135,14 @@ impl StorageBackend for FileStorageBackend {
         fs::remove_file(path).await.map_err(StorageError::from)
     }
 
-    async fn delete_objs(&self, paths: &[&str]) -> Result<(), StorageError> {
-        let res = paths
-            .iter()
-            .map(|path| self.delete_obj(path.to_owned()))
-            .collect::<Vec<_>>();
-        future::try_join_all(res).await?;
+    async fn delete_objs(&self, paths: &[String]) -> Result<(), StorageError> {
+        for path in paths {
+            match self.delete_obj(path).await {
+                Ok(_) => continue,
+                Err(StorageError::NotFound) => continue,
+                Err(e) => return Err(e),
+            }
+        }
         Ok(())
     }
 }

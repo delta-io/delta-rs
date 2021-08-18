@@ -428,13 +428,13 @@ impl StorageBackend for S3StorageBackend {
         Ok(())
     }
 
-    async fn delete_objs(&self, paths: &[&str]) -> Result<(), StorageError> {
+    async fn delete_objs(&self, paths: &[String]) -> Result<(), StorageError> {
         debug!("delete s3 objects: {:?}...", paths);
 
         let uris = paths
             .iter()
             .map(|path| {
-                let s3_obj = parse_uri(path.to_owned()).unwrap().into_s3object().unwrap();
+                let s3_obj = parse_uri(path).unwrap().into_s3object().unwrap();
                 (s3_obj.bucket, s3_obj)
             })
             .into_group_map();
