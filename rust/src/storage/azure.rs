@@ -200,6 +200,10 @@ impl StorageBackend for AdlsGen2Backend {
     async fn delete_obj(&self, _path: &str) -> Result<(), StorageError> {
         unimplemented!("delete_obj not implemented for azure");
     }
+
+    async fn delete_objs(&self, _paths: &[&str]) -> Result<(), StorageError> {
+        unimplemented!("delete_objs not implemented for azure");
+    }
 }
 
 #[cfg(test)]

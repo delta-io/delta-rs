@@ -252,6 +252,14 @@ pub enum StorageError {
         #[from]
         source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectError>,
     },
+    /// Error representing a failure when executing an S3 DeleteObjects request.
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    #[error("Failed to delete S3 object: {source}")]
+    S3DeleteMultiple {
+        /// The underlying Rusoto S3 error.
+        #[from]
+        source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectsError>,
+    },
     /// Error representing a failure when copying a S3 object
     #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[error("Failed to copy S3 object: {source}")]
@@ -430,6 +438,9 @@ pub trait StorageBackend: Send + Sync + Debug {
 
     /// Deletes object by `path`.
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError>;
+
+    /// Deletes object by `path`.
+    async fn delete_objs(&self, paths: &[&str]) -> Result<(), StorageError>;
 }
 
 /// Dynamically construct a Storage backend trait object based on scheme for provided URI

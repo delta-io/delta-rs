@@ -134,4 +134,23 @@ mod s3 {
 
         assert!(matches!(err, StorageError::NotFound));
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_s3_delete_objs() {
+        setup();
+
+        let path1 = "s3://deltars/delete1.snappy.parquet";
+        let path2 = "s3://deltars/delete2.snappy.parquet";
+        let backend = deltalake::get_backend_for_uri(path1).unwrap();
+        backend.put_obj(path1, &[]).await.unwrap();
+        backend.put_obj(path2, &[]).await.unwrap();
+
+        backend.delete_objs(&[path1, path2]).await.unwrap();
+        let err1 = backend.head_obj(path1).await.err().unwrap();
+        let err2 = backend.head_obj(path2).await.err().unwrap();
+
+        assert!(matches!(err1, StorageError::NotFound));
+        assert!(matches!(err2, StorageError::NotFound));
+    }
 }
