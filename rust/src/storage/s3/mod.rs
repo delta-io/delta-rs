@@ -10,8 +10,8 @@ use log::debug;
 use rusoto_core::{HttpClient, Region, RusotoError};
 use rusoto_credential::AutoRefreshingProvider;
 use rusoto_s3::{
-    CopyObjectRequest, DeleteObjectRequest, GetObjectRequest, HeadObjectRequest,
-    ListObjectsV2Request, PutObjectRequest, S3Client, S3,
+    CopyObjectRequest, Delete, DeleteObjectRequest, DeleteObjectsRequest, GetObjectRequest,
+    HeadObjectRequest, ListObjectsV2Request, ObjectIdentifier, PutObjectRequest, S3Client, S3,
 };
 use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient, WebIdentityProvider};
 use serde::{Deserialize, Serialize};
@@ -423,6 +423,52 @@ impl StorageBackend for S3StorageBackend {
         };
 
         self.client.delete_object(put_req).await?;
+
+        Ok(())
+    }
+
+    async fn delete_objs(&self, paths: &[&str]) -> Result<(), StorageError> {
+        debug!("delete s3 objects: {:?}...", paths);
+        if paths.is_empty() {
+            return Ok(());
+        }
+
+        let chunks = paths.chunks(1000);
+
+        let bucket = parse_uri(paths[0])?.into_s3object()?.bucket;
+
+        // Check whether all buckets are equal
+        paths.iter().skip(1).try_for_each(|path| {
+            let other_bucket = parse_uri(path)?.into_s3object()?.bucket;
+            if other_bucket != bucket {
+                Err(StorageError::Generic(
+                    format!("All buckets of the paths in `S3StorageBackend::delete_objs` should be the same. Expected '{}', got '{}'", bucket, other_bucket),
+                ))
+            } else {
+                Ok(())
+            }
+        })?;
+
+        for chunk in chunks {
+            let objects = chunk
+                .iter()
+                .map(|x| ObjectIdentifier {
+                    key: x.to_string(),
+                    ..Default::default()
+                })
+                .collect();
+            let delete = Delete {
+                objects,
+                ..Default::default()
+            };
+            let req = DeleteObjectsRequest {
+                bucket: bucket.to_string(),
+                delete,
+                ..Default::default()
+            };
+
+            self.client.delete_objects(req).await?;
+        }
 
         Ok(())
     }
