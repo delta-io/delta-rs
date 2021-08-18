@@ -134,17 +134,6 @@ impl StorageBackend for FileStorageBackend {
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
         fs::remove_file(path).await.map_err(StorageError::from)
     }
-
-    async fn delete_objs(&self, paths: &[String]) -> Result<(), StorageError> {
-        for path in paths {
-            match self.delete_obj(path).await {
-                Ok(_) => continue,
-                Err(StorageError::NotFound) => continue,
-                Err(e) => return Err(e),
-            }
-        }
-        Ok(())
-    }
 }
 
 #[cfg(test)]
