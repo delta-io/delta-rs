@@ -433,6 +433,7 @@ impl StorageBackend for S3StorageBackend {
             return Ok(());
         }
 
+        // S3 has a maximum of 1000 files to delete
         let chunks = paths.chunks(1000);
 
         let bucket = parse_uri(paths[0])?.into_s3object()?.bucket;
@@ -452,11 +453,13 @@ impl StorageBackend for S3StorageBackend {
         for chunk in chunks {
             let objects = chunk
                 .iter()
-                .map(|x| ObjectIdentifier {
-                    key: x.to_string(),
-                    ..Default::default()
+                .map(|path| {
+                    Ok(ObjectIdentifier {
+                        key: parse_uri(path)?.into_s3object()?.key.to_string(),
+                        ..Default::default()
+                    })
                 })
-                .collect();
+                .collect::<Result<Vec<_>, StorageError>>()?;
             let delete = Delete {
                 objects,
                 ..Default::default()
