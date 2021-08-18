@@ -146,7 +146,7 @@ mod s3 {
         backend.put_obj(path1, &[]).await.unwrap();
         backend.put_obj(path2, &[]).await.unwrap();
 
-        backend.delete_objs(&[path1, path2]).await.unwrap();
+        backend.delete_objs(&[path1.to_string(), path2.to_string()]).await.unwrap();
         let err1 = backend.head_obj(path1).await.err().unwrap();
         let err2 = backend.head_obj(path2).await.err().unwrap();
 

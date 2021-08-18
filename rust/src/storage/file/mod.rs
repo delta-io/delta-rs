@@ -209,7 +209,7 @@ mod tests {
         assert_eq!(fs::metadata(path2).await.is_ok(), true);
 
         // delete object
-        backend.delete_objs(&[path1, path2]).await.unwrap();
+        backend.delete_objs(&[path1.to_string(), path2.to_string()]).await.unwrap();
         assert_eq!(fs::metadata(path1).await.is_ok(), false);
         assert_eq!(fs::metadata(path2).await.is_ok(), false)
     }
