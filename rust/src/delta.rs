@@ -1081,16 +1081,38 @@ impl DeltaTable {
         })
     }
 
-    /// Create a DeltaTable with version 0 given the provided MetaData and Protocol
+    /// Create a DeltaTable with version 0 given the provided MetaData, Protocol, and CommitInfo
     pub async fn create(
         &mut self,
         metadata: DeltaTableMetaData,
         protocol: action::Protocol,
+        commit_info: Option<Value>,
     ) -> Result<(), DeltaTableError> {
         let meta = action::MetaData::try_from(metadata)?;
 
-        // TODO add commit info action
-        let actions = vec![Action::protocol(protocol), Action::metaData(meta)];
+        // delta-rs commit info will include the delta-rs version and timestamp as of now
+        let mut enriched_commit_info = match commit_info {
+            Some(Value::Object(map)) => Ok(map),
+            Some(_) => Err(DeltaTableError::Generic(
+                "Expected a json object".to_string(),
+            )),
+            None => Ok(serde_json::Map::new()),
+        }?;
+        enriched_commit_info.insert(
+            "delta-rs".to_string(),
+            Value::String(crate_version().to_string()),
+        );
+        enriched_commit_info.insert(
+            "timestamp".to_string(),
+            Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
+        );
+
+        let actions = vec![
+            Action::commitInfo(Value::Object(enriched_commit_info)),
+            Action::protocol(protocol),
+            Action::metaData(meta),
+        ];
+
         let mut transaction = self.create_transaction(None);
         transaction.add_actions(actions.clone());
 
@@ -1686,8 +1708,11 @@ mod tests {
         ));
         let mut dt = DeltaTable::new(path, backend).unwrap();
 
+        let commit_info = json!({"operation": "CREATE TABLE", "userName": "test user"});
         // Action
-        dt.create(delta_md.clone(), protocol.clone()).await.unwrap();
+        dt.create(delta_md.clone(), protocol.clone(), Some(commit_info))
+            .await
+            .unwrap();
 
         // Validation
         // assert DeltaTable version is now 0 and no data files have been added
@@ -1716,6 +1741,20 @@ mod tests {
                 }
                 Action::metaData(action) => {
                     assert_eq!(DeltaTableMetaData::try_from(action).unwrap(), delta_md);
+                }
+                Action::commitInfo(mut action) => {
+                    let modified_action = if action.is_object() {
+                        let temp = action.as_object_mut().unwrap();
+                        temp["timestamp"] = Value::Number(serde_json::Number::from(0i64));
+                        Some(Value::Object(temp.clone()))
+                    } else {
+                        None
+                    };
+
+                    assert_eq!(
+                        modified_action.unwrap(),
+                        json!({"operation": "CREATE TABLE", "userName": "test user", "delta-rs": crate_version().to_string(), "timestamp": 0i64})
+                    )
                 }
                 _ => (),
             }
