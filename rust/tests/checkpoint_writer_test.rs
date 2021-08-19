@@ -22,7 +22,7 @@ async fn write_simple_checkpoint() {
         .unwrap();
 
     // Write a checkpoint
-    checkpoints::create_checkpoint_from_table(&mut table, 5)
+    checkpoints::create_checkpoint_from_table(&table)
         .await
         .unwrap();
 
