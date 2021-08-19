@@ -34,14 +34,10 @@ async fn write_simple_checkpoint() {
     let version = get_last_checkpoint_version(&log_path);
     assert_eq!(5, version);
 
-    // Setting table version to 11, but creating a checkpoint for 10
-    // simulating multi writer behaviour where the latest version could be incremented
-    // by the concurrent writers.
-    table.load_version(11).await.unwrap();
-    checkpoints::create_checkpoint_from_table(&mut table, 10)
+    table.load_version(10).await.unwrap();
+    checkpoints::create_checkpoint_from_table(&table)
         .await
         .unwrap();
-    assert_eq!(table.version, 12);
 
     // checkpoint should exist
     let checkpoint_path = log_path.join("00000000000000000010.checkpoint.parquet");
