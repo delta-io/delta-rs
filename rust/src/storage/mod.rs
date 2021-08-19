@@ -14,6 +14,8 @@ use std::error::Error;
 #[cfg(feature = "azure")]
 pub mod azure;
 pub mod file;
+#[cfg(any(feature = "gcs"))]
+pub mod gcs;
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 pub mod s3;
 
@@ -27,12 +29,12 @@ pub enum UriError {
     #[error("Expected local path URI, found: {0}")]
     ExpectedSLocalPathUri(String),
 
-    /// Error returned when the URI is expected to be an S3 path, but does not include a bucket part.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    /// Error returned when the URI is expected to be an object storage path, but does not include a bucket part.
+    #[cfg(any(feature = "gcs", feature = "s3", feature = "s3-rustls"))]
     #[error("Object URI missing bucket")]
     MissingObjectBucket,
-    /// Error returned when the URI is expected to be an S3 path, but does not include a key part.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    /// Error returned when the URI is expected to be an object storage path, but does not include a key part.
+    #[cfg(any(feature = "gcs", feature = "s3", feature = "s3-rustls"))]
     #[error("Object URI missing key")]
     MissingObjectKey,
     /// Error returned when an S3 path is expected, but the URI is not an S3 URI.
@@ -40,11 +42,17 @@ pub enum UriError {
     #[error("Expected S3 URI, found: {0}")]
     ExpectedS3Uri(String),
 
+    /// Error returned when an GCS path is expected, but the URI is not an GCS URI.
+    #[cfg(any(feature = "gcs"))]
+    #[error("Expected GCS URI, found: {0}")]
+    ExpectedGCSUri(String),
+
     /// Error returned when an Azure URI is expected, but the URI is not an Azure file system
     /// (abfs\[s\]) URI.
     #[cfg(feature = "azure")]
     #[error("Expected Azure URI, found: {0}")]
     ExpectedAzureUri(String),
+
     /// Error returned when an Azure URI is expected, but the URI is missing the scheme.
     #[cfg(feature = "azure")]
     #[error("Object URI missing filesystem")]
@@ -84,6 +92,9 @@ pub enum Uri<'a> {
     /// URI for Azure backend.
     #[cfg(feature = "azure")]
     AdlsGen2Object(azure::AdlsGen2Object<'a>),
+    /// URI for GCS backend
+    #[cfg(feature = "gcs")]
+    GCSObject(gcs::GCSObject<'a>),
 }
 
 impl<'a> Uri<'a> {
@@ -95,6 +106,8 @@ impl<'a> Uri<'a> {
             Uri::S3Object(x) => Ok(x),
             #[cfg(feature = "azure")]
             Uri::AdlsGen2Object(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
+            #[cfg(feature = "gcs")]
+            Uri::GCSObject(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
             Uri::LocalPath(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
         }
     }
@@ -107,7 +120,23 @@ impl<'a> Uri<'a> {
             Uri::AdlsGen2Object(x) => Ok(x),
             #[cfg(any(feature = "s3", feature = "s3-rustls"))]
             Uri::S3Object(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
+            #[cfg(feature = "gcs")]
+            Uri::GCSObject(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
             Uri::LocalPath(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
+        }
+    }
+
+    /// Converts the URI to an GCSObject. Returns UriError if the URI is not valid for the
+    /// Google Cloud Storage backend.
+    #[cfg(feature = "gcs")]
+    pub fn into_gcs_object(self) -> Result<gcs::GCSObject<'a>, UriError> {
+        match self {
+            Uri::GCSObject(x) => Ok(x),
+            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+            Uri::S3Object(x) => Err(UriError::ExpectedGCSUri(x.to_string())),
+            #[cfg(feature = "azure")]
+            Uri::AdlsGen2Object(x) => Err(UriError::ExpectedGCSUri(x.to_string())),
+            Uri::LocalPath(x) => Err(UriError::ExpectedGCSUri(x.to_string())),
         }
     }
 
@@ -120,6 +149,8 @@ impl<'a> Uri<'a> {
             Uri::S3Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
             #[cfg(feature = "azure")]
             Uri::AdlsGen2Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
+            #[cfg(feature = "gcs")]
+            Uri::GCSObject(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
         }
     }
 
@@ -132,6 +163,8 @@ impl<'a> Uri<'a> {
             Uri::S3Object(x) => x.key.to_string(),
             #[cfg(feature = "azure")]
             Uri::AdlsGen2Object(x) => x.path.to_string(),
+            #[cfg(feature = "gcs")]
+            Uri::GCSObject(x) => x.path.to_string(),
         }
     }
 }
@@ -169,6 +202,32 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
                 }
             }
         }
+
+        // This can probably be refactored into the above match arm
+        "gs" => {
+            cfg_if::cfg_if! {
+                if #[cfg(any(feature = "gcs"))] {
+                    let mut path_parts = parts[1].splitn(2, '/');
+                    let bucket = match path_parts.next() {
+                        Some(x) => x,
+                        None => {
+                            return Err(UriError::MissingObjectBucket);
+                        }
+                    };
+                    let path = match path_parts.next() {
+                        Some(x) => x,
+                        None => {
+                            return Err(UriError::MissingObjectKey);
+                        }
+                    };
+
+                    Ok(Uri::GCSObject(gcs::GCSObject::new(bucket, path)))
+                } else {
+                    Err(UriError::InvalidScheme(String::from(parts[0])))
+                }
+            }
+        }
+
         "file" => Ok(Uri::LocalPath(parts[1])),
         "abfss" => {
             cfg_if::cfg_if! {
@@ -311,6 +370,20 @@ pub enum StorageError {
     #[error("Azure config error: {0}")]
     AzureConfig(String),
 
+    /// GCS config error
+    #[cfg(feature = "gcs")]
+    #[error("GCS config error: {0}")]
+    GCSConfig(String),
+
+    /// GCS client error
+    #[cfg(feature = "gcs")]
+    #[error("GCS error: {source}")]
+    GCSError {
+        /// The underlying Google Cloud Error
+        #[from]
+        source: gcs::GCSClientError,
+    },
+
     /// Error returned when the URI is invalid.
     /// The wrapped UriError contains additional details.
     #[error("Invalid object URI")]
@@ -440,5 +513,7 @@ pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, Storage
         Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new()?)),
         #[cfg(feature = "azure")]
         Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
+        #[cfg(feature = "gcs")]
+        Uri::GCSObject(_) => Ok(Box::new(gcs::GCSStorageBackend::new()?)),
     }
 }

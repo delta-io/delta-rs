@@ -30,7 +30,7 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 * Local file system
 * AWS S3
 * Azure Data Lake Storage Gen 2
-* :x: Google Cloud Storage see link:https://github.com/delta-io/delta-rs/issues/56[#56]
+* Google Cloud Storage
 
 .Support features
 |===
