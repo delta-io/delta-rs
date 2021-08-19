@@ -89,24 +89,15 @@ pub async fn create_checkpoint_from_table_uri(
     Ok(())
 }
 
-/// Loads given `table` at given `version` and creates checkpoints for it.
-/// If given table's version does not match given `version`, then `table` is re-loaded with appropriate one.
-/// Once checkpoint is created, then the `table` is updated to the latest version.
-pub async fn create_checkpoint_from_table(
-    table: &mut DeltaTable,
-    version: DeltaDataTypeVersion,
-) -> Result<(), CheckpointError> {
-    if table.version != version {
-        table.load_version(version).await?;
-    }
+/// Creates checkpoint at `table.version` for given `table`.
+pub async fn create_checkpoint_from_table(table: &DeltaTable) -> Result<(), CheckpointError> {
     create_checkpoint(
-        version,
+        table.version,
         table.get_state(),
         table.storage.as_ref(),
         &table.table_uri,
     )
     .await?;
-    table.update_incremental().await?;
     Ok(())
 }
 
@@ -171,6 +162,11 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
             }
         })
         .collect();
+
+    println!("CREATING CHECKPOINT");
+    for a in state.files().iter() {
+        println!("{}", a.path);
+    }
 
     // Collect a map of paths that require special stats conversion.
     let mut stats_conversions: Vec<(SchemaPath, SchemaDataType)> = Vec::new();
