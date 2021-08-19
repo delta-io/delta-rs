@@ -22,6 +22,17 @@ objection store communication. Please file Github issue to request for critical
 openssl upgrade.
 
 
+Examples
+------------
+
+The examples folder shows how to use Rust API to manipulate Delta tables.
+
+Examples can be run using the `cargo run --example` command. For example:
+
+```bash
+cargo run --example read_delta_table
+```
+
 Develop
 -------
 

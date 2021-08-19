@@ -531,6 +531,7 @@ version = "0.4.1"
 dependencies = [
  "anyhow",
  "arrow",
+ "async-stream",
  "async-trait",
  "azure_core",
  "azure_storage",
@@ -560,6 +561,8 @@ dependencies = [
  "serde",
  "serde_json",
  "serial_test",
+ "tame-gcs",
+ "tame-oauth",
  "tempdir",
  "thiserror",
  "tokio",
@@ -2643,6 +2646,42 @@ dependencies = [
 ]
 
 [[package]]
+name = "tame-gcs"
+version = "0.10.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d20ec2d6525a66afebdff9e1d8ef143c9deae9a3b040c61d3cfa9ae6fda80060"
+dependencies = [
+ "base64 0.13.0",
+ "bytes",
+ "chrono",
+ "http",
+ "percent-encoding",
+ "serde",
+ "serde_json",
+ "serde_urlencoded 0.7.0",
+ "thiserror",
+ "url",
+]
+
+[[package]]
+name = "tame-oauth"
+version = "0.4.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9435c9348e480fad0f2215d5602e2dfad03df8a6398c4e7ceaeaa42758f26a8a"
+dependencies = [
+ "base64 0.13.0",
+ "chrono",
+ "http",
+ "lock_api",
+ "parking_lot",
+ "ring",
+ "serde",
+ "serde_json",
+ "twox-hash",
+ "url",
+]
+
+[[package]]
 name = "tempdir"
 version = "0.3.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2950,6 +2989,16 @@ name = "try-lock"
 version = "0.2.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "59547bce71d9c38b83d9c0e92b6066c4253371f15005def0c30d9657f50c7642"
+
+[[package]]
+name = "twox-hash"
+version = "1.6.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1f559b464de2e2bdabcac6a210d12e9b5a5973c251e102c44c585c71d51bd78e"
+dependencies = [
+ "cfg-if",
+ "static_assertions",
+]
 
 [[package]]
 name = "typenum"
