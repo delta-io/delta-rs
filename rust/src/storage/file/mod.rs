@@ -114,15 +114,14 @@ impl StorageBackend for FileStorageBackend {
         f.sync_all().await?;
         drop(f);
 
-        // atomic rename with swap=true only possible if both paths exists.
-        let swap = Path::new(path).exists();
-
-        match rename::atomic_rename(tmp_path, path, swap) {
+        // as temp path is transparent to end user, we could use syscall directly here
+        // path exists check needed by `atomic_rename` might cause a race condition
+        match fs::rename(tmp_path, path).await {
             Ok(_) => Ok(()),
             Err(e) => {
                 // If rename failed, clean up the temp file.
                 self.delete_obj(tmp_path).await?;
-                Err(e)
+                Err(StorageError::from(e))
             }
         }
     }
