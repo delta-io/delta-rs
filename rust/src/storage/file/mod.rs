@@ -182,6 +182,30 @@ mod tests {
         assert_eq!(fs::metadata(path).await.is_ok(), false)
     }
 
+    #[tokio::test]
+    async fn delete_objs() {
+        let tmp_dir = tempdir::TempDir::new("delete_test").unwrap();
+        let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
+        let tmp_file_path2 = tmp_dir.path().join("tmp_file2");
+        let backend = FileStorageBackend::new(tmp_dir.path().to_str().unwrap());
+
+        // put object
+        let path1 = tmp_file_path1.to_str().unwrap();
+        let path2 = tmp_file_path2.to_str().unwrap();
+        backend.put_obj(path1, &[]).await.unwrap();
+        backend.put_obj(path2, &[]).await.unwrap();
+        assert_eq!(fs::metadata(path1).await.is_ok(), true);
+        assert_eq!(fs::metadata(path2).await.is_ok(), true);
+
+        // delete object
+        backend
+            .delete_objs(&[path1.to_string(), path2.to_string()])
+            .await
+            .unwrap();
+        assert_eq!(fs::metadata(path1).await.is_ok(), false);
+        assert_eq!(fs::metadata(path2).await.is_ok(), false)
+    }
+
     #[test]
     fn join_multiple_paths() {
         let backend = FileStorageBackend::new("./");

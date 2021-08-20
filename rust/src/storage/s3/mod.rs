@@ -10,8 +10,8 @@ use log::debug;
 use rusoto_core::{HttpClient, Region, RusotoError};
 use rusoto_credential::AutoRefreshingProvider;
 use rusoto_s3::{
-    CopyObjectRequest, DeleteObjectRequest, GetObjectRequest, HeadObjectRequest,
-    ListObjectsV2Request, PutObjectRequest, S3Client, S3,
+    CopyObjectRequest, Delete, DeleteObjectRequest, DeleteObjectsRequest, GetObjectRequest,
+    HeadObjectRequest, ListObjectsV2Request, ObjectIdentifier, PutObjectRequest, S3Client, S3,
 };
 use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient, WebIdentityProvider};
 use serde::{Deserialize, Serialize};
@@ -416,13 +416,61 @@ impl StorageBackend for S3StorageBackend {
         debug!("delete s3 object: {}...", path);
 
         let uri = parse_uri(path)?.into_s3object()?;
-        let put_req = DeleteObjectRequest {
+        let delete_req = DeleteObjectRequest {
             bucket: uri.bucket.to_string(),
             key: uri.key.to_string(),
             ..Default::default()
         };
 
-        self.client.delete_object(put_req).await?;
+        self.client.delete_object(delete_req).await?;
+
+        Ok(())
+    }
+
+    async fn delete_objs(&self, paths: &[String]) -> Result<(), StorageError> {
+        debug!("delete s3 objects: {:?}...", paths);
+        if paths.is_empty() {
+            return Ok(());
+        }
+
+        let s3_objects = paths
+            .iter()
+            .map(|path| Ok(parse_uri(path)?.into_s3object()?))
+            .collect::<Result<Vec<_>, StorageError>>()?;
+
+        // Check whether all buckets are equal
+        let bucket = s3_objects[0].bucket;
+        s3_objects.iter().skip(1).try_for_each(|object| {
+            let other_bucket = object.bucket;
+            if other_bucket != bucket {
+                Err(StorageError::S3Generic(
+                    format!("All buckets of the paths in `S3StorageBackend::delete_objs` should be the same. Expected '{}', got '{}'", bucket, other_bucket)
+                ))
+            } else {
+                Ok(())
+            }
+        })?;
+
+        // S3 has a maximum of 1000 files to delete
+        let chunks = s3_objects.chunks(1000);
+        for chunk in chunks {
+            let delete = Delete {
+                objects: chunk
+                    .iter()
+                    .map(|obj| ObjectIdentifier {
+                        key: obj.key.to_string(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                ..Default::default()
+            };
+            let delete_req = DeleteObjectsRequest {
+                bucket: bucket.to_string(),
+                delete,
+                ..Default::default()
+            };
+            self.client.delete_objects(delete_req).await?;
+        }
 
         Ok(())
     }
