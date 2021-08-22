@@ -45,6 +45,12 @@ To install development version of the package into your current Python environme
 $ make develop
 ```
 
+To setup development and include optional dependencies
+
+```bash
+$ make setup-dev
+```
+
 Build manylinux wheels
 ----------------------
 

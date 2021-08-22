@@ -2,6 +2,7 @@
 
 VENV := venv
 MATURIN_VERSION := $(shell awk -F '[ ="]+' '$$1 == "requires" { print $$4 }' pyproject.toml)
+TARGET_WHL := $(wildcard ../target/wheels/*.whl)
 
 .PHONY: setup-venv
 setup-venv: ## Setup the virtualenv
@@ -17,6 +18,15 @@ setup: ## Setup the requirements
 develop: setup ## Install Python binding of delta-rs
 	$(info --- Maturin develop ---)
 	maturin develop
+
+.PHONY: find-whl
+find-whl:
+	$(wildcard ../target/wheels/*.whl)
+
+.PHONY: setup-dev
+setup-dev: setup
+	maturin build
+	python -m pip install $(TARGET_WHL)[devel,pandas]
 
 .PHONY: format
 format: ## Format the code
