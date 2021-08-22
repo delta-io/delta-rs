@@ -19,10 +19,6 @@ develop: setup ## Install Python binding of delta-rs
 	$(info --- Maturin develop ---)
 	maturin develop
 
-.PHONY: find-whl
-find-whl:
-	$(wildcard ../target/wheels/*.whl)
-
 .PHONY: setup-dev
 setup-dev: setup
 	maturin build
