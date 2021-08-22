@@ -19,7 +19,7 @@ setup: ## Setup the requirements
 develop: setup ## Install Python binding of delta-rs
 	$(info --- Maturin build ---)
 	maturin build
-	python -m pip install $(TARGET_WHEEL)[devel,pandas]
+	pip install $(TARGET_WHEEL)[devel,pandas]
 
 .PHONY: format
 format: ## Format the code
