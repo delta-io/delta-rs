@@ -40,6 +40,9 @@ async fn read_delta_table_with_update() {
     let path = "./tests/data/simple_table_with_checkpoint/";
     let table_newest_version = deltalake::open_table(path).await.unwrap();
     let mut table_to_update = deltalake::open_table_with_version(path, 0).await.unwrap();
+    // calling update several times should not produce any duplicates
+    table_to_update.update().await.unwrap();
+    table_to_update.update().await.unwrap();
     table_to_update.update().await.unwrap();
 
     assert_eq!(
