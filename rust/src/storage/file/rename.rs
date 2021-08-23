@@ -4,21 +4,14 @@ use crate::StorageError;
 mod imp {
     use super::*;
 
-    pub fn atomic_rename(from: &str, to: &str, swap: bool) -> Result<(), StorageError> {
-        // doing best effort in windows since there is no native atomic rename support
+    pub fn rename_if_not_exists(from: &str, to: &str) -> Result<(), StorageError> {
+        // doing best effort in windows since there is no native rename if not exists support
         let to_exists = std::fs::metadata(to).is_ok();
-        // consistent behavior with Linux
-        if !to_exists && swap {
-            return Err(StorageError::other_std_io_err(format!(
-                "failed to rename {} to {}: {} not exists and swap is set to true.",
-                from, to, to
-            )));
-        } else if to_exists && !swap {
+        if to_exists {
             return Err(StorageError::AlreadyExists(to.to_string()));
         }
         // rename in Windows already set the MOVEFILE_REPLACE_EXISTING flag
         // it should always succeed no matter destination file exists or not
-        // TODO: with swap set to true, we should keep the from file in Windows?
         std::fs::rename(from, to).map_err(|e| {
             StorageError::other_std_io_err(format!("failed to rename {} to {}: {}", from, to, e))
         })
@@ -34,10 +27,10 @@ mod imp {
         CString::new(p).map_err(|e| StorageError::Generic(format!("{}", e)))
     }
 
-    pub fn atomic_rename(from: &str, to: &str, swap: bool) -> Result<(), StorageError> {
+    pub fn rename_if_not_exists(from: &str, to: &str) -> Result<(), StorageError> {
         let cs_from = to_c_string(from)?;
         let cs_to = to_c_string(to)?;
-        let ret = unsafe { platform_specific_rename(cs_from.as_ptr(), cs_to.as_ptr(), swap) };
+        let ret = unsafe { platform_specific_rename(cs_from.as_ptr(), cs_to.as_ptr()) };
 
         if ret != 0 {
             let e = errno::errno();
@@ -46,7 +39,7 @@ mod imp {
             }
             if let libc::EINVAL = e.0 {
                 return Err(StorageError::Generic(format!(
-                    "atomic_rename failed with message '{}'",
+                    "rename_if_not_exists failed with message '{}'",
                     e
                 )));
             }
@@ -60,25 +53,19 @@ mod imp {
     }
 
     #[allow(unused_variables)]
-    unsafe fn platform_specific_rename(
-        from: *const libc::c_char,
-        to: *const libc::c_char,
-        swap: bool,
-    ) -> i32 {
+    unsafe fn platform_specific_rename(from: *const libc::c_char, to: *const libc::c_char) -> i32 {
         cfg_if::cfg_if! {
             if #[cfg(all(target_os = "linux", target_env = "gnu"))] {
                 cfg_if::cfg_if! {
                     if #[cfg(glibc_renameat2)] {
-                        let flag = if swap { libc::RENAME_EXCHANGE } else { libc::RENAME_NOREPLACE };
-                        libc::renameat2(libc::AT_FDCWD, from, libc::AT_FDCWD, to, flag)
+                        libc::renameat2(libc::AT_FDCWD, from, libc::AT_FDCWD, to, libc::RENAME_NOREPLACE)
                     } else {
                         // target has old glibc (< 2.28), we would need to invoke syscall manually
                         unimplemented!()
                     }
                 }
             } else if #[cfg(target_os = "macos")] {
-                let flag = if swap { libc::RENAME_SWAP } else { libc::RENAME_EXCL };
-                libc::renamex_np(from, to, flag)
+                libc::renamex_np(from, to, libc::RENAME_EXCL)
             } else {
                 unimplemented!()
             }
@@ -87,12 +74,10 @@ mod imp {
 }
 
 /// Atomically renames `from` to `to`.
-/// - if `swap` is `true` then both `from` and `to` have to exist;
-/// - if `swap` is `false` then `from` has to exist, but `to` is not;
-/// otherwise the operation will fail.
+/// `from` has to exist, but `to` is not, otherwise the operation will fail.
 #[inline]
-pub fn atomic_rename(from: &str, to: &str, swap: bool) -> Result<(), StorageError> {
-    imp::atomic_rename(from, to, swap)
+pub fn rename_if_not_exists(from: &str, to: &str) -> Result<(), StorageError> {
+    imp::rename_if_not_exists(from, to)
 }
 
 #[cfg(test)]
@@ -103,14 +88,14 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     #[test]
-    fn test_atomic_rename() {
-        let tmp_dir = tempdir::TempDir::new_in(".", "test_atomic_rename").unwrap();
+    fn test_rename_if_not_exists() {
+        let tmp_dir = tempdir::TempDir::new_in(".", "test_rename_if_not_exists").unwrap();
         let a = create_file(&tmp_dir.path(), "a");
         let b = create_file(&tmp_dir.path(), "b");
         let c = &tmp_dir.path().join("c");
 
         // unsuccessful move not_exists to C, not_exists is missing
-        match atomic_rename("not_exists", c.to_str().unwrap(), false) {
+        match rename_if_not_exists("not_exists", c.to_str().unwrap()) {
             Err(StorageError::Io { source: e }) => {
                 cfg_if::cfg_if! {
                     if #[cfg(target_os = "windows")] {
@@ -139,8 +124,8 @@ mod tests {
         // successful move A to C
         assert!(a.exists());
         assert!(!c.exists());
-        match atomic_rename(a.to_str().unwrap(), c.to_str().unwrap(), false) {
-            Err(StorageError::Generic(e)) if e == "atomic_rename failed with message 'Invalid argument'" =>
+        match rename_if_not_exists(a.to_str().unwrap(), c.to_str().unwrap()) {
+            Err(StorageError::Generic(e)) if e == "rename_if_not_exists failed with message 'Invalid argument'" =>
                 panic!("expected success, got: {:?}. Note: atomically renaming Windows files from WSL2 is not supported.", e),
             Err(e) => panic!("expected success, got: {:?}", e),
             _ => {}
@@ -150,37 +135,12 @@ mod tests {
 
         // unsuccessful move B to C, C already exists, B is not deleted
         assert!(b.exists());
-        match atomic_rename(b.to_str().unwrap(), c.to_str().unwrap(), false) {
+        match rename_if_not_exists(b.to_str().unwrap(), c.to_str().unwrap()) {
             Err(StorageError::AlreadyExists(p)) => assert_eq!(p, c.to_str().unwrap()),
             _ => panic!("unexpected"),
         }
         assert!(b.exists());
         assert_eq!(std::fs::read_to_string(c).unwrap(), "a");
-
-        // successful swaps B to C
-        atomic_rename(b.to_str().unwrap(), c.to_str().unwrap(), true).unwrap();
-        cfg_if::cfg_if! {
-            if #[cfg(target_os = "windows")] {
-                assert!(!b.exists());
-            } else{
-                assert!(b.exists());
-                assert_eq!(std::fs::read_to_string(b).unwrap(), "a");
-            }
-        }
-        assert!(c.exists());
-        assert_eq!(std::fs::read_to_string(c).unwrap(), "b");
-
-        // unsuccessful swap C to D, D does not exist
-        let d = &tmp_dir.path().join("d");
-        assert!(!d.exists());
-        match atomic_rename(c.to_str().unwrap(), d.to_str().unwrap(), true) {
-            Err(StorageError::Io { source }) => {
-                assert!(source.to_string().starts_with("failed to rename"));
-            }
-            _ => panic!("unexpected"),
-        }
-        assert!(c.exists());
-        assert!(!d.exists());
     }
 
     fn create_file(dir: &Path, name: &str) -> PathBuf {

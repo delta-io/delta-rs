@@ -115,7 +115,6 @@ impl StorageBackend for FileStorageBackend {
         drop(f);
 
         // as temp path is transparent to end user, we could use syscall directly here
-        // path exists check needed by `atomic_rename` might cause a race condition
         match fs::rename(tmp_path, path).await {
             Ok(_) => Ok(()),
             Err(e) => {
@@ -127,7 +126,7 @@ impl StorageBackend for FileStorageBackend {
     }
 
     async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError> {
-        rename::atomic_rename(src, dst, false)
+        rename::rename_if_not_exists(src, dst)
     }
 
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
