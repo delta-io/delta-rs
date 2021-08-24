@@ -66,6 +66,7 @@ where
     }
 
     Ok(builder
+        .header(reqwest::header::CONTENT_LENGTH, content_len)
         .headers(parts.headers)
         .body(buffer.freeze())
         .build()?)
