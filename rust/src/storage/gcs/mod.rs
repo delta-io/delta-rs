@@ -94,13 +94,13 @@ impl StorageBackend for GCSStorageBackend {
     ///
     /// Implementation note:
     ///
-    /// For a multi-writer safe backend, `rename_obj` needs to implement `atomic rename` semantic.
+    /// For a multi-writer safe backend, `rename_obj` needs to implement `rename if not exists` semantic.
     /// In other words, if the destination path already exists, rename should return a
     /// [StorageError::AlreadyExists] error.
-    async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError> {
+    async fn rename_obj_noreplace(&self, src: &str, dst: &str) -> Result<(), StorageError> {
         let src_uri = parse_uri(src)?.into_gcs_object()?;
         let dst_uri = parse_uri(dst)?.into_gcs_object()?;
-        match self.rename(src_uri, dst_uri).await {
+        match self.rename_noreplace(src_uri, dst_uri).await {
             Err(GCSClientError::PreconditionFailed) => {
                 return Err(StorageError::AlreadyExists(dst.to_string()))
             }

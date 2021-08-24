@@ -1044,7 +1044,7 @@ impl DeltaTable {
         // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
         self.storage
-            .rename_obj(&commit.uri, &self.commit_uri_from_version(version))
+            .rename_obj_noreplace(&commit.uri, &self.commit_uri_from_version(version))
             .await
             .map_err(|e| DeltaTableError::from(DeltaTransactionError::from(e)))?;
 

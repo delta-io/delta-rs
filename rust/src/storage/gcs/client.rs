@@ -120,7 +120,7 @@ impl GCSStorageBackend {
         Ok(())
     }
 
-    pub async fn rename<'a>(
+    pub async fn rename_noreplace<'a>(
         &self,
         src: GCSObject<'a>,
         dst: GCSObject<'a>,

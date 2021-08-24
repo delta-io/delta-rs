@@ -114,21 +114,19 @@ impl StorageBackend for FileStorageBackend {
         f.sync_all().await?;
         drop(f);
 
-        // atomic rename with swap=true only possible if both paths exists.
-        let swap = Path::new(path).exists();
-
-        match rename::atomic_rename(tmp_path, path, swap) {
+        // as temp path is transparent to end user, we could use syscall directly here
+        match fs::rename(tmp_path, path).await {
             Ok(_) => Ok(()),
             Err(e) => {
                 // If rename failed, clean up the temp file.
                 self.delete_obj(tmp_path).await?;
-                Err(e)
+                Err(StorageError::from(e))
             }
         }
     }
 
-    async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError> {
-        rename::atomic_rename(src, dst, false)
+    async fn rename_obj_noreplace(&self, src: &str, dst: &str) -> Result<(), StorageError> {
+        rename::rename_noreplace(src, dst)
     }
 
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
@@ -154,14 +152,14 @@ mod tests {
 
         // first try should result in successful rename
         backend.put_obj(tmp_file, b"hello").await.unwrap();
-        if let Err(e) = backend.rename_obj(tmp_file, new_file).await {
+        if let Err(e) = backend.rename_obj_noreplace(tmp_file, new_file).await {
             panic!("Expect put_obj to return Ok, got Err: {:#?}", e)
         }
 
         // second try should result in already exists error
         backend.put_obj(tmp_file, b"hello").await.unwrap();
         assert!(matches!(
-            backend.rename_obj(tmp_file, new_file).await,
+            backend.rename_obj_noreplace(tmp_file, new_file).await,
             Err(StorageError::AlreadyExists(s)) if s == new_file_path.to_str().unwrap(),
         ));
     }

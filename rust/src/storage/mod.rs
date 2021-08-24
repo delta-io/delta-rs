@@ -504,10 +504,10 @@ pub trait StorageBackend: Send + Sync + Debug {
     ///
     /// Implementation note:
     ///
-    /// For a multi-writer safe backend, `rename_obj` needs to implement `atomic rename` semantic.
+    /// For a multi-writer safe backend, `rename_obj_noreplace` needs to implement rename if not exists semantic.
     /// In other words, if the destination path already exists, rename should return a
     /// [StorageError::AlreadyExists] error.
-    async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError>;
+    async fn rename_obj_noreplace(&self, src: &str, dst: &str) -> Result<(), StorageError>;
 
     /// Deletes object by `path`.
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError>;
