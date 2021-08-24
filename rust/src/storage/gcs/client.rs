@@ -150,7 +150,7 @@ impl GCSStorageBackend {
             }
         }
 
-        Ok(())
+        self.delete(src).await
     }
 
     pub async fn delete<'a>(&self, uri: GCSObject<'a>) -> Result<(), GCSClientError> {
