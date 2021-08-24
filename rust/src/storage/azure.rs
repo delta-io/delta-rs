@@ -193,8 +193,8 @@ impl StorageBackend for AdlsGen2Backend {
         unimplemented!("put_obj not implemented for azure");
     }
 
-    async fn rename_obj(&self, _src: &str, _dst: &str) -> Result<(), StorageError> {
-        unimplemented!("rename_obj not implemented for azure");
+    async fn rename_obj_noreplace(&self, _src: &str, _dst: &str) -> Result<(), StorageError> {
+        unimplemented!("rename_obj_noreplace not implemented for azure");
     }
 
     async fn delete_obj(&self, _path: &str) -> Result<(), StorageError> {

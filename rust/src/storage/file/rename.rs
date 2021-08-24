@@ -4,7 +4,7 @@ use crate::StorageError;
 mod imp {
     use super::*;
 
-    pub fn rename_if_not_exists(from: &str, to: &str) -> Result<(), StorageError> {
+    pub fn rename_noreplace(from: &str, to: &str) -> Result<(), StorageError> {
         // doing best effort in windows since there is no native rename if not exists support
         let to_exists = std::fs::metadata(to).is_ok();
         if to_exists {
@@ -27,7 +27,7 @@ mod imp {
         CString::new(p).map_err(|e| StorageError::Generic(format!("{}", e)))
     }
 
-    pub fn rename_if_not_exists(from: &str, to: &str) -> Result<(), StorageError> {
+    pub fn rename_noreplace(from: &str, to: &str) -> Result<(), StorageError> {
         let cs_from = to_c_string(from)?;
         let cs_to = to_c_string(to)?;
         let ret = unsafe { platform_specific_rename(cs_from.as_ptr(), cs_to.as_ptr()) };
@@ -39,7 +39,7 @@ mod imp {
             }
             if let libc::EINVAL = e.0 {
                 return Err(StorageError::Generic(format!(
-                    "rename_if_not_exists failed with message '{}'",
+                    "rename_noreplace failed with message '{}'",
                     e
                 )));
             }
@@ -76,8 +76,8 @@ mod imp {
 /// Atomically renames `from` to `to`.
 /// `from` has to exist, but `to` is not, otherwise the operation will fail.
 #[inline]
-pub fn rename_if_not_exists(from: &str, to: &str) -> Result<(), StorageError> {
-    imp::rename_if_not_exists(from, to)
+pub fn rename_noreplace(from: &str, to: &str) -> Result<(), StorageError> {
+    imp::rename_noreplace(from, to)
 }
 
 #[cfg(test)]
@@ -88,14 +88,14 @@ mod tests {
     use std::path::{Path, PathBuf};
 
     #[test]
-    fn test_rename_if_not_exists() {
-        let tmp_dir = tempdir::TempDir::new_in(".", "test_rename_if_not_exists").unwrap();
+    fn test_rename_noreplace() {
+        let tmp_dir = tempdir::TempDir::new_in(".", "test_rename_noreplace").unwrap();
         let a = create_file(&tmp_dir.path(), "a");
         let b = create_file(&tmp_dir.path(), "b");
         let c = &tmp_dir.path().join("c");
 
         // unsuccessful move not_exists to C, not_exists is missing
-        match rename_if_not_exists("not_exists", c.to_str().unwrap()) {
+        match rename_noreplace("not_exists", c.to_str().unwrap()) {
             Err(StorageError::Io { source: e }) => {
                 cfg_if::cfg_if! {
                     if #[cfg(target_os = "windows")] {
@@ -124,8 +124,8 @@ mod tests {
         // successful move A to C
         assert!(a.exists());
         assert!(!c.exists());
-        match rename_if_not_exists(a.to_str().unwrap(), c.to_str().unwrap()) {
-            Err(StorageError::Generic(e)) if e == "rename_if_not_exists failed with message 'Invalid argument'" =>
+        match rename_noreplace(a.to_str().unwrap(), c.to_str().unwrap()) {
+            Err(StorageError::Generic(e)) if e == "rename_noreplace failed with message 'Invalid argument'" =>
                 panic!("expected success, got: {:?}. Note: atomically renaming Windows files from WSL2 is not supported.", e),
             Err(e) => panic!("expected success, got: {:?}", e),
             _ => {}
@@ -135,7 +135,7 @@ mod tests {
 
         // unsuccessful move B to C, C already exists, B is not deleted
         assert!(b.exists());
-        match rename_if_not_exists(b.to_str().unwrap(), c.to_str().unwrap()) {
+        match rename_noreplace(b.to_str().unwrap(), c.to_str().unwrap()) {
             Err(StorageError::AlreadyExists(p)) => assert_eq!(p, c.to_str().unwrap()),
             _ => panic!("unexpected"),
         }

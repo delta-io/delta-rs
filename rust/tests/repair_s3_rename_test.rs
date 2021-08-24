@@ -104,7 +104,7 @@ mod s3 {
     ) -> JoinHandle<Result<(), StorageError>> {
         tokio::spawn(async move {
             println!("rename({}, {}) started", &src, &dst);
-            let result = s3.rename_obj(&src, &dst).await;
+            let result = s3.rename_obj_noreplace(&src, &dst).await;
             println!("rename({}, {}) finished", &src, &dst);
             result
         })
