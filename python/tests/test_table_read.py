@@ -18,6 +18,17 @@ def test_read_simple_table_by_version_to_dict():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
 
+def test_load_with_datetime():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    dt.load_with_datetime("2020-05-01T00:47:31-07:00")
+    assert dt.version() == 0
+    dt.load_with_datetime("2020-05-02T22:47:31-07:00")
+    assert dt.version() == 1
+    dt.load_with_datetime("2020-05-25T22:47:31-07:00")
+    assert dt.version() == 4
+
+
 def test_read_simple_table_update_incremental():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path, version=0)

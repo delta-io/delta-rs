@@ -152,6 +152,14 @@ class DeltaTable:
         """
         self._table.load_version(version)
 
+    def load_with_datetime(self, ds: str) -> None:
+        """
+        Time travel Delta table to latest version that's created at or before provided `ds` argument.
+
+        :param ds: the identifier of the datetime point of the DeltaTable to load
+        """
+        self._table.load_with_datetime(ds)
+
     def schema(self) -> Schema:
         """
         Get the current schema of the DeltaTable.
