@@ -2,6 +2,7 @@ from threading import Barrier, Thread
 
 import pandas as pd
 import pytest
+from pyarrow.fs import LocalFileSystem
 
 from deltalake import DeltaTable, Metadata
 
@@ -11,12 +12,10 @@ def test_read_simple_table_to_dict():
     dt = DeltaTable(table_path)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
 
-
 def test_read_simple_table_by_version_to_dict():
     table_path = "../rust/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
-
 
 def test_read_simple_table_update_incremental():
     table_path = "../rust/tests/data/simple_table"
@@ -177,6 +176,12 @@ def test_delta_table_to_pandas():
     dt = DeltaTable(table_path)
     assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
 
+
+def test_delta_table_with_filesystem():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    filesystem = LocalFileSystem()
+    assert dt.to_pandas(filesystem=filesystem).equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 class ExcPassThroughThread(Thread):
     """Wrapper around `threading.Thread` that propagates exceptions."""
