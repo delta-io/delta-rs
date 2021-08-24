@@ -112,9 +112,7 @@ jobs:
 
     - name: Build and install deltalake
       run: |
-        make setup
-        maturin build --manylinux off
-        pip install $(printf ../target/wheels/deltalake-*-cp36-abi3-*.whl)'[devel,pandas]'
+        make install MATURIN_EXTRA_ARGS="--manylinux off"
 
     - name: Build Sphinx documentation
       run: |
