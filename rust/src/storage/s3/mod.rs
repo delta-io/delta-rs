@@ -395,7 +395,7 @@ impl StorageBackend for S3StorageBackend {
         Ok(())
     }
 
-    async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError> {
+    async fn rename_obj_noreplace(&self, src: &str, dst: &str) -> Result<(), StorageError> {
         debug!("rename s3 object: {} -> {}...", src, dst);
 
         let lock_client = match self.lock_client {
