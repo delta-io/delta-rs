@@ -39,10 +39,16 @@ $ source ./venv/bin/activate
 
 [maturin](https://github.com/PyO3/maturin) is used to build the python package.
 
-To install development version of the package into your current Python environment:
+First, install the package into your current Python environment
 
 ```bash
-$ make develop
+$ make install
+```
+
+Then, list all the available tasks
+
+```bash
+$ make help
 ```
 
 Build manylinux wheels

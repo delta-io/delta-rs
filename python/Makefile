@@ -3,7 +3,6 @@
 VENV := venv
 MATURIN_VERSION := $(shell awk -F '[ ="]+' '$$1 == "requires" { print $$4 }' pyproject.toml)
 PACKAGE_VERSION := $(shell cargo pkgid | cut -d\# -f2 | cut -d: -f2)
-TARGET_WHEEL := $(shell ls ../target/wheels/deltalake-${PACKAGE_VERSION}-*.whl)
 
 .PHONY: setup-venv
 setup-venv: ## Setup the virtualenv
@@ -15,10 +14,15 @@ setup: ## Setup the requirements
 	$(info --- Setup dependencies ---)
 	pip install maturin==$(MATURIN_VERSION)
 
-.PHONY: develop
-develop: setup ## Install Python binding of delta-rs
-	$(info --- Maturin build ---)
-	maturin build
+.PHONY: build
+build: setup ## Build Python binding of delta-rs
+	$(info --- Build Python binding ---)
+	maturin build $(MATURIN_EXTRA_ARGS)
+
+.PHONY: install
+install: build ## Install Python binding of delta-rs
+	$(info --- Install Python binding ---)
+	$(eval TARGET_WHEEL := $(shell ls ../target/wheels/deltalake-${PACKAGE_VERSION}-*.whl))
 	pip install $(TARGET_WHEEL)[devel,pandas]
 
 .PHONY: format
