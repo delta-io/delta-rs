@@ -57,11 +57,8 @@ jobs:
 
     - name: Build and install deltalake
       run: |
-        make setup
         # disable manylinux audit checks for test builds
-        maturin build --manylinux off
-        ls -lh ../target/wheels
-        pip install $(printf ../target/wheels/deltalake-*-cp36-abi3-*.whl)'[devel,pandas]'
+        make install MATURIN_EXTRA_ARGS="--manylinux off"
 
     - name: Run tests
       run: make unit-test
