@@ -1,6 +1,7 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
 use serde::{Deserialize, Serialize};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Type alias for a string expected to match a GUID/UUID format
@@ -14,16 +15,25 @@ pub type DeltaDataTypeTimestamp = DeltaDataTypeLong;
 /// Type alias for i32/Delta int
 pub type DeltaDataTypeInt = i32;
 
+static STRUCT_TAG: &'static str = "struct";
 /// Represents a struct field defined in the Delta table schema.
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
 #[derive(Serialize, Deserialize, PartialEq, Debug, Default, Clone)]
 pub struct SchemaTypeStruct {
-    // type field is always the string "struct", so we are ignoring it here
-    r#type: String,
+    r#type: Cow<'static, str>,
     fields: Vec<SchemaField>,
 }
 
 impl SchemaTypeStruct {
+    /// Create a new Schema using a vector of SchemaFields
+    pub fn new(fields: Vec<SchemaField>) -> Self {
+        let tag = Cow::Borrowed(STRUCT_TAG);
+        Self {
+            r#type: tag,
+            fields,
+        }
+    }
+
     /// Returns the list of fields contained within the column struct.
     pub fn get_fields(&self) -> &Vec<SchemaField> {
         &self.fields
@@ -162,20 +172,4 @@ pub enum SchemaDataType {
 }
 
 /// Represents the schema of the delta table.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
-pub struct Schema {
-    r#type: String,
-    fields: Vec<SchemaField>,
-}
-
-impl Schema {
-    /// Returns the list of fields that make up the schema definition of the table.
-    pub fn get_fields(&self) -> &Vec<SchemaField> {
-        &self.fields
-    }
-
-    /// Create a new Schema using a vector of SchemaFields
-    pub fn new(r#type: String, fields: Vec<SchemaField>) -> Self {
-        Self { r#type, fields }
-    }
-}
+pub type Schema = SchemaTypeStruct;
