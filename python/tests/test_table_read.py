@@ -1,7 +1,7 @@
-from threading import Barrier, Thread
-from datetime import datetime
-
 import os
+from datetime import datetime
+from threading import Barrier, Thread
+
 import pandas as pd
 import pytest
 
