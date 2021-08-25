@@ -1,5 +1,4 @@
 import os
-from datetime import datetime
 from threading import Barrier, Thread
 
 import pandas as pd
@@ -23,14 +22,13 @@ def test_read_simple_table_by_version_to_dict():
 def test_load_with_datetime():
     log_dir = "../rust/tests/data/simple_table/_delta_log"
     log_mtime_pair = [
-        ("00000000000000000000.json", "2020-05-01T22:47:31-07:00"),
-        ("00000000000000000001.json", "2020-05-02T22:47:31-07:00"),
-        ("00000000000000000002.json", "2020-05-03T22:47:31-07:00"),
-        ("00000000000000000003.json", "2020-05-04T22:47:31-07:00"),
-        ("00000000000000000004.json", "2020-05-05T22:47:31-07:00"),
+        ("00000000000000000000.json", 1588398451.0),
+        ("00000000000000000001.json", 1588484851.0),
+        ("00000000000000000002.json", 1588571251.0),
+        ("00000000000000000003.json", 1588657651.0),
+        ("00000000000000000004.json", 1588744051.0),
     ]
-    for file_name, date_str in log_mtime_pair:
-        dt_epoch = datetime.fromisoformat(date_str).timestamp()
+    for file_name, dt_epoch in log_mtime_pair:
         file_path = os.path.join(log_dir, file_name)
         os.utime(file_path, (dt_epoch, dt_epoch))
 
