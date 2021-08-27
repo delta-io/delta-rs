@@ -155,7 +155,7 @@ class DeltaTable:
     def load_with_datetime(self, datetime_string: str) -> None:
         """
         Time travel Delta table to the latest version that's created at or before provided `datetime_string` argument.
-        The `timestamp_string` argument should be an RFC 3339 and ISO 8601 date and time string.
+        The `datetime_string` argument should be an RFC 3339 and ISO 8601 date and time string.
 
         Examples:
         `2018-01-26T18:30:09Z`
