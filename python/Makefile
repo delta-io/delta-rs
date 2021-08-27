@@ -21,6 +21,8 @@ build: setup ## Build Python binding of delta-rs
 
 .PHONY: install
 install: build ## Install Python binding of delta-rs
+	$(info --- Uninstall Python binding ---)
+	pip uninstall -y deltalake
 	$(info --- Install Python binding ---)
 	$(eval TARGET_WHEEL := $(shell ls ../target/wheels/deltalake-${PACKAGE_VERSION}-*.whl))
 	pip install $(TARGET_WHEEL)[devel,pandas]

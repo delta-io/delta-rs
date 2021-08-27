@@ -1,3 +1,4 @@
+import os
 from threading import Barrier, Thread
 
 import pandas as pd
@@ -16,6 +17,52 @@ def test_read_simple_table_by_version_to_dict():
     table_path = "../rust/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2)
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
+
+
+def test_load_with_datetime():
+    log_dir = "../rust/tests/data/simple_table/_delta_log"
+    log_mtime_pair = [
+        ("00000000000000000000.json", 1588398451.0),
+        ("00000000000000000001.json", 1588484851.0),
+        ("00000000000000000002.json", 1588571251.0),
+        ("00000000000000000003.json", 1588657651.0),
+        ("00000000000000000004.json", 1588744051.0),
+    ]
+    for file_name, dt_epoch in log_mtime_pair:
+        file_path = os.path.join(log_dir, file_name)
+        os.utime(file_path, (dt_epoch, dt_epoch))
+
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    dt.load_with_datetime("2020-05-01T00:47:31-07:00")
+    assert dt.version() == 0
+    dt.load_with_datetime("2020-05-02T22:47:31-07:00")
+    assert dt.version() == 1
+    dt.load_with_datetime("2020-05-25T22:47:31-07:00")
+    assert dt.version() == 4
+
+
+def test_load_with_datetime_bad_format():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    with pytest.raises(Exception) as exception:
+        dt.load_with_datetime("2020-05-01T00:47:31")
+    assert (
+        str(exception.value)
+        == "Parse date and time string failed: premature end of input"
+    )
+    with pytest.raises(Exception) as exception:
+        dt.load_with_datetime("2020-05-01 00:47:31")
+    assert (
+        str(exception.value)
+        == "Parse date and time string failed: input contains invalid characters"
+    )
+    with pytest.raises(Exception) as exception:
+        dt.load_with_datetime("2020-05-01T00:47:31+08")
+    assert (
+        str(exception.value)
+        == "Parse date and time string failed: premature end of input"
+    )
 
 
 def test_read_simple_table_update_incremental():
