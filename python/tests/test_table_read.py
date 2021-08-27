@@ -42,6 +42,29 @@ def test_load_with_datetime():
     assert dt.version() == 4
 
 
+def test_load_with_datetime_bad_format():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    with pytest.raises(Exception) as exception:
+        dt.load_with_datetime("2020-05-01T00:47:31")
+    assert (
+        str(exception.value)
+        == "Parse date and time string failed: premature end of input"
+    )
+    with pytest.raises(Exception) as exception:
+        dt.load_with_datetime("2020-05-01 00:47:31")
+    assert (
+        str(exception.value)
+        == "Parse date and time string failed: premature end of input"
+    )
+    with pytest.raises(Exception) as exception:
+        dt.load_with_datetime("2020-05-01 00:47:31Z")
+    assert (
+        str(exception.value)
+        == "Parse date and time string failed: premature end of input"
+    )
+
+
 def test_read_simple_table_update_incremental():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path, version=0)

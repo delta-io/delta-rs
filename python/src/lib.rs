@@ -28,7 +28,10 @@ impl PyDeltaTableError {
     }
 
     fn from_chrono(err: chrono::ParseError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(err.to_string())
+        PyDeltaTableError::new_err(format!(
+            "Parse date and time string failed: {}",
+            err.to_string()
+        ))
     }
 }
 
