@@ -55,10 +55,10 @@ def test_load_with_datetime_bad_format():
         dt.load_with_datetime("2020-05-01 00:47:31")
     assert (
         str(exception.value)
-        == "Parse date and time string failed: premature end of input"
+        == "Parse date and time string failed: input contains invalid characters"
     )
     with pytest.raises(Exception) as exception:
-        dt.load_with_datetime("2020-05-01 00:47:31Z")
+        dt.load_with_datetime("2020-05-01T00:47:31+08")
     assert (
         str(exception.value)
         == "Parse date and time string failed: premature end of input"
