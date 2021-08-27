@@ -4,6 +4,7 @@ extern crate arrow;
 extern crate pyo3;
 
 use arrow::datatypes::Schema as ArrowSchema;
+use chrono::{DateTime, FixedOffset, Utc};
 use deltalake::partitions::PartitionFilter;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -24,6 +25,13 @@ impl PyDeltaTableError {
 
     fn from_tokio(err: tokio::io::Error) -> pyo3::PyErr {
         PyDeltaTableError::new_err(err.to_string())
+    }
+
+    fn from_chrono(err: chrono::ParseError) -> pyo3::PyErr {
+        PyDeltaTableError::new_err(format!(
+            "Parse date and time string failed: {}",
+            err.to_string()
+        ))
     }
 }
 
@@ -97,6 +105,16 @@ impl RawDeltaTable {
     pub fn load_version(&mut self, version: deltalake::DeltaDataTypeVersion) -> PyResult<()> {
         rt()?
             .block_on(self._table.load_version(version))
+            .map_err(PyDeltaTableError::from_raw)
+    }
+
+    pub fn load_with_datetime(&mut self, ds: &str) -> PyResult<()> {
+        let datetime = DateTime::<Utc>::from(
+            DateTime::<FixedOffset>::parse_from_rfc3339(ds)
+                .map_err(PyDeltaTableError::from_chrono)?,
+        );
+        rt()?
+            .block_on(self._table.load_with_datetime(datetime))
             .map_err(PyDeltaTableError::from_raw)
     }
 

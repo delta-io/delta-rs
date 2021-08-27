@@ -152,6 +152,20 @@ class DeltaTable:
         """
         self._table.load_version(version)
 
+    def load_with_datetime(self, datetime_string: str) -> None:
+        """
+        Time travel Delta table to the latest version that's created at or before provided `datetime_string` argument.
+        The `datetime_string` argument should be an RFC 3339 and ISO 8601 date and time string.
+
+        Examples:
+        `2018-01-26T18:30:09Z`
+        `2018-12-19T16:39:57-08:00`
+        `2018-01-26T18:30:09.453+00:00`
+
+        :param datetime_string: the identifier of the datetime point of the DeltaTable to load
+        """
+        self._table.load_with_datetime(datetime_string)
+
     def schema(self) -> Schema:
         """
         Get the current schema of the DeltaTable.
