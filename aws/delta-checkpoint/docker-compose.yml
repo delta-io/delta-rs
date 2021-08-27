@@ -10,7 +10,7 @@ networks:
 
 services:
   localstack:
-    image: localstack/localstack
+    image: localstack/localstack:0.12.11
     ports:
       - "4566:4566"
       - "${PORT_WEB_UI-8080}:${PORT_WEB_UI-8080}"
@@ -29,7 +29,7 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock"
 
   setup:
-    image: localstack/localstack
+    image: localstack/localstack:0.12.11
     depends_on:
       - localstack
     entrypoint: "/bin/bash"

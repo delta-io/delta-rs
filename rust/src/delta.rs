@@ -184,6 +184,15 @@ pub enum DeltaTableError {
     /// Generic Delta Table error
     #[error("Generic DeltaTable error: {0}")]
     Generic(String),
+
+    /// Error that wraps an underlying DeltaTransaction error.
+    /// The wrapped error describes the specific cause.
+    #[error("Delta transaction failed: {source}")]
+    TransactionError {
+        /// The wrapped DeltaTransaction error.
+        #[from]
+        source: DeltaTransactionError,
+    },
 }
 
 /// Delta table metadata
@@ -426,7 +435,7 @@ pub struct DeltaTable {
 
     // metadata
     // application_transactions
-    storage: Box<dyn StorageBackend>,
+    pub(crate) storage: Box<dyn StorageBackend>,
 
     last_check_point: Option<CheckPoint>,
     log_uri: String,
@@ -1036,12 +1045,13 @@ impl DeltaTable {
         &mut self,
         commit: &PreparedCommit,
         version: DeltaDataTypeVersion,
-    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
         self.storage
             .rename_obj(&commit.uri, &self.commit_uri_from_version(version))
-            .await?;
+            .await
+            .map_err(|e| DeltaTableError::from(DeltaTransactionError::from(e)))?;
 
         // NOTE: since we have the log entry in memory already,
         // we could optimize this further by merging the log entry instead of updating from storage.
@@ -1071,16 +1081,38 @@ impl DeltaTable {
         })
     }
 
-    /// Create a DeltaTable with version 0 given the provided MetaData and Protocol
+    /// Create a DeltaTable with version 0 given the provided MetaData, Protocol, and CommitInfo
     pub async fn create(
         &mut self,
         metadata: DeltaTableMetaData,
         protocol: action::Protocol,
-    ) -> Result<(), DeltaTransactionError> {
+        commit_info: Option<Value>,
+    ) -> Result<(), DeltaTableError> {
         let meta = action::MetaData::try_from(metadata)?;
 
-        // TODO add commit info action
-        let actions = vec![Action::protocol(protocol), Action::metaData(meta)];
+        // delta-rs commit info will include the delta-rs version and timestamp as of now
+        let mut enriched_commit_info = match commit_info {
+            Some(Value::Object(map)) => Ok(map),
+            Some(_) => Err(DeltaTableError::Generic(
+                "Expected a json object".to_string(),
+            )),
+            None => Ok(serde_json::Map::new()),
+        }?;
+        enriched_commit_info.insert(
+            "delta-rs".to_string(),
+            Value::String(crate_version().to_string()),
+        );
+        enriched_commit_info.insert(
+            "timestamp".to_string(),
+            Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
+        );
+
+        let actions = vec![
+            Action::commitInfo(Value::Object(enriched_commit_info)),
+            Action::protocol(protocol),
+            Action::metaData(meta),
+        ];
+
         let mut transaction = self.create_transaction(None);
         transaction.add_actions(actions.clone());
 
@@ -1186,15 +1218,6 @@ pub enum DeltaTransactionError {
     Storage {
         /// The wrapped StorageError.
         source: StorageError,
-    },
-
-    /// Error that wraps an underlying DeltaTable error.
-    /// The wrapped error describes the specific cause.
-    #[error("DeltaTable interaction failed: {source}")]
-    DeltaTable {
-        /// The wrapped DeltaTable error.
-        #[from]
-        source: DeltaTableError,
     },
 
     /// Error caused by a problem while using serde_json to serialize an action.
@@ -1364,7 +1387,7 @@ impl<'a> DeltaTransaction<'a> {
     pub async fn commit(
         &mut self,
         _operation: Option<DeltaOperation>,
-    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action), but leaving it unused for now.
         // `CommitInfo` is a fairly dynamic data structure so we should work out the data structure approach separately.
 
@@ -1421,7 +1444,7 @@ impl<'a> DeltaTransaction<'a> {
     async fn try_commit_loop(
         &mut self,
         commit: &PreparedCommit,
-    ) -> Result<DeltaDataTypeVersion, DeltaTransactionError> {
+    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         let mut attempt_number: u32 = 0;
         loop {
             self.delta_table.update_incremental().await?;
@@ -1438,15 +1461,16 @@ impl<'a> DeltaTransaction<'a> {
                 }
                 Err(e) => {
                     match e {
-                        DeltaTransactionError::VersionAlreadyExists { .. }
-                            if attempt_number > self.options.max_retry_commit_attempts + 1 =>
-                        {
-                            debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
-                            return Err(e);
-                        }
-                        DeltaTransactionError::VersionAlreadyExists { .. } => {
-                            attempt_number += 1;
-                            debug!("Transaction attempt failed. Incrementing attempt number to {} and retrying.", attempt_number);
+                        DeltaTableError::TransactionError {
+                            source: DeltaTransactionError::VersionAlreadyExists { .. },
+                        } => {
+                            if attempt_number > self.options.max_retry_commit_attempts + 1 {
+                                debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
+                                return Err(e);
+                            } else {
+                                attempt_number += 1;
+                                debug!("Transaction attempt failed. Incrementing attempt number to {} and retrying.", attempt_number);
+                            }
                         }
                         // NOTE: Add other retryable errors as needed here
                         _ => {
@@ -1684,8 +1708,11 @@ mod tests {
         ));
         let mut dt = DeltaTable::new(path, backend).unwrap();
 
+        let commit_info = json!({"operation": "CREATE TABLE", "userName": "test user"});
         // Action
-        dt.create(delta_md.clone(), protocol.clone()).await.unwrap();
+        dt.create(delta_md.clone(), protocol.clone(), Some(commit_info))
+            .await
+            .unwrap();
 
         // Validation
         // assert DeltaTable version is now 0 and no data files have been added
@@ -1714,6 +1741,20 @@ mod tests {
                 }
                 Action::metaData(action) => {
                     assert_eq!(DeltaTableMetaData::try_from(action).unwrap(), delta_md);
+                }
+                Action::commitInfo(mut action) => {
+                    let modified_action = if action.is_object() {
+                        let temp = action.as_object_mut().unwrap();
+                        temp["timestamp"] = Value::Number(serde_json::Number::from(0i64));
+                        Some(Value::Object(temp.clone()))
+                    } else {
+                        None
+                    };
+
+                    assert_eq!(
+                        modified_action.unwrap(),
+                        json!({"operation": "CREATE TABLE", "userName": "test user", "delta-rs": crate_version().to_string(), "timestamp": 0i64})
+                    )
                 }
                 _ => (),
             }

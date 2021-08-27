@@ -11,7 +11,7 @@ async fn main() -> anyhow::Result<()> {
         .version(env!("CARGO_PKG_VERSION"))
         .about("Utility to help inspect Delta talebs")
         .setting(AppSettings::SubcommandRequiredElseHelp)
-        .setting(AppSettings::VersionlessSubcommands)
+        .setting(AppSettings::DisableVersionForSubcommands)
         .subcommand(
             App::new("info")
                 .about("dump table metadata info")

@@ -1,7 +1,6 @@
 extern crate deltalake;
 
-use deltalake::checkpoints::CheckPointWriter;
-use deltalake::storage;
+use deltalake::checkpoints;
 use std::fs;
 use std::path::{Path, PathBuf};
 
@@ -23,10 +22,7 @@ async fn write_simple_checkpoint() {
         .unwrap();
 
     // Write a checkpoint
-    let storage_backend = storage::get_backend_for_uri(table_location).unwrap();
-    let checkpoint_writer = CheckPointWriter::new(table_location, storage_backend);
-    let _ = checkpoint_writer
-        .create_checkpoint_from_state(table.version, table.get_state())
+    checkpoints::create_checkpoint_from_table(&table)
         .await
         .unwrap();
 
@@ -38,10 +34,8 @@ async fn write_simple_checkpoint() {
     let version = get_last_checkpoint_version(&log_path);
     assert_eq!(5, version);
 
-    // Setting table version to 10 for another checkpoint
     table.load_version(10).await.unwrap();
-    checkpoint_writer
-        .create_checkpoint_from_state(table.version, table.get_state())
+    checkpoints::create_checkpoint_from_table(&table)
         .await
         .unwrap();
 
@@ -57,7 +51,7 @@ async fn write_simple_checkpoint() {
     let table_result = deltalake::open_table(table_location).await.unwrap();
     let table = table_result;
     let files = table.get_files();
-    assert_eq!(11, files.len());
+    assert_eq!(12, files.len());
 }
 
 fn get_last_checkpoint_version(log_path: &PathBuf) -> i64 {

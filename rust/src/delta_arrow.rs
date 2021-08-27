@@ -114,7 +114,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                     }
                     "timestamp" => {
                         // Issue: https://github.com/delta-io/delta/issues/643
-                        Ok(ArrowDataType::Timestamp(TimeUnit::Nanosecond, None))
+                        Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
                     }
                     s => Err(ArrowError::SchemaError(format!(
                         "Invalid data type for Arrow: {}",
@@ -183,6 +183,21 @@ pub(crate) fn delta_log_schema_for_table(
                             ArrowDataType::Utf8,
                             true
                         ))),
+                        true
+                    ),
+                    ArrowField::new(
+                        "configuration",
+                        ArrowDataType::Map(
+                            Box::new(ArrowField::new(
+                                "key_value",
+                                ArrowDataType::Struct(vec![
+                                    ArrowField::new("key", ArrowDataType::Utf8, false),
+                                    ArrowField::new("value", ArrowDataType::Utf8, true),
+                                ]),
+                                false
+                            )),
+                            false
+                        ),
                         true
                     ),
                     ArrowField::new(
@@ -317,13 +332,25 @@ pub(crate) fn delta_log_schema_for_table(
         vec![ArrowField::new("numRecords", ArrowDataType::Int64, true)];
 
     if !non_partition_fields.is_empty() {
-        stats_parsed_fields.extend(["minValues", "maxValues", "nullCount"].iter().map(|name| {
-            ArrowField::new(
-                name,
-                ArrowDataType::Struct(non_partition_fields.clone()),
-                true,
-            )
-        }));
+        let mut max_min_vec = Vec::new();
+        non_partition_fields
+            .iter()
+            .for_each(|f| max_min_schema_for_fields(&mut max_min_vec, f));
+
+        stats_parsed_fields.extend(
+            ["minValues", "maxValues"].iter().map(|name| {
+                ArrowField::new(name, ArrowDataType::Struct(max_min_vec.clone()), true)
+            }),
+        );
+
+        let mut null_count_vec = Vec::new();
+        non_partition_fields
+            .iter()
+            .for_each(|f| null_count_schema_for_fields(&mut null_count_vec, f));
+        let null_count_struct =
+            ArrowField::new("nullCount", ArrowDataType::Struct(null_count_vec), true);
+
+        stats_parsed_fields.push(null_count_struct);
     }
 
     let mut add_fields = ADD_FIELDS.clone();
@@ -352,6 +379,52 @@ pub(crate) fn delta_log_schema_for_table(
     let arrow_schema = ArrowSchema::new(schema_fields);
 
     std::sync::Arc::new(arrow_schema)
+}
+
+fn max_min_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
+    match f.data_type() {
+        ArrowDataType::Struct(struct_fields) => {
+            let mut child_dest = Vec::new();
+
+            for f in struct_fields {
+                max_min_schema_for_fields(&mut child_dest, f);
+            }
+
+            dest.push(ArrowField::new(
+                f.name(),
+                ArrowDataType::Struct(child_dest),
+                true,
+            ));
+        }
+        // don't compute min or max for list or map types
+        ArrowDataType::List(_) | ArrowDataType::Map(_, _) => { /* noop */ }
+        _ => {
+            let f = f.clone();
+            dest.push(f);
+        }
+    }
+}
+
+fn null_count_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
+    match f.data_type() {
+        ArrowDataType::Struct(struct_fields) => {
+            let mut child_dest = Vec::new();
+
+            for f in struct_fields {
+                null_count_schema_for_fields(&mut child_dest, f);
+            }
+
+            dest.push(ArrowField::new(
+                f.name(),
+                ArrowDataType::Struct(child_dest),
+                true,
+            ));
+        }
+        _ => {
+            let f = ArrowField::new(f.name(), ArrowDataType::Int64, true);
+            dest.push(f);
+        }
+    }
 }
 
 #[cfg(test)]
@@ -419,7 +492,12 @@ mod tests {
                         ArrowDataType::Struct(fields) => {
                             assert_eq!(1, fields.len());
                             let field = fields.get(0).unwrap().to_owned();
-                            assert_eq!(ArrowField::new("col1", ArrowDataType::Int32, true), field);
+                            let data_type = if k == "nullCount" {
+                                ArrowDataType::Int64
+                            } else {
+                                ArrowDataType::Int32
+                            };
+                            assert_eq!(ArrowField::new("col1", data_type, true), field);
                         }
                         _ => unreachable!(),
                     },

@@ -20,7 +20,7 @@ env_logger = "0"
 # for binary wheel best practice, statically link openssl
 reqwest = { version = "*", features = ["native-tls-vendored"] }
 serde_json = "1"
-arrow = { git = "https://github.com/apache/arrow-rs.git", rev= "fa5acd971c973161f17e69d5c6b50d6e77c7da03" }
+arrow  = { git = "https://github.com/apache/arrow-rs", rev = "fa5acd971c973161f17e69d5c6b50d6e77c7da03" }
 
 [dependencies.pyo3]
 version = "0.14"
@@ -31,29 +31,3 @@ path = "../rust"
 version = "0"
 features = ["s3", "azure"]
 
-[package.metadata.maturin]
-name = "deltalake"
-requires-python = ">=3.6"
-classifier = [
-    "Development Status :: 3 - Alpha",
-    "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3 :: Only"
-]
-project-url = { Repo = "https://github.com/delta-io/delta-rs", Documentation = "https://delta-io.github.io/delta-rs/python/", "Bug Tracker" = "https://github.com/delta-io/delta-rs/issues" }
-requires-dist = [
-    "pyarrow>=4",
-    'numpy<1.20.0;python_version<="3.6"',
-    'dataclasses;python_version<="3.6"',
-    'types-dataclasses;python_version<="3.6" and extra == "pandas"',
-    "pandas; extra == 'pandas' or extra == 'devel'",
-    "mypy; extra == 'devel'",
-    "isort; extra == 'devel'",
-    "pytest; extra == 'devel'",
-    "pytest-mock; extra == 'devel'",
-    "pytest-cov; extra == 'devel'",
-    "pytest-timeout; extra == 'devel'",
-    "sphinx; extra == 'devel'",
-    "sphinx-rtd-theme; extra == 'devel'",
-    "toml; extra == 'devel'",
-]
-provides-extra = ["pandas", "devel"]
