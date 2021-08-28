@@ -3,6 +3,7 @@ from threading import Barrier, Thread
 
 import pandas as pd
 import pytest
+from pyarrow.fs import LocalFileSystem
 
 from deltalake import DeltaTable, Metadata
 
@@ -48,20 +49,20 @@ def test_load_with_datetime_bad_format():
     with pytest.raises(Exception) as exception:
         dt.load_with_datetime("2020-05-01T00:47:31")
     assert (
-        str(exception.value)
-        == "Parse date and time string failed: premature end of input"
+            str(exception.value)
+            == "Parse date and time string failed: premature end of input"
     )
     with pytest.raises(Exception) as exception:
         dt.load_with_datetime("2020-05-01 00:47:31")
     assert (
-        str(exception.value)
-        == "Parse date and time string failed: input contains invalid characters"
+            str(exception.value)
+            == "Parse date and time string failed: input contains invalid characters"
     )
     with pytest.raises(Exception) as exception:
         dt.load_with_datetime("2020-05-01T00:47:31+08")
     assert (
-        str(exception.value)
-        == "Parse date and time string failed: premature end of input"
+            str(exception.value)
+            == "Parse date and time string failed: premature end of input"
     )
 
 
@@ -115,8 +116,8 @@ def test_read_table_with_column_subset():
         "day": ["1", "3", "5", "20", "20", "4", "5"],
     }
     assert (
-        dt.to_pyarrow_dataset().to_table(columns=["value", "day"]).to_pydict()
-        == expected
+            dt.to_pyarrow_dataset().to_table(columns=["value", "day"]).to_pydict()
+            == expected
     )
 
 
@@ -142,8 +143,8 @@ def test_vacuum_dry_run_simple_table():
     with pytest.raises(Exception) as exception:
         dt.vacuum(retention_periods)
     assert (
-        str(exception.value)
-        == "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
+            str(exception.value)
+            == "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
     )
 
 
@@ -195,24 +196,24 @@ def test_get_files_partitioned_table():
     with pytest.raises(Exception) as exception:
         dt.files_by_partitions(partition_filters=partition_filters)
     assert (
-        str(exception.value)
-        == 'Invalid partition filter found: ("invalid_operation", "=>", "3").'
+            str(exception.value)
+            == 'Invalid partition filter found: ("invalid_operation", "=>", "3").'
     )
 
     partition_filters = [("invalid_operation", "=", ["3", "20"])]
     with pytest.raises(Exception) as exception:
         dt.files_by_partitions(partition_filters=partition_filters)
     assert (
-        str(exception.value)
-        == 'Invalid partition filter found: ("invalid_operation", "=", ["3", "20"]).'
+            str(exception.value)
+            == 'Invalid partition filter found: ("invalid_operation", "=", ["3", "20"]).'
     )
 
     partition_filters = [("day", "=", 3)]
     with pytest.raises(Exception) as exception:
         dt.files_by_partitions(partition_filters=partition_filters)
     assert (
-        str(exception.value)
-        == "Only the type String is currently allowed inside the partition filters."
+            str(exception.value)
+            == "Only the type String is currently allowed inside the partition filters."
     )
 
     partition_filters = [("unknown", "=", "3")]
@@ -223,6 +224,13 @@ def test_delta_table_to_pandas():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
     assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
+
+
+def test_delta_table_with_filesystem():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    filesystem = LocalFileSystem()
+    assert dt.to_pandas(filesystem=filesystem).equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 
 class ExcPassThroughThread(Thread):
