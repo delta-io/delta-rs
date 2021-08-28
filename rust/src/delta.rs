@@ -1099,8 +1099,8 @@ impl DeltaTable {
         Ok(())
     }
 
-    /// Time travel Delta table to latest version that's created at or before provided `datetime`
-    /// argument.
+    /// Time travel Delta table to the latest version that's created at or before provided
+    /// `datetime` argument.
     ///
     /// Internally, this methods performs a binary search on all Delta transaction logs.
     pub async fn load_with_datetime(
