@@ -191,7 +191,7 @@ class DeltaTable:
         return pyarrow_schema_from_json(self._table.arrow_schema_json())
 
     def to_pyarrow_dataset(
-        self, partitions: Optional[List[Tuple[str, str, Any]]] = None, filesystem: FileSystem = None
+        self, partitions: Optional[List[Tuple[str, str, Any]]] = None, filesystem: Optional[FileSystem] = None
     ) -> pyarrow.dataset.Dataset:
         """
         Build a PyArrow Dataset using data from the DeltaTable.
@@ -251,7 +251,7 @@ class DeltaTable:
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
-        filesystem: FileSystem = None
+        filesystem: Optional[FileSystem] = None
     ) -> pyarrow.Table:
         """
         Build a PyArrow Table using data from the DeltaTable.
@@ -267,7 +267,7 @@ class DeltaTable:
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
-        filesystem: FileSystem = None
+        filesystem: Optional[FileSystem] = None
     ) -> "pandas.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
