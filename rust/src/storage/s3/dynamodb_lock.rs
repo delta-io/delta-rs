@@ -66,7 +66,7 @@ impl Default for DynamoDbOptions {
 
 impl DynamoDbOptions {
     /// Creates a new DynamoDb options from the given map.
-    /// Keys not present in the environment are taken from the environment variable.
+    /// Keys not present in the map are taken from the environment variable.
     pub fn from_map(options: &HashMap<String, String>) -> Self {
         fn str_opt(map: &HashMap<String, String>, key: &str, default: String) -> String {
             map.get(key)
