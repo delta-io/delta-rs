@@ -542,6 +542,9 @@ pub struct Remove {
     /// example, since it adds and removes files by combining many files into one.
     pub data_change: bool,
     /// When true the fields partitionValues, size, and tags are present
+    ///
+    /// NOTE: Although it's defined as required in scala delta implementation, but some writes
+    /// it's still nullable so we keep it as Option<> for compatibly.
     pub extended_file_metadata: Option<bool>,
     /// A map from partition column to value for this file.
     pub partition_values: Option<HashMap<String, Option<String>>>,
@@ -571,9 +574,7 @@ impl Remove {
                         .map_err(|_| gen_action_type_error("remove", "dataChange", "bool"))?;
                 }
                 "extendedFileMetadata" => {
-                    re.extended_file_metadata = Some(record.get_bool(i).map_err(|_| {
-                        gen_action_type_error("remove", "extendedFileMetadata", "bool")
-                    })?);
+                    re.extended_file_metadata = record.get_bool(i).map(Some).unwrap_or(None);
                 }
                 "deletionTimestamp" => {
                     re.deletion_timestamp = record.get_long(i).map_err(|_| {
@@ -617,11 +618,7 @@ impl Remove {
                     }
                 },
                 "size" => {
-                    re.size = Some(
-                        record
-                            .get_long(i)
-                            .map_err(|_| gen_action_type_error("remove", "size", "long"))?,
-                    );
+                    re.size = record.get_long(i).map(Some).unwrap_or(None);
                 }
                 _ => {
                     log::warn!(
@@ -670,11 +667,7 @@ impl Txn {
                         .map_err(|_| gen_action_type_error("txn", "version", "long"))?;
                 }
                 "lastUpdated" => {
-                    re.last_updated = Some(
-                        record
-                            .get_long(i)
-                            .map_err(|_| gen_action_type_error("txn", "lastUpdated", "long"))?,
-                    );
+                    re.last_updated = record.get_long(i).map(Some).unwrap_or(None);
                 }
                 _ => {
                     log::warn!(
