@@ -56,10 +56,10 @@ mod s3_storage_options {
 ///
 /// Unconsumed `extra_opts` are passed as a `HashMap` to the `dynamodb_lock` module for configuring the dynamodb client used for safe atomic rename.
 ///
+/// [dynamodb_lock::DynamoDbOptions] describes the available options.
+///
 /// Two environment variables are not included as options (and not described in the table above).
 /// These must be set as environment variables when desired and are described below:
-///
-/// [dynamodb_lock::DynamoDbOptions] describes the available options.
 ///
 /// * AWS_ENDPOINT_URL - This variable is used specifically for testing against localstack and should be specified in the environment.
 /// * AWS_WEB_IDENTITY_TOKEN_FILE - file describing k8s configuration.
