@@ -537,12 +537,12 @@ pub struct Remove {
     /// The path of the file that is removed from the table.
     pub path: String,
     /// The timestamp when the remove was added to table state.
-    pub deletion_timestamp: DeltaDataTypeTimestamp,
+    pub deletion_timestamp: Option<DeltaDataTypeTimestamp>,
     /// Whether data is changed by the remove. A table optimize will report this as false for
     /// example, since it adds and removes files by combining many files into one.
     pub data_change: bool,
     /// When true the fields partitionValues, size, and tags are present
-    pub extended_file_metadata: Option<bool>,
+    pub extended_file_metadata: bool,
     /// A map from partition column to value for this file.
     pub partition_values: Option<HashMap<String, Option<String>>>,
     /// Size of this file in bytes
@@ -571,15 +571,18 @@ impl Remove {
                         .map_err(|_| gen_action_type_error("remove", "dataChange", "bool"))?;
                 }
                 "extendedFileMetadata" => {
-                    re.extended_file_metadata = Some(record.get_bool(i).map_err(|_| {
+                    re.extended_file_metadata = record.get_bool(i).map_err(|_| {
                         gen_action_type_error("remove", "extendedFileMetadata", "bool")
-                    })?);
-                }
-                "deletionTimestamp" => {
-                    re.deletion_timestamp = record.get_long(i).map_err(|_| {
-                        gen_action_type_error("remove", "deletionTimestamp", "long")
                     })?;
                 }
+                "deletionTimestamp" => match record.get_long(i) {
+                    Ok(deletion_timestamp) => {
+                        re.deletion_timestamp = Some(deletion_timestamp);
+                    }
+                    _ => {
+                        re.deletion_timestamp = None;
+                    }
+                },
                 "partitionValues" => match record.get_map(i) {
                     Ok(_) => {
                         let parquetMap = record.get_map(i).map_err(|_| {

@@ -28,7 +28,7 @@ async fn read_delta_2_0_table_without_version() {
         tombstones[0],
         deltalake::action::Remove {
             path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
-            deletion_timestamp: 1564524298213,
+            deletion_timestamp: Some(1564524298213),
             data_change: false,
             ..Default::default()
         }
@@ -41,6 +41,7 @@ async fn read_delta_table_with_update() {
     let table_newest_version = deltalake::open_table(path).await.unwrap();
     let mut table_to_update = deltalake::open_table_with_version(path, 0).await.unwrap();
     // calling update several times should not produce any duplicates
+    table_to_update.update().await.unwrap();
     table_to_update.update().await.unwrap();
     table_to_update.update().await.unwrap();
     table_to_update.update().await.unwrap();
@@ -137,9 +138,9 @@ async fn read_delta_8_0_table_without_version() {
         tombstones[0],
         deltalake::action::Remove {
             path: "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet".to_string(),
-            deletion_timestamp: 1615043776198,
+            deletion_timestamp: Some(1615043776198),
             data_change: true,
-            extended_file_metadata: Some(true),
+            extended_file_metadata: true,
             partition_values: Some(HashMap::new()),
             size: Some(445),
             ..Default::default()

@@ -904,7 +904,7 @@ impl DeltaTable {
         Ok(self
             .get_tombstones()
             .iter()
-            .filter(|tombstone| tombstone.deletion_timestamp < delete_before_timestamp)
+            .filter(|tombstone| tombstone.deletion_timestamp.unwrap_or(0) < delete_before_timestamp)
             .map(|tombstone| tombstone.path.as_str())
             .collect::<HashSet<_>>())
     }
