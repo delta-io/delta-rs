@@ -26,10 +26,23 @@ mod options {
 }
 
 /// Configuration options for [`DynamoDbLockClient`].
+///
+/// The same key shown in the table below should be used whether passing a key in the hashmap or setting it as an environment variable.
+///
+/// Available options:
+/// | name/key                       | description   |
+/// | ============================== | ============= |
+/// | PARTITION_KEY_VALUE            | Used as the partition key for DynamoDb writes. This should be the same for all writers that perform writes against the same table stored in S3.
+/// | TABLE_NAME                     | The DynamoDb table where locks are stored. Must be the same between clients that require the same lock.
+/// | OWNER_NAME                     | Name of the task that owns the DynamoDb lock. If not provided, defaults to a UUID that represents the process performing the write.
+/// | LEASE_DURATION                 | Amount of time to lease a lock. If not provided, defaults to 20 seconds.
+/// | REFRESH_PERIOD_MILLIS          | Amount of time to wait before trying to acquire a lock.
+/// | ADDITIONAL_TIME_TO_WAIT_MILLIS | Timeout for lock acquisition. In practice, this is used to allow acquiring the lock in case it cannot be acquired immediately when a check after `LEASE_DURATION` is performed.
+///
 #[derive(Clone, Debug)]
-pub struct Options {
+pub struct DynamoDbOptions {
     /// Partition key value of DynamoDB table,
-    /// should be the same among the clients which work with the lock.
+    /// Should be the same among the clients which work with the lock.
     pub partition_key_value: String,
     /// The DynamoDB table name, should be the same among the clients which work with the lock.
     /// The table has to be created if it not exists before using it with DynamoDB locking API.
@@ -38,34 +51,61 @@ pub struct Options {
     pub owner_name: String,
     /// The amount of time (in seconds) that the owner has for the acquired lock.
     pub lease_duration: u64,
-    /// The amount of time to wait before trying to get the lock again.
+    /// The amount of time to wait before trying to get the lock again in milliseconds. Defaults to 1000ms (1 second).
     pub refresh_period: Duration,
     /// The amount of time to wait in addition to `lease_duration`.
     pub additional_time_to_wait_for_lock: Duration,
 }
 
-impl Default for Options {
+impl Default for DynamoDbOptions {
     fn default() -> Self {
-        fn str_env(key: &str, default: String) -> String {
-            std::env::var(key).unwrap_or(default)
+        let empty_map = HashMap::new();
+        Self::from_map(&empty_map)
+    }
+}
+
+impl DynamoDbOptions {
+    /// Creates a new DynamoDb options from the given map.
+    /// Keys not present in the environment are taken from the environment variable.
+    pub fn from_map(options: &HashMap<String, String>) -> Self {
+        fn str_opt(map: &HashMap<String, String>, key: &str, default: String) -> String {
+            map.get(key)
+                .map(|v| v.to_owned())
+                .unwrap_or_else(|| std::env::var(key).unwrap_or(default))
         }
 
-        fn u64_env(key: &str, default: u64) -> u64 {
-            std::env::var(key)
-                .ok()
-                .and_then(|e| e.parse::<u64>().ok())
-                .unwrap_or(default)
+        fn u64_opt(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {
+            map.get(key)
+                .and_then(|v| v.parse::<u64>().ok())
+                .unwrap_or_else(|| {
+                    std::env::var(key)
+                        .ok()
+                        .and_then(|e| e.parse::<u64>().ok())
+                        .unwrap_or(default)
+                })
         }
 
-        let refresh_period = Duration::from_millis(u64_env(options::REFRESH_PERIOD_MILLIS, 1000));
-        let additional_time_to_wait_for_lock =
-            Duration::from_millis(u64_env(options::ADDITIONAL_TIME_TO_WAIT_MILLIS, 1000));
+        let refresh_period =
+            Duration::from_millis(u64_opt(options, options::REFRESH_PERIOD_MILLIS, 1000));
+        let additional_time_to_wait_for_lock = Duration::from_millis(u64_opt(
+            options,
+            options::ADDITIONAL_TIME_TO_WAIT_MILLIS,
+            1000,
+        ));
 
         Self {
-            partition_key_value: str_env(options::PARTITION_KEY_VALUE, "delta-rs".to_string()),
-            table_name: str_env(options::TABLE_NAME, "delta_rs_lock_table".to_string()),
-            owner_name: str_env(options::OWNER_NAME, Uuid::new_v4().to_string()),
-            lease_duration: u64_env(options::LEASE_DURATION, 20),
+            partition_key_value: str_opt(
+                options,
+                options::PARTITION_KEY_VALUE,
+                "delta-rs".to_string(),
+            ),
+            table_name: str_opt(
+                options,
+                options::TABLE_NAME,
+                "delta_rs_lock_table".to_string(),
+            ),
+            owner_name: str_opt(options, options::OWNER_NAME, Uuid::new_v4().to_string()),
+            lease_duration: u64_opt(options, options::LEASE_DURATION, 20),
             refresh_period,
             additional_time_to_wait_for_lock,
         }
@@ -201,7 +241,7 @@ mod vars {
 /// to use it for managing distributed locks.
 pub struct DynamoDbLockClient {
     client: DynamoDbClient,
-    opts: Options,
+    opts: DynamoDbOptions,
 }
 
 impl std::fmt::Debug for DynamoDbLockClient {
@@ -231,7 +271,7 @@ impl LockClient for DynamoDbLockClient {
 
 impl DynamoDbLockClient {
     /// Creates new DynamoDB lock client
-    pub fn new(client: DynamoDbClient, opts: Options) -> Self {
+    pub fn new(client: DynamoDbClient, opts: DynamoDbOptions) -> Self {
         Self { client, opts }
     }
 

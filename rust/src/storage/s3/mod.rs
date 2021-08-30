@@ -1,5 +1,6 @@
 //! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
 
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::{fmt, pin::Pin};
@@ -22,9 +23,106 @@ use uuid::Uuid;
 
 pub mod dynamodb_lock;
 
-const AWS_S3_ASSUME_ROLE_ARN: &str = "AWS_S3_ASSUME_ROLE_ARN";
-const AWS_S3_ROLE_SESSION_NAME: &str = "AWS_S3_ROLE_SESSION_NAME";
+const AWS_ENDPOINT_URL: &str = "AWS_ENDPOINT_URL";
 const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
+
+mod s3_storage_options {
+    pub const AWS_REGION: &str = "AWS_REGION";
+    pub const AWS_S3_ASSUME_ROLE_ARN: &str = "AWS_S3_ASSUME_ROLE_ARN";
+    pub const AWS_S3_LOCKING_PROVIDER: &str = "AWS_S3_LOCKING_PROVIDER";
+    pub const AWS_S3_ROLE_SESSION_NAME: &str = "AWS_S3_ROLE_SESSION_NAME";
+
+    pub const S3_OPTS: &[&str] = &[
+        AWS_REGION,
+        AWS_S3_ASSUME_ROLE_ARN,
+        AWS_S3_LOCKING_PROVIDER,
+        AWS_S3_ROLE_SESSION_NAME,
+    ];
+}
+
+/// Options used to configure the S3StorageBackend.
+///
+/// Available options are described below.
+///
+/// The same key shown in the table below should be used whether passing a key in the hashmap or setting it as an environment variable.
+/// Provided keys may include configuration for the S3 backend and also the optional DynamoDb lock used for atomic rename.
+///
+/// | name/key                 | description                                                                                                                                                    |
+/// | ======================== | ============================================================================================================================================================== |
+/// | AWS_REGION               | The AWS region.                                                                                                                                                |
+/// | AWS_S3_ASSUME_ROLE_ARN   | The role to assume for S3 writes.                                                                                                                              |
+/// | AWS_S3_ROLE_SESSION_NAME | The role session name to use for assume role. If not provided a random session name is generated.                                                              |
+/// | AWS_S3_LOCKING_PROVIDER  | The locking provider to use. For safe atomic rename, this should be `dynamodb`. If empty, no locking provider is used and safe atomic rename is not available. |
+///
+/// Unconsumed `extra_opts` are passed as a `HashMap` to the `dynamodb_lock` module for configuring the dynamodb client used for safe atomic rename.
+///
+/// Two environment variables are not included as options (and not described in the table above).
+/// These must be set as environment variables when desired and are described below:
+///
+/// [dynamodb_lock::DynamoDbOptions] describes the available options.
+///
+/// * AWS_ENDPOINT_URL - This variable is used specifically for testing against localstack and should be specified in the environment.
+/// * AWS_WEB_IDENTITY_TOKEN_FILE - file describing k8s configuration.
+///   env vars to satisfy https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env should be provided
+pub struct S3StorageOptions {
+    region: Region,
+    assume_role_arn: Option<String>,
+    role_session_name: Option<String>,
+    use_web_identity: bool,
+    locking_provider: Option<String>,
+    extra_opts: HashMap<String, String>,
+}
+
+impl S3StorageOptions {
+    /// Creates an instance of S3StorageOptions from environment variables.
+    pub fn from_env() -> S3StorageOptions {
+        let empty_opts = HashMap::new();
+        Self::from_map(&empty_opts)
+    }
+
+    /// Creates an instance of S3StorageOptions from the given HashMap
+    pub fn from_map(options: &HashMap<String, String>) -> S3StorageOptions {
+        fn str_or_default(map: &HashMap<String, String>, key: &str, default: String) -> String {
+            map.get(key)
+                .map(|v| v.to_owned())
+                .unwrap_or_else(|| std::env::var(key).unwrap_or(default))
+        }
+
+        fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
+            map.get(key)
+                .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
+        }
+
+        let extra_opts = options
+            .iter()
+            .filter(|(k, _)| !s3_storage_options::S3_OPTS.contains(&k.as_str()))
+            .map(|(k, v)| (k.to_owned(), v.to_owned()))
+            .collect();
+
+        let endpoint_url = std::env::var(AWS_ENDPOINT_URL).ok();
+        let region = if let Some(endpoint_url) = endpoint_url {
+            Region::Custom {
+                name: str_or_default(
+                    options,
+                    s3_storage_options::AWS_REGION,
+                    "custom".to_string(),
+                ),
+                endpoint: endpoint_url,
+            }
+        } else {
+            Region::default()
+        };
+
+        Self {
+            region,
+            assume_role_arn: str_option(options, s3_storage_options::AWS_S3_ASSUME_ROLE_ARN),
+            role_session_name: str_option(options, s3_storage_options::AWS_S3_ROLE_SESSION_NAME),
+            use_web_identity: std::env::var(AWS_WEB_IDENTITY_TOKEN_FILE).is_ok(),
+            locking_provider: str_option(options, s3_storage_options::AWS_S3_LOCKING_PROVIDER),
+            extra_opts,
+        }
+    }
+}
 
 impl From<RusotoError<rusoto_s3::GetObjectError>> for StorageError {
     fn from(error: RusotoError<rusoto_s3::GetObjectError>) -> Self {
@@ -82,16 +180,18 @@ fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvi
 }
 
 fn get_sts_assume_role_provider(
-    region: Region,
+    assume_role_arn: String,
+    options: &S3StorageOptions,
 ) -> Result<AutoRefreshingProvider<StsAssumeRoleSessionCredentialsProvider>, StorageError> {
-    let sts_client = StsClient::new(region);
-    let role_arn = std::env::var(AWS_S3_ASSUME_ROLE_ARN)
-        .map_err(|_| StorageError::S3Generic(format!("{} is not set", AWS_S3_ASSUME_ROLE_ARN)))?;
-    let session_name = std::env::var(AWS_S3_ROLE_SESSION_NAME)
-        .unwrap_or_else(|_| format!("delta-rs-{}", Uuid::new_v4()));
+    let sts_client = StsClient::new(options.region.clone());
+    let session_name = options
+        .role_session_name
+        .as_ref()
+        .map(|v| v.to_owned())
+        .unwrap_or_else(|| format!("delta-rs-{}", Uuid::new_v4()));
     let provider = StsAssumeRoleSessionCredentialsProvider::new(
         sts_client,
-        role_arn,
+        assume_role_arn,
         session_name,
         None,
         None,
@@ -101,15 +201,23 @@ fn get_sts_assume_role_provider(
     Ok(AutoRefreshingProvider::new(provider)?)
 }
 
-fn create_s3_client(region: Region) -> Result<S3Client, StorageError> {
-    if std::env::var(AWS_WEB_IDENTITY_TOKEN_FILE).is_ok() {
+fn create_s3_client(options: &S3StorageOptions) -> Result<S3Client, StorageError> {
+    if options.use_web_identity {
         let provider = get_web_identity_provider()?;
-        Ok(S3Client::new_with(HttpClient::new()?, provider, region))
-    } else if std::env::var(AWS_S3_ASSUME_ROLE_ARN).is_ok() {
-        let provider = get_sts_assume_role_provider(region.clone())?;
-        Ok(S3Client::new_with(HttpClient::new()?, provider, region))
+        Ok(S3Client::new_with(
+            HttpClient::new()?,
+            provider,
+            options.region.clone(),
+        ))
+    } else if let Some(assume_role_arn) = &options.assume_role_arn {
+        let provider = get_sts_assume_role_provider(assume_role_arn.to_owned(), options)?;
+        Ok(S3Client::new_with(
+            HttpClient::new()?,
+            provider,
+            options.region.clone(),
+        ))
     } else {
-        Ok(S3Client::new(region))
+        Ok(S3Client::new(options.region.clone()))
     }
 }
 
@@ -186,17 +294,9 @@ pub struct S3StorageBackend {
 impl S3StorageBackend {
     /// Creates a new S3StorageBackend.
     pub fn new() -> Result<Self, StorageError> {
-        let region = if let Ok(url) = std::env::var("AWS_ENDPOINT_URL") {
-            Region::Custom {
-                name: std::env::var("AWS_REGION").unwrap_or_else(|_| "custom".to_string()),
-                endpoint: url,
-            }
-        } else {
-            Region::default()
-        };
-
-        let client = create_s3_client(region.clone())?;
-        let lock_client = try_create_lock_client(region)?;
+        let options = S3StorageOptions::from_env();
+        let client = create_s3_client(&options)?;
+        let lock_client = try_create_lock_client(&options)?;
 
         Ok(Self {
             client,
@@ -204,7 +304,18 @@ impl S3StorageBackend {
         })
     }
 
-    /// Creates a new S3StorageBackend with given s3 and lock clients.
+    /// Creates a new S3StorageBackend from the provided options
+    pub fn new_from_options(options: S3StorageOptions) -> Result<Self, StorageError> {
+        let client = create_s3_client(&options)?;
+        let lock_client = try_create_lock_client(&options)?;
+
+        Ok(Self {
+            client,
+            lock_client,
+        })
+    }
+
+    /// Creates a new S3StorageBackend with given options, s3 client and lock client.
     pub fn new_with(client: rusoto_s3::S3Client, lock_client: Option<Box<dyn LockClient>>) -> Self {
         Self {
             client,
@@ -520,21 +631,25 @@ impl LockData {
     }
 }
 
-fn try_create_lock_client(region: Region) -> Result<Option<Box<dyn LockClient>>, StorageError> {
+fn try_create_lock_client(
+    options: &S3StorageOptions,
+) -> Result<Option<Box<dyn LockClient>>, StorageError> {
     let dispatcher = HttpClient::new()?;
 
-    match std::env::var("AWS_S3_LOCKING_PROVIDER") {
-        Ok(p) if p.to_lowercase() == "dynamodb" => {
-            let client = match std::env::var("AWS_WEB_IDENTITY_TOKEN_FILE") {
-                Ok(_) => rusoto_dynamodb::DynamoDbClient::new_with(
+    match &options.locking_provider {
+        Some(p) if p.to_lowercase() == "dynamodb" => {
+            let client = match options.use_web_identity {
+                true => rusoto_dynamodb::DynamoDbClient::new_with(
                     dispatcher,
                     get_web_identity_provider()?,
-                    region,
+                    options.region.clone(),
                 ),
-                Err(_) => rusoto_dynamodb::DynamoDbClient::new(region),
+                false => rusoto_dynamodb::DynamoDbClient::new(options.region.clone()),
             };
-            let client =
-                dynamodb_lock::DynamoDbLockClient::new(client, dynamodb_lock::Options::default());
+            let client = dynamodb_lock::DynamoDbLockClient::new(
+                client,
+                dynamodb_lock::DynamoDbOptions::from_map(&options.extra_opts),
+            );
             Ok(Some(Box::new(client)))
         }
         _ => Ok(None),

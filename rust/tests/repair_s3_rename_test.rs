@@ -128,7 +128,7 @@ mod s3 {
         let client = S3Client::new_with(dispatcher, ChainProvider::new(), s3_common::region());
         let lock_client = dynamodb_lock::DynamoDbLockClient::new(
             rusoto_dynamodb::DynamoDbClient::new(s3_common::region()),
-            dynamodb_lock::Options::default(),
+            dynamodb_lock::DynamoDbOptions::default(),
         );
 
         (
