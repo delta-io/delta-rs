@@ -638,7 +638,7 @@ fn try_create_lock_client(
 
     match &options.locking_provider {
         Some(p) if p.to_lowercase() == "dynamodb" => {
-            let client = match options.use_web_identity {
+            let dynamodb_client = match options.use_web_identity {
                 true => rusoto_dynamodb::DynamoDbClient::new_with(
                     dispatcher,
                     get_web_identity_provider()?,
@@ -646,11 +646,11 @@ fn try_create_lock_client(
                 ),
                 false => rusoto_dynamodb::DynamoDbClient::new(options.region.clone()),
             };
-            let client = dynamodb_lock::DynamoDbLockClient::new(
-                client,
+            let lock_client = dynamodb_lock::DynamoDbLockClient::new(
+                dynamodb_client,
                 dynamodb_lock::DynamoDbOptions::from_map(&options.extra_opts),
             );
-            Ok(Some(Box::new(client)))
+            Ok(Some(Box::new(lock_client)))
         }
         _ => Ok(None),
     }
