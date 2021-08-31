@@ -931,7 +931,7 @@ mod tests {
     }
     #[test]
     fn storage_options_web_identity_test() {
-        let options = S3StorageOptions::from_map(hashmap! {
+        let _options = S3StorageOptions::from_map(hashmap! {
             s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "web_identity_token_file".to_string(),
             s3_storage_options::AWS_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/web_identity_role".to_string(),
             s3_storage_options::AWS_ROLE_SESSION_NAME.to_string() => "web_identity_session_name".to_string(),
