@@ -1638,23 +1638,20 @@ mod tests {
     #[tokio::test]
     async fn test_create_delta_table() {
         // Setup
-        let test_schema = Schema::new(
-            "test".to_string(),
-            vec![
-                SchemaField::new(
-                    "Id".to_string(),
-                    SchemaDataType::primitive("integer".to_string()),
-                    true,
-                    HashMap::new(),
-                ),
-                SchemaField::new(
-                    "Name".to_string(),
-                    SchemaDataType::primitive("string".to_string()),
-                    true,
-                    HashMap::new(),
-                ),
-            ],
-        );
+        let test_schema = Schema::new(vec![
+            SchemaField::new(
+                "Id".to_string(),
+                SchemaDataType::primitive("integer".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "Name".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+        ]);
 
         let delta_md = DeltaTableMetaData::new(
             Some("Test Table Create".to_string()),
