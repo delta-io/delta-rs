@@ -15,7 +15,7 @@ pub type DeltaDataTypeTimestamp = DeltaDataTypeLong;
 /// Type alias for i32/Delta int
 pub type DeltaDataTypeInt = i32;
 
-static STRUCT_TAG: &'static str = "struct";
+static STRUCT_TAG: &str = "struct";
 /// Represents a struct field defined in the Delta table schema.
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
 #[derive(Serialize, Deserialize, PartialEq, Debug, Default, Clone)]
