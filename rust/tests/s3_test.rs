@@ -6,6 +6,7 @@ mod s3_common;
 mod s3 {
     use crate::s3_common::setup;
     use deltalake::storage;
+    use deltalake::{dynamo_lock_options, s3_storage_options};
     use maplit::hashmap;
     use serial_test::serial;
 
@@ -27,11 +28,12 @@ mod s3 {
         let storage = storage::get_backend_for_uri_with_options(
             table_uri,
             hashmap! {
-                storage::s3_storage_options::AWS_REGION.to_string() => "us-east-2".to_string(),
+                s3_storage_options::AWS_REGION.to_string() => "us-east-2".to_string(),
+                dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "s3::deltars/simple".to_string(),
             },
         )
         .unwrap();
-        let table = deltalake::DeltaTable::new(table_uri, storage).unwrap();
+        let mut table = deltalake::DeltaTable::new(table_uri, storage).unwrap();
         table.load().await.unwrap();
         println!("{}", table);
 
