@@ -10,36 +10,32 @@ use rusoto_core::RusotoError;
 use rusoto_dynamodb::*;
 use uuid::Uuid;
 
-mod options {
-    /// Environment variable for `partition_key_value` option.
-    pub const PARTITION_KEY_VALUE: &str = "DYNAMO_LOCK_PARTITION_KEY_VALUE";
-    /// Environment variable for `table_name` option.
-    pub const TABLE_NAME: &str = "DYNAMO_LOCK_TABLE_NAME";
-    /// Environment variable for `owner_name` option.
-    pub const OWNER_NAME: &str = "DYNAMO_LOCK_OWNER_NAME";
-    /// Environment variable for `lease_duration` option.
-    pub const LEASE_DURATION: &str = "DYNAMO_LOCK_LEASE_DURATION";
-    /// Environment variable for `refresh_period` option.
-    pub const REFRESH_PERIOD_MILLIS: &str = "DYNAMO_LOCK_REFRESH_PERIOD_MILLIS";
-    /// Environment variable for `additional_time_to_wait_for_lock` option.
-    pub const ADDITIONAL_TIME_TO_WAIT_MILLIS: &str = "DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS";
+/// DynamoDb option keys to use when creating DynamoDbOptions.
+/// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
+pub mod dynamo_lock_options {
+    /// Used as the partition key for DynamoDb writes.
+    /// This should be the same for all writers writing against the same S3 table.
+    pub const DYNAMO_LOCK_PARTITION_KEY_VALUE: &str = "DYNAMO_LOCK_PARTITION_KEY_VALUE";
+    /// The DynamoDb table where locks are stored. Must be the same between clients that require the same lock.
+    pub const DYNAMO_LOCK_TABLE_NAME: &str = "DYNAMO_LOCK_TABLE_NAME";
+    /// Name of the task that owns the DynamoDb lock. If not provided, defaults to a UUID that represents the process performing the write.
+    pub const DYNAMO_LOCK_OWNER_NAME: &str = "DYNAMO_LOCK_OWNER_NAME";
+    /// Amount of time to lease a lock. If not provided, defaults to 20 seconds.
+    pub const DYNAMO_LOCK_LEASE_DURATION: &str = "DYNAMO_LOCK_LEASE_DURATION";
+    /// Amount of time to wait before trying to acquire a lock.
+    /// If not provided, defaults to 1000 millis.
+    pub const DYNAMO_LOCK_REFRESH_PERIOD_MILLIS: &str = "DYNAMO_LOCK_REFRESH_PERIOD_MILLIS";
+    /// Timeout for lock acquisition.
+    /// In practice, this is used to allow acquiring the lock in case it cannot be acquired immediately when a check after `LEASE_DURATION` is performed.
+    /// If not provided, defaults to 1000 millis.
+    pub const DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS: &str =
+        "DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS";
 }
 
 /// Configuration options for [`DynamoDbLockClient`].
 ///
-/// The same key shown in the table below should be used whether passing a key in the hashmap or setting it as an environment variable.
-///
-/// Available options:
-/// | name/key                       | description   |
-/// | ============================== | ============= |
-/// | PARTITION_KEY_VALUE            | Used as the partition key for DynamoDb writes. This should be the same for all writers that perform writes against the same table stored in S3.
-/// | TABLE_NAME                     | The DynamoDb table where locks are stored. Must be the same between clients that require the same lock.
-/// | OWNER_NAME                     | Name of the task that owns the DynamoDb lock. If not provided, defaults to a UUID that represents the process performing the write.
-/// | LEASE_DURATION                 | Amount of time to lease a lock. If not provided, defaults to 20 seconds.
-/// | REFRESH_PERIOD_MILLIS          | Amount of time to wait before trying to acquire a lock.
-/// | ADDITIONAL_TIME_TO_WAIT_MILLIS | Timeout for lock acquisition. In practice, this is used to allow acquiring the lock in case it cannot be acquired immediately when a check after `LEASE_DURATION` is performed.
-///
-#[derive(Clone, Debug)]
+/// Available options are described in [dynamo_lock_options].
+#[derive(Clone, Debug, PartialEq)]
 pub struct DynamoDbOptions {
     /// Partition key value of DynamoDB table,
     /// Should be the same among the clients which work with the lock.
@@ -59,56 +55,66 @@ pub struct DynamoDbOptions {
 
 impl Default for DynamoDbOptions {
     fn default() -> Self {
-        let empty_map = HashMap::new();
-        Self::from_map(&empty_map)
+        Self::from_map(HashMap::new())
     }
 }
 
 impl DynamoDbOptions {
     /// Creates a new DynamoDb options from the given map.
     /// Keys not present in the map are taken from the environment variable.
-    pub fn from_map(options: &HashMap<String, String>) -> Self {
-        fn str_opt(map: &HashMap<String, String>, key: &str, default: String) -> String {
-            map.get(key)
-                .map(|v| v.to_owned())
-                .unwrap_or_else(|| std::env::var(key).unwrap_or(default))
-        }
-
-        fn u64_opt(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {
-            map.get(key)
-                .and_then(|v| v.parse::<u64>().ok())
-                .unwrap_or_else(|| {
-                    std::env::var(key)
-                        .ok()
-                        .and_then(|e| e.parse::<u64>().ok())
-                        .unwrap_or(default)
-                })
-        }
-
-        let refresh_period =
-            Duration::from_millis(u64_opt(options, options::REFRESH_PERIOD_MILLIS, 1000));
-        let additional_time_to_wait_for_lock = Duration::from_millis(u64_opt(
-            options,
-            options::ADDITIONAL_TIME_TO_WAIT_MILLIS,
+    pub fn from_map(options: HashMap<String, String>) -> Self {
+        let refresh_period = Duration::from_millis(Self::u64_opt(
+            &options,
+            dynamo_lock_options::DYNAMO_LOCK_REFRESH_PERIOD_MILLIS,
+            1000,
+        ));
+        let additional_time_to_wait_for_lock = Duration::from_millis(Self::u64_opt(
+            &options,
+            dynamo_lock_options::DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS,
             1000,
         ));
 
         Self {
-            partition_key_value: str_opt(
-                options,
-                options::PARTITION_KEY_VALUE,
+            partition_key_value: Self::str_opt(
+                &options,
+                dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE,
                 "delta-rs".to_string(),
             ),
-            table_name: str_opt(
-                options,
-                options::TABLE_NAME,
+            table_name: Self::str_opt(
+                &options,
+                dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME,
                 "delta_rs_lock_table".to_string(),
             ),
-            owner_name: str_opt(options, options::OWNER_NAME, Uuid::new_v4().to_string()),
-            lease_duration: u64_opt(options, options::LEASE_DURATION, 20),
+            owner_name: Self::str_opt(
+                &options,
+                dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME,
+                Uuid::new_v4().to_string(),
+            ),
+            lease_duration: Self::u64_opt(
+                &options,
+                dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION,
+                20,
+            ),
             refresh_period,
             additional_time_to_wait_for_lock,
         }
+    }
+
+    fn str_opt(map: &HashMap<String, String>, key: &str, default: String) -> String {
+        map.get(key)
+            .map(|v| v.to_owned())
+            .unwrap_or_else(|| std::env::var(key).unwrap_or(default))
+    }
+
+    fn u64_opt(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {
+        map.get(key)
+            .and_then(|v| v.parse::<u64>().ok())
+            .unwrap_or_else(|| {
+                std::env::var(key)
+                    .ok()
+                    .and_then(|e| e.parse::<u64>().ok())
+                    .unwrap_or(default)
+            })
     }
 }
 
@@ -606,5 +612,122 @@ impl<'a> AcquireLockState<'a> {
                 }),
             )
             .await
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use maplit::hashmap;
+
+    #[test]
+    fn lock_options_default_test() {
+        std::env::set_var(
+            dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME,
+            "some_table".to_string(),
+        );
+        std::env::set_var(
+            dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME,
+            "some_owner".to_string(),
+        );
+        std::env::set_var(
+            dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE,
+            "some_pk".to_string(),
+        );
+        std::env::set_var(
+            dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION,
+            "40".to_string(),
+        );
+        std::env::set_var(
+            dynamo_lock_options::DYNAMO_LOCK_REFRESH_PERIOD_MILLIS,
+            "2000".to_string(),
+        );
+        std::env::set_var(
+            dynamo_lock_options::DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS,
+            "3000".to_string(),
+        );
+
+        let options = DynamoDbOptions::default();
+
+        assert_eq!(
+            DynamoDbOptions {
+                partition_key_value: "some_pk".to_string(),
+                table_name: "some_table".to_string(),
+                owner_name: "some_owner".to_string(),
+                lease_duration: 40,
+                refresh_period: Duration::from_millis(2000),
+                additional_time_to_wait_for_lock: Duration::from_millis(3000),
+            },
+            options
+        );
+    }
+
+    #[test]
+    fn lock_options_from_map_test() {
+        let options = DynamoDbOptions::from_map(hashmap! {
+            dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME.to_string() => "a_table".to_string(),
+            dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "an_owner".to_string(),
+            dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE.to_string() => "a_pk".to_string(),
+            dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION.to_string() => "60".to_string(),
+            dynamo_lock_options::DYNAMO_LOCK_REFRESH_PERIOD_MILLIS.to_string() => "4000".to_string(),
+            dynamo_lock_options::DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS.to_string() => "5000".to_string(),
+        });
+
+        assert_eq!(
+            DynamoDbOptions {
+                partition_key_value: "a_pk".to_string(),
+                table_name: "a_table".to_string(),
+                owner_name: "an_owner".to_string(),
+                lease_duration: 60,
+                refresh_period: Duration::from_millis(4000),
+                additional_time_to_wait_for_lock: Duration::from_millis(5000),
+            },
+            options
+        );
+    }
+
+    #[test]
+    fn lock_options_mixed_test() {
+        std::env::set_var(
+            dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME,
+            "some_table".to_string(),
+        );
+        std::env::set_var(
+            dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME,
+            "some_owner".to_string(),
+        );
+        std::env::set_var(
+            dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE,
+            "some_pk".to_string(),
+        );
+        std::env::set_var(
+            dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION,
+            "40".to_string(),
+        );
+        std::env::set_var(
+            dynamo_lock_options::DYNAMO_LOCK_REFRESH_PERIOD_MILLIS,
+            "2000".to_string(),
+        );
+        std::env::set_var(
+            dynamo_lock_options::DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS,
+            "3000".to_string(),
+        );
+
+        let options = DynamoDbOptions::from_map(hashmap! {
+            dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE.to_string() => "overridden_key".to_string()
+        });
+
+        assert_eq!(
+            DynamoDbOptions {
+                partition_key_value: "overridden_key".to_string(),
+                table_name: "some_table".to_string(),
+                owner_name: "some_owner".to_string(),
+                lease_duration: 40,
+                refresh_period: Duration::from_millis(2000),
+                additional_time_to_wait_for_lock: Duration::from_millis(3000),
+            },
+            options
+        );
     }
 }

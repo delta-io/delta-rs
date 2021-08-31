@@ -548,7 +548,7 @@ pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, Storage
 /// Options may be passed in the HashMap or set as environment variables.
 ///
 /// [S3StorageOptions] describes the available options for the S3 backend.
-///
+/// [s3::dynamodb_lock::DynamoDbLockClient] describes additional options for the atomic rename client.
 pub fn get_backend_for_uri_with_options(
     uri: &str,
     // NOTE: prefixing options with "_" to avoid deny warnings error since usage is conditional on s3 and the only usage is with s3 so far
@@ -557,7 +557,7 @@ pub fn get_backend_for_uri_with_options(
     match parse_uri(uri)? {
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
         Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new_from_options(
-            S3StorageOptions::from_map(&_options),
+            S3StorageOptions::from_map(_options),
         )?)),
         _ => get_backend_for_uri(uri),
     }
