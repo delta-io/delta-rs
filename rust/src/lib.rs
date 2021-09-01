@@ -76,5 +76,9 @@ pub use self::delta::*;
 pub use self::partitions::*;
 pub use self::schema::*;
 pub use self::storage::{
-    get_backend_for_uri, parse_uri, StorageBackend, StorageError, Uri, UriError,
+    get_backend_for_uri, get_backend_for_uri_with_options, parse_uri, StorageBackend, StorageError,
+    Uri, UriError,
 };
+
+#[cfg(feature = "s3")]
+pub use self::storage::s3::{dynamodb_lock::dynamo_lock_options, s3_storage_options};
