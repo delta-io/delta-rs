@@ -7,6 +7,7 @@ use std::path::{Path, PathBuf};
 // NOTE: The below is a useful external command for inspecting the written checkpoint schema visually:
 // parquet-tools inspect tests/data/checkpoints/_delta_log/00000000000000000005.checkpoint.parquet
 
+// TODO Add Remove actions to checkpoints tests as well!
 #[tokio::test]
 async fn write_simple_checkpoint() {
     let table_location = "./tests/data/checkpoints";

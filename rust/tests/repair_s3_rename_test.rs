@@ -104,7 +104,7 @@ mod s3 {
     ) -> JoinHandle<Result<(), StorageError>> {
         tokio::spawn(async move {
             println!("rename({}, {}) started", &src, &dst);
-            let result = s3.rename_obj(&src, &dst).await;
+            let result = s3.rename_obj_noreplace(&src, &dst).await;
             println!("rename({}, {}) finished", &src, &dst);
             result
         })
@@ -128,7 +128,7 @@ mod s3 {
         let client = S3Client::new_with(dispatcher, ChainProvider::new(), s3_common::region());
         let lock_client = dynamodb_lock::DynamoDbLockClient::new(
             rusoto_dynamodb::DynamoDbClient::new(s3_common::region()),
-            dynamodb_lock::Options::default(),
+            dynamodb_lock::DynamoDbOptions::default(),
         );
 
         (

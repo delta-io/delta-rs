@@ -633,24 +633,10 @@ impl DeltaTable {
 
     /// Load DeltaTable with data from latest checkpoint
     pub async fn load(&mut self) -> Result<(), DeltaTableError> {
-        match self.get_last_checkpoint().await {
-            Ok(last_check_point) => {
-                self.last_check_point = Some(last_check_point);
-                self.restore_checkpoint(last_check_point).await?;
-                self.version = last_check_point.version + 1;
-            }
-            Err(LoadCheckpointError::NotFound) => {
-                // no checkpoint, start with version 0
-                self.version = 0;
-            }
-            Err(e) => {
-                return Err(DeltaTableError::LoadCheckpoint { source: e });
-            }
-        }
-
-        self.apply_logs_from_current_version().await?;
-
-        Ok(())
+        self.last_check_point = None;
+        self.version = -1;
+        self.state = DeltaTableState::default();
+        self.update().await
     }
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
@@ -658,33 +644,25 @@ impl DeltaTable {
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
-                if self.last_check_point != Some(last_check_point) {
+                if Some(last_check_point) == self.last_check_point {
+                    self.update_incremental().await
+                } else {
                     self.last_check_point = Some(last_check_point);
                     self.restore_checkpoint(last_check_point).await?;
-                    self.version = last_check_point.version + 1;
+                    self.version = last_check_point.version;
+                    self.update_incremental().await
                 }
             }
-            Err(LoadCheckpointError::NotFound) => {
-                self.version += 1;
-            }
-            Err(e) => {
-                return Err(DeltaTableError::LoadCheckpoint { source: e });
-            }
+            Err(LoadCheckpointError::NotFound) => self.update_incremental().await,
+            Err(e) => Err(DeltaTableError::LoadCheckpoint { source: e }),
         }
-
-        self.apply_logs_from_current_version().await?;
-
-        Ok(())
     }
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
+    /// It assumes that the table is already updated to the current version `self.version`.
     pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
         self.version += 1;
-        self.apply_logs_from_current_version().await
-    }
 
-    async fn apply_logs_from_current_version(&mut self) -> Result<(), DeltaTableError> {
-        // replay logs after checkpoint
         loop {
             match self.apply_log(self.version).await {
                 Ok(_) => {
@@ -706,12 +684,10 @@ impl DeltaTable {
                             return Err(DeltaTableError::from(e));
                         }
                     }
-                    break;
+                    return Ok(());
                 }
             }
         }
-
-        Ok(())
     }
 
     /// Loads the DeltaTable state for the given version.
@@ -989,19 +965,14 @@ impl DeltaTable {
             return Ok(files_to_delete);
         }
 
-        for rel_path in &files_to_delete {
-            match self
-                .storage
-                .delete_obj(&self.storage.join_path(&self.table_uri, rel_path))
-                .await
-            {
-                Ok(_) => continue,
-                Err(StorageError::NotFound) => continue,
-                Err(err) => return Err(DeltaTableError::StorageError { source: err }),
-            }
+        let paths = &files_to_delete
+            .iter()
+            .map(|rel_path| self.storage.join_path(&self.table_uri, rel_path))
+            .collect::<Vec<_>>();
+        match self.storage.delete_objs(paths).await {
+            Ok(_) => Ok(files_to_delete),
+            Err(err) => Err(DeltaTableError::StorageError { source: err }),
         }
-
-        Ok(files_to_delete)
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
@@ -1049,7 +1020,7 @@ impl DeltaTable {
         // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
         self.storage
-            .rename_obj(&commit.uri, &self.commit_uri_from_version(version))
+            .rename_obj_noreplace(&commit.uri, &self.commit_uri_from_version(version))
             .await
             .map_err(|e| DeltaTableError::from(DeltaTransactionError::from(e)))?;
 
@@ -1128,8 +1099,8 @@ impl DeltaTable {
         Ok(())
     }
 
-    /// Time travel Delta table to latest version that's created at or before provided `datetime`
-    /// argument.
+    /// Time travel Delta table to the latest version that's created at or before provided
+    /// `datetime` argument.
     ///
     /// Internally, this methods performs a binary search on all Delta transaction logs.
     pub async fn load_with_datetime(
@@ -1667,23 +1638,20 @@ mod tests {
     #[tokio::test]
     async fn test_create_delta_table() {
         // Setup
-        let test_schema = Schema::new(
-            "test".to_string(),
-            vec![
-                SchemaField::new(
-                    "Id".to_string(),
-                    SchemaDataType::primitive("integer".to_string()),
-                    true,
-                    HashMap::new(),
-                ),
-                SchemaField::new(
-                    "Name".to_string(),
-                    SchemaDataType::primitive("string".to_string()),
-                    true,
-                    HashMap::new(),
-                ),
-            ],
-        );
+        let test_schema = Schema::new(vec![
+            SchemaField::new(
+                "Id".to_string(),
+                SchemaDataType::primitive("integer".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "Name".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+        ]);
 
         let delta_md = DeltaTableMetaData::new(
             Some("Test Table Create".to_string()),
