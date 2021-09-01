@@ -10,6 +10,7 @@ from pyarrow.dataset import dataset, partitioning
 if TYPE_CHECKING:
     import pandas
 
+from .data_catalog import DataCatalog
 from .deltalake import RawDeltaTable
 from .schema import Schema, pyarrow_schema_from_json
 
@@ -75,6 +76,32 @@ class DeltaTable:
         """
         self._table = RawDeltaTable(table_uri, version=version)
         self._metadata = Metadata(self._table)
+
+    @classmethod
+    def from_data_catalog(
+        cls,
+        data_catalog: DataCatalog,
+        database_name: str,
+        table_name: str,
+        data_catalog_id: Optional[str] = None,
+        version: Optional[int] = None,
+    ) -> "DeltaTable":
+        """
+        Create the Delta Table from a Data Catalog.
+
+        :param data_catalog: the Catalog to use for getting the storage location of the Delta Table
+        :param database_name: the database name inside the Data Catalog
+        :param table_name: the table name inside the Data Catalog
+        :param data_catalog_id: the identifier of the Data Catalog
+        :param version: version of the DeltaTable
+        """
+        table_uri = RawDeltaTable.get_table_uri_from_data_catalog(
+            data_catalog=data_catalog.value,
+            data_catalog_id=data_catalog_id,
+            database_name=database_name,
+            table_name=table_name,
+        )
+        return cls(table_uri=table_uri, version=version)
 
     def version(self) -> int:
         """
