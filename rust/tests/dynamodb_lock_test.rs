@@ -12,7 +12,7 @@ mod dynamodb {
     const TABLE: &str = "test_table";
 
     async fn create_dynamo_lock(key: &str, owner: &str) -> DynamoDbLockClient {
-        let opts = Options {
+        let opts = DynamoDbOptions {
             partition_key_value: key.to_string(),
             table_name: TABLE.to_string(),
             owner_name: owner.to_string(),
@@ -23,7 +23,7 @@ mod dynamodb {
         create_dynamo_lock_with(key, opts).await
     }
 
-    async fn create_dynamo_lock_with(key: &str, opts: Options) -> DynamoDbLockClient {
+    async fn create_dynamo_lock_with(key: &str, opts: DynamoDbOptions) -> DynamoDbLockClient {
         crate::s3_common::setup();
         let client = DynamoDbClient::new(crate::s3_common::region());
         let _ = client
@@ -142,7 +142,7 @@ mod dynamodb {
     async fn test_non_expirable_lock() {
         let key = "test_non_expirable_lock";
 
-        let opts = |owner: &str| Options {
+        let opts = |owner: &str| DynamoDbOptions {
             partition_key_value: key.to_string(),
             table_name: TABLE.to_string(),
             owner_name: owner.to_string(),

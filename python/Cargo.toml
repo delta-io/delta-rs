@@ -21,6 +21,7 @@ env_logger = "0"
 reqwest = { version = "*", features = ["native-tls-vendored"] }
 serde_json = "1"
 arrow  = { git = "https://github.com/apache/arrow-rs", rev = "fa5acd971c973161f17e69d5c6b50d6e77c7da03" }
+chrono = "0"
 
 [dependencies.pyo3]
 version = "0.14"

@@ -6,6 +6,7 @@ from urllib.parse import urlparse
 
 import pyarrow
 from pyarrow.dataset import dataset, partitioning
+from pyarrow.fs import FileSystem
 
 if TYPE_CHECKING:
     import pandas
@@ -152,6 +153,20 @@ class DeltaTable:
         """
         self._table.load_version(version)
 
+    def load_with_datetime(self, datetime_string: str) -> None:
+        """
+        Time travel Delta table to the latest version that's created at or before provided `datetime_string` argument.
+        The `datetime_string` argument should be an RFC 3339 and ISO 8601 date and time string.
+
+        Examples:
+        `2018-01-26T18:30:09Z`
+        `2018-12-19T16:39:57-08:00`
+        `2018-01-26T18:30:09.453+00:00`
+
+        :param datetime_string: the identifier of the datetime point of the DeltaTable to load
+        """
+        self._table.load_with_datetime(datetime_string)
+
     def schema(self) -> Schema:
         """
         Get the current schema of the DeltaTable.
@@ -190,15 +205,16 @@ class DeltaTable:
         return pyarrow_schema_from_json(self._table.arrow_schema_json())
 
     def to_pyarrow_dataset(
-        self, partitions: Optional[List[Tuple[str, str, Any]]] = None
+        self, partitions: Optional[List[Tuple[str, str, Any]]] = None, filesystem: Optional[FileSystem] = None
     ) -> pyarrow.dataset.Dataset:
         """
         Build a PyArrow Dataset using data from the DeltaTable.
 
         :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
+        :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
         :return: the PyArrow dataset in PyArrow
         """
-        if partitions is None:
+        if not partitions:
             file_paths = self._table.file_uris()
         else:
             file_paths = self._table.files_by_partitions(partitions)
@@ -219,19 +235,21 @@ class DeltaTable:
             # for non-AWS S3 like resources. This is a slight hack until such a
             # point when pyarrow learns about AWS_ENDPOINT_URL
             endpoint_url = os.environ.get("AWS_ENDPOINT_URL")
-            if endpoint_url is not None:
+            if endpoint_url:
                 endpoint = urlparse(endpoint_url)
                 # This format specific to the URL schema inference done inside
                 # of pyarrow, consult their tests/dataset.py for examples
                 query_str += (
                     f"?scheme={endpoint.scheme}&endpoint_override={endpoint.netloc}"
                 )
+            if not filesystem:
+                filesystem = f"{paths[0].scheme}://{paths[0].netloc}{query_str}"
 
             keys = [curr_file.path for curr_file in paths]
             return dataset(
                 keys,
                 schema=self.pyarrow_schema(),
-                filesystem=f"{paths[0].scheme}://{paths[0].netloc}{query_str}",
+                filesystem=filesystem,
                 partitioning=partitioning(flavor="hive"),
             )
         else:
@@ -239,6 +257,7 @@ class DeltaTable:
                 file_paths,
                 schema=self.pyarrow_schema(),
                 format="parquet",
+                filesystem=filesystem,
                 partitioning=partitioning(flavor="hive"),
             )
 
@@ -246,29 +265,33 @@ class DeltaTable:
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
+        filesystem: Optional[FileSystem] = None
     ) -> pyarrow.Table:
         """
         Build a PyArrow Table using data from the DeltaTable.
 
         :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
         :param columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
+        :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
         :return: the PyArrow table
         """
-        return self.to_pyarrow_dataset(partitions).to_table(columns=columns)
+        return self.to_pyarrow_dataset(partitions=partitions, filesystem=filesystem).to_table(columns=columns)
 
     def to_pandas(
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
+        filesystem: Optional[FileSystem] = None
     ) -> "pandas.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
 
         :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
         :param columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
+        :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
         :return: a pandas dataframe
         """
-        return self.to_pyarrow_table(partitions, columns).to_pandas()
+        return self.to_pyarrow_table(partitions=partitions, columns=columns, filesystem=filesystem).to_pandas()
 
     def update_incremental(self) -> None:
         """

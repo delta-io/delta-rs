@@ -11,6 +11,9 @@ use azure_core::errors::AzureError;
 #[cfg(feature = "azure")]
 use std::error::Error;
 
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+use self::s3::S3StorageOptions;
+
 #[cfg(feature = "azure")]
 pub mod azure;
 pub mod file;
@@ -303,13 +306,21 @@ pub enum StorageError {
         /// The underlying Rusoto S3 error.
         source: rusoto_core::RusotoError<rusoto_s3::PutObjectError>,
     },
-    /// Error returned when an S3 response for a requested URI does not include body bytes.
+    /// Error representing a failure when executing an S3 DeleteObject request.
     #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[error("Failed to delete S3 object: {source}")]
     S3Delete {
         /// The underlying Rusoto S3 error.
         #[from]
         source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectError>,
+    },
+    /// Error representing a failure when executing an S3 DeleteObjects request.
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    #[error("Failed to delete S3 object: {source}")]
+    S3BatchDelete {
+        /// The underlying Rusoto S3 error.
+        #[from]
+        source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectsError>,
     },
     /// Error representing a failure when copying a S3 object
     #[cfg(any(feature = "s3", feature = "s3-rustls"))]
@@ -496,13 +507,25 @@ pub trait StorageBackend: Send + Sync + Debug {
     ///
     /// Implementation note:
     ///
-    /// For a multi-writer safe backend, `rename_obj` needs to implement `atomic rename` semantic.
+    /// For a multi-writer safe backend, `rename_obj_noreplace` needs to implement rename if not exists semantic.
     /// In other words, if the destination path already exists, rename should return a
     /// [StorageError::AlreadyExists] error.
-    async fn rename_obj(&self, src: &str, dst: &str) -> Result<(), StorageError>;
+    async fn rename_obj_noreplace(&self, src: &str, dst: &str) -> Result<(), StorageError>;
 
     /// Deletes object by `path`.
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError>;
+
+    /// Deletes object by `paths`.
+    async fn delete_objs(&self, paths: &[String]) -> Result<(), StorageError> {
+        for path in paths {
+            match self.delete_obj(path).await {
+                Ok(_) => continue,
+                Err(StorageError::NotFound) => continue,
+                Err(e) => return Err(e),
+            }
+        }
+        Ok(())
+    }
 }
 
 /// Dynamically construct a Storage backend trait object based on scheme for provided URI
@@ -515,5 +538,27 @@ pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, Storage
         Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
         #[cfg(feature = "gcs")]
         Uri::GCSObject(_) => Ok(Box::new(gcs::GCSStorageBackend::new()?)),
+    }
+}
+
+/// Returns a StorageBackend appropriate for the protocol and configured with the given options
+/// Options must be passed as a hashmap. Hashmap keys correspond to env variables that are used if options are not set.
+///
+/// Currently, S3 is the only backend that accepts options.
+/// Options may be passed in the HashMap or set as environment variables.
+///
+/// [S3StorageOptions] describes the available options for the S3 backend.
+/// [s3::dynamodb_lock::DynamoDbLockClient] describes additional options for the atomic rename client.
+pub fn get_backend_for_uri_with_options(
+    uri: &str,
+    // NOTE: prefixing options with "_" to avoid deny warnings error since usage is conditional on s3 and the only usage is with s3 so far
+    _options: std::collections::HashMap<String, String>,
+) -> Result<Box<dyn StorageBackend>, StorageError> {
+    match parse_uri(uri)? {
+        #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+        Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new_from_options(
+            S3StorageOptions::from_map(_options),
+        )?)),
+        _ => get_backend_for_uri(uri),
     }
 }

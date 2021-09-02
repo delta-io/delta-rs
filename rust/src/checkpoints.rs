@@ -164,11 +164,6 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
         })
         .collect();
 
-    println!("CREATING CHECKPOINT");
-    for a in state.files().iter() {
-        println!("{}", a.path);
-    }
-
     // Collect a map of paths that require special stats conversion.
     let mut stats_conversions: Vec<(SchemaPath, SchemaDataType)> = Vec::new();
     collect_stats_conversions(&mut stats_conversions, current_metadata.schema.get_fields());
