@@ -9,6 +9,7 @@ use deltalake::partitions::PartitionFilter;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
+use pyo3::types::PyType;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
@@ -16,6 +17,10 @@ create_exception!(deltalake, PyDeltaTableError, PyException);
 
 impl PyDeltaTableError {
     fn from_arrow(err: arrow::error::ArrowError) -> pyo3::PyErr {
+        PyDeltaTableError::new_err(err.to_string())
+    }
+
+    fn from_data_catalog(err: deltalake::DataCatalogError) -> pyo3::PyErr {
         PyDeltaTableError::new_err(err.to_string())
     }
 
@@ -77,6 +82,27 @@ impl RawDeltaTable {
         }
         .map_err(PyDeltaTableError::from_raw)?;
         Ok(RawDeltaTable { _table: table })
+    }
+
+    #[classmethod]
+    fn get_table_uri_from_data_catalog(
+        _cls: &PyType,
+        data_catalog: &str,
+        database_name: &str,
+        table_name: &str,
+        data_catalog_id: Option<String>,
+    ) -> PyResult<String> {
+        let data_catalog = deltalake::data_catalog::get_data_catalog(data_catalog)
+            .map_err(PyDeltaTableError::from_data_catalog)?;
+        let table_uri = rt()?
+            .block_on(data_catalog.get_table_storage_location(
+                data_catalog_id,
+                database_name,
+                table_name,
+            ))
+            .map_err(PyDeltaTableError::from_data_catalog)?;
+
+        Ok(table_uri)
     }
 
     pub fn table_uri(&self) -> PyResult<&str> {
