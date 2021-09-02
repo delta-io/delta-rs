@@ -64,5 +64,5 @@ profile = "black"
 src_paths = ["deltalake", "tests"]
 
 [tool.black]
-include = "deltalake,tests"
+include = '\.pyi?$'
 exclude = "venv"
