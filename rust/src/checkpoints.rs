@@ -114,7 +114,7 @@ async fn create_checkpoint(
     let delta_log_uri = storage.join_path(table_uri, "_delta_log");
     let last_checkpoint_uri = storage.join_path(&delta_log_uri, "_last_checkpoint");
 
-    info!("Writing parquet bytes to checkpoint buffer.");
+    debug!("Writing parquet bytes to checkpoint buffer.");
     let parquet_bytes = parquet_bytes_from_state(state)?;
 
     let size = parquet_bytes.len() as i64;
@@ -124,13 +124,13 @@ async fn create_checkpoint(
     let file_name = format!("{:020}.checkpoint.parquet", version);
     let checkpoint_uri = storage.join_path(&delta_log_uri, &file_name);
 
-    info!("Writing checkpoint to {:?}.", checkpoint_uri);
+    debug!("Writing checkpoint to {:?}.", checkpoint_uri);
     storage.put_obj(&checkpoint_uri, &parquet_bytes).await?;
 
     let last_checkpoint_content: Value = serde_json::to_value(&checkpoint)?;
     let last_checkpoint_content = serde_json::to_string(&last_checkpoint_content)?;
 
-    info!("Writing _last_checkpoint to {:?}.", last_checkpoint_uri);
+    debug!("Writing _last_checkpoint to {:?}.", last_checkpoint_uri);
     storage
         .put_obj(&last_checkpoint_uri, last_checkpoint_content.as_bytes())
         .await?;
