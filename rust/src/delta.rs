@@ -211,7 +211,7 @@ pub struct DeltaTableMetaData {
     /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
-    pub created_time: DeltaDataTypeTimestamp,
+    pub created_time: Option<DeltaDataTypeTimestamp>,
     /// table properties
     pub configuration: HashMap<String, Option<String>>,
 }
@@ -235,7 +235,7 @@ impl DeltaTableMetaData {
             format: format.unwrap_or_default(),
             schema,
             partition_columns,
-            created_time: Utc::now().timestamp_millis(),
+            created_time: Some(Utc::now().timestamp_millis()),
             configuration,
         }
     }
@@ -904,7 +904,7 @@ impl DeltaTable {
         Ok(self
             .get_tombstones()
             .iter()
-            .filter(|tombstone| tombstone.deletion_timestamp < delete_before_timestamp)
+            .filter(|tombstone| tombstone.deletion_timestamp.unwrap_or(0) < delete_before_timestamp)
             .map(|tombstone| tombstone.path.as_str())
             .collect::<HashSet<_>>())
     }

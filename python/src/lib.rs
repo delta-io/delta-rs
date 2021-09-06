@@ -67,7 +67,7 @@ struct RawDeltaTableMetaData {
     #[pyo3(get)]
     partition_columns: Vec<String>,
     #[pyo3(get)]
-    created_time: deltalake::DeltaDataTypeTimestamp,
+    created_time: Option<deltalake::DeltaDataTypeTimestamp>,
     #[pyo3(get)]
     configuration: HashMap<String, Option<String>>,
 }
