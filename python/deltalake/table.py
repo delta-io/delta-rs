@@ -210,16 +210,17 @@ class DeltaTable:
         """
         return self._metadata
 
-    def vacuum(self, retention_hours: int, dry_run: bool = True) -> List[str]:
+    def vacuum(self, retention_hours: Optional[int] = None, dry_run: bool = True) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
 
-        :param retention_hours: the retention threshold in hours
+        :param retention_hours: the retention threshold in hours, if none then the value from `configuration.deletedFileRetentionDuration` is used or default of 1 week otherwise.
         :param dry_run: when activated, list only the files, delete otherwise
         :return: the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
-        if retention_hours < 0:
-            raise ValueError("The retention periods should be positive.")
+        if retention_hours:
+            if retention_hours < 0:
+                raise ValueError("The retention periods should be positive.")
 
         return self._table.vacuum(dry_run, retention_hours)
 
