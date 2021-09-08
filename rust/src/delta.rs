@@ -887,7 +887,7 @@ impl DeltaTable {
             .ok_or(DeltaTableError::NoMetadata)
     }
 
-    /// Returns a vector of tombstones (i.e. `Remove` actions present in the current delta log).
+    /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
     pub fn get_tombstones(&self) -> Vec<&action::Remove> {
         self.state.unexpired_tombstones()
     }
