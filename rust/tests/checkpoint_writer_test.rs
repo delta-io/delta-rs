@@ -136,10 +136,7 @@ async fn test_checkpoints_with_tombstones_map_support() {
 
     let (removes1, opt1) = pseudo_optimize(&mut table, 5 * 59 * 1000).await;
     assert_eq!(table.get_files(), vec![opt1.path.as_str()]);
-    assert_eq!(
-        table.get_state().all_tombstones(),
-        &removes1
-    );
+    assert_eq!(table.get_state().all_tombstones(), &removes1);
 
     checkpoints::create_checkpoint_from_table(&table)
         .await
