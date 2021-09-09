@@ -167,6 +167,8 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     let mut stats_conversions: Vec<(SchemaPath, SchemaDataType)> = Vec::new();
     collect_stats_conversions(&mut stats_conversions, current_metadata.schema.get_fields());
 
+    let tombstones = state.unexpired_tombstones();
+
     // protocol
     let mut jsons = std::iter::once(action::Action::protocol(action::Protocol {
         min_reader_version: state.min_reader_version(),
@@ -191,10 +193,9 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     )
     // removes
     .chain(
-        state
-            .tombstones()
+        tombstones
             .iter()
-            .map(|f| action::Action::remove(f.clone())),
+            .map(|f| action::Action::remove((*f).clone())),
     )
     .map(|a| serde_json::to_value(a).map_err(ArrowError::from))
     // adds
@@ -213,7 +214,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     let writeable_cursor = InMemoryWriteableCursor::default();
     let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
     let batch_size =
-        state.app_transaction_version().len() + state.tombstones().len() + state.files().len() + 2; // 1 (protocol) + 1 (metadata)
+        state.app_transaction_version().len() + tombstones.len() + state.files().len() + 2; // 1 (protocol) + 1 (metadata)
     let decoder = Decoder::new(arrow_schema, batch_size, None);
     while let Some(batch) = decoder.next_batch(&mut jsons)? {
         writer.write(&batch)?;
