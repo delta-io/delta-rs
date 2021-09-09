@@ -191,7 +191,7 @@ impl RawDeltaTable {
     }
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
-    pub fn vacuum(&mut self, dry_run: bool, retention_hours: u64) -> PyResult<Vec<String>> {
+    pub fn vacuum(&mut self, dry_run: bool, retention_hours: Option<u64>) -> PyResult<Vec<String>> {
         rt()?
             .block_on(self._table.vacuum(retention_hours, dry_run))
             .map_err(PyDeltaTableError::from_raw)

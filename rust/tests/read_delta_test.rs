@@ -22,7 +22,7 @@ async fn read_delta_2_0_table_without_version() {
             "part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet",
         ]
     );
-    let tombstones = table.get_tombstones();
+    let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 4);
     assert_eq!(
         tombstones[0],
@@ -132,7 +132,7 @@ async fn read_delta_8_0_table_without_version() {
             .collect::<Vec<i64>>(),
         vec![0, 0]
     );
-    let tombstones = table.get_tombstones();
+    let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 1);
     assert_eq!(
         tombstones[0],
@@ -297,14 +297,17 @@ async fn vacuum_delta_8_0_table() {
     let dry_run = true;
 
     assert!(matches!(
-        table.vacuum(retention_hours, dry_run).await.unwrap_err(),
+        table
+            .vacuum(Some(retention_hours), dry_run)
+            .await
+            .unwrap_err(),
         deltalake::DeltaTableError::InvalidVacuumRetentionPeriod,
     ));
 
     let retention_hours = 169;
 
     assert_eq!(
-        table.vacuum(retention_hours, dry_run).await.unwrap(),
+        table.vacuum(Some(retention_hours), dry_run).await.unwrap(),
         vec![backend.join_paths(&[
             "tests",
             "data",
@@ -320,5 +323,8 @@ async fn vacuum_delta_8_0_table() {
         / 3600;
     let empty: Vec<String> = Vec::new();
 
-    assert_eq!(table.vacuum(retention_hours, dry_run).await.unwrap(), empty);
+    assert_eq!(
+        table.vacuum(Some(retention_hours), dry_run).await.unwrap(),
+        empty
+    );
 }

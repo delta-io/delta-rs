@@ -20,7 +20,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
-use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::{cmp::Ordering, collections::HashSet};
 use uuid::Uuid;
 
@@ -28,10 +28,12 @@ use crate::action::Stats;
 
 use super::action;
 use super::action::{Action, DeltaOperation};
+use super::delta_config;
 use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
 use super::storage::{parse_uri, StorageBackend, StorageError, UriError};
+use crate::delta_config::DeltaConfigError;
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
@@ -311,6 +313,13 @@ pub enum ApplyLogError {
         /// Storage error details returned while reading the log content.
         source: StorageError,
     },
+    /// Error returned when reading delta config failed.
+    #[error("Failed to read delta config: {}", .source)]
+    Config {
+        /// Delta config error returned when reading delta config failed.
+        #[from]
+        source: DeltaConfigError,
+    },
     /// Error returned when a line from log record is invalid.
     #[error("Failed to read line from log record")]
     Io {
@@ -371,12 +380,23 @@ pub struct DeltaTableState {
     min_reader_version: i32,
     min_writer_version: i32,
     current_metadata: Option<DeltaTableMetaData>,
+    tombstone_retention_millis: DeltaDataTypeLong,
 }
 
 impl DeltaTableState {
     /// Full list of tombstones (remove actions) representing files removed from table state).
-    pub fn tombstones(&self) -> &Vec<action::Remove> {
+    pub fn all_tombstones(&self) -> &Vec<action::Remove> {
         self.tombstones.as_ref()
+    }
+
+    /// List of unexpired tombstones (remove actions) representing files removed from table state.
+    /// The retention period is set by `deletedFileRetentionDuration` with default value of 1 week.
+    pub fn unexpired_tombstones(&self) -> Vec<&action::Remove> {
+        let retention_timestamp = Utc::now().timestamp_millis() - self.tombstone_retention_millis;
+        self.tombstones
+            .iter()
+            .filter(|t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp)
+            .collect()
     }
 
     /// Full list of add actions representing all parquet files that are part of the current
@@ -867,9 +887,9 @@ impl DeltaTable {
             .ok_or(DeltaTableError::NoMetadata)
     }
 
-    /// Returns a vector of tombstones (i.e. `Remove` actions present in the current delta log.
-    pub fn get_tombstones(&self) -> &Vec<action::Remove> {
-        &self.state.tombstones
+    /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
+    pub fn get_tombstones(&self) -> Vec<&action::Remove> {
+        self.state.unexpired_tombstones()
     }
 
     /// Returns the current version of the DeltaTable based on the loaded metadata.
@@ -890,21 +910,29 @@ impl DeltaTable {
     }
 
     /// List files no longer referenced by a Delta table and are older than the retention threshold.
-    fn get_stale_files(&self, retention_hours: u64) -> Result<HashSet<&str>, DeltaTableError> {
-        if retention_hours < 168 {
+    fn get_stale_files(
+        &self,
+        retention_hours: Option<u64>,
+    ) -> Result<HashSet<&str>, DeltaTableError> {
+        let retention_millis = retention_hours
+            .map(|hours| 3600000 * hours as i64)
+            .unwrap_or(self.state.tombstone_retention_millis);
+
+        if retention_millis < self.state.tombstone_retention_millis {
             return Err(DeltaTableError::InvalidVacuumRetentionPeriod);
         }
-        let before_duration = (SystemTime::now() - Duration::from_secs(3600 * retention_hours))
-            .duration_since(UNIX_EPOCH);
-        let delete_before_timestamp = match before_duration {
-            Ok(duration) => duration.as_millis() as i64,
-            Err(_) => return Err(DeltaTableError::InvalidVacuumRetentionPeriod),
-        };
+
+        let tombstone_retention_timestamp = Utc::now().timestamp_millis() - retention_millis;
 
         Ok(self
-            .get_tombstones()
+            .state
+            .all_tombstones()
             .iter()
-            .filter(|tombstone| tombstone.deletion_timestamp.unwrap_or(0) < delete_before_timestamp)
+            .filter(|tombstone| {
+                // if the file has a creation time before the `tombstone_retention_timestamp`
+                // then it's considered as a stale file
+                tombstone.deletion_timestamp.unwrap_or(0) < tombstone_retention_timestamp
+            })
             .map(|tombstone| tombstone.path.as_str())
             .collect::<HashSet<_>>())
     }
@@ -928,10 +956,15 @@ impl DeltaTable {
     }
 
     /// Run the Vacuum command on the Delta Table: delete files no longer referenced by a Delta table and are older than the retention threshold.
-    /// We do not recommend that you set a retention interval shorter than 7 days, because old snapshots and uncommitted files can still be in use by concurrent readers or writers to the table. If vacuum cleans up active files, concurrent readers can fail or, worse, tables can be corrupted when vacuum deletes files that have not yet been committed.
+    /// We do not recommend that you set a retention interval shorter than 7 days, because old snapshots
+    /// and uncommitted files can still be in use by concurrent readers or writers to the table.
+    /// If vacuum cleans up active files, concurrent readers can fail or, worse, tables can be
+    /// corrupted when vacuum deletes files that have not yet been committed.
+    /// If `retention_hours` is not set then the `configuration.deletedFileRetentionDuration` of
+    /// delta table is used or if that's missing too, then the default value of 7 days otherwise.
     pub async fn vacuum(
         &mut self,
-        retention_hours: u64,
+        retention_hours: Option<u64>,
         dry_run: bool,
     ) -> Result<Vec<String>, DeltaTableError> {
         let expired_tombstones = self.get_stale_files(retention_hours)?;
@@ -1024,9 +1057,7 @@ impl DeltaTable {
             .await
             .map_err(|e| DeltaTableError::from(DeltaTransactionError::from(e)))?;
 
-        // NOTE: since we have the log entry in memory already,
-        // we could optimize this further by merging the log entry instead of updating from storage.
-        self.update_incremental().await?;
+        self.update().await?;
 
         Ok(version)
     }
@@ -1418,7 +1449,7 @@ impl<'a> DeltaTransaction<'a> {
     ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         let mut attempt_number: u32 = 0;
         loop {
-            self.delta_table.update_incremental().await?;
+            self.delta_table.update().await?;
 
             let version = self.delta_table.version + 1;
 
@@ -1472,10 +1503,7 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Erro
     Ok(jsons.join("\n"))
 }
 
-fn process_action(
-    state: &mut DeltaTableState,
-    action: Action,
-) -> Result<(), serde_json::error::Error> {
+fn process_action(state: &mut DeltaTableState, action: Action) -> Result<(), ApplyLogError> {
     match action {
         Action::add(v) => {
             state.files.push(v);
@@ -1489,7 +1517,11 @@ fn process_action(
             state.min_writer_version = v.min_writer_version;
         }
         Action::metaData(v) => {
-            state.current_metadata = Some(DeltaTableMetaData::try_from(v)?);
+            let md = DeltaTableMetaData::try_from(v)?;
+            state.tombstone_retention_millis = delta_config::TOMBSTONE_RETENTION
+                .get_interval_from_metadata(&md)?
+                .as_millis() as i64;
+            state.current_metadata = Some(md);
         }
         Action::txn(v) => {
             *state
@@ -1565,6 +1597,7 @@ mod tests {
             min_reader_version: 1,
             min_writer_version: 2,
             app_transaction_version,
+            tombstone_retention_millis: 0,
         };
 
         let txn_action = Action::txn(action::Txn {

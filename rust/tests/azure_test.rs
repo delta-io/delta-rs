@@ -29,7 +29,7 @@ mod azure {
                 "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
             ]
         );
-        let tombstones = table.get_tombstones();
+        let tombstones = table.get_state().all_tombstones();
         assert_eq!(tombstones.len(), 31);
         assert_eq!(
             tombstones[0],
