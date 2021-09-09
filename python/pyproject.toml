@@ -6,6 +6,7 @@ build-backend = "maturin"
 name = "deltalake"
 description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
+license = {file = "LICENSE.txt"}
 requires-python = ">=3.6"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 classifiers = [
@@ -64,5 +65,5 @@ profile = "black"
 src_paths = ["deltalake", "tests"]
 
 [tool.black]
-include = "deltalake,tests"
+include = '\.pyi?$'
 exclude = "venv"

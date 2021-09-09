@@ -22,14 +22,15 @@ async fn read_delta_2_0_table_without_version() {
             "part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet",
         ]
     );
-    let tombstones = table.get_tombstones();
+    let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 4);
     assert_eq!(
         tombstones[0],
         deltalake::action::Remove {
             path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
-            deletion_timestamp: 1564524298213,
+            deletion_timestamp: Some(1564524298213),
             data_change: false,
+            extended_file_metadata: Some(false),
             ..Default::default()
         }
     );
@@ -131,13 +132,13 @@ async fn read_delta_8_0_table_without_version() {
             .collect::<Vec<i64>>(),
         vec![0, 0]
     );
-    let tombstones = table.get_tombstones();
+    let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 1);
     assert_eq!(
         tombstones[0],
         deltalake::action::Remove {
             path: "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet".to_string(),
-            deletion_timestamp: 1615043776198,
+            deletion_timestamp: Some(1615043776198),
             data_change: true,
             extended_file_metadata: Some(true),
             partition_values: Some(HashMap::new()),
@@ -296,14 +297,17 @@ async fn vacuum_delta_8_0_table() {
     let dry_run = true;
 
     assert!(matches!(
-        table.vacuum(retention_hours, dry_run).await.unwrap_err(),
+        table
+            .vacuum(Some(retention_hours), dry_run)
+            .await
+            .unwrap_err(),
         deltalake::DeltaTableError::InvalidVacuumRetentionPeriod,
     ));
 
     let retention_hours = 169;
 
     assert_eq!(
-        table.vacuum(retention_hours, dry_run).await.unwrap(),
+        table.vacuum(Some(retention_hours), dry_run).await.unwrap(),
         vec![backend.join_paths(&[
             "tests",
             "data",
@@ -319,5 +323,8 @@ async fn vacuum_delta_8_0_table() {
         / 3600;
     let empty: Vec<String> = Vec::new();
 
-    assert_eq!(table.vacuum(retention_hours, dry_run).await.unwrap(), empty);
+    assert_eq!(
+        table.vacuum(Some(retention_hours), dry_run).await.unwrap(),
+        empty
+    );
 }

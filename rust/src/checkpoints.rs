@@ -115,7 +115,7 @@ async fn create_checkpoint(
     let delta_log_uri = storage.join_path(table_uri, "_delta_log");
     let last_checkpoint_uri = storage.join_path(&delta_log_uri, "_last_checkpoint");
 
-    info!("Writing parquet bytes to checkpoint buffer.");
+    debug!("Writing parquet bytes to checkpoint buffer.");
     let parquet_bytes = parquet_bytes_from_state(state)?;
 
     let size = parquet_bytes.len() as i64;
@@ -125,13 +125,13 @@ async fn create_checkpoint(
     let file_name = format!("{:020}.checkpoint.parquet", version);
     let checkpoint_uri = storage.join_path(&delta_log_uri, &file_name);
 
-    info!("Writing checkpoint to {:?}.", checkpoint_uri);
+    debug!("Writing checkpoint to {:?}.", checkpoint_uri);
     storage.put_obj(&checkpoint_uri, &parquet_bytes).await?;
 
     let last_checkpoint_content: Value = serde_json::to_value(&checkpoint)?;
     let last_checkpoint_content = serde_json::to_string(&last_checkpoint_content)?;
 
-    info!("Writing _last_checkpoint to {:?}.", last_checkpoint_uri);
+    debug!("Writing _last_checkpoint to {:?}.", last_checkpoint_uri);
     storage
         .put_obj(&last_checkpoint_uri, last_checkpoint_content.as_bytes())
         .await?;
@@ -168,6 +168,8 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     let mut stats_conversions: Vec<(SchemaPath, SchemaDataType)> = Vec::new();
     collect_stats_conversions(&mut stats_conversions, current_metadata.schema.get_fields());
 
+    let tombstones = state.unexpired_tombstones();
+
     // protocol
     let mut jsons = std::iter::once(action::Action::protocol(action::Protocol {
         min_reader_version: state.min_reader_version(),
@@ -192,10 +194,9 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     )
     // removes
     .chain(
-        state
-            .tombstones()
+        tombstones
             .iter()
-            .map(|f| action::Action::remove(f.clone())),
+            .map(|f| action::Action::remove((*f).clone())),
     )
     .map(|a| serde_json::to_value(a).map_err(ArrowError::from))
     // adds
@@ -214,7 +215,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     let writeable_cursor = InMemoryWriteableCursor::default();
     let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
     let batch_size =
-        state.app_transaction_version().len() + state.tombstones().len() + state.files().len() + 2; // 1 (protocol) + 1 (metadata)
+        state.app_transaction_version().len() + tombstones.len() + state.files().len() + 2; // 1 (protocol) + 1 (metadata)
     let decoder = Decoder::new(arrow_schema, batch_size, None);
     while let Some(batch) = decoder.next_batch(&mut jsons)? {
         writer.write(&batch)?;

@@ -311,7 +311,7 @@ pub fn create_remove(path: String) -> Remove {
 
     Remove {
         path,
-        deletion_timestamp: deletion_timestamp,
+        deletion_timestamp: Some(deletion_timestamp),
         data_change: true,
         extended_file_metadata: Some(false),
         ..Default::default()

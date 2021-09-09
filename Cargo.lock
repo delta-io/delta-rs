@@ -636,6 +636,7 @@ dependencies = [
  "rusoto_core",
  "rusoto_credential",
  "rusoto_dynamodb",
+ "rusoto_glue",
  "rusoto_s3",
  "rusoto_sts",
  "serde",
@@ -2283,6 +2284,20 @@ name = "rusoto_dynamodb"
 version = "0.46.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0f26af40f36409cb8fae3069690f78f638f747b55c7b90f338d5ed36016b0cda"
+dependencies = [
+ "async-trait",
+ "bytes",
+ "futures",
+ "rusoto_core",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
+name = "rusoto_glue"
+version = "0.46.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9cd3fb8114717609561e16b5e818bf26e6864d94b655574c9c3f7b959563aaae"
 dependencies = [
  "async-trait",
  "bytes",
