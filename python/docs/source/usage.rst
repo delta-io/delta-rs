@@ -56,6 +56,18 @@ Time travel
     >>> dt.to_pyarrow_table().to_pydict()
     {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
 
+Create a DeltaTable using a Data Catalog
+
+.. code-block:: python
+
+    >>> from deltalake import DeltaTable
+    >>> from deltalake import DataCatalog
+    >>> database_name = "simple_database"
+    >>> table_name = "simple_table"
+    >>> data_catalog = DataCatalog.AWS
+    >>> dt = DeltaTable.from_data_catalog(data_catalog=data_catalog, database_name=database_name, table_name=table_name)
+    >>> dt.to_pyarrow_table().to_pydict()
+    {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
 
 DeltaSchema
 -----------

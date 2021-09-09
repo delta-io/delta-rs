@@ -12,3 +12,9 @@ DeltaSchema
 
 .. automodule:: deltalake.schema
     :members:
+
+DataCatalog
+-----------
+
+.. automodule:: deltalake.data_catalog
+    :members:

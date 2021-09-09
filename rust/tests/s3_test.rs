@@ -50,14 +50,14 @@ mod s3 {
                 "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
             ]
         );
-        let tombstones = table.get_tombstones();
+        let tombstones = table.get_state().all_tombstones();
         assert_eq!(tombstones.len(), 31);
         assert_eq!(
             tombstones[0],
             deltalake::action::Remove {
                 path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet"
                     .to_string(),
-                deletion_timestamp: 1587968596250,
+                deletion_timestamp: Some(1587968596250),
                 data_change: true,
                 ..Default::default()
             }
@@ -86,14 +86,14 @@ mod s3 {
                 "part-00001-bb70d2ba-c196-4df2-9c85-f34969ad3aa9-c000.snappy.parquet",
             ]
         );
-        let tombstones = table.get_tombstones();
+        let tombstones = table.get_state().all_tombstones();
         assert_eq!(tombstones.len(), 29);
         assert_eq!(
             tombstones[0],
             deltalake::action::Remove {
                 path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet"
                     .to_string(),
-                deletion_timestamp: 1587968596250,
+                deletion_timestamp: Some(1587968596250),
                 data_change: true,
                 ..Default::default()
             }
