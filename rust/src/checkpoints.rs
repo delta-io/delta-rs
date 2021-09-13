@@ -170,6 +170,12 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
 
     let tombstones = state.unexpired_tombstones();
 
+    // if any, tombstones do not include extended file metadata, we must omit the extended metadata fields from the remove schema
+    // See https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
+    let use_extended_remove_schema = tombstones
+        .iter()
+        .all(|r| r.extended_file_metadata == Some(true));
+
     // protocol
     let mut jsons = std::iter::once(action::Action::protocol(action::Protocol {
         min_reader_version: state.min_reader_version(),
@@ -193,11 +199,17 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
             }),
     )
     // removes
-    .chain(
-        tombstones
-            .iter()
-            .map(|f| action::Action::remove((*f).clone())),
-    )
+    .chain(tombstones.iter().map(|r| {
+        let mut r = (*r).clone();
+
+        // As a "new writer", we should always set `extendedFileMetadata` when writing, and include/ignore the other three fields accordingly.
+        // https://github.com/delta-io/delta/blob/fb0452c2fb142310211c6d3604eefb767bb4a134/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L311-L314
+        if None == r.extended_file_metadata {
+            r.extended_file_metadata = Some(false);
+        }
+
+        action::Action::remove(r)
+    }))
     .map(|a| serde_json::to_value(a).map_err(ArrowError::from))
     // adds
     .chain(state.files().iter().map(|f| {
@@ -208,6 +220,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     let arrow_schema = delta_log_schema_for_table(
         <ArrowSchema as TryFrom<&Schema>>::try_from(&current_metadata.schema)?,
         current_metadata.partition_columns.as_slice(),
+        use_extended_remove_schema,
     );
 
     debug!("Writing to checkpoint parquet buffer...");

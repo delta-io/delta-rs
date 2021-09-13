@@ -162,9 +162,18 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
     }
 }
 
+/// Returns an arrow schema representing the delta log for use in checkpoints
+///
+/// # Arguments
+///
+/// * `table_schema` - The arrow schema representing the table backed by the delta log
+/// * `partition_columns` - The list of partition columns of the table.
+/// * `use_extended_remove_schema` - Whether to include extended file metadata in remove action schema.
+///    Required for compatibility with different versions of Databricks runtime.
 pub(crate) fn delta_log_schema_for_table(
     table_schema: ArrowSchema,
     partition_columns: &[String],
+    use_extended_remove_schema: bool,
 ) -> SchemaRef {
     lazy_static! {
         static ref SCHEMA_FIELDS: Vec<ArrowField> = vec![
@@ -241,47 +250,6 @@ pub(crate) fn delta_log_schema_for_table(
                 ]),
                 true
             ),
-            ArrowField::new(
-                "remove",
-                ArrowDataType::Struct(vec![
-                    ArrowField::new("path", ArrowDataType::Utf8, true),
-                    ArrowField::new("deletionTimestamp", ArrowDataType::Int64, true),
-                    ArrowField::new("dataChange", ArrowDataType::Boolean, true),
-                    ArrowField::new("extendedFileMetadata", ArrowDataType::Boolean, true),
-                    ArrowField::new("size", ArrowDataType::Int64, true),
-                    ArrowField::new(
-                        "partitionValues",
-                        ArrowDataType::Map(
-                            Box::new(ArrowField::new(
-                                "key_value",
-                                ArrowDataType::Struct(vec![
-                                    ArrowField::new("key", ArrowDataType::Utf8, false),
-                                    ArrowField::new("value", ArrowDataType::Utf8, true),
-                                ]),
-                                false
-                            )),
-                            false
-                        ),
-                        true
-                    ),
-                    ArrowField::new(
-                        "tags",
-                        ArrowDataType::Map(
-                            Box::new(ArrowField::new(
-                                "key_value",
-                                ArrowDataType::Struct(vec![
-                                    ArrowField::new("key", ArrowDataType::Utf8, false),
-                                    ArrowField::new("value", ArrowDataType::Utf8, true),
-                                ]),
-                                false
-                            )),
-                            false
-                        ),
-                        true
-                    )
-                ]),
-                true
-            )
         ];
         static ref ADD_FIELDS: Vec<ArrowField> = vec![
             ArrowField::new("path", ArrowDataType::Utf8, true),
@@ -320,17 +288,55 @@ pub(crate) fn delta_log_schema_for_table(
                 true
             )
         ];
+        static ref REMOVE_FIELDS: Vec<ArrowField> = vec![
+            ArrowField::new("path", ArrowDataType::Utf8, true),
+            ArrowField::new("deletionTimestamp", ArrowDataType::Int64, true),
+            ArrowField::new("dataChange", ArrowDataType::Boolean, true),
+            ArrowField::new("extendedFileMetadata", ArrowDataType::Boolean, true),
+        ];
+        static ref REMOVE_EXTENDED_FILE_METADATA_FIELDS: Vec<ArrowField> = vec![
+            ArrowField::new("size", ArrowDataType::Int64, true),
+            ArrowField::new(
+                "partitionValues",
+                ArrowDataType::Map(
+                    Box::new(ArrowField::new(
+                        "key_value",
+                        ArrowDataType::Struct(vec![
+                            ArrowField::new("key", ArrowDataType::Utf8, false),
+                            ArrowField::new("value", ArrowDataType::Utf8, true),
+                        ]),
+                        false
+                    )),
+                    false
+                ),
+                true
+            ),
+            ArrowField::new(
+                "tags",
+                ArrowDataType::Map(
+                    Box::new(ArrowField::new(
+                        "key_value",
+                        ArrowDataType::Struct(vec![
+                            ArrowField::new("key", ArrowDataType::Utf8, false),
+                            ArrowField::new("value", ArrowDataType::Utf8, true),
+                        ]),
+                        false
+                    )),
+                    false
+                ),
+                true
+            )
+        ];
     }
 
+    // create add fields according to the specific data table schema
     let (partition_fields, non_partition_fields): (Vec<ArrowField>, Vec<ArrowField>) = table_schema
         .fields()
         .iter()
         .map(|f| f.to_owned())
         .partition(|field| partition_columns.contains(field.name()));
-
     let mut stats_parsed_fields: Vec<ArrowField> =
         vec![ArrowField::new("numRecords", ArrowDataType::Int64, true)];
-
     if !non_partition_fields.is_empty() {
         let mut max_min_vec = Vec::new();
         non_partition_fields
@@ -352,15 +358,12 @@ pub(crate) fn delta_log_schema_for_table(
 
         stats_parsed_fields.push(null_count_struct);
     }
-
     let mut add_fields = ADD_FIELDS.clone();
-
     add_fields.push(ArrowField::new(
         "stats_parsed",
         ArrowDataType::Struct(stats_parsed_fields),
         true,
     ));
-
     if !partition_fields.is_empty() {
         add_fields.push(ArrowField::new(
             "partitionValues_parsed",
@@ -369,10 +372,22 @@ pub(crate) fn delta_log_schema_for_table(
         ));
     }
 
+    // create remove fields with or without extendedFileMetadata
+    let mut remove_fields = REMOVE_FIELDS.clone();
+    if use_extended_remove_schema {
+        remove_fields.extend(REMOVE_EXTENDED_FILE_METADATA_FIELDS.clone());
+    }
+
+    // include add and remove fields in checkpoint schema
     let mut schema_fields = SCHEMA_FIELDS.clone();
     schema_fields.push(ArrowField::new(
         "add",
         ArrowDataType::Struct(add_fields),
+        true,
+    ));
+    schema_fields.push(ArrowField::new(
+        "remove",
+        ArrowDataType::Struct(remove_fields),
         true,
     ));
 
@@ -442,12 +457,17 @@ mod tests {
             ArrowField::new("col1", ArrowDataType::Int32, true),
         ]);
         let partition_columns = vec!["pcol".to_string()];
-        let log_schema = delta_log_schema_for_table(table_schema, partition_columns.as_slice());
+        let log_schema =
+            delta_log_schema_for_table(table_schema.clone(), partition_columns.as_slice(), false);
 
+        // verify top-level schema contains all expected fields and they are named correctly.
         let expected_fields = vec!["metaData", "protocol", "txn", "remove", "add"];
         for f in log_schema.fields().iter() {
             assert!(expected_fields.contains(&f.name().as_str()));
         }
+        assert_eq!(5, log_schema.fields().len());
+
+        // verify add fields match as expected. a lot of transformation goes into these.
         let add_fields: Vec<_> = log_schema
             .fields()
             .iter()
@@ -462,12 +482,10 @@ mod tests {
             .flatten()
             .collect();
         assert_eq!(9, add_fields.len());
-
         let add_field_map: HashMap<_, _> = add_fields
             .iter()
             .map(|f| (f.name().to_owned(), f.clone()))
             .collect();
-
         let partition_values_parsed = add_field_map.get("partitionValues_parsed").unwrap();
         if let ArrowDataType::Struct(fields) = partition_values_parsed.data_type() {
             assert_eq!(1, fields.len());
@@ -476,7 +494,6 @@ mod tests {
         } else {
             unreachable!();
         }
-
         let stats_parsed = add_field_map.get("stats_parsed").unwrap();
         if let ArrowDataType::Struct(fields) = stats_parsed.data_type() {
             assert_eq!(4, fields.len());
@@ -507,6 +524,52 @@ mod tests {
             }
         } else {
             unreachable!();
+        }
+
+        // verify extended remove schema fields **ARE NOT** included when `use_extended_remove_schema` is false.
+        let remove_fields: Vec<_> = log_schema
+            .fields()
+            .iter()
+            .filter(|f| f.name() == "remove")
+            .map(|f| {
+                if let ArrowDataType::Struct(fields) = f.data_type() {
+                    fields.iter().map(|f| f.clone())
+                } else {
+                    unreachable!();
+                }
+            })
+            .flatten()
+            .collect();
+        assert_eq!(4, remove_fields.len());
+
+        // verify extended remove schema fields **ARE** included when `use_extended_remove_schema` is true.
+        let log_schema =
+            delta_log_schema_for_table(table_schema, partition_columns.as_slice(), true);
+        let remove_fields: Vec<_> = log_schema
+            .fields()
+            .iter()
+            .filter(|f| f.name() == "remove")
+            .map(|f| {
+                if let ArrowDataType::Struct(fields) = f.data_type() {
+                    fields.iter().map(|f| f.clone())
+                } else {
+                    unreachable!();
+                }
+            })
+            .flatten()
+            .collect();
+        assert_eq!(7, remove_fields.len());
+        let expected_fields = vec![
+            "path",
+            "deletionTimestamp",
+            "dataChange",
+            "extendedFileMetadata",
+            "partitionValues",
+            "size",
+            "tags",
+        ];
+        for f in remove_fields.iter() {
+            assert!(expected_fields.contains(&f.name().as_str()));
         }
     }
 }
