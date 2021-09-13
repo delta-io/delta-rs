@@ -18,7 +18,7 @@ async fn write_simple_checkpoint() {
     cleanup_checkpoint_files(log_path.as_path());
 
     // Load the delta table at version 5
-    let mut table = deltalake::open_table_with_version(table_location, 5)
+    let table = deltalake::open_table_with_version(table_location, 5)
         .await
         .unwrap();
 

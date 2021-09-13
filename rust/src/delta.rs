@@ -15,7 +15,6 @@ use parquet::file::{
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
@@ -27,7 +26,7 @@ use uuid::Uuid;
 use crate::action::Stats;
 
 use super::action;
-use super::action::{Action, DeltaOperation};
+use super::action::{Action, CommitInfo, DeltaOperation};
 use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
@@ -366,7 +365,7 @@ pub struct DeltaTableState {
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: Vec<action::Remove>,
     files: Vec<action::Add>,
-    commit_infos: Vec<Value>,
+    commit_infos: Vec<CommitInfo>,
     app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
     min_reader_version: i32,
     min_writer_version: i32,
@@ -751,6 +750,16 @@ impl DeltaTable {
         }
     }
 
+    /// Returns provenance information, including the operation, user, and so on, for each write to a table.
+    /// Table history is retained for 30 days.
+    pub fn history(&mut self, limit: Option<usize>) -> Result<Vec<CommitInfo>, DeltaTableError> {
+        let commit_infos_list = self.state.commit_infos.iter().rev().map(CommitInfo::clone);
+        match limit {
+            Some(l) => Ok(commit_infos_list.take(l).collect()),
+            None => Ok(commit_infos_list.collect()),
+        }
+    }
+
     /// Returns the file list tracked in current table state filtered by provided
     /// `PartitionFilter`s.
     pub fn get_files_by_partitions(
@@ -1057,29 +1066,22 @@ impl DeltaTable {
         &mut self,
         metadata: DeltaTableMetaData,
         protocol: action::Protocol,
-        commit_info: Option<Value>,
+        commit_info: Option<CommitInfo>,
     ) -> Result<(), DeltaTableError> {
         let meta = action::MetaData::try_from(metadata)?;
 
         // delta-rs commit info will include the delta-rs version and timestamp as of now
-        let mut enriched_commit_info = match commit_info {
-            Some(Value::Object(map)) => Ok(map),
-            Some(_) => Err(DeltaTableError::Generic(
-                "Expected a json object".to_string(),
-            )),
-            None => Ok(serde_json::Map::new()),
-        }?;
-        enriched_commit_info.insert(
-            "delta-rs".to_string(),
-            Value::String(crate_version().to_string()),
-        );
-        enriched_commit_info.insert(
-            "timestamp".to_string(),
-            Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
-        );
-
+        let enriched_commit_info = match commit_info {
+            Some(mut c) => {
+                c.user_id = Some("delta-rs".to_string());
+                c.user_metadata = Some(crate_version().to_string());
+                c.timestamp = Utc::now().timestamp_millis();
+                c
+            }
+            _ => CommitInfo::default(),
+        };
         let actions = vec![
-            Action::commitInfo(Value::Object(enriched_commit_info)),
+            Action::commitInfo(Box::new(enriched_commit_info)),
             Action::protocol(protocol),
             Action::metaData(meta),
         ];
@@ -1498,7 +1500,7 @@ fn process_action(
                 .or_insert(v.version) = v.version;
         }
         Action::commitInfo(v) => {
-            state.commit_infos.push(v);
+            state.commit_infos.push(*v);
         }
     }
 
@@ -1676,7 +1678,11 @@ mod tests {
         ));
         let mut dt = DeltaTable::new(path, backend).unwrap();
 
-        let commit_info = json!({"operation": "CREATE TABLE", "userName": "test user"});
+        let commit_info = CommitInfo {
+            operation: "CREATE TABLE".to_string(),
+            user_name: Some("userName".to_string()),
+            ..Default::default()
+        };
         // Action
         dt.create(delta_md.clone(), protocol.clone(), Some(commit_info))
             .await
@@ -1710,19 +1716,12 @@ mod tests {
                 Action::metaData(action) => {
                     assert_eq!(DeltaTableMetaData::try_from(action).unwrap(), delta_md);
                 }
-                Action::commitInfo(mut action) => {
-                    let modified_action = if action.is_object() {
-                        let temp = action.as_object_mut().unwrap();
-                        temp["timestamp"] = Value::Number(serde_json::Number::from(0i64));
-                        Some(Value::Object(temp.clone()))
-                    } else {
-                        None
-                    };
-
-                    assert_eq!(
-                        modified_action.unwrap(),
-                        json!({"operation": "CREATE TABLE", "userName": "test user", "delta-rs": crate_version().to_string(), "timestamp": 0i64})
-                    )
+                Action::commitInfo(action) => {
+                    assert_eq!(action.operation, "CREATE TABLE".to_string());
+                    assert_eq!(action.user_name, Some("userName".to_string()));
+                    assert_eq!(action.user_id, Some("delta-rs".to_string()));
+                    assert_eq!(action.user_metadata, Some(crate_version().to_string()));
+                    assert_ne!(action.timestamp, 0);
                 }
                 _ => (),
             }
