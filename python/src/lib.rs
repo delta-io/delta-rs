@@ -72,63 +72,6 @@ struct RawDeltaTableMetaData {
     configuration: HashMap<String, Option<String>>,
 }
 
-#[pyclass]
-#[derive(Clone)]
-struct RawCommitInfoJobInfo {
-    #[pyo3(get)]
-    job_id: String,
-    #[pyo3(get)]
-    job_name: String,
-    #[pyo3(get)]
-    run_id: String,
-    #[pyo3(get)]
-    job_owner_id: String,
-    #[pyo3(get)]
-    trigger_type: String,
-}
-
-#[pyclass]
-#[derive(Clone)]
-struct RawCommitInfoNotebookInfo {
-    #[pyo3(get)]
-    notebook_id: String,
-}
-
-#[pyclass]
-#[derive(Clone)]
-struct RawDeltaTableCommitInfo {
-    #[pyo3(get)]
-    version: Option<deltalake::DeltaDataTypeLong>,
-    #[pyo3(get)]
-    timestamp: deltalake::DeltaDataTypeTimestamp,
-    #[pyo3(get)]
-    user_id: Option<String>,
-    #[pyo3(get)]
-    user_name: Option<String>,
-    #[pyo3(get)]
-    operation: String,
-    #[pyo3(get)]
-    operation_parameters: HashMap<String, Option<String>>,
-    #[pyo3(get)]
-    job: Option<RawCommitInfoJobInfo>,
-    #[pyo3(get)]
-    notebook: Option<RawCommitInfoNotebookInfo>,
-    #[pyo3(get)]
-    cluster_id: Option<String>,
-    #[pyo3(get)]
-    read_version: Option<deltalake::DeltaDataTypeLong>,
-    #[pyo3(get)]
-    isolation_level: Option<String>,
-    #[pyo3(get)]
-    is_blind_append: Option<bool>,
-    #[pyo3(get)]
-    operation_metrics: Option<HashMap<String, Option<String>>>,
-    #[pyo3(get)]
-    user_metadata: Option<String>,
-    #[pyo3(get)]
-    tags: Option<HashMap<String, Option<String>>>,
-}
-
 #[pymethods]
 impl RawDeltaTable {
     #[new]
@@ -255,45 +198,15 @@ impl RawDeltaTable {
     }
 
     // Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.
-    pub fn history(&mut self, limit: Option<usize>) -> PyResult<Vec<RawDeltaTableCommitInfo>> {
+    pub fn history(&mut self, limit: Option<usize>) -> PyResult<Vec<String>> {
         let history = self
             ._table
             .history(limit)
             .map_err(PyDeltaTableError::from_raw)?;
         Ok(history
             .iter()
-            .map(|c| RawDeltaTableCommitInfo {
-                version: c.version,
-                timestamp: c.timestamp,
-                user_id: c.user_id.clone(),
-                user_name: c.user_name.clone(),
-                operation: c.operation.clone(),
-                operation_parameters: c.operation_parameters.clone(),
-                job: match &c.job {
-                    Some(j) => Some(RawCommitInfoJobInfo {
-                        job_id: j.job_id.clone(),
-                        job_name: j.job_name.clone(),
-                        run_id: j.run_id.clone(),
-                        job_owner_id: j.job_owner_id.clone(),
-                        trigger_type: j.trigger_type.clone(),
-                    }),
-                    None => None,
-                },
-                notebook: match &c.notebook {
-                    Some(n) => Some(RawCommitInfoNotebookInfo {
-                        notebook_id: n.notebook_id.clone(),
-                    }),
-                    None => None,
-                },
-                cluster_id: c.cluster_id.clone(),
-                read_version: c.read_version.clone(),
-                isolation_level: c.isolation_level.clone(),
-                is_blind_append: c.is_blind_append.clone(),
-                operation_metrics: c.operation_metrics.clone(),
-                user_metadata: c.user_metadata.clone(),
-                tags: c.tags.clone()
-            })
-            .collect::<Vec<RawDeltaTableCommitInfo>>())
+            .map(|c| serde_json::to_string(c).unwrap())
+            .collect())
     }
 
     pub fn arrow_schema_json(&self) -> PyResult<String> {
@@ -329,7 +242,6 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
-    m.add_class::<RawDeltaTableCommitInfo>()?;
     m.add("DeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())
 }

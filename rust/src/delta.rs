@@ -15,6 +15,7 @@ use parquet::file::{
 };
 use regex::Regex;
 use serde::{Deserialize, Serialize};
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
@@ -26,8 +27,7 @@ use uuid::Uuid;
 use crate::action::Stats;
 
 use super::action;
-<<<<<<< HEAD
-use super::action::{Action, CommitInfo, DeltaOperation};
+use super::action::{Action, DeltaOperation};
 use super::delta_config;
 use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
@@ -375,7 +375,7 @@ pub struct DeltaTableState {
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: Vec<action::Remove>,
     files: Vec<action::Add>,
-    commit_infos: Vec<CommitInfo>,
+    commit_infos: Vec<Map<String, Value>>,
     app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
     min_reader_version: i32,
     min_writer_version: i32,
@@ -772,9 +772,12 @@ impl DeltaTable {
     }
 
     /// Returns provenance information, including the operation, user, and so on, for each write to a table.
-    /// Table history is retained for 30 days.
-    pub fn history(&mut self, limit: Option<usize>) -> Result<Vec<CommitInfo>, DeltaTableError> {
-        let commit_infos_list = self.state.commit_infos.iter().rev().map(CommitInfo::clone);
+    /// The table history retention is based on the `logRetentionDuration` property of the Delta Table, 30 days by default.
+    pub fn history(
+        &mut self,
+        limit: Option<usize>,
+    ) -> Result<Vec<Map<String, Value>>, DeltaTableError> {
+        let commit_infos_list = self.state.commit_infos.iter().rev().map(Map::clone);
         match limit {
             Some(l) => Ok(commit_infos_list.take(l).collect()),
             None => Ok(commit_infos_list.collect()),
@@ -1098,22 +1101,23 @@ impl DeltaTable {
         &mut self,
         metadata: DeltaTableMetaData,
         protocol: action::Protocol,
-        commit_info: Option<CommitInfo>,
+        commit_info: Option<Map<String, Value>>,
     ) -> Result<(), DeltaTableError> {
         let meta = action::MetaData::try_from(metadata)?;
 
         // delta-rs commit info will include the delta-rs version and timestamp as of now
-        let enriched_commit_info = match commit_info {
-            Some(mut c) => {
-                c.user_id = Some("delta-rs".to_string());
-                c.user_metadata = Some(crate_version().to_string());
-                c.timestamp = Utc::now().timestamp_millis();
-                c
-            }
-            _ => CommitInfo::default(),
-        };
+        let mut enriched_commit_info = commit_info.unwrap_or_default();
+        enriched_commit_info.insert(
+            "delta-rs".to_string(),
+            Value::String(crate_version().to_string()),
+        );
+        enriched_commit_info.insert(
+            "timestamp".to_string(),
+            Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
+        );
+
         let actions = vec![
-            Action::commitInfo(Box::new(enriched_commit_info)),
+            Action::commitInfo(enriched_commit_info),
             Action::protocol(protocol),
             Action::metaData(meta),
         ];
@@ -1533,7 +1537,7 @@ fn process_action(state: &mut DeltaTableState, action: Action) -> Result<(), App
                 .or_insert(v.version) = v.version;
         }
         Action::commitInfo(v) => {
-            state.commit_infos.push(*v);
+            state.commit_infos.push(v);
         }
     }
 
@@ -1712,11 +1716,15 @@ mod tests {
         ));
         let mut dt = DeltaTable::new(path, backend).unwrap();
 
-        let commit_info = CommitInfo {
-            operation: "CREATE TABLE".to_string(),
-            user_name: Some("userName".to_string()),
-            ..Default::default()
-        };
+        let mut commit_info = Map::<String, Value>::new();
+        commit_info.insert(
+            "operation".to_string(),
+            serde_json::Value::String("CREATE TABLE".to_string()),
+        );
+        commit_info.insert(
+            "userName".to_string(),
+            serde_json::Value::String("test user".to_string()),
+        );
         // Action
         dt.create(delta_md.clone(), protocol.clone(), Some(commit_info))
             .await
@@ -1751,11 +1759,27 @@ mod tests {
                     assert_eq!(DeltaTableMetaData::try_from(action).unwrap(), delta_md);
                 }
                 Action::commitInfo(action) => {
-                    assert_eq!(action.operation, "CREATE TABLE".to_string());
-                    assert_eq!(action.user_name, Some("userName".to_string()));
-                    assert_eq!(action.user_id, Some("delta-rs".to_string()));
-                    assert_eq!(action.user_metadata, Some(crate_version().to_string()));
-                    assert_ne!(action.timestamp, 0);
+                    let mut modified_action = action;
+                    let timestamp = serde_json::Number::from(0i64);
+                    modified_action["timestamp"] = Value::Number(serde_json::Number::from(0i64));
+                    let mut expected = Map::<String, Value>::new();
+                    expected.insert(
+                        "operation".to_string(),
+                        serde_json::Value::String("CREATE TABLE".to_string()),
+                    );
+                    expected.insert(
+                        "userName".to_string(),
+                        serde_json::Value::String("test user".to_string()),
+                    );
+                    expected.insert(
+                        "delta-rs".to_string(),
+                        serde_json::Value::String(crate_version().to_string()),
+                    );
+                    expected.insert(
+                        "timestamp".to_string(),
+                        serde_json::Value::Number(timestamp),
+                    );
+                    assert_eq!(modified_action, expected)
                 }
                 _ => (),
             }

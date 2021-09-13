@@ -167,27 +167,20 @@ def test_history_partitioned_table_metadata():
     commit_info = history[0]
 
     assert len(history) == 1
-    assert commit_info.version is None
-    assert commit_info.timestamp == 1615555646188
-    assert commit_info.user_id is None
-    assert commit_info.user_name is None
-    assert commit_info.operation == "WRITE"
-    assert commit_info.operation_parameters == {
-        "mode": "ErrorIfExists",
-        "partitionBy": '["year","month","day"]',
+    assert commit_info == {
+        "timestamp": 1615555646188,
+        "operation": "WRITE",
+        "operationParameters": {
+            "mode": "ErrorIfExists",
+            "partitionBy": '["year","month","day"]',
+        },
+        "isBlindAppend": True,
+        "operationMetrics": {
+            "numFiles": "6",
+            "numOutputBytes": "2477",
+            "numOutputRows": "7",
+        },
     }
-    assert commit_info.job is None
-    assert commit_info.cluster_id is None
-    assert commit_info.read_version is None
-    assert commit_info.isolation_level is None
-    assert commit_info.is_blind_append is True
-    assert commit_info.operation_metrics == {
-        "numFiles": "6",
-        "numOutputBytes": "2477",
-        "numOutputRows": "7",
-    }
-    assert commit_info.user_metadata is None
-    assert commit_info.tags is None
 
 
 def test_get_files_partitioned_table():

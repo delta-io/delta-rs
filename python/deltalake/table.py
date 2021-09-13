@@ -1,7 +1,8 @@
+import json
 import os
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import pyarrow
@@ -13,7 +14,6 @@ if TYPE_CHECKING:
 
 from .data_catalog import DataCatalog
 from .deltalake import RawDeltaTable
-from .history import CommitInfo
 from .schema import Schema, pyarrow_schema_from_json
 
 
@@ -211,7 +211,7 @@ class DeltaTable:
         """
         return self._metadata
 
-    def history(self, limit: Optional[int] = None) -> List[CommitInfo]:
+    def history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """
         Run the history command on the DeltaTable.
         The operations are returned in reverse chronological order.
@@ -220,11 +220,13 @@ class DeltaTable:
         :return: list of the commit infos registered in the transaction log
         """
         return [
-            CommitInfo(commit_info_raw=commit_info_raw)
+            json.loads(commit_info_raw)
             for commit_info_raw in self._table.history(limit)
         ]
 
-    def vacuum(self, retention_hours: Optional[int] = None, dry_run: bool = True) -> List[str]:
+    def vacuum(
+        self, retention_hours: Optional[int] = None, dry_run: bool = True
+    ) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
 
