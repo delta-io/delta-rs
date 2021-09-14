@@ -17,6 +17,7 @@ use super::delta_arrow::delta_log_schema_for_table;
 use super::open_table_with_version;
 use super::schema::*;
 use super::storage::{StorageBackend, StorageError};
+use super::writer::time_utils;
 use super::{CheckPoint, DeltaTableError, DeltaTableState};
 use crate::DeltaTable;
 
@@ -169,12 +170,18 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
 
     let tombstones = state.unexpired_tombstones();
 
+    // if any, tombstones do not include extended file metadata, we must omit the extended metadata fields from the remove schema
+    // See https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
+    let use_extended_remove_schema = tombstones
+        .iter()
+        .all(|r| r.extended_file_metadata == Some(true));
+
     // protocol
     let mut jsons = std::iter::once(action::Action::protocol(action::Protocol {
         min_reader_version: state.min_reader_version(),
         min_writer_version: state.min_writer_version(),
     }))
-    // metadata
+    // metaData
     .chain(std::iter::once(action::Action::metaData(
         action::MetaData::try_from(current_metadata.clone())?,
     )))
@@ -192,11 +199,17 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
             }),
     )
     // removes
-    .chain(
-        tombstones
-            .iter()
-            .map(|f| action::Action::remove((*f).clone())),
-    )
+    .chain(tombstones.iter().map(|r| {
+        let mut r = (*r).clone();
+
+        // As a "new writer", we should always set `extendedFileMetadata` when writing, and include/ignore the other three fields accordingly.
+        // https://github.com/delta-io/delta/blob/fb0452c2fb142310211c6d3604eefb767bb4a134/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L311-L314
+        if None == r.extended_file_metadata {
+            r.extended_file_metadata = Some(false);
+        }
+
+        action::Action::remove(r)
+    }))
     .map(|a| serde_json::to_value(a).map_err(ArrowError::from))
     // adds
     .chain(state.files().iter().map(|f| {
@@ -207,6 +220,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     let arrow_schema = delta_log_schema_for_table(
         <ArrowSchema as TryFrom<&Schema>>::try_from(&current_metadata.schema)?,
         current_metadata.partition_columns.as_slice(),
+        use_extended_remove_schema,
     );
 
     debug!("Writing to checkpoint parquet buffer...");
@@ -231,6 +245,8 @@ fn checkpoint_add_from_state(
     stats_conversions: &[(SchemaPath, SchemaDataType)],
 ) -> Result<Value, ArrowError> {
     let mut v = serde_json::to_value(action::Action::add(add.clone()))?;
+
+    v["add"]["dataChange"] = Value::Bool(false);
 
     if !add.partition_values.is_empty() {
         let mut partition_values_parsed: HashMap<String, Value> = HashMap::new();
@@ -374,9 +390,8 @@ fn apply_stats_conversion(
                 if let Some(v) = v {
                     let ts = v
                         .as_str()
-                        .and_then(|s| chrono::DateTime::parse_from_rfc3339(s).ok())
-                        .map(|dt| serde_json::Number::from(dt.timestamp_nanos()))
-                        .map(Value::Number);
+                        .and_then(|s| time_utils::timestamp_micros_from_stats_string(s).ok())
+                        .map(|n| Value::Number(serde_json::Number::from(n)));
 
                     if let Some(ts) = ts {
                         *v = ts;
@@ -554,14 +569,14 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(
-            1627668684594000000i64,
+            1627668684594000i64,
             stats["minValues"]["some_struct"]["struct_timestamp"]
                 .as_i64()
                 .unwrap()
         );
         assert_eq!("P", stats["minValues"]["some_string"].as_str().unwrap());
         assert_eq!(
-            1627668684594000000i64,
+            1627668684594000i64,
             stats["minValues"]["some_timestamp"].as_i64().unwrap()
         );
 
@@ -573,14 +588,14 @@ mod tests {
                 .unwrap()
         );
         assert_eq!(
-            1627668685594000000i64,
+            1627668685594000i64,
             stats["maxValues"]["some_struct"]["struct_timestamp"]
                 .as_i64()
                 .unwrap()
         );
         assert_eq!("Q", stats["maxValues"]["some_string"].as_str().unwrap());
         assert_eq!(
-            1627668685594000000i64,
+            1627668685594000i64,
             stats["maxValues"]["some_timestamp"].as_i64().unwrap()
         );
     }

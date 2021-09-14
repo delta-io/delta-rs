@@ -54,7 +54,8 @@ jobs:
         toolchain: stable
         override: true
     - name: build and lint with clippy
-      run: cargo clippy --features azure,datafusion-ext,s3
+      #run: cargo clippy --features azure,datafusion-ext,s3 Comment out datafusion until https://github.com/apache/arrow-datafusion/pull/984 is merged
+      run: cargo clippy --features azure,s3
     - name: Spot-check build for rustls features
       run: cargo clippy --features s3-rustls
 
@@ -88,7 +89,8 @@ jobs:
         toolchain: stable
         override: true
     - name: Run tests
-      run: cargo test --verbose --features datafusion-ext,azure
+      #run: cargo test --verbose --features datafusion-ext,azure Comment out datafusion until https://github.com/apache/arrow-datafusion/pull/984 is merged
+      run: cargo test --verbose --features azure
 
   s3_test:
     runs-on: ubuntu-latest

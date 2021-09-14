@@ -21,7 +21,7 @@ async fn write_simple_checkpoint() {
     cleanup_checkpoint_files(log_path.as_path());
 
     // Load the delta table at version 5
-    let table = deltalake::open_table_with_version(table_location, 5)
+    let mut table = deltalake::open_table_with_version(table_location, 5)
         .await
         .unwrap();
 
@@ -38,11 +38,8 @@ async fn write_simple_checkpoint() {
     let version = get_last_checkpoint_version(&log_path);
     assert_eq!(5, version);
 
-    /* uncomment once map support is merged to arrow
-    // Setting table version to 10 for another checkpoint
     table.load_version(10).await.unwrap();
-    checkpoint_writer
-        .create_checkpoint_from_state(table.version, table.get_state())
+    checkpoints::create_checkpoint_from_table(&table)
         .await
         .unwrap();
 
@@ -58,8 +55,7 @@ async fn write_simple_checkpoint() {
     let table_result = deltalake::open_table(table_location).await.unwrap();
     let table = table_result;
     let files = table.get_files();
-    assert_eq!(11, files.len());
-    */
+    assert_eq!(12, files.len());
 }
 
 fn get_last_checkpoint_version(log_path: &PathBuf) -> i64 {
@@ -100,7 +96,7 @@ mod fs_common;
 
 #[tokio::test]
 async fn test_checkpoints_with_tombstones() {
-    let main_branch = true;
+    let main_branch = false;
     if main_branch {
         test_checkpoints_with_tombstones_main().await
     } else {
@@ -140,17 +136,14 @@ async fn test_checkpoints_with_tombstones_map_support() {
 
     let (removes1, opt1) = pseudo_optimize(&mut table, 5 * 59 * 1000).await;
     assert_eq!(table.get_files(), vec![opt1.path.as_str()]);
-    assert_eq!(
-        table.get_tombstones(),
-        removes1.iter().collect::<Vec<&Remove>>()
-    );
+    assert_eq!(table.get_state().all_tombstones(), &removes1);
 
     checkpoints::create_checkpoint_from_table(&table)
         .await
         .unwrap();
     table.update().await.unwrap(); // make table to read the checkpoint
     assert_eq!(table.get_files(), vec![opt1.path.as_str()]);
-    assert_eq!(table.get_tombstones(), Vec::<&Remove>::new()); // stale removes are deleted from the state
+    assert_eq!(table.get_state().all_tombstones(), &vec![]); // stale removes are deleted from the state
 }
 
 async fn pseudo_optimize(table: &mut DeltaTable, offset_millis: i64) -> (Vec<Remove>, Add) {
