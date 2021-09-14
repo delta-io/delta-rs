@@ -53,11 +53,15 @@ async-stream = { version = "0.3.2", default-features = true, optional = true }
 # High-level writer
 parquet-format = "~2.6.1"
 
-arrow = { version = "5" }
-datafusion = { version = "5", optional = true }
-parquet = { version = "5" }
+arrow  = { git = "https://github.com/apache/arrow-rs", rev = "fa5acd971c973161f17e69d5c6b50d6e77c7da03" }
+parquet = {  git = "https://github.com/apache/arrow-rs", rev = "fa5acd971c973161f17e69d5c6b50d6e77c7da03" }
+datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "4ddd2f5e7582ffe662aea27bbb74c58cd0715152", optional = true }
+
+crossbeam = { version = "0", optional = true }
+
 cfg-if = "1"
 async-trait = "0.1"
+
 # NOTE: disable rust-dataframe integration since it currently doesn't have a
 # version published in crates.io
 # rust-dataframe = {version = "0.*", optional = true }
