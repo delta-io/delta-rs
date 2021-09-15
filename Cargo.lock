@@ -98,7 +98,7 @@ dependencies = [
  "hex",
  "indexmap",
  "lazy_static",
- "lexical-core",
+ "lexical-core 0.7.6",
  "multiversion",
  "num",
  "prettytable-rs",
@@ -112,7 +112,7 @@ dependencies = [
 [[package]]
 name = "arrow"
 version = "6.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow-rs?rev=fa5acd971c973161f17e69d5c6b50d6e77c7da03#fa5acd971c973161f17e69d5c6b50d6e77c7da03"
+source = "git+https://github.com/apache/arrow-rs?rev=5c3ed6123d9ea0130a1eca95a0aae776b458208f#5c3ed6123d9ea0130a1eca95a0aae776b458208f"
 dependencies = [
  "bitflags",
  "chrono",
@@ -121,7 +121,7 @@ dependencies = [
  "hex",
  "indexmap",
  "lazy_static",
- "lexical-core",
+ "lexical-core 0.8.0",
  "multiversion",
  "num",
  "rand 0.8.4",
@@ -1349,6 +1349,70 @@ dependencies = [
 ]
 
 [[package]]
+name = "lexical-core"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d32c80337884d5044fe54e9c1b8d64b92de67e10d9312e472a8ff6d6ea849daf"
+dependencies = [
+ "lexical-parse-float",
+ "lexical-parse-integer",
+ "lexical-util",
+ "lexical-write-float",
+ "lexical-write-integer",
+]
+
+[[package]]
+name = "lexical-parse-float"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "673a01c82cb851a33bb46cacc44c3ad5e7b39ea3b8d22ade21646221df58e45f"
+dependencies = [
+ "lexical-parse-integer",
+ "lexical-util",
+ "static_assertions",
+]
+
+[[package]]
+name = "lexical-parse-integer"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f2c92badda8cc0fc4f3d3cc1c30aaefafb830510c8781ce4e8669881f3ed53ac"
+dependencies = [
+ "lexical-util",
+ "static_assertions",
+]
+
+[[package]]
+name = "lexical-util"
+version = "0.8.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6ff669ccaae16ee33af90dc51125755efed17f1309626ba5c12052512b11e291"
+dependencies = [
+ "static_assertions",
+]
+
+[[package]]
+name = "lexical-write-float"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f93601479eae2b41ad465e1f813ea98780069ef1d69063145e76c1bd108ab769"
+dependencies = [
+ "lexical-util",
+ "lexical-write-integer",
+ "static_assertions",
+]
+
+[[package]]
+name = "lexical-write-integer"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ece956492e0e40fd95ef8658a34d53a3b8c2015762fdcaaff2167b28de1f56ef"
+dependencies = [
+ "lexical-util",
+ "static_assertions",
+]
+
+[[package]]
 name = "libc"
 version = "0.2.101"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1771,7 +1835,7 @@ dependencies = [
 [[package]]
 name = "parquet"
 version = "6.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow-rs?rev=fa5acd971c973161f17e69d5c6b50d6e77c7da03#fa5acd971c973161f17e69d5c6b50d6e77c7da03"
+source = "git+https://github.com/apache/arrow-rs?rev=5c3ed6123d9ea0130a1eca95a0aae776b458208f#5c3ed6123d9ea0130a1eca95a0aae776b458208f"
 dependencies = [
  "arrow 6.0.0-SNAPSHOT",
  "base64 0.13.0",
