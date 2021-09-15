@@ -85,8 +85,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                     "float" => Ok(ArrowDataType::Float32),
                     "double" => Ok(ArrowDataType::Float64),
                     "boolean" => Ok(ArrowDataType::Boolean),
-                    // Change to binary type after https://github.com/apache/arrow-rs/pull/702 is released
-                    "binary" => Ok(ArrowDataType::Utf8),
+                    "binary" => Ok(ArrowDataType::Binary),
                     decimal if DECIMAL_REGEX.is_match(decimal) => {
                         let extract = DECIMAL_REGEX.captures(decimal).ok_or_else(|| {
                             ArrowError::SchemaError(format!(
