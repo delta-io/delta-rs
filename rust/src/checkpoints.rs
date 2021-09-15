@@ -291,7 +291,7 @@ fn typed_partition_value_from_string(
 ) -> Result<Value, CheckpointError> {
     match data_type {
         SchemaDataType::primitive(primitive_type) => match primitive_type.as_str() {
-            "string" => Ok(string_value.to_owned().into()),
+            "string" | "binary" => Ok(string_value.to_owned().into()),
             "long" | "integer" | "short" | "byte" => Ok(string_value
                 .parse::<i64>()
                 .map_err(|_| CheckpointError::PartitionValueNotParseable(string_value.to_owned()))?
@@ -311,6 +311,14 @@ fn typed_partition_value_from_string(
                     })?;
                 // day 0 is 1970-01-01 (719163 days from ce)
                 Ok((d.num_days_from_ce() - 719_163).into())
+            }
+            "timestamp" => {
+                let ts =
+                    chrono::naive::NaiveDateTime::parse_from_str(string_value, "%Y-%m-%d %H:%M:%S")
+                        .map_err(|_| {
+                            CheckpointError::PartitionValueNotParseable(string_value.to_owned())
+                        })?;
+                Ok((ts.timestamp_millis() * 1000).into())
             }
             s => unimplemented!(
                 "Primitive type {} is not supported for partition column values.",
@@ -462,6 +470,34 @@ mod tests {
                 .unwrap()
             );
         }
+
+        for (s, v) in [
+            ("2021-08-08 01:00:01", 1628384401000000i64),
+            ("1970-01-02 12:59:59", 133199000000i64),
+            ("1970-01-01 13:00:01", 46801000000i64),
+            ("1969-12-31 00:00:00", -86400000000i64),
+            ("1677-09-21 00:12:44", -9223372036000000i64),
+        ] {
+            let timestamp_value: Value = v.into();
+            assert_eq!(
+                timestamp_value,
+                typed_partition_value_from_option_string(
+                    &Some(s.to_string()),
+                    &SchemaDataType::primitive("timestamp".to_string()),
+                )
+                .unwrap()
+            );
+        }
+
+        let binary_value: Value = "\u{2081}\u{2082}\u{2083}\u{2084}".into();
+        assert_eq!(
+            binary_value,
+            typed_partition_value_from_option_string(
+                &Some("₁₂₃₄".to_string()),
+                &SchemaDataType::primitive("binary".to_string()),
+            )
+            .unwrap()
+        );
     }
 
     #[test]
