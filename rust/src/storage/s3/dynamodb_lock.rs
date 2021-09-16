@@ -133,7 +133,7 @@ impl LockItem {
 }
 
 /// Error returned by the [`DynamoDbLockClient`] API.
-#[derive(thiserror::Error, Debug)]
+#[derive(thiserror::Error, Debug, PartialEq)]
 pub enum DynamoError {
     /// Error caused by the DynamoDB table not being created.
     #[error("Dynamo table not found")]
@@ -153,6 +153,12 @@ pub enum DynamoError {
     /// not be acquired for more that returned number of seconds.
     #[error("Could not acquire lock for {0} sec")]
     TimedOut(u64),
+
+    /// Error returned by [`DynamoDbLockClient::acquire_lock`] which indicates that the lock could
+    /// not be acquired because the `is_non_acquirable` is set to `true`.
+    /// Usually this is done intentionally outside of [`DynamoDbLockClient`].
+    #[error("The existing lock in dynamodb is non-acquirable")]
+    NonAcquirableLock,
 
     /// Error that caused by the dynamodb request exceeded maximum allowed provisioned throughput
     /// for the table.
@@ -208,6 +214,8 @@ pub const RECORD_VERSION_NUMBER: &str = "recordVersionNumber";
 pub const IS_RELEASED: &str = "isReleased";
 /// The field name of `lease_duration` in DynamoDB
 pub const LEASE_DURATION: &str = "leaseDuration";
+/// The field name of `is_non_acquirable` in DynamoDB
+pub const IS_NON_ACQUIRABLE: &str = "isNonAcquirable";
 /// The field name of `data` in DynamoDB
 pub const DATA: &str = "data";
 /// The field name of `data.source` in DynamoDB
@@ -367,6 +375,7 @@ impl DynamoDbLockClient {
                 data,
                 lookup_time: now_millis(),
                 acquired_expired_lock: false,
+                is_non_acquirable: item.contains_key(IS_NON_ACQUIRABLE),
             }));
         }
 
@@ -462,6 +471,7 @@ impl DynamoDbLockClient {
             data: data.map(String::from),
             lookup_time: now_millis(),
             acquired_expired_lock,
+            is_non_acquirable: false,
         })
     }
 }
@@ -515,6 +525,7 @@ impl<'a> AcquireLockState<'a> {
                 // there's no lock, we good to acquire it
                 Ok(self.upsert_new_lock(data).await?)
             }
+            Some(existing) if existing.is_non_acquirable => Err(DynamoError::NonAcquirableLock),
             Some(existing) if existing.is_released => {
                 // lock is released by a caller, we good to acquire it
                 Ok(self.upsert_released_lock(data).await?)
