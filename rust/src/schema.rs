@@ -142,26 +142,25 @@ impl SchemaTypeMap {
     }
 }
 
-/*
- * List of primitive types:
- *   string: utf8
- *   long  // undocumented, i64?
- *   integer: i32
- *   short: i16
- *   byte: i8
- *   float: f32
- *   double: f64
- *   boolean: bool
- *   binary: a sequence of binary data
- *   date: A calendar date, represented as a year-month-day triple without a timezone
- *   timestamp: Microsecond precision timestamp without a timezone
- */
 /// Enum with variants for each top level schema data type.
 #[derive(Serialize, Deserialize, PartialEq, Debug, Clone)]
 #[serde(untagged)]
 pub enum SchemaDataType {
     /// Variant representing non-array, non-map, non-struct fields. Wrapped value will contain the
     /// the string name of the primitive type.
+    ///
+    /// Valid values are:
+    ///  * string: utf8
+    ///  * long  // undocumented, i64?
+    ///  * integer: i32
+    ///  * short: i16
+    ///  * byte: i8
+    ///  * float: f32
+    ///  * double: f64
+    ///  * boolean: bool
+    ///  * binary: a sequence of binary data
+    ///  * date: A calendar date, represented as a year-month-day triple without a timezone
+    ///  * timestamp: Microsecond precision timestamp without a timezone
     primitive(String),
     /// Variant representing a struct.
     r#struct(SchemaTypeStruct),
