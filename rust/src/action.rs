@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
+use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
@@ -52,6 +53,13 @@ fn gen_action_type_error(action: &str, field: &str, expected_type: &str) -> Acti
         "type for {} in {} action should be {}",
         field, action, expected_type
     ))
+}
+
+fn decode_path(raw_path: &str) -> String {
+    percent_decode(raw_path.as_bytes())
+        .decode_utf8()
+        .unwrap()
+        .to_string()
 }
 
 /// Struct used to represent minValues and maxValues in add action statistics.
@@ -278,6 +286,14 @@ impl Add {
         }
 
         Ok(re)
+    }
+
+    /// Returns the Add action with path decoded.
+    pub fn decode_path(self) -> Self {
+        Add {
+            path: decode_path(&self.path),
+            ..self
+        }
     }
 
     /// Returns the serde_json representation of stats contained in the action if present.
@@ -634,6 +650,14 @@ impl Remove {
         }
 
         Ok(re)
+    }
+
+    /// Returns the Remove action with path decoded.
+    pub fn decode_path(self) -> Self {
+        Remove {
+            path: decode_path(&self.path),
+            ..self
+        }
     }
 }
 

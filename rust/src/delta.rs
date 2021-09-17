@@ -1456,9 +1456,10 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Erro
 fn process_action(state: &mut DeltaTableState, action: Action) -> Result<(), ApplyLogError> {
     match action {
         Action::add(v) => {
-            state.files.push(v);
+            state.files.push(v.decode_path());
         }
         Action::remove(v) => {
+            let v = v.decode_path();
             let index = { state.files.iter().position(|a| *a.path == v.path) };
             if let Some(index) = index {
                 state.files.swap_remove(index);
