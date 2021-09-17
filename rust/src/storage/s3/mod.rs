@@ -636,8 +636,10 @@ pub struct LockItem {
     pub data: Option<String>,
     /// The last time this lock was updated or retrieved.
     pub lookup_time: u128,
-    /// Tells whether this lock was acquired by expiring existing one
+    /// Tells whether this lock was acquired by expiring existing one.
     pub acquired_expired_lock: bool,
+    /// If true then this lock could not be acquired.
+    pub is_non_acquirable: bool,
 }
 
 /// Lock data which stores an attempt to rename `source` into `destination`
