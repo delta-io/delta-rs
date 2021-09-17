@@ -183,18 +183,12 @@ pub enum DeltaTableError {
         "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
     )]
     InvalidVacuumRetentionPeriod,
+    /// Error returned when transaction is failed to be committed because given version already exists.
+    #[error("Delta transaction failed, version {0} already exists.")]
+    VersionAlreadyExists(DeltaDataTypeVersion),
     /// Generic Delta Table error
     #[error("Generic DeltaTable error: {0}")]
     Generic(String),
-
-    /// Error that wraps an underlying DeltaTransaction error.
-    /// The wrapped error describes the specific cause.
-    #[error("Delta transaction failed: {source}")]
-    TransactionError {
-        /// The wrapped DeltaTransaction error.
-        #[from]
-        source: DeltaTransactionError,
-    },
 }
 
 /// Delta table metadata
@@ -1040,7 +1034,7 @@ impl DeltaTable {
         DeltaTransaction::new(self, options)
     }
 
-    /// Tries to commit a prepared commit file. Returns `DeltaTransactionError::VersionAlreadyExists`
+    /// Tries to commit a prepared commit file. Returns `DeltaTableError::VersionAlreadyExists`
     /// if the given `version` already exists. The caller should handle the retry logic itself.
     /// This is low-level transaction API. If user does not want to maintain the commit loop then
     /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
@@ -1055,7 +1049,10 @@ impl DeltaTable {
         self.storage
             .rename_obj_noreplace(&commit.uri, &self.commit_uri_from_version(version))
             .await
-            .map_err(|e| DeltaTableError::from(DeltaTransactionError::from(e)))?;
+            .map_err(|e| match e {
+                StorageError::AlreadyExists(_) => DeltaTableError::VersionAlreadyExists(version),
+                _ => DeltaTableError::from(e),
+            })?;
 
         self.update().await?;
 
@@ -1198,50 +1195,6 @@ impl std::fmt::Debug for DeltaTable {
     }
 }
 
-/// Error returned by the DeltaTransaction struct
-#[derive(thiserror::Error, Debug)]
-pub enum DeltaTransactionError {
-    /// Error that indicates a Delta version conflict. i.e. a writer tried to write version _N_ but
-    /// version _N_ already exists in the delta log.
-    #[error("Version already existed when writing transaction. Last error: {source}")]
-    VersionAlreadyExists {
-        /// The wrapped TransactionCommitAttemptError.
-        source: StorageError,
-    },
-
-    /// Error that indicates the record batch is missing a partition column required by the Delta
-    /// schema.
-    #[error("RecordBatch is missing partition column in Delta schema.")]
-    MissingPartitionColumn,
-
-    /// Error that indicates the transaction failed due to an underlying storage error.
-    /// Specific details of the error are described by the wrapped storage error.
-    #[error("Storage interaction failed: {source}")]
-    Storage {
-        /// The wrapped StorageError.
-        source: StorageError,
-    },
-
-    /// Error caused by a problem while using serde_json to serialize an action.
-    #[error("Action serialization failed: {source}")]
-    ActionSerializationFailed {
-        /// The wrapped serde_json Error.
-        #[from]
-        source: serde_json::Error,
-    },
-}
-
-impl From<StorageError> for DeltaTransactionError {
-    fn from(error: StorageError) -> Self {
-        match error {
-            StorageError::AlreadyExists(_) => {
-                DeltaTransactionError::VersionAlreadyExists { source: error }
-            }
-            _ => DeltaTransactionError::Storage { source: error },
-        }
-    }
-}
-
 const DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS: u32 = 10_000_000;
 
 /// Options for customizing behavior of a `DeltaTransaction`
@@ -1322,7 +1275,7 @@ impl<'a> DeltaTransaction<'a> {
         &mut self,
         bytes: &[u8],
         partitions: Option<Vec<(String, String)>>,
-    ) -> Result<(), DeltaTransactionError> {
+    ) -> Result<(), DeltaTableError> {
         let mut partition_values = HashMap::new();
         if let Some(partitions) = &partitions {
             for (key, value) in partitions {
@@ -1340,8 +1293,7 @@ impl<'a> DeltaTransaction<'a> {
         self.delta_table
             .storage
             .put_obj(&parquet_uri, bytes)
-            .await
-            .map_err(|source| DeltaTransactionError::Storage { source })?;
+            .await?;
 
         // Determine the modification timestamp to include in the add action - milliseconds since epoch
         // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
@@ -1422,7 +1374,7 @@ impl<'a> DeltaTransaction<'a> {
     pub async fn prepare_commit(
         &self,
         _operation: Option<DeltaOperation>,
-    ) -> Result<PreparedCommit, DeltaTransactionError> {
+    ) -> Result<PreparedCommit, DeltaTableError> {
         let token = Uuid::new_v4().to_string();
 
         // TODO: create a CommitInfo action and prepend it to actions.
@@ -1463,9 +1415,7 @@ impl<'a> DeltaTransaction<'a> {
                 }
                 Err(e) => {
                     match e {
-                        DeltaTableError::TransactionError {
-                            source: DeltaTransactionError::VersionAlreadyExists { .. },
-                        } => {
+                        DeltaTableError::VersionAlreadyExists(_) => {
                             if attempt_number > self.options.max_retry_commit_attempts + 1 {
                                 debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
                                 return Err(e);
