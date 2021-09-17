@@ -5,6 +5,7 @@ mod s3_common;
 #[cfg(feature = "s3")]
 mod dynamodb {
     use deltalake::storage::s3::dynamodb_lock::*;
+    use deltalake::storage::s3::LockItem;
     use maplit::hashmap;
     use rusoto_dynamodb::*;
     use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
@@ -193,5 +194,62 @@ mod dynamodb {
         let current = w1.get_lock().await.unwrap().unwrap();
         assert_ne!(w1_rnv, lock_w2.record_version_number);
         assert_eq!(current.record_version_number, lock_w2.record_version_number);
+    }
+
+    #[tokio::test]
+    async fn test_is_non_acquirable() {
+        async fn update_is_non_acquirable(action: &str) {
+            let value = match action {
+                "set" => AttributeValueUpdate {
+                    action: Some("PUT".to_string()),
+                    value: Some(attr_val("1".to_string())),
+                },
+                "drop" => AttributeValueUpdate {
+                    action: Some("DELETE".to_string()),
+                    value: None,
+                },
+                _ => unreachable!(),
+            };
+            DynamoDbClient::new(crate::s3_common::region())
+                .update_item(UpdateItemInput {
+                    table_name: TABLE.to_string(),
+                    key: hashmap! {
+                        PARTITION_KEY_NAME.to_string() => attr_val("test_is_non_acquirable"),
+                    },
+                    attribute_updates: Some(hashmap! {
+                        IS_NON_ACQUIRABLE.to_string() => value
+                    }),
+                    ..Default::default()
+                })
+                .await
+                .unwrap();
+        }
+
+        async fn current_lock(client: &DynamoDbLockClient) -> LockItem {
+            client.get_lock().await.unwrap().unwrap()
+        }
+
+        let lock = create_dynamo_lock("test_is_non_acquirable", "worker").await;
+        let item = lock.acquire_lock(None).await.unwrap();
+
+        // verify that lock is acquirable
+        assert!(!item.is_non_acquirable);
+
+        // verify that lock is non acquirable
+        update_is_non_acquirable("set").await;
+        assert!(current_lock(&lock).await.is_non_acquirable);
+
+        // verify that the error is correct
+        assert_eq!(
+            lock.acquire_lock(None).await.err().unwrap(),
+            DynamoError::NonAcquirableLock
+        );
+
+        // verify that lock is acquirable
+        update_is_non_acquirable("drop").await;
+        assert!(!current_lock(&lock).await.is_non_acquirable);
+
+        // done
+        assert!(lock.release_lock(&item).await.unwrap());
     }
 }
