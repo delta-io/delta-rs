@@ -157,6 +157,13 @@ pub enum DynamoError {
     /// Error returned by [`DynamoDbLockClient::acquire_lock`] which indicates that the lock could
     /// not be acquired because the `is_non_acquirable` is set to `true`.
     /// Usually this is done intentionally outside of [`DynamoDbLockClient`].
+    ///
+    /// The example could be the dropping of a table. For example external service acquires the lock
+    /// to drop (or drop/create etc., something that modifies the delta log completely) a table.
+    /// The dangerous part here is that the concurrent delta workers will still perform the write
+    /// whenever the lock is available, because it effectively locks the rename operation. However
+    /// if the `is_non_acquirable` is set, then the `NonAcquirableLock` is returned which prohibits
+    /// the delta-rs to continue the write.
     #[error("The existing lock in dynamodb is non-acquirable")]
     NonAcquirableLock,
 
