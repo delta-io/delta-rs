@@ -1459,7 +1459,10 @@ fn process_action(state: &mut DeltaTableState, action: Action) -> Result<(), App
             state.files.push(v);
         }
         Action::remove(v) => {
-            state.files.retain(|a| *a.path != v.path);
+            let index = { state.files.iter().position(|a| *a.path == v.path) };
+            if let Some(index) = index {
+                state.files.swap_remove(index);
+            }
             state.tombstones.push(v);
         }
         Action::protocol(v) => {
