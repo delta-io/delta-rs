@@ -1511,7 +1511,7 @@ fn process_action(state: &mut DeltaTableState, action: Action) -> Result<(), App
         Action::remove(v) => {
             let index = { state.files.iter().position(|a| *a.path == v.path) };
             if let Some(index) = index {
-                state.files.remove(index);
+                state.files.swap_remove(index);
             }
             state.tombstones.push(v);
         }
