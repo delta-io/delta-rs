@@ -55,11 +55,13 @@ fn gen_action_type_error(action: &str, field: &str, expected_type: &str) -> Acti
     ))
 }
 
-fn decode_path(raw_path: &str) -> String {
+fn decode_path(raw_path: &str) -> Result<String, ActionError> {
     percent_decode(raw_path.as_bytes())
         .decode_utf8()
-        .unwrap()
-        .to_string()
+        .map(|c| c.to_string())
+        .map_err(|e| {
+            ActionError::InvalidField(format!("Decode path failed for action: {}", e.to_string(),))
+        })
 }
 
 /// Struct used to represent minValues and maxValues in add action statistics.
@@ -289,11 +291,8 @@ impl Add {
     }
 
     /// Returns the Add action with path decoded.
-    pub fn decode_path(self) -> Self {
-        Add {
-            path: decode_path(&self.path),
-            ..self
-        }
+    pub fn path_decoded(self) -> Result<Self, ActionError> {
+        decode_path(&self.path).map(|path| Self { path, ..self })
     }
 
     /// Returns the serde_json representation of stats contained in the action if present.
@@ -653,11 +652,8 @@ impl Remove {
     }
 
     /// Returns the Remove action with path decoded.
-    pub fn decode_path(self) -> Self {
-        Remove {
-            path: decode_path(&self.path),
-            ..self
-        }
+    pub fn path_decoded(self) -> Result<Self, ActionError> {
+        decode_path(&self.path).map(|path| Self { path, ..self })
     }
 }
 

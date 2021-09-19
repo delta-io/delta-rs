@@ -321,6 +321,13 @@ pub enum ApplyLogError {
         #[from]
         source: std::io::Error,
     },
+    /// Error returned when the action record is invalid in log.
+    #[error("Invalid action record found in log: {}", .source)]
+    InvalidAction {
+        /// Action error details returned of the invalid action.
+        #[from]
+        source: action::ActionError,
+    },
 }
 
 impl From<StorageError> for ApplyLogError {
@@ -1456,10 +1463,10 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Erro
 fn process_action(state: &mut DeltaTableState, action: Action) -> Result<(), ApplyLogError> {
     match action {
         Action::add(v) => {
-            state.files.push(v.decode_path());
+            state.files.push(v.path_decoded()?);
         }
         Action::remove(v) => {
-            let v = v.decode_path();
+            let v = v.path_decoded()?;
             let index = { state.files.iter().position(|a| *a.path == v.path) };
             if let Some(index) = index {
                 state.files.swap_remove(index);
