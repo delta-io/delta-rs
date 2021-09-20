@@ -2,12 +2,11 @@
 
 #![allow(non_snake_case, non_camel_case_types)]
 
-use std::collections::HashMap;
-
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Map, Value};
+use std::collections::HashMap;
 
 use super::schema::*;
 
@@ -71,7 +70,7 @@ pub enum ColumnValueStat {
     /// Composite HashMap representation of statistics.
     Column(HashMap<String, ColumnValueStat>),
     /// Json representation of statistics.
-    Value(serde_json::Value),
+    Value(Value),
 }
 
 impl ColumnValueStat {
@@ -84,7 +83,7 @@ impl ColumnValueStat {
     }
 
     /// Returns the serde_json representation of the ColumnValueStat.
-    pub fn as_value(&self) -> Option<&serde_json::Value> {
+    pub fn as_value(&self) -> Option<&Value> {
         match self {
             ColumnValueStat::Value(v) => Some(v),
             _ => None,
@@ -768,7 +767,7 @@ pub enum Action {
     /// Describes the minimum reader and writer versions required to read or write to the table.
     protocol(Protocol),
     /// Describes commit provenance information for the table.
-    commitInfo(Value),
+    commitInfo(Map<String, Value>),
 }
 
 impl Action {
@@ -813,9 +812,6 @@ impl Action {
             "remove" => Action::remove(Remove::from_parquet_record(col_data)?),
             "txn" => Action::txn(Txn::from_parquet_record(col_data)?),
             "protocol" => Action::protocol(Protocol::from_parquet_record(col_data)?),
-            "commitInfo" => {
-                unimplemented!("FIXME: support commitInfo");
-            }
             name => {
                 return Err(ActionError::InvalidField(format!(
                     "Unexpected action from checkpoint: {}",
