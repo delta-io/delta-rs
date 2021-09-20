@@ -3,7 +3,6 @@ mod datafusion {
     use std::sync::Arc;
 
     use arrow::array::*;
-    use datafusion::datasource::TableProvider;
     use datafusion::error::Result;
     use datafusion::execution::context::ExecutionContext;
     use datafusion::scalar::ScalarValue;
@@ -58,7 +57,7 @@ mod datafusion {
         let table = deltalake::open_table("./tests/data/delta-0.8.0")
             .await
             .unwrap();
-        let statistics = table.statistics();
+        let statistics = table.datafusion_table_statistics();
 
         assert_eq!(statistics.num_rows, Some(4),);
 
