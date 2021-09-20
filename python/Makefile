@@ -32,7 +32,7 @@ format: ## Format the code
 	$(info --- Rust format ---)
 	cargo fmt
 	$(info --- Python format ---)
-	black
+	black .
 	isort .
 
 .PHONY: check-rust

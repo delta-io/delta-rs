@@ -1,7 +1,8 @@
+import json
 import os
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
 from urllib.parse import urlparse
 
 import pyarrow
@@ -58,8 +59,8 @@ class Metadata:
     def __str__(self) -> str:
         return (
             f"Metadata(id: {self._metadata.id}, name: {self._metadata.name}, "
-            f"description: {self._metadata.description}, partitionColumns: {self._metadata.partition_columns}, "
-            f"created_time: {self.created_time}, configuration={self._metadata.configuration})"
+            f"description: {self._metadata.description}, partition_columns: {self._metadata.partition_columns}, "
+            f"created_time: {self.created_time}, configuration: {self._metadata.configuration})"
         )
 
 
@@ -210,7 +211,22 @@ class DeltaTable:
         """
         return self._metadata
 
-    def vacuum(self, retention_hours: Optional[int] = None, dry_run: bool = True) -> List[str]:
+    def history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
+        """
+        Run the history command on the DeltaTable.
+        The operations are returned in reverse chronological order.
+
+        :param limit: the commit info limit to return
+        :return: list of the commit infos registered in the transaction log
+        """
+        return [
+            json.loads(commit_info_raw)
+            for commit_info_raw in self._table.history(limit)
+        ]
+
+    def vacuum(
+        self, retention_hours: Optional[int] = None, dry_run: bool = True
+    ) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
 
@@ -233,7 +249,9 @@ class DeltaTable:
         return pyarrow_schema_from_json(self._table.arrow_schema_json())
 
     def to_pyarrow_dataset(
-        self, partitions: Optional[List[Tuple[str, str, Any]]] = None, filesystem: Optional[FileSystem] = None
+        self,
+        partitions: Optional[List[Tuple[str, str, Any]]] = None,
+        filesystem: Optional[FileSystem] = None,
     ) -> pyarrow.dataset.Dataset:
         """
         Build a PyArrow Dataset using data from the DeltaTable.
@@ -293,7 +311,7 @@ class DeltaTable:
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
-        filesystem: Optional[FileSystem] = None
+        filesystem: Optional[FileSystem] = None,
     ) -> pyarrow.Table:
         """
         Build a PyArrow Table using data from the DeltaTable.
@@ -303,13 +321,15 @@ class DeltaTable:
         :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
         :return: the PyArrow table
         """
-        return self.to_pyarrow_dataset(partitions=partitions, filesystem=filesystem).to_table(columns=columns)
+        return self.to_pyarrow_dataset(
+            partitions=partitions, filesystem=filesystem
+        ).to_table(columns=columns)
 
     def to_pandas(
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
-        filesystem: Optional[FileSystem] = None
+        filesystem: Optional[FileSystem] = None,
     ) -> "pandas.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
@@ -319,7 +339,9 @@ class DeltaTable:
         :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
         :return: a pandas dataframe
         """
-        return self.to_pyarrow_table(partitions=partitions, columns=columns, filesystem=filesystem).to_pandas()
+        return self.to_pyarrow_table(
+            partitions=partitions, columns=columns, filesystem=filesystem
+        ).to_pandas()
 
     def update_incremental(self) -> None:
         """

@@ -197,6 +197,18 @@ impl RawDeltaTable {
             .map_err(PyDeltaTableError::from_raw)
     }
 
+    // Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.
+    pub fn history(&mut self, limit: Option<usize>) -> PyResult<Vec<String>> {
+        let history = self
+            ._table
+            .history(limit)
+            .map_err(PyDeltaTableError::from_raw)?;
+        Ok(history
+            .iter()
+            .map(|c| serde_json::to_string(c).unwrap())
+            .collect())
+    }
+
     pub fn arrow_schema_json(&self) -> PyResult<String> {
         let schema = self
             ._table
