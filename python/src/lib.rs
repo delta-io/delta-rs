@@ -1,10 +1,10 @@
 #![deny(warnings)]
 
-extern crate arrow;
 extern crate pyo3;
 
-use arrow::datatypes::Schema as ArrowSchema;
 use chrono::{DateTime, FixedOffset, Utc};
+use deltalake::arrow;
+use deltalake::arrow::datatypes::Schema as ArrowSchema;
 use deltalake::partitions::PartitionFilter;
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;

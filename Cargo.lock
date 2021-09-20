@@ -76,28 +76,6 @@ checksum = "28ae2b3dec75a406790005a200b1bd89785afc02517a00ca99ecfe093ee9e6cf"
 [[package]]
 name = "arrow"
 version = "6.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow-rs?rev=5c3ed6123d9ea0130a1eca95a0aae776b458208f#5c3ed6123d9ea0130a1eca95a0aae776b458208f"
-dependencies = [
- "bitflags",
- "chrono",
- "csv",
- "flatbuffers",
- "hex",
- "indexmap",
- "lazy_static",
- "lexical-core",
- "multiversion",
- "num",
- "rand 0.8.4",
- "regex",
- "serde",
- "serde_derive",
- "serde_json",
-]
-
-[[package]]
-name = "arrow"
-version = "6.0.0-SNAPSHOT"
 source = "git+https://github.com/apache/arrow-rs?rev=615d7830fdaf994ebd32ca1e349daf68b18c99b0#615d7830fdaf994ebd32ca1e349daf68b18c99b0"
 dependencies = [
  "bitflags",
@@ -562,7 +540,7 @@ version = "5.1.0"
 source = "git+https://github.com/houqp/arrow-datafusion?rev=af34cec956c8d67b2520a266e74683d7bdcb3099#af34cec956c8d67b2520a266e74683d7bdcb3099"
 dependencies = [
  "ahash",
- "arrow 6.0.0-SNAPSHOT (git+https://github.com/apache/arrow-rs?rev=615d7830fdaf994ebd32ca1e349daf68b18c99b0)",
+ "arrow",
  "async-trait",
  "chrono",
  "futures",
@@ -590,7 +568,7 @@ name = "deltalake"
 version = "0.4.1"
 dependencies = [
  "anyhow",
- "arrow 6.0.0-SNAPSHOT (git+https://github.com/apache/arrow-rs?rev=615d7830fdaf994ebd32ca1e349daf68b18c99b0)",
+ "arrow",
  "async-stream",
  "async-trait",
  "azure_core",
@@ -637,7 +615,6 @@ dependencies = [
 name = "deltalake-python"
 version = "0.5.2"
 dependencies = [
- "arrow 6.0.0-SNAPSHOT (git+https://github.com/apache/arrow-rs?rev=5c3ed6123d9ea0130a1eca95a0aae776b458208f)",
  "chrono",
  "deltalake",
  "env_logger 0.9.0",
@@ -1767,7 +1744,7 @@ name = "parquet"
 version = "6.0.0-SNAPSHOT"
 source = "git+https://github.com/apache/arrow-rs?rev=615d7830fdaf994ebd32ca1e349daf68b18c99b0#615d7830fdaf994ebd32ca1e349daf68b18c99b0"
 dependencies = [
- "arrow 6.0.0-SNAPSHOT (git+https://github.com/apache/arrow-rs?rev=615d7830fdaf994ebd32ca1e349daf68b18c99b0)",
+ "arrow",
  "base64 0.13.0",
  "brotli",
  "byteorder",
