@@ -25,97 +25,21 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
-use datafusion::datasource::datasource::{ColumnStatistics, Statistics};
-use datafusion::datasource::TableProvider;
+use datafusion::datasource::{PartitionedFile, TableProvider};
 use datafusion::logical_plan::{combine_filters, Expr};
 use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::parquet::{ParquetExec, ParquetExecMetrics, ParquetPartition};
+use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
+use datafusion::physical_plan::parquet::{ParquetExec, ParquetPartition};
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::{ColumnStatistics, Statistics};
 use datafusion::scalar::ScalarValue;
 
 use crate::delta;
 use crate::schema;
 
-impl TableProvider for delta::DeltaTable {
-    fn schema(&self) -> Arc<ArrowSchema> {
-        Arc::new(
-            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
-                delta::DeltaTable::schema(self).unwrap(),
-            )
-            .unwrap(),
-        )
-    }
-
-    fn scan(
-        &self,
-        projection: &Option<Vec<usize>>,
-        batch_size: usize,
-        filters: &[Expr],
-        limit: Option<usize>,
-    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
-        let schema = Arc::new(<ArrowSchema as TryFrom<&schema::Schema>>::try_from(
-            delta::DeltaTable::schema(self).unwrap(),
-        )?);
-        let filenames = self.get_file_uris();
-
-        let partitions = filenames
-            .into_iter()
-            .zip(self.get_active_add_actions())
-            .map(|(fname, action)| {
-                let statistics = if let Ok(Some(statistics)) = action.get_stats() {
-                    Statistics {
-                        num_rows: Some(statistics.num_records as usize),
-                        total_byte_size: Some(action.size as usize),
-                        column_statistics: Some(
-                            self.schema()
-                                .unwrap()
-                                .get_fields()
-                                .iter()
-                                .map(|field| ColumnStatistics {
-                                    null_count: statistics
-                                        .null_count
-                                        .get(field.get_name())
-                                        .and_then(|f| f.as_value().map(|v| v as usize)),
-                                    max_value: statistics
-                                        .max_values
-                                        .get(field.get_name())
-                                        .and_then(|f| to_scalar_value(f.as_value()?)),
-                                    min_value: statistics
-                                        .min_values
-                                        .get(field.get_name())
-                                        .and_then(|f| to_scalar_value(f.as_value()?)),
-                                    distinct_count: None, // TODO: distinct
-                                })
-                                .collect(),
-                        ),
-                    }
-                } else {
-                    Statistics::default()
-                };
-
-                Ok(ParquetPartition::new(vec![fname], statistics))
-            })
-            .collect::<datafusion::error::Result<_>>()?;
-        let predicate_builder = combine_filters(filters).and_then(|predicate_expr| {
-            PruningPredicate::try_new(&predicate_expr, schema.clone()).ok()
-        });
-
-        Ok(Arc::new(ParquetExec::new(
-            partitions,
-            schema,
-            projection.clone(),
-            ParquetExecMetrics::new(),
-            predicate_builder,
-            batch_size,
-            limit,
-        )))
-    }
-
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn statistics(&self) -> Statistics {
+impl delta::DeltaTable {
+    /// Return statistics for Datafusion Table
+    pub fn datafusion_table_statistics(&self) -> Statistics {
         let stats = self
             .get_active_add_actions()
             .iter()
@@ -132,6 +56,7 @@ impl TableProvider for delta::DeltaTable {
                         };
                         self.schema().unwrap().get_fields().len()
                     ]),
+                    is_exact: true,
                 }),
                 |acc, action| {
                     let acc = acc?;
@@ -204,12 +129,14 @@ impl TableProvider for delta::DeltaTable {
                                 })
                                 .collect()
                         }),
+                        is_exact: true,
                     })
                 },
             )
             .unwrap_or_default();
         // Convert column max/min scalar values to correct types based on arrow types.
         Statistics {
+            is_exact: true,
             num_rows: stats.num_rows,
             total_byte_size: stats.total_byte_size,
             column_statistics: stats.column_statistics.map(|col_stats| {
@@ -240,6 +167,97 @@ impl TableProvider for delta::DeltaTable {
                     .collect()
             }),
         }
+    }
+}
+
+impl TableProvider for delta::DeltaTable {
+    fn schema(&self) -> Arc<ArrowSchema> {
+        Arc::new(
+            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
+                delta::DeltaTable::schema(self).unwrap(),
+            )
+            .unwrap(),
+        )
+    }
+
+    fn scan(
+        &self,
+        projection: &Option<Vec<usize>>,
+        batch_size: usize,
+        filters: &[Expr],
+        limit: Option<usize>,
+    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+        let schema = Arc::new(<ArrowSchema as TryFrom<&schema::Schema>>::try_from(
+            delta::DeltaTable::schema(self).unwrap(),
+        )?);
+        let filenames = self.get_file_uris();
+        let metrics = ExecutionPlanMetricsSet::new();
+
+        let partitions = filenames
+            .into_iter()
+            .zip(self.get_active_add_actions())
+            .enumerate()
+            .map(|(idx, (fname, action))| {
+                let statistics = if let Ok(Some(statistics)) = action.get_stats() {
+                    Statistics {
+                        num_rows: Some(statistics.num_records as usize),
+                        total_byte_size: Some(action.size as usize),
+                        column_statistics: Some(
+                            self.schema()
+                                .unwrap()
+                                .get_fields()
+                                .iter()
+                                .map(|field| ColumnStatistics {
+                                    null_count: statistics
+                                        .null_count
+                                        .get(field.get_name())
+                                        .and_then(|f| f.as_value().map(|v| v as usize)),
+                                    max_value: statistics
+                                        .max_values
+                                        .get(field.get_name())
+                                        .and_then(|f| to_scalar_value(f.as_value()?)),
+                                    min_value: statistics
+                                        .min_values
+                                        .get(field.get_name())
+                                        .and_then(|f| to_scalar_value(f.as_value()?)),
+                                    distinct_count: None, // TODO: distinct
+                                })
+                                .collect(),
+                        ),
+                        is_exact: true,
+                    }
+                } else {
+                    Statistics::default()
+                };
+
+                Ok(ParquetPartition::new(
+                    vec![PartitionedFile {
+                        path: fname,
+                        statistics,
+                    }],
+                    idx,
+                    metrics.clone(),
+                ))
+            })
+            .collect::<datafusion::error::Result<_>>()?;
+        let predicate_builder = combine_filters(filters).and_then(|predicate_expr| {
+            PruningPredicate::try_new(&predicate_expr, schema.clone()).ok()
+        });
+
+        Ok(Arc::new(ParquetExec::new(
+            partitions,
+            schema,
+            projection.clone(),
+            self.datafusion_table_statistics(),
+            ExecutionPlanMetricsSet::new(),
+            predicate_builder,
+            batch_size,
+            limit,
+        )))
+    }
+
+    fn as_any(&self) -> &dyn Any {
+        self
     }
 }
 

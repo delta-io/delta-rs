@@ -47,7 +47,7 @@
 
 extern crate log;
 
-extern crate arrow;
+pub use arrow;
 extern crate chrono;
 extern crate lazy_static;
 extern crate parquet;
