@@ -74,54 +74,19 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "28ae2b3dec75a406790005a200b1bd89785afc02517a00ca99ecfe093ee9e6cf"
 
 [[package]]
-name = "arrayref"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4c527152e37cf757a3f78aae5a06fbeefdb07ccc535c980a3208ee3060dd544"
-
-[[package]]
-name = "arrayvec"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "23b62fc65de8e4e7f52534fb52b0f3ed04746ae267519eef2a83941e8085068b"
-
-[[package]]
-name = "arrow"
-version = "5.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a4091f84cacfdbd5238e161d314e585820269926f79e05d184db8a2898782d44"
-dependencies = [
- "bitflags",
- "chrono",
- "csv",
- "flatbuffers",
- "hex",
- "indexmap",
- "lazy_static",
- "lexical-core 0.7.6",
- "multiversion",
- "num",
- "prettytable-rs",
- "rand 0.8.4",
- "regex",
- "serde",
- "serde_derive",
- "serde_json",
-]
-
-[[package]]
 name = "arrow"
 version = "6.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow-rs?rev=5c3ed6123d9ea0130a1eca95a0aae776b458208f#5c3ed6123d9ea0130a1eca95a0aae776b458208f"
+source = "git+https://github.com/apache/arrow-rs?rev=615d7830fdaf994ebd32ca1e349daf68b18c99b0#615d7830fdaf994ebd32ca1e349daf68b18c99b0"
 dependencies = [
  "bitflags",
  "chrono",
+ "comfy-table",
  "csv",
  "flatbuffers",
  "hex",
  "indexmap",
  "lazy_static",
- "lexical-core 0.8.0",
+ "lexical-core",
  "multiversion",
  "num",
  "rand 0.8.4",
@@ -280,17 +245,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "bef38d45163c2f1dde094a7dfd33ccf595c92905c8f8f4fdc18d06fb1037718a"
 
 [[package]]
-name = "blake2b_simd"
-version = "0.5.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "afa748e348ad3be8263be728124b24a24f268266f6f5d58af9d75f6a40b5c587"
-dependencies = [
- "arrayref",
- "arrayvec",
- "constant_time_eq",
-]
-
-[[package]]
 name = "block-buffer"
 version = "0.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -411,16 +365,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "comfy-table"
+version = "4.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "11e95a3e867422fd8d04049041f5671f94d53c32a9dcd82e2be268714942f3f3"
+dependencies = [
+ "strum",
+ "strum_macros",
+ "unicode-width",
+]
+
+[[package]]
 name = "const_fn"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f92cfa0fd5690b3cf8c1ef2cabbd9b7ef22fa53cf5e1f92b05103f6d5d1cf6e7"
-
-[[package]]
-name = "constant_time_eq"
-version = "0.1.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "245097e9a4535ee1e3e3931fcfcd55a796a44c643e8596ff6566d68f09b87bbc"
 
 [[package]]
 name = "core-foundation"
@@ -577,11 +536,11 @@ dependencies = [
 
 [[package]]
 name = "datafusion"
-version = "4.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow-datafusion?rev=4ddd2f5e7582ffe662aea27bbb74c58cd0715152#4ddd2f5e7582ffe662aea27bbb74c58cd0715152"
+version = "5.1.0"
+source = "git+https://github.com/houqp/arrow-datafusion?rev=af34cec956c8d67b2520a266e74683d7bdcb3099#af34cec956c8d67b2520a266e74683d7bdcb3099"
 dependencies = [
  "ahash",
- "arrow 5.3.0",
+ "arrow",
  "async-trait",
  "chrono",
  "futures",
@@ -591,7 +550,7 @@ dependencies = [
  "md-5",
  "num_cpus",
  "ordered-float 2.7.0",
- "parquet 5.3.0",
+ "parquet",
  "paste 1.0.5",
  "pin-project-lite",
  "rand 0.8.4",
@@ -609,7 +568,7 @@ name = "deltalake"
 version = "0.4.1"
 dependencies = [
  "anyhow",
- "arrow 6.0.0-SNAPSHOT",
+ "arrow",
  "async-stream",
  "async-trait",
  "azure_core",
@@ -628,7 +587,7 @@ dependencies = [
  "libc",
  "log",
  "maplit",
- "parquet 6.0.0-SNAPSHOT",
+ "parquet",
  "parquet-format",
  "percent-encoding",
  "pretty_assertions",
@@ -657,7 +616,6 @@ dependencies = [
 name = "deltalake-python"
 version = "0.5.2"
 dependencies = [
- "arrow 6.0.0-SNAPSHOT",
  "chrono",
  "deltalake",
  "env_logger 0.9.0",
@@ -693,17 +651,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "dirs"
-version = "1.0.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "3fd78930633bd1c6e35c4b42b1df7b0cbc6bc191146e512bb3bedf243fcc3901"
-dependencies = [
- "libc",
- "redox_users 0.3.5",
- "winapi",
-]
-
-[[package]]
 name = "dirs-next"
 version = "2.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -720,7 +667,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "4ebda144c4fe02d1f7ea1a7d9641b6fc6b580adcfa024ae48797ecdeb6825b4d"
 dependencies = [
  "libc",
- "redox_users 0.4.0",
+ "redox_users",
  "winapi",
 ]
 
@@ -735,12 +682,6 @@ name = "dtoa"
 version = "0.4.8"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "56899898ce76aaf4a0f24d914c97ea6ed976d42fec6ad33fcbb0a1103e07b2b0"
-
-[[package]]
-name = "encode_unicode"
-version = "0.3.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a357d28ed41a50f9c765dbfe56cbc04a64e53e5fc58ba79fbc34c10ef3df831f"
 
 [[package]]
 name = "encoding_rs"
@@ -1338,19 +1279,6 @@ checksum = "e2abad23fbc42b3700f2f279844dc832adb2b2eb069b2df918f455c4e18cc646"
 
 [[package]]
 name = "lexical-core"
-version = "0.7.6"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6607c62aa161d23d17a9072cc5da0be67cdfc89d3afb1e8d9c842bebc2525ffe"
-dependencies = [
- "arrayvec",
- "bitflags",
- "cfg-if",
- "ryu",
- "static_assertions",
-]
-
-[[package]]
-name = "lexical-core"
 version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d32c80337884d5044fe54e9c1b8d64b92de67e10d9312e472a8ff6d6ea849daf"
@@ -1807,38 +1735,17 @@ dependencies = [
  "cfg-if",
  "instant",
  "libc",
- "redox_syscall 0.2.10",
+ "redox_syscall",
  "smallvec",
  "winapi",
 ]
 
 [[package]]
 name = "parquet"
-version = "5.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2943ec261708f7aaa51ea8a1fa2cd3367f5dec3219f7c231d8759fef4b93cc06"
-dependencies = [
- "arrow 5.3.0",
- "base64 0.13.0",
- "brotli",
- "byteorder",
- "chrono",
- "flate2",
- "lz4",
- "num-bigint",
- "parquet-format",
- "rand 0.8.4",
- "snap",
- "thrift",
- "zstd",
-]
-
-[[package]]
-name = "parquet"
 version = "6.0.0-SNAPSHOT"
-source = "git+https://github.com/apache/arrow-rs?rev=5c3ed6123d9ea0130a1eca95a0aae776b458208f#5c3ed6123d9ea0130a1eca95a0aae776b458208f"
+source = "git+https://github.com/apache/arrow-rs?rev=615d7830fdaf994ebd32ca1e349daf68b18c99b0#615d7830fdaf994ebd32ca1e349daf68b18c99b0"
 dependencies = [
- "arrow 6.0.0-SNAPSHOT",
+ "arrow",
  "base64 0.13.0",
  "brotli",
  "byteorder",
@@ -1937,20 +1844,6 @@ checksum = "926d36b9553851b8b0005f1275891b392ee4d2d833852c417ed025477350fb9d"
 dependencies = [
  "env_logger 0.7.1",
  "log",
-]
-
-[[package]]
-name = "prettytable-rs"
-version = "0.8.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0fd04b170004fa2daccf418a7f8253aaf033c27760b5f225889024cf66d7ac2e"
-dependencies = [
- "atty",
- "csv",
- "encode_unicode",
- "lazy_static",
- "term",
- "unicode-width",
 ]
 
 [[package]]
@@ -2181,12 +2074,6 @@ dependencies = [
 
 [[package]]
 name = "redox_syscall"
-version = "0.1.57"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "41cc0f7e4d5d4544e8861606a285bb08d3e70712ccc7d2b84d7c0ccfaf4b05ce"
-
-[[package]]
-name = "redox_syscall"
 version = "0.2.10"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8383f39639269cde97d255a32bdb68c047337295414940c68bdd30c2e13203ff"
@@ -2196,23 +2083,12 @@ dependencies = [
 
 [[package]]
 name = "redox_users"
-version = "0.3.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "de0737333e7a9502c789a36d7c7fa6092a49895d4faa31ca5df163857ded2e9d"
-dependencies = [
- "getrandom 0.1.16",
- "redox_syscall 0.1.57",
- "rust-argon2",
-]
-
-[[package]]
-name = "redox_users"
 version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "528532f3d801c87aec9def2add9ca802fe569e44a544afe633765267840abe64"
 dependencies = [
  "getrandom 0.2.3",
- "redox_syscall 0.2.10",
+ "redox_syscall",
 ]
 
 [[package]]
@@ -2423,18 +2299,6 @@ dependencies = [
  "rusoto_core",
  "serde_urlencoded 0.6.1",
  "xml-rs",
-]
-
-[[package]]
-name = "rust-argon2"
-version = "0.8.3"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4b18820d944b33caa75a71378964ac46f58517c92b6ae5f762636247c09e78fb"
-dependencies = [
- "base64 0.13.0",
- "blake2b_simd",
- "constant_time_eq",
- "crossbeam-utils",
 ]
 
 [[package]]
@@ -2729,9 +2593,9 @@ checksum = "6e63cff320ae2c57904679ba7cb63280a3dc4613885beafb148ee7bf9aa9042d"
 
 [[package]]
 name = "sqlparser"
-version = "0.9.0"
+version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4fa863a2dfc4879a35647c51dadf495a2ad53745eaf3723fda27006e745fb0ba"
+checksum = "7dbcb26aebf44a0993c3c95e41d13860131b6cbf52edb2c53230056baa4d733f"
 dependencies = [
  "log",
 ]
@@ -2805,6 +2669,24 @@ name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
+
+[[package]]
+name = "strum"
+version = "0.21.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "aaf86bbcfd1fa9670b7a129f64fc0c9fcbbfe4f1bc4210e9e98fe71ffc12cde2"
+
+[[package]]
+name = "strum_macros"
+version = "0.21.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d06aaeeee809dbc59eb4556183dd927df67db1540de5be8d3ec0b6636358a5ec"
+dependencies = [
+ "heck",
+ "proc-macro2",
+ "quote",
+ "syn",
+]
 
 [[package]]
 name = "subtle"
@@ -2890,19 +2772,8 @@ dependencies = [
  "cfg-if",
  "libc",
  "rand 0.8.4",
- "redox_syscall 0.2.10",
+ "redox_syscall",
  "remove_dir_all",
- "winapi",
-]
-
-[[package]]
-name = "term"
-version = "0.5.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "edd106a334b7657c10b7c540a0106114feadeb4dc314513e97df481d5d966f42"
-dependencies = [
- "byteorder",
- "dirs",
  "winapi",
 ]
 
