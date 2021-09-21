@@ -252,4 +252,26 @@ mod dynamodb {
         // done
         assert!(lock.release_lock(&item).await.unwrap());
     }
+
+    #[tokio::test]
+    async fn test_release_and_delete_lock() {
+        let key = "test_release_and_delete_lock";
+        let c1 = create_dynamo_lock(key, "w1").await;
+        let c2 = create_dynamo_lock(key, "w2").await;
+
+        let l1 = c1.acquire_lock(None).await.unwrap();
+        let l2 = c2.get_lock().await.unwrap().unwrap();
+        assert_eq!(l1.record_version_number, l2.record_version_number);
+
+        // ensure that worker 2 cannot release worker 1 lock
+        let released = c2.release_lock(&l2).await.unwrap();
+        assert!(!released);
+
+        // however it can delete it if called delete_lock
+        let deleted = c2.delete_lock(&l2).await.unwrap();
+        assert!(deleted);
+
+        // make sure it is deleted
+        assert!(c1.get_lock().await.unwrap().is_none());
+    }
 }

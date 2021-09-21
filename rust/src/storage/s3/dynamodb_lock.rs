@@ -413,29 +413,17 @@ impl DynamoDbLockClient {
     /// Releases the given lock if the current user still has it, returning true if the lock was
     /// successfully released, and false if someone else already stole the lock
     pub async fn release_lock(&self, lock: &LockItem) -> Result<bool, DynamoError> {
-        let result = self.client.delete_item(DeleteItemInput {
-            table_name: self.opts.table_name.clone(),
-            key: hashmap! {
-                PARTITION_KEY_NAME.to_string() => attr(self.opts.partition_key_value.clone())
-            },
-            condition_expression: Some(expressions::PK_EXISTS_AND_OWNER_RVN_MATCHES.to_string()),
-            expression_attribute_names: Some(hashmap! {
-                vars::PK_PATH.to_string() => PARTITION_KEY_NAME.to_string(),
-                vars::RVN_PATH.to_string() => RECORD_VERSION_NUMBER.to_string(),
-                vars::OWNER_NAME_PATH.to_string() => OWNER_NAME.to_string(),
-            }),
-            expression_attribute_values: Some(hashmap! {
-                vars::RVN_VALUE.to_string() => attr(&lock.record_version_number),
-                vars::OWNER_NAME_VALUE.to_string() => attr(&lock.owner_name),
-            }),
-            ..Default::default()
-        });
-
-        match result.await {
-            Ok(_) => Ok(true),
-            Err(RusotoError::Service(DeleteItemError::ConditionalCheckFailed(_))) => Ok(false),
-            Err(e) => Err(DynamoError::DeleteItemError(e)),
+        if lock.owner_name != self.opts.owner_name {
+            return Ok(false);
         }
+        self.delete_lock(lock).await
+    }
+
+    /// Deletes the given lock from dynamodb if given rvn and owner is still matching. This is
+    /// dangerous call and allows every owner to delete the active lock
+    pub async fn delete_lock(&self, lock: &LockItem) -> Result<bool, DynamoError> {
+        self.delete_item(&lock.record_version_number, &lock.owner_name)
+            .await
     }
 
     async fn upsert_item(
@@ -480,6 +468,32 @@ impl DynamoDbLockClient {
             acquired_expired_lock,
             is_non_acquirable: false,
         })
+    }
+
+    async fn delete_item(&self, rvn: &str, owner: &str) -> Result<bool, DynamoError> {
+        let result = self.client.delete_item(DeleteItemInput {
+            table_name: self.opts.table_name.clone(),
+            key: hashmap! {
+                PARTITION_KEY_NAME.to_string() => attr(self.opts.partition_key_value.clone())
+            },
+            condition_expression: Some(expressions::PK_EXISTS_AND_OWNER_RVN_MATCHES.to_string()),
+            expression_attribute_names: Some(hashmap! {
+                vars::PK_PATH.to_string() => PARTITION_KEY_NAME.to_string(),
+                vars::RVN_PATH.to_string() => RECORD_VERSION_NUMBER.to_string(),
+                vars::OWNER_NAME_PATH.to_string() => OWNER_NAME.to_string(),
+            }),
+            expression_attribute_values: Some(hashmap! {
+                vars::RVN_VALUE.to_string() => attr(rvn),
+                vars::OWNER_NAME_VALUE.to_string() => attr(owner),
+            }),
+            ..Default::default()
+        });
+
+        match result.await {
+            Ok(_) => Ok(true),
+            Err(RusotoError::Service(DeleteItemError::ConditionalCheckFailed(_))) => Ok(false),
+            Err(e) => Err(DynamoError::DeleteItemError(e)),
+        }
     }
 }
 
