@@ -56,6 +56,27 @@ Time travel
     >>> dt.to_pyarrow_table().to_pydict()
     {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
 
+History
+
+.. code-block:: python
+
+    >>> from deltalake import DeltaTable
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.history()
+    [{'timestamp': 1587968626537, 'operation': 'DELETE', 'operationParameters': {'predicate': '["((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))"]'}, 'readVersion': 3, 'isBlindAppend': False}, {'timestamp': 1587968614187, 'operation': 'UPDATE', 'operationParameters': {'predicate': '((id#697L % cast(2 as bigint)) = cast(0 as bigint))'}, 'readVersion': 2, 'isBlindAppend': False}, {'timestamp': 1587968604143, 'operation': 'WRITE', 'operationParameters': {'mode': 'Overwrite', 'partitionBy': '[]'}, 'readVersion': 1, 'isBlindAppend': False}, {'timestamp': 1587968596254, 'operation': 'MERGE', 'operationParameters': {'predicate': '(oldData.`id` = newData.`id`)'}, 'readVersion': 0, 'isBlindAppend': False}, {'timestamp': 1587968586154, 'operation': 'WRITE', 'operationParameters': {'mode': 'ErrorIfExists', 'partitionBy': '[]'}, 'isBlindAppend': True}]
+
+Create a DeltaTable using a Data Catalog
+
+.. code-block:: python
+
+    >>> from deltalake import DeltaTable
+    >>> from deltalake import DataCatalog
+    >>> database_name = "simple_database"
+    >>> table_name = "simple_table"
+    >>> data_catalog = DataCatalog.AWS
+    >>> dt = DeltaTable.from_data_catalog(data_catalog=data_catalog, database_name=database_name, table_name=table_name)
+    >>> dt.to_pyarrow_table().to_pydict()
+    {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
 
 DeltaSchema
 -----------
