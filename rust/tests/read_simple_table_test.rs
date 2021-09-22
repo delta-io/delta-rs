@@ -14,16 +14,17 @@ async fn read_simple_table() {
     assert_eq!(table.version, 4);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
+    let mut files = table.get_files();
+    files.sort();
     assert_eq!(
-        table.get_files().sort(),
+        files,
         vec![
+            "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
             "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
             "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
             "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
             "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
-            "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
         ]
-        .sort()
     );
     let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 31);
@@ -39,38 +40,44 @@ async fn read_simple_table() {
     );
     #[cfg(unix)]
     {
-        let mut paths: Vec<String> = vec![
+        let mut paths = table.get_file_uris();
+        paths.sort();
+        let expected_paths: Vec<String> = vec![
+                "./tests/data/simple_table/part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet".to_string(),
                 "./tests/data/simple_table/part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet".to_string(),
                 "./tests/data/simple_table/part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet".to_string(),
                 "./tests/data/simple_table/part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet".to_string(),
-                "./tests/data/simple_table/part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet".to_string(),
-                "./tests/data/simple_table/part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet".to_string(),
+                "./tests/data/simple_table/part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet".to_string()
             ];
-        assert_eq!(table.get_file_uris().sort(), paths.sort());
+        assert_eq!(paths, expected_paths);
     }
     #[cfg(windows)]
     {
-        let mut paths: Vec<String> = vec![
+        let mut paths = table.get_file_uris();
+        paths.sort();
+        let mut expected_paths: Vec<String> = vec![
+                "./tests/data/simple_table\\part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet".to_string(),
                 "./tests/data/simple_table\\part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet".to_string(),
                 "./tests/data/simple_table\\part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet".to_string(),
                 "./tests/data/simple_table\\part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet".to_string(),
-                "./tests/data/simple_table\\part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet".to_string(),
-                "./tests/data/simple_table\\part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet".to_string(),
+                "./tests/data/simple_table\\part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet".to_string()
             ];
-        assert_eq!(table.get_file_uris().sort(), paths.sort());
+        assert_eq!(paths, expected_paths);
     }
 }
 
 #[tokio::test]
 async fn read_simple_table_with_version() {
-    let mut table = deltalake::open_table_with_version("./tests/data/simple_table", 0)
+    let table = deltalake::open_table_with_version("./tests/data/simple_table", 0)
         .await
         .unwrap();
     assert_eq!(table.version, 0);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
+    let mut files = table.get_files();
+    files.sort();
     assert_eq!(
-        table.get_files(),
+        files,
         vec![
             "part-00000-a72b1fb3-f2df-41fe-a8f0-e65b746382dd-c000.snappy.parquet",
             "part-00001-c506e79a-0bf8-4e2b-a42b-9731b2e490ae-c000.snappy.parquet",
@@ -81,14 +88,16 @@ async fn read_simple_table_with_version() {
         ],
     );
 
-    table = deltalake::open_table_with_version("./tests/data/simple_table", 2)
+    let table = deltalake::open_table_with_version("./tests/data/simple_table", 2)
         .await
         .unwrap();
     assert_eq!(table.version, 2);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
+    let mut files = table.get_files();
+    files.sort();
     assert_eq!(
-        table.get_files().sort(),
+        files,
         vec![
             "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
             "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
@@ -97,26 +106,26 @@ async fn read_simple_table_with_version() {
             "part-00006-46f2ff20-eb5d-4dda-8498-7bfb2940713b-c000.snappy.parquet",
             "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
         ]
-        .sort()
     );
 
-    table = deltalake::open_table_with_version("./tests/data/simple_table", 3)
+    let table = deltalake::open_table_with_version("./tests/data/simple_table", 3)
         .await
         .unwrap();
     assert_eq!(table.version, 3);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
+    let mut files = table.get_files();
+    files.sort();
     assert_eq!(
-        table.get_files().sort(),
+        files,
         vec![
             "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+            "part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet",
             "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+            "part-00001-bb70d2ba-c196-4df2-9c85-f34969ad3aa9-c000.snappy.parquet",
             "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
             "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
-            "part-00000-f17fcbf5-e0dc-40ba-adae-ce66d1fcaef6-c000.snappy.parquet",
-            "part-00001-bb70d2ba-c196-4df2-9c85-f34969ad3aa9-c000.snappy.parquet",
-        ]
-        .sort(),
+        ],
     );
 }
 
