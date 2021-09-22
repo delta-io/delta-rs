@@ -428,7 +428,7 @@ impl DeltaTableState {
     }
 
     /// merges new state information into our state
-    pub fn merge(&mut self, new_state: &mut DeltaTableState) -> () {
+    pub fn merge(&mut self, new_state: &mut DeltaTableState) {
         // build a lookup table of all remove actions
 
         if !new_state.tombstones.is_empty() {
