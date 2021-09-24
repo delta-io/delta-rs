@@ -428,8 +428,8 @@ impl DeltaTableState {
     }
 
     /// merges new state information into our state
-    pub fn merge(&mut self, new_state: &mut DeltaTableState) {
-        // build a lookup table of all remove actions
+    pub fn merge(&mut self, mut new_state: DeltaTableState) {
+        self.files.append(&mut new_state.files);
 
         if !new_state.tombstones.is_empty() {
             let new_removals: HashSet<&str> = new_state
@@ -438,12 +438,9 @@ impl DeltaTableState {
                 .map(|s| s.path.as_str())
                 .collect();
 
-            // previous state files must filtered for removals,
-            // new state files are appended without looking.
             self.files
                 .retain(|a| !new_removals.contains(a.path.as_str()));
         }
-        self.files.append(&mut new_state.files);
         self.tombstones.append(&mut new_state.tombstones);
         if new_state.min_reader_version > 0 {
             self.min_reader_version = new_state.min_reader_version;
@@ -614,7 +611,7 @@ impl DeltaTable {
             process_action(&mut new_state, action)?;
         }
 
-        self.state.merge(&mut new_state);
+        self.state.merge(new_state);
 
         Ok(())
     }
