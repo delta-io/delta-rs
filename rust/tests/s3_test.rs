@@ -33,7 +33,12 @@ mod s3 {
             },
         )
         .unwrap();
-        let mut table = deltalake::DeltaTable::new(table_uri, storage).unwrap();
+        let mut table = deltalake::DeltaTable::new(
+            table_uri,
+            storage,
+            deltalake::DeltaTableLoadOptions::default(),
+        )
+        .unwrap();
         table.load().await.unwrap();
         println!("{}", table);
 
