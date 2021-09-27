@@ -428,7 +428,7 @@ impl DeltaTableState {
     }
 
     /// merges new state information into our state
-    pub fn merge(&mut self, mut new_state: DeltaTableState) {
+    pub fn merge(&mut self, mut new_state: DeltaTableState, require_tombstones: bool) {
         self.files.append(&mut new_state.files);
 
         if !new_state.tombstones.is_empty() {
@@ -441,7 +441,11 @@ impl DeltaTableState {
             self.files
                 .retain(|a| !new_removals.contains(a.path.as_str()));
         }
-        self.tombstones.append(&mut new_state.tombstones);
+
+        if require_tombstones {
+            self.tombstones.append(&mut new_state.tombstones);
+        }
+
         if new_state.min_reader_version > 0 {
             self.min_reader_version = new_state.min_reader_version;
             self.min_writer_version = new_state.min_writer_version;
@@ -485,12 +489,65 @@ fn extract_rel_path<'a, 'b>(
     }
 }
 
+/// Load-time delta table configuration options
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DeltaTableLoadOptions {
+    /// indicates whether our use case requires tracking tombstones.
+    /// read-only applications never require tombstones. Tombstones
+    /// are only required when writing checkpoints, so even many writers
+    /// may want to skip them.
+    /// defaults to true as a safe default.
+    pub require_tombstones: bool,
+}
+
+impl Default for DeltaTableLoadOptions {
+    fn default() -> Self {
+        DeltaTableLoadOptions {
+            require_tombstones: true,
+        }
+    }
+}
+
+/// builder for configuring a delta table load.
+#[derive(Debug, Clone, Default)]
+pub struct DeltaTableBuilder {
+    options: DeltaTableLoadOptions,
+}
+
+impl DeltaTableBuilder {
+    /// TODO
+    pub fn new() -> Self {
+        DeltaTableBuilder {
+            options: DeltaTableLoadOptions {
+                require_tombstones: true,
+            },
+        }
+    }
+
+    /// TODO
+    pub fn without_tombstones(mut self) -> Self {
+        self.options.require_tombstones = false;
+        self
+    }
+
+    /// finally load the table
+    pub async fn load(&self, table_uri: &str) -> Result<DeltaTable, DeltaTableError> {
+        let storage_backend = storage::get_backend_for_uri(table_uri)?;
+        let mut table = DeltaTable::new(table_uri, storage_backend, self.options.clone())?;
+        table.load().await?;
+
+        Ok(table)
+    }
+}
+
 /// In memory representation of a Delta Table
 pub struct DeltaTable {
     /// The version of the table as of the most recent loaded Delta log entry.
     pub version: DeltaDataTypeVersion,
     /// The URI the DeltaTable was loaded from.
     pub table_uri: String,
+    /// the load options used during load
+    pub load_options: DeltaTableLoadOptions,
 
     state: DeltaTableState,
 
@@ -608,10 +665,11 @@ impl DeltaTable {
         let mut new_state = DeltaTableState::default();
         for line in reader.lines() {
             let action: Action = serde_json::from_str(line?.as_str())?;
-            process_action(&mut new_state, action)?;
+            process_action(&mut new_state, action, true)?;
         }
 
-        self.state.merge(new_state);
+        self.state
+            .merge(new_state, self.load_options.require_tombstones);
 
         Ok(())
     }
@@ -641,6 +699,7 @@ impl DeltaTable {
                 process_action(
                     &mut self.state,
                     Action::from_parquet_record(schema, &record)?,
+                    self.load_options.require_tombstones,
                 )?;
             }
         }
@@ -1129,6 +1188,7 @@ impl DeltaTable {
     pub fn new(
         table_uri: &str,
         storage_backend: Box<dyn StorageBackend>,
+        load_options: DeltaTableLoadOptions,
     ) -> Result<Self, DeltaTableError> {
         let table_uri = storage_backend.trim_path(table_uri);
         let log_uri_normalized = storage_backend.join_path(&table_uri, "_delta_log");
@@ -1137,6 +1197,7 @@ impl DeltaTable {
             state: DeltaTableState::default(),
             storage: storage_backend,
             table_uri,
+            load_options,
             last_check_point: None,
             log_uri: log_uri_normalized,
             version_timestamp: HashMap::new(),
@@ -1178,7 +1239,11 @@ impl DeltaTable {
         // Mutate the DeltaTable's state using process_action()
         // in order to get most up-to-date state based on the commit above
         for action in actions {
-            let _ = process_action(&mut self.state, action)?;
+            let _ = process_action(
+                &mut self.state,
+                action,
+                self.load_options.require_tombstones,
+            )?;
         }
 
         Ok(())
@@ -1510,14 +1575,20 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Erro
     Ok(jsons.join("\n"))
 }
 
-fn process_action(state: &mut DeltaTableState, action: Action) -> Result<(), ApplyLogError> {
+fn process_action(
+    state: &mut DeltaTableState,
+    action: Action,
+    handle_tombstones: bool,
+) -> Result<(), ApplyLogError> {
     match action {
         Action::add(v) => {
             state.files.push(v.path_decoded()?);
         }
         Action::remove(v) => {
-            let v = v.path_decoded()?;
-            state.tombstones.push(v);
+            if handle_tombstones {
+                let v = v.path_decoded()?;
+                state.tombstones.push(v);
+            }
         }
         Action::protocol(v) => {
             state.min_reader_version = v.min_reader_version;
@@ -1548,7 +1619,7 @@ fn process_action(state: &mut DeltaTableState, action: Action) -> Result<(), App
 /// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table(table_uri: &str) -> Result<DeltaTable, DeltaTableError> {
     let storage_backend = storage::get_backend_for_uri(table_uri)?;
-    let mut table = DeltaTable::new(table_uri, storage_backend)?;
+    let mut table = DeltaTable::new(table_uri, storage_backend, DeltaTableLoadOptions::default())?;
     table.load().await?;
 
     Ok(table)
@@ -1561,7 +1632,7 @@ pub async fn open_table_with_version(
     version: DeltaDataTypeVersion,
 ) -> Result<DeltaTable, DeltaTableError> {
     let storage_backend = storage::get_backend_for_uri(table_uri)?;
-    let mut table = DeltaTable::new(table_uri, storage_backend)?;
+    let mut table = DeltaTable::new(table_uri, storage_backend, DeltaTableLoadOptions::default())?;
     table.load_version(version).await?;
 
     Ok(table)
@@ -1573,7 +1644,7 @@ pub async fn open_table_with_version(
 pub async fn open_table_with_ds(table_uri: &str, ds: &str) -> Result<DeltaTable, DeltaTableError> {
     let datetime = DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds)?);
     let storage_backend = storage::get_backend_for_uri(table_uri)?;
-    let mut table = DeltaTable::new(table_uri, storage_backend)?;
+    let mut table = DeltaTable::new(table_uri, storage_backend, DeltaTableLoadOptions::default())?;
     table.load_with_datetime(datetime).await?;
 
     Ok(table)
@@ -1613,7 +1684,7 @@ mod tests {
             last_updated: Some(0),
         });
 
-        let _ = process_action(&mut state, txn_action).unwrap();
+        let _ = process_action(&mut state, txn_action, false).unwrap();
 
         assert_eq!(2, *state.app_transaction_version.get("abc").unwrap());
         assert_eq!(1, *state.app_transaction_version.get("xyz").unwrap());
@@ -1630,7 +1701,7 @@ mod tests {
         .iter()
         {
             let be = storage::get_backend_for_uri(table_uri).unwrap();
-            let table = DeltaTable::new(table_uri, be).unwrap();
+            let table = DeltaTable::new(table_uri, be, DeltaTableLoadOptions::default()).unwrap();
             assert_eq!(table.table_uri, "s3://tests/data/delta-0.8.0");
         }
     }
@@ -1714,7 +1785,7 @@ mod tests {
         let backend = Box::new(storage::file::FileStorageBackend::new(
             tmp_dir.path().to_str().unwrap(),
         ));
-        let mut dt = DeltaTable::new(path, backend).unwrap();
+        let mut dt = DeltaTable::new(path, backend, DeltaTableLoadOptions::default()).unwrap();
 
         let mut commit_info = Map::<String, Value>::new();
         commit_info.insert(
