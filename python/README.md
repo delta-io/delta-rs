@@ -38,11 +38,10 @@ $ source ./venv/bin/activate
 #### Ready to develop with maturin
 
 [maturin](https://github.com/PyO3/maturin) is used to build the python package.
-
-First, install the package into your current Python environment
+Install delta-rs in the current virtualenv
 
 ```bash
-$ make install
+$ make develop
 ```
 
 Then, list all the available tasks

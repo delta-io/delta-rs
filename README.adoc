@@ -56,6 +56,11 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 | link:https://github.com/delta-io/delta-rs/issues/97[#97]
 |
 
+| History
+| :heavy_check_mark:
+| :heavy_check_mark:
+|
+
 | Write transactions
 | :heavy_check_mark:
 |
