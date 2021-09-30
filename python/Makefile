@@ -19,6 +19,11 @@ build: setup ## Build Python binding of delta-rs
 	$(info --- Build Python binding ---)
 	maturin build $(MATURIN_EXTRA_ARGS)
 
+.PHONY: develop
+develop: setup ## Install Python binding of delta-rs
+	$(info --- Develop with Python binding ---)
+	maturin develop --extras=devel,pandas $(MATURIN_EXTRA_ARGS)
+
 .PHONY: install
 install: build ## Install Python binding of delta-rs
 	$(info --- Uninstall Python binding ---)
