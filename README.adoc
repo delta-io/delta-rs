@@ -67,7 +67,7 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 |
 
 | Checkpoint creation
-| link:https://github.com/delta-io/delta-rs/issues/106[#106]
+| :heavy_check_mark:
 |
 |
 
