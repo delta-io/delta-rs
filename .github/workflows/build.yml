@@ -116,11 +116,5 @@ jobs:
     - name: Setup localstack
       run: docker-compose up setup
     - name: Run tests
-      # As there's no way to run tests which are feature only, one should explicitly tell which tests to execute.
-      # Using `cargo test s3` requires tests to include _s3_ part in a name which is easily human error prone.
       run: |
-       cargo test s3 --test simple_commit_test --features s3
-       cargo test s3 --test concurrent_writes_test --features s3
-       cargo test --test dynamodb_lock_test --features s3
-       cargo test --test repair_s3_rename_test --features s3
-       cargo test test_s3_delete_objs --test s3_test --features s3
+       cargo test --features s3
