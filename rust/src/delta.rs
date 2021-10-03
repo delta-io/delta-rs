@@ -490,6 +490,23 @@ fn extract_rel_path<'a, 'b>(
     }
 }
 
+/// possible version specifications for loading a delta table
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum DeltaVersion {
+    /// load the newest version
+    Newest,
+    /// specify the version to laod
+    Version(DeltaDataTypeVersion),
+    /// specify the timestamp in UTC
+    Timestamp(DateTime<Utc>),
+}
+
+impl Default for DeltaVersion {
+    fn default() -> Self {
+        DeltaVersion::Newest
+    }
+}
+
 /// Load-time delta table configuration options
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DeltaTableLoadOptions {
@@ -499,12 +516,16 @@ pub struct DeltaTableLoadOptions {
     /// may want to skip them.
     /// defaults to true as a safe default.
     pub require_tombstones: bool,
+    /// specify the version we are going to load: a time stamp, a version, or just the newest
+    /// available version
+    pub version: DeltaVersion,
 }
 
 impl Default for DeltaTableLoadOptions {
     fn default() -> Self {
         DeltaTableLoadOptions {
             require_tombstones: true,
+            version: DeltaVersion::default(),
         }
     }
 }
@@ -519,9 +540,7 @@ impl DeltaTableBuilder {
     /// TODO
     pub fn new() -> Self {
         DeltaTableBuilder {
-            options: DeltaTableLoadOptions {
-                require_tombstones: true,
-            },
+            options: DeltaTableLoadOptions::default(),
         }
     }
 
@@ -531,11 +550,35 @@ impl DeltaTableBuilder {
         self
     }
 
+    /// TODO
+    pub fn with_version(mut self, version: DeltaDataTypeVersion) -> Self {
+        self.options.version = DeltaVersion::Version(version);
+        self
+    }
+
+    /// specify the timestamp given as ISO-8601/RFC-3339 timestamp
+    pub fn with_datestring(self, date_string: &str) -> Result<Self, DeltaTableError> {
+        let datetime =
+            DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(date_string)?);
+        Ok(self.with_timestamp(datetime))
+    }
+
+    /// specify a timestamp
+    pub fn with_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
+        self.options.version = DeltaVersion::Timestamp(timestamp);
+        self
+    }
+
     /// finally load the table
     pub async fn load(&self, table_uri: &str) -> Result<DeltaTable, DeltaTableError> {
         let storage_backend = storage::get_backend_for_uri(table_uri)?;
         let mut table = DeltaTable::new(table_uri, storage_backend, self.options.clone())?;
-        table.load().await?;
+
+        match self.options.version {
+            DeltaVersion::Newest => table.load().await?,
+            DeltaVersion::Version(v) => table.load_version(v).await?,
+            DeltaVersion::Timestamp(ts) => table.load_with_datetime(ts).await?,
+        }
 
         Ok(table)
     }
@@ -1632,10 +1675,10 @@ pub async fn open_table_with_version(
     table_uri: &str,
     version: DeltaDataTypeVersion,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let storage_backend = storage::get_backend_for_uri(table_uri)?;
-    let mut table = DeltaTable::new(table_uri, storage_backend, DeltaTableLoadOptions::default())?;
-    table.load_version(version).await?;
-
+    let table = DeltaTableBuilder::new()
+        .with_version(version)
+        .load(table_uri)
+        .await?;
     Ok(table)
 }
 
@@ -1643,11 +1686,10 @@ pub async fn open_table_with_version(
 /// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
 /// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table_with_ds(table_uri: &str, ds: &str) -> Result<DeltaTable, DeltaTableError> {
-    let datetime = DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(ds)?);
-    let storage_backend = storage::get_backend_for_uri(table_uri)?;
-    let mut table = DeltaTable::new(table_uri, storage_backend, DeltaTableLoadOptions::default())?;
-    table.load_with_datetime(datetime).await?;
-
+    let table = DeltaTableBuilder::new()
+        .with_datestring(ds)?
+        .load(table_uri)
+        .await?;
     Ok(table)
 }
 
