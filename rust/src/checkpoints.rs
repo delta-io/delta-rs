@@ -168,13 +168,26 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     let mut stats_conversions: Vec<(SchemaPath, SchemaDataType)> = Vec::new();
     collect_stats_conversions(&mut stats_conversions, current_metadata.schema.get_fields());
 
-    let tombstones = state.unexpired_tombstones();
+    let mut tombstones = state.unexpired_tombstones();
 
     // if any, tombstones do not include extended file metadata, we must omit the extended metadata fields from the remove schema
     // See https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
+    //
+    // DBR version 8.x and greater have different behaviors of reading the parquet file depending
+    // on the `extended_file_metadata` flag, hence this is safer to set `extended_file_metadata=false`
+    // and omit metadata columns if at least one remove action has `extended_file_metadata=false`.
+    // We've added the additional check on `size.is_some` because in delta-spark the primitive long type
+    // is used, hence we want to omit possible errors when `extended_file_metadata=true`, but `size=null`
     let use_extended_remove_schema = tombstones
         .iter()
-        .all(|r| r.extended_file_metadata == Some(true));
+        .all(|r| r.extended_file_metadata == Some(true) && r.size.is_some());
+
+    // If use_extended_remove_schema=false for some of the tombstones, then it should be for each.
+    if !use_extended_remove_schema {
+        for remove in tombstones.iter_mut() {
+            remove.extended_file_metadata = Some(false);
+        }
+    }
 
     // protocol
     let mut jsons = std::iter::once(action::Action::protocol(action::Protocol {
