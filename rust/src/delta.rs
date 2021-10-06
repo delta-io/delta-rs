@@ -397,7 +397,7 @@ impl DeltaTableState {
         self.tombstones
             .iter()
             .filter(|t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp)
-            .map(|t| t.clone())
+            .cloned()
             .collect()
     }
 
