@@ -1,5 +1,5 @@
 use deltalake::action::Protocol;
-use deltalake::{storage, DeltaTable, DeltaTableLoadOptions, DeltaTableMetaData, Schema};
+use deltalake::{storage, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema};
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -23,7 +23,7 @@ pub async fn create_test_table(
     config: HashMap<String, Option<String>>,
 ) -> DeltaTable {
     let backend = storage::get_backend_for_uri(path).unwrap();
-    let mut table = DeltaTable::new(path, backend, DeltaTableLoadOptions::default()).unwrap();
+    let mut table = DeltaTable::new(path, backend, DeltaTableConfig::default()).unwrap();
     let md = DeltaTableMetaData::new(None, None, None, schema, Vec::new(), config);
     let protocol = Protocol {
         min_reader_version: 1,

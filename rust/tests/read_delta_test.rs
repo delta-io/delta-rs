@@ -55,9 +55,10 @@ async fn read_delta_table_with_update() {
 
 #[tokio::test]
 async fn read_delta_table_ignoring_tombstones() {
-    let table = DeltaTableBuilder::new()
+    let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+        .unwrap()
         .without_tombstones()
-        .load("./tests/data/delta-0.8.0")
+        .load()
         .await
         .unwrap();
     assert!(
