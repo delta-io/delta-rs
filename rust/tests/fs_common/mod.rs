@@ -2,7 +2,6 @@ use deltalake::action::{Action, Protocol};
 use deltalake::{storage, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::schema::types::Type;
->>>>>>> 361e9133e9a99689bcc0cb4c0718ab1c6bc2f66e
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
