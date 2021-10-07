@@ -1,6 +1,7 @@
 extern crate deltalake;
 
 use deltalake::storage::file::FileStorageBackend;
+use deltalake::DeltaTableBuilder;
 use deltalake::StorageBackend;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -49,6 +50,28 @@ async fn read_delta_table_with_update() {
     assert_eq!(
         table_newest_version.get_files(),
         table_to_update.get_files()
+    );
+}
+
+#[tokio::test]
+async fn read_delta_table_ignoring_tombstones() {
+    let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+        .unwrap()
+        .without_tombstones()
+        .load()
+        .await
+        .unwrap();
+    assert!(
+        table.get_state().all_tombstones().is_empty(),
+        "loading without tombstones should skip tombstones"
+    );
+
+    assert_eq!(
+        table.get_files(),
+        vec![
+            "part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet",
+            "part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet"
+        ]
     );
 }
 
