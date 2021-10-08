@@ -19,6 +19,7 @@ use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
+use rusoto_core::credential::{AwsCredentials, CredentialsError, ProvideAwsCredentials};
 use uuid::Uuid;
 
 pub mod dynamodb_lock;
@@ -203,31 +204,49 @@ impl From<RusotoError<rusoto_s3::CopyObjectError>> for StorageError {
     }
 }
 
-fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvider>, StorageError>
-{
-    let provider = WebIdentityProvider::from_k8s_env();
-    Ok(AutoRefreshingProvider::new(provider)?)
+/// The extension of StsAssumeRoleSessionCredentialsProvider in order to provide new session_name
+/// on each credentials refresh.
+struct AssumeRoleCredentialsProvider {
+    assume_role_arn: String,
+    region: Region,
+    session_name: Option<String>,
+}
+
+#[async_trait::async_trait]
+impl ProvideAwsCredentials for AssumeRoleCredentialsProvider {
+    async fn credentials(&self) -> Result<AwsCredentials, CredentialsError> {
+        let sts_client = StsClient::new(self.region.clone());
+        let session_name = self.session_name.as_deref().unwrap_or("delta-rs");
+        let session_name = format!("{}-{}", session_name, Uuid::new_v4());
+        let provider = StsAssumeRoleSessionCredentialsProvider::new(
+            sts_client,
+            self.assume_role_arn.clone(),
+            session_name,
+            None,
+            None,
+            None,
+            None,
+        );
+        provider.credentials().await
+    }
 }
 
 fn get_sts_assume_role_provider(
     assume_role_arn: String,
     options: &S3StorageOptions,
-) -> Result<AutoRefreshingProvider<StsAssumeRoleSessionCredentialsProvider>, StorageError> {
-    let sts_client = StsClient::new(options.region.clone());
-    let session_name = options
-        .assume_role_session_name
-        .as_ref()
-        .map(|v| v.to_owned())
-        .unwrap_or_else(|| format!("delta-rs-{}", Uuid::new_v4()));
-    let provider = StsAssumeRoleSessionCredentialsProvider::new(
-        sts_client,
+) -> Result<AutoRefreshingProvider<AssumeRoleCredentialsProvider>, StorageError> {
+    let provider = AssumeRoleCredentialsProvider {
         assume_role_arn,
-        session_name,
-        None,
-        None,
-        None,
-        None,
-    );
+        region: options.region.clone(),
+        session_name: options.assume_role_session_name.clone(),
+    };
+
+    Ok(AutoRefreshingProvider::new(provider)?)
+}
+
+fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvider>, StorageError>
+{
+    let provider = WebIdentityProvider::from_k8s_env();
     Ok(AutoRefreshingProvider::new(provider)?)
 }
 
