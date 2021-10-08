@@ -47,28 +47,46 @@
 
 extern crate log;
 
+#[cfg(all(feature = "arrow", feature = "arrow2"))]
+compile_error!("Feature arrow and arrow2 are mutually exclusive and cannot be enabled together");
+
+#[cfg(all(feature = "parquet", feature = "parquet2"))]
+compile_error!(
+    "Feature parquet and parquet2 are mutually exclusive and cannot be enabled together"
+);
+
+#[cfg(feature = "arrow")]
 pub use arrow;
+#[cfg(feature = "parquet")]
+extern crate parquet;
+#[cfg(feature = "arrow")]
+pub mod delta_arrow;
+
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod writer;
+
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod checkpoints;
+
+#[cfg(feature = "arrow2")]
+pub use arrow2;
+#[cfg(feature = "parquet2")]
+pub use parquet2;
+
 extern crate chrono;
 extern crate lazy_static;
-extern crate parquet;
 extern crate regex;
 extern crate serde;
-#[cfg(test)]
-#[macro_use]
-extern crate serde_json;
 extern crate thiserror;
 
 pub mod action;
-pub mod checkpoints;
 pub mod data_catalog;
 mod delta;
-pub mod delta_arrow;
 pub mod delta_config;
 pub mod partitions;
 pub mod schema;
 pub mod storage;
 mod table_state;
-pub mod writer;
 
 #[cfg(feature = "datafusion-ext")]
 pub mod delta_datafusion;

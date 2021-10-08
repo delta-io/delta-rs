@@ -3,12 +3,10 @@
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 //
 
-use arrow::error::ArrowError;
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::*;
-use parquet::errors::ParquetError;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -41,11 +39,7 @@ pub struct CheckPoint {
 
 impl CheckPoint {
     /// Creates a new checkpoint from the given parameters.
-    pub(crate) fn new(
-        version: DeltaDataTypeVersion,
-        size: DeltaDataTypeLong,
-        parts: Option<u32>,
-    ) -> Self {
+    pub fn new(version: DeltaDataTypeVersion, size: DeltaDataTypeLong, parts: Option<u32>) -> Self {
         Self {
             version,
             size,
@@ -87,18 +81,28 @@ pub enum DeltaTableError {
         source: StorageError,
     },
     /// Error returned when reading the checkpoint failed.
+    #[cfg(feature = "parquet")]
     #[error("Failed to read checkpoint: {}", .source)]
     ParquetError {
         /// Parquet error details returned when reading the checkpoint failed.
         #[from]
-        source: ParquetError,
+        source: parquet::errors::ParquetError,
     },
     /// Error returned when converting the schema in Arrow format failed.
+    #[cfg(feature = "arrow")]
     #[error("Failed to convert into Arrow schema: {}", .source)]
     ArrowError {
         /// Arrow error details returned when converting the schema in Arrow format failed
         #[from]
-        source: ArrowError,
+        source: arrow::error::ArrowError,
+    },
+    /// Error returned when parsing checkpoint parquet using parquet2 crate.
+    #[cfg(feature = "parquet2")]
+    #[error("Failed to parse parquet: {}", .source)]
+    ParquetError {
+        /// Parquet error details returned when parsing the checkpoint parquet
+        #[from]
+        source: parquet2::error::ParquetError,
     },
     /// Error returned when the table has an invalid path.
     #[error("Invalid table path: {}", .source)]
@@ -666,7 +670,6 @@ impl DeltaTable {
         self.state =
             DeltaTableState::from_checkpoint(self, &check_point, self.config.require_tombstones)
                 .await?;
-
         Ok(())
     }
 

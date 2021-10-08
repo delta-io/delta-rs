@@ -1,10 +1,6 @@
 //! The module for delta table state.
 
 use chrono::Utc;
-use parquet::file::{
-    reader::{FileReader, SerializedFileReader},
-    serialized_reader::SliceableCursor,
-};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -64,18 +60,44 @@ impl DeltaTableState {
 
         for f in &checkpoint_data_paths {
             let obj = table.storage.get_obj(f).await?;
-            let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
-            let schema = preader.metadata().file_metadata().schema();
-            if !schema.is_group() {
-                return Err(DeltaTableError::from(action::ActionError::Generic(
-                    "Action record in checkpoint should be a struct".to_string(),
-                )));
+
+            #[cfg(feature = "parquet")]
+            {
+                use parquet::file::{
+                    reader::{FileReader, SerializedFileReader},
+                    serialized_reader::SliceableCursor,
+                };
+
+                let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
+                let schema = preader.metadata().file_metadata().schema();
+                if !schema.is_group() {
+                    return Err(DeltaTableError::from(action::ActionError::Generic(
+                        "Action record in checkpoint should be a struct".to_string(),
+                    )));
+                }
+                for record in preader.get_row_iter(None)? {
+                    new_state.process_action(
+                        action::Action::from_parquet_record(schema, &record)?,
+                        require_tombstones,
+                    )?;
+                }
             }
-            for record in preader.get_row_iter(None)? {
-                new_state.process_action(
-                    action::Action::from_parquet_record(schema, &record)?,
-                    require_tombstones,
-                )?;
+            #[cfg(feature = "parquet2")]
+            {
+                use crate::action::parquet2_read::actions_from_row_group;
+                use parquet2::read::read_metadata;
+
+                let mut reader = std::io::Cursor::new(obj);
+                let metadata = read_metadata(&mut reader)?;
+                // let schema = &metadata.schema_descr;
+
+                for row_group in metadata.row_groups {
+                    for action in actions_from_row_group(row_group, &mut reader)
+                        .map_err(|e| action::ActionError::from(e))?
+                    {
+                        new_state.process_action(action, require_tombstones)?;
+                    }
+                }
             }
         }
 

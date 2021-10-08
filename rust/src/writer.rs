@@ -240,6 +240,7 @@ mod tests {
     use super::*;
     use crate::writer::time_utils::timestamp_micros_from_stats_string;
     use parquet_format::{MicroSeconds, MilliSeconds, NanoSeconds, TimeUnit};
+    use serde_json::json;
 
     #[test]
     fn test_timestamp_to_delta_stats_string() {

@@ -2,7 +2,12 @@
 
 #![allow(non_snake_case, non_camel_case_types)]
 
+#[cfg(feature = "parquet")]
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
+
+#[cfg(feature = "parquet2")]
+pub mod parquet2_read;
+
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -24,8 +29,17 @@ pub enum ActionError {
     /// A generic action error. The wrapped error string describes the details.
     #[error("Generic action error: {0}")]
     Generic(String),
+    /// Error returned when parsing checkpoint parquet using parquet2 crate.
+    #[cfg(feature = "parquet2")]
+    #[error("Failed to parse parquet checkpoint: {}", .source)]
+    ParquetParseError {
+        /// Parquet error details returned when parsing the checkpoint parquet
+        #[from]
+        source: parquet2_read::ParseError,
+    },
 }
 
+#[cfg(feature = "parquet")]
 fn populate_hashmap_with_option_from_parquet_map(
     map: &mut HashMap<String, Option<String>>,
     pmap: &parquet::record::Map,
@@ -49,6 +63,7 @@ fn populate_hashmap_with_option_from_parquet_map(
     Ok(())
 }
 
+#[cfg(feature = "parquet")]
 fn gen_action_type_error(action: &str, field: &str, expected_type: &str) -> ActionError {
     ActionError::InvalidField(format!(
         "type for {} in {} action should be {}",
@@ -145,9 +160,18 @@ pub struct StatsParsed {
 
     // start of per column stats
     /// Contains a value smaller than all values present in the file for all columns.
+    #[cfg(feature = "parquet")]
     pub min_values: HashMap<String, parquet::record::Field>,
+    /// Contains a value smaller than all values present in the file for all columns.
+    #[cfg(feature = "parquet2")]
+    pub min_values: HashMap<String, String>,
+    /// Contains a value larger than all values present in the file for all columns.
+    #[cfg(feature = "parquet")]
     /// Contains a value larger than all values present in the file for all columns.
     pub max_values: HashMap<String, parquet::record::Field>,
+    #[cfg(feature = "parquet2")]
+    /// Contains a value larger than all values present in the file for all columns.
+    pub max_values: HashMap<String, String>,
     /// The number of null values for all columns.
     pub null_count: HashMap<String, DeltaDataTypeLong>,
 }
@@ -169,8 +193,19 @@ pub struct Add {
     /// column can be omitted.
     ///
     /// This field is only available in add action records read from checkpoints
+    #[cfg(feature = "parquet")]
     #[serde(skip_serializing, skip_deserializing)]
     pub partition_values_parsed: Option<parquet::record::Row>,
+    /// Partition values stored in raw parquet struct format. In this struct, the column names
+    /// correspond to the partition columns and the values are stored in their corresponding data
+    /// type. This is a required field when the table is partitioned and the table property
+    /// delta.checkpoint.writeStatsAsStruct is set to true. If the table is not partitioned, this
+    /// column can be omitted.
+    ///
+    /// This field is only available in add action records read from checkpoints
+    #[cfg(feature = "parquet2")]
+    #[serde(skip_serializing, skip_deserializing)]
+    pub partition_values_parsed: Option<String>,
     /// The time this file was created, as milliseconds since the epoch
     pub modification_time: DeltaDataTypeTimestamp,
     /// When false the file must already be present in the table or the records in the added file
@@ -186,13 +221,23 @@ pub struct Add {
     /// table property: delta.checkpoint.writeStatsAsStruct is set to true.
     ///
     /// This field is only available in add action records read from checkpoints
+    #[cfg(feature = "parquet")]
     #[serde(skip_serializing, skip_deserializing)]
     pub stats_parsed: Option<parquet::record::Row>,
+    /// Contains statistics (e.g., count, min/max values for columns) about the data in this file in
+    /// raw parquet format. This field needs to be written when statistics are available and the
+    /// table property: delta.checkpoint.writeStatsAsStruct is set to true.
+    ///
+    /// This field is only available in add action records read from checkpoints
+    #[cfg(feature = "parquet2")]
+    #[serde(skip_serializing, skip_deserializing)]
+    pub stats_parsed: Option<String>,
     /// Map containing metadata about this file
     pub tags: Option<HashMap<String, Option<String>>>,
 }
 
 impl Add {
+    #[cfg(feature = "parquet")]
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
         let mut re = Self {
             ..Default::default()
@@ -306,6 +351,7 @@ impl Add {
 
     /// Returns the composite HashMap representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
+    #[cfg(feature = "parquet")]
     pub fn get_stats_parsed(&self) -> Result<Option<StatsParsed>, parquet::errors::ParquetError> {
         self.stats_parsed.as_ref().map_or(Ok(None), |record| {
             let mut stats = StatsParsed::default();
@@ -428,6 +474,7 @@ pub struct MetaData {
 }
 
 impl MetaData {
+    #[cfg(feature = "parquet")]
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
         let mut re = Self {
             ..Default::default()
@@ -548,7 +595,7 @@ impl MetaData {
 
 /// Represents a tombstone (deleted file) in the Delta log.
 /// This is a top-level action in Delta log entries.
-#[derive(Serialize, Deserialize, Clone, Eq, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Eq, Debug)]
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
     /// The path of the file that is removed from the table.
@@ -597,13 +644,24 @@ impl PartialEq for Remove {
     }
 }
 
-impl Remove {
-    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
-        let mut re = Self {
+impl Default for Remove {
+    fn default() -> Self {
+        Remove {
+            path: String::default(),
+            deletion_timestamp: None,
             data_change: true,
             extended_file_metadata: Some(false),
-            ..Default::default()
-        };
+            partition_values: None,
+            size: None,
+            tags: None,
+        }
+    }
+}
+
+impl Remove {
+    #[cfg(feature = "parquet")]
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
+        let mut re = Self::default();
 
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
@@ -698,6 +756,7 @@ pub struct Txn {
 }
 
 impl Txn {
+    #[cfg(feature = "parquet")]
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
         let mut re = Self {
             ..Default::default()
@@ -747,6 +806,7 @@ pub struct Protocol {
 }
 
 impl Protocol {
+    #[cfg(feature = "parquet")]
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
         let mut re = Self {
             ..Default::default()
@@ -801,6 +861,7 @@ pub enum Action {
 impl Action {
     /// Returns an action from the given parquet Row. Used when deserializing delta log parquet
     /// checkpoints.
+    #[cfg(feature = "parquet")]
     pub fn from_parquet_record(
         schema: &parquet::schema::types::Type,
         record: &parquet::record::Row,
@@ -903,11 +964,13 @@ pub enum OutputMode {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parquet::file::reader::{FileReader, SerializedFileReader};
-    use std::fs::File;
 
+    #[cfg(feature = "parquet")]
     #[test]
     fn test_add_action_without_partition_values_and_stats() {
+        use parquet::file::reader::{FileReader, SerializedFileReader};
+        use std::fs::File;
+
         let path = "./tests/data/delta-0.2.0/_delta_log/00000000000000000003.checkpoint.parquet";
         let preader = SerializedFileReader::new(File::open(path).unwrap()).unwrap();
 

@@ -1,10 +1,6 @@
-extern crate chrono;
-extern crate deltalake;
-extern crate utime;
-
+use chrono::{DateTime, FixedOffset, Utc};
+use pretty_assertions::assert_eq;
 use std::path::Path;
-
-use self::chrono::{DateTime, FixedOffset, Utc};
 
 #[tokio::test]
 async fn read_simple_table() {
@@ -28,13 +24,19 @@ async fn read_simple_table() {
     );
     let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 31);
-    assert!(tombstones.contains(&deltalake::action::Remove {
-        path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
-        deletion_timestamp: Some(1587968596250),
-        data_change: true,
-        extended_file_metadata: None,
-        ..Default::default()
-    }));
+    assert_eq!(
+        tombstones
+            .get("part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet")
+            .unwrap(),
+        &deltalake::action::Remove {
+            path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
+            deletion_timestamp: Some(1587968596250),
+            data_change: true,
+            extended_file_metadata: None,
+            size: None,
+            ..Default::default()
+        }
+    );
     #[cfg(unix)]
     {
         let mut paths = table.get_file_uris();
