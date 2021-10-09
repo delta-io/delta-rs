@@ -292,7 +292,7 @@ pub fn create_add(
         partition_values: partition_values.to_owned(),
         partition_values_parsed: None,
 
-        modification_time: modification_time,
+        modification_time,
         data_change: true,
 
         // TODO: calculate additional stats

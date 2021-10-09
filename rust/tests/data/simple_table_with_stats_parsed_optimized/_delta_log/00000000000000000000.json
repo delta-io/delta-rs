@@ -1,0 +1,3 @@
+{"protocol":{"minReaderVersion":1,"minWriterVersion":2}}
+{"metaData":{"id":"86813337-feec-4527-886b-384bdd6f7f6a","format":{"provider":"parquet","options":{}},"schemaString":"{\"type\":\"struct\",\"fields\":[{\"name\":\"id\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}","partitionColumns":[],"configuration":{},"createdTime":1633794687045}}
+{"commitInfo":{"timestamp":1633794687150,"userId":"906424503339340","userName":"contact@manishgill.com","operation":"CREATE TABLE","operationParameters":{"isManaged":"false","description":null,"partitionBy":"[]","properties":"{}"},"notebook":{"notebookId":"2167422995023007"},"clusterId":"0604-105630-ajar222","isolationLevel":"SnapshotIsolation","isBlindAppend":true,"operationMetrics":{}}}

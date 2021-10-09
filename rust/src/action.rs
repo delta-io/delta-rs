@@ -7,8 +7,13 @@ use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-
+use arrow::record_batch::RecordBatch;
 use super::schema::*;
+use std::sync::Arc;
+use std::collections::hash_map::Entry;
+use arrow::array::ArrayRef;
+use arrow::array::Int64Array;
+use arrow::datatypes::Field;
 
 /// Error returned when an invalid Delta log action is encountered.
 #[derive(thiserror::Error, Debug)]
@@ -148,6 +153,21 @@ pub struct StatsParsed {
     pub max_values: HashMap<String, parquet::record::Field>,
     /// The number of null values for all columns.
     pub null_count: HashMap<String, DeltaDataTypeLong>,
+}
+
+/// RecordBatch representation of the stats from parquet
+#[derive(Debug)]
+pub struct StatRecordBatch {
+    /// Number of records in the file associated with the log action.
+    pub num_records: DeltaDataTypeLong,
+
+    // start of per column stats
+    /// Contains a value smaller than all values present in the file for all columns.
+    pub min_values: RecordBatch,
+    /// Contains a value larger than all values present in the file for all columns.
+    pub max_values: RecordBatch,
+    /// The number of null values for all columns.
+    pub null_counts: RecordBatch,
 }
 
 /// Delta log action that describes a parquet data file that is part of the table.
@@ -300,6 +320,113 @@ impl Add {
         self.stats
             .as_ref()
             .map_or(Ok(None), |s| serde_json::from_str(s))
+    }
+
+    fn get_stat_row_rb(&self, row: &parquet::record::Row, cols: &[String]) -> arrow::error::Result<RecordBatch> {
+        let mut stat_col_map: HashMap<&String, Vec<Option<String>>> = HashMap::new();
+        for col in cols {
+            let data: Vec<Option<String>> = vec![];
+            stat_col_map.insert(col, data);
+        }
+        for (_, (name, value)) in row.get_column_iter().enumerate() {
+            for col in cols {
+                if name == col {
+                    match stat_col_map.entry(name) {
+                        Entry::Occupied(mut e) => {
+                            let val = value.to_string(); // all values of type String for now
+                            e.get_mut().push(Some(val));
+                        }
+                        Entry::Vacant(_) => {}
+                    }
+                }
+            }
+        }
+        // now we have column name and corresponding vector inside a hashmap
+        // we can create a record batch out of it
+        let mut rb_vec: Vec<(&str, ArrayRef)> = vec![];
+        for col in cols {
+            match stat_col_map.entry(col) {
+                Entry::Occupied(e) => {
+                    // TODO: i64s only for now. should support all possible column types
+                    let my_vec: Vec<i64> = e.get().iter().map(|v| {
+                        v.as_ref().unwrap().parse::<i64>().unwrap()
+                    }).collect::<Vec<_>>();
+                    let a : ArrayRef = Arc::new(Int64Array::from(my_vec));
+                    rb_vec.push(
+                        (col.as_str(), a)
+                    )
+                }
+                Entry::Vacant(_) => {}
+            }
+        }
+        RecordBatch::try_from_iter(rb_vec)
+    }
+
+    /// The stats_parsed can be converted into the record batches and the original mem-heavy data structure
+    /// can eventually be eliminated entirely.
+    pub fn get_stats_as_record_batch(&self, batch_columns: &[String]) -> Result<Option<StatRecordBatch>, parquet::errors::ParquetError> {
+        self.stats_parsed.as_ref().map_or(Ok(None), |record| {
+            let mut min_val_vec = vec![];
+            let mut max_val_vec = vec![];
+            let mut num_records = 0;
+            for (i, (name, _)) in record.get_column_iter().enumerate() {
+                match name.as_str() {
+                    "numRecords" => match record.get_long(i) {
+                        Ok(v) => {
+                            num_records = v;
+                        }
+                        _ => {
+                            log::error!("Expect type of stats_parsed field numRecords to be long, got: {}", record);
+                        }
+                    }
+                    "minValues" => match record.get_group(i) {
+                        Ok(row) => {
+                            min_val_vec.push(
+                                self.get_stat_row_rb(row, batch_columns).unwrap()
+                            );
+                        }
+                        _ => {
+                            log::error!("Expect type of stats_parsed field minRecords to be struct, got: {}", record);
+                        }
+                    }
+                    "maxValues" => match record.get_group(i) {
+                        Ok(row) => {
+                            max_val_vec.push(
+                                self.get_stat_row_rb(row, batch_columns).unwrap()
+                            );
+                        }
+                        _ => {
+                            log::error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
+                        }
+                    }
+                    _ => {
+                        log::warn!(
+                            "Unexpected field name `{}` for stats_parsed: {:?}",
+                            name,
+                            record,
+                        );
+                    }
+                }
+            }
+
+            let schema = Arc::new(self.new_schema(batch_columns));
+            let stats = StatRecordBatch{
+                num_records,
+                min_values: RecordBatch::concat(&schema, &min_val_vec).unwrap(),
+                max_values: RecordBatch::concat(&schema, &max_val_vec).unwrap(),
+                null_counts: RecordBatch::new_empty(schema)
+            };
+            Ok(Some(stats))
+        })
+    }
+
+    /// Creates the schema for the Record Batch for the columns provided
+    fn new_schema(&self, batch_columns: &[String]) -> arrow::datatypes::Schema {
+        let mut fields: Vec<Field> = vec![];
+        for col_name in batch_columns {
+            fields.push(Field::new(col_name, arrow::datatypes::DataType::Int64, false))
+        }
+        arrow::datatypes::Schema::new(fields)
     }
 
     /// Returns the composite HashMap representation of stats contained in the action if present.
@@ -890,6 +1017,58 @@ mod tests {
 
         assert_eq!(add_action.partition_values.len(), 0);
         assert_eq!(add_action.stats, None);
+    }
+
+    #[test]
+    fn test_load_table_stats_as_record_batch() {
+        let path = "./tests/data/simple_table_with_stats_parsed_optimized/_delta_log/00000000000000000003.checkpoint.parquet";
+        let preader = SerializedFileReader::new(File::open(path).unwrap()).unwrap();
+        let mut iter = preader.get_row_iter(None).unwrap();
+        let record = iter.nth(3).unwrap();
+        let add_record = record.get_group(1).unwrap();
+        let action = Add::from_parquet_record(&add_record).unwrap();
+
+        // Verify normal stats
+        let stats = action.get_stats().unwrap().unwrap();
+        assert_eq!(stats.num_records, 10);
+
+        // Verify stats rb 
+        let cols = vec!["id".to_string()];
+        let schema = Arc::new(arrow::datatypes::Schema::new(vec![
+            Field::new("id", arrow::datatypes::DataType::Int64, false),
+        ]));
+
+        let stats_rb = action.get_stats_as_record_batch(&cols).unwrap().unwrap();
+        assert_eq!(stats_rb.num_records, 10);
+
+        let min_batch = stats_rb.min_values;
+        let min_arr = Int64Array::from(vec![1]);
+        let expected_min_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(min_arr)]
+        ).unwrap();
+        assert_eq!(min_batch.num_columns(), 1);
+        assert_eq!(min_batch.num_rows(), 1);
+        assert_eq!(min_batch, expected_min_batch);
+
+        let max_batch = stats_rb.max_values;
+        let max_arr = Int64Array::from(vec![10]);
+        let expected_max_batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![Arc::new(max_arr)]
+        ).unwrap();
+        assert_eq!(max_batch, expected_max_batch);
+
+        // TODO
+        let null_count_batch = stats_rb.null_counts;
+        assert_eq!(null_count_batch.num_columns(), 1);
+        let expected_null_count_batch = RecordBatch::new_empty(
+            schema.clone()
+        );
+        assert_eq!(null_count_batch.num_columns(), 1);
+        assert_eq!(null_count_batch.num_rows(), 0);
+        assert_eq!(null_count_batch, expected_null_count_batch);
+
     }
 
     #[test]
