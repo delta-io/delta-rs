@@ -168,7 +168,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     let mut stats_conversions: Vec<(SchemaPath, SchemaDataType)> = Vec::new();
     collect_stats_conversions(&mut stats_conversions, current_metadata.schema.get_fields());
 
-    let mut tombstones = state.unexpired_tombstones();
+    let mut tombstones = state.unexpired_tombstones().cloned().collect::<Vec<_>>();
 
     // if any, tombstones do not include extended file metadata, we must omit the extended metadata fields from the remove schema
     // See https://github.com/delta-io/delta/blob/master/PROTOCOL.md#add-file-and-remove-file
