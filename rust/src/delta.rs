@@ -392,13 +392,11 @@ impl DeltaTableState {
 
     /// List of unexpired tombstones (remove actions) representing files removed from table state.
     /// The retention period is set by `deletedFileRetentionDuration` with default value of 1 week.
-    pub fn unexpired_tombstones(&self) -> Vec<action::Remove> {
+    pub fn unexpired_tombstones(&self) -> impl Iterator<Item = &action::Remove> {
         let retention_timestamp = Utc::now().timestamp_millis() - self.tombstone_retention_millis;
         self.tombstones
             .iter()
-            .filter(|t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp)
-            .cloned()
-            .collect()
+            .filter(move |t| t.deletion_timestamp.unwrap_or(0) > retention_timestamp)
     }
 
     /// Full list of add actions representing all parquet files that are part of the current
@@ -1086,7 +1084,7 @@ impl DeltaTable {
     }
 
     /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
-    pub fn get_tombstones(&self) -> Vec<action::Remove> {
+    pub fn get_tombstones(&self) -> impl Iterator<Item = &action::Remove> {
         self.state.unexpired_tombstones()
     }
 
