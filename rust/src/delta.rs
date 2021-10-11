@@ -1661,7 +1661,14 @@ fn process_action(
             let v = v.path_decoded()?;
             // Remove `remove` actions for the same path.
             if handle_tombstones {
-                state.tombstones.drain_filter(|r| r.path == v.path);
+                let mut i = 0;
+                while i < state.tombstones.len() {
+                    if state.tombstones[i].path == v.path {
+                        state.tombstones.remove(i);
+                    } else {
+                        i += 1;
+                    }
+                }
             }
             state.files.push(v);
         }
@@ -1669,7 +1676,14 @@ fn process_action(
             if handle_tombstones {
                 let v = v.path_decoded()?;
                 // Remove `add` actions for the same path.
-                state.files.drain_filter(|a| a.path == v.path);
+                let mut i = 0;
+                while i < state.files.len() {
+                    if state.files[i].path == v.path {
+                        state.files.remove(i);
+                    } else {
+                        i += 1;
+                    }
+                }
                 state.tombstones.push(v);
             }
         }
