@@ -1658,11 +1658,18 @@ fn process_action(
 ) -> Result<(), ApplyLogError> {
     match action {
         Action::add(v) => {
-            state.files.push(v.path_decoded()?);
+            let v = v.path_decoded()?;
+            // Remove `remove` actions for the same path.
+            if handle_tombstones {
+                state.tombstones.drain_filter(|r| r.path == v.path);
+            }
+            state.files.push(v);
         }
         Action::remove(v) => {
             if handle_tombstones {
                 let v = v.path_decoded()?;
+                // Remove `add` actions for the same path.
+                state.files.drain_filter(|a| a.path == v.path);
                 state.tombstones.push(v);
             }
         }

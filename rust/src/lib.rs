@@ -1,3 +1,4 @@
+#![feature(drain_filter)]
 //! Native Delta Lake implementation in Rust
 //!
 //! # Usage
