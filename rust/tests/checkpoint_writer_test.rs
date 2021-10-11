@@ -191,6 +191,38 @@ mod checkpoints_with_tombstones {
         assert_eq!(actions, vec![r1_updated, r2]);
     }
 
+    #[tokio::test]
+    async fn test_checkpoint_with_action_reconciliation() {
+        let path = "./tests/data/checkpoints_tombstones/action_reconciliation";
+        let mut table = create_table(path, None).await;
+
+        let a1 = add(3 * 60 * 1000);
+        assert_eq!(1, commit_add(&mut table, &a1).await);
+
+        // Remove added file.
+        let (_, opt1) = pseudo_optimize(&mut table, 5 * 59 * 1000).await;
+
+        checkpoints::create_checkpoint_from_table(&table)
+            .await
+            .unwrap();
+        table.update().await.unwrap(); // make table to read the checkpoint
+        assert_eq!(table.get_files(), vec![opt1.path.as_str()]);
+
+        // Add removed file back.
+        assert_eq!(3, commit_add(&mut table, &a1).await);
+
+        checkpoints::create_checkpoint_from_table(&table)
+            .await
+            .unwrap();
+        table.update().await.unwrap(); // make table to read the checkpoint
+        assert_eq!(
+            table.get_files(),
+            vec![opt1.path.as_str(), a1.path.as_str()]
+        );
+        // tombstone is removed.
+        assert_eq!(table.get_state().all_tombstones().len(), 0);
+    }
+
     async fn create_table(
         path: &str,
         config: Option<HashMap<String, Option<String>>>,
