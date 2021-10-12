@@ -428,8 +428,6 @@ impl DeltaTableState {
 
     /// merges new state information into our state
     pub fn merge(&mut self, mut new_state: DeltaTableState, require_tombstones: bool) {
-        self.files.append(&mut new_state.files);
-
         if !new_state.tombstones.is_empty() {
             let new_removals: HashSet<&str> = new_state
                 .tombstones
@@ -444,6 +442,14 @@ impl DeltaTableState {
         if require_tombstones {
             self.tombstones.append(&mut new_state.tombstones);
         }
+
+        if !new_state.files.is_empty() {
+            let new_adds: HashSet<&str> = new_state.files.iter().map(|s| s.path.as_str()).collect();
+            self.tombstones
+                .retain(|a| !new_adds.contains(a.path.as_str()));
+        }
+
+        self.files.append(&mut new_state.files);
 
         if new_state.min_reader_version > 0 {
             self.min_reader_version = new_state.min_reader_version;
@@ -766,6 +772,7 @@ impl DeltaTable {
         let checkpoint_data_paths = self.get_checkpoint_data_paths(&check_point);
         // process actions from checkpoint
         self.state = DeltaTableState::default();
+
         for f in &checkpoint_data_paths {
             let obj = self.storage.get_obj(f).await?;
             let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
@@ -1658,32 +1665,11 @@ fn process_action(
 ) -> Result<(), ApplyLogError> {
     match action {
         Action::add(v) => {
-            let v = v.path_decoded()?;
-            // Remove `remove` actions for the same path.
-            if handle_tombstones {
-                let mut i = 0;
-                while i < state.tombstones.len() {
-                    if state.tombstones[i].path == v.path {
-                        state.tombstones.remove(i);
-                    } else {
-                        i += 1;
-                    }
-                }
-            }
-            state.files.push(v);
+            state.files.push(v.path_decoded()?);
         }
         Action::remove(v) => {
             if handle_tombstones {
                 let v = v.path_decoded()?;
-                // Remove `add` actions for the same path.
-                let mut i = 0;
-                while i < state.files.len() {
-                    if state.files[i].path == v.path {
-                        state.files.remove(i);
-                    } else {
-                        i += 1;
-                    }
-                }
                 state.tombstones.push(v);
             }
         }

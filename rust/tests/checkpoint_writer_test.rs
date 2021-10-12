@@ -198,23 +198,23 @@ mod checkpoints_with_tombstones {
 
         let a1 = add(3 * 60 * 1000);
         assert_eq!(1, commit_add(&mut table, &a1).await);
+        assert_eq!(table.get_files(), vec![a1.path.as_str()]);
 
         // Remove added file.
         let (_, opt1) = pseudo_optimize(&mut table, 5 * 59 * 1000).await;
-
-        checkpoints::create_checkpoint_from_table(&table)
-            .await
-            .unwrap();
-        table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(table.get_files(), vec![opt1.path.as_str()]);
+        assert_eq!(
+            table
+                .get_state()
+                .all_tombstones()
+                .iter()
+                .map(|r| r.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![a1.path.as_str()]
+        );
 
         // Add removed file back.
         assert_eq!(3, commit_add(&mut table, &a1).await);
-
-        checkpoints::create_checkpoint_from_table(&table)
-            .await
-            .unwrap();
-        table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(
             table.get_files(),
             vec![opt1.path.as_str(), a1.path.as_str()]
