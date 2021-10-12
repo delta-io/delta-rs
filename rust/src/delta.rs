@@ -374,7 +374,7 @@ impl From<StorageError> for LoadCheckpointError {
 pub struct DeltaTableState {
     // A remove action should remain in the state of the table as a tombstone until it has expired.
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
-    tombstones: Vec<action::Remove>,
+    tombstones: HashSet<action::Remove>,
     files: Vec<action::Add>,
     commit_infos: Vec<Map<String, Value>>,
     app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
@@ -386,8 +386,8 @@ pub struct DeltaTableState {
 
 impl DeltaTableState {
     /// Full list of tombstones (remove actions) representing files removed from table state).
-    pub fn all_tombstones(&self) -> &Vec<action::Remove> {
-        self.tombstones.as_ref()
+    pub fn all_tombstones(&self) -> &HashSet<action::Remove> {
+        &self.tombstones
     }
 
     /// List of unexpired tombstones (remove actions) representing files removed from table state.
@@ -440,7 +440,9 @@ impl DeltaTableState {
         }
 
         if require_tombstones {
-            self.tombstones.append(&mut new_state.tombstones);
+            new_state.tombstones.into_iter().for_each(|r| {
+                self.tombstones.insert(r);
+            });
         }
 
         if !new_state.files.is_empty() {
@@ -1670,7 +1672,7 @@ fn process_action(
         Action::remove(v) => {
             if handle_tombstones {
                 let v = v.path_decoded()?;
-                state.tombstones.push(v);
+                state.tombstones.insert(v);
             }
         }
         Action::protocol(v) => {
@@ -1750,7 +1752,7 @@ mod tests {
         let mut state = DeltaTableState {
             files: vec![],
             commit_infos: vec![],
-            tombstones: vec![],
+            tombstones: HashSet::new(),
             current_metadata: None,
             min_reader_version: 1,
             min_writer_version: 2,

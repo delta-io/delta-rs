@@ -25,16 +25,13 @@ async fn read_delta_2_0_table_without_version() {
     );
     let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 4);
-    assert_eq!(
-        tombstones[0],
-        deltalake::action::Remove {
-            path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
-            deletion_timestamp: Some(1564524298213),
-            data_change: false,
-            extended_file_metadata: Some(false),
-            ..Default::default()
-        }
-    );
+    assert!(tombstones.contains(&deltalake::action::Remove {
+        path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
+        deletion_timestamp: Some(1564524298213),
+        data_change: false,
+        extended_file_metadata: Some(false),
+        ..Default::default()
+    }));
 }
 
 #[tokio::test]
@@ -157,18 +154,15 @@ async fn read_delta_8_0_table_without_version() {
     );
     let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 1);
-    assert_eq!(
-        tombstones[0],
-        deltalake::action::Remove {
-            path: "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet".to_string(),
-            deletion_timestamp: Some(1615043776198),
-            data_change: true,
-            extended_file_metadata: Some(true),
-            partition_values: Some(HashMap::new()),
-            size: Some(445),
-            ..Default::default()
-        }
-    );
+    assert!(tombstones.contains(&deltalake::action::Remove {
+        path: "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet".to_string(),
+        deletion_timestamp: Some(1615043776198),
+        data_change: true,
+        extended_file_metadata: Some(true),
+        partition_values: Some(HashMap::new()),
+        size: Some(445),
+        ..Default::default()
+    }));
 }
 
 #[tokio::test]

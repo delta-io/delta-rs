@@ -128,7 +128,7 @@ mod checkpoints_with_tombstones {
             .unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(table.get_files(), vec![opt1.path.as_str()]);
-        assert_eq!(table.get_state().all_tombstones(), &vec![]); // stale removes are deleted from the state
+        assert_eq!(table.get_state().all_tombstones().len(), 0); // stale removes are deleted from the state
     }
 
     #[tokio::test]
@@ -140,7 +140,8 @@ mod checkpoints_with_tombstones {
         let version = commit_removes(&mut table, vec![&r1, &r2]).await;
         let (schema, actions) = create_checkpoint_and_parse(&table, &path, version).await;
 
-        assert_eq!(actions, vec![r1, r2]);
+        assert!(actions.contains(&r1));
+        assert!(actions.contains(&r2));
         assert!(schema.contains("size"));
         assert!(schema.contains("partitionValues"));
         assert!(schema.contains("tags"));
@@ -157,6 +158,8 @@ mod checkpoints_with_tombstones {
 
         // r2 has extended_file_metadata=false, then every tombstone should be so, even r1
         assert_ne!(actions, vec![r1.clone(), r2.clone()]);
+        // assert!(!actions.contains(&r1));
+        // assert!(!actions.contains(&r2));
         assert!(!schema.contains("size"));
         assert!(!schema.contains("partitionValues"));
         assert!(!schema.contains("tags"));
@@ -165,7 +168,8 @@ mod checkpoints_with_tombstones {
             size: None,
             ..r1
         };
-        assert_eq!(actions, vec![r1_updated, r2]);
+        assert!(actions.contains(&r1_updated));
+        assert!(actions.contains(&r2));
     }
 
     #[tokio::test]
@@ -188,7 +192,8 @@ mod checkpoints_with_tombstones {
             size: None,
             ..r1
         };
-        assert_eq!(actions, vec![r1_updated, r2]);
+        assert!(actions.contains(&r1_updated));
+        assert!(actions.contains(&r2));
     }
 
     #[tokio::test]
@@ -241,8 +246,8 @@ mod checkpoints_with_tombstones {
         fs_common::create_test_table(path, schema, config.unwrap_or(HashMap::new())).await
     }
 
-    async fn pseudo_optimize(table: &mut DeltaTable, offset_millis: i64) -> (Vec<Remove>, Add) {
-        let removes: Vec<Remove> = table
+    async fn pseudo_optimize(table: &mut DeltaTable, offset_millis: i64) -> (HashSet<Remove>, Add) {
+        let removes: HashSet<Remove> = table
             .get_files()
             .iter()
             .map(|p| Remove {

@@ -7,6 +7,7 @@ use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::hash::{Hash, Hasher};
 
 use super::schema::*;
 
@@ -546,7 +547,7 @@ impl MetaData {
 
 /// Represents a tombstone (deleted file) in the Delta log.
 /// This is a top-level action in Delta log entries.
-#[derive(Serialize, Deserialize, Clone, PartialEq, Debug, Default)]
+#[derive(Serialize, Deserialize, Clone, Eq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
     /// The path of the file that is removed from the table.
@@ -567,6 +568,24 @@ pub struct Remove {
     pub size: Option<DeltaDataTypeLong>,
     /// Map containing metadata about this file
     pub tags: Option<HashMap<String, Option<String>>>,
+}
+
+impl Hash for Remove {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        state.write(self.path.as_bytes())
+    }
+}
+
+impl PartialEq for Remove {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.deletion_timestamp == other.deletion_timestamp
+            && self.data_change == other.data_change
+            && self.extended_file_metadata == other.extended_file_metadata
+            && self.partition_values == other.partition_values
+            && self.size == other.size
+            && self.tags == other.tags
+    }
 }
 
 impl Remove {
