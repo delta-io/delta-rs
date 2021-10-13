@@ -104,15 +104,15 @@ mod checkpoints_with_tombstones {
 
     #[tokio::test]
     async fn test_expired_tombstones() {
-        let mut table = create_table("./tests/data/checkpoints_tombstones/expired", Some(hashmap! {
+        let mut table = fs_common::create_table("./tests/data/checkpoints_tombstones/expired", Some(hashmap! {
             delta_config::TOMBSTONE_RETENTION.key.clone() => Some("interval 1 minute".to_string())
         })).await;
 
-        let a1 = add(3 * 60 * 1000); // 3 mins ago,
-        let a2 = add(2 * 60 * 1000); // 2 mins ago,
+        let a1 = fs_common::add(3 * 60 * 1000); // 3 mins ago,
+        let a2 = fs_common::add(2 * 60 * 1000); // 2 mins ago,
 
-        assert_eq!(1, commit_add(&mut table, &a1).await);
-        assert_eq!(2, commit_add(&mut table, &a2).await);
+        assert_eq!(1, fs_common::commit_add(&mut table, &a1).await);
+        assert_eq!(2, fs_common::commit_add(&mut table, &a2).await);
         checkpoints::create_checkpoint_from_table(&table)
             .await
             .unwrap();
@@ -128,19 +128,20 @@ mod checkpoints_with_tombstones {
             .unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(table.get_files(), vec![opt1.path.as_str()]);
-        assert_eq!(table.get_state().all_tombstones(), &vec![]); // stale removes are deleted from the state
+        assert_eq!(table.get_state().all_tombstones().len(), 0); // stale removes are deleted from the state
     }
 
     #[tokio::test]
     async fn test_checkpoint_with_extended_file_metadata_true() {
         let path = "./tests/data/checkpoints_tombstones/metadata_true";
-        let mut table = create_table(path, None).await;
+        let mut table = fs_common::create_table(path, None).await;
         let r1 = remove_metadata_true();
         let r2 = remove_metadata_true();
-        let version = commit_removes(&mut table, vec![&r1, &r2]).await;
+        let version = fs_common::commit_removes(&mut table, vec![&r1, &r2]).await;
         let (schema, actions) = create_checkpoint_and_parse(&table, &path, version).await;
 
-        assert_eq!(actions, vec![r1, r2]);
+        assert!(actions.contains(&r1));
+        assert!(actions.contains(&r2));
         assert!(schema.contains("size"));
         assert!(schema.contains("partitionValues"));
         assert!(schema.contains("tags"));
@@ -149,10 +150,10 @@ mod checkpoints_with_tombstones {
     #[tokio::test]
     async fn test_checkpoint_with_extended_file_metadata_false() {
         let path = "./tests/data/checkpoints_tombstones/metadata_false";
-        let mut table = create_table(path, None).await;
+        let mut table = fs_common::create_table(path, None).await;
         let r1 = remove_metadata_true();
         let r2 = remove_metadata_false();
-        let version = commit_removes(&mut table, vec![&r1, &r2]).await;
+        let version = fs_common::commit_removes(&mut table, vec![&r1, &r2]).await;
         let (schema, actions) = create_checkpoint_and_parse(&table, &path, version).await;
 
         // r2 has extended_file_metadata=false, then every tombstone should be so, even r1
@@ -165,16 +166,17 @@ mod checkpoints_with_tombstones {
             size: None,
             ..r1
         };
-        assert_eq!(actions, vec![r1_updated, r2]);
+        assert!(actions.contains(&r1_updated));
+        assert!(actions.contains(&r2));
     }
 
     #[tokio::test]
     async fn test_checkpoint_with_extended_file_metadata_broken() {
         let path = "./tests/data/checkpoints_tombstones/metadata_broken";
-        let mut table = create_table(path, None).await;
+        let mut table = fs_common::create_table(path, None).await;
         let r1 = remove_metadata_broken();
         let r2 = remove_metadata_false();
-        let version = commit_removes(&mut table, vec![&r1, &r2]).await;
+        let version = fs_common::commit_removes(&mut table, vec![&r1, &r2]).await;
         let (schema, actions) = create_checkpoint_and_parse(&table, &path, version).await;
 
         // r1 extended_file_metadata=true, but the size is null.
@@ -188,29 +190,12 @@ mod checkpoints_with_tombstones {
             size: None,
             ..r1
         };
-        assert_eq!(actions, vec![r1_updated, r2]);
+        assert!(actions.contains(&r1_updated));
+        assert!(actions.contains(&r2));
     }
 
-    async fn create_table(
-        path: &str,
-        config: Option<HashMap<String, Option<String>>>,
-    ) -> DeltaTable {
-        let log_dir = Path::new(path).join("_delta_log");
-        fs::create_dir_all(&log_dir).unwrap();
-        fs_common::cleanup_dir_except(log_dir, vec![]);
-
-        let schema = Schema::new(vec![SchemaField::new(
-            "id".to_string(),
-            SchemaDataType::primitive("integer".to_string()),
-            true,
-            HashMap::new(),
-        )]);
-
-        fs_common::create_test_table(path, schema, config.unwrap_or(HashMap::new())).await
-    }
-
-    async fn pseudo_optimize(table: &mut DeltaTable, offset_millis: i64) -> (Vec<Remove>, Add) {
-        let removes: Vec<Remove> = table
+    async fn pseudo_optimize(table: &mut DeltaTable, offset_millis: i64) -> (HashSet<Remove>, Add) {
+        let removes: HashSet<Remove> = table
             .get_files()
             .iter()
             .map(|p| Remove {
@@ -226,7 +211,7 @@ mod checkpoints_with_tombstones {
 
         let add = Add {
             data_change: false,
-            ..add(offset_millis)
+            ..fs_common::add(offset_millis)
         };
 
         let actions = removes
@@ -236,22 +221,8 @@ mod checkpoints_with_tombstones {
             .chain(std::iter::once(Action::add(add.clone())))
             .collect();
 
-        commit_actions(table, actions).await;
+        fs_common::commit_actions(table, actions).await;
         (removes, add)
-    }
-
-    fn add(offset_millis: i64) -> Add {
-        Add {
-            path: Uuid::new_v4().to_string(),
-            size: 100,
-            partition_values: Default::default(),
-            partition_values_parsed: None,
-            modification_time: Utc::now().timestamp_millis() - offset_millis,
-            data_change: true,
-            stats: None,
-            stats_parsed: None,
-            tags: None,
-        }
     }
 
     async fn create_checkpoint_and_parse(
@@ -318,23 +289,5 @@ mod checkpoints_with_tombstones {
             extended_file_metadata: Some(true),
             ..remove_metadata_false()
         }
-    }
-
-    async fn commit_add(table: &mut DeltaTable, add: &Add) -> i64 {
-        commit_actions(table, vec![Action::add(add.clone())]).await
-    }
-
-    async fn commit_removes(table: &mut DeltaTable, removes: Vec<&Remove>) -> i64 {
-        let vec = removes
-            .iter()
-            .map(|r| Action::remove((*r).clone()))
-            .collect();
-        commit_actions(table, vec).await
-    }
-
-    async fn commit_actions(table: &mut DeltaTable, actions: Vec<Action>) -> i64 {
-        let mut tx = table.create_transaction(None);
-        tx.add_actions(actions);
-        tx.commit(None).await.unwrap()
     }
 }

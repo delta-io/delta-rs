@@ -28,16 +28,13 @@ async fn read_simple_table() {
     );
     let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 31);
-    assert_eq!(
-        tombstones[0],
-        deltalake::action::Remove {
-            path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
-            deletion_timestamp: Some(1587968596250),
-            data_change: true,
-            extended_file_metadata: None,
-            ..Default::default()
-        }
-    );
+    assert!(tombstones.contains(&deltalake::action::Remove {
+        path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
+        deletion_timestamp: Some(1587968596250),
+        data_change: true,
+        extended_file_metadata: None,
+        ..Default::default()
+    }));
     #[cfg(unix)]
     {
         let mut paths = table.get_file_uris();
