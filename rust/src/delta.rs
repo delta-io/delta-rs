@@ -443,12 +443,13 @@ impl DeltaTableState {
             new_state.tombstones.into_iter().for_each(|r| {
                 self.tombstones.insert(r);
             });
-        }
 
-        if !new_state.files.is_empty() {
-            let new_adds: HashSet<&str> = new_state.files.iter().map(|s| s.path.as_str()).collect();
-            self.tombstones
-                .retain(|a| !new_adds.contains(a.path.as_str()));
+            if !new_state.files.is_empty() {
+                let new_adds: HashSet<&str> =
+                    new_state.files.iter().map(|s| s.path.as_str()).collect();
+                self.tombstones
+                    .retain(|a| !new_adds.contains(a.path.as_str()));
+            }
         }
 
         self.files.append(&mut new_state.files);

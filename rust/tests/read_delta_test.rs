@@ -1,11 +1,14 @@
 extern crate deltalake;
 
+use chrono::Utc;
 use deltalake::storage::file::FileStorageBackend;
 use deltalake::DeltaTableBuilder;
 use deltalake::StorageBackend;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::SystemTime;
+
+mod fs_common;
 
 #[tokio::test]
 async fn read_delta_2_0_table_without_version() {
@@ -373,4 +376,44 @@ async fn vacuum_delta_8_0_table() {
         table.vacuum(Some(retention_hours), dry_run).await.unwrap(),
         empty
     );
+}
+
+#[tokio::test]
+async fn test_action_reconciliation() {
+    let path = "./tests/data/action_reconciliation";
+    let mut table = fs_common::create_table(path, None).await;
+
+    // Add a file.
+    let a = fs_common::add(3 * 60 * 1000);
+    assert_eq!(1, fs_common::commit_add(&mut table, &a).await);
+    assert_eq!(table.get_files(), vec![a.path.as_str()]);
+
+    // Remove added file.
+    let r = deltalake::action::Remove {
+        path: a.path.clone(),
+        deletion_timestamp: Some(Utc::now().timestamp_millis()),
+        data_change: false,
+        extended_file_metadata: None,
+        partition_values: None,
+        size: None,
+        tags: None,
+    };
+
+    assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);
+    assert_eq!(table.get_files().len(), 0);
+    assert_eq!(
+        table
+            .get_state()
+            .all_tombstones()
+            .iter()
+            .map(|r| r.path.as_str())
+            .collect::<Vec<_>>(),
+        vec![a.path.as_str()]
+    );
+
+    // Add removed file back.
+    assert_eq!(3, fs_common::commit_add(&mut table, &a).await);
+    assert_eq!(table.get_files(), vec![a.path.as_str()]);
+    // tombstone is removed.
+    assert_eq!(table.get_state().all_tombstones().len(), 0);
 }

@@ -1,11 +1,15 @@
-use deltalake::action::{Action, Protocol};
-use deltalake::{storage, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema};
+use chrono::Utc;
+use deltalake::action::{Action, Add, Protocol, Remove};
+use deltalake::{
+    storage, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
+};
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::schema::types::Type;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::File;
 use std::path::Path;
+use uuid::Uuid;
 
 pub fn cleanup_dir_except<P: AsRef<Path>>(path: P, ignore_files: Vec<String>) {
     for p in fs::read_dir(path).unwrap() {
@@ -46,4 +50,54 @@ pub async fn read_checkpoint(path: &str) -> (Type, Vec<Action>) {
         actions.push(Action::from_parquet_record(schema, &record).unwrap())
     }
     (schema.clone(), actions)
+}
+
+pub async fn create_table(
+    path: &str,
+    config: Option<HashMap<String, Option<String>>>,
+) -> DeltaTable {
+    let log_dir = Path::new(path).join("_delta_log");
+    fs::create_dir_all(&log_dir).unwrap();
+    cleanup_dir_except(log_dir, vec![]);
+
+    let schema = Schema::new(vec![SchemaField::new(
+        "id".to_string(),
+        SchemaDataType::primitive("integer".to_string()),
+        true,
+        HashMap::new(),
+    )]);
+
+    create_test_table(path, schema, config.unwrap_or(HashMap::new())).await
+}
+
+pub fn add(offset_millis: i64) -> Add {
+    Add {
+        path: Uuid::new_v4().to_string(),
+        size: 100,
+        partition_values: Default::default(),
+        partition_values_parsed: None,
+        modification_time: Utc::now().timestamp_millis() - offset_millis,
+        data_change: true,
+        stats: None,
+        stats_parsed: None,
+        tags: None,
+    }
+}
+
+pub async fn commit_add(table: &mut DeltaTable, add: &Add) -> i64 {
+    commit_actions(table, vec![Action::add(add.clone())]).await
+}
+
+pub async fn commit_removes(table: &mut DeltaTable, removes: Vec<&Remove>) -> i64 {
+    let vec = removes
+        .iter()
+        .map(|r| Action::remove((*r).clone()))
+        .collect();
+    commit_actions(table, vec).await
+}
+
+pub async fn commit_actions(table: &mut DeltaTable, actions: Vec<Action>) -> i64 {
+    let mut tx = table.create_transaction(None);
+    tx.add_actions(actions);
+    tx.commit(None).await.unwrap()
 }
