@@ -34,6 +34,7 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::{ColumnStatistics, Statistics};
 use datafusion::scalar::ScalarValue;
 
+use crate::action;
 use crate::delta;
 use crate::schema;
 
@@ -60,7 +61,9 @@ impl delta::DeltaTable {
                 }),
                 |acc, action| {
                     let acc = acc?;
-                    let new_stats = action.get_stats().unwrap_or(None)?;
+                    let new_stats = action
+                        .get_stats()
+                        .unwrap_or_else(|_| Some(action::Stats::default()))?;
                     Some(Statistics {
                         num_rows: acc
                             .num_rows
@@ -82,9 +85,12 @@ impl delta::DeltaTable {
                                             let null_count_acc = stats.null_count?;
                                             let null_count = x.as_value()? as usize;
                                             Some(null_count_acc + null_count)
-                                        }),
-                                    max_value: new_stats.max_values.get(field.get_name()).and_then(
-                                        |x| {
+                                        })
+                                        .or(stats.null_count),
+                                    max_value: new_stats
+                                        .max_values
+                                        .get(field.get_name())
+                                        .and_then(|x| {
                                             let old_stats = stats.clone();
                                             let max_value = to_scalar_value(x.as_value()?);
 
@@ -102,10 +108,12 @@ impl delta::DeltaTable {
                                                 (Some(max_value), None) => Some(max_value),
                                                 (None, old) => old,
                                             }
-                                        },
-                                    ),
-                                    min_value: new_stats.min_values.get(field.get_name()).and_then(
-                                        |x| {
+                                        })
+                                        .or_else(|| stats.max_value.clone()),
+                                    min_value: new_stats
+                                        .min_values
+                                        .get(field.get_name())
+                                        .and_then(|x| {
                                             let old_stats = stats.clone();
                                             let min_value = to_scalar_value(x.as_value()?);
 
@@ -123,8 +131,8 @@ impl delta::DeltaTable {
                                                 (Some(min_value), None) => Some(min_value),
                                                 (None, old) => old,
                                             }
-                                        },
-                                    ),
+                                        })
+                                        .or_else(|| stats.min_value.clone()),
                                     distinct_count: None, // TODO: distinct
                                 })
                                 .collect()
