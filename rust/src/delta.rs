@@ -429,14 +429,8 @@ impl DeltaTableState {
     /// merges new state information into our state
     pub fn merge(&mut self, mut new_state: DeltaTableState, require_tombstones: bool) {
         if !new_state.tombstones.is_empty() {
-            let new_removals: HashSet<&str> = new_state
-                .tombstones
-                .iter()
-                .map(|s| s.path.as_str())
-                .collect();
-
             self.files
-                .retain(|a| !new_removals.contains(a.path.as_str()));
+                .retain(|a| !new_state.tombstones.contains(a.path.as_str()));
         }
 
         if require_tombstones {
@@ -445,10 +439,9 @@ impl DeltaTableState {
             });
 
             if !new_state.files.is_empty() {
-                let new_adds: HashSet<&str> =
-                    new_state.files.iter().map(|s| s.path.as_str()).collect();
-                self.tombstones
-                    .retain(|a| !new_adds.contains(a.path.as_str()));
+                new_state.files.iter().for_each(|s| {
+                    self.tombstones.remove(s.path.as_str());
+                });
             }
         }
 
