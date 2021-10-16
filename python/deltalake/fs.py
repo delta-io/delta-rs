@@ -1,4 +1,3 @@
-from io import BytesIO
 from typing import List
 
 import pyarrow as pa
