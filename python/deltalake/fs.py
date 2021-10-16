@@ -13,19 +13,13 @@ class DeltaStorageHandler(pa_fs.FileSystemHandler):
         self._storage = DeltaStorageFsBackend(table_uri)
 
     def __eq__(self, other):
-        raise NotImplementedError
-        if isinstance(other, DeltaStorageHandler):
-            return self._fs == other._fs
         return NotImplemented
 
     def __ne__(self, other):
-        raise NotImplementedError
-        if isinstance(other, DeltaStorageHandler):
-            return self._fs != other._fs
         return NotImplemented
 
     def get_type_name(self):
-        return "abfss::"# + self._fs.type_name
+        return NotImplemented
 
     def normalize_path(self, path: str) -> str:
         return self._storage.normalize_path(path)
@@ -62,7 +56,8 @@ class DeltaStorageHandler(pa_fs.FileSystemHandler):
         raise NotImplementedError
 
     def open_input_stream(self, path):
-        return self._fs.open_input_stream(path)
+        raw = self._storage.get_obj(path)
+        return pa.BufferReader(pa.py_buffer(raw))
 
     def open_input_file(self, path):
         raw = self._storage.get_obj(path)
