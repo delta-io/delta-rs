@@ -1,39 +1,40 @@
 from io import BytesIO
+from typing import List
 
 import pyarrow as pa
-from pyarrow.fs import FileInfo, FileSystemHandler, FileType, PyFileSystem
+import pyarrow.fs as pa_fs
 
-from .deltalake import DeltaStorageFsHandler
+from .deltalake import DeltaStorageFsBackend
 
 
-class ProxyHandler(FileSystemHandler):
+class DeltaStorageHandler(pa_fs.FileSystemHandler):
 
-    def __init__(self, handler: DeltaStorageFsHandler):
-        self._handler = handler
+    def __init__(self, table_uri: str):
+        self._storage = DeltaStorageFsBackend(table_uri)
 
     def __eq__(self, other):
         raise NotImplementedError
-        if isinstance(other, ProxyHandler):
+        if isinstance(other, DeltaStorageHandler):
             return self._fs == other._fs
         return NotImplemented
 
     def __ne__(self, other):
         raise NotImplementedError
-        if isinstance(other, ProxyHandler):
+        if isinstance(other, DeltaStorageHandler):
             return self._fs != other._fs
         return NotImplemented
 
     def get_type_name(self):
         return "abfss::"# + self._fs.type_name
 
-    def normalize_path(self, path):
-        raise NotImplementedError
+    def normalize_path(self, path: str) -> str:
+        return self._storage.normalize_path(path)
 
-    def get_file_info(self, paths):
+    def get_file_info(self, paths: List[str]) -> List[pa_fs.FileInfo]:
         infos = []
         for path in paths:
-            path, secs = self._handler.head_obj(path)
-            infos.append(FileInfo(path, type=FileType.File, mtime=float(secs)))
+            path, secs = self._storage.head_obj(path)
+            infos.append(pa_fs.FileInfo(path, type=pa_fs.FileType.File, mtime=float(secs)))
         return infos
 
     def get_file_info_selector(self, selector):
@@ -64,9 +65,8 @@ class ProxyHandler(FileSystemHandler):
         return self._fs.open_input_stream(path)
 
     def open_input_file(self, path):
-        raw = self._handler.get_obj(path)
-        buf = pa.py_buffer(raw)
-        return pa.BufferReader(buf)
+        raw = self._storage.get_obj(path)
+        return pa.BufferReader(pa.py_buffer(raw))
 
     def open_output_stream(self, path, metadata):
         raise NotImplementedError

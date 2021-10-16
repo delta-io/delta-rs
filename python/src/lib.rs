@@ -5,7 +5,7 @@ extern crate pyo3;
 use chrono::{DateTime, FixedOffset, Utc};
 use deltalake::arrow::datatypes::Schema as ArrowSchema;
 use deltalake::partitions::PartitionFilter;
-use deltalake::storage::azure::AdlsGen2Backend;
+use deltalake::storage;
 use deltalake::{arrow, StorageBackend};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -235,27 +235,31 @@ impl RawDeltaTable {
 }
 
 #[pyclass]
-pub struct DeltaStorageFsHandler {
+pub struct DeltaStorageFsBackend {
     _storage: Box<dyn StorageBackend>,
 }
 
 #[pymethods]
-impl DeltaStorageFsHandler {
+impl DeltaStorageFsBackend {
     #[new]
-    fn new(container: &str) -> PyResult<Self> {
-        let storage = AdlsGen2Backend::new(container).map_err(PyDeltaTableError::from_storage)?;
-        Ok(Self { _storage: Box::new(storage) })
+    fn new(table_uri: &str) -> PyResult<Self> {
+        let storage =
+            storage::get_backend_for_uri(table_uri).map_err(PyDeltaTableError::from_storage)?;
+        Ok(Self { _storage: storage })
     }
 
     fn normalize_path(&self, path: &str) -> PyResult<String> {
-        Ok(String::from(path.trim_matches('/')))
+        Ok(self._storage.trim_path(path))
     }
 
     fn head_obj<'py>(&mut self, py: Python<'py>, path: &str) -> PyResult<&'py PyTuple> {
         let obj = rt()?
             .block_on(self._storage.head_obj(path))
             .map_err(PyDeltaTableError::from_storage)?;
-        Ok(PyTuple::new(py, &[obj.path, obj.modified.timestamp().to_string()]))
+        Ok(PyTuple::new(
+            py,
+            &[obj.path, obj.modified.timestamp().to_string()],
+        ))
     }
 
     fn get_obj<'py>(&mut self, py: Python<'py>, path: &str) -> PyResult<&'py PyBytes> {
@@ -279,7 +283,7 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
-    m.add_class::<DeltaStorageFsHandler>()?;
+    m.add_class::<DeltaStorageFsBackend>()?;
     m.add("DeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())
 }
