@@ -6,6 +6,7 @@ use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
@@ -572,7 +573,15 @@ pub struct Remove {
 
 impl Hash for Remove {
     fn hash<H: Hasher>(&self, state: &mut H) {
-        state.write(self.path.as_bytes())
+        self.path.hash(state);
+    }
+}
+
+/// Borrow `Remove` as str so we can look at tombstones hashset in `DeltaTableState` by using
+/// a path from action `Add`.
+impl Borrow<str> for Remove {
+    fn borrow(&self) -> &str {
+        self.path.as_ref()
     }
 }
 
