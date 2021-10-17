@@ -18,7 +18,8 @@ use super::open_table_with_version;
 use super::schema::*;
 use super::storage::{StorageBackend, StorageError};
 use super::writer::time_utils;
-use super::{CheckPoint, DeltaTableError, DeltaTableState};
+use super::{CheckPoint, DeltaTableError};
+use crate::delta::table_state::DeltaTableState;
 use crate::DeltaTable;
 
 /// Error returned when there is an error during creating a checkpoint.
