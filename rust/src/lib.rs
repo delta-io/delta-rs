@@ -67,6 +67,7 @@ pub mod delta_config;
 pub mod partitions;
 mod schema;
 pub mod storage;
+mod table_state;
 pub mod writer;
 
 #[cfg(feature = "datafusion-ext")]
