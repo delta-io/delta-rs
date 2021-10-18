@@ -67,3 +67,9 @@ src_paths = ["deltalake", "tests"]
 [tool.black]
 include = '\.pyi?$'
 exclude = "venv"
+
+[tool.pytest.ini_options]
+addopts = "--cov=deltalake -v -m 'not integration'"
+testpaths = [
+    "tests",
+]

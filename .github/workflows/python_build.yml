@@ -57,15 +57,21 @@ jobs:
 
     - name: Build and install deltalake
       run: |
-        # disable manylinux audit checks for test builds
-        make install MATURIN_EXTRA_ARGS="--manylinux off"
+        pip install virtualenv
+        virtualenv venv
+        source venv/bin/activate
+        make develop
 
     - name: Run tests
-      run: make unit-test
+      run: |
+        source venv/bin/activate
+        make unit-test
 
     # - name: Run Integration tests
     #   run: |
     #     py.test --cov tests -m integration
 
     - name: Build Sphinx documentation
-      run: make build-documentation
+      run: |
+        source venv/bin/activate
+        make build-documentation
