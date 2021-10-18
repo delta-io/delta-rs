@@ -59,7 +59,7 @@ check-python: ## Run check on Python
 .PHONY: unit-test
 unit-test: ## Run unit test
 	$(info --- Run Python unit-test ---)
-	py.test --cov tests -m 'not integration'
+	python -m pytest
 
 .PHONY: build-documentation
 build-documentation: ## Build documentation with Sphinx
