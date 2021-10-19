@@ -21,9 +21,21 @@ class DeltaStorageHandler(pa_fs.FileSystemHandler):
         return NotImplemented
 
     def normalize_path(self, path: str) -> str:
+        """
+        Normalize filesystem path.
+        
+        :param path:the path to normalize
+        :return: the normalized path
+        """
         return self._storage.normalize_path(path)
 
     def get_file_info(self, paths: List[str]) -> List[pa_fs.FileInfo]:
+        """
+        Get info for the given files.
+
+        :param paths: List of file paths
+        :return: list of file info objects
+        """
         infos = []
         for path in paths:
             path, secs = self._storage.head_obj(path)
@@ -54,11 +66,23 @@ class DeltaStorageHandler(pa_fs.FileSystemHandler):
     def copy_file(self, src: str, dest: str) -> None:
         raise NotImplementedError
 
-    def open_input_stream(self, path) -> pa.NativeFile:
+    def open_input_stream(self, path: str) -> pa.NativeFile:
+        """
+        Open an input stream for sequential reading.
+
+        :param source The source to open for reading.
+        :return:  NativeFile
+        """
         raw = self._storage.get_obj(path)
         return pa.BufferReader(pa.py_buffer(raw))
 
     def open_input_file(self, path) -> pa.NativeFile:
+        """
+        Open an input file for random access reading.
+
+        :param source The source to open for reading.
+        :return:  NativeFile
+        """
         raw = self._storage.get_obj(path)
         return pa.BufferReader(pa.py_buffer(raw))
 

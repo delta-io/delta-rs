@@ -18,3 +18,9 @@ DataCatalog
 
 .. automodule:: deltalake.data_catalog
     :members:
+
+DeltaStorageHandler
+-----------
+
+.. automodule:: deltalake.fs
+    :members:
