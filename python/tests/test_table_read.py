@@ -301,7 +301,7 @@ class ExcPassThroughThread(Thread):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=5, method="thread")
-def test_read_multiple_tables_from_s3(s3cred):
+def test_read_multiple_tables_from_s3(s3_localstack):
     """
     Should be able to create multiple cloud storage based DeltaTable instances
     without blocking on async rust function calls.
@@ -320,7 +320,7 @@ def test_read_multiple_tables_from_s3(s3cred):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=10, method="thread")
-def test_read_multiple_tables_from_s3_multi_threaded(s3cred):
+def test_read_multiple_tables_from_s3_multi_threaded(s3_localstack):
     thread_count = 10
     b = Barrier(thread_count, timeout=5)
 

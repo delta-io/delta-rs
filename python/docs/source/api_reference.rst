@@ -20,7 +20,7 @@ DataCatalog
     :members:
 
 DeltaStorageHandler
------------
+-------------------
 
 .. automodule:: deltalake.fs
     :members:

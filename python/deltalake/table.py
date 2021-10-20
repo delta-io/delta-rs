@@ -275,7 +275,9 @@ class DeltaTable:
 
         parsed = urlparse(file_paths[0])
         if not filesystem and parsed.netloc:
-            filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(self._table.table_uri()))
+            filesystem = pa_fs.PyFileSystem(
+                DeltaStorageHandler(self._table.table_uri())
+            )
 
         return dataset(
             file_paths,

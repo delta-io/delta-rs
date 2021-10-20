@@ -1,4 +1,4 @@
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
 import pyarrow as pa
 import pyarrow.fs as pa_fs
@@ -7,14 +7,13 @@ from .deltalake import DeltaStorageFsBackend
 
 
 class DeltaStorageHandler(pa_fs.FileSystemHandler):
-
     def __init__(self, table_uri: str) -> None:
         self._storage = DeltaStorageFsBackend(table_uri)
 
-    def __eq__(self, other) -> bool:
+    def __eq__(self, other: Any) -> bool:
         return NotImplemented
 
-    def __ne__(self, other) -> bool:
+    def __ne__(self, other: Any) -> bool:
         return NotImplemented
 
     def get_type_name(self) -> str:
@@ -23,7 +22,7 @@ class DeltaStorageHandler(pa_fs.FileSystemHandler):
     def normalize_path(self, path: str) -> str:
         """
         Normalize filesystem path.
-        
+
         :param path:the path to normalize
         :return: the normalized path
         """
@@ -39,10 +38,14 @@ class DeltaStorageHandler(pa_fs.FileSystemHandler):
         infos = []
         for path in paths:
             path, secs = self._storage.head_obj(path)
-            infos.append(pa_fs.FileInfo(path, type=pa_fs.FileType.File, mtime=float(secs)))
+            infos.append(
+                pa_fs.FileInfo(path, type=pa_fs.FileType.File, mtime=float(secs))
+            )
         return infos
 
-    def get_file_info_selector(self, selector):
+    def get_file_info_selector(
+        self, selector: pa_fs.FileSelector
+    ) -> List[pa_fs.FileInfo]:
         raise NotImplementedError
 
     def create_dir(self, path: str, *, recursive: bool = True) -> None:
@@ -76,7 +79,7 @@ class DeltaStorageHandler(pa_fs.FileSystemHandler):
         raw = self._storage.get_obj(path)
         return pa.BufferReader(pa.py_buffer(raw))
 
-    def open_input_file(self, path) -> pa.NativeFile:
+    def open_input_file(self, path: str) -> pa.NativeFile:
         """
         Open an input file for random access reading.
 
@@ -86,8 +89,12 @@ class DeltaStorageHandler(pa_fs.FileSystemHandler):
         raw = self._storage.get_obj(path)
         return pa.BufferReader(pa.py_buffer(raw))
 
-    def open_output_stream(self, path: str, metadata: Dict = None) -> pa.NativeFile:
+    def open_output_stream(
+        self, path: str, metadata: Optional[Dict[str, Any]] = None
+    ) -> pa.NativeFile:
         raise NotImplementedError
 
-    def open_append_stream(self, path: str, metadata: Dict = None) -> pa.NativeFile:
+    def open_append_stream(
+        self, path: str, metadata: Optional[Dict[str, Any]] = None
+    ) -> pa.NativeFile:
         raise NotImplementedError
