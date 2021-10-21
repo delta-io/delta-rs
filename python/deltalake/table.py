@@ -1,19 +1,19 @@
 import json
-import os
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import pyarrow
+import pyarrow.fs as pa_fs
 from pyarrow.dataset import dataset, partitioning
-from pyarrow.fs import FileSystem
 
 if TYPE_CHECKING:
     import pandas
 
 from .data_catalog import DataCatalog
 from .deltalake import RawDeltaTable
+from .fs import DeltaStorageHandler
 from .schema import Schema, pyarrow_schema_from_json
 
 
@@ -251,7 +251,7 @@ class DeltaTable:
     def to_pyarrow_dataset(
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
-        filesystem: Optional[FileSystem] = None,
+        filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
     ) -> pyarrow.dataset.Dataset:
         """
         Build a PyArrow Dataset using data from the DeltaTable.
@@ -264,9 +264,8 @@ class DeltaTable:
             file_paths = self._table.file_uris()
         else:
             file_paths = self._table.files_by_partitions(partitions)
-        paths = [urlparse(curr_file) for curr_file in file_paths]
 
-        empty_delta_table = len(paths) == 0
+        empty_delta_table = len(file_paths) == 0
         if empty_delta_table:
             return dataset(
                 [],
@@ -274,44 +273,25 @@ class DeltaTable:
                 partitioning=partitioning(flavor="hive"),
             )
 
-        # Decide based on the first file, if the file is on cloud storage or local
-        if paths[0].netloc:
-            query_str = ""
-            # pyarrow doesn't properly support the AWS_ENDPOINT_URL environment variable
-            # for non-AWS S3 like resources. This is a slight hack until such a
-            # point when pyarrow learns about AWS_ENDPOINT_URL
-            endpoint_url = os.environ.get("AWS_ENDPOINT_URL")
-            if endpoint_url:
-                endpoint = urlparse(endpoint_url)
-                # This format specific to the URL schema inference done inside
-                # of pyarrow, consult their tests/dataset.py for examples
-                query_str += (
-                    f"?scheme={endpoint.scheme}&endpoint_override={endpoint.netloc}"
-                )
-            if not filesystem:
-                filesystem = f"{paths[0].scheme}://{paths[0].netloc}{query_str}"
+        parsed = urlparse(file_paths[0])
+        if not filesystem and parsed.netloc:
+            filesystem = pa_fs.PyFileSystem(
+                DeltaStorageHandler(self._table.table_uri())
+            )
 
-            keys = [curr_file.path for curr_file in paths]
-            return dataset(
-                keys,
-                schema=self.pyarrow_schema(),
-                filesystem=filesystem,
-                partitioning=partitioning(flavor="hive"),
-            )
-        else:
-            return dataset(
-                file_paths,
-                schema=self.pyarrow_schema(),
-                format="parquet",
-                filesystem=filesystem,
-                partitioning=partitioning(flavor="hive"),
-            )
+        return dataset(
+            file_paths,
+            schema=self.pyarrow_schema(),
+            format="parquet",
+            filesystem=filesystem,
+            partitioning=partitioning(flavor="hive"),
+        )
 
     def to_pyarrow_table(
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
-        filesystem: Optional[FileSystem] = None,
+        filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
     ) -> pyarrow.Table:
         """
         Build a PyArrow Table using data from the DeltaTable.
@@ -329,7 +309,7 @@ class DeltaTable:
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
-        filesystem: Optional[FileSystem] = None,
+        filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
     ) -> "pandas.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.

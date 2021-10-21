@@ -3,13 +3,14 @@
 extern crate pyo3;
 
 use chrono::{DateTime, FixedOffset, Utc};
-use deltalake::arrow;
 use deltalake::arrow::datatypes::Schema as ArrowSchema;
 use deltalake::partitions::PartitionFilter;
+use deltalake::storage;
+use deltalake::{arrow, StorageBackend};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
-use pyo3::types::PyType;
+use pyo3::types::{PyBytes, PyTuple, PyType};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
@@ -25,6 +26,10 @@ impl PyDeltaTableError {
     }
 
     fn from_raw(err: deltalake::DeltaTableError) -> pyo3::PyErr {
+        PyDeltaTableError::new_err(err.to_string())
+    }
+
+    fn from_storage(err: deltalake::StorageError) -> pyo3::PyErr {
         PyDeltaTableError::new_err(err.to_string())
     }
 
@@ -229,6 +234,42 @@ impl RawDeltaTable {
     }
 }
 
+#[pyclass]
+pub struct DeltaStorageFsBackend {
+    _storage: Box<dyn StorageBackend>,
+}
+
+#[pymethods]
+impl DeltaStorageFsBackend {
+    #[new]
+    fn new(table_uri: &str) -> PyResult<Self> {
+        let storage =
+            storage::get_backend_for_uri(table_uri).map_err(PyDeltaTableError::from_storage)?;
+        Ok(Self { _storage: storage })
+    }
+
+    fn normalize_path(&self, path: &str) -> PyResult<String> {
+        Ok(self._storage.trim_path(path))
+    }
+
+    fn head_obj<'py>(&mut self, py: Python<'py>, path: &str) -> PyResult<&'py PyTuple> {
+        let obj = rt()?
+            .block_on(self._storage.head_obj(path))
+            .map_err(PyDeltaTableError::from_storage)?;
+        Ok(PyTuple::new(
+            py,
+            &[obj.path, obj.modified.timestamp().to_string()],
+        ))
+    }
+
+    fn get_obj<'py>(&mut self, py: Python<'py>, path: &str) -> PyResult<&'py PyBytes> {
+        let obj = rt()?
+            .block_on(self._storage.get_obj(path))
+            .map_err(PyDeltaTableError::from_storage)?;
+        Ok(PyBytes::new(py, &obj))
+    }
+}
+
 #[pyfunction]
 fn rust_core_version() -> &'static str {
     deltalake::crate_version()
@@ -242,6 +283,7 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
+    m.add_class::<DeltaStorageFsBackend>()?;
     m.add("DeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())
 }
