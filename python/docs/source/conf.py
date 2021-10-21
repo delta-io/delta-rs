@@ -51,7 +51,11 @@ nitpick_ignore = [
     ("py:class", "pyarrow.lib.Table"),
     ("py:class", "pyarrow.lib.DataType"),
     ("py:class", "pyarrow.lib.Field"),
+    ("py:class", "pyarrow.lib.NativeFile"),
     ("py:class", "pyarrow._fs.FileSystem"),
+    ("py:class", "pyarrow._fs.FileInfo"),
+    ("py:class", "pyarrow._fs.FileSelector"),
+    ("py:class", "pyarrow._fs.FileSystemHandler"),
     ("py:class", "RawDeltaTable"),
     ("py:class", "pandas.DataFrame"),
 ]
