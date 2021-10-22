@@ -126,7 +126,7 @@ impl StorageBackend for FileStorageBackend {
     }
 
     async fn rename_obj_noreplace(&self, src: &str, dst: &str) -> Result<(), StorageError> {
-        rename::rename_noreplace(src, dst)
+        rename::rename_noreplace(src, dst).await
     }
 
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
