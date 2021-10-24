@@ -5,18 +5,17 @@ mod imp {
     use super::*;
 
     pub async fn rename_noreplace(from: &str, to: &str) -> Result<(), StorageError> {
-        // doing best effort in windows since there is no native rename if not exists support
-        let to_exists = std::fs::metadata(to).is_ok();
-        if to_exists {
-            return Err(StorageError::AlreadyExists(to.to_string()));
-        }
-
         let from_path = String::from(from);
         let to_path = String::from(to);
 
         // rename in Windows already set the MOVEFILE_REPLACE_EXISTING flag
-        // it should always succeed no matter destination file exists or not
+        // it should always succeed no matter destination filconcurrent_writes_teste exists or not
         tokio::task::spawn_blocking(move || {
+            // doing best effort in windows since there is no native rename if not exists support
+            let to_exists = std::fs::metadata(&to_path).is_ok();
+            if to_exists {
+                return Err(StorageError::AlreadyExists(to_path));
+            }
             std::fs::rename(&from_path, &to_path).map_err(|e| {
                 StorageError::other_std_io_err(format!(
                     "failed to rename {} to {}: {}",
