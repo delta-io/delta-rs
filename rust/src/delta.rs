@@ -1302,7 +1302,7 @@ impl<'a> DeltaTransaction<'a> {
         DeltaTransaction {
             delta_table,
             actions: vec![],
-            options: options.unwrap_or_else(DeltaTransactionOptions::default),
+            options: options.unwrap_or_default(),
         }
     }
 
