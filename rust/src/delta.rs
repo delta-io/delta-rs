@@ -235,6 +235,27 @@ impl DeltaTableMetaData {
     pub fn get_configuration(&self) -> &HashMap<String, Option<String>> {
         &self.configuration
     }
+
+    /// Return partition fields along with their data type from the current schema.
+    pub fn get_partition_col_data_types(&self) -> Vec<(&str, &SchemaDataType)> {
+        // JSON add actions contain a `partitionValues` field which is a map<string, string>.
+        // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
+        self.schema
+            .get_fields()
+            .iter()
+            .filter_map(|f| {
+                if self
+                    .partition_columns
+                    .iter()
+                    .any(|s| s.as_str() == f.get_name())
+                {
+                    Some((f.get_name(), f.get_type()))
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
 }
 
 impl fmt::Display for DeltaTableMetaData {
@@ -847,6 +868,12 @@ impl DeltaTable {
                 partition_filter: format!("{:?}", filters),
             });
         }
+
+        let partition_col_data_types: HashMap<&str, &SchemaDataType> = current_metadata
+            .get_partition_col_data_types()
+            .into_iter()
+            .collect();
+
         let files = self
             .state
             .files()
@@ -859,7 +886,7 @@ impl DeltaTable {
                     .collect::<Vec<DeltaTablePartition>>();
                 filters
                     .iter()
-                    .all(|filter| filter.match_partitions(&partitions))
+                    .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
             })
             .map(|add| add.path.clone())
             .collect();
