@@ -847,7 +847,7 @@ impl DeltaTable {
                     .collect::<Vec<DeltaTablePartition>>();
                 filters
                     .iter()
-                    .all(|filter| filter.match_partitions(&partitions))
+                    .all(|filter| filter.match_partitions(&partitions).unwrap())
             })
             .map(|add| add.path.clone())
             .collect();

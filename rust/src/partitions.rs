@@ -1,8 +1,8 @@
 //! Delta Table partition handling logic.
 
-use std::convert::TryFrom;
-
 use crate::DeltaTableError;
+use std::collections::HashSet;
+use std::convert::TryFrom;
 
 /// A Enum used for selecting the partition value operation when filtering a DeltaTable partition.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -44,10 +44,21 @@ impl<'a> PartitionFilter<'a, &str> {
 
     /// Indicates if one of the DeltaTable partition among the list
     /// matches with the partition filter.
-    pub fn match_partitions(&self, partitions: &[DeltaTablePartition<'a>]) -> bool {
-        partitions
-            .iter()
-            .any(|partition| self.match_partition(partition))
+    pub fn match_partitions(
+        &self,
+        partitions: &[DeltaTablePartition<'a>],
+    ) -> Result<bool, DeltaTableError> {
+        let all_partition_keys: HashSet<&str> =
+            partitions.iter().map(|partition| partition.key).collect();
+        if !all_partition_keys.contains(self.key) {
+            Err(DeltaTableError::InvalidPartitionFilter {
+                partition_filter: format!("{:?}", self),
+            })
+        } else {
+            Ok(partitions
+                .iter()
+                .any(|partition| self.match_partition(partition)))
+        }
     }
 }
 

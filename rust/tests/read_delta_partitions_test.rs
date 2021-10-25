@@ -93,7 +93,36 @@ fn test_match_filters() {
         value: deltalake::PartitionValue::Equal("2020"),
     };
 
-    assert_eq!(valid_filters.match_partitions(&partitions), true);
-    assert_eq!(valid_filter_month.match_partitions(&partitions), true);
-    assert_eq!(invalid_filter.match_partitions(&partitions), false);
+    assert_eq!(valid_filters.match_partitions(&partitions).unwrap(), true);
+    assert_eq!(
+        valid_filter_month.match_partitions(&partitions).unwrap(),
+        true
+    );
+    assert_eq!(invalid_filter.match_partitions(&partitions).unwrap(), false);
+}
+
+#[test]
+fn test_invalid_filter_key() {
+    let partitions = vec![
+        deltalake::DeltaTablePartition {
+            key: "year",
+            value: "2021",
+        },
+        deltalake::DeltaTablePartition {
+            key: "month",
+            value: "12",
+        },
+    ];
+
+    let invalid_filter = deltalake::PartitionFilter {
+        key: "value",
+        value: deltalake::PartitionValue::Equal("1"),
+    };
+
+    assert!(matches!(
+        invalid_filter.match_partitions(&partitions).unwrap_err(),
+        deltalake::DeltaTableError::InvalidPartitionFilter {
+            partition_filter: _
+        },
+    ));
 }
