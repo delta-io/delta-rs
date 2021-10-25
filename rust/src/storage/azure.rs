@@ -174,7 +174,7 @@ impl StorageBackend for AdlsGen2Backend {
                 futures::stream::iter(response.blobs.blobs.into_iter().map(move |blob| {
                     let object = AdlsGen2Object {
                         account_name: &self.account,
-                        file_system: &self.container_client.container_name(),
+                        file_system: self.container_client.container_name(),
                         path: &blob.name,
                     };
                     Ok(ObjectMeta {
