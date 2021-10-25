@@ -835,24 +835,27 @@ impl DeltaTable {
         &self,
         filters: &[PartitionFilter<&str>],
     ) -> Result<Vec<String>, DeltaTableError> {
-        let files = self
-            .state
+        self.state
             .files()
             .iter()
-            .filter(|add| {
+            .filter_map(|add| {
                 let partitions = add
                     .partition_values
                     .iter()
                     .map(|p| DeltaTablePartition::from_partition_value(p, ""))
                     .collect::<Vec<DeltaTablePartition>>();
-                filters
+                let filter_results: Result<Vec<bool>, DeltaTableError> = filters
                     .iter()
-                    .all(|filter| filter.match_partitions(&partitions).unwrap())
+                    .map(|filter| filter.match_partitions(&partitions))
+                    .collect();
+                let is_matched = filter_results.map(|res| res.into_iter().all(|x| x));
+                match is_matched {
+                    Ok(true) => Some(Ok(add.path.clone())),
+                    Ok(false) => None,
+                    Err(e) => Some(Err(e)),
+                }
             })
-            .map(|add| add.path.clone())
-            .collect();
-
-        Ok(files)
+            .collect()
     }
 
     /// Return the file uris as strings for the partition(s)

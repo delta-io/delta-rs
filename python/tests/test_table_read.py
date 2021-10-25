@@ -240,7 +240,12 @@ def test_get_files_partitioned_table():
     )
 
     partition_filters = [("unknown", "=", "3")]
-    assert dt.files_by_partitions(partition_filters=partition_filters) == []
+    with pytest.raises(Exception) as exception:
+        dt.files_by_partitions(partition_filters=partition_filters)
+    assert (
+        str(exception.value)
+        == 'Invalid partition filter found: PartitionFilter { key: "unknown", value: Equal("3") }.'
+    )
 
 
 def test_delta_table_to_pandas():
