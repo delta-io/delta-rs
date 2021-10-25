@@ -45,7 +45,7 @@ impl TryFrom<PathBuf> for GCSStorageBackend {
 impl GCSStorageBackend {
     pub async fn metadata<'a>(
         &self,
-        path: GCSObject<'a>,
+        path: GCSObject<'_>,
     ) -> Result<objects::Metadata, GCSClientError> {
         debug!("creating request");
         let get_meta_request = Object::get(&path, None)?;
@@ -57,7 +57,7 @@ impl GCSStorageBackend {
         Ok(response.metadata)
     }
 
-    pub async fn download<'a>(&self, path: GCSObject<'a>) -> Result<bytes::Bytes, GCSClientError> {
+    pub async fn download<'a>(&self, path: GCSObject<'_>) -> Result<bytes::Bytes, GCSClientError> {
         let download_request = Object::download(&path, None)?;
 
         let response = util::execute::<_, objects::DownloadObjectResponse>(self, download_request)
@@ -153,7 +153,7 @@ impl GCSStorageBackend {
         self.delete(src).await
     }
 
-    pub async fn delete<'a>(&self, uri: GCSObject<'a>) -> Result<(), GCSClientError> {
+    pub async fn delete<'a>(&self, uri: GCSObject<'_>) -> Result<(), GCSClientError> {
         let delete_request = Object::delete(&uri, None)?;
         let _response =
             util::execute::<_, objects::DeleteObjectResponse>(self, delete_request).await?;
