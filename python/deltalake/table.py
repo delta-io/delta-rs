@@ -71,7 +71,7 @@ class DeltaTable:
     def __init__(self, table_uri: str, version: Optional[int] = None):
         """
         Create the Delta Table from a path with an optional version.
-        Multiple StorageBackends are currently supported: AWS S3, Azure Data Lake Storage Gen2 and local URI.
+        Multiple StorageBackends are currently supported: AWS S3, Azure Data Lake Storage Gen2, Google Cloud Storage (GCS) and local URI.
 
         :param table_uri: the path of the DeltaTable
         :param version: version of the DeltaTable
