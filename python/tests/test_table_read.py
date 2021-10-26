@@ -244,7 +244,7 @@ def test_get_files_partitioned_table():
         dt.files_by_partitions(partition_filters=partition_filters)
     assert (
         str(exception.value)
-        == 'Invalid partition filter found: PartitionFilter { key: "unknown", value: Equal("3") }.'
+        == 'Invalid partition filter found: [PartitionFilter { key: "unknown", value: Equal("3") }].'
     )
 
 

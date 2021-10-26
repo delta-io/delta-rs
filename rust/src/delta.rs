@@ -835,27 +835,36 @@ impl DeltaTable {
         &self,
         filters: &[PartitionFilter<&str>],
     ) -> Result<Vec<String>, DeltaTableError> {
-        self.state
+        let current_metadata = self
+            .state
+            .current_metadata()
+            .ok_or(DeltaTableError::NoMetadata)?;
+        if !filters
+            .iter()
+            .all(|f| current_metadata.partition_columns.contains(&f.key.into()))
+        {
+            return Err(DeltaTableError::InvalidPartitionFilter {
+                partition_filter: format!("{:?}", filters),
+            });
+        }
+        let files = self
+            .state
             .files()
             .iter()
-            .filter_map(|add| {
+            .filter(|add| {
                 let partitions = add
                     .partition_values
                     .iter()
                     .map(|p| DeltaTablePartition::from_partition_value(p, ""))
                     .collect::<Vec<DeltaTablePartition>>();
-                let filter_results: Result<Vec<bool>, DeltaTableError> = filters
+                filters
                     .iter()
-                    .map(|filter| filter.match_partitions(&partitions))
-                    .collect();
-                let is_matched = filter_results.map(|res| res.into_iter().all(|x| x));
-                match is_matched {
-                    Ok(true) => Some(Ok(add.path.clone())),
-                    Ok(false) => None,
-                    Err(e) => Some(Err(e)),
-                }
+                    .all(|filter| filter.match_partitions(&partitions))
             })
-            .collect()
+            .map(|add| add.path.clone())
+            .collect();
+
+        Ok(files)
     }
 
     /// Return the file uris as strings for the partition(s)
