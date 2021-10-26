@@ -31,7 +31,7 @@ jobs:
         os:
           - ubuntu-latest
           - macOS-10.15
-          - windows-2019:20210928.2
+          - windows-latest
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v2
@@ -65,7 +65,7 @@ jobs:
         os:
           - ubuntu-latest
           - macOS-10.15
-          - windows-2019
+          - windows-latest
     runs-on: ${{ matrix.os }}
     steps:
     - uses: actions/checkout@v2
