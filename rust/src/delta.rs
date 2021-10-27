@@ -835,6 +835,18 @@ impl DeltaTable {
         &self,
         filters: &[PartitionFilter<&str>],
     ) -> Result<Vec<String>, DeltaTableError> {
+        let current_metadata = self
+            .state
+            .current_metadata()
+            .ok_or(DeltaTableError::NoMetadata)?;
+        if !filters
+            .iter()
+            .all(|f| current_metadata.partition_columns.contains(&f.key.into()))
+        {
+            return Err(DeltaTableError::InvalidPartitionFilter {
+                partition_filter: format!("{:?}", filters),
+            });
+        }
         let files = self
             .state
             .files()
