@@ -1,8 +1,7 @@
 //! Delta Table partition handling logic.
 
-use std::convert::TryFrom;
-
 use crate::DeltaTableError;
+use std::convert::TryFrom;
 
 /// A Enum used for selecting the partition value operation when filtering a DeltaTable partition.
 #[derive(Clone, Debug, PartialEq, Eq)]
