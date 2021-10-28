@@ -27,6 +27,7 @@ pandas = [
 ]
 devel = [
     "mypy",
+    "black",
     "isort",
     "pytest",
     "pytest-mock",
