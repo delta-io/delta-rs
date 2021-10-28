@@ -1,12 +1,16 @@
 from typing import Any, Dict, List, Optional
 
 import pyarrow as pa
-import pyarrow.fs as pa_fs
+from pyarrow.fs import FileInfo, FileSelector, FileSystemHandler, FileType
 
 from .deltalake import DeltaStorageFsBackend
 
 
-class DeltaStorageHandler(pa_fs.FileSystemHandler):
+class DeltaStorageHandler(FileSystemHandler):
+    """
+    DeltaStorageHander is a concrete implementations of a PyArrow FileSystemHandler.
+    """
+
     def __init__(self, table_uri: str) -> None:
         self._storage = DeltaStorageFsBackend(table_uri)
 
@@ -28,7 +32,7 @@ class DeltaStorageHandler(pa_fs.FileSystemHandler):
         """
         return self._storage.normalize_path(path)
 
-    def get_file_info(self, paths: List[str]) -> List[pa_fs.FileInfo]:
+    def get_file_info(self, paths: List[str]) -> List[FileInfo]:
         """
         Get info for the given files.
 
@@ -38,14 +42,10 @@ class DeltaStorageHandler(pa_fs.FileSystemHandler):
         infos = []
         for path in paths:
             path, secs = self._storage.head_obj(path)
-            infos.append(
-                pa_fs.FileInfo(path, type=pa_fs.FileType.File, mtime=float(secs))
-            )
+            infos.append(FileInfo(path, type=FileType.File, mtime=float(secs)))
         return infos
 
-    def get_file_info_selector(
-        self, selector: pa_fs.FileSelector
-    ) -> List[pa_fs.FileInfo]:
+    def get_file_info_selector(self, selector: FileSelector) -> List[FileInfo]:
         raise NotImplementedError
 
     def create_dir(self, path: str, *, recursive: bool = True) -> None:
