@@ -31,12 +31,12 @@ jobs:
       matrix:
         os:
           - macOS-10.15
-          - windows-latest:20211011.0
+          - windows-latest:1.0.0.0-master-20211007-1
         include:
           - target: x86_64-apple-darwin
             os: macOS-10.15
           - target: x86_64-pc-windows-msvc
-            os: windows-latest:20211011.0
+            os: windows-latest:1.0.0.0-master-20211007-1
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v2
