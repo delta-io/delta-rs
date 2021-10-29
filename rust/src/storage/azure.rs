@@ -8,8 +8,8 @@ use std::error::Error;
 use std::sync::Arc;
 use std::{env, fmt, pin::Pin};
 
-use azure_core::prelude::*;
 use azure_core::HttpError as AzureError;
+use azure_core::{prelude::*, TokenCredential};
 use azure_storage::blob::prelude::*;
 use azure_storage::core::clients::{AsStorageClient, StorageAccountClient};
 use futures::stream::{Stream, TryStreamExt};
@@ -40,13 +40,20 @@ impl<'a> fmt::Display for AdlsGen2Object<'a> {
     }
 }
 
+#[derive(Debug)]
+struct StorageClient {
+    account_client: Option<Arc<StorageAccountClient>>,
+    credential: Option<Arc<dyn TokenCredential>>,
+}
+
 /// A storage backend backed by an Azure Data Lake Storage Gen2 account.
 ///
 /// This uses the `dfs.core.windows.net` endpoint.
 #[derive(Debug)]
 pub struct AdlsGen2Backend {
     account: String,
-    container_client: Arc<ContainerClient>,
+    container: String,
+    client: Arc<StorageClient>,
 }
 
 impl AdlsGen2Backend {
@@ -84,19 +91,54 @@ impl AdlsGen2Backend {
             ));
         };
 
+        let client = Arc::new(StorageClient {
+            account_client: Some(storage_account_client.unwrap()),
+            credential: None,
+        });
+
         Ok(Self {
             account: account_name,
-            container_client: storage_account_client?
-                .as_storage_client()
-                .as_container_client(container),
+            container: String::from(container),
+            client,
         })
     }
 
+    async fn container_client(&self) -> Arc<ContainerClient> {
+        let client = match &*self.client {
+            StorageClient {
+                account_client: Some(client),
+                ..
+            } => Ok(client
+                .as_storage_client()
+                .as_container_client(&self.container)),
+            StorageClient {
+                credential: Some(credential),
+                ..
+            } => {
+                let http_client = new_http_client();
+                let token = credential
+                    .get_token("https://storage.azure.com/")
+                    .await
+                    .unwrap();
+                let client = StorageAccountClient::new_bearer_token(
+                    http_client,
+                    &self.account,
+                    token.token.secret(),
+                )
+                .as_storage_client()
+                .as_container_client(&self.container);
+                Ok(client)
+            }
+            _ => Err(StorageError::AzureConfig(String::from("Missing config"))),
+        };
+        client.unwrap().clone()
+    }
+
     fn validate_container<'a>(&self, obj: &AdlsGen2Object<'a>) -> Result<(), StorageError> {
-        if obj.file_system != self.container_client.container_name() {
+        if obj.file_system != self.container {
             Err(StorageError::Uri {
                 source: UriError::ContainerMismatch {
-                    expected: self.container_client.container_name().to_string(),
+                    expected: self.container,
                     got: obj.file_system.to_string(),
                 },
             })
@@ -125,7 +167,8 @@ impl StorageBackend for AdlsGen2Backend {
         self.validate_container(&obj)?;
 
         let properties = self
-            .container_client
+            .container_client()
+            .await
             .as_blob_client(obj.path)
             .get_properties()
             .execute()
@@ -144,7 +187,8 @@ impl StorageBackend for AdlsGen2Backend {
         self.validate_container(&obj)?;
 
         Ok(self
-            .container_client
+            .container_client()
+            .await
             .as_blob_client(obj.path)
             .get()
             .execute()
@@ -166,7 +210,8 @@ impl StorageBackend for AdlsGen2Backend {
         self.validate_container(&obj)?;
 
         let stream = self
-            .container_client
+            .container_client()
+            .await
             .list_blobs()
             .prefix(obj.path)
             .stream()
@@ -174,7 +219,7 @@ impl StorageBackend for AdlsGen2Backend {
                 futures::stream::iter(response.blobs.blobs.into_iter().map(move |blob| {
                     let object = AdlsGen2Object {
                         account_name: &self.account,
-                        file_system: self.container_client.container_name(),
+                        file_system: &self.container,
                         path: &blob.name,
                     };
                     Ok(ObjectMeta {
