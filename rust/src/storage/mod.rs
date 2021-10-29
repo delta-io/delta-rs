@@ -7,7 +7,9 @@ use chrono::{DateTime, Utc};
 use futures::Stream;
 
 #[cfg(feature = "azure")]
-use azure_core::errors::AzureError;
+use azure_core::HttpError as AzureError;
+#[cfg(feature = "azure")]
+use azure_storage::Error as AzureStorageError;
 #[cfg(feature = "azure")]
 use std::error::Error;
 
@@ -369,6 +371,13 @@ pub enum StorageError {
         /// Azure error reason
         source: AzureError,
     },
+    /// Azure Storage error
+    #[cfg(feature = "azure")]
+    #[error("Error interacting with AzureStorage: {source}")]
+    AzureStorage {
+        /// Azure error reason
+        source: AzureStorageError,
+    },
     /// Generic Azure error
     #[cfg(feature = "azure")]
     #[error("Generic error: {source}")]
@@ -427,11 +436,20 @@ impl From<std::io::Error> for StorageError {
 impl From<AzureError> for StorageError {
     fn from(error: AzureError) -> Self {
         match error {
-            AzureError::UnexpectedHTTPResult(e) if e.status_code().as_u16() == 404 => {
-                StorageError::NotFound
-            }
+            AzureError::UnexpectedStatusCode {
+                expected: _,
+                received,
+                body: _,
+            } if received.as_u16() == 404 => StorageError::NotFound,
             _ => StorageError::Azure { source: error },
         }
+    }
+}
+
+#[cfg(feature = "azure")]
+impl From<AzureStorageError> for StorageError {
+    fn from(error: AzureStorageError) -> Self {
+        StorageError::AzureStorage { source: error }
     }
 }
 
