@@ -18,6 +18,11 @@ lazy_static! {
     ///  still needs to read old files.
     pub static ref TOMBSTONE_RETENTION: DeltaConfig =
         DeltaConfig::new("deletedFileRetentionDuration", "interval 1 week");
+
+    /// The shortest duration we have to keep delta files around before deleting them. We can only
+    /// delete delta files that are before a compaction. We may keep files beyond this duration until
+    /// the next calendar day.
+    pub static ref LOG_RETENTION: DeltaConfig = DeltaConfig::new("logRetentionDuration", "interval 30 day");
 }
 
 /// Delta configuration error

@@ -31,6 +31,7 @@ pub struct DeltaTableState {
     min_writer_version: i32,
     current_metadata: Option<DeltaTableMetaData>,
     tombstone_retention_millis: DeltaDataTypeLong,
+    log_retention_millis: DeltaDataTypeLong,
 }
 
 impl DeltaTableState {
@@ -90,6 +91,10 @@ impl DeltaTableState {
     /// Retention of tombstone in milliseconds.
     pub fn tombstone_retention_millis(&self) -> DeltaDataTypeLong {
         self.tombstone_retention_millis
+    }
+
+    pub fn log_retention_millis(&self) -> DeltaDataTypeLong {
+        self.log_retention_millis
     }
 
     /// Full list of tombstones (remove actions) representing files removed from table state).
@@ -204,6 +209,9 @@ impl DeltaTableState {
                 self.tombstone_retention_millis = delta_config::TOMBSTONE_RETENTION
                     .get_interval_from_metadata(&md)?
                     .as_millis() as i64;
+                self.log_retention_millis = delta_config::LOG_RETENTION
+                    .get_interval_from_metadata(&md)?
+                    .as_millis() as i64;
                 self.current_metadata = Some(md);
             }
             action::Action::txn(v) => {
@@ -242,6 +250,7 @@ mod tests {
             min_writer_version: 2,
             app_transaction_version,
             tombstone_retention_millis: 0,
+            log_retention_millis: 0,
         };
 
         let txn_action = action::Action::txn(action::Txn {
