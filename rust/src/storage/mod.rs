@@ -7,7 +7,7 @@ use chrono::{DateTime, Utc};
 use futures::Stream;
 
 #[cfg(feature = "azure")]
-use azure_core::HttpError as AzureError;
+use azure_core::{Error as AzureError, HttpError as AzureHttpError};
 #[cfg(feature = "azure")]
 use azure_storage::Error as AzureStorageError;
 #[cfg(feature = "azure")]
@@ -369,7 +369,7 @@ pub enum StorageError {
     #[error("Error interacting with Azure: {source}")]
     Azure {
         /// Azure error reason
-        source: AzureError,
+        source: AzureHttpError,
     },
     /// Azure Storage error
     #[cfg(feature = "azure")]
@@ -389,6 +389,13 @@ pub enum StorageError {
     #[cfg(feature = "azure")]
     #[error("Azure config error: {0}")]
     AzureConfig(String),
+    /// Azure credentials error
+    #[cfg(feature = "azure")]
+    #[error("Azure credentials error: {source}")]
+    AzureCredentials {
+        /// Azure error reason
+        source: AzureError,
+    },
 
     /// GCS config error
     #[cfg(feature = "gcs")]
@@ -433,10 +440,10 @@ impl From<std::io::Error> for StorageError {
 }
 
 #[cfg(feature = "azure")]
-impl From<AzureError> for StorageError {
-    fn from(error: AzureError) -> Self {
+impl From<AzureHttpError> for StorageError {
+    fn from(error: AzureHttpError) -> Self {
         match error {
-            AzureError::UnexpectedStatusCode {
+            AzureHttpError::UnexpectedStatusCode {
                 expected: _,
                 received,
                 body: _,
@@ -450,6 +457,13 @@ impl From<AzureError> for StorageError {
 impl From<AzureStorageError> for StorageError {
     fn from(error: AzureStorageError) -> Self {
         StorageError::AzureStorage { source: error }
+    }
+}
+
+#[cfg(feature = "azure")]
+impl From<AzureError> for StorageError {
+    fn from(error: AzureError) -> Self {
+        StorageError::AzureCredentials { source: error }
     }
 }
 
