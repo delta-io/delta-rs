@@ -35,8 +35,6 @@ reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"
 azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "2f1ca2e57801c81143b871fc5bf0df8e7250a56c" }
 azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "2f1ca2e57801c81143b871fc5bf0df8e7250a56c", features = ["blob", "account", "data_lake"] }
 azure_identity = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "2f1ca2e57801c81143b871fc5bf0df8e7250a56c" }
-# added to avoid cyclic dependecy caused by transient dependencies of azure crates
-indexmap = { version = "~1.6.2", optional = true}
 
 # S3
 rusoto_core = { version = "0.46", default-features = false, optional = true }
@@ -73,7 +71,7 @@ async-trait = "0.1"
 [features]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion"]
-azure = ["azure_core", "azure_storage", "azure_identity", "reqwest", "indexmap"]
+azure = ["azure_core", "azure_storage", "azure_identity", "reqwest"]
 s3 = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_s3/native-tls", "rusoto_sts/native-tls", "rusoto_dynamodb/native-tls", "maplit"]
 s3-rustls = ["rusoto_core/rustls", "rusoto_credential", "rusoto_s3/rustls", "rusoto_sts/rustls", "rusoto_dynamodb/rustls", "maplit"]
 gcs = ["async-stream", "tame-gcs", "tame-oauth", "reqwest"]
