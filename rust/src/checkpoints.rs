@@ -203,11 +203,11 @@ async fn flush_delete_files<T: Fn(&(DeltaDataTypeVersion, ObjectMeta)) -> bool>(
     }
 
     let deleted = files_to_delete
-        .into_iter()
+        .iter_mut()
         .map(|file| async move {
             match storage.delete_obj(&file.1.path).await {
                 Ok(_) => Ok(1),
-                Err(e) => return Err(DeltaTableError::from(e)),
+                Err(e) => Err(DeltaTableError::from(e)),
             }
         })
         .collect::<Vec<_>>();
@@ -242,7 +242,7 @@ async fn cleanup_expired_logs(
     let mut deleted_log_num = 0;
 
     // Get file objects from table.
-    let log_uri = storage.join_path(&table_uri, "_delta_log");
+    let log_uri = storage.join_path(table_uri, "_delta_log");
     let mut candidates: Vec<(DeltaDataTypeVersion, ObjectMeta)> = Vec::new();
     let mut stream = storage.list_objs(&log_uri).await?;
     while let Some(obj_meta) = stream.next().await {
@@ -294,7 +294,7 @@ async fn cleanup_expired_logs(
 
     let mut current_file: (DeltaDataTypeVersion, ObjectMeta);
     loop {
-        if candidates.len() == 0 {
+        if candidates.is_empty() {
             deleted_log_num += flush_delete_files(
                 storage,
                 &mut maybe_delete_files,

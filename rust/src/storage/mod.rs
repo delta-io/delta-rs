@@ -473,7 +473,7 @@ impl Clone for ObjectMeta {
     fn clone(&self) -> Self {
         Self {
             path: self.path.clone(),
-            modified: self.modified.clone(),
+            modified: self.modified,
         }
     }
 }
