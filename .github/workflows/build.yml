@@ -142,7 +142,7 @@ jobs:
         toolchain: stable
         override: true
     - name: Setup azurite
-      run: docker-compose -f docker-compose.azure.yml up setup
+      run: docker-compose up setup-azurite
     - name: Run tests
       run: |
        cargo test --features azure
