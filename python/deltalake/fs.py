@@ -27,7 +27,7 @@ class DeltaStorageHandler(FileSystemHandler):
         """
         Normalize filesystem path.
 
-        :param path:the path to normalize
+        :param path: the path to normalize
         :return: the normalized path
         """
         return self._storage.normalize_path(path)
@@ -73,7 +73,7 @@ class DeltaStorageHandler(FileSystemHandler):
         """
         Open an input stream for sequential reading.
 
-        :param source The source to open for reading.
+        :param source: The source to open for reading.
         :return:  NativeFile
         """
         raw = self._storage.get_obj(path)
@@ -83,7 +83,7 @@ class DeltaStorageHandler(FileSystemHandler):
         """
         Open an input file for random access reading.
 
-        :param source The source to open for reading.
+        :param source: The source to open for reading.
         :return:  NativeFile
         """
         raw = self._storage.get_obj(path)
