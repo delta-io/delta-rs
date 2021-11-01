@@ -1,8 +1,24 @@
 //! The Azure Data Lake Storage Gen2 storage backend. It currently only supports read operations.
 //!
-//! This module is gated behind the "azure" feature. Its usage also requires
-//! the `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_KEY` environment variables
-//! to be set to the name and key of the Azure Storage Account, respectively.
+//! This module is gated behind the "azure" feature.
+//! 
+//! There are several authentication options available. Either via the environment:
+//! a) `AZURE_STORAGE_CONNECTION_STRING`
+//! b) `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_SAS`
+//! c) `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_KEY`
+//!
+//! Alternatively, the default credential from the azure_identity crate is used,
+//! which iterates through several authentication alternatives.
+//! - EnvironmentCredential: uses `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` and `AZURE_TENANT_ID`
+//!   from the environment to authenticate via an azure client application
+//! - ManagedIdentityCredential: This authentication type works in Azure VMs,
+//!   App Service and Azure Functions applications, as well as the Azure Cloud Shell
+//! - AzureCliCredential: Enables authentication to Azure Active Directory
+//!   using Azure CLI to obtain an access token.
+//! 
+//! all alternatives but using a connection string require `AZURE_STORAGE_ACCOUNT` to be set
+//! and will panic if this is not set. This also implies that the backend is
+//! only valid for a single Storage Account.
 
 use azure_core::HttpError as AzureError;
 use azure_storage::blob::prelude::*;
@@ -95,6 +111,9 @@ impl AzureContainerClient {
             });
         }
 
+        // Other authorization options will panic if applicable. however for the default credential
+        // we do not know if we can get a token until we actually try, an thus fail only when we try to use it.
+        // using it here is not an option (i think) since fetching a token is an async operation.
         let inner = DefaultClientProvider::new(account.clone(), container.to_string())?;
         Ok(Self {
             account,
@@ -132,10 +151,15 @@ impl AdlsGen2Backend {
     ///
     /// Alternatively, the default credential from the azure_identity crate is used,
     /// which iterates through several authentication alternatives.
-    /// - EnvironmentCredential: uses `AZURE_CLIENT_ID` and `AZURE_CLIENT_KEY` form the
-    ///   environment to authenticate via an azure application
-    /// -
-    /// and will panic if both are unset. This also implies that the backend is
+    /// - EnvironmentCredential: uses `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` and `AZURE_TENANT_ID`
+    ///   from the environment to authenticate via an azure client application
+    /// - ManagedIdentityCredential: This authentication type works in Azure VMs,
+    ///   App Service and Azure Functions applications, as well as the Azure Cloud Shell
+    /// - AzureCliCredential: Enables authentication to Azure Active Directory
+    ///   using Azure CLI to obtain an access token.
+    /// 
+    /// all alternatives but using a connection string require `AZURE_STORAGE_ACCOUNT` to be set
+    /// and will panic if this is not set. This also implies that the backend is
     /// only valid for a single Storage Account.
     pub fn new(container: &str) -> Result<Self, StorageError> {
         Ok(Self {

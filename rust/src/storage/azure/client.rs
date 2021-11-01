@@ -18,6 +18,8 @@ pub struct ClientContainer {
 impl ClientContainer {
     fn is_expired(&self) -> bool {
         match self.expires_on {
+            // The 20 second offset is somewhat arbitrary to account for a delta between
+            // getting a new client instance and submitting a request using the client.
             Some(ref e) => *e < Utc::now() + Duration::seconds(20),
             None => false,
         }
@@ -36,6 +38,8 @@ impl<P: ProvideClientContainer + Send + Sync> ProvideClientContainer for Arc<P> 
     }
 }
 
+/// Provides a container client that does not expire - at least not for the lifetime of the storage backend.
+/// Allows using a connection string, SAS, or master key for authorization.
 #[derive(Clone, Debug)]
 pub struct StaticClientProvider {
     inner: ClientContainer,
@@ -208,6 +212,8 @@ impl ProvideClientContainer for DefaultAzureProvider {
     }
 }
 
+/// Wraps the `DefaultCredential` from the azure_identity crate in an AutoRefreshingProvider to
+/// enable authorization using azure identities.
 #[derive(Clone, Debug)]
 pub struct DefaultClientProvider(AutoRefreshingProvider<DefaultAzureProvider>);
 
