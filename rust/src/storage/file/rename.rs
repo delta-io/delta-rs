@@ -3,6 +3,15 @@ use crate::StorageError;
 #[cfg(windows)]
 mod imp {
     use super::*;
+    use lazy_static::lazy_static;
+    use std::sync::Arc;
+    use std::sync::Mutex;
+
+    // async rename under Windows is flaky due to no native rename if not exists support.
+    // Use a shared lock to prevent threads renaming at the same time.
+    lazy_static! {
+        static ref SHARED_LOCK: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
+    }
 
     pub async fn rename_noreplace(from: &str, to: &str) -> Result<(), StorageError> {
         let from_path = String::from(from);
@@ -11,6 +20,10 @@ mod imp {
         // rename in Windows already set the MOVEFILE_REPLACE_EXISTING flag
         // it should always succeed no matter destination filconcurrent_writes_teste exists or not
         tokio::task::spawn_blocking(move || {
+            let lock = Arc::clone(&SHARED_LOCK);
+            let mut data = lock.lock().unwrap();
+            *data += 1;
+
             // doing best effort in windows since there is no native rename if not exists support
             let to_exists = std::fs::metadata(&to_path).is_ok();
             if to_exists {
