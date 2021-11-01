@@ -197,7 +197,10 @@ impl fmt::Debug for DefaultAzureProvider {
 impl ProvideClientContainer for DefaultAzureProvider {
     async fn get_client_container(&self) -> Result<ClientContainer, StorageError> {
         let http_client = new_http_client();
-        let token = self.credential.get_token("https://storage.azure.com/").await?;
+        let token = self
+            .credential
+            .get_token("https://storage.azure.com/")
+            .await?;
         let client = StorageAccountClient::new_bearer_token(
             http_client,
             &self.account,

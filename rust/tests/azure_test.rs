@@ -1,7 +1,7 @@
 #[cfg(feature = "azure")]
 mod azure {
-    use serial_test::serial;
     use deltalake::StorageError;
+    use serial_test::serial;
     /*
      * The storage account used below resides in @rtyler's personal Azure account
      *
@@ -50,9 +50,11 @@ mod azure {
     async fn test_azure_simple_with_connection_string() {
         std::env::set_var("AZURE_STORAGE_CONNECTION_STRING", "AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;DefaultEndpointsProtocol=http;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;");
         // https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri
-        let table = deltalake::open_table("abfss://deltars@devstoreaccount1.dfs.core.windows.net/simple_table")
-            .await
-            .unwrap();
+        let table = deltalake::open_table(
+            "abfss://deltars@devstoreaccount1.dfs.core.windows.net/simple_table",
+        )
+        .await
+        .unwrap();
         assert_eq!(table.version, 4);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
@@ -80,9 +82,12 @@ mod azure {
     #[serial]
     async fn test_azure_simple_with_version() {
         std::env::set_var("AZURE_STORAGE_CONNECTION_STRING", "AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;DefaultEndpointsProtocol=http;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;");
-        let table = deltalake::open_table_with_version("abfss://deltars@devstoreaccount1.dfs.core.windows.net/simple_table", 3)
-            .await
-            .unwrap();
+        let table = deltalake::open_table_with_version(
+            "abfss://deltars@devstoreaccount1.dfs.core.windows.net/simple_table",
+            3,
+        )
+        .await
+        .unwrap();
         println!("{}", table);
         assert_eq!(table.version, 3);
         assert_eq!(table.get_min_writer_version(), 2);
@@ -112,7 +117,11 @@ mod azure {
     #[serial]
     async fn test_azure_simple_with_trailing_slash() {
         std::env::set_var("AZURE_STORAGE_CONNECTION_STRING", "AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;DefaultEndpointsProtocol=http;BlobEndpoint=http://127.0.0.1:10000/devstoreaccount1;QueueEndpoint=http://127.0.0.1:10001/devstoreaccount1;TableEndpoint=http://127.0.0.1:10002/devstoreaccount1;");
-        let table = deltalake::open_table("abfss://deltars@devstoreaccount1.dfs.core.windows.net/simple_table/").await.unwrap();
+        let table = deltalake::open_table(
+            "abfss://deltars@devstoreaccount1.dfs.core.windows.net/simple_table/",
+        )
+        .await
+        .unwrap();
         println!("{}", table);
         assert_eq!(table.version, 4);
         assert_eq!(table.get_min_writer_version(), 2);

@@ -1,7 +1,7 @@
 //! The Azure Data Lake Storage Gen2 storage backend. It currently only supports read operations.
 //!
 //! This module is gated behind the "azure" feature.
-//! 
+//!
 //! There are several authentication options available. Either via the environment:
 //! a) `AZURE_STORAGE_CONNECTION_STRING`
 //! b) `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_SAS`
@@ -15,7 +15,7 @@
 //!   App Service and Azure Functions applications, as well as the Azure Cloud Shell
 //! - AzureCliCredential: Enables authentication to Azure Active Directory
 //!   using Azure CLI to obtain an access token.
-//! 
+//!
 //! all alternatives but using a connection string require `AZURE_STORAGE_ACCOUNT` to be set
 //! and will panic if this is not set. This also implies that the backend is
 //! only valid for a single Storage Account.
@@ -157,7 +157,7 @@ impl AdlsGen2Backend {
     ///   App Service and Azure Functions applications, as well as the Azure Cloud Shell
     /// - AzureCliCredential: Enables authentication to Azure Active Directory
     ///   using Azure CLI to obtain an access token.
-    /// 
+    ///
     /// all alternatives but using a connection string require `AZURE_STORAGE_ACCOUNT` to be set
     /// and will panic if this is not set. This also implies that the backend is
     /// only valid for a single Storage Account.
