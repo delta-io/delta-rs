@@ -21,6 +21,11 @@ class DeltaStorageHandler(FileSystemHandler):
         return NotImplemented
 
     def get_type_name(self) -> str:
+        """
+        The filesystem’s type name.
+
+        :return: The filesystem’s type name.
+        """
         return NotImplemented
 
     def normalize_path(self, path: str) -> str:
@@ -46,32 +51,84 @@ class DeltaStorageHandler(FileSystemHandler):
         return infos
 
     def get_file_info_selector(self, selector: FileSelector) -> List[FileInfo]:
+        """
+        Get info for the files defined by FileSelector.
+
+        :param selector: FileSelector object
+        :return: list of file info objects
+        """
         raise NotImplementedError
 
     def create_dir(self, path: str, *, recursive: bool = True) -> None:
+        """
+        Create a directory and subdirectories.
+
+        This function succeeds if the directory already exists.
+        
+        :param path: The path of the new directory.
+        :param recursive: Create nested directories as well.
+        """
         raise NotImplementedError
 
     def delete_dir(self, path: str) -> None:
+        """
+        Delete a directory and its contents, recursively.
+
+        :param path: The path of the directory to be deleted.
+        """
         raise NotImplementedError
 
     def delete_dir_contents(self, path: str) -> None:
+        """
+        Delete a directory’s contents, recursively.
+
+        Like delete_dir, but doesn’t delete the directory itself.
+
+        :param path: The path of the directory to be deleted.
+        :param accept_root_dir: Allow deleting the root directory’s contents (path is empty or “/”)
+        """
         raise NotImplementedError
 
     def delete_root_dir_contents(self) -> None:
+        """
+        Delete a directory’s contents, recursively.
+
+        Like delete_dir_contents, but for the root directory (path is empty or “/”)
+
+        :param path: The path of the directory to be deleted.
+        """
         raise NotImplementedError
 
     def delete_file(self, path: str) -> None:
+        """
+        Delete a file.
+
+        :param path: The path of the file to be deleted.
+        """
         raise NotImplementedError
 
     def move(self, src: str, dest: str) -> None:
+        """
+        Move / rename a file or directory.
+
+        If the destination exists: - if it is a non-empty directory, an error is returned - otherwise,
+        if it has the same type as the source, it is replaced - otherwise,
+        behavior is unspecified (implementation-dependent).
+
+        :param src: The path of the file or the directory to be moved.
+        :param dest: The destination path where the file or directory is moved to.
+        """
         raise NotImplementedError
 
     def copy_file(self, src: str, dest: str) -> None:
         """
-        Copy a file in src to dest.
+        Copy a file.
 
-        :param src: path of what should be copied.
-        :param dest: path of where it should be copied to.
+        If the destination exists and is a directory, an error is returned.
+        Otherwise, it is replaced.
+
+        :param src: The path of the file to be copied from.
+        :param dest: The destination path where the file is copied to.
         """
         raise NotImplementedError
 
@@ -98,9 +155,27 @@ class DeltaStorageHandler(FileSystemHandler):
     def open_output_stream(
         self, path: str, metadata: Optional[Dict[str, Any]] = None
     ) -> pa.NativeFile:
+        """
+        Open an output stream for sequential writing.
+
+        If the target already exists, existing data is truncated.
+
+        :param path: The source to open for writing.
+        :param metadata: If not None, a mapping of string keys to string values.
+        :return:  NativeFile
+        """
         raise NotImplementedError
 
     def open_append_stream(
         self, path: str, metadata: Optional[Dict[str, Any]] = None
     ) -> pa.NativeFile:
+        """
+        DEPRECATED: Open an output stream for appending.
+
+        If the target doesn’t exist, a new empty file is created.
+
+        :param path: The source to open for writing.
+        :param metadata: If not None, a mapping of string keys to string values.
+        :return:  NativeFile
+        """
         raise NotImplementedError
