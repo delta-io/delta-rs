@@ -89,7 +89,7 @@ jobs:
         override: true
     - name: Run tests
       #run: cargo test --verbose --features datafusion-ext,azure Comment out datafusion until https://github.com/apache/arrow-datafusion/pull/984 is merged
-      run: cargo test --verbose --features azure
+      run: cargo test --verbose
 
   s3_test:
     runs-on: ubuntu-latest
