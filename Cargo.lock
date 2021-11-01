@@ -151,7 +151,7 @@ checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 [[package]]
 name = "azure_core"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=2f1ca2e57801c81143b871fc5bf0df8e7250a56c#2f1ca2e57801c81143b871fc5bf0df8e7250a56c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c6f94bcd494e74dc71977136fa62362d0b8f6fbf#c6f94bcd494e74dc71977136fa62362d0b8f6fbf"
 dependencies = [
  "async-trait",
  "base64",
@@ -177,7 +177,7 @@ dependencies = [
 [[package]]
 name = "azure_identity"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=2f1ca2e57801c81143b871fc5bf0df8e7250a56c#2f1ca2e57801c81143b871fc5bf0df8e7250a56c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c6f94bcd494e74dc71977136fa62362d0b8f6fbf#c6f94bcd494e74dc71977136fa62362d0b8f6fbf"
 dependencies = [
  "async-timer",
  "async-trait",
@@ -196,9 +196,10 @@ dependencies = [
 [[package]]
 name = "azure_storage"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=2f1ca2e57801c81143b871fc5bf0df8e7250a56c#2f1ca2e57801c81143b871fc5bf0df8e7250a56c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c6f94bcd494e74dc71977136fa62362d0b8f6fbf#c6f94bcd494e74dc71977136fa62362d0b8f6fbf"
 dependencies = [
  "RustyXML",
+ "async-trait",
  "azure_core",
  "base64",
  "bytes",

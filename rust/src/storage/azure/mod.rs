@@ -160,11 +160,9 @@ impl AdlsGen2Backend {
 
 fn to_storage_err(err: Box<dyn Error + Sync + std::marker::Send>) -> StorageError {
     match err.downcast_ref::<AzureError>() {
-        Some(AzureError::UnexpectedStatusCode {
-            expected: _,
-            received,
-            body: _,
-        }) if received.as_u16() == 404 => StorageError::NotFound,
+        Some(AzureError::ErrorStatusCode { status, body: _ }) if status.as_u16() == 404 => {
+            StorageError::NotFound
+        }
         _ => StorageError::AzureGeneric { source: err },
     }
 }
