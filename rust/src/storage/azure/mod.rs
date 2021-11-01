@@ -123,11 +123,7 @@ impl AzureContainerClient {
     }
 
     pub async fn as_container_client(&self) -> Arc<ContainerClient> {
-        self.inner
-            .get_client_container()
-            .await
-            .unwrap()
-            .client
+        self.inner.get_client_container().await.unwrap().client
     }
 }
 
