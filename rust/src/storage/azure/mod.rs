@@ -128,7 +128,6 @@ impl AzureContainerClient {
             .await
             .unwrap()
             .client
-            .clone()
     }
 }
 
