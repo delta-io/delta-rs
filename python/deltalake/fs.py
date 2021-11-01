@@ -67,6 +67,12 @@ class DeltaStorageHandler(FileSystemHandler):
         raise NotImplementedError
 
     def copy_file(self, src: str, dest: str) -> None:
+        """
+        Copy a file in src to dest.
+
+        :param src: path of what should be copied.
+        :param dest: path of where it should be copied to.
+        """
         raise NotImplementedError
 
     def open_input_stream(self, path: str) -> pa.NativeFile:
