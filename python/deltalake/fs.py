@@ -85,7 +85,6 @@ class DeltaStorageHandler(FileSystemHandler):
         Like delete_dir, but doesn’t delete the directory itself.
 
         :param path: The path of the directory to be deleted.
-        :param accept_root_dir: Allow deleting the root directory’s contents (path is empty or “/”)
         """
         raise NotImplementedError
 
@@ -94,8 +93,6 @@ class DeltaStorageHandler(FileSystemHandler):
         Delete a directory’s contents, recursively.
 
         Like delete_dir_contents, but for the root directory (path is empty or “/”)
-
-        :param path: The path of the directory to be deleted.
         """
         raise NotImplementedError
 
