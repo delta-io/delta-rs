@@ -145,25 +145,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
         .current_metadata()
         .ok_or(CheckpointError::MissingMetaData)?;
 
-    // Collect partition fields along with their data type from the current schema.
-    // JSON add actions contain a `partitionValues` field which is a map<string, string>.
-    // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
-    let partition_col_data_types: Vec<(&str, &SchemaDataType)> = current_metadata
-        .schema
-        .get_fields()
-        .iter()
-        .filter_map(|f| {
-            if current_metadata
-                .partition_columns
-                .iter()
-                .any(|s| s.as_str() == f.get_name())
-            {
-                Some((f.get_name(), f.get_type()))
-            } else {
-                None
-            }
-        })
-        .collect();
+    let partition_col_data_types = current_metadata.get_partition_col_data_types();
 
     // Collect a map of paths that require special stats conversion.
     let mut stats_conversions: Vec<(SchemaPath, SchemaDataType)> = Vec::new();
