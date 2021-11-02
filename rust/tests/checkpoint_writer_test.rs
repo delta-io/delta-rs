@@ -117,15 +117,8 @@ mod delete_expired_delta_log_in_checkpoint {
         assert_eq!(1, fs_common::commit_add(&mut table, &a1).await);
         assert_eq!(2, fs_common::commit_add(&mut table, &a2).await);
 
-        match table.load_version(0).await {
-            Ok(_) => {}
-            Err(e) => assert!(false, "Cannot load version 0"),
-        }
-
-        match table.load_version(1).await {
-            Ok(_) => {}
-            Err(e) => assert!(false, "Cannot load version 1"),
-        }
+        table.load_version(0).await.expect("Cannot load version 0");
+        table.load_version(1).await.expect("Cannot load version 1");
 
         checkpoints::create_checkpoint_from_table(&table)
             .await
@@ -133,20 +126,16 @@ mod delete_expired_delta_log_in_checkpoint {
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(table.get_files(), vec![a1.path.as_str(), a2.path.as_str()]);
 
-        match table.load_version(0).await {
-            Ok(_) => assert!(false, "Should not load version 0"),
-            Err(_) => {}
-        }
+        table
+            .load_version(0)
+            .await
+            .expect_err("Should not load version 0");
+        table
+            .load_version(1)
+            .await
+            .expect_err("Should not load version 1");
 
-        match table.load_version(1).await {
-            Ok(_) => assert!(false, "Should not load version 1"),
-            Err(_) => {}
-        }
-
-        match table.load_version(2).await {
-            Ok(_) => {}
-            Err(e) => assert!(false, "Cannot load version 2"),
-        }
+        table.load_version(2).await.expect("Cannot load version 2");
     }
 }
 

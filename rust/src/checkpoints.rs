@@ -285,11 +285,8 @@ async fn cleanup_expired_logs(
     // Init
     if !candidates.is_empty() {
         let removed = candidates.remove(0);
+        last_file = (removed.0, removed.1.clone());
         maybe_delete_files.push(removed);
-        last_file = (
-            maybe_delete_files.get(0).unwrap().0,
-            maybe_delete_files.get(0).unwrap().1.clone(),
-        );
     }
 
     let mut current_file: (DeltaDataTypeVersion, ObjectMeta);
