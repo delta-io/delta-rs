@@ -17,8 +17,8 @@ Docs: [Microsoft.Storage/storageAccounts - Bicep & ARM template reference | Micr
 
 The critical part for creating an ADLS Gen2 Storage Account via ARM are the following properties:
 
-* kind = StorageV2
-* isHnsEnabled = true
+* `kind = StorageV2`
+* `isHnsEnabled = true`
 
 ### Azure Portal
 
