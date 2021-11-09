@@ -97,11 +97,9 @@ pub async fn create_checkpoint_from_table_uri(
     )
     .await?;
 
-    let new_version = table.version + 1;
-
-    if new_version > 0 {
+    if table.version >= 0 {
         let deleted_log_num = cleanup_expired_logs(
-            new_version,
+            table.version + 1,
             table.storage.as_ref(),
             table.get_state(),
             table_uri,
@@ -123,11 +121,9 @@ pub async fn create_checkpoint_from_table(table: &DeltaTable) -> Result<(), Chec
     )
     .await?;
 
-    let new_version = table.version + 1;
-
-    if new_version > 0 {
+    if table.version >= 0 {
         let deleted_log_num = cleanup_expired_logs(
-            new_version,
+            table.version + 1,
             table.storage.as_ref(),
             table.get_state(),
             &table.table_uri,
