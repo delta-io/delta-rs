@@ -29,7 +29,7 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 
 * Local file system
 * AWS S3
-* Azure Data Lake Storage Gen 2 (link:ADLSGen2-HOWTO.md[HOW-TO])
+* Azure Data Lake Storage Gen 2 (link:docs/ADLSGen2-HOWTO.md[HOW-TO])
 * Google Cloud Storage
 
 .Support features
