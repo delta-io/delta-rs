@@ -74,3 +74,7 @@ addopts = "--cov=deltalake -v -m 'not integration'"
 testpaths = [
     "tests",
 ]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "s3: marks tests as integration tests with S3 (deselect with '-m \"not s3\"')",
+]

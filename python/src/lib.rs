@@ -284,6 +284,6 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<DeltaStorageFsBackend>()?;
-    m.add("DeltaTableError", py.get_type::<PyDeltaTableError>())?;
+    m.add("PyDeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())
 }
