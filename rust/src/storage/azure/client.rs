@@ -1,6 +1,6 @@
 use super::StorageError;
 use azure_core::{prelude::*, TokenCredential};
-use azure_identity::token_credentials::DefaultCredential;
+use azure_identity::token_credentials::DefaultAzureCredential;
 use azure_storage::blob::prelude::*;
 use azure_storage::core::clients::{AsStorageClient, StorageAccountClient};
 use chrono::{DateTime, Duration, Utc};
@@ -162,7 +162,7 @@ impl<P: ProvideClientContainer + Send + Sync + 'static> ProvideClientContainer
 struct DefaultAzureProvider {
     account: String,
     container: String,
-    credential: DefaultCredential,
+    credential: DefaultAzureCredential,
 }
 
 impl DefaultAzureProvider {
@@ -170,7 +170,7 @@ impl DefaultAzureProvider {
         Self {
             account,
             container,
-            credential: DefaultCredential::default(),
+            credential: DefaultAzureCredential::default(),
         }
     }
 }
@@ -180,7 +180,7 @@ impl Clone for DefaultAzureProvider {
         Self {
             account: self.account.clone(),
             container: self.container.clone(),
-            credential: DefaultCredential::default(),
+            credential: DefaultAzureCredential::default(),
         }
     }
 }
@@ -188,7 +188,7 @@ impl Clone for DefaultAzureProvider {
 impl fmt::Debug for DefaultAzureProvider {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         f.debug_struct("DefaultAzureProvider")
-            .field("credential", &"DefaultCredential")
+            .field("credential", &"DefaultAzureCredential")
             .finish()
     }
 }
@@ -215,7 +215,7 @@ impl ProvideClientContainer for DefaultAzureProvider {
     }
 }
 
-/// Wraps the `DefaultCredential` from the azure_identity crate in an AutoRefreshingProvider to
+/// Wraps the `DefaultAzureCredential` from the azure_identity crate in an AutoRefreshingProvider to
 /// enable authorization using azure identities.
 #[derive(Clone, Debug)]
 pub struct DefaultClientProvider(AutoRefreshingProvider<DefaultAzureProvider>);
