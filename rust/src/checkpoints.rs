@@ -4,6 +4,7 @@ use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
 use arrow::json::reader::Decoder;
 use chrono::Datelike;
+use chrono::Duration;
 use chrono::Utc;
 use chrono::MIN_DATETIME;
 use futures::StreamExt;
@@ -18,7 +19,6 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::iter::Iterator;
 use std::ops::Add;
-use time::Duration;
 
 use super::action;
 use super::delta_arrow::delta_log_schema_for_table;
