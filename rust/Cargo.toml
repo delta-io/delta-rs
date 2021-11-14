@@ -6,7 +6,7 @@ homepage = "https://github.com/delta-io/delta.rs"
 license = "Apache-2.0"
 keywords = ["deltalake", "delta", "datalake"]
 description = "Native Delta Lake implementation in Rust"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
 libc = ">=0.2.90,<1"

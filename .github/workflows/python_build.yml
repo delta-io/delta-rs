@@ -43,6 +43,10 @@ jobs:
     # docker based action.
     - uses: actions/checkout@v1
 
+    # Require for building openssl-sys
+    - name: Install perl-IPC/Cmd
+      run: yum install -y perl-IPC-Cmd
+
     # actions-rs/toolchain@v1 is a node action, which runs on a fairly new
     # version of node. however, manylinux environment's glibc is too old for
     # that version of the node. so we will have to install rust manually here.
