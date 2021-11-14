@@ -6,7 +6,7 @@ homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
 description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
-edition = "2018"
+edition = "2021"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 
 [lib]
