@@ -261,6 +261,12 @@ def test_delta_table_with_filesystem():
     assert dt.to_pandas(filesystem=filesystem).equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 
+def test_import_delta_table_error():
+    from deltalake import PyDeltaTableError
+
+    PyDeltaTableError()
+
+
 class ExcPassThroughThread(Thread):
     """Wrapper around `threading.Thread` that propagates exceptions."""
 
