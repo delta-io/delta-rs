@@ -336,6 +336,37 @@ async fn read_delta_8_0_table_with_special_partition() {
 }
 
 #[tokio::test]
+async fn read_delta_8_0_table_partition_with_compare_op() {
+    let table = deltalake::open_table("./tests/data/delta-0.8.0-numeric-partition")
+        .await
+        .unwrap();
+
+    let filters = vec![deltalake::PartitionFilter {
+        key: "x",
+        value: deltalake::PartitionValue::LessThanOrEqual("9"),
+    }];
+    assert_eq!(
+        table.get_files_by_partitions(&filters).unwrap(),
+        vec![
+            "x=9/y=9.9/part-00007-3c50fba1-4264-446c-9c67-d8e24a1ccf83.c000.snappy.parquet"
+                .to_string()
+        ]
+    );
+
+    let filters = vec![deltalake::PartitionFilter {
+        key: "y",
+        value: deltalake::PartitionValue::LessThan("10.0"),
+    }];
+    assert_eq!(
+        table.get_files_by_partitions(&filters).unwrap(),
+        vec![
+            "x=9/y=9.9/part-00007-3c50fba1-4264-446c-9c67-d8e24a1ccf83.c000.snappy.parquet"
+                .to_string()
+        ]
+    );
+}
+
+#[tokio::test]
 async fn vacuum_delta_8_0_table() {
     let backend = FileStorageBackend::new("");
     let mut table = deltalake::open_table(&backend.join_paths(&["tests", "data", "delta-0.8.0"]))

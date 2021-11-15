@@ -1,7 +1,11 @@
 //! Delta Table partition handling logic.
 
-use crate::DeltaTableError;
 use std::convert::TryFrom;
+
+use super::schema::SchemaDataType;
+use crate::DeltaTableError;
+use std::cmp::Ordering;
+use std::collections::HashMap;
 
 /// A Enum used for selecting the partition value operation when filtering a DeltaTable partition.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -10,6 +14,14 @@ pub enum PartitionValue<T> {
     Equal(T),
     /// The partition value with the not equal operator
     NotEqual(T),
+    /// The partition value with the greater than operator
+    GreaterThan(T),
+    /// The partition value with the greater than or equal operator
+    GreaterThanOrEqual(T),
+    /// The partition value with the less than operator
+    LessThan(T),
+    /// The partition value with the less than or equal operator
+    LessThanOrEqual(T),
     /// The partition values with the in operator
     In(Vec<T>),
     /// The partition values with the not in operator
@@ -25,10 +37,41 @@ pub struct PartitionFilter<'a, T> {
     pub value: PartitionValue<T>,
 }
 
+fn compare_typed_value(
+    partition_value: &str,
+    filter_value: &str,
+    data_type: &SchemaDataType,
+) -> Option<Ordering> {
+    match data_type {
+        SchemaDataType::primitive(primitive_type) => match primitive_type.as_str() {
+            "long" | "integer" | "short" | "byte" => match filter_value.parse::<i64>() {
+                Ok(parsed_filter_value) => {
+                    let parsed_partition_value = partition_value.parse::<i64>().unwrap();
+                    parsed_partition_value.partial_cmp(&parsed_filter_value)
+                }
+                _ => None,
+            },
+            "float" | "double" => match filter_value.parse::<f64>() {
+                Ok(parsed_filter_value) => {
+                    let parsed_partition_value = partition_value.parse::<f64>().unwrap();
+                    parsed_partition_value.partial_cmp(&parsed_filter_value)
+                }
+                _ => None,
+            },
+            _ => partition_value.partial_cmp(filter_value),
+        },
+        _ => partition_value.partial_cmp(filter_value),
+    }
+}
+
 /// Partition filters methods for filtering the DeltaTable partitions.
 impl<'a> PartitionFilter<'a, &str> {
     /// Indicates if a DeltaTable partition matches with the partition filter by key and value.
-    pub fn match_partition(&self, partition: &DeltaTablePartition<'a>) -> bool {
+    pub fn match_partition(
+        &self,
+        partition: &DeltaTablePartition<'a>,
+        data_type: &SchemaDataType,
+    ) -> bool {
         if self.key != partition.key {
             return false;
         }
@@ -36,6 +79,26 @@ impl<'a> PartitionFilter<'a, &str> {
         match &self.value {
             PartitionValue::Equal(value) => value == &partition.value,
             PartitionValue::NotEqual(value) => value != &partition.value,
+            PartitionValue::GreaterThan(value) => {
+                compare_typed_value(partition.value, value.to_owned(), data_type)
+                    .map(|x| x.is_gt())
+                    .unwrap_or(false)
+            }
+            PartitionValue::GreaterThanOrEqual(value) => {
+                compare_typed_value(partition.value, value.to_owned(), data_type)
+                    .map(|x| x.is_ge())
+                    .unwrap_or(false)
+            }
+            PartitionValue::LessThan(value) => {
+                compare_typed_value(partition.value, value.to_owned(), data_type)
+                    .map(|x| x.is_lt())
+                    .unwrap_or(false)
+            }
+            PartitionValue::LessThanOrEqual(value) => {
+                compare_typed_value(partition.value, value.to_owned(), data_type)
+                    .map(|x| x.is_le())
+                    .unwrap_or(false)
+            }
             PartitionValue::In(value) => value.contains(&partition.value),
             PartitionValue::NotIn(value) => !value.contains(&partition.value),
         }
@@ -43,10 +106,15 @@ impl<'a> PartitionFilter<'a, &str> {
 
     /// Indicates if one of the DeltaTable partition among the list
     /// matches with the partition filter.
-    pub fn match_partitions(&self, partitions: &[DeltaTablePartition<'a>]) -> bool {
+    pub fn match_partitions(
+        &self,
+        partitions: &[DeltaTablePartition<'a>],
+        partition_col_data_types: &HashMap<&str, &SchemaDataType>,
+    ) -> bool {
+        let data_type = partition_col_data_types.get(self.key).unwrap().to_owned();
         partitions
             .iter()
-            .any(|partition| self.match_partition(partition))
+            .any(|partition| self.match_partition(partition, data_type))
     }
 }
 
@@ -65,6 +133,22 @@ impl<'a, T: std::fmt::Debug> TryFrom<(&'a str, &str, T)> for PartitionFilter<'a,
             (key, "!=", value) if !key.is_empty() => Ok(PartitionFilter {
                 key,
                 value: PartitionValue::NotEqual(value),
+            }),
+            (key, ">", value) if !key.is_empty() => Ok(PartitionFilter {
+                key,
+                value: PartitionValue::GreaterThan(value),
+            }),
+            (key, ">=", value) if !key.is_empty() => Ok(PartitionFilter {
+                key,
+                value: PartitionValue::GreaterThanOrEqual(value),
+            }),
+            (key, "<", value) if !key.is_empty() => Ok(PartitionFilter {
+                key,
+                value: PartitionValue::LessThan(value),
+            }),
+            (key, "<=", value) if !key.is_empty() => Ok(PartitionFilter {
+                key,
+                value: PartitionValue::LessThanOrEqual(value),
             }),
             (_, _, _) => Err(DeltaTableError::InvalidPartitionFilter {
                 partition_filter: format!("{:?}", filter),
