@@ -14,7 +14,7 @@
 //!   ctx.register_table("demo", Arc::new(table)).unwrap();
 //!
 //!   let batches = ctx
-//!       .sql("SELECT * FROM demo").unwrap()
+//!       .sql("SELECT * FROM demo").await.unwrap()
 //!       .collect()
 //!       .await.unwrap();
 //! };
@@ -25,11 +25,13 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
+use async_trait::async_trait;
+use datafusion::datasource::file_format::parquet::ParquetFormat;
+use datafusion::datasource::file_format::FileFormat;
+use datafusion::datasource::object_store::local::LocalFileSystem;
 use datafusion::datasource::{PartitionedFile, TableProvider};
-use datafusion::logical_plan::{combine_filters, Expr};
-use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion::physical_plan::parquet::{ParquetExec, ParquetPartition};
+use datafusion::logical_plan::Expr;
+use datafusion::physical_plan::file_format::PhysicalPlanConfig;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::{ColumnStatistics, Statistics};
 use datafusion::scalar::ScalarValue;
@@ -178,6 +180,41 @@ impl delta::DeltaTable {
     }
 }
 
+// TODO: uncomment this when datafusion supports per partitioned file stats
+// fn add_action_df_stats(add: &action::Add, schema: &schema::Schema) -> Statistics {
+//     if let Ok(Some(statistics)) = add.get_stats() {
+//         Statistics {
+//             num_rows: Some(statistics.num_records as usize),
+//             total_byte_size: Some(add.size as usize),
+//             column_statistics: Some(
+//                 schema
+//                     .get_fields()
+//                     .iter()
+//                     .map(|field| ColumnStatistics {
+//                         null_count: statistics
+//                             .null_count
+//                             .get(field.get_name())
+//                             .and_then(|f| f.as_value().map(|v| v as usize)),
+//                         max_value: statistics
+//                             .max_values
+//                             .get(field.get_name())
+//                             .and_then(|f| to_scalar_value(f.as_value()?)),
+//                         min_value: statistics
+//                             .min_values
+//                             .get(field.get_name())
+//                             .and_then(|f| to_scalar_value(f.as_value()?)),
+//                         distinct_count: None, // TODO: distinct
+//                     })
+//                     .collect(),
+//             ),
+//             is_exact: true,
+//         }
+//     } else {
+//         Statistics::default()
+//     }
+// }
+
+#[async_trait]
 impl TableProvider for delta::DeltaTable {
     fn schema(&self) -> Arc<ArrowSchema> {
         Arc::new(
@@ -188,7 +225,7 @@ impl TableProvider for delta::DeltaTable {
         )
     }
 
-    fn scan(
+    async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
         batch_size: usize,
@@ -199,69 +236,34 @@ impl TableProvider for delta::DeltaTable {
             delta::DeltaTable::schema(self).unwrap(),
         )?);
         let filenames = self.get_file_uris();
-        let metrics = ExecutionPlanMetricsSet::new();
 
         let partitions = filenames
             .into_iter()
             .zip(self.get_active_add_actions())
             .enumerate()
-            .map(|(idx, (fname, action))| {
-                let statistics = if let Ok(Some(statistics)) = action.get_stats() {
-                    Statistics {
-                        num_rows: Some(statistics.num_records as usize),
-                        total_byte_size: Some(action.size as usize),
-                        column_statistics: Some(
-                            self.schema()
-                                .unwrap()
-                                .get_fields()
-                                .iter()
-                                .map(|field| ColumnStatistics {
-                                    null_count: statistics
-                                        .null_count
-                                        .get(field.get_name())
-                                        .and_then(|f| f.as_value().map(|v| v as usize)),
-                                    max_value: statistics
-                                        .max_values
-                                        .get(field.get_name())
-                                        .and_then(|f| to_scalar_value(f.as_value()?)),
-                                    min_value: statistics
-                                        .min_values
-                                        .get(field.get_name())
-                                        .and_then(|f| to_scalar_value(f.as_value()?)),
-                                    distinct_count: None, // TODO: distinct
-                                })
-                                .collect(),
-                        ),
-                        is_exact: true,
-                    }
-                } else {
-                    Statistics::default()
-                };
-
-                Ok(ParquetPartition::new(
-                    vec![PartitionedFile {
-                        path: fname,
-                        statistics,
-                    }],
-                    idx,
-                    metrics.clone(),
-                ))
+            .map(|(_idx, (fname, action))| {
+                // TODO: no way to associate stats per file in datafusion at the moment, see:
+                // https://github.com/apache/arrow-datafusion/issues/1301
+                Ok(vec![PartitionedFile::new(fname, action.size as u64)])
             })
             .collect::<datafusion::error::Result<_>>()?;
-        let predicate_builder = combine_filters(filters).and_then(|predicate_expr| {
-            PruningPredicate::try_new(&predicate_expr, schema.clone()).ok()
-        });
 
-        Ok(Arc::new(ParquetExec::new(
-            partitions,
-            schema,
-            projection.clone(),
-            self.datafusion_table_statistics(),
-            ExecutionPlanMetricsSet::new(),
-            predicate_builder,
-            batch_size,
-            limit,
-        )))
+        let df_object_store = Arc::new(LocalFileSystem {});
+        ParquetFormat::default()
+            .create_physical_plan(
+                PhysicalPlanConfig {
+                    object_store: df_object_store,
+                    file_schema: schema,
+                    file_groups: partitions,
+                    statistics: self.datafusion_table_statistics(),
+                    projection: projection.clone(),
+                    batch_size,
+                    limit,
+                    table_partition_cols: self.get_metadata().unwrap().partition_columns.clone(),
+                },
+                filters,
+            )
+            .await
     }
 
     fn as_any(&self) -> &dyn Any {
