@@ -10,7 +10,8 @@ pub mod parquet2_read;
 
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::Map;
+use serde_json::Value;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -75,9 +76,7 @@ fn decode_path(raw_path: &str) -> Result<String, ActionError> {
     percent_decode(raw_path.as_bytes())
         .decode_utf8()
         .map(|c| c.to_string())
-        .map_err(|e| {
-            ActionError::InvalidField(format!("Decode path failed for action: {}", e.to_string(),))
-        })
+        .map_err(|e| ActionError::InvalidField(format!("Decode path failed for action: {}", e)))
 }
 
 /// Struct used to represent minValues and maxValues in add action statistics.
@@ -838,6 +837,8 @@ impl Protocol {
     }
 }
 
+type CommitInfo = Map<String, Value>;
+
 /// Represents an action in the Delta log. The Delta log is an aggregate of all actions performed
 /// on the table, so the full list of actions is required to properly read a table.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -855,7 +856,7 @@ pub enum Action {
     /// Describes the minimum reader and writer versions required to read or write to the table.
     protocol(Protocol),
     /// Describes commit provenance information for the table.
-    commitInfo(Map<String, Value>),
+    commitInfo(CommitInfo),
 }
 
 impl Action {

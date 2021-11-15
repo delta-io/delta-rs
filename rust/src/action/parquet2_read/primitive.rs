@@ -142,7 +142,7 @@ pub fn for_each_primitive_field_value<T, ActType, SetFn>(
 where
     T: NativeType,
     ActType: ActionVariant,
-    SetFn: Fn((&mut ActType, T)) -> (),
+    SetFn: Fn(&mut ActType, T),
 {
     if let ParquetType::PrimitiveType { physical_type, .. } = descriptor.type_() {
         if physical_type != &T::TYPE {
@@ -159,14 +159,14 @@ where
             let some_value_iter = SomePrimitiveValueIter::<T>::new(page, descriptor);
             for (idx, value) in some_value_iter {
                 let a = actions[idx].get_or_insert_with(ActType::default_action);
-                set_fn((ActType::try_mut_from_action(a)?, value));
+                set_fn(ActType::try_mut_from_action(a)?, value);
             }
         }
         (Encoding::PlainDictionary | Encoding::RleDictionary, Some(dict)) => {
             let some_value_iter = SomeDictionaryPrimitiveValueIter::new(page, descriptor, dict);
             for (idx, value) in some_value_iter {
                 let a = actions[idx].get_or_insert_with(ActType::default_action);
-                set_fn((ActType::try_mut_from_action(a)?, value));
+                set_fn(ActType::try_mut_from_action(a)?, value);
             }
         }
         _ => todo!(),

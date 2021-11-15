@@ -49,7 +49,7 @@ pub fn for_each_boolean_field_value<ActType, SetFn>(
 ) -> Result<(), ParseError>
 where
     ActType: ActionVariant,
-    SetFn: Fn((&mut ActType, bool)) -> (),
+    SetFn: Fn(&mut ActType, bool),
 {
     if let ParquetType::PrimitiveType { physical_type, .. } = descriptor.type_() {
         if physical_type != &PhysicalType::Boolean {
@@ -63,7 +63,7 @@ where
     let some_value_iter = SomeBooleanValueIter::new(page, descriptor);
     for (idx, value) in some_value_iter {
         let a = actions[idx].get_or_insert_with(ActType::default_action);
-        set_fn((ActType::try_mut_from_action(a)?, value));
+        set_fn(ActType::try_mut_from_action(a)?, value);
     }
 
     Ok(())

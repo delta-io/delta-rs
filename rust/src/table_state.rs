@@ -40,8 +40,14 @@ impl DeltaTableState {
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
         let mut new_state = DeltaTableState::default();
-        for line in reader.lines() {
-            let action: action::Action = serde_json::from_str(line?.as_str())?;
+        for (idx, line) in reader.lines().enumerate() {
+            let action: action::Action = serde_json::from_str(line?.as_str()).map_err(|e| {
+                ApplyLogError::InvalidJsonLog {
+                    path: commit_uri.clone(),
+                    line: idx + 1,
+                    source: e,
+                }
+            })?;
             new_state.process_action(action, true)?;
         }
 
@@ -93,7 +99,7 @@ impl DeltaTableState {
 
                 for row_group in metadata.row_groups {
                     for action in actions_from_row_group(row_group, &mut reader)
-                        .map_err(|e| action::ActionError::from(e))?
+                        .map_err(action::ActionError::from)?
                     {
                         new_state.process_action(action, require_tombstones)?;
                     }
@@ -222,7 +228,8 @@ impl DeltaTableState {
                 self.min_writer_version = v.min_writer_version;
             }
             action::Action::metaData(v) => {
-                let md = DeltaTableMetaData::try_from(v)?;
+                let md = DeltaTableMetaData::try_from(v)
+                    .map_err(|e| ApplyLogError::InvalidJsonSchema { source: e })?;
                 self.tombstone_retention_millis = delta_config::TOMBSTONE_RETENTION
                     .get_interval_from_metadata(&md)?
                     .as_millis() as i64;

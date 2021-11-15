@@ -30,6 +30,7 @@ mod rename;
 /// Patches welcome.
 /// * Support for other platforms are not implemented at the moment.
 #[derive(Default, Debug)]
+#[allow(dead_code)]
 pub struct FileStorageBackend {
     root: String,
 }
@@ -102,7 +103,7 @@ impl StorageBackend for FileStorageBackend {
         if let Some(parent) = Path::new(path).parent() {
             fs::create_dir_all(parent).await?;
         }
-        let tmp_path = &format!("{}_{}", path, Uuid::new_v4().to_string());
+        let tmp_path = &format!("{}_{}", path, Uuid::new_v4());
         let mut f = fs::OpenOptions::new()
             .create(true)
             .truncate(true)

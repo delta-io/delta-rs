@@ -6,7 +6,7 @@
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use log::*;
+use log::debug;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -315,10 +315,19 @@ pub enum ApplyLogError {
     #[error("End of transaction log")]
     EndOfLog,
     /// Error returned when the JSON of the log record is invalid.
-    #[error("Invalid JSON in log record")]
-    InvalidJson {
+    #[error("Invalid JSON in log record `{path}`: {source}")]
+    InvalidJsonLog {
+        /// URI for json log file.
+        path: String,
+        /// Line offset for the invalid action JSON
+        line: usize,
         /// JSON error details returned when reading the JSON log record.
-        #[from]
+        source: serde_json::error::Error,
+    },
+    /// Error returned when the JSON of the metadata schema string is invalid.
+    #[error("Invalid JSON in metadata schema string: {source}")]
+    InvalidJsonSchema {
+        /// JSON error details returned when reading the JSON from metadata schema.
         source: serde_json::error::Error,
     },
     /// Error returned when the storage failed to read the log content.
@@ -887,6 +896,7 @@ impl DeltaTable {
                     .iter()
                     .map(|p| DeltaTablePartition::from_partition_value(p, ""))
                     .collect::<Vec<DeltaTablePartition>>();
+
                 filters
                     .iter()
                     .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
@@ -1373,14 +1383,18 @@ impl<'a> DeltaTransaction<'a> {
         bytes: &[u8],
         partitions: Option<Vec<(String, String)>>,
     ) -> Result<(), DeltaTableError> {
-        let mut partition_values = HashMap::new();
-        if let Some(partitions) = &partitions {
-            for (key, value) in partitions {
-                partition_values.insert(key.clone(), Some(value.clone()));
-            }
-        }
+        let path = self.generate_parquet_filename(&partitions);
 
-        let path = self.generate_parquet_filename(partitions);
+        let partition_values = {
+            let mut partition_values = HashMap::new();
+            if let Some(partitions) = &partitions {
+                for (key, value) in partitions {
+                    partition_values.insert(key.clone(), Some(value.clone()));
+                }
+            }
+            partition_values
+        };
+
         let parquet_uri = self
             .delta_table
             .storage
@@ -1412,7 +1426,7 @@ impl<'a> DeltaTransaction<'a> {
         Ok(())
     }
 
-    fn generate_parquet_filename(&self, partitions: Option<Vec<(String, String)>>) -> String {
+    fn generate_parquet_filename(&self, partitions: &Option<Vec<(String, String)>>) -> String {
         /*
          * The specific file naming for parquet is not well documented including the preceding five
          * zeros and the trailing c000 string
@@ -1642,7 +1656,7 @@ mod tests {
             (String::from("col1"), String::from("a")),
             (String::from("col2"), String::from("b")),
         ];
-        let parquet_filename = txn.generate_parquet_filename(Some(partitions));
+        let parquet_filename = txn.generate_parquet_filename(&Some(partitions));
         if cfg!(windows) {
             assert!(parquet_filename.contains("col1=a\\col2=b\\part-00000-"));
         } else {
