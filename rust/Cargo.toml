@@ -56,9 +56,9 @@ async-stream = { version = "0.3.2", default-features = true, optional = true }
 # High-level writer
 parquet-format = "~2.6.1"
 
-arrow  = { git = "https://github.com/apache/arrow-rs", rev = "615d7830fdaf994ebd32ca1e349daf68b18c99b0" }
-parquet = {  git = "https://github.com/apache/arrow-rs", rev = "615d7830fdaf994ebd32ca1e349daf68b18c99b0" }
-datafusion = { git = "https://github.com/houqp/arrow-datafusion", rev = "af34cec956c8d67b2520a266e74683d7bdcb3099", optional = true }
+arrow = "6.1.0"
+parquet = "6.1.0"
+datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "e62cb455955e120cfe9d8935aa3ebc8726369d15", optional = true }
 
 crossbeam = { version = "0", optional = true }
 
