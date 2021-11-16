@@ -16,7 +16,8 @@ mod datafusion {
         ctx.register_table("demo", Arc::new(table))?;
 
         let batches = ctx
-            .sql("SELECT id FROM demo WHERE id > 5 ORDER BY id ASC")?
+            .sql("SELECT id FROM demo WHERE id > 5 ORDER BY id ASC")
+            .await?
             .collect()
             .await?;
 
@@ -40,7 +41,8 @@ mod datafusion {
         ctx.register_table("dates", Arc::new(table))?;
 
         let batches = ctx
-            .sql("SELECT date from dates WHERE dayOfYear = 2")?
+            .sql("SELECT date from dates WHERE dayOfYear = 2")
+            .await?
             .collect()
             .await?;
 
@@ -78,7 +80,8 @@ mod datafusion {
         ctx.register_table("test_table", Arc::new(table))?;
 
         let batches = ctx
-            .sql("SELECT max(value), min(value) FROM test_table")?
+            .sql("SELECT max(value), min(value) FROM test_table")
+            .await?
             .collect()
             .await?;
 

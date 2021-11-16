@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin==0.11.4"]
+requires = ["maturin==0.11.5"]
 build-backend = "maturin"
 
 [project]
@@ -73,4 +73,8 @@ exclude = "venv"
 addopts = "--cov=deltalake -v -m 'not integration'"
 testpaths = [
     "tests",
+]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "s3: marks tests as integration tests with S3 (deselect with '-m \"not s3\"')",
 ]
