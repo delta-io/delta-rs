@@ -122,6 +122,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "async-timer"
+version = "1.0.0-beta.7"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9d962799a5863fdf06fbf594e04102130582d010379137e9a98a7e2e693a5885"
+dependencies = [
+ "error-code",
+ "libc",
+ "wasm-bindgen",
+ "winapi",
+]
+
+[[package]]
 name = "async-trait"
 version = "0.1.51"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -152,7 +164,7 @@ checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 [[package]]
 name = "azure_core"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=2f1ca2e57801c81143b871fc5bf0df8e7250a56c#2f1ca2e57801c81143b871fc5bf0df8e7250a56c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=2f2caff49b3e1ba08f430f82e16994670dddda95#2f2caff49b3e1ba08f430f82e16994670dddda95"
 dependencies = [
  "async-trait",
  "base64",
@@ -176,11 +188,31 @@ dependencies = [
 ]
 
 [[package]]
+name = "azure_identity"
+version = "0.1.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=2f2caff49b3e1ba08f430f82e16994670dddda95#2f2caff49b3e1ba08f430f82e16994670dddda95"
+dependencies = [
+ "async-timer",
+ "async-trait",
+ "azure_core",
+ "chrono",
+ "futures",
+ "log",
+ "oauth2",
+ "reqwest",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "url",
+]
+
+[[package]]
 name = "azure_storage"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=2f1ca2e57801c81143b871fc5bf0df8e7250a56c#2f1ca2e57801c81143b871fc5bf0df8e7250a56c"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=2f2caff49b3e1ba08f430f82e16994670dddda95#2f2caff49b3e1ba08f430f82e16994670dddda95"
 dependencies = [
  "RustyXML",
+ "async-trait",
  "azure_core",
  "base64",
  "bytes",
@@ -589,6 +621,7 @@ dependencies = [
  "async-stream",
  "async-trait",
  "azure_core",
+ "azure_identity",
  "azure_storage",
  "bytes",
  "cfg-if",
@@ -600,7 +633,6 @@ dependencies = [
  "errno",
  "futures",
  "glibc_version 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "indexmap",
  "lazy_static",
  "libc",
  "log",
@@ -632,11 +664,11 @@ dependencies = [
 
 [[package]]
 name = "deltalake-python"
-version = "0.5.3"
+version = "0.5.4"
 dependencies = [
  "chrono",
  "deltalake",
- "env_logger 0.9.0",
+ "env_logger 0.7.1",
  "pyo3",
  "reqwest",
  "serde_json",
@@ -761,6 +793,16 @@ checksum = "aa68f1b12764fab894d2755d2518754e71b4fd80ecfb822714a1206c2aab39bf"
 dependencies = [
  "cc",
  "libc",
+]
+
+[[package]]
+name = "error-code"
+version = "2.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b5115567ac25674e0043e472be13d14e537f37ea8aa4bdc4aef0c89add1db1ff"
+dependencies = [
+ "libc",
+ "str-buf",
 ]
 
 [[package]]
@@ -2624,6 +2666,12 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "213701ba3370744dcd1a12960caa4843b3d68b4d1c0a5d575e0d65b2ee9d16c0"
 
 [[package]]
+name = "str-buf"
+version = "1.0.5"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d44a3643b4ff9caf57abcee9c2c621d6c03d9135e0d8b589bd9afb5992cb176a"
+
+[[package]]
 name = "strsim"
 version = "0.10.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2655,9 +2703,9 @@ checksum = "6bdef32e8150c2a081110b42772ffe7d7c9032b606bc226c8260fd97e0976601"
 
 [[package]]
 name = "syn"
-version = "1.0.81"
+version = "1.0.77"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f2afee18b8beb5a596ecb4a2dce128c719b4ba399d34126b9e4396e3f9860966"
+checksum = "5239bc68e0fef57495900cfea4e8dc75596d9a319d7e16b1e0a440d24e6fe0a0"
 dependencies = [
  "proc-macro2",
  "quote",
