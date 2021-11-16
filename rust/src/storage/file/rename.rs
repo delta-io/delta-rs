@@ -30,6 +30,11 @@ mod imp {
                 return Err(StorageError::AlreadyExists(to_path));
             }
             std::fs::rename(&from_path, &to_path).map_err(|e| {
+                let to_exists = std::fs::metadata(&to_path).is_ok();
+                if to_exists {
+                    return StorageError::AlreadyExists(to_path);
+                }
+
                 StorageError::other_std_io_err(format!(
                     "failed to rename {} to {}: {}",
                     from_path, to_path, e
