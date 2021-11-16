@@ -5,10 +5,10 @@ mod azure {
      *
      * To prepare test execution, make sure a container / file system with the name "simple" exists within the account
      * and upload the contents of ./rust/tests/data/simple_table into that file system.
-     * 
+     *
      * Set the environment variables used for authentication as outlined in rust/src/storage/azure/mod.rs
      * Also set AZURE_STORAGE_ACCOUNT for setting up the test.
-     * 
+     *
      * remove the ignore statement below and execute tests via 'cargo test --features azure'
      */
     #[ignore]
@@ -16,10 +16,11 @@ mod azure {
     async fn test_azure_simple() {
         let account = std::env::var("AZURE_STORAGE_ACCOUNT").unwrap();
         // https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri
-        let table =
-            deltalake::open_table(format!("abfss://simple@{}.dfs.core.windows.net/", account).as_str())
-                .await
-                .unwrap();
+        let table = deltalake::open_table(
+            format!("abfss://simple@{}.dfs.core.windows.net/", account).as_str(),
+        )
+        .await
+        .unwrap();
         assert_eq!(table.version, 4);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
