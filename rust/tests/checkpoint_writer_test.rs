@@ -33,7 +33,7 @@ mod simple_checkpoint {
             .unwrap();
 
         // Write a checkpoint
-        checkpoints::create_checkpoint_from_table(&table)
+        checkpoints::create_checkpoint_from_table_without_cleaning_logs(&table)
             .await
             .unwrap();
 
@@ -46,7 +46,7 @@ mod simple_checkpoint {
         assert_eq!(5, version);
 
         table.load_version(10).await.unwrap();
-        checkpoints::create_checkpoint_from_table(&table)
+        checkpoints::create_checkpoint_from_table_without_cleaning_logs(&table)
             .await
             .unwrap();
 
@@ -96,6 +96,46 @@ mod simple_checkpoint {
                 _ => {}
             }
         }
+    }
+}
+
+mod delete_expired_delta_log_in_checkpoint {
+    use super::*;
+
+    #[tokio::test]
+    async fn test_delete_expired_logs() {
+        let mut table = fs_common::create_table(
+            "./tests/data/checkpoints_with_expired_logs/expired",
+            Some(hashmap! {
+                delta_config::LOG_RETENTION.key.clone() => Some("interval 1 second".to_string())
+            }),
+        )
+        .await;
+
+        let a1 = fs_common::add(3 * 60 * 1000); // 3 mins ago,
+        let a2 = fs_common::add(2 * 60 * 1000); // 2 mins ago,
+        assert_eq!(1, fs_common::commit_add(&mut table, &a1).await);
+        assert_eq!(2, fs_common::commit_add(&mut table, &a2).await);
+
+        table.load_version(0).await.expect("Cannot load version 0");
+        table.load_version(1).await.expect("Cannot load version 1");
+
+        checkpoints::create_checkpoint_from_table(&table)
+            .await
+            .unwrap();
+        table.update().await.unwrap(); // make table to read the checkpoint
+        assert_eq!(table.get_files(), vec![a1.path.as_str(), a2.path.as_str()]);
+
+        table
+            .load_version(0)
+            .await
+            .expect_err("Should not load version 0");
+        table
+            .load_version(1)
+            .await
+            .expect_err("Should not load version 1");
+
+        table.load_version(2).await.expect("Cannot load version 2");
     }
 }
 

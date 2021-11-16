@@ -4,19 +4,27 @@ use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
 use arrow::json::reader::Decoder;
 use chrono::Datelike;
+use chrono::Duration;
+use chrono::Utc;
+use chrono::MIN_DATETIME;
+use futures::StreamExt;
+use lazy_static::lazy_static;
 use log::*;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use parquet::file::writer::InMemoryWriteableCursor;
+use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::iter::Iterator;
+use std::ops::Add;
 
 use super::action;
 use super::delta_arrow::delta_log_schema_for_table;
 use super::open_table_with_version;
 use super::schema::*;
-use super::storage::{StorageBackend, StorageError};
+use super::storage::{ObjectMeta, StorageBackend, StorageError};
 use super::table_state::DeltaTableState;
 use super::writer::time_utils;
 use super::{CheckPoint, DeltaTableError};
@@ -88,6 +96,18 @@ pub async fn create_checkpoint_from_table_uri(
         table_uri,
     )
     .await?;
+
+    if table.version >= 0 {
+        let deleted_log_num = cleanup_expired_logs(
+            table.version + 1,
+            table.storage.as_ref(),
+            table.get_state(),
+            table_uri,
+        )
+        .await?;
+        debug!("Deleted {:?} log files.", deleted_log_num);
+    }
+
     Ok(())
 }
 
@@ -100,6 +120,34 @@ pub async fn create_checkpoint_from_table(table: &DeltaTable) -> Result<(), Chec
         &table.table_uri,
     )
     .await?;
+
+    if table.version >= 0 {
+        let deleted_log_num = cleanup_expired_logs(
+            table.version + 1,
+            table.storage.as_ref(),
+            table.get_state(),
+            &table.table_uri,
+        )
+        .await?;
+        debug!("Deleted {:?} log files.", deleted_log_num);
+    }
+
+    Ok(())
+}
+
+/// Creates checkpoint at `table.version` for given `table`, without deleting expired log files.
+/// Exposed for tests.
+pub async fn create_checkpoint_from_table_without_cleaning_logs(
+    table: &DeltaTable,
+) -> Result<(), CheckpointError> {
+    create_checkpoint(
+        table.version,
+        table.get_state(),
+        table.storage.as_ref(),
+        &table.table_uri,
+    )
+    .await?;
+
     Ok(())
 }
 
@@ -138,6 +186,150 @@ async fn create_checkpoint(
         .await?;
 
     Ok(())
+}
+
+async fn flush_delete_files<T: Fn(&(DeltaDataTypeVersion, ObjectMeta)) -> bool>(
+    storage: &dyn StorageBackend,
+    maybe_delete_files: &mut Vec<(DeltaDataTypeVersion, ObjectMeta)>,
+    files_to_delete: &mut Vec<(DeltaDataTypeVersion, ObjectMeta)>,
+    should_delete_file: T,
+) -> Result<i32, DeltaTableError> {
+    if !maybe_delete_files.is_empty() && should_delete_file(maybe_delete_files.last().unwrap()) {
+        files_to_delete.append(maybe_delete_files);
+    }
+
+    let deleted = files_to_delete
+        .iter_mut()
+        .map(|file| async move {
+            match storage.delete_obj(&file.1.path).await {
+                Ok(_) => Ok(1),
+                Err(e) => Err(DeltaTableError::from(e)),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut deleted_num = 0;
+    for x in deleted {
+        match x.await {
+            Ok(_) => deleted_num += 1,
+            Err(e) => return Err(e),
+        }
+    }
+
+    files_to_delete.clear();
+
+    Ok(deleted_num)
+}
+
+/// Delete expires log files before given version from table. The table log retention is based on
+/// the `logRetentionDuration` property of the Delta Table, 30 days by default.
+async fn cleanup_expired_logs(
+    version: DeltaDataTypeVersion,
+    storage: &dyn StorageBackend,
+    state: &DeltaTableState,
+    table_uri: &str,
+) -> Result<i32, DeltaTableError> {
+    lazy_static! {
+        static ref DELTA_LOG_REGEX: Regex =
+            Regex::new(r#"^*[/\\]_delta_log[/\\](\d{20})\.(json|checkpoint)*$"#).unwrap();
+    }
+
+    let log_retention_timestamp = Utc::now().timestamp_millis() - state.log_retention_millis();
+    let mut deleted_log_num = 0;
+
+    // Get file objects from table.
+    let log_uri = storage.join_path(table_uri, "_delta_log");
+    let mut candidates: Vec<(DeltaDataTypeVersion, ObjectMeta)> = Vec::new();
+    let mut stream = storage.list_objs(&log_uri).await?;
+    while let Some(obj_meta) = stream.next().await {
+        let obj_meta = obj_meta?;
+
+        let ts = obj_meta.modified.timestamp();
+
+        if let Some(captures) = DELTA_LOG_REGEX.captures(&obj_meta.path) {
+            let log_ver_str = captures.get(1).unwrap().as_str();
+            let log_ver: DeltaDataTypeVersion = log_ver_str.parse().unwrap();
+            if log_ver < version && ts <= log_retention_timestamp {
+                candidates.push((log_ver, obj_meta));
+            }
+        }
+    }
+
+    // Sort files by file object version.
+    candidates.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut last_file: (i64, ObjectMeta) = (
+        0,
+        ObjectMeta {
+            path: String::new(),
+            modified: MIN_DATETIME,
+        },
+    );
+    let file_needs_time_adjustment =
+        |current_file: &(i64, ObjectMeta), last_file: &(i64, ObjectMeta)| {
+            last_file.0 < current_file.0
+                && last_file.1.modified.timestamp() >= current_file.1.modified.timestamp()
+        };
+
+    let should_delete_file = |file: &(i64, ObjectMeta)| {
+        file.1.modified.timestamp() <= log_retention_timestamp && file.0 < version
+    };
+
+    let mut maybe_delete_files: Vec<(DeltaDataTypeVersion, ObjectMeta)> = Vec::new();
+    let mut files_to_delete: Vec<(DeltaDataTypeVersion, ObjectMeta)> = Vec::new();
+
+    // Init
+    if !candidates.is_empty() {
+        let removed = candidates.remove(0);
+        last_file = (removed.0, removed.1.clone());
+        maybe_delete_files.push(removed);
+    }
+
+    let mut current_file: (DeltaDataTypeVersion, ObjectMeta);
+    loop {
+        if candidates.is_empty() {
+            deleted_log_num += flush_delete_files(
+                storage,
+                &mut maybe_delete_files,
+                &mut files_to_delete,
+                should_delete_file,
+            )
+            .await?;
+
+            return Ok(deleted_log_num);
+        }
+        current_file = candidates.remove(0);
+
+        if file_needs_time_adjustment(&current_file, &last_file) {
+            let updated = (
+                current_file.0,
+                ObjectMeta {
+                    path: current_file.1.path.clone(),
+                    modified: last_file.1.modified.add(Duration::seconds(1)),
+                },
+            );
+            maybe_delete_files.push(updated);
+            last_file = (
+                maybe_delete_files.last().unwrap().0,
+                maybe_delete_files.last().unwrap().1.clone(),
+            );
+        } else {
+            let deleted = flush_delete_files(
+                storage,
+                &mut maybe_delete_files,
+                &mut files_to_delete,
+                should_delete_file,
+            )
+            .await?;
+            if deleted == 0 {
+                return Ok(deleted_log_num);
+            }
+            deleted_log_num += deleted;
+
+            maybe_delete_files.push(current_file.clone());
+            last_file = current_file;
+        }
+    }
 }
 
 fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, CheckpointError> {

@@ -481,6 +481,15 @@ pub struct ObjectMeta {
     pub modified: DateTime<Utc>,
 }
 
+impl Clone for ObjectMeta {
+    fn clone(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            modified: self.modified,
+        }
+    }
+}
+
 /// Abstractions for underlying blob storages hosting the Delta table. To add support for new cloud
 /// or local storage systems, simply implement this trait.
 #[async_trait::async_trait]
