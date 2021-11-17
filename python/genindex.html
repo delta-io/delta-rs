@@ -27,7 +27,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.5.3
+                0.5.4
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -74,11 +74,13 @@
  | <a href="#C"><strong>C</strong></a>
  | <a href="#D"><strong>D</strong></a>
  | <a href="#F"><strong>F</strong></a>
+ | <a href="#G"><strong>G</strong></a>
  | <a href="#H"><strong>H</strong></a>
  | <a href="#I"><strong>I</strong></a>
  | <a href="#L"><strong>L</strong></a>
  | <a href="#M"><strong>M</strong></a>
  | <a href="#N"><strong>N</strong></a>
+ | <a href="#O"><strong>O</strong></a>
  | <a href="#P"><strong>P</strong></a>
  | <a href="#S"><strong>S</strong></a>
  | <a href="#T"><strong>T</strong></a>
@@ -99,8 +101,12 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api_reference.html#deltalake.table.Metadata.configuration">configuration (deltalake.table.Metadata property)</a>
 </li>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.copy_file">copy_file() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.create_dir">create_dir() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
       <li><a href="api_reference.html#deltalake.table.Metadata.created_time">created_time (deltalake.table.Metadata property)</a>
 </li>
   </ul></td>
@@ -113,11 +119,28 @@
 </li>
       <li><a href="api_reference.html#deltalake.schema.DataType">DataType (class in deltalake.schema)</a>
 </li>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.delete_dir">delete_dir() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.delete_dir_contents">delete_dir_contents() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.delete_file">delete_file() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.delete_root_dir_contents">delete_root_dir_contents() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
       <li>
     deltalake.data_catalog
 
       <ul>
         <li><a href="api_reference.html#module-deltalake.data_catalog">module</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li>
+    deltalake.fs
+
+      <ul>
+        <li><a href="api_reference.html#module-deltalake.fs">module</a>
 </li>
       </ul></li>
       <li>
@@ -127,8 +150,6 @@
         <li><a href="api_reference.html#module-deltalake.schema">module</a>
 </li>
       </ul></li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     deltalake.table
 
@@ -136,6 +157,8 @@
         <li><a href="api_reference.html#module-deltalake.table">module</a>
 </li>
       </ul></li>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler">DeltaStorageHandler (class in deltalake.fs)</a>
+</li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable">DeltaTable (class in deltalake.table)</a>
 </li>
       <li><a href="api_reference.html#deltalake.table.Metadata.description">description (deltalake.table.Metadata property)</a>
@@ -163,6 +186,20 @@
       <li><a href="api_reference.html#deltalake.schema.DataType.from_dict">from_dict() (deltalake.schema.DataType class method)</a>
 </li>
       <li><a href="api_reference.html#deltalake.schema.Schema.from_json">from_json() (deltalake.schema.Schema class method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="G">G</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.get_file_info">get_file_info() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.get_file_info_selector">get_file_info_selector() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.get_type_name">get_type_name() (deltalake.fs.DeltaStorageHandler method)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -204,13 +241,13 @@
 </li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.metadata">metadata() (deltalake.table.DeltaTable method)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li>
     module
 
       <ul>
         <li><a href="api_reference.html#module-deltalake.data_catalog">deltalake.data_catalog</a>
+</li>
+        <li><a href="api_reference.html#module-deltalake.fs">deltalake.fs</a>
 </li>
         <li><a href="api_reference.html#module-deltalake.schema">deltalake.schema</a>
 </li>
@@ -218,12 +255,36 @@
 </li>
       </ul></li>
   </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.move">move() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
+  </ul></td>
 </tr></table>
 
 <h2 id="N">N</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api_reference.html#deltalake.table.Metadata.name">name (deltalake.table.Metadata property)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.normalize_path">normalize_path() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="O">O</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.open_append_stream">open_append_stream() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.open_input_file">open_input_file() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.open_input_stream">open_input_stream() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.open_output_stream">open_output_stream() (deltalake.fs.DeltaStorageHandler method)</a>
 </li>
   </ul></td>
 </tr></table>

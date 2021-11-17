@@ -29,7 +29,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.5.3
+                0.5.4
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -46,6 +46,7 @@
 <li class="toctree-l2"><a class="reference internal" href="#module-deltalake.table">DeltaTable</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#module-deltalake.schema">DeltaSchema</a></li>
 <li class="toctree-l2"><a class="reference internal" href="#module-deltalake.data_catalog">DataCatalog</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#module-deltalake.fs">DeltaStorageHandler</a></li>
 </ul>
 </li>
 </ul>
@@ -80,7 +81,7 @@
 <span id="deltatable"></span><h2>DeltaTable<a class="headerlink" href="#module-deltalake.table" title="Permalink to this headline"></a></h2>
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable">
-<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">deltalake.table.</span></span><span class="sig-name descname"><span class="pre">DeltaTable</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.table.</span></span><span class="sig-name descname"><span class="pre">DeltaTable</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable" title="Permalink to this definition"></a></dt>
 <dd><p>Create a DeltaTable instance.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -165,7 +166,7 @@ The supported type for value is str. Use empty string <cite>‘’</cite> for Nu
 
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.from_data_catalog">
-<em class="property"><span class="pre">classmethod</span> </em><span class="sig-name descname"><span class="pre">from_data_catalog</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_catalog</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">database_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">table_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data_catalog_id</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.from_data_catalog" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_data_catalog</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_catalog</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">database_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">table_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data_catalog_id</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.from_data_catalog" title="Permalink to this definition"></a></dt>
 <dd><p>Create the Delta Table from a Data Catalog.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -285,7 +286,7 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p></li>
 <li><p><strong>columns</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>]</em>) – The columns to project. This can be a list of column names to include (order and duplicates will be preserved)</p></li>
-<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>pyarrow._fs.FileSystem</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
+<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><em>pyarrow._fs.FileSystem</em><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
@@ -305,7 +306,7 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p></li>
-<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>pyarrow._fs.FileSystem</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
+<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><em>pyarrow._fs.FileSystem</em><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
@@ -326,7 +327,7 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p></li>
 <li><p><strong>columns</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>]</em>) – The columns to project. This can be a list of column names to include (order and duplicates will be preserved)</p></li>
-<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>pyarrow._fs.FileSystem</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
+<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><em>pyarrow._fs.FileSystem</em><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
@@ -388,7 +389,7 @@ newer versions.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.table.Metadata">
-<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">deltalake.table.</span></span><span class="sig-name descname"><span class="pre">Metadata</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.Metadata" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.table.</span></span><span class="sig-name descname"><span class="pre">Metadata</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.Metadata" title="Permalink to this definition"></a></dt>
 <dd><p>Create a Metadata instance.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -397,37 +398,37 @@ newer versions.</p>
 </dl>
 <dl class="py property">
 <dt class="sig sig-object py" id="deltalake.table.Metadata.configuration">
-<em class="property"><span class="pre">property</span> </em><span class="sig-name descname"><span class="pre">configuration</span></span><em class="property"><span class="pre">:</span> <span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#deltalake.table.Metadata.configuration" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">configuration</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#deltalake.table.Metadata.configuration" title="Permalink to this definition"></a></dt>
 <dd><p>Return the DeltaTable properties.</p>
 </dd></dl>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="deltalake.table.Metadata.created_time">
-<em class="property"><span class="pre">property</span> </em><span class="sig-name descname"><span class="pre">created_time</span></span><em class="property"><span class="pre">:</span> <span class="pre">int</span></em><a class="headerlink" href="#deltalake.table.Metadata.created_time" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">created_time</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">int</span></em><a class="headerlink" href="#deltalake.table.Metadata.created_time" title="Permalink to this definition"></a></dt>
 <dd><p>Return The time when this metadata action is created, in milliseconds since the Unix epoch of the DeltaTable.</p>
 </dd></dl>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="deltalake.table.Metadata.description">
-<em class="property"><span class="pre">property</span> </em><span class="sig-name descname"><span class="pre">description</span></span><em class="property"><span class="pre">:</span> <span class="pre">str</span></em><a class="headerlink" href="#deltalake.table.Metadata.description" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">description</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">str</span></em><a class="headerlink" href="#deltalake.table.Metadata.description" title="Permalink to this definition"></a></dt>
 <dd><p>Return the user-provided description of the DeltaTable.</p>
 </dd></dl>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="deltalake.table.Metadata.id">
-<em class="property"><span class="pre">property</span> </em><span class="sig-name descname"><span class="pre">id</span></span><em class="property"><span class="pre">:</span> <span class="pre">int</span></em><a class="headerlink" href="#deltalake.table.Metadata.id" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">id</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">int</span></em><a class="headerlink" href="#deltalake.table.Metadata.id" title="Permalink to this definition"></a></dt>
 <dd><p>Return the unique identifier of the DeltaTable.</p>
 </dd></dl>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="deltalake.table.Metadata.name">
-<em class="property"><span class="pre">property</span> </em><span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="pre">:</span> <span class="pre">str</span></em><a class="headerlink" href="#deltalake.table.Metadata.name" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">name</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">str</span></em><a class="headerlink" href="#deltalake.table.Metadata.name" title="Permalink to this definition"></a></dt>
 <dd><p>Return the user-provided identifier of the DeltaTable.</p>
 </dd></dl>
 
 <dl class="py property">
 <dt class="sig sig-object py" id="deltalake.table.Metadata.partition_columns">
-<em class="property"><span class="pre">property</span> </em><span class="sig-name descname"><span class="pre">partition_columns</span></span><em class="property"><span class="pre">:</span> <span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#deltalake.table.Metadata.partition_columns" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">partition_columns</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#deltalake.table.Metadata.partition_columns" title="Permalink to this definition"></a></dt>
 <dd><p>Return an array containing the names of the partitioned columns of the DeltaTable.</p>
 </dd></dl>
 
@@ -438,7 +439,7 @@ newer versions.</p>
 <span id="deltaschema"></span><h2>DeltaSchema<a class="headerlink" href="#module-deltalake.schema" title="Permalink to this headline"></a></h2>
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.ArrayType">
-<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">ArrayType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">element_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">contains_null</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.ArrayType" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">ArrayType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">element_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">contains_null</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.ArrayType" title="Permalink to this definition"></a></dt>
 <dd><p>Concrete class for array data types.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -452,7 +453,7 @@ newer versions.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.DataType">
-<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">DataType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">type</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.DataType" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">DataType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">type</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.DataType" title="Permalink to this definition"></a></dt>
 <dd><p>Base class of all Delta data types.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -464,7 +465,7 @@ newer versions.</p>
 </dl>
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.schema.DataType.from_dict">
-<em class="property"><span class="pre">classmethod</span> </em><span class="sig-name descname"><span class="pre">from_dict</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json_dict</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.DataType.from_dict" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_dict</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json_dict</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.DataType.from_dict" title="Permalink to this definition"></a></dt>
 <dd><p>Generate a DataType from a DataType in json format.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -483,7 +484,7 @@ newer versions.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.Field">
-<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">Field</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nullable</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.Field" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">Field</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nullable</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.Field" title="Permalink to this definition"></a></dt>
 <dd><p>Create a DeltaTable Field instance.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -502,7 +503,7 @@ newer versions.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.MapType">
-<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">MapType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">key_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value_contains_null</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.MapType" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">MapType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">key_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value_contains_null</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.MapType" title="Permalink to this definition"></a></dt>
 <dd><p>Concrete class for map data types.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -517,7 +518,7 @@ newer versions.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.Schema">
-<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">Schema</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fields</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">json_value</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.Schema" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">Schema</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fields</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">json_value</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.Schema" title="Permalink to this definition"></a></dt>
 <dd><p>Create a DeltaTable Schema instance.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -532,7 +533,7 @@ newer versions.</p>
 </dl>
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.schema.Schema.from_json">
-<em class="property"><span class="pre">classmethod</span> </em><span class="sig-name descname"><span class="pre">from_json</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json_data</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.Schema.from_json" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_json</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">json_data</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.Schema.from_json" title="Permalink to this definition"></a></dt>
 <dd><p>Generate a DeltaTable Schema from a json format.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -551,7 +552,7 @@ newer versions.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.StructType">
-<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">StructType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fields</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.StructType" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">StructType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fields</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.StructType" title="Permalink to this definition"></a></dt>
 <dd><p>Concrete class for struct data types.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -615,8 +616,284 @@ newer versions.</p>
 <span id="datacatalog"></span><h2>DataCatalog<a class="headerlink" href="#module-deltalake.data_catalog" title="Permalink to this headline"></a></h2>
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.data_catalog.DataCatalog">
-<em class="property"><span class="pre">class</span> </em><span class="sig-prename descclassname"><span class="pre">deltalake.data_catalog.</span></span><span class="sig-name descname"><span class="pre">DataCatalog</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.data_catalog.DataCatalog" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.data_catalog.</span></span><span class="sig-name descname"><span class="pre">DataCatalog</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">value</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.data_catalog.DataCatalog" title="Permalink to this definition"></a></dt>
 <dd><p>List of the Data Catalogs</p>
+</dd></dl>
+
+</section>
+<section id="module-deltalake.fs">
+<span id="deltastoragehandler"></span><h2>DeltaStorageHandler<a class="headerlink" href="#module-deltalake.fs" title="Permalink to this headline"></a></h2>
+<dl class="py class">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.fs.</span></span><span class="sig-name descname"><span class="pre">DeltaStorageHandler</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_uri</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler" title="Permalink to this definition"></a></dt>
+<dd><p>DeltaStorageHander is a concrete implementations of a PyArrow FileSystemHandler.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>table_uri</strong> (<em>str</em>) – </p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.copy_file">
+<span class="sig-name descname"><span class="pre">copy_file</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dest</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.copy_file" title="Permalink to this definition"></a></dt>
+<dd><p>Copy a file.</p>
+<p>If the destination exists and is a directory, an error is returned.
+Otherwise, it is replaced.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>src</strong> (<em>str</em>) – The path of the file to be copied from.</p></li>
+<li><p><strong>dest</strong> (<em>str</em>) – The destination path where the file is copied to.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.create_dir">
+<span class="sig-name descname"><span class="pre">create_dir</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">recursive</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.create_dir" title="Permalink to this definition"></a></dt>
+<dd><p>Create a directory and subdirectories.</p>
+<p>This function succeeds if the directory already exists.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>path</strong> (<em>str</em>) – The path of the new directory.</p></li>
+<li><p><strong>recursive</strong> (<em>bool</em>) – Create nested directories as well.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.delete_dir">
+<span class="sig-name descname"><span class="pre">delete_dir</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.delete_dir" title="Permalink to this definition"></a></dt>
+<dd><p>Delete a directory and its contents, recursively.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>path</strong> (<em>str</em>) – The path of the directory to be deleted.</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.delete_dir_contents">
+<span class="sig-name descname"><span class="pre">delete_dir_contents</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.delete_dir_contents" title="Permalink to this definition"></a></dt>
+<dd><p>Delete a directory’s contents, recursively.</p>
+<p>Like delete_dir, but doesn’t delete the directory itself.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>path</strong> (<em>str</em>) – The path of the directory to be deleted.</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.delete_file">
+<span class="sig-name descname"><span class="pre">delete_file</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.delete_file" title="Permalink to this definition"></a></dt>
+<dd><p>Delete a file.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>path</strong> (<em>str</em>) – The path of the file to be deleted.</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.delete_root_dir_contents">
+<span class="sig-name descname"><span class="pre">delete_root_dir_contents</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.delete_root_dir_contents" title="Permalink to this definition"></a></dt>
+<dd><p>Delete a directory’s contents, recursively.</p>
+<p>Like delete_dir_contents, but for the root directory (path is empty or “/”)</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.get_file_info">
+<span class="sig-name descname"><span class="pre">get_file_info</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">paths</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.get_file_info" title="Permalink to this definition"></a></dt>
+<dd><p>Get info for the given files.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>paths</strong> (<em>List</em><em>[</em><em>str</em><em>]</em>) – List of file paths</p>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>list of file info objects</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>List[pyarrow._fs.FileInfo]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.get_file_info_selector">
+<span class="sig-name descname"><span class="pre">get_file_info_selector</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">selector</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.get_file_info_selector" title="Permalink to this definition"></a></dt>
+<dd><p>Get info for the files defined by FileSelector.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>selector</strong> (<em>pyarrow._fs.FileSelector</em>) – FileSelector object</p>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>list of file info objects</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>List[pyarrow._fs.FileInfo]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.get_type_name">
+<span class="sig-name descname"><span class="pre">get_type_name</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.get_type_name" title="Permalink to this definition"></a></dt>
+<dd><p>The filesystem’s type name.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p>The filesystem’s type name.</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.move">
+<span class="sig-name descname"><span class="pre">move</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dest</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.move" title="Permalink to this definition"></a></dt>
+<dd><p>Move / rename a file or directory.</p>
+<p>If the destination exists: - if it is a non-empty directory, an error is returned - otherwise,
+if it has the same type as the source, it is replaced - otherwise,
+behavior is unspecified (implementation-dependent).</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>src</strong> (<em>str</em>) – The path of the file or the directory to be moved.</p></li>
+<li><p><strong>dest</strong> (<em>str</em>) – The destination path where the file or directory is moved to.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p>None</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.normalize_path">
+<span class="sig-name descname"><span class="pre">normalize_path</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.normalize_path" title="Permalink to this definition"></a></dt>
+<dd><p>Normalize filesystem path.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>path</strong> (<em>str</em>) – the path to normalize</p>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>the normalized path</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>str</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.open_append_stream">
+<span class="sig-name descname"><span class="pre">open_append_stream</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.open_append_stream" title="Permalink to this definition"></a></dt>
+<dd><p>DEPRECATED: Open an output stream for appending.</p>
+<p>If the target doesn’t exist, a new empty file is created.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>path</strong> (<em>str</em>) – The source to open for writing.</p></li>
+<li><p><strong>metadata</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em>) – If not None, a mapping of string keys to string values.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>NativeFile</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>pyarrow.lib.NativeFile</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.open_input_file">
+<span class="sig-name descname"><span class="pre">open_input_file</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.open_input_file" title="Permalink to this definition"></a></dt>
+<dd><p>Open an input file for random access reading.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>source</strong> – The source to open for reading.</p></li>
+<li><p><strong>path</strong> (<em>str</em>) – </p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>NativeFile</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>pyarrow.lib.NativeFile</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.open_input_stream">
+<span class="sig-name descname"><span class="pre">open_input_stream</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.open_input_stream" title="Permalink to this definition"></a></dt>
+<dd><p>Open an input stream for sequential reading.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>source</strong> – The source to open for reading.</p></li>
+<li><p><strong>path</strong> (<em>str</em>) – </p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>NativeFile</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>pyarrow.lib.NativeFile</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.open_output_stream">
+<span class="sig-name descname"><span class="pre">open_output_stream</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.open_output_stream" title="Permalink to this definition"></a></dt>
+<dd><p>Open an output stream for sequential writing.</p>
+<p>If the target already exists, existing data is truncated.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>path</strong> (<em>str</em>) – The source to open for writing.</p></li>
+<li><p><strong>metadata</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em>) – If not None, a mapping of string keys to string values.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>NativeFile</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>pyarrow.lib.NativeFile</p>
+</dd>
+</dl>
+</dd></dl>
+
 </dd></dl>
 
 </section>
