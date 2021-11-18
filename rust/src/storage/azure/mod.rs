@@ -271,8 +271,7 @@ impl StorageBackend for AdlsGen2Backend {
     }
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
-        self
-            .container_client
+        self.container_client
             .as_blob_client(path)
             .put_block_blob(obj_bytes)
             .execute()
@@ -287,8 +286,7 @@ impl StorageBackend for AdlsGen2Backend {
     }
 
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
-        self
-            .container_client
+        self.container_client
             .as_blob_client(path)
             .delete()
             .execute()
