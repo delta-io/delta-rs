@@ -33,7 +33,7 @@ reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"
 
 # Azure
 azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "2f2caff49b3e1ba08f430f82e16994670dddda95" }
-azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "2f2caff49b3e1ba08f430f82e16994670dddda95", features = ["blob", "account"] }
+azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "2f2caff49b3e1ba08f430f82e16994670dddda95", features = ["account", "blob", "data_lake"] }
 azure_identity = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "2f2caff49b3e1ba08f430f82e16994670dddda95" }
 
 # S3

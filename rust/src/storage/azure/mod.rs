@@ -22,6 +22,7 @@
 
 use azure_core::HttpError as AzureError;
 use azure_storage::blob::prelude::*;
+use azure_storage::data_lake::prelude::*;
 use azure_storage::ConnectionString;
 use client::{DefaultClientProvider, ProvideClientContainer, StaticClientProvider};
 use futures::stream::Stream;
