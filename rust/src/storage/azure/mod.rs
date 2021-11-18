@@ -270,16 +270,32 @@ impl StorageBackend for AdlsGen2Backend {
         Ok(Box::pin(output))
     }
 
-    async fn put_obj(&self, _path: &str, _obj_bytes: &[u8]) -> Result<(), StorageError> {
-        unimplemented!("put_obj not implemented for azure");
+    async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
+        self
+            .container_client
+            .as_blob_client(path)
+            .put_block_blob(obj_bytes)
+            .execute()
+            .await
+            .map_err(to_storage_err)?;
+
+        Ok(())
     }
 
     async fn rename_obj_noreplace(&self, _src: &str, _dst: &str) -> Result<(), StorageError> {
         unimplemented!("rename_obj_noreplace not implemented for azure");
     }
 
-    async fn delete_obj(&self, _path: &str) -> Result<(), StorageError> {
-        unimplemented!("delete_obj not implemented for azure");
+    async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
+        self
+            .container_client
+            .as_blob_client(path)
+            .delete()
+            .execute()
+            .await
+            .map_err(to_storage_err)?;
+
+        Ok(())
     }
 }
 
