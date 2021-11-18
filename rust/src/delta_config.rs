@@ -23,6 +23,9 @@ lazy_static! {
     /// delete delta files that are before a compaction. We may keep files beyond this duration until
     /// the next calendar day.
     pub static ref LOG_RETENTION: DeltaConfig = DeltaConfig::new("logRetentionDuration", "interval 30 day");
+
+    /// Whether to clean up expired checkpoints and delta logs.
+    pub static ref ENABLE_EXPIRED_LOG_CLEANUP: DeltaConfig = DeltaConfig::new("enableExpiredLogCleanup", "true");
 }
 
 /// Delta configuration error
@@ -81,6 +84,15 @@ impl DeltaConfig {
         parse_interval(&self.get_raw_from_metadata(metadata))
     }
 
+    /// Returns the value from `metadata.configuration` for `self.key` as bool.
+    /// If it's missing in metadata then the `self.default` is used.
+    pub fn get_boolean_from_metadata(
+        &self,
+        metadata: &DeltaTableMetaData,
+    ) -> Result<bool, DeltaConfigError> {
+        parse_bool(&self.get_raw_from_metadata(metadata))
+    }
+
     fn get_raw_from_metadata(&self, metadata: &DeltaTableMetaData) -> String {
         metadata
             .configuration
@@ -137,6 +149,12 @@ fn parse_interval(value: &str) -> Result<Duration, DeltaConfigError> {
 fn parse_int(value: &str) -> Result<i64, DeltaConfigError> {
     value.parse().map_err(|e| {
         DeltaConfigError::Validation(format!("Cannot parse '{}' as integer: {}", value, e))
+    })
+}
+
+fn parse_bool(value: &str) -> Result<bool, DeltaConfigError> {
+    value.parse().map_err(|e| {
+        DeltaConfigError::Validation(format!("Cannot parse '{}' as bool: {}", value, e))
     })
 }
 
