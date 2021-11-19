@@ -11,8 +11,9 @@ use log::debug;
 use rusoto_core::{HttpClient, HttpConfig, Region, RusotoError};
 use rusoto_credential::AutoRefreshingProvider;
 use rusoto_s3::{
-    CopyObjectRequest, Delete, DeleteObjectRequest, DeleteObjectsRequest, GetObjectRequest,
-    HeadObjectRequest, ListObjectsV2Request, ObjectIdentifier, PutObjectRequest, S3Client, S3,
+    CopyObjectRequest, Delete, DeleteObjectRequest, DeleteObjectsRequest, GetObjectError,
+    GetObjectOutput, GetObjectRequest, HeadObjectRequest, ListObjectsV2Request, ObjectIdentifier,
+    PutObjectRequest, S3Client, S3,
 };
 use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient, WebIdentityProvider};
 use serde::{Deserialize, Serialize};
@@ -487,13 +488,7 @@ impl StorageBackend for S3StorageBackend {
         debug!("fetching s3 object: {}...", path);
 
         let uri = parse_uri(path)?.into_s3object()?;
-        let get_req = GetObjectRequest {
-            bucket: uri.bucket.to_string(),
-            key: uri.key.to_string(),
-            ..Default::default()
-        };
-
-        let result = self.client.get_object(get_req).await?;
+        let result = get_object_with_retries(&self.client, uri.bucket, uri.key, 10).await?;
 
         debug!("streaming data from {}...", path);
         let mut buf = Vec::new();
@@ -853,6 +848,36 @@ impl dyn LockClient {
         }
 
         Ok(lock)
+    }
+}
+
+async fn get_object_with_retries(
+    client: &S3Client,
+    bucket: &str,
+    key: &str,
+    retries: u32,
+) -> Result<GetObjectOutput, RusotoError<GetObjectError>> {
+    let req = || GetObjectRequest {
+        bucket: bucket.to_string(),
+        key: key.to_string(),
+        ..Default::default()
+    };
+
+    let mut tries = 0;
+    loop {
+        if tries >= retries {
+            return client.get_object(req()).await;
+        }
+        match client.get_object(req()).await {
+            Err(RusotoError::Unknown(e)) if e.status.is_server_error() => {
+                log::warn!("Got {:?}, retrying", e);
+                tries += 1;
+                continue;
+            }
+            result => {
+                return result;
+            }
+        }
     }
 }
 
