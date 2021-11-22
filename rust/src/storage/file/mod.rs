@@ -31,6 +31,7 @@ mod rename;
 /// * Support for other platforms are not implemented at the moment.
 #[derive(Default, Debug)]
 pub struct FileStorageBackend {
+    #[allow(dead_code)]
     root: String,
 }
 

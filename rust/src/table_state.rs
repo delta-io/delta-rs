@@ -32,6 +32,7 @@ pub struct DeltaTableState {
     current_metadata: Option<DeltaTableMetaData>,
     tombstone_retention_millis: DeltaDataTypeLong,
     log_retention_millis: DeltaDataTypeLong,
+    enable_expired_log_cleanup: bool,
 }
 
 impl DeltaTableState {
@@ -93,8 +94,14 @@ impl DeltaTableState {
         self.tombstone_retention_millis
     }
 
+    /// Retention of logs in milliseconds.
     pub fn log_retention_millis(&self) -> DeltaDataTypeLong {
         self.log_retention_millis
+    }
+
+    /// Whether to clean up expired checkpoints and delta logs.
+    pub fn enable_expired_log_cleanup(&self) -> bool {
+        self.enable_expired_log_cleanup
     }
 
     /// Full list of tombstones (remove actions) representing files removed from table state).
@@ -166,6 +173,8 @@ impl DeltaTableState {
 
         if new_state.current_metadata.is_some() {
             self.tombstone_retention_millis = new_state.tombstone_retention_millis;
+            self.log_retention_millis = new_state.log_retention_millis;
+            self.enable_expired_log_cleanup = new_state.enable_expired_log_cleanup;
             self.current_metadata = new_state.current_metadata.take();
         }
 
@@ -212,6 +221,8 @@ impl DeltaTableState {
                 self.log_retention_millis = delta_config::LOG_RETENTION
                     .get_interval_from_metadata(&md)?
                     .as_millis() as i64;
+                self.enable_expired_log_cleanup =
+                    delta_config::ENABLE_EXPIRED_LOG_CLEANUP.get_boolean_from_metadata(&md)?;
                 self.current_metadata = Some(md);
             }
             action::Action::txn(v) => {
@@ -251,6 +262,7 @@ mod tests {
             app_transaction_version,
             tombstone_retention_millis: 0,
             log_retention_millis: 0,
+            enable_expired_log_cleanup: true,
         };
 
         let txn_action = action::Action::txn(action::Txn {
