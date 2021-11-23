@@ -77,6 +77,9 @@ pub enum CheckpointError {
     },
 }
 
+/// The record batch size for checkpoint parquet file
+pub const CHECKPOINT_RECORD_BATCH_SIZE: usize = 5000;
+
 impl From<CheckpointError> for ArrowError {
     fn from(error: CheckpointError) -> Self {
         ArrowError::from_external_error(Box::new(error))
@@ -415,9 +418,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     // Write the Checkpoint parquet file.
     let writeable_cursor = InMemoryWriteableCursor::default();
     let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
-    let batch_size =
-        state.app_transaction_version().len() + tombstones.len() + state.files().len() + 2; // 1 (protocol) + 1 (metadata)
-    let decoder = Decoder::new(arrow_schema, batch_size, None);
+    let decoder = Decoder::new(arrow_schema, CHECKPOINT_RECORD_BATCH_SIZE, None);
     while let Some(batch) = decoder.next_batch(&mut jsons)? {
         writer.write(&batch)?;
     }
