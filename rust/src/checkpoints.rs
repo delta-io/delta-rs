@@ -244,7 +244,7 @@ async fn cleanup_expired_logs(
     while let Some(obj_meta) = stream.next().await {
         let obj_meta = obj_meta?;
 
-        let ts = obj_meta.modified.timestamp();
+        let ts = obj_meta.modified.timestamp_millis();
 
         if let Some(captures) = DELTA_LOG_REGEX.captures(&obj_meta.path) {
             let log_ver_str = captures.get(1).unwrap().as_str();
