@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::fs;
 use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
@@ -107,19 +107,34 @@ mod delete_expired_delta_log_in_checkpoint {
         let mut table = fs_common::create_table(
             "./tests/data/checkpoints_with_expired_logs/expired",
             Some(hashmap! {
-                delta_config::LOG_RETENTION.key.clone() => Some("interval 1 second".to_string()),
+                delta_config::LOG_RETENTION.key.clone() => Some("interval 10 minute".to_string()),
                 delta_config::ENABLE_EXPIRED_LOG_CLEANUP.key.clone() => Some("true".to_string())
             }),
         )
         .await;
 
-        let a1 = fs_common::add(3 * 60 * 1000); // 3 mins ago,
-        let a2 = fs_common::add(2 * 60 * 1000); // 2 mins ago,
+        let table_path = table.table_uri.clone();
+        let set_file_last_modified = |version: usize, last_modified_millis: i64| {
+            let last_modified_secs = last_modified_millis / 1000;
+            let path = format!("{}/_delta_log/{:020}.json", &table_path, version);
+            utime::set_file_times(&path, last_modified_secs, last_modified_secs).unwrap();
+        };
+
+        // create 2 commits
+        let a1 = fs_common::add(0);
+        let a2 = fs_common::add(0);
         assert_eq!(1, fs_common::commit_add(&mut table, &a1).await);
         assert_eq!(2, fs_common::commit_add(&mut table, &a2).await);
 
+        // set last_modified
+        let now = Utc::now().timestamp_millis();
+        set_file_last_modified(0, now - 25 * 60 * 1000); // 25 mins ago, should be deleted
+        set_file_last_modified(1, now - 15 * 60 * 1000); // 25 mins ago, should be deleted
+        set_file_last_modified(2, now - 5 * 60 * 1000); // 25 mins ago, should be kept
+
         table.load_version(0).await.expect("Cannot load version 0");
         table.load_version(1).await.expect("Cannot load version 1");
+        table.load_version(2).await.expect("Cannot load version 2");
 
         checkpoints::create_checkpoint_from_table(&table)
             .await
@@ -127,6 +142,7 @@ mod delete_expired_delta_log_in_checkpoint {
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(table.get_files(), vec![a1.path.as_str(), a2.path.as_str()]);
 
+        // log files 0 and 1 are deleted
         table
             .load_version(0)
             .await
@@ -136,6 +152,7 @@ mod delete_expired_delta_log_in_checkpoint {
             .await
             .expect_err("Should not load version 1");
 
+        // log file 2 is kept
         table.load_version(2).await.expect("Cannot load version 2");
     }
 
