@@ -6,7 +6,7 @@ mod s3_common;
 mod s3 {
 
     use crate::s3_common;
-    use deltalake::storage::s3::{dynamodb_lock, S3StorageBackend};
+    use deltalake::storage::s3::S3StorageBackend;
     use deltalake::{StorageBackend, StorageError};
     use rusoto_core::credential::ChainProvider;
     use rusoto_core::request::DispatchSignedRequestFuture;

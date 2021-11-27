@@ -2,13 +2,59 @@
 //! Adapted from https://github.com/awslabs/amazon-dynamodb-lock-client.
 
 use std::collections::HashMap;
+use std::fmt::Debug;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use crate::storage::s3::{LockClient, LockItem, StorageError};
 use maplit::hashmap;
 use rusoto_core::RusotoError;
 use rusoto_dynamodb::*;
 use uuid::Uuid;
+
+/// A lock that has been successfully acquired
+#[derive(Clone, Debug)]
+pub struct LockItem {
+    /// The name of the owner that owns this lock.
+    pub owner_name: String,
+    /// Current version number of the lock in DynamoDB. This is what tells the lock client
+    /// when the lock is stale.
+    pub record_version_number: String,
+    /// The amount of time (in seconds) that the owner has this lock for.
+    /// If lease_duration is None then the lock is non-expirable.
+    pub lease_duration: Option<u64>,
+    /// Tells whether or not the lock was marked as released when loaded from DynamoDB.
+    pub is_released: bool,
+    /// Optional data associated with this lock.
+    pub data: Option<String>,
+    /// The last time this lock was updated or retrieved.
+    pub lookup_time: u128,
+    /// Tells whether this lock was acquired by expiring existing one.
+    pub acquired_expired_lock: bool,
+    /// If true then this lock could not be acquired.
+    pub is_non_acquirable: bool,
+}
+
+/// Abstraction over a distributive lock provider
+#[async_trait::async_trait]
+pub trait LockClient: Send + Sync + Debug {
+    /// Attempts to acquire lock. If successful, returns the lock.
+    /// Otherwise returns [`Option::None`] which is retryable action.
+    /// Visit implementation docs for more details.
+    async fn try_acquire_lock(&self, data: &str) -> Result<Option<LockItem>, DynamoError>;
+
+    /// Returns current lock from DynamoDB (if any).
+    async fn get_lock(&self) -> Result<Option<LockItem>, DynamoError>;
+
+    /// Update data in the upstream lock of the current user still has it.
+    /// The returned lock will have a new `rvn` so it'll increase the lease duration
+    /// as this method is usually called when the work with a lock is extended.
+    async fn update_data(&self, lock: &LockItem) -> Result<LockItem, DynamoError>;
+
+    /// Releases the given lock if the current user still has it, returning true if the lock was
+    /// successfully released, and false if someone else already stole the lock
+    async fn release_lock(&self, lock: &LockItem) -> Result<bool, DynamoError>;
+}
+
+pub const DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS: u32 = 10_000;
 
 /// DynamoDb option keys to use when creating DynamoDbOptions.
 /// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
@@ -273,19 +319,19 @@ impl std::fmt::Debug for DynamoDbLockClient {
 
 #[async_trait::async_trait]
 impl LockClient for DynamoDbLockClient {
-    async fn try_acquire_lock(&self, data: &str) -> Result<Option<LockItem>, StorageError> {
+    async fn try_acquire_lock(&self, data: &str) -> Result<Option<LockItem>, DynamoError> {
         Ok(self.try_acquire_lock(Some(data)).await?)
     }
 
-    async fn get_lock(&self) -> Result<Option<LockItem>, StorageError> {
+    async fn get_lock(&self) -> Result<Option<LockItem>, DynamoError> {
         Ok(self.get_lock().await?)
     }
 
-    async fn update_data(&self, lock: &LockItem) -> Result<LockItem, StorageError> {
+    async fn update_data(&self, lock: &LockItem) -> Result<LockItem, DynamoError> {
         Ok(self.update_data(lock).await?)
     }
 
-    async fn release_lock(&self, lock: &LockItem) -> Result<bool, StorageError> {
+    async fn release_lock(&self, lock: &LockItem) -> Result<bool, DynamoError> {
         Ok(self.release_lock(lock).await?)
     }
 }
