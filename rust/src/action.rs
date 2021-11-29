@@ -42,7 +42,7 @@ fn populate_hashmap_with_option_from_parquet_map(
         .or_insert(match values.get_string(j) {
             Ok(s) => Some(s.clone()),
             Err(ParquetError::General(s)) if s == "Cannot access Null as Str" => None,
-            _ => return Err("value for HashMap in parquet has to be a string"),
+            _ => return Err("value for HashMap in parquet has to be a string or null"),
         });
     }
 
