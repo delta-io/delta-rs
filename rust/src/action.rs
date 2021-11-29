@@ -2,6 +2,7 @@
 
 #![allow(non_snake_case, non_camel_case_types)]
 
+use parquet::errors::ParquetError;
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
@@ -38,12 +39,11 @@ fn populate_hashmap_with_option_from_parquet_map(
                 .map_err(|_| "key for HashMap in parquet has to be a string")?
                 .clone(),
         )
-        .or_insert(Some(
-            values
-                .get_string(j)
-                .map_err(|_| "value for HashMap in parquet has to be a string")?
-                .clone(),
-        ));
+        .or_insert(match values.get_string(j) {
+            Ok(s) => Some(s.clone()),
+            Err(ParquetError::General(s)) if s == "Cannot access Null as Str" => None,
+            _ => return Err("value for HashMap in parquet has to be a string"),
+        });
     }
 
     Ok(())
