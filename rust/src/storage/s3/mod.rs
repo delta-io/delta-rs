@@ -11,8 +11,9 @@ use log::debug;
 use rusoto_core::{HttpClient, HttpConfig, Region, RusotoError};
 use rusoto_credential::AutoRefreshingProvider;
 use rusoto_s3::{
-    CopyObjectRequest, Delete, DeleteObjectRequest, DeleteObjectsRequest, GetObjectRequest,
-    HeadObjectRequest, ListObjectsV2Request, ObjectIdentifier, PutObjectRequest, S3Client, S3,
+    CopyObjectRequest, Delete, DeleteObjectRequest, DeleteObjectsRequest, GetObjectError,
+    GetObjectOutput, GetObjectRequest, HeadObjectRequest, ListObjectsV2Request, ObjectIdentifier,
+    PutObjectRequest, S3Client, S3,
 };
 use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient, WebIdentityProvider};
 use serde::{Deserialize, Serialize};
@@ -51,6 +52,9 @@ pub mod s3_storage_options {
     pub const AWS_S3_POOL_IDLE_TIMEOUT_SECONDS: &str = "AWS_S3_POOL_IDLE_TIMEOUT_SECONDS";
     /// The `pool_idle_timeout` for the aws sts client. See the reasoning in `AWS_S3_POOL_IDLE_TIMEOUT_SECONDS`.
     pub const AWS_STS_POOL_IDLE_TIMEOUT_SECONDS: &str = "AWS_STS_POOL_IDLE_TIMEOUT_SECONDS";
+    /// The number of retries for S3 GET requests failed with 500 Internal Server Error.
+    pub const AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES: &str =
+        "AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES";
     /// The web identity token file to use when using a web identity provider.
     /// NOTE: web identity related options are set in the environment when creating an instance of [crate::storage::s3::S3StorageOptions].
     /// See also https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env.
@@ -78,6 +82,7 @@ pub mod s3_storage_options {
         AWS_ROLE_SESSION_NAME,
         AWS_S3_POOL_IDLE_TIMEOUT_SECONDS,
         AWS_STS_POOL_IDLE_TIMEOUT_SECONDS,
+        AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES,
     ];
 }
 
@@ -94,6 +99,7 @@ pub struct S3StorageOptions {
     use_web_identity: bool,
     s3_pool_idle_timeout: Duration,
     sts_pool_idle_timeout: Duration,
+    s3_get_internal_server_error_retries: usize,
     extra_opts: HashMap<String, String>,
 }
 
@@ -137,6 +143,12 @@ impl S3StorageOptions {
             10,
         );
 
+        let s3_get_internal_server_error_retries = Self::u64_or_default(
+            &options,
+            s3_storage_options::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES,
+            10,
+        ) as usize;
+
         Self {
             _endpoint_url: endpoint_url,
             region,
@@ -153,6 +165,7 @@ impl S3StorageOptions {
                 .is_ok(),
             s3_pool_idle_timeout: Duration::from_secs(s3_pool_idle_timeout),
             sts_pool_idle_timeout: Duration::from_secs(sts_pool_idle_timeout),
+            s3_get_internal_server_error_retries,
             extra_opts,
         }
     }
@@ -380,6 +393,7 @@ impl<'a> fmt::Display for S3Object<'a> {
 pub struct S3StorageBackend {
     client: rusoto_s3::S3Client,
     lock_client: Option<Box<dyn LockClient>>,
+    options: S3StorageOptions,
 }
 
 impl S3StorageBackend {
@@ -392,6 +406,7 @@ impl S3StorageBackend {
         Ok(Self {
             client,
             lock_client,
+            options,
         })
     }
 
@@ -405,14 +420,20 @@ impl S3StorageBackend {
         Ok(Self {
             client,
             lock_client,
+            options,
         })
     }
 
     /// Creates a new S3StorageBackend with given options, s3 client and lock client.
-    pub fn new_with(client: rusoto_s3::S3Client, lock_client: Option<Box<dyn LockClient>>) -> Self {
+    pub fn new_with(
+        client: rusoto_s3::S3Client,
+        lock_client: Option<Box<dyn LockClient>>,
+        options: S3StorageOptions,
+    ) -> Self {
         Self {
             client,
             lock_client,
+            options,
         }
     }
 
@@ -487,13 +508,13 @@ impl StorageBackend for S3StorageBackend {
         debug!("fetching s3 object: {}...", path);
 
         let uri = parse_uri(path)?.into_s3object()?;
-        let get_req = GetObjectRequest {
-            bucket: uri.bucket.to_string(),
-            key: uri.key.to_string(),
-            ..Default::default()
-        };
-
-        let result = self.client.get_object(get_req).await?;
+        let result = get_object_with_retries(
+            &self.client,
+            uri.bucket,
+            uri.key,
+            self.options.s3_get_internal_server_error_retries,
+        )
+        .await?;
 
         debug!("streaming data from {}...", path);
         let mut buf = Vec::new();
@@ -856,6 +877,34 @@ impl dyn LockClient {
     }
 }
 
+async fn get_object_with_retries(
+    client: &S3Client,
+    bucket: &str,
+    key: &str,
+    retries: usize,
+) -> Result<GetObjectOutput, RusotoError<GetObjectError>> {
+    let mut tries = 0;
+    loop {
+        let result = client
+            .get_object(GetObjectRequest {
+                bucket: bucket.to_string(),
+                key: key.to_string(),
+                ..Default::default()
+            })
+            .await;
+        match result {
+            Err(RusotoError::Unknown(e)) if e.status.is_server_error() && tries < retries => {
+                log::warn!("Got {:?}, retrying", e);
+                tries += 1;
+                continue;
+            }
+            _ => {
+                return result;
+            }
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -922,6 +971,7 @@ mod tests {
                 locking_provider: Some("dynamodb".to_string()),
                 s3_pool_idle_timeout: Duration::from_secs(15),
                 sts_pool_idle_timeout: Duration::from_secs(10),
+                s3_get_internal_server_error_retries: 10,
                 extra_opts: HashMap::new(),
             },
             options
@@ -939,6 +989,7 @@ mod tests {
             s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "another_token_file".to_string(),
             s3_storage_options::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "1".to_string(),
             s3_storage_options::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "2".to_string(),
+            s3_storage_options::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES.to_string() => "3".to_string(),
         });
 
         assert_eq!(
@@ -954,6 +1005,7 @@ mod tests {
                 locking_provider: Some("another_locking_provider".to_string()),
                 s3_pool_idle_timeout: Duration::from_secs(1),
                 sts_pool_idle_timeout: Duration::from_secs(2),
+                s3_get_internal_server_error_retries: 3,
                 extra_opts: HashMap::new(),
             },
             options
@@ -977,10 +1029,15 @@ mod tests {
 
         std::env::set_var(s3_storage_options::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS, "1");
         std::env::set_var(s3_storage_options::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS, "2");
+        std::env::set_var(
+            s3_storage_options::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES,
+            "3",
+        );
 
         let options = S3StorageOptions::from_map(hashmap! {
             s3_storage_options::AWS_REGION.to_string() => "us-west-2".to_string(),
             "DYNAMO_LOCK_PARTITION_KEY_VALUE".to_string() => "my_lock".to_string(),
+            "AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES".to_string() => "3".to_string(),
         });
 
         assert_eq!(
@@ -996,6 +1053,7 @@ mod tests {
                 locking_provider: Some("dynamodb".to_string()),
                 s3_pool_idle_timeout: Duration::from_secs(1),
                 sts_pool_idle_timeout: Duration::from_secs(2),
+                s3_get_internal_server_error_retries: 3,
                 extra_opts: hashmap! {
                     "DYNAMO_LOCK_PARTITION_KEY_VALUE".to_string() => "my_lock".to_string(),
                 },
