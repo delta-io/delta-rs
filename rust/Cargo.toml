@@ -57,7 +57,7 @@ parquet-format = "~2.6.1"
 
 arrow = "6"
 parquet = "6"
-datafusion = { git = "https://github.com/apache/arrow-datafusion", rev = "e62cb455955e120cfe9d8935aa3ebc8726369d15", optional = true }
+datafusion = { version = "6", optional = true }
 
 crossbeam = { version = "0", optional = true }
 
