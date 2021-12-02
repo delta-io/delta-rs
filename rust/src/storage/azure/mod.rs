@@ -22,7 +22,7 @@
 
 use azure_core::HttpError as AzureError;
 use azure_storage::blob::prelude::*;
-use azure_storage::data_lake::prelude::*;
+// use azure_storage::data_lake::prelude::*;
 use azure_storage::ConnectionString;
 use client::{DefaultClientProvider, ProvideClientContainer, StaticClientProvider};
 use futures::stream::Stream;
@@ -272,9 +272,15 @@ impl StorageBackend for AdlsGen2Backend {
     }
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
-        self.container_client
-            .as_blob_client(path)
-            .put_block_blob(obj_bytes)
+        let obj = parse_uri(path)?.into_adlsgen2_object()?;
+        self.validate_container(&obj)?;
+
+        self
+            .client
+            .as_container_client()
+            .await
+            .as_blob_client(obj.path)
+            .put_block_blob(obj_bytes.to_vec())
             .execute()
             .await
             .map_err(to_storage_err)?;
@@ -287,8 +293,14 @@ impl StorageBackend for AdlsGen2Backend {
     }
 
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
-        self.container_client
-            .as_blob_client(path)
+        let obj = parse_uri(path)?.into_adlsgen2_object()?;
+        self.validate_container(&obj)?;
+
+        self
+            .client
+            .as_container_client()
+            .await
+            .as_blob_client(obj.path)
             .delete()
             .execute()
             .await

@@ -1,5 +1,9 @@
 #[cfg(feature = "azure")]
 mod azure {
+    use deltalake::StorageError;
+    use serial_test::serial;
+    use chrono::Utc;
+
     /*
      * The storage account to run this test must be provided by the developer and test are executed locally.
      *
@@ -13,6 +17,7 @@ mod azure {
      */
     #[ignore]
     #[tokio::test]
+    #[serial]
     async fn test_azure_simple() {
         let account = std::env::var("AZURE_STORAGE_ACCOUNT").unwrap();
         // https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri
@@ -42,5 +47,23 @@ mod azure {
             data_change: true,
             ..Default::default()
         }));
+    }
+
+    #[ignore]
+    #[tokio::test]
+    #[serial]
+    async fn test_azure_delete_obj() {
+        let account = std::env::var("AZURE_STORAGE_ACCOUNT").unwrap();
+        let base_path = &format!("abfss://simple@{}.dfs.core.windows.net/", account);
+        let backend = deltalake::get_backend_for_uri(base_path).unwrap();
+
+        let file_path = &format!("{}test_azure_delete_obj-{}.txt", base_path, Utc::now().timestamp());
+        backend.put_obj(file_path, &[12, 13, 14]).await.unwrap();
+        let file_meta_data = backend.head_obj(file_path).await.unwrap();
+        assert_eq!(file_meta_data.path, *file_path);
+
+        backend.delete_obj(file_path).await.unwrap();
+        let head_err = backend.head_obj(file_path).await.err().unwrap();
+        assert!(matches!(head_err, StorageError::NotFound));
     }
 }
