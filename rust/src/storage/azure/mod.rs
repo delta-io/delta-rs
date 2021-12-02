@@ -275,8 +275,7 @@ impl StorageBackend for AdlsGen2Backend {
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
         self.validate_container(&obj)?;
 
-        self
-            .client
+        self.client
             .as_container_client()
             .await
             .as_blob_client(obj.path)
@@ -296,8 +295,7 @@ impl StorageBackend for AdlsGen2Backend {
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
         self.validate_container(&obj)?;
 
-        self
-            .client
+        self.client
             .as_container_client()
             .await
             .as_blob_client(obj.path)

@@ -1,8 +1,8 @@
 #[cfg(feature = "azure")]
 mod azure {
+    use chrono::Utc;
     use deltalake::StorageError;
     use serial_test::serial;
-    use chrono::Utc;
 
     /*
      * The storage account to run this test must be provided by the developer and test are executed locally.
@@ -26,6 +26,7 @@ mod azure {
         )
         .await
         .unwrap();
+
         assert_eq!(table.version, 4);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
@@ -39,6 +40,7 @@ mod azure {
                 "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
             ]
         );
+
         let tombstones = table.get_state().all_tombstones();
         assert_eq!(tombstones.len(), 31);
         assert!(tombstones.contains(&deltalake::action::Remove {
@@ -57,7 +59,11 @@ mod azure {
         let base_path = &format!("abfss://simple@{}.dfs.core.windows.net/", account);
         let backend = deltalake::get_backend_for_uri(base_path).unwrap();
 
-        let file_path = &format!("{}test_azure_delete_obj-{}.txt", base_path, Utc::now().timestamp());
+        let file_path = &format!(
+            "{}test_azure_delete_obj-{}.txt",
+            base_path,
+            Utc::now().timestamp()
+        );
         backend.put_obj(file_path, &[12, 13, 14]).await.unwrap();
         let file_meta_data = backend.head_obj(file_path).await.unwrap();
         assert_eq!(file_meta_data.path, *file_path);
