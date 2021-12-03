@@ -46,7 +46,8 @@ async fn process_event(event: &Value) -> Result<(), CheckPointLambdaError> {
             table_uri, version
         );
 
-        checkpoints::create_checkpoint_from_table_uri(&table_uri, version).await?;
+        checkpoints::create_checkpoint_from_table_uri_and_cleanup(&table_uri, version, None)
+            .await?;
     } else {
         info!(
             "Not writing checkpoint for table uri {} at delta version {}.",
