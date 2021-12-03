@@ -466,6 +466,7 @@ impl From<AzureError> for StorageError {
 }
 
 /// Describes metadata of a storage object.
+#[derive(Debug)]
 pub struct ObjectMeta {
     /// The path where the object is stored. This is the path component of the object URI.
     ///

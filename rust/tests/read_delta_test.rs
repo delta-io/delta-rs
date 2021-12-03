@@ -8,6 +8,7 @@ use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::SystemTime;
 
+#[allow(dead_code)]
 mod fs_common;
 
 #[tokio::test]
