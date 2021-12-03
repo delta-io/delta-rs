@@ -86,13 +86,43 @@ impl From<CheckpointError> for ArrowError {
     }
 }
 
-/// Loads table from given `table_uri` at given `version` and creates checkpoints for it.
-pub async fn create_checkpoint_from_table_uri(
+/// Creates checkpoint at `table.version` for given `table`.
+pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), CheckpointError> {
+    create_checkpoint_for(
+        table.version,
+        table.get_state(),
+        table.storage.as_ref(),
+        &table.table_uri,
+    )
+    .await?;
+
+    Ok(())
+}
+
+/// Delete expires log files before given version from table. The table log retention is based on
+/// the `logRetentionDuration` property of the Delta Table, 30 days by default.
+pub async fn cleanup_metadata(table: &DeltaTable) -> Result<i32, DeltaTableError> {
+    let log_retention_timestamp =
+        Utc::now().timestamp_millis() - table.get_state().log_retention_millis();
+    cleanup_expired_logs_for(
+        table.version + 1,
+        table.storage.as_ref(),
+        log_retention_timestamp,
+        &table.table_uri,
+    )
+    .await
+}
+
+/// Loads table from given `table_uri` at given `version` and creates checkpoint for it.
+/// The `cleanup` param decides whether to run metadata cleanup of obsolete logs.
+/// If it's empty then the table's `enableExpiredLogCleanup` is used.
+pub async fn create_checkpoint_from_table_uri_and_cleanup(
     table_uri: &str,
     version: DeltaDataTypeVersion,
+    cleanup: Option<bool>,
 ) -> Result<(), CheckpointError> {
     let table = open_table_with_version(table_uri, version).await?;
-    create_checkpoint(
+    create_checkpoint_for(
         version,
         table.get_state(),
         table.storage.as_ref(),
@@ -100,61 +130,18 @@ pub async fn create_checkpoint_from_table_uri(
     )
     .await?;
 
-    if table.version >= 0 && table.get_state().enable_expired_log_cleanup() {
-        let deleted_log_num = cleanup_expired_logs(
-            table.version + 1,
-            table.storage.as_ref(),
-            table.get_state(),
-            table_uri,
-        )
-        .await?;
+    let enable_expired_log_cleanup =
+        cleanup.unwrap_or_else(|| table.get_state().enable_expired_log_cleanup());
+
+    if table.version >= 0 && enable_expired_log_cleanup {
+        let deleted_log_num = cleanup_metadata(&table).await?;
         debug!("Deleted {:?} log files.", deleted_log_num);
     }
 
     Ok(())
 }
 
-/// Creates checkpoint at `table.version` for given `table`.
-pub async fn create_checkpoint_from_table(table: &DeltaTable) -> Result<(), CheckpointError> {
-    create_checkpoint(
-        table.version,
-        table.get_state(),
-        table.storage.as_ref(),
-        &table.table_uri,
-    )
-    .await?;
-
-    if table.version >= 0 && table.get_state().enable_expired_log_cleanup() {
-        let deleted_log_num = cleanup_expired_logs(
-            table.version + 1,
-            table.storage.as_ref(),
-            table.get_state(),
-            &table.table_uri,
-        )
-        .await?;
-        debug!("Deleted {:?} log files.", deleted_log_num);
-    }
-
-    Ok(())
-}
-
-/// Creates checkpoint at `table.version` for given `table`, without deleting expired log files.
-/// Exposed for tests.
-pub async fn create_checkpoint_from_table_without_cleaning_logs(
-    table: &DeltaTable,
-) -> Result<(), CheckpointError> {
-    create_checkpoint(
-        table.version,
-        table.get_state(),
-        table.storage.as_ref(),
-        &table.table_uri,
-    )
-    .await?;
-
-    Ok(())
-}
-
-async fn create_checkpoint(
+async fn create_checkpoint_for(
     version: DeltaDataTypeVersion,
     state: &DeltaTableState,
     storage: &dyn StorageBackend,
@@ -224,12 +211,10 @@ async fn flush_delete_files<T: Fn(&(DeltaDataTypeVersion, ObjectMeta)) -> bool>(
     Ok(deleted_num)
 }
 
-/// Delete expires log files before given version from table. The table log retention is based on
-/// the `logRetentionDuration` property of the Delta Table, 30 days by default.
-async fn cleanup_expired_logs(
-    version: DeltaDataTypeVersion,
+async fn cleanup_expired_logs_for(
+    until_version: DeltaDataTypeVersion,
     storage: &dyn StorageBackend,
-    state: &DeltaTableState,
+    log_retention_timestamp: i64,
     table_uri: &str,
 ) -> Result<i32, DeltaTableError> {
     lazy_static! {
@@ -237,7 +222,6 @@ async fn cleanup_expired_logs(
             Regex::new(r#"^*[/\\]_delta_log[/\\](\d{20})\.(json|checkpoint)*$"#).unwrap();
     }
 
-    let log_retention_timestamp = Utc::now().timestamp_millis() - state.log_retention_millis();
     let mut deleted_log_num = 0;
 
     // Get file objects from table.
@@ -252,7 +236,7 @@ async fn cleanup_expired_logs(
         if let Some(captures) = DELTA_LOG_REGEX.captures(&obj_meta.path) {
             let log_ver_str = captures.get(1).unwrap().as_str();
             let log_ver: DeltaDataTypeVersion = log_ver_str.parse().unwrap();
-            if log_ver < version && ts <= log_retention_timestamp {
+            if log_ver < until_version && ts <= log_retention_timestamp {
                 candidates.push((log_ver, obj_meta));
             }
         }
@@ -275,7 +259,7 @@ async fn cleanup_expired_logs(
         };
 
     let should_delete_file = |file: &(i64, ObjectMeta)| {
-        file.1.modified.timestamp() <= log_retention_timestamp && file.0 < version
+        file.1.modified.timestamp() <= log_retention_timestamp && file.0 < until_version
     };
 
     let mut maybe_delete_files: Vec<(DeltaDataTypeVersion, ObjectMeta)> = Vec::new();
@@ -609,6 +593,8 @@ fn apply_stats_conversion(
 mod tests {
     use super::*;
     use lazy_static::lazy_static;
+    use std::time::Duration;
+    use uuid::Uuid;
 
     #[test]
     fn typed_partition_value_from_string_test() {
@@ -869,5 +855,73 @@ mod tests {
                 "some_timestamp": "2021-07-30T18:11:25.594Z"
             }
         });
+    }
+
+    // Last-Modified for S3 could not be altered by user, hence using system pauses which makes
+    // test to run longer but reliable
+    async fn cleanup_metadata_test(table_path: &str) {
+        let log_path = |version| format!("{}/_delta_log/{:020}.json", table_path, version);
+        let backend = crate::storage::get_backend_for_uri(&table_path).unwrap();
+
+        // we don't need to actually populate files with content as cleanup works only with file's metadata
+        backend.put_obj(&log_path(0), &[]).await.unwrap();
+
+        // since we cannot alter s3 object metadata, we mimic it with pauses
+        // also we forced to use 2 seconds since Last-Modified is stored in seconds
+        std::thread::sleep(Duration::from_secs(2));
+        backend.put_obj(&log_path(1), &[]).await.unwrap();
+
+        std::thread::sleep(Duration::from_secs(3));
+        backend.put_obj(&log_path(2), &[]).await.unwrap();
+
+        let v0time = backend.head_obj(&log_path(0)).await.unwrap().modified;
+        let v1time = backend.head_obj(&log_path(1)).await.unwrap().modified;
+        let v2time = backend.head_obj(&log_path(2)).await.unwrap().modified;
+
+        // we choose the retention timestamp to be between v1 and v2 so v2 will be kept but other removed.
+        let retention_timestamp =
+            v1time.timestamp_millis() + (v2time.timestamp_millis() - v1time.timestamp_millis()) / 2;
+
+        assert!(retention_timestamp > v0time.timestamp_millis());
+        assert!(retention_timestamp > v1time.timestamp_millis());
+        assert!(retention_timestamp < v2time.timestamp_millis());
+
+        let removed = crate::checkpoints::cleanup_expired_logs_for(
+            3,
+            backend.as_ref(),
+            retention_timestamp,
+            &table_path,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(removed, 2);
+        assert!(backend.head_obj(&log_path(0)).await.is_err());
+        assert!(backend.head_obj(&log_path(1)).await.is_err());
+        assert!(backend.head_obj(&log_path(2)).await.is_ok());
+
+        // after test cleanup
+        backend.delete_obj(&log_path(2)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cleanup_metadata_fs_test() {
+        let table_path = format!("./tests/data/md_cleanup/{}", Uuid::new_v4());
+        cleanup_metadata_test(&table_path).await;
+        std::fs::remove_dir_all(&table_path).unwrap();
+    }
+
+    #[cfg(feature = "s3")]
+    mod cleanup_metadata_s3_test {
+        use super::*;
+
+        #[tokio::test]
+        async fn cleanup_metadata_s3_test() {
+            std::env::set_var("AWS_ACCESS_KEY_ID", "test");
+            std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
+            std::env::set_var("AWS_ENDPOINT_URL", "http://localhost:4566");
+            let table_path = format!("s3://deltars/md_cleanup/{}", Uuid::new_v4());
+            cleanup_metadata_test(&table_path).await;
+        }
     }
 }

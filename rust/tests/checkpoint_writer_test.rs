@@ -10,6 +10,7 @@ use uuid::Uuid;
 use deltalake::action::*;
 use deltalake::*;
 
+#[allow(dead_code)]
 mod fs_common;
 
 // NOTE: The below is a useful external command for inspecting the written checkpoint schema visually:
@@ -33,9 +34,7 @@ mod simple_checkpoint {
             .unwrap();
 
         // Write a checkpoint
-        checkpoints::create_checkpoint_from_table_without_cleaning_logs(&table)
-            .await
-            .unwrap();
+        checkpoints::create_checkpoint(&table).await.unwrap();
 
         // checkpoint should exist
         let checkpoint_path = log_path.join("00000000000000000005.checkpoint.parquet");
@@ -46,9 +45,7 @@ mod simple_checkpoint {
         assert_eq!(5, version);
 
         table.load_version(10).await.unwrap();
-        checkpoints::create_checkpoint_from_table_without_cleaning_logs(&table)
-            .await
-            .unwrap();
+        checkpoints::create_checkpoint(&table).await.unwrap();
 
         // checkpoint should exist
         let checkpoint_path = log_path.join("00000000000000000010.checkpoint.parquet");
@@ -136,9 +133,13 @@ mod delete_expired_delta_log_in_checkpoint {
         table.load_version(1).await.expect("Cannot load version 1");
         table.load_version(2).await.expect("Cannot load version 2");
 
-        checkpoints::create_checkpoint_from_table(&table)
-            .await
-            .unwrap();
+        checkpoints::create_checkpoint_from_table_uri_and_cleanup(
+            &table.table_uri,
+            table.version,
+            None,
+        )
+        .await
+        .unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(table.get_files(), vec![a1.path.as_str(), a2.path.as_str()]);
 
@@ -175,9 +176,13 @@ mod delete_expired_delta_log_in_checkpoint {
         table.load_version(0).await.expect("Cannot load version 0");
         table.load_version(1).await.expect("Cannot load version 1");
 
-        checkpoints::create_checkpoint_from_table(&table)
-            .await
-            .unwrap();
+        checkpoints::create_checkpoint_from_table_uri_and_cleanup(
+            &table.table_uri,
+            table.version,
+            None,
+        )
+        .await
+        .unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(table.get_files(), vec![a1.path.as_str(), a2.path.as_str()]);
 
@@ -208,9 +213,7 @@ mod checkpoints_with_tombstones {
 
         assert_eq!(1, fs_common::commit_add(&mut table, &a1).await);
         assert_eq!(2, fs_common::commit_add(&mut table, &a2).await);
-        checkpoints::create_checkpoint_from_table(&table)
-            .await
-            .unwrap();
+        checkpoints::create_checkpoint(&table).await.unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(table.get_files(), vec![a1.path.as_str(), a2.path.as_str()]);
 
@@ -218,9 +221,7 @@ mod checkpoints_with_tombstones {
         assert_eq!(table.get_files(), vec![opt1.path.as_str()]);
         assert_eq!(table.get_state().all_tombstones(), &removes1);
 
-        checkpoints::create_checkpoint_from_table(&table)
-            .await
-            .unwrap();
+        checkpoints::create_checkpoint(&table).await.unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
         assert_eq!(table.get_files(), vec![opt1.path.as_str()]);
         assert_eq!(table.get_state().all_tombstones().len(), 0); // stale removes are deleted from the state
@@ -325,9 +326,7 @@ mod checkpoints_with_tombstones {
         path: &str,
         version: i64,
     ) -> (HashSet<String>, Vec<Remove>) {
-        checkpoints::create_checkpoint_from_table(&table)
-            .await
-            .unwrap();
+        checkpoints::create_checkpoint(&table).await.unwrap();
         let cp_path = format!(
             "{}/_delta_log/0000000000000000000{}.checkpoint.parquet",
             path, version

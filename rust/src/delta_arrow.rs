@@ -16,7 +16,7 @@ impl TryFrom<&schema::Schema> for ArrowSchema {
         let fields = s
             .get_fields()
             .iter()
-            .map(|field| <ArrowField as TryFrom<&schema::SchemaField>>::try_from(field))
+            .map(<ArrowField as TryFrom<&schema::SchemaField>>::try_from)
             .collect::<Result<Vec<ArrowField>, ArrowError>>()?;
 
         Ok(ArrowSchema::new(fields))
@@ -125,7 +125,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
             schema::SchemaDataType::r#struct(s) => Ok(ArrowDataType::Struct(
                 s.get_fields()
                     .iter()
-                    .map(|f| <ArrowField as TryFrom<&schema::SchemaField>>::try_from(f))
+                    .map(<ArrowField as TryFrom<&schema::SchemaField>>::try_from)
                     .collect::<Result<Vec<ArrowField>, ArrowError>>()?,
             )),
             schema::SchemaDataType::array(a) => {
