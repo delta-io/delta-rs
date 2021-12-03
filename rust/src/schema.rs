@@ -17,6 +17,9 @@ pub type DeltaDataTypeTimestamp = DeltaDataTypeLong;
 pub type DeltaDataTypeInt = i32;
 
 static STRUCT_TAG: &str = "struct";
+static ARRAY_TAG: &str = "array";
+static MAP_TAG: &str = "map";
+
 /// Represents a struct field defined in the Delta table schema.
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
 #[derive(Serialize, Deserialize, PartialEq, Debug, Default, Clone)]
@@ -104,6 +107,15 @@ pub struct SchemaTypeArray {
 }
 
 impl SchemaTypeArray {
+    /// Create a new SchemaTypeArray
+    pub fn new(elementType: Box<SchemaDataType>, containsNull: bool) -> Self {
+        Self {
+            r#type: String::from(ARRAY_TAG),
+            elementType,
+            containsNull,
+        }
+    }
+
     /// The data type of each element contained in the array.
     pub fn get_element_type(&self) -> &SchemaDataType {
         &self.elementType
@@ -125,6 +137,20 @@ pub struct SchemaTypeMap {
 }
 
 impl SchemaTypeMap {
+    /// Create a new SchemaTypeMap
+    pub fn new(
+        keyType: Box<SchemaDataType>,
+        valueType: Box<SchemaDataType>,
+        valueContainsNull: bool,
+    ) -> Self {
+        Self {
+            r#type: String::from(MAP_TAG),
+            keyType,
+            valueType,
+            valueContainsNull,
+        }
+    }
+
     /// The type of element used for the key of this map, represented as a string containing the
     /// name of a primitive type, a struct definition, an array definition or a map definition
     pub fn get_key_type(&self) -> &SchemaDataType {
