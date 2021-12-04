@@ -507,7 +507,7 @@ impl DeltaTableBuilder {
         self
     }
 
-    /// explicitely set a backend (override backend derived from `table_uri`)
+    /// explicitly set a backend (override backend derived from `table_uri`)
     pub fn with_storage_backend(mut self, storage: Box<dyn StorageBackend>) -> Self {
         self.options.storage_backend = storage;
         self
@@ -918,7 +918,7 @@ impl DeltaTable {
             .collect())
     }
 
-    /// Return a refernece to all active "add" actions present in the loaded state
+    /// Return a reference to all active "add" actions present in the loaded state
     pub fn get_active_add_actions(&self) -> &Vec<action::Add> {
         self.state.files()
     }
@@ -1365,6 +1365,7 @@ impl<'a> DeltaTransaction<'a> {
     /// partitions: an ordered vec of WritablePartitionValues for the file to be added
     /// actions: an ordered list of Actions to be inserted into the log file _ahead_ of the Add
     ///     action for the file added. This should typically be used for txn type actions
+    // TODO move or remove this function
     pub async fn add_file(
         &mut self,
         bytes: &[u8],
@@ -1431,17 +1432,19 @@ impl<'a> DeltaTransaction<'a> {
     }
 
     /// Commits the given actions to the delta log.
-    /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
+    /// This method will retry the transaction commit based on the value of
+    /// `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
     pub async fn commit(
         &mut self,
         _operation: Option<DeltaOperation>,
     ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
-        // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action), but leaving it unused for now.
-        // `CommitInfo` is a fairly dynamic data structure so we should work out the data structure approach separately.
+        // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action),
+        // but leaving it unused for now. `CommitInfo` is a fairly dynamic data structure so we should work
+        // out the data structure approach separately.
 
         // TODO: calculate isolation level to use when checking for conflicts.
         // Leaving conflict checking unimplemented for now to get the "single writer" implementation off the ground.
-        // Leaving some commmented code in place as a guidepost for the future.
+        // Leaving some commented code in place as a guidepost for the future.
 
         // let no_data_changed = actions.iter().all(|a| match a {
         //     Action::add(x) => !x.dataChange,
