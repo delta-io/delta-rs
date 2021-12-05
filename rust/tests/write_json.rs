@@ -31,6 +31,8 @@ async fn write_single_partition() {
     let log_path = table_path.join("_delta_log/00000000000000000001.json");
     assert!(log_path.exists());
     assert!(log_path.is_file());
+
+    assert_eq!(table.get_files().len(), 1);
 }
 
 #[tokio::test]
@@ -56,6 +58,8 @@ async fn write_multiple_partitions() {
     let partition_path_2 = table_path.join("modified=2021-02-02");
     assert!(partition_path_2.exists());
     assert!(partition_path_2.is_dir());
+
+    assert_eq!(table.get_files().len(), 2);
 
     let log_path = table_path.join("_delta_log/00000000000000000001.json");
     assert!(log_path.exists());

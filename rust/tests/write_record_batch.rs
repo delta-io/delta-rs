@@ -23,10 +23,16 @@ async fn write_and_commit_no_partition() {
     let mut writer = DataWriter::for_table(&table, message_handler, HashMap::new()).unwrap();
     let data = get_record_batch();
 
+    assert_eq!(table.version, 0);
+    assert_eq!(table.get_files().len(), 0);
+
     writer
         .write_and_commit(&mut table, vec![data], None)
         .await
         .unwrap();
+
+    assert_eq!(table.version, 1);
+    assert_eq!(table.get_files().len(), 1);
 
     let log_path = table_path.join("_delta_log/00000000000000000001.json");
     assert!(log_path.exists());
