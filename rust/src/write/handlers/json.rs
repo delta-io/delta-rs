@@ -1,4 +1,4 @@
-//! Abstractions and implementations for writing data to delta tables
+//! Handle JSON messages when writing to delta tables
 use crate::write::{DataWriterError, MessageHandler};
 use arrow::{datatypes::Schema as ArrowSchema, json::reader::Decoder, record_batch::*};
 use serde_json::Value;

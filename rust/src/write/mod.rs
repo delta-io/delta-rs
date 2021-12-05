@@ -18,6 +18,7 @@ use arrow::{
     error::ArrowError,
     record_batch::*,
 };
+use arrow_buffer::DataArrowWriter;
 use parquet::{
     basic::{Compression, LogicalType, TimestampType},
     errors::ParquetError,
@@ -32,7 +33,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use uuid::Uuid;
 
-pub mod arrow_buffer;
+mod arrow_buffer;
 pub mod handlers;
 
 const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
@@ -42,14 +43,6 @@ type MinAndMaxValues = (
     HashMap<String, ColumnValueStat>,
     HashMap<String, ColumnValueStat>,
 );
-
-/// Handling of basic write operations
-pub enum WriteMode {
-    /// append data to existing table
-    Append,
-    /// overwrite table with new data
-    Overwrite,
-}
 
 /// Enum representing an error when calling [`DataWriter`].
 #[derive(thiserror::Error, Debug)]
@@ -165,7 +158,7 @@ pub struct DataWriter<M: Clone> {
     arrow_schema_ref: Arc<arrow::datatypes::Schema>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
-    arrow_writers: HashMap<String, arrow_buffer::DataArrowWriter<M>>,
+    arrow_writers: HashMap<String, DataArrowWriter<M>>,
 }
 
 impl<M: Clone> DataWriter<M> {
@@ -222,15 +215,25 @@ impl<M: Clone> DataWriter<M> {
         Ok(schema_updated)
     }
 
+    fn divide_by_partition_values(
+        &mut self,
+        values: Vec<M>,
+    ) -> Result<HashMap<String, Vec<M>>, DataWriterError> {
+        if self.partition_columns.is_empty() {
+            let mut partitions = HashMap::new();
+            partitions.insert(Value::Null.to_string(), values);
+            return Ok(partitions)
+        }
+        self.message_handler
+            .divide_by_partition_values(&self.partition_columns, values)
+    }
+
     /// Writes the given values to internal parquet buffers for each represented partition.
     pub async fn write(&mut self, values: Vec<M>) -> Result<(), DataWriterError> {
-        let mut partial_writes: Vec<(Value, ParquetError)> = Vec::new();
+        let mut partial_writes: Vec<(M, ParquetError)> = Vec::new();
         let arrow_schema = self.arrow_schema();
 
-        for (key, values) in self
-            .message_handler
-            .divide_by_partition_values(&self.partition_columns, values)?
-        {
+        for (key, values) in self.divide_by_partition_values(values)? {
             match self.arrow_writers.get_mut(&key) {
                 Some(writer) => DataWriter::collect_partial_write_failure(
                     &mut partial_writes,
@@ -239,7 +242,7 @@ impl<M: Clone> DataWriter<M> {
                         .await,
                 )?,
                 None => {
-                    let mut writer = arrow_buffer::DataArrowWriter::new(
+                    let mut writer = DataArrowWriter::new(
                         arrow_schema.clone(),
                         self.writer_properties.clone(),
                         self.message_handler.clone(),
@@ -261,7 +264,8 @@ impl<M: Clone> DataWriter<M> {
             let sample = partial_writes.first().map(|t| t.to_owned());
             if let Some((_, e)) = sample {
                 return Err(DataWriterError::PartialParquetWrite {
-                    skipped_values: partial_writes,
+                    // TODO handle error with generic messages
+                    skipped_values: vec![],
                     sample_error: e,
                 });
             } else {
