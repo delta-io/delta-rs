@@ -60,6 +60,7 @@ extern crate thiserror;
 
 pub mod action;
 pub mod checkpoints;
+pub mod commands;
 pub mod data_catalog;
 mod delta;
 pub mod delta_arrow;

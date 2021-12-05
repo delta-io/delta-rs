@@ -5,7 +5,7 @@
 
 use crate::{
     action::{Action, Add, ColumnCountStat, ColumnValueStat, DeltaOperation, Remove, Stats},
-    get_backend_for_uri_with_options,
+    get_backend_for_uri_with_options, schema,
     writer::time_utils::timestamp_to_delta_stats_string,
     DeltaDataTypeVersion, DeltaTable, DeltaTableError, DeltaTableMetaData, Schema, StorageBackend,
     StorageError, UriError,
@@ -13,8 +13,8 @@ use crate::{
 use arrow::{
     array::{as_boolean_array, as_primitive_array, make_array, Array, ArrayData},
     buffer::MutableBuffer,
-    datatypes::Schema as ArrowSchema,
     datatypes::*,
+    datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema},
     error::ArrowError,
     record_batch::*,
 };
@@ -43,6 +43,58 @@ type MinAndMaxValues = (
     HashMap<String, ColumnValueStat>,
     HashMap<String, ColumnValueStat>,
 );
+
+impl TryFrom<Arc<ArrowSchema>> for Schema {
+    type Error = DeltaTableError;
+
+    fn try_from(s: Arc<ArrowSchema>) -> Result<Self, DeltaTableError> {
+        let fields = s
+            .fields()
+            .iter()
+            .map(<schema::SchemaField as TryFrom<&ArrowField>>::try_from)
+            .collect::<Result<Vec<schema::SchemaField>, DeltaTableError>>()?;
+
+        Ok(Schema::new(fields))
+    }
+}
+
+impl TryFrom<&ArrowField> for schema::SchemaField {
+    type Error = DeltaTableError;
+
+    fn try_from(f: &ArrowField) -> Result<Self, DeltaTableError> {
+
+        let field = schema::SchemaField::new(
+            f.name().to_string(),
+            schema::SchemaDataType::try_from(f.data_type())?,
+            f.is_nullable(),
+            HashMap::new(),
+        );
+        Ok(field)
+    }
+}
+
+impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
+    type Error = DeltaTableError;
+
+    fn try_from(t: &ArrowDataType) -> Result<Self, DeltaTableError> {
+        match t {
+            ArrowDataType::Utf8 => Ok(schema::SchemaDataType::primitive("string".to_string())),
+            ArrowDataType::Int64 => Ok(schema::SchemaDataType::primitive("long".to_string())),
+            ArrowDataType::Int32 => Ok(schema::SchemaDataType::primitive("integer".to_string())),
+            ArrowDataType::Int16 => Ok(schema::SchemaDataType::primitive("short".to_string())),
+            ArrowDataType::Int8 => Ok(schema::SchemaDataType::primitive("byte".to_string())),
+            ArrowDataType::Float32 => Ok(schema::SchemaDataType::primitive("float".to_string())),
+            ArrowDataType::Float64 => Ok(schema::SchemaDataType::primitive("double".to_string())),
+            ArrowDataType::Boolean => Ok(schema::SchemaDataType::primitive("boolean".to_string())),
+            ArrowDataType::Binary => Ok(schema::SchemaDataType::primitive("binary".to_string())),
+            ArrowDataType::Date32 => Ok(schema::SchemaDataType::primitive("date".to_string())),
+            // TODO handle missing datatypes, especially struct, array, map
+            _ => Err(DeltaTableError::Generic(
+                "Error converting Arrow datatype.".to_string(),
+            )),
+        }
+    }
+}
 
 /// Enum representing an error when calling [`DataWriter`].
 #[derive(thiserror::Error, Debug)]
@@ -222,7 +274,7 @@ impl<M: Clone> DataWriter<M> {
         if self.partition_columns.is_empty() {
             let mut partitions = HashMap::new();
             partitions.insert(Value::Null.to_string(), values);
-            return Ok(partitions)
+            return Ok(partitions);
         }
         self.message_handler
             .divide_by_partition_values(&self.partition_columns, values)
@@ -316,7 +368,7 @@ impl<M: Clone> DataWriter<M> {
                 // partial_writes.extend(skipped_values);
                 Ok(())
             }
-            _ => writer_result,
+            other => other,
         }
     }
 
@@ -764,13 +816,47 @@ mod tests {
     use crate::{
         action::{ColumnCountStat, ColumnValueStat},
         write::handlers::json::*,
-        DeltaTable, DeltaTableError,
+        DeltaTable, DeltaTableError, SchemaDataType, SchemaField,
     };
     use lazy_static::lazy_static;
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::path::Path;
     use std::sync::Arc;
+
+    #[test]
+    fn convert_arrow_schema_to_delta() {
+        let arrow_schema = ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+        ]);
+
+        let ref_schema = Schema::new(vec![
+            SchemaField::new(
+                "id".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "value".to_string(),
+                SchemaDataType::primitive("integer".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "modified".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+        ]);
+
+        let schema = Schema::try_from(Arc::new(arrow_schema)).unwrap();
+
+        assert_eq!(schema, ref_schema);
+    }
 
     #[tokio::test]
     async fn delta_stats_test() {
