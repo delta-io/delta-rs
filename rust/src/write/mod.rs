@@ -374,7 +374,7 @@ impl DataWriter {
     //     self.commit(table, None, None).await
     // }
 
-    fn divide_by_partition_values(
+    pub(crate) fn divide_by_partition_values(
         &mut self,
         values: Vec<RecordBatch>,
     ) -> Result<HashMap<String, Vec<RecordBatch>>, DataWriterError> {
@@ -606,19 +606,131 @@ impl DataWriter {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{SchemaDataType, SchemaField};
+    use crate::{action::Protocol, DeltaTableConfig, SchemaDataType, SchemaField};
+    use arrow::array::{Int32Array, StringArray, UInt32Array};
     use std::collections::HashMap;
     use std::sync::Arc;
 
     #[test]
-    fn convert_arrow_schema_to_delta() {
+    fn convert_schema_arrow_to_delta() {
         let arrow_schema = ArrowSchema::new(vec![
             Field::new("id", DataType::Utf8, true),
             Field::new("value", DataType::Int32, true),
             Field::new("modified", DataType::Utf8, true),
         ]);
+        let ref_schema = get_delta_schema();
+        let schema = Schema::try_from(Arc::new(arrow_schema)).unwrap();
+        assert_eq!(schema, ref_schema);
+    }
 
-        let ref_schema = Schema::new(vec![
+    #[tokio::test]
+    async fn test_divide_record_batch_no_partition() {
+        let batch = get_record_batch(None);
+        let table = create_initialized_table(vec![]).await;
+        let mut writer = DataWriter::for_table(&table, HashMap::new()).unwrap();
+
+        let partitions = writer
+            .divide_record_batch_by_partition_values(&batch)
+            .unwrap();
+
+        let expected_keys = vec![Value::Null.to_string()];
+        validate_partition_map(partitions, expected_keys)
+    }
+
+    #[tokio::test]
+    async fn test_divide_record_batch_single_partition() {
+        let batch = get_record_batch(None);
+        let table = create_initialized_table(vec![String::from("modified")]).await;
+        let mut writer = DataWriter::for_table(&table, HashMap::new()).unwrap();
+
+        let partitions = writer
+            .divide_record_batch_by_partition_values(&batch)
+            .unwrap();
+
+        let expected_keys = vec![
+            String::from("modified=2021-02-01"),
+            String::from("modified=2021-02-02"),
+        ];
+        validate_partition_map(partitions, expected_keys)
+    }
+
+    #[tokio::test]
+    async fn test_divide_record_batch_multiple_partitions() {
+        let batch = get_record_batch(None);
+        let table = create_initialized_table(vec!["modified".to_string(), "id".to_string()]).await;
+        let mut writer = DataWriter::for_table(&table, HashMap::new()).unwrap();
+
+        let partitions = writer
+            .divide_record_batch_by_partition_values(&batch)
+            .unwrap();
+
+        let expected_keys = vec![
+            String::from("modified=2021-02-01/id=A"),
+            String::from("modified=2021-02-01/id=B"),
+            String::from("modified=2021-02-02/id=A"),
+            String::from("modified=2021-02-02/id=B"),
+        ];
+        validate_partition_map(partitions, expected_keys)
+    }
+
+    fn validate_partition_map(
+        partitions: HashMap<String, RecordBatch>,
+        expected_keys: Vec<String>,
+    ) {
+        assert_eq!(partitions.len(), expected_keys.len());
+        for (key, values) in partitions {
+            assert!(expected_keys.contains(&key));
+            let ref_batch = get_record_batch(Some(key));
+            assert_eq!(ref_batch, Arc::new(values));
+        }
+    }
+
+    fn get_record_batch(part: Option<String>) -> Arc<RecordBatch> {
+        let base_int = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+        let base_str =
+            StringArray::from(vec!["A", "B", "A", "B", "A", "A", "A", "B", "B", "A", "A"]);
+        let base_mod = StringArray::from(vec![
+            "2021-02-02",
+            "2021-02-02",
+            "2021-02-02",
+            "2021-02-01",
+            "2021-02-01",
+            "2021-02-01",
+            "2021-02-01",
+            "2021-02-01",
+            "2021-02-01",
+            "2021-02-01",
+            "2021-02-01",
+        ]);
+        let indices = match &part {
+            Some(key) if key == "modified=2021-02-01" => {
+                UInt32Array::from(vec![3, 4, 5, 6, 7, 8, 9, 10])
+            }
+            Some(key) if key == "modified=2021-02-01/id=A" => {
+                UInt32Array::from(vec![4, 5, 6, 9, 10])
+            }
+            Some(key) if key == "modified=2021-02-01/id=B" => UInt32Array::from(vec![3, 7, 8]),
+            Some(key) if key == "modified=2021-02-02" => UInt32Array::from(vec![0, 1, 2]),
+            Some(key) if key == "modified=2021-02-02/id=A" => UInt32Array::from(vec![0, 2]),
+            Some(key) if key == "modified=2021-02-02/id=B" => UInt32Array::from(vec![1]),
+            _ => UInt32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
+        };
+
+        let int_values = take(&base_int, &indices, None).unwrap();
+        let str_values = take(&base_str, &indices, None).unwrap();
+        let mod_values = take(&base_mod, &indices, None).unwrap();
+
+        // expected results from parsing json payload
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+        ]));
+        Arc::new(RecordBatch::try_new(schema, vec![str_values, int_values, mod_values]).unwrap())
+    }
+
+    fn get_delta_schema() -> Schema {
+        Schema::new(vec![
             SchemaField::new(
                 "id".to_string(),
                 SchemaDataType::primitive("string".to_string()),
@@ -637,10 +749,56 @@ mod tests {
                 true,
                 HashMap::new(),
             ),
-        ]);
+        ])
+    }
 
-        let schema = Schema::try_from(Arc::new(arrow_schema)).unwrap();
+    fn create_bare_table() -> DeltaTable {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path();
+        let backend = Box::new(crate::storage::file::FileStorageBackend::new(
+            table_path.to_str().unwrap(),
+        ));
+        DeltaTable::new(
+            table_path.to_str().unwrap(),
+            backend,
+            DeltaTableConfig::default(),
+        )
+        .unwrap()
+    }
 
-        assert_eq!(schema, ref_schema);
+    async fn create_initialized_table(partition_cols: Vec<String>) -> DeltaTable {
+        let mut table = create_bare_table();
+        let table_schema = get_delta_schema();
+
+        let mut commit_info = serde_json::Map::<String, serde_json::Value>::new();
+        commit_info.insert(
+            "operation".to_string(),
+            serde_json::Value::String("CREATE TABLE".to_string()),
+        );
+        commit_info.insert(
+            "userName".to_string(),
+            serde_json::Value::String("test user".to_string()),
+        );
+
+        let protocol = Protocol {
+            min_reader_version: 1,
+            min_writer_version: 2,
+        };
+
+        let metadata = DeltaTableMetaData::new(
+            None,
+            None,
+            None,
+            table_schema,
+            partition_cols,
+            HashMap::new(),
+        );
+
+        table
+            .create(metadata, protocol, Some(commit_info))
+            .await
+            .unwrap();
+
+        table
     }
 }

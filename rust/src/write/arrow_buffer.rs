@@ -1,5 +1,4 @@
 //! Arrow writers for writing arrow partitions
-#![allow(clippy::type_complexity)]
 use super::DataWriterError;
 use crate::{action::ColumnCountStat, DeltaDataTypeLong};
 use arrow::{
