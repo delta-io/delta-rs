@@ -1,6 +1,6 @@
 //! Arrow writers for writing arrow partitions
 #![allow(clippy::type_complexity)]
-use super::{DataWriterError, MessageHandler};
+use super::DataWriterError;
 use crate::{action::ColumnCountStat, DeltaDataTypeLong};
 use arrow::{
     array::{as_primitive_array, as_struct_array, Array, StructArray},
@@ -8,7 +8,7 @@ use arrow::{
     datatypes::*,
     record_batch::*,
 };
-use log::{info, warn};
+// use log::{info, warn};
 use parquet::{
     arrow::ArrowWriter,
     errors::ParquetError,
@@ -20,8 +20,7 @@ use std::sync::Arc;
 
 type NullCounts = HashMap<String, ColumnCountStat>;
 
-pub(super) struct DataArrowWriter<T: Clone> {
-    message_handler: Arc<dyn MessageHandler<T>>,
+pub(super) struct DataArrowWriter {
     arrow_schema: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
     pub(super) cursor: InMemoryWriteableCursor,
@@ -31,14 +30,13 @@ pub(super) struct DataArrowWriter<T: Clone> {
     pub(super) buffered_record_batch_count: usize,
 }
 
-impl<T: Clone> DataArrowWriter<T> {
+impl DataArrowWriter {
     pub fn new(
         arrow_schema: Arc<ArrowSchema>,
         writer_properties: WriterProperties,
-        message_handler: Arc<dyn MessageHandler<T>>,
     ) -> Result<Self, ParquetError> {
         let cursor = InMemoryWriteableCursor::default();
-        let arrow_writer = Self::new_underlying_writer(
+        let arrow_writer = new_underlying_writer(
             cursor.clone(),
             arrow_schema.clone(),
             writer_properties.clone(),
@@ -49,7 +47,6 @@ impl<T: Clone> DataArrowWriter<T> {
         let buffered_record_batch_count = 0;
 
         Ok(Self {
-            message_handler,
             arrow_schema,
             writer_properties,
             cursor,
@@ -67,11 +64,11 @@ impl<T: Clone> DataArrowWriter<T> {
         &mut self,
         partition_columns: &[String],
         arrow_schema: Arc<ArrowSchema>,
-        message_buffer: Vec<T>,
+        record_batch: &RecordBatch,
     ) -> Result<(), DataWriterError> {
-        let record_batch = self
-            .message_handler
-            .record_batch_from_message(arrow_schema.clone(), message_buffer.as_slice())?;
+        // let record_batch = self
+        //     .message_handler
+        //     .record_batch_from_message(arrow_schema.clone(), message_buffer.as_slice())?;
 
         if record_batch.schema() != arrow_schema {
             return Err(DataWriterError::SchemaMismatch {
@@ -84,65 +81,13 @@ impl<T: Clone> DataArrowWriter<T> {
             .write_record_batch(partition_columns, record_batch)
             .await;
 
-        if let Err(DataWriterError::Parquet { source }) = result {
-            self.write_partial(partition_columns, arrow_schema, message_buffer, source)
-                .await
-        } else {
-            result
-        }
-    }
-
-    fn quarantine_failed_parquet_rows(
-        &self,
-        arrow_schema: Arc<ArrowSchema>,
-        values: Vec<T>,
-    ) -> Result<(Vec<T>, Vec<(T, ParquetError)>), DataWriterError> {
-        let mut good: Vec<T> = Vec::new();
-        let mut bad: Vec<(T, ParquetError)> = Vec::new();
-
-        for value in values {
-            let record_batch = self
-                .message_handler
-                .record_batch_from_message(arrow_schema.clone(), &[value.clone()])?;
-
-            let cursor = InMemoryWriteableCursor::default();
-            let mut writer = ArrowWriter::try_new(cursor.clone(), arrow_schema.clone(), None)?;
-
-            match writer.write(&record_batch) {
-                Ok(_) => good.push(value),
-                Err(e) => bad.push((value, e)),
-            }
-        }
-
-        Ok((good, bad))
-    }
-
-    async fn write_partial(
-        &mut self,
-        partition_columns: &[String],
-        arrow_schema: Arc<ArrowSchema>,
-        message_buffer: Vec<T>,
-        parquet_error: ParquetError,
-    ) -> Result<(), DataWriterError> {
-        warn!("Failed with parquet error while writing record batch. Attempting quarantine of bad records.");
-        let (good, bad) =
-            self.quarantine_failed_parquet_rows(arrow_schema.clone(), message_buffer)?;
-        let record_batch = self
-            .message_handler
-            .record_batch_from_message(arrow_schema, good.as_slice())?;
-        self.write_record_batch(partition_columns, record_batch)
-            .await?;
-        info!(
-            "Wrote {} good records to record batch and quarantined {} bad records.",
-            good.len(),
-            bad.len()
-        );
-        Err(DataWriterError::PartialParquetWrite {
-            // TODO handle generic type in Error definition
-            // skipped_values: bad,
-            skipped_values: vec![],
-            sample_error: parquet_error,
-        })
+        // if let Err(DataWriterError::Parquet { source }) = result {
+        //     self.write_partial(partition_columns, arrow_schema, record_batch, source)
+        //         .await
+        // } else {
+        //     result
+        // }
+        Ok(result.unwrap())
     }
 
     /// Writes the record batch in-memory and updates internal state accordingly.
@@ -151,7 +96,7 @@ impl<T: Clone> DataArrowWriter<T> {
     async fn write_record_batch(
         &mut self,
         partition_columns: &[String],
-        record_batch: RecordBatch,
+        record_batch: &RecordBatch,
     ) -> Result<(), DataWriterError> {
         if record_batch.schema() != self.arrow_schema {
             return Err(DataWriterError::SchemaMismatch {
@@ -161,14 +106,14 @@ impl<T: Clone> DataArrowWriter<T> {
         }
 
         if !partition_columns.is_empty() && self.partition_values.is_empty() {
-            let partition_values = extract_partition_values(partition_columns, &record_batch)?;
+            let partition_values = extract_partition_values(partition_columns, record_batch)?;
             self.partition_values = partition_values;
         }
 
         // Copy current cursor bytes so we can recover from failures
         let current_cursor_bytes = self.cursor.data();
 
-        let result = self.arrow_writer.write(&record_batch);
+        let result = self.arrow_writer.write(record_batch);
 
         match result {
             Ok(_) => {
@@ -176,7 +121,7 @@ impl<T: Clone> DataArrowWriter<T> {
 
                 apply_null_counts(
                     partition_columns,
-                    &record_batch.into(),
+                    &record_batch.clone().into(),
                     &mut self.null_counts,
                     0,
                 );
@@ -184,9 +129,9 @@ impl<T: Clone> DataArrowWriter<T> {
             }
             // If a write fails we need to reset the state of the DeltaArrowWriter
             Err(e) => {
-                let new_cursor = Self::cursor_from_bytes(current_cursor_bytes.as_slice())?;
+                let new_cursor = cursor_from_bytes(current_cursor_bytes.as_slice())?;
                 let _ = std::mem::replace(&mut self.cursor, new_cursor.clone());
-                let arrow_writer = Self::new_underlying_writer(
+                let arrow_writer = new_underlying_writer(
                     new_cursor,
                     self.arrow_schema.clone(),
                     self.writer_properties.clone(),
@@ -199,19 +144,64 @@ impl<T: Clone> DataArrowWriter<T> {
         }
     }
 
-    fn cursor_from_bytes(bytes: &[u8]) -> Result<InMemoryWriteableCursor, std::io::Error> {
-        let mut cursor = InMemoryWriteableCursor::default();
-        cursor.write_all(bytes)?;
-        Ok(cursor)
-    }
+    // fn quarantine_failed_parquet_rows(
+    //     &self,
+    //     arrow_schema: Arc<ArrowSchema>,
+    //     values: Vec<RecordBatch>,
+    // ) -> Result<(Vec<RecordBatch>, Vec<(RecordBatch, ParquetError)>), DataWriterError> {
+    //     let mut good: Vec<RecordBatch> = Vec::new();
+    //     let mut bad: Vec<(RecordBatch, ParquetError)> = Vec::new();
+    //     for value in values {
+    //         let cursor = InMemoryWriteableCursor::default();
+    //         let mut writer = ArrowWriter::try_new(cursor.clone(), arrow_schema.clone(), None)?;
+    //         match writer.write(&value) {
+    //             Ok(_) => good.push(value),
+    //             Err(e) => bad.push((value, e)),
+    //         }
+    //     }
+    //     Ok((good, bad))
+    // }
 
-    fn new_underlying_writer(
-        cursor: InMemoryWriteableCursor,
-        arrow_schema: Arc<ArrowSchema>,
-        writer_properties: WriterProperties,
-    ) -> Result<ArrowWriter<InMemoryWriteableCursor>, ParquetError> {
-        ArrowWriter::try_new(cursor, arrow_schema, Some(writer_properties))
-    }
+    // async fn write_partial(
+    //     &mut self,
+    //     partition_columns: &[String],
+    //     arrow_schema: Arc<ArrowSchema>,
+    //     message_buffer: Vec<RecordBatch>,
+    //     parquet_error: ParquetError,
+    // ) -> Result<(), DataWriterError> {
+    //     warn!("Failed with parquet error while writing record batch. Attempting quarantine of bad records.");
+    //     let (good, bad) =
+    //         self.quarantine_failed_parquet_rows(arrow_schema.clone(), message_buffer)?;
+    //     for record_batch in good.iter() {
+    //         self.write_record_batch(partition_columns, record_batch)
+    //             .await?;
+    //     }
+    //     info!(
+    //         "Wrote {} good records to record batch and quarantined {} bad records.",
+    //         good.len(),
+    //         bad.len()
+    //     );
+    //     Err(DataWriterError::PartialParquetWrite {
+    //         // TODO handle generic type in Error definition
+    //         // skipped_values: bad,
+    //         skipped_values: vec![],
+    //         sample_error: parquet_error,
+    //     })
+    // }
+}
+
+fn cursor_from_bytes(bytes: &[u8]) -> Result<InMemoryWriteableCursor, std::io::Error> {
+    let mut cursor = InMemoryWriteableCursor::default();
+    cursor.write_all(bytes)?;
+    Ok(cursor)
+}
+
+fn new_underlying_writer(
+    cursor: InMemoryWriteableCursor,
+    arrow_schema: Arc<ArrowSchema>,
+    writer_properties: WriterProperties,
+) -> Result<ArrowWriter<InMemoryWriteableCursor>, ParquetError> {
+    ArrowWriter::try_new(cursor, arrow_schema, Some(writer_properties))
 }
 
 fn extract_partition_values(
@@ -240,7 +230,7 @@ fn extract_partition_values(
 // however, stats are optional and can be added later with `dataChange` false log entries, and it may be more appropriate to add stats _later_ to speed up the initial write.
 // a happy middle-road might be to compute stats for partition columns only on the initial write since we should validate partition values anyway, and compute additional stats later (at checkpoint time perhaps?).
 // also this does not currently support nested partition columns and many other data types.
-fn stringified_partition_value(arr: &Arc<dyn Array>) -> Result<Option<String>, DataWriterError> {
+pub fn stringified_partition_value(arr: &Arc<dyn Array>) -> Result<Option<String>, DataWriterError> {
     let data_type = arr.data_type();
 
     if arr.is_null(0) {

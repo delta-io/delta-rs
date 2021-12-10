@@ -11,14 +11,15 @@ use crate::{
     StorageError, UriError,
 };
 use arrow::{
-    array::{as_boolean_array, as_primitive_array, make_array, Array, ArrayData},
+    array::{as_boolean_array, as_primitive_array, make_array, Array, ArrayData, UInt32Array},
     buffer::MutableBuffer,
+    compute::{lexicographical_partition_ranges, lexsort_to_indices, take, SortColumn},
     datatypes::*,
-    datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema},
+    datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef},
     error::ArrowError,
     record_batch::*,
 };
-use arrow_buffer::DataArrowWriter;
+use arrow_buffer::{stringified_partition_value, DataArrowWriter};
 use parquet::{
     basic::{Compression, LogicalType, TimestampType},
     errors::ParquetError,
@@ -35,6 +36,7 @@ use uuid::Uuid;
 
 mod arrow_buffer;
 pub mod handlers;
+pub mod streams;
 
 const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 
@@ -62,7 +64,6 @@ impl TryFrom<&ArrowField> for schema::SchemaField {
     type Error = DeltaTableError;
 
     fn try_from(f: &ArrowField) -> Result<Self, DeltaTableError> {
-
         let field = schema::SchemaField::new(
             f.name().to_string(),
             schema::SchemaDataType::try_from(f.data_type())?,
@@ -187,7 +188,7 @@ pub enum DataWriterError {
 }
 
 /// Process data messages for handling in data writer
-pub trait MessageHandler<M: Clone> {
+pub trait MessageHandler<M: Clone + Send + Sync> {
     /// Convert a buffer of messages to a RecordBatch
     fn record_batch_from_message(
         &self,
@@ -204,22 +205,22 @@ pub trait MessageHandler<M: Clone> {
 }
 
 /// Writes messages to a delta lake table.
-pub struct DataWriter<M: Clone> {
+pub struct DataWriter {
     storage: Box<dyn StorageBackend>,
-    message_handler: Arc<dyn MessageHandler<M>>,
+    // message_handler: Arc<dyn MessageHandler<M>>,
     arrow_schema_ref: Arc<arrow::datatypes::Schema>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
-    arrow_writers: HashMap<String, DataArrowWriter<M>>,
+    arrow_writers: HashMap<String, DataArrowWriter>,
 }
 
-impl<M: Clone> DataWriter<M> {
+impl DataWriter {
     /// Creates a DataWriter to write to the given table
     pub fn for_table(
         table: &DeltaTable,
-        message_handler: Arc<dyn MessageHandler<M>>,
+        // message_handler: Arc<dyn MessageHandler<M>>,
         options: HashMap<String, String>,
-    ) -> Result<DataWriter<M>, DataWriterError> {
+    ) -> Result<DataWriter, DataWriterError> {
         let storage = get_backend_for_uri_with_options(&table.table_uri, options)?;
 
         // Initialize an arrow schema ref from the delta table schema
@@ -236,7 +237,7 @@ impl<M: Clone> DataWriter<M> {
 
         Ok(Self {
             storage,
-            message_handler,
+            // message_handler,
             arrow_schema_ref,
             writer_properties,
             partition_columns,
@@ -269,44 +270,190 @@ impl<M: Clone> DataWriter<M> {
 
     fn divide_by_partition_values(
         &mut self,
-        values: Vec<M>,
-    ) -> Result<HashMap<String, Vec<M>>, DataWriterError> {
+        values: Vec<RecordBatch>,
+    ) -> Result<HashMap<String, Vec<RecordBatch>>, DataWriterError> {
+        let mut partitions = HashMap::new();
+
         if self.partition_columns.is_empty() {
-            let mut partitions = HashMap::new();
             partitions.insert(Value::Null.to_string(), values);
             return Ok(partitions);
         }
-        self.message_handler
-            .divide_by_partition_values(&self.partition_columns, values)
+
+        for batch in values {
+            let parts = self.divide_record_batch_by_partition_values(&batch)?;
+            for (key, part_values) in parts {
+                match partitions.get_mut(&key) {
+                    Some(vec) => vec.push(part_values),
+                    None => {
+                        partitions.insert(key, vec![part_values]);
+                    }
+                }
+            }
+        }
+        
+        Ok(partitions)
+    }
+
+    fn divide_record_batch_by_partition_values(
+        &mut self,
+        values: &RecordBatch,
+    ) -> Result<HashMap<String, RecordBatch>, DataWriterError> {
+        let mut partitions = HashMap::new();
+
+        if self.partition_columns.is_empty() {
+            partitions.insert(Value::Null.to_string(), values.clone());
+            return Ok(partitions);
+        }
+
+        let schema = values.schema();
+        // let batch_schema = Arc::new(ArrowSchema::new(
+        //     schema
+        //         .fields()
+        //         .iter()
+        //         .filter(|f| !self.partition_columns.contains(f.name()))
+        //         .map(|f| f.to_owned())
+        //         .collect::<Vec<_>>(),
+        // ));
+
+        // collect all columns in order relevant for partitioning
+        let sort_columns = self
+            .partition_columns
+            .clone()
+            .into_iter()
+            .map(|col| SortColumn {
+                values: values.column(schema.index_of(&col).unwrap()).clone(),
+                options: None,
+            })
+            .collect::<Vec<_>>();
+
+        let indices = lexsort_to_indices(sort_columns.as_slice(), None).unwrap();
+        let sorted_partition_columns = sort_columns
+            .iter()
+            .map(|c| SortColumn {
+                values: take(c.values.as_ref(), &indices, None).unwrap(),
+                options: None,
+            })
+            .collect::<Vec<_>>();
+
+        let ranges = lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
+
+        for range in ranges {
+            // get row indices for current partition
+            let idx: UInt32Array = (range.start..range.end)
+                .map(|i| Some(indices.value(i)))
+                .into_iter()
+                .collect();
+
+            let partition_key = sorted_partition_columns
+                .iter()
+                .map(|c| {
+                    stringified_partition_value(
+                        &c.values.slice(range.start, range.end - range.start),
+                    )
+                    .unwrap()
+                })
+                .zip(self.partition_columns.clone())
+                .map(|tuple| format!("{}={}", tuple.1, tuple.0.unwrap_or(Value::Null.to_string())))
+                .collect::<Vec<_>>()
+                .join("/");
+
+            let batch_data = schema
+                .fields()
+                .iter()
+                .map(|f| values.column(schema.index_of(&f.name()).unwrap()).clone())
+                .map(move |col| take(col.as_ref(), &idx, None).unwrap())
+                .collect::<Vec<_>>();
+
+            partitions.insert(
+                partition_key,
+                RecordBatch::try_new(schema.clone(), batch_data).unwrap(),
+            );
+        }
+
+        Ok(partitions)
     }
 
     /// Writes the given values to internal parquet buffers for each represented partition.
-    pub async fn write(&mut self, values: Vec<M>) -> Result<(), DataWriterError> {
-        let mut partial_writes: Vec<(M, ParquetError)> = Vec::new();
+    pub async fn write_record_batch(
+        &mut self,
+        values: &RecordBatch,
+    ) -> Result<(), DataWriterError> {
+        let mut partial_writes: Vec<(RecordBatch, ParquetError)> = Vec::new();
         let arrow_schema = self.arrow_schema();
 
-        for (key, values) in self.divide_by_partition_values(values)? {
+        for (key, batch) in self.divide_record_batch_by_partition_values(values)? {
             match self.arrow_writers.get_mut(&key) {
                 Some(writer) => DataWriter::collect_partial_write_failure(
                     &mut partial_writes,
                     writer
-                        .write_values(&self.partition_columns, arrow_schema.clone(), values)
+                        .write_values(&self.partition_columns, arrow_schema.clone(), &batch)
                         .await,
                 )?,
                 None => {
                     let mut writer = DataArrowWriter::new(
                         arrow_schema.clone(),
                         self.writer_properties.clone(),
-                        self.message_handler.clone(),
                     )?;
 
                     DataWriter::collect_partial_write_failure(
                         &mut partial_writes,
                         writer
-                            .write_values(&self.partition_columns, self.arrow_schema(), values)
+                            .write_values(&self.partition_columns, self.arrow_schema(), &batch)
                             .await,
                     )?;
 
+                    self.arrow_writers.insert(key, writer);
+                }
+            }
+        }
+
+        if !partial_writes.is_empty() {
+            let sample = partial_writes.first().map(|t| t.to_owned());
+            if let Some((_, e)) = sample {
+                return Err(DataWriterError::PartialParquetWrite {
+                    // TODO handle error with generic messages
+                    skipped_values: vec![],
+                    sample_error: e,
+                });
+            } else {
+                unreachable!()
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Writes the given values to internal parquet buffers for each represented partition.
+    pub async fn write(&mut self, values: Vec<RecordBatch>) -> Result<(), DataWriterError> {
+        let mut partial_writes: Vec<(RecordBatch, ParquetError)> = Vec::new();
+        let arrow_schema = self.arrow_schema();
+
+        for (key, partition_values) in self.divide_by_partition_values(values)? {
+            match self.arrow_writers.get_mut(&key) {
+                Some(writer) => {
+                    for batch in partition_values {
+                        DataWriter::collect_partial_write_failure(
+                            &mut partial_writes,
+                            writer
+                                .write_values(&self.partition_columns, arrow_schema.clone(), &batch)
+                                .await,
+                        )?
+                    }
+                }
+                None => {
+                    let mut writer = DataArrowWriter::new(
+                        arrow_schema.clone(),
+                        self.writer_properties.clone(),
+                        // self.message_handler.clone(),
+                    )?;
+                    for batch in partition_values {
+                        DataWriter::collect_partial_write_failure(
+                            &mut partial_writes,
+                            writer
+                                .write_values(&self.partition_columns, self.arrow_schema(), &batch)
+                                .await,
+                        )?;
+                    }
                     self.arrow_writers.insert(key, writer);
                 }
             }
@@ -346,20 +493,24 @@ impl<M: Clone> DataWriter<M> {
     }
 
     /// Write and immediately commit data
-    // TODO re-consider where to put this - on the table?
-    pub async fn write_and_commit(
-        &mut self,
-        table: &mut DeltaTable,
-        values: Vec<M>,
-        operation: Option<DeltaOperation>,
-    ) -> Result<DeltaDataTypeVersion, DataWriterError> {
-        self.write(values).await?;
-        self.commit(table, operation, None).await
-    }
+    // TODO trying to pass the table and record batch stream leads to compiler errors.
+    // There is a fix by simply wrapping the stream type, but it seems not worth it given the limited
+    // gain in convenience...
+    // https://github.com/rust-lang/rust/issues/63033#issuecomment-521234696
+    // pub async fn write_and_commit(
+    //     &mut self,
+    //     table: &mut DeltaTable,
+    //     values: SendableRecordBatchStream,
+    //     // operation: Option<DeltaOperation>,
+    // ) -> Result<DeltaDataTypeVersion, DataWriterError> {
+    //     self.write(values).await?;
+    //     // TODO find a way to handle operation, maybe set on writer?
+    //     self.commit(table, None, None).await
+    // }
 
     // TODO provide meaningful implementation
     fn collect_partial_write_failure(
-        _partial_writes: &mut Vec<(M, ParquetError)>,
+        _partial_writes: &mut Vec<(RecordBatch, ParquetError)>,
         writer_result: Result<(), DataWriterError>,
     ) -> Result<(), DataWriterError> {
         match writer_result {
@@ -812,10 +963,10 @@ fn arrow_array_from_bytes(
 
 #[cfg(test)]
 mod tests {
+    use super::handlers::json::record_batch_from_message;
     use super::*;
     use crate::{
         action::{ColumnCountStat, ColumnValueStat},
-        write::handlers::json::*,
         DeltaTable, DeltaTableError, SchemaDataType, SchemaField,
     };
     use lazy_static::lazy_static;
@@ -868,10 +1019,13 @@ mod tests {
             .await
             .unwrap();
 
-        let message_handler = Arc::new(JsonHandler {});
-        let mut writer = DataWriter::for_table(&table, message_handler, HashMap::new()).unwrap();
+        // let message_handler = Arc::new(JsonHandler {});
+        let mut writer = DataWriter::for_table(&table, HashMap::new()).unwrap();
 
-        writer.write(JSON_ROWS.clone()).await.unwrap();
+        let arrow_schema = writer.arrow_schema();
+        let batch = record_batch_from_message(arrow_schema, JSON_ROWS.clone().as_ref()).unwrap();
+
+        writer.write(vec![batch]).await.unwrap();
         let add = writer.write_parquet_files(&table.table_uri).await.unwrap();
         assert_eq!(add.len(), 1);
         let stats = add[0].get_stats().unwrap().unwrap();

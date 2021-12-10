@@ -22,6 +22,13 @@ pub struct CreateCommand {
     protocol: Protocol,
 }
 
+impl CreateCommand {
+    /// Create new CreateCommand
+    pub fn new(metadata: DeltaTableMetaData, protocol: Protocol) -> Self {
+        Self { metadata, protocol }
+    }
+}
+
 #[async_trait]
 impl DeltaCommandExec for CreateCommand {
     async fn execute(&self, table: &mut DeltaTable) -> Result<(), DeltaCommandError> {
@@ -82,14 +89,8 @@ mod tests {
             ),
         ]);
 
-        let metadata = DeltaTableMetaData::new(
-            Some("Test Table Create".to_string()),
-            Some("This table is made to test the create function for a DeltaTable".to_string()),
-            None,
-            table_schema,
-            vec![],
-            HashMap::new(),
-        );
+        let metadata =
+            DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
 
         let protocol = Protocol {
             min_reader_version: 1,
