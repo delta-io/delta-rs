@@ -183,23 +183,6 @@ pub enum DataWriterError {
     },
 }
 
-/// Process data messages for handling in data writer
-pub trait MessageHandler<M: Clone + Send + Sync> {
-    /// Convert a buffer of messages to a RecordBatch
-    fn record_batch_from_message(
-        &self,
-        arrow_schema: Arc<ArrowSchema>,
-        message_buffer: &[M],
-    ) -> Result<RecordBatch, DataWriterError>;
-
-    /// Split a vector of messages into individual partitions
-    fn divide_by_partition_values(
-        &self,
-        partition_columns: &[String],
-        records: Vec<M>,
-    ) -> Result<HashMap<String, Vec<M>>, DataWriterError>;
-}
-
 /// Writes messages to a delta lake table.
 pub struct DataWriter {
     storage: Box<dyn StorageBackend>,
@@ -259,111 +242,6 @@ impl DataWriter {
         }
 
         Ok(schema_updated)
-    }
-
-    fn divide_by_partition_values(
-        &mut self,
-        values: Vec<RecordBatch>,
-    ) -> Result<HashMap<String, Vec<RecordBatch>>, DataWriterError> {
-        let mut partitions = HashMap::new();
-
-        if self.partition_columns.is_empty() {
-            partitions.insert(Value::Null.to_string(), values);
-            return Ok(partitions);
-        }
-
-        for batch in values {
-            let parts = self.divide_record_batch_by_partition_values(&batch)?;
-            for (key, part_values) in parts {
-                match partitions.get_mut(&key) {
-                    Some(vec) => vec.push(part_values),
-                    None => {
-                        partitions.insert(key, vec![part_values]);
-                    }
-                }
-            }
-        }
-
-        Ok(partitions)
-    }
-
-    fn divide_record_batch_by_partition_values(
-        &mut self,
-        values: &RecordBatch,
-    ) -> Result<HashMap<String, RecordBatch>, DataWriterError> {
-        let mut partitions = HashMap::new();
-
-        if self.partition_columns.is_empty() {
-            partitions.insert(Value::Null.to_string(), values.clone());
-            return Ok(partitions);
-        }
-
-        let schema = values.schema();
-        // let batch_schema = Arc::new(ArrowSchema::new(
-        //     schema
-        //         .fields()
-        //         .iter()
-        //         .filter(|f| !self.partition_columns.contains(f.name()))
-        //         .map(|f| f.to_owned())
-        //         .collect::<Vec<_>>(),
-        // ));
-
-        // collect all columns in order relevant for partitioning
-        let sort_columns = self
-            .partition_columns
-            .clone()
-            .into_iter()
-            .map(|col| SortColumn {
-                values: values.column(schema.index_of(&col).unwrap()).clone(),
-                options: None,
-            })
-            .collect::<Vec<_>>();
-
-        let indices = lexsort_to_indices(sort_columns.as_slice(), None).unwrap();
-        let sorted_partition_columns = sort_columns
-            .iter()
-            .map(|c| SortColumn {
-                values: take(c.values.as_ref(), &indices, None).unwrap(),
-                options: None,
-            })
-            .collect::<Vec<_>>();
-
-        let ranges = lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
-
-        for range in ranges {
-            // get row indices for current partition
-            let idx: UInt32Array = (range.start..range.end)
-                .map(|i| Some(indices.value(i)))
-                .into_iter()
-                .collect();
-
-            let partition_key = sorted_partition_columns
-                .iter()
-                .map(|c| {
-                    stringified_partition_value(
-                        &c.values.slice(range.start, range.end - range.start),
-                    )
-                    .unwrap()
-                })
-                .zip(self.partition_columns.clone())
-                .map(|tuple| format!("{}={}", tuple.1, tuple.0.unwrap_or(Value::Null.to_string())))
-                .collect::<Vec<_>>()
-                .join("/");
-
-            let batch_data = schema
-                .fields()
-                .iter()
-                .map(|f| values.column(schema.index_of(&f.name()).unwrap()).clone())
-                .map(move |col| take(col.as_ref(), &idx, None).unwrap())
-                .collect::<Vec<_>>();
-
-            partitions.insert(
-                partition_key,
-                RecordBatch::try_new(schema.clone(), batch_data).unwrap(),
-            );
-        }
-
-        Ok(partitions)
     }
 
     /// Writes the given values to internal parquet buffers for each represented partition.
@@ -495,6 +373,111 @@ impl DataWriter {
     //     // TODO find a way to handle operation, maybe set on writer?
     //     self.commit(table, None, None).await
     // }
+
+    fn divide_by_partition_values(
+        &mut self,
+        values: Vec<RecordBatch>,
+    ) -> Result<HashMap<String, Vec<RecordBatch>>, DataWriterError> {
+        let mut partitions = HashMap::new();
+
+        if self.partition_columns.is_empty() {
+            partitions.insert(Value::Null.to_string(), values);
+            return Ok(partitions);
+        }
+
+        for batch in values {
+            let parts = self.divide_record_batch_by_partition_values(&batch)?;
+            for (key, part_values) in parts {
+                match partitions.get_mut(&key) {
+                    Some(vec) => vec.push(part_values),
+                    None => {
+                        partitions.insert(key, vec![part_values]);
+                    }
+                }
+            }
+        }
+
+        Ok(partitions)
+    }
+
+    fn divide_record_batch_by_partition_values(
+        &mut self,
+        values: &RecordBatch,
+    ) -> Result<HashMap<String, RecordBatch>, DataWriterError> {
+        let mut partitions = HashMap::new();
+
+        if self.partition_columns.is_empty() {
+            partitions.insert(Value::Null.to_string(), values.clone());
+            return Ok(partitions);
+        }
+
+        let schema = values.schema();
+        // let batch_schema = Arc::new(ArrowSchema::new(
+        //     schema
+        //         .fields()
+        //         .iter()
+        //         .filter(|f| !self.partition_columns.contains(f.name()))
+        //         .map(|f| f.to_owned())
+        //         .collect::<Vec<_>>(),
+        // ));
+
+        // collect all columns in order relevant for partitioning
+        let sort_columns = self
+            .partition_columns
+            .clone()
+            .into_iter()
+            .map(|col| SortColumn {
+                values: values.column(schema.index_of(&col).unwrap()).clone(),
+                options: None,
+            })
+            .collect::<Vec<_>>();
+
+        let indices = lexsort_to_indices(sort_columns.as_slice(), None).unwrap();
+        let sorted_partition_columns = sort_columns
+            .iter()
+            .map(|c| SortColumn {
+                values: take(c.values.as_ref(), &indices, None).unwrap(),
+                options: None,
+            })
+            .collect::<Vec<_>>();
+
+        let ranges = lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
+
+        for range in ranges {
+            // get row indices for current partition
+            let idx: UInt32Array = (range.start..range.end)
+                .map(|i| Some(indices.value(i)))
+                .into_iter()
+                .collect();
+
+            let partition_key = sorted_partition_columns
+                .iter()
+                .map(|c| {
+                    stringified_partition_value(
+                        &c.values.slice(range.start, range.end - range.start),
+                    )
+                    .unwrap()
+                })
+                .zip(self.partition_columns.clone())
+                .map(|tuple| format!("{}={}", tuple.1, tuple.0.unwrap_or(Value::Null.to_string())))
+                .collect::<Vec<_>>()
+                .join("/");
+
+            let batch_data = schema
+                .fields()
+                .iter()
+                .map(|f| values.column(schema.index_of(&f.name()).unwrap()).clone())
+                .map(move |col| take(col.as_ref(), &idx, None).unwrap())
+                .collect::<Vec<_>>();
+
+            partitions.insert(
+                partition_key,
+                RecordBatch::try_new(schema.clone(), batch_data).unwrap(),
+            );
+        }
+
+        Ok(partitions)
+    }
 
     // TODO provide meaningful implementation
     fn collect_partial_write_failure(
