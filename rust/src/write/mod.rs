@@ -174,3 +174,46 @@ pub enum DataWriterError {
         source: std::io::Error,
     },
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::{SchemaDataType, SchemaField};
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    #[test]
+    fn convert_schema_arrow_to_delta() {
+        let arrow_schema = ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+        ]);
+        let ref_schema = get_delta_schema();
+        let schema = Schema::try_from(Arc::new(arrow_schema)).unwrap();
+        assert_eq!(schema, ref_schema);
+    }
+
+    fn get_delta_schema() -> Schema {
+        Schema::new(vec![
+            SchemaField::new(
+                "id".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "value".to_string(),
+                SchemaDataType::primitive("integer".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "modified".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+        ])
+    }
+}

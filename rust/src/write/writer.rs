@@ -133,7 +133,7 @@ impl DataWriter {
         let mut partial_writes: Vec<(RecordBatch, ParquetError)> = Vec::new();
         let arrow_schema = self.arrow_schema();
 
-        for (key, partition_values) in self.divide_by_partition_values(values)? {
+        for (key, partition_values) in self.divide_by_partition_values(values.as_slice())? {
             match self.arrow_writers.get_mut(&key) {
                 Some(writer) => {
                     for batch in partition_values {
@@ -212,12 +212,12 @@ impl DataWriter {
 
     fn divide_by_partition_values(
         &mut self,
-        values: Vec<RecordBatch>,
+        values: &[RecordBatch],
     ) -> Result<HashMap<String, Vec<RecordBatch>>, DataWriterError> {
         let mut partitions = HashMap::new();
 
         if self.partition_columns.is_empty() {
-            partitions.insert(Value::Null.to_string(), values);
+            partitions.insert(Value::Null.to_string(), values.to_vec());
             return Ok(partitions);
         }
 
@@ -277,9 +277,10 @@ impl DataWriter {
             })
             .collect::<Vec<_>>();
 
-        let ranges = lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
+        let partition_ranges =
+            lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
 
-        for range in ranges {
+        for range in partition_ranges {
             // get row indices for current partition
             let idx: UInt32Array = (range.start..range.end)
                 .map(|i| Some(indices.value(i)))
@@ -299,6 +300,8 @@ impl DataWriter {
                 .collect::<Vec<_>>()
                 .join("/");
 
+            // TODO We should probably only add the `batch_schema` columns here,
+            // but somehow the stats test files then, investigating ...
             let batch_data = schema
                 .fields()
                 .iter()
@@ -447,18 +450,6 @@ mod tests {
     use std::collections::HashMap;
     use std::sync::Arc;
 
-    #[test]
-    fn convert_schema_arrow_to_delta() {
-        let arrow_schema = ArrowSchema::new(vec![
-            Field::new("id", DataType::Utf8, true),
-            Field::new("value", DataType::Int32, true),
-            Field::new("modified", DataType::Utf8, true),
-        ]);
-        let ref_schema = get_delta_schema();
-        let schema = Schema::try_from(Arc::new(arrow_schema)).unwrap();
-        assert_eq!(schema, ref_schema);
-    }
-
     #[tokio::test]
     async fn test_divide_record_batch_no_partition() {
         let batch = get_record_batch(None);
@@ -509,6 +500,32 @@ mod tests {
         validate_partition_map(partitions, expected_keys)
     }
 
+    #[tokio::test]
+    async fn test_write_no_partitions() {
+        let batch = get_record_batch(None);
+        let mut table = create_initialized_table(vec![]).await;
+        let mut writer = DataWriter::for_table(&table, HashMap::new()).unwrap();
+        
+        writer.write(vec![batch]).await.unwrap();
+        writer.commit(&mut table, None, None).await.unwrap();
+
+        let files = table.get_file_uris();
+        assert_eq!(files.len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_write_multiple_partitions() {
+        let batch = get_record_batch(None);
+        let mut table = create_initialized_table(vec!["modified".to_string(), "id".to_string()]).await;
+        let mut writer = DataWriter::for_table(&table, HashMap::new()).unwrap();
+        
+        writer.write(vec![batch]).await.unwrap();
+        writer.commit(&mut table, None, None).await.unwrap();
+
+        let files = table.get_file_uris();
+        assert_eq!(files.len(), 4);
+    }
+
     fn validate_partition_map(
         partitions: HashMap<String, RecordBatch>,
         expected_keys: Vec<String>,
@@ -517,11 +534,11 @@ mod tests {
         for (key, values) in partitions {
             assert!(expected_keys.contains(&key));
             let ref_batch = get_record_batch(Some(key));
-            assert_eq!(ref_batch, Arc::new(values));
+            assert_eq!(ref_batch, values);
         }
     }
 
-    fn get_record_batch(part: Option<String>) -> Arc<RecordBatch> {
+    fn get_record_batch(part: Option<String>) -> RecordBatch {
         let base_int = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
         let base_str =
             StringArray::from(vec!["A", "B", "A", "B", "A", "A", "A", "B", "B", "A", "A"]);
@@ -562,7 +579,7 @@ mod tests {
             Field::new("value", DataType::Int32, true),
             Field::new("modified", DataType::Utf8, true),
         ]));
-        Arc::new(RecordBatch::try_new(schema, vec![str_values, int_values, mod_values]).unwrap())
+        RecordBatch::try_new(schema, vec![str_values, int_values, mod_values]).unwrap()
     }
 
     fn get_delta_schema() -> Schema {
