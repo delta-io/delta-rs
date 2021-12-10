@@ -1,5 +1,5 @@
 //! High level delta commands that can be executed against a delta table
-use crate::{storage::StorageError, DeltaTable, DeltaTableError, write::DataWriterError};
+use crate::{storage::StorageError, write::DataWriterError, DeltaTable, DeltaTableError};
 use async_trait::async_trait;
 
 use arrow::error::ArrowError;
@@ -25,7 +25,7 @@ pub enum DeltaCommandError {
         #[from]
         source: DeltaTableError,
     },
-    
+
     /// Errors occurring inside the DeltaWriter modules
     #[error("Error in underlying storage backend")]
     DeltaWriterError {
@@ -41,7 +41,7 @@ pub enum DeltaCommandError {
         #[from]
         source: StorageError,
     },
-    
+
     /// Error returned when errors occur in underlying storage instance
     #[error("Error handling arrow data")]
     ArrowError {

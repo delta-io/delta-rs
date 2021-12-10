@@ -230,7 +230,9 @@ fn extract_partition_values(
 // however, stats are optional and can be added later with `dataChange` false log entries, and it may be more appropriate to add stats _later_ to speed up the initial write.
 // a happy middle-road might be to compute stats for partition columns only on the initial write since we should validate partition values anyway, and compute additional stats later (at checkpoint time perhaps?).
 // also this does not currently support nested partition columns and many other data types.
-pub fn stringified_partition_value(arr: &Arc<dyn Array>) -> Result<Option<String>, DataWriterError> {
+pub fn stringified_partition_value(
+    arr: &Arc<dyn Array>,
+) -> Result<Option<String>, DataWriterError> {
     let data_type = arr.data_type();
 
     if arr.is_null(0) {

@@ -106,7 +106,6 @@ impl DeltaCommandExec for WriteCommand {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
