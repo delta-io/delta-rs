@@ -17,8 +17,8 @@
 
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/WriteIntoDelta.scala
 use super::*;
-use crate::write::streams::*;
 use crate::{action::Protocol, DeltaTable, DeltaTableMetaData, Schema};
+use datafusion::physical_plan::SendableRecordBatchStream;
 // use arrow::{
 //     datatypes::Schema as ArrowSchema, error::Result as ArrowResult, record_batch::RecordBatch,
 // };
@@ -109,13 +109,13 @@ impl DeltaCommandExec for WriteCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::write::streams::SizedRecordBatchStream;
     use crate::DeltaTableConfig;
     use arrow::{
         array::{Int32Array, StringArray},
         datatypes::{DataType, Field, Schema as ArrowSchema},
         record_batch::RecordBatch,
     };
+    use datafusion::physical_plan::common::SizedRecordBatchStream;
     use std::path::Path;
     use std::sync::Arc;
 

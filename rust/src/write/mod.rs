@@ -23,7 +23,6 @@ pub use writer::*;
 mod arrow_buffer;
 pub mod json;
 mod stats;
-pub mod streams;
 pub mod writer;
 
 const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
