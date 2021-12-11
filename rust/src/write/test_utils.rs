@@ -88,7 +88,7 @@ pub fn create_bare_table() -> DeltaTable {
     .unwrap()
 }
 
-pub async fn create_initialized_table(partition_cols: Vec<String>) -> DeltaTable {
+pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
     let mut table = create_bare_table();
     let table_schema = get_delta_schema();
 
@@ -112,7 +112,7 @@ pub async fn create_initialized_table(partition_cols: Vec<String>) -> DeltaTable
         None,
         None,
         table_schema,
-        partition_cols,
+        partition_cols.to_vec(),
         HashMap::new(),
     );
 

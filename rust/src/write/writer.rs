@@ -11,8 +11,7 @@ use arrow::{
     compute::{lexicographical_partition_ranges, lexsort_to_indices, take, SortColumn},
     datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
 };
-use parquet::{basic::Compression, errors::ParquetError, file::properties::WriterProperties};
-use serde_json::Value;
+use parquet::{basic::Compression, file::properties::WriterProperties};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
@@ -25,6 +24,32 @@ pub struct DeltaWriter {
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
     arrow_writers: HashMap<String, PartitionWriter>,
+}
+
+struct PartitionResult {
+    pub partition_values: HashMap<String, Option<String>>,
+    pub record_batch: RecordBatch,
+}
+
+impl PartitionResult {
+    pub fn partition_key(&self, partition_cols: &[String]) -> Result<String, DeltaWriterError> {
+        let mut path_parts = vec![];
+        for k in partition_cols.iter() {
+            let partition_value = self
+                .partition_values
+                .get(k)
+                .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
+
+            let partition_value = partition_value
+                .as_deref()
+                .unwrap_or(NULL_PARTITION_VALUE_DATA_PATH);
+
+            let part = format!("{}={}", k, partition_value);
+
+            path_parts.push(part);
+        }
+        Ok(path_parts.join("/"))
+    }
 }
 
 impl DeltaWriter {
@@ -82,96 +107,27 @@ impl DeltaWriter {
 
     /// Divides a single record batch into into multiple according to table partitioning.
     /// Values are written to arrow buffers, to collect data until it should be written to disk.
-    pub async fn write_record_batch(
+    pub async fn write(
         &mut self,
         values: &RecordBatch,
     ) -> Result<(), DeltaWriterError> {
-        let mut partial_writes: Vec<(RecordBatch, ParquetError)> = Vec::new();
         let arrow_schema = self.arrow_schema();
-
-        for (key, batch) in self.divide_record_batch_by_partition_values(values)? {
-            match self.arrow_writers.get_mut(&key) {
-                Some(writer) => DeltaWriter::collect_partial_write_failure(
-                    &mut partial_writes,
-                    writer
-                        .write_record_batch(&self.partition_columns, &batch)
-                        .await,
-                )?,
-                None => {
-                    let mut writer =
-                        PartitionWriter::new(arrow_schema.clone(), self.writer_properties.clone())?;
-
-                    DeltaWriter::collect_partial_write_failure(
-                        &mut partial_writes,
-                        writer
-                            .write_record_batch(&self.partition_columns, &batch)
-                            .await,
-                    )?;
-
-                    self.arrow_writers.insert(key, writer);
-                }
-            }
-        }
-
-        if !partial_writes.is_empty() {
-            let sample = partial_writes.first().map(|t| t.to_owned());
-            if let Some((_, e)) = sample {
-                return Err(DeltaWriterError::PartialParquetWrite {
-                    // TODO handle error with generic messages
-                    skipped_values: vec![],
-                    sample_error: e,
-                });
-            } else {
-                unreachable!()
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Writes the given values to internal parquet buffers for each represented partition.
-    pub async fn write(&mut self, values: Vec<RecordBatch>) -> Result<(), DeltaWriterError> {
-        let mut partial_writes: Vec<(RecordBatch, ParquetError)> = Vec::new();
-        let arrow_schema = self.arrow_schema();
-
-        for (key, partition_values) in self.divide_by_partition_values(values.as_slice())? {
-            match self.arrow_writers.get_mut(&key) {
+        for result in self.divide_by_partition_values(values)? {
+            let partition_key = result.partition_key(&self.partition_columns)?;
+            match self.arrow_writers.get_mut(&partition_key) {
                 Some(writer) => {
-                    for batch in partition_values {
-                        DeltaWriter::collect_partial_write_failure(
-                            &mut partial_writes,
-                            writer
-                                .write_record_batch(&self.partition_columns, &batch)
-                                .await,
-                        )?
-                    }
+                    writer
+                        .write_record_batch(&self.partition_columns, &result.record_batch)
+                        .await?
                 }
                 None => {
                     let mut writer =
                         PartitionWriter::new(arrow_schema.clone(), self.writer_properties.clone())?;
-                    for batch in partition_values {
-                        DeltaWriter::collect_partial_write_failure(
-                            &mut partial_writes,
-                            writer
-                                .write_record_batch(&self.partition_columns, &batch)
-                                .await,
-                        )?;
-                    }
-                    self.arrow_writers.insert(key, writer);
+                    writer
+                        .write_record_batch(&self.partition_columns, &result.record_batch)
+                        .await?;
+                    self.arrow_writers.insert(partition_key, writer);
                 }
-            }
-        }
-
-        if !partial_writes.is_empty() {
-            let sample = partial_writes.first().map(|t| t.to_owned());
-            if let Some((_, e)) = sample {
-                return Err(DeltaWriterError::PartialParquetWrite {
-                    // TODO handle error with generic messages
-                    skipped_values: vec![],
-                    sample_error: e,
-                });
-            } else {
-                unreachable!()
             }
         }
 
@@ -195,52 +151,17 @@ impl DeltaWriter {
         Ok(version)
     }
 
-    /// Write and immediately commit data
-    pub async fn write_and_commit(
-        &mut self,
-        table: &mut DeltaTable,
-        values: Vec<RecordBatch>,
-        operation: Option<DeltaOperation>,
-        removals: Option<Vec<Remove>>,
-    ) -> Result<DeltaDataTypeVersion, DeltaWriterError> {
-        self.write(values).await?;
-        self.commit(table, operation, removals).await
-    }
-
     fn divide_by_partition_values(
         &mut self,
-        values: &[RecordBatch],
-    ) -> Result<HashMap<String, Vec<RecordBatch>>, DeltaWriterError> {
-        let mut partitions = HashMap::new();
-
-        if self.partition_columns.is_empty() {
-            partitions.insert(Value::Null.to_string(), values.to_vec());
-            return Ok(partitions);
-        }
-
-        for batch in values {
-            let parts = self.divide_record_batch_by_partition_values(batch)?;
-            for (key, part_values) in parts {
-                match partitions.get_mut(&key) {
-                    Some(vec) => vec.push(part_values),
-                    None => {
-                        partitions.insert(key, vec![part_values]);
-                    }
-                }
-            }
-        }
-
-        Ok(partitions)
-    }
-
-    fn divide_record_batch_by_partition_values(
-        &mut self,
         values: &RecordBatch,
-    ) -> Result<HashMap<String, RecordBatch>, DeltaWriterError> {
-        let mut partitions = HashMap::new();
+    ) -> Result<Vec<PartitionResult>, DeltaWriterError> {
+        let mut partitions = Vec::new();
 
         if self.partition_columns.is_empty() {
-            partitions.insert(Value::Null.to_string(), values.clone());
+            partitions.push(PartitionResult {
+                partition_values: HashMap::new(),
+                record_batch: values.clone(),
+            });
             return Ok(partitions);
         }
 
@@ -284,26 +205,27 @@ impl DeltaWriter {
                 .into_iter()
                 .collect();
 
-            let partition_key = sorted_partition_columns
-                .iter()
-                .map(|c| {
-                    stringified_partition_value(
-                        &c.values.slice(range.start, range.end - range.start),
-                    )
+            let partition_key_iter = sorted_partition_columns.iter().map(|c| {
+                stringified_partition_value(&c.values.slice(range.start, range.end - range.start))
                     .unwrap()
-                })
-                .zip(self.partition_columns.clone())
-                .map(|tuple| {
-                    format!(
-                        "{}={}",
-                        tuple.1,
-                        tuple
-                            .0
-                            .unwrap_or_else(|| NULL_PARTITION_VALUE_DATA_PATH.to_string())
-                    )
-                })
-                .collect::<Vec<_>>()
-                .join("/");
+            });
+
+            // let partition_values = self
+            //     .partition_columns
+            //     .clone()
+            //     .iter()
+            //     .zip(partition_key_iter)
+            //     .collect::<Vec<_>>();
+
+            let mut partition_values = HashMap::new();
+            for (key, value) in self
+                .partition_columns
+                .clone()
+                .iter()
+                .zip(partition_key_iter)
+            {
+                partition_values.insert(key.clone(), value);
+            }
 
             // TODO We should probably only add the `batch_schema` columns here,
             // but somehow the stats test files then, investigating ...
@@ -314,28 +236,18 @@ impl DeltaWriter {
                 .map(move |col| take(col.as_ref(), &idx, None).unwrap())
                 .collect::<Vec<_>>();
 
-            partitions.insert(
-                partition_key,
-                RecordBatch::try_new(schema.clone(), batch_data).unwrap(),
-            );
+            // partitions.insert(
+            //     partition_key,
+            //     RecordBatch::try_new(schema.clone(), batch_data).unwrap(),
+            // );
+
+            partitions.push(PartitionResult {
+                partition_values,
+                record_batch: RecordBatch::try_new(schema.clone(), batch_data).unwrap(),
+            });
         }
 
         Ok(partitions)
-    }
-
-    // TODO provide meaningful implementation
-    fn collect_partial_write_failure(
-        _partial_writes: &mut Vec<(RecordBatch, ParquetError)>,
-        writer_result: Result<(), DeltaWriterError>,
-    ) -> Result<(), DeltaWriterError> {
-        match writer_result {
-            Err(DeltaWriterError::PartialParquetWrite { .. }) => {
-                // TODO handle templated type in Error definition
-                // partial_writes.extend(skipped_values);
-                Ok(())
-            }
-            other => other,
-        }
     }
 
     /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
@@ -353,7 +265,6 @@ impl DeltaWriter {
 
             let obj_bytes = writer.cursor.data();
             let file_size = obj_bytes.len() as i64;
-
             let storage_path = self.storage.join_path(table_uri, path.as_str());
 
             //
@@ -397,28 +308,26 @@ impl DeltaWriter {
             first_part, uuid_part, last_part
         );
 
-        let data_path = if !partition_cols.is_empty() {
-            let mut path_parts = vec![];
+        if partition_cols.is_empty() {
+            return Ok(file_name);
+        }
 
-            for k in partition_cols.iter() {
-                let partition_value = partition_values
-                    .get(k)
-                    .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
+        let mut path_parts = vec![];
+        for k in partition_cols.iter() {
+            let partition_value = partition_values
+                .get(k)
+                .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
 
-                let partition_value = partition_value
-                    .as_deref()
-                    .unwrap_or(NULL_PARTITION_VALUE_DATA_PATH);
-                let part = format!("{}={}", k, partition_value);
+            let partition_value = partition_value
+                .as_deref()
+                .unwrap_or(NULL_PARTITION_VALUE_DATA_PATH);
+            let part = format!("{}={}", k, partition_value);
 
-                path_parts.push(part);
-            }
-            path_parts.push(file_name);
-            path_parts.join("/")
-        } else {
-            file_name
-        };
+            path_parts.push(part);
+        }
+        path_parts.push(file_name);
 
-        Ok(data_path)
+        Ok(path_parts.join("/"))
     }
 
     /// Returns the current byte length of the in memory buffer.
@@ -469,42 +378,45 @@ mod tests {
     #[tokio::test]
     async fn test_divide_record_batch_no_partition() {
         let batch = get_record_batch(None);
-        let table = create_initialized_table(vec![]).await;
+        let partition_cols = vec![];
+        let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
         let partitions = writer
-            .divide_record_batch_by_partition_values(&batch)
+            .divide_by_partition_values(&batch)
             .unwrap();
 
-        let expected_keys = vec![Value::Null.to_string()];
-        validate_partition_map(partitions, expected_keys)
+        assert_eq!(partitions.len(), 1);
+        assert_eq!(partitions[0].record_batch, batch)
     }
 
     #[tokio::test]
     async fn test_divide_record_batch_single_partition() {
         let batch = get_record_batch(None);
-        let table = create_initialized_table(vec![String::from("modified")]).await;
+        let partition_cols = vec!["modified".to_string()];
+        let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
         let partitions = writer
-            .divide_record_batch_by_partition_values(&batch)
+            .divide_by_partition_values(&batch)
             .unwrap();
 
         let expected_keys = vec![
             String::from("modified=2021-02-01"),
             String::from("modified=2021-02-02"),
         ];
-        validate_partition_map(partitions, expected_keys)
+        validate_partition_map(partitions, &partition_cols, expected_keys)
     }
 
     #[tokio::test]
     async fn test_divide_record_batch_multiple_partitions() {
         let batch = get_record_batch(None);
-        let table = create_initialized_table(vec!["modified".to_string(), "id".to_string()]).await;
+        let partition_cols = vec!["modified".to_string(), "id".to_string()];
+        let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
         let partitions = writer
-            .divide_record_batch_by_partition_values(&batch)
+            .divide_by_partition_values(&batch)
             .unwrap();
 
         let expected_keys = vec![
@@ -513,32 +425,18 @@ mod tests {
             String::from("modified=2021-02-02/id=A"),
             String::from("modified=2021-02-02/id=B"),
         ];
-        validate_partition_map(partitions, expected_keys)
+        validate_partition_map(partitions, &partition_cols.clone(), expected_keys)
     }
 
     #[tokio::test]
     async fn test_write_no_partitions() {
         let batch = get_record_batch(None);
-        let mut table = create_initialized_table(vec![]).await;
+        let partition_cols = vec![];
+        let mut table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
-        writer.write(vec![batch]).await.unwrap();
+        writer.write(&batch).await.unwrap();
         writer.commit(&mut table, None, None).await.unwrap();
-
-        let files = table.get_file_uris();
-        assert_eq!(files.len(), 1);
-    }
-
-    #[tokio::test]
-    async fn test_write_and_commit_no_partitions() {
-        let batch = get_record_batch(None);
-        let mut table = create_initialized_table(vec![]).await;
-        let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
-
-        writer
-            .write_and_commit(&mut table, vec![batch], None, None)
-            .await
-            .unwrap();
 
         let files = table.get_file_uris();
         assert_eq!(files.len(), 1);
@@ -547,11 +445,11 @@ mod tests {
     #[tokio::test]
     async fn test_write_multiple_partitions() {
         let batch = get_record_batch(None);
-        let mut table =
-            create_initialized_table(vec!["modified".to_string(), "id".to_string()]).await;
+        let partition_cols = vec!["modified".to_string(), "id".to_string()];
+        let mut table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
-        writer.write(vec![batch]).await.unwrap();
+        writer.write(&batch).await.unwrap();
         writer.commit(&mut table, None, None).await.unwrap();
 
         let files = table.get_file_uris();
@@ -571,14 +469,16 @@ mod tests {
     }
 
     fn validate_partition_map(
-        partitions: HashMap<String, RecordBatch>,
+        partitions: Vec<PartitionResult>,
+        partition_cols: &[String],
         expected_keys: Vec<String>,
     ) {
         assert_eq!(partitions.len(), expected_keys.len());
-        for (key, values) in partitions {
-            assert!(expected_keys.contains(&key));
-            let ref_batch = get_record_batch(Some(key.clone()));
-            assert_eq!(ref_batch, values);
+        for result in partitions {
+            let partition_key = result.partition_key(partition_cols).unwrap();
+            assert!(expected_keys.contains(&partition_key));
+            let ref_batch = get_record_batch(Some(partition_key.clone()));
+            assert_eq!(ref_batch, result.record_batch);
         }
     }
 }

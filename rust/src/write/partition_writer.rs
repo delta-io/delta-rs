@@ -86,7 +86,6 @@ impl PartitionWriter {
                     partition_columns,
                     &record_batch.clone().into(),
                     &mut self.null_counts,
-                    // TODO How do we figure out the nesting level, or is this a configurable value?
                     0,
                 );
                 Ok(())
@@ -113,51 +112,6 @@ impl PartitionWriter {
     pub fn buffer_len(&self) -> usize {
         self.cursor.len()
     }
-
-    // fn quarantine_failed_parquet_rows(
-    //     &self,
-    //     arrow_schema: Arc<ArrowSchema>,
-    //     values: Vec<RecordBatch>,
-    // ) -> Result<(Vec<RecordBatch>, Vec<(RecordBatch, ParquetError)>), DeltaWriterError> {
-    //     let mut good: Vec<RecordBatch> = Vec::new();
-    //     let mut bad: Vec<(RecordBatch, ParquetError)> = Vec::new();
-    //     for value in values {
-    //         let cursor = InMemoryWriteableCursor::default();
-    //         let mut writer = ArrowWriter::try_new(cursor.clone(), arrow_schema.clone(), None)?;
-    //         match writer.write(&value) {
-    //             Ok(_) => good.push(value),
-    //             Err(e) => bad.push((value, e)),
-    //         }
-    //     }
-    //     Ok((good, bad))
-    // }
-
-    // async fn write_partial(
-    //     &mut self,
-    //     partition_columns: &[String],
-    //     arrow_schema: Arc<ArrowSchema>,
-    //     message_buffer: Vec<RecordBatch>,
-    //     parquet_error: ParquetError,
-    // ) -> Result<(), DeltaWriterError> {
-    //     warn!("Failed with parquet error while writing record batch. Attempting quarantine of bad records.");
-    //     let (good, bad) =
-    //         self.quarantine_failed_parquet_rows(arrow_schema.clone(), message_buffer)?;
-    //     for record_batch in good.iter() {
-    //         self.write_record_batch(partition_columns, record_batch)
-    //             .await?;
-    //     }
-    //     info!(
-    //         "Wrote {} good records to record batch and quarantined {} bad records.",
-    //         good.len(),
-    //         bad.len()
-    //     );
-    //     Err(DeltaWriterError::PartialParquetWrite {
-    //         // TODO handle generic type in Error definition
-    //         // skipped_values: bad,
-    //         skipped_values: vec![],
-    //         sample_error: parquet_error,
-    //     })
-    // }
 }
 
 fn cursor_from_bytes(bytes: &[u8]) -> Result<InMemoryWriteableCursor, std::io::Error> {
