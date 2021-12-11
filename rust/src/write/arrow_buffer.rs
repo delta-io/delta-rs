@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 type NullCounts = HashMap<String, ColumnCountStat>;
 
-pub(super) struct DataArrowWriter {
+pub(super) struct DeltaArrowWriter {
     arrow_schema: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
     pub(super) cursor: InMemoryWriteableCursor,
@@ -29,7 +29,7 @@ pub(super) struct DataArrowWriter {
     pub(super) buffered_record_batch_count: usize,
 }
 
-impl DataArrowWriter {
+impl DeltaArrowWriter {
     pub fn new(
         arrow_schema: Arc<ArrowSchema>,
         writer_properties: WriterProperties,

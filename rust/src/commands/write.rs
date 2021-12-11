@@ -71,7 +71,7 @@ impl DeltaCommandExec for WriteCommand {
         // let partition_columns = metadata.partition_columns.clone();
 
         // let writer = Arc::new(
-        //     DataWriter::new(
+        //     DeltaWriter::new(
         //         &table.table_uri,
         //         partition_columns,
         //         arrow_schema_ref,

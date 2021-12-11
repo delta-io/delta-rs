@@ -60,7 +60,7 @@ extern crate thiserror;
 
 pub mod action;
 pub mod checkpoints;
-#[cfg(feature="datafusion-ext")]
+#[cfg(feature = "datafusion-ext")]
 pub mod commands;
 pub mod data_catalog;
 mod delta;

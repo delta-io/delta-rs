@@ -371,7 +371,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut writer = DataWriter::for_table(&table, HashMap::new()).unwrap();
+        let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
         let arrow_schema = writer.arrow_schema();
         let batch = record_batch_from_message(arrow_schema, JSON_ROWS.clone().as_ref()).unwrap();

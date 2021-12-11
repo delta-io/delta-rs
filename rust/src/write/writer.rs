@@ -1,5 +1,5 @@
 //! Main writer API to write record batches to delta table
-use super::arrow_buffer::{stringified_partition_value, DataArrowWriter};
+use super::arrow_buffer::{stringified_partition_value, DeltaArrowWriter};
 use super::{stats::create_add, *};
 use crate::{
     action::{Action, Add, DeltaOperation, Remove},
@@ -19,20 +19,20 @@ use std::sync::Arc;
 use uuid::Uuid;
 
 /// Writes messages to a delta lake table.
-pub struct DataWriter {
+pub struct DeltaWriter {
     storage: Box<dyn StorageBackend>,
     arrow_schema_ref: Arc<arrow::datatypes::Schema>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
-    arrow_writers: HashMap<String, DataArrowWriter>,
+    arrow_writers: HashMap<String, DeltaArrowWriter>,
 }
 
-impl DataWriter {
-    /// Creates a DataWriter to write to the given table
+impl DeltaWriter {
+    /// Creates a DeltaWriter to write to the given table
     pub fn for_table(
         table: &DeltaTable,
         options: HashMap<String, String>,
-    ) -> Result<DataWriter, DataWriterError> {
+    ) -> Result<DeltaWriter, DataWriterError> {
         let storage = get_backend_for_uri_with_options(&table.table_uri, options)?;
 
         // Initialize an arrow schema ref from the delta table schema
@@ -90,7 +90,7 @@ impl DataWriter {
 
         for (key, batch) in self.divide_record_batch_by_partition_values(values)? {
             match self.arrow_writers.get_mut(&key) {
-                Some(writer) => DataWriter::collect_partial_write_failure(
+                Some(writer) => DeltaWriter::collect_partial_write_failure(
                     &mut partial_writes,
                     writer
                         .write_values(&self.partition_columns, arrow_schema.clone(), &batch)
@@ -98,9 +98,9 @@ impl DataWriter {
                 )?,
                 None => {
                     let mut writer =
-                        DataArrowWriter::new(arrow_schema.clone(), self.writer_properties.clone())?;
+                        DeltaArrowWriter::new(arrow_schema.clone(), self.writer_properties.clone())?;
 
-                    DataWriter::collect_partial_write_failure(
+                    DeltaWriter::collect_partial_write_failure(
                         &mut partial_writes,
                         writer
                             .write_values(&self.partition_columns, self.arrow_schema(), &batch)
@@ -137,7 +137,7 @@ impl DataWriter {
             match self.arrow_writers.get_mut(&key) {
                 Some(writer) => {
                     for batch in partition_values {
-                        DataWriter::collect_partial_write_failure(
+                        DeltaWriter::collect_partial_write_failure(
                             &mut partial_writes,
                             writer
                                 .write_values(&self.partition_columns, arrow_schema.clone(), &batch)
@@ -147,9 +147,9 @@ impl DataWriter {
                 }
                 None => {
                     let mut writer =
-                        DataArrowWriter::new(arrow_schema.clone(), self.writer_properties.clone())?;
+                        DeltaArrowWriter::new(arrow_schema.clone(), self.writer_properties.clone())?;
                     for batch in partition_values {
-                        DataWriter::collect_partial_write_failure(
+                        DeltaWriter::collect_partial_write_failure(
                             &mut partial_writes,
                             writer
                                 .write_values(&self.partition_columns, self.arrow_schema(), &batch)
@@ -448,13 +448,14 @@ mod tests {
     use crate::{action::Protocol, DeltaTableConfig, SchemaDataType, SchemaField};
     use arrow::array::{Int32Array, StringArray, UInt32Array};
     use std::collections::HashMap;
+    use std::path::Path;
     use std::sync::Arc;
 
     #[tokio::test]
     async fn test_divide_record_batch_no_partition() {
         let batch = get_record_batch(None);
         let table = create_initialized_table(vec![]).await;
-        let mut writer = DataWriter::for_table(&table, HashMap::new()).unwrap();
+        let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
         let partitions = writer
             .divide_record_batch_by_partition_values(&batch)
@@ -468,7 +469,7 @@ mod tests {
     async fn test_divide_record_batch_single_partition() {
         let batch = get_record_batch(None);
         let table = create_initialized_table(vec![String::from("modified")]).await;
-        let mut writer = DataWriter::for_table(&table, HashMap::new()).unwrap();
+        let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
         let partitions = writer
             .divide_record_batch_by_partition_values(&batch)
@@ -485,7 +486,7 @@ mod tests {
     async fn test_divide_record_batch_multiple_partitions() {
         let batch = get_record_batch(None);
         let table = create_initialized_table(vec!["modified".to_string(), "id".to_string()]).await;
-        let mut writer = DataWriter::for_table(&table, HashMap::new()).unwrap();
+        let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
         let partitions = writer
             .divide_record_batch_by_partition_values(&batch)
@@ -504,8 +505,8 @@ mod tests {
     async fn test_write_no_partitions() {
         let batch = get_record_batch(None);
         let mut table = create_initialized_table(vec![]).await;
-        let mut writer = DataWriter::for_table(&table, HashMap::new()).unwrap();
-        
+        let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
+
         writer.write(vec![batch]).await.unwrap();
         writer.commit(&mut table, None, None).await.unwrap();
 
@@ -516,14 +517,27 @@ mod tests {
     #[tokio::test]
     async fn test_write_multiple_partitions() {
         let batch = get_record_batch(None);
-        let mut table = create_initialized_table(vec!["modified".to_string(), "id".to_string()]).await;
-        let mut writer = DataWriter::for_table(&table, HashMap::new()).unwrap();
-        
+        let mut table =
+            create_initialized_table(vec!["modified".to_string(), "id".to_string()]).await;
+        let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
+
         writer.write(vec![batch]).await.unwrap();
         writer.commit(&mut table, None, None).await.unwrap();
 
         let files = table.get_file_uris();
         assert_eq!(files.len(), 4);
+
+        let expected_keys = vec![
+            String::from("modified=2021-02-01/id=A"),
+            String::from("modified=2021-02-01/id=B"),
+            String::from("modified=2021-02-02/id=A"),
+            String::from("modified=2021-02-02/id=B"),
+        ];
+        let table_dir = Path::new(&table.table_uri);
+        for key in expected_keys {
+            let partition_dir = table_dir.join(key);
+            assert!(partition_dir.exists())
+        }
     }
 
     fn validate_partition_map(
@@ -533,7 +547,7 @@ mod tests {
         assert_eq!(partitions.len(), expected_keys.len());
         for (key, values) in partitions {
             assert!(expected_keys.contains(&key));
-            let ref_batch = get_record_batch(Some(key));
+            let ref_batch = get_record_batch(Some(key.clone()));
             assert_eq!(ref_batch, values);
         }
     }

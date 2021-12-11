@@ -84,7 +84,7 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
     }
 }
 
-/// Enum representing an error when calling [`DataWriter`].
+/// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]
 pub enum DataWriterError {
     /// Partition column is missing in a record written to delta.
