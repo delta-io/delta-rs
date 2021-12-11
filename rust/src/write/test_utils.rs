@@ -42,13 +42,31 @@ pub fn get_record_batch(part: Option<String>) -> RecordBatch {
     let str_values = take(&base_str, &indices, None).unwrap();
     let mod_values = take(&base_mod, &indices, None).unwrap();
 
-    // expected results from parsing json payload
-    let schema = Arc::new(ArrowSchema::new(vec![
-        Field::new("id", DataType::Utf8, true),
-        Field::new("value", DataType::Int32, true),
-        Field::new("modified", DataType::Utf8, true),
-    ]));
-    RecordBatch::try_new(schema, vec![str_values, int_values, mod_values]).unwrap()
+    match &part {
+        Some(key) if key.contains("/id=") => {
+            let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+                "value",
+                DataType::Int32,
+                true,
+            )]));
+            RecordBatch::try_new(schema, vec![int_values]).unwrap()
+        },
+        Some(_) => {
+            let schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Utf8, true),
+                Field::new("value", DataType::Int32, true),
+            ]));
+            RecordBatch::try_new(schema, vec![str_values, int_values]).unwrap()
+        }
+        _ => {
+            let schema = Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Utf8, true),
+                Field::new("value", DataType::Int32, true),
+                Field::new("modified", DataType::Utf8, true),
+            ]));
+            RecordBatch::try_new(schema, vec![str_values, int_values, mod_values]).unwrap()
+        }
+    }
 }
 
 pub fn get_delta_schema() -> Schema {

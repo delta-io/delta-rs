@@ -2,7 +2,7 @@
 use super::DeltaWriterError;
 use crate::{action::ColumnCountStat, DeltaDataTypeLong};
 use arrow::{
-    array::{as_primitive_array, as_struct_array, Array, StructArray},
+    array::{as_struct_array, Array, StructArray},
     datatypes::Schema as ArrowSchema,
     datatypes::*,
     record_batch::*,
@@ -32,6 +32,7 @@ pub(super) struct PartitionWriter {
 impl PartitionWriter {
     pub fn new(
         arrow_schema: Arc<ArrowSchema>,
+        partition_values: HashMap<String, Option<String>>,
         writer_properties: WriterProperties,
     ) -> Result<Self, ParquetError> {
         let cursor = InMemoryWriteableCursor::default();
@@ -41,7 +42,6 @@ impl PartitionWriter {
             writer_properties.clone(),
         )?;
 
-        let partition_values = HashMap::new();
         let null_counts = NullCounts::new();
         let buffered_record_batch_count = 0;
 
@@ -61,7 +61,6 @@ impl PartitionWriter {
     /// record batches and flushed after the appropriate number of bytes has been written.
     pub async fn write_record_batch(
         &mut self,
-        partition_columns: &[String],
         record_batch: &RecordBatch,
     ) -> Result<(), DeltaWriterError> {
         if record_batch.schema() != self.arrow_schema {
@@ -71,23 +70,12 @@ impl PartitionWriter {
             });
         }
 
-        if !partition_columns.is_empty() && self.partition_values.is_empty() {
-            let partition_values = extract_partition_values(partition_columns, record_batch)?;
-            self.partition_values = partition_values;
-        }
-
         // Copy current cursor bytes so we can recover from failures
         let current_cursor_bytes = self.cursor.data();
         match self.arrow_writer.write(record_batch) {
             Ok(_) => {
                 self.buffered_record_batch_count += 1;
-
-                apply_null_counts(
-                    partition_columns,
-                    &record_batch.clone().into(),
-                    &mut self.null_counts,
-                    0,
-                );
+                apply_null_counts(&record_batch.clone().into(), &mut self.null_counts, 0);
                 Ok(())
             }
             // If a write fails we need to reset the state of the PartitionWriter
@@ -128,66 +116,7 @@ fn new_underlying_writer(
     ArrowWriter::try_new(cursor, arrow_schema, Some(writer_properties))
 }
 
-fn extract_partition_values(
-    partition_cols: &[String],
-    record_batch: &RecordBatch,
-) -> Result<HashMap<String, Option<String>>, DeltaWriterError> {
-    let mut partition_values = HashMap::new();
-
-    for col_name in partition_cols.iter() {
-        let arrow_schema = record_batch.schema();
-
-        let i = arrow_schema.index_of(col_name)?;
-        let col = record_batch.column(i);
-
-        let partition_string = stringified_partition_value(col)?;
-
-        partition_values.insert(col_name.clone(), partition_string);
-    }
-
-    Ok(partition_values)
-}
-
-// very naive implementation for plucking the partition value from the first element of a column array.
-// ideally, we would do some validation to ensure the record batch containing the passed partition column contains only distinct values.
-// if we calculate stats _first_, we can avoid the extra iteration by ensuring max and min match for the column.
-// however, stats are optional and can be added later with `dataChange` false log entries, and it may be more appropriate to add stats _later_ to speed up the initial write.
-// a happy middle-road might be to compute stats for partition columns only on the initial write since we should validate partition values anyway, and compute additional stats later (at checkpoint time perhaps?).
-// also this does not currently support nested partition columns and many other data types.
-pub fn stringified_partition_value(
-    arr: &Arc<dyn Array>,
-) -> Result<Option<String>, DeltaWriterError> {
-    let data_type = arr.data_type();
-
-    if arr.is_null(0) {
-        return Ok(None);
-    }
-
-    let s = match data_type {
-        DataType::Int8 => as_primitive_array::<Int8Type>(arr).value(0).to_string(),
-        DataType::Int16 => as_primitive_array::<Int16Type>(arr).value(0).to_string(),
-        DataType::Int32 => as_primitive_array::<Int32Type>(arr).value(0).to_string(),
-        DataType::Int64 => as_primitive_array::<Int64Type>(arr).value(0).to_string(),
-        DataType::UInt8 => as_primitive_array::<UInt8Type>(arr).value(0).to_string(),
-        DataType::UInt16 => as_primitive_array::<UInt16Type>(arr).value(0).to_string(),
-        DataType::UInt32 => as_primitive_array::<UInt32Type>(arr).value(0).to_string(),
-        DataType::UInt64 => as_primitive_array::<UInt64Type>(arr).value(0).to_string(),
-        DataType::Utf8 => {
-            let data = arrow::array::as_string_array(arr);
-
-            data.value(0).to_string()
-        }
-        // TODO: handle more types
-        _ => {
-            unimplemented!("Unimplemented data type: {:?}", data_type);
-        }
-    };
-
-    Ok(Some(s))
-}
-
 fn apply_null_counts(
-    partition_columns: &[String],
     array: &StructArray,
     null_counts: &mut HashMap<String, ColumnCountStat>,
     nest_level: i32,
@@ -204,11 +133,6 @@ fn apply_null_counts(
         .for_each(|(column, field)| {
             let key = field.name().to_owned();
 
-            // Do not include partition columns in statistics
-            if nest_level == 0 && partition_columns.contains(&key) {
-                return;
-            }
-
             match column.data_type() {
                 // Recursive case
                 DataType::Struct(_) => {
@@ -218,12 +142,7 @@ fn apply_null_counts(
 
                     match col_struct {
                         ColumnCountStat::Column(map) => {
-                            apply_null_counts(
-                                partition_columns,
-                                as_struct_array(column),
-                                map,
-                                nest_level + 1,
-                            );
+                            apply_null_counts(as_struct_array(column), map, nest_level + 1);
                         }
                         _ => unreachable!(),
                     }

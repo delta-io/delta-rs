@@ -1,5 +1,5 @@
 //! Main writer API to write record batches to delta table
-use super::partition_writer::{stringified_partition_value, PartitionWriter};
+use super::partition_writer::PartitionWriter;
 use super::{stats::create_add, *};
 use crate::{
     action::{Action, Add, DeltaOperation, Remove},
@@ -7,7 +7,7 @@ use crate::{
     StorageBackend,
 };
 use arrow::{
-    array::UInt32Array,
+    array::{UInt32Array, as_primitive_array, Array},
     compute::{lexicographical_partition_ranges, lexsort_to_indices, take, SortColumn},
     datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
 };
@@ -29,27 +29,6 @@ pub struct DeltaWriter {
 struct PartitionResult {
     pub partition_values: HashMap<String, Option<String>>,
     pub record_batch: RecordBatch,
-}
-
-impl PartitionResult {
-    pub fn partition_key(&self, partition_cols: &[String]) -> Result<String, DeltaWriterError> {
-        let mut path_parts = vec![];
-        for k in partition_cols.iter() {
-            let partition_value = self
-                .partition_values
-                .get(k)
-                .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
-
-            let partition_value = partition_value
-                .as_deref()
-                .unwrap_or(NULL_PARTITION_VALUE_DATA_PATH);
-
-            let part = format!("{}={}", k, partition_value);
-
-            path_parts.push(part);
-        }
-        Ok(path_parts.join("/"))
-    }
 }
 
 impl DeltaWriter {
@@ -107,25 +86,20 @@ impl DeltaWriter {
 
     /// Divides a single record batch into into multiple according to table partitioning.
     /// Values are written to arrow buffers, to collect data until it should be written to disk.
-    pub async fn write(
-        &mut self,
-        values: &RecordBatch,
-    ) -> Result<(), DeltaWriterError> {
-        let arrow_schema = self.arrow_schema();
+    pub async fn write(&mut self, values: &RecordBatch) -> Result<(), DeltaWriterError> {
+        let arrow_schema = self.partition_arrow_schema();
         for result in self.divide_by_partition_values(values)? {
-            let partition_key = result.partition_key(&self.partition_columns)?;
+            let partition_key =
+                DeltaWriter::get_partition_key(&self.partition_columns, &result.partition_values)?;
             match self.arrow_writers.get_mut(&partition_key) {
-                Some(writer) => {
-                    writer
-                        .write_record_batch(&self.partition_columns, &result.record_batch)
-                        .await?
-                }
+                Some(writer) => writer.write_record_batch(&result.record_batch).await?,
                 None => {
-                    let mut writer =
-                        PartitionWriter::new(arrow_schema.clone(), self.writer_properties.clone())?;
-                    writer
-                        .write_record_batch(&self.partition_columns, &result.record_batch)
-                        .await?;
+                    let mut writer = PartitionWriter::new(
+                        arrow_schema.clone(),
+                        result.partition_values,
+                        self.writer_properties.clone(),
+                    )?;
+                    writer.write_record_batch(&result.record_batch).await?;
                     self.arrow_writers.insert(partition_key, writer);
                 }
             }
@@ -166,14 +140,7 @@ impl DeltaWriter {
         }
 
         let schema = values.schema();
-        // let batch_schema = Arc::new(ArrowSchema::new(
-        //     schema
-        //         .fields()
-        //         .iter()
-        //         .filter(|f| !self.partition_columns.contains(f.name()))
-        //         .map(|f| f.to_owned())
-        //         .collect::<Vec<_>>(),
-        // ));
+        let batch_schema = self.partition_arrow_schema();
 
         // collect all columns in order relevant for partitioning
         let sort_columns = self
@@ -210,13 +177,6 @@ impl DeltaWriter {
                     .unwrap()
             });
 
-            // let partition_values = self
-            //     .partition_columns
-            //     .clone()
-            //     .iter()
-            //     .zip(partition_key_iter)
-            //     .collect::<Vec<_>>();
-
             let mut partition_values = HashMap::new();
             for (key, value) in self
                 .partition_columns
@@ -227,23 +187,16 @@ impl DeltaWriter {
                 partition_values.insert(key.clone(), value);
             }
 
-            // TODO We should probably only add the `batch_schema` columns here,
-            // but somehow the stats test files then, investigating ...
-            let batch_data = schema
+            let batch_data = batch_schema
                 .fields()
                 .iter()
                 .map(|f| values.column(schema.index_of(f.name()).unwrap()).clone())
                 .map(move |col| take(col.as_ref(), &idx, None).unwrap())
                 .collect::<Vec<_>>();
 
-            // partitions.insert(
-            //     partition_key,
-            //     RecordBatch::try_new(schema.clone(), batch_data).unwrap(),
-            // );
-
             partitions.push(PartitionResult {
                 partition_values,
-                record_batch: RecordBatch::try_new(schema.clone(), batch_data).unwrap(),
+                record_batch: RecordBatch::try_new(batch_schema.clone(), batch_data).unwrap(),
             });
         }
 
@@ -261,7 +214,7 @@ impl DeltaWriter {
         for (_, mut writer) in writers {
             let metadata = writer.arrow_writer.close()?;
 
-            let path = self.next_data_path(&self.partition_columns, &writer.partition_values)?;
+            let path = self.next_data_path(&writer.partition_values)?;
 
             let obj_bytes = writer.cursor.data();
             let file_size = obj_bytes.len() as i64;
@@ -293,7 +246,6 @@ impl DeltaWriter {
     // I have not been able to find documentation for yet.
     fn next_data_path(
         &self,
-        partition_cols: &[String],
         partition_values: &HashMap<String, Option<String>>,
     ) -> Result<String, DeltaWriterError> {
         // TODO: what does 00000 mean?
@@ -308,12 +260,21 @@ impl DeltaWriter {
             first_part, uuid_part, last_part
         );
 
-        if partition_cols.is_empty() {
+        if self.partition_columns.is_empty() {
             return Ok(file_name);
         }
 
+        let partition_key =
+            DeltaWriter::get_partition_key(&self.partition_columns, partition_values)?;
+        Ok(format!("{}/{}", partition_key, file_name))
+    }
+
+    fn get_partition_key(
+        partition_columns: &[String],
+        partition_values: &HashMap<String, Option<String>>,
+    ) -> Result<String, DeltaWriterError> {
         let mut path_parts = vec![];
-        for k in partition_cols.iter() {
+        for k in partition_columns.iter() {
             let partition_value = partition_values
                 .get(k)
                 .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
@@ -325,7 +286,6 @@ impl DeltaWriter {
 
             path_parts.push(part);
         }
-        path_parts.push(file_name);
 
         Ok(path_parts.join("/"))
     }
@@ -368,6 +328,44 @@ impl DeltaWriter {
     }
 }
 
+// very naive implementation for plucking the partition value from the first element of a column array.
+// ideally, we would do some validation to ensure the record batch containing the passed partition column contains only distinct values.
+// if we calculate stats _first_, we can avoid the extra iteration by ensuring max and min match for the column.
+// however, stats are optional and can be added later with `dataChange` false log entries, and it may be more appropriate to add stats _later_ to speed up the initial write.
+// a happy middle-road might be to compute stats for partition columns only on the initial write since we should validate partition values anyway, and compute additional stats later (at checkpoint time perhaps?).
+// also this does not currently support nested partition columns and many other data types.
+fn stringified_partition_value(
+    arr: &Arc<dyn Array>,
+) -> Result<Option<String>, DeltaWriterError> {
+    let data_type = arr.data_type();
+
+    if arr.is_null(0) {
+        return Ok(None);
+    }
+
+    let s = match data_type {
+        DataType::Int8 => as_primitive_array::<Int8Type>(arr).value(0).to_string(),
+        DataType::Int16 => as_primitive_array::<Int16Type>(arr).value(0).to_string(),
+        DataType::Int32 => as_primitive_array::<Int32Type>(arr).value(0).to_string(),
+        DataType::Int64 => as_primitive_array::<Int64Type>(arr).value(0).to_string(),
+        DataType::UInt8 => as_primitive_array::<UInt8Type>(arr).value(0).to_string(),
+        DataType::UInt16 => as_primitive_array::<UInt16Type>(arr).value(0).to_string(),
+        DataType::UInt32 => as_primitive_array::<UInt32Type>(arr).value(0).to_string(),
+        DataType::UInt64 => as_primitive_array::<UInt64Type>(arr).value(0).to_string(),
+        DataType::Utf8 => {
+            let data = arrow::array::as_string_array(arr);
+
+            data.value(0).to_string()
+        }
+        // TODO: handle more types
+        _ => {
+            unimplemented!("Unimplemented data type: {:?}", data_type);
+        }
+    };
+
+    Ok(Some(s))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -382,9 +380,7 @@ mod tests {
         let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
-        let partitions = writer
-            .divide_by_partition_values(&batch)
-            .unwrap();
+        let partitions = writer.divide_by_partition_values(&batch).unwrap();
 
         assert_eq!(partitions.len(), 1);
         assert_eq!(partitions[0].record_batch, batch)
@@ -397,9 +393,7 @@ mod tests {
         let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
-        let partitions = writer
-            .divide_by_partition_values(&batch)
-            .unwrap();
+        let partitions = writer.divide_by_partition_values(&batch).unwrap();
 
         let expected_keys = vec![
             String::from("modified=2021-02-01"),
@@ -415,9 +409,7 @@ mod tests {
         let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
-        let partitions = writer
-            .divide_by_partition_values(&batch)
-            .unwrap();
+        let partitions = writer.divide_by_partition_values(&batch).unwrap();
 
         let expected_keys = vec![
             String::from("modified=2021-02-01/id=A"),
@@ -475,7 +467,8 @@ mod tests {
     ) {
         assert_eq!(partitions.len(), expected_keys.len());
         for result in partitions {
-            let partition_key = result.partition_key(partition_cols).unwrap();
+            let partition_key =
+                DeltaWriter::get_partition_key(partition_cols, &result.partition_values).unwrap();
             assert!(expected_keys.contains(&partition_key));
             let ref_batch = get_record_batch(Some(partition_key.clone()));
             assert_eq!(ref_batch, result.record_batch);
