@@ -9,7 +9,7 @@ use crate::{
 use arrow::{
     array::UInt32Array,
     compute::{lexicographical_partition_ranges, lexsort_to_indices, take, SortColumn},
-    datatypes::Schema as ArrowSchema,
+    datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
 };
 use parquet::{basic::Compression, errors::ParquetError, file::properties::WriterProperties};
 use serde_json::Value;
@@ -98,10 +98,8 @@ impl DeltaWriter {
                         .await,
                 )?,
                 None => {
-                    let mut writer = PartitionWriter::new(
-                        arrow_schema.clone(),
-                        self.writer_properties.clone(),
-                    )?;
+                    let mut writer =
+                        PartitionWriter::new(arrow_schema.clone(), self.writer_properties.clone())?;
 
                     DeltaWriter::collect_partial_write_failure(
                         &mut partial_writes,
@@ -149,10 +147,8 @@ impl DeltaWriter {
                     }
                 }
                 None => {
-                    let mut writer = PartitionWriter::new(
-                        arrow_schema.clone(),
-                        self.writer_properties.clone(),
-                    )?;
+                    let mut writer =
+                        PartitionWriter::new(arrow_schema.clone(), self.writer_properties.clone())?;
                     for batch in partition_values {
                         DeltaWriter::collect_partial_write_failure(
                             &mut partial_writes,
@@ -223,7 +219,7 @@ impl DeltaWriter {
         }
 
         for batch in values {
-            let parts = self.divide_record_batch_by_partition_values(&batch)?;
+            let parts = self.divide_record_batch_by_partition_values(batch)?;
             for (key, part_values) in parts {
                 match partitions.get_mut(&key) {
                     Some(vec) => vec.push(part_values),
@@ -303,7 +299,7 @@ impl DeltaWriter {
                         tuple.1,
                         tuple
                             .0
-                            .unwrap_or(NULL_PARTITION_VALUE_DATA_PATH.to_string())
+                            .unwrap_or_else(|| NULL_PARTITION_VALUE_DATA_PATH.to_string())
                     )
                 })
                 .collect::<Vec<_>>()
@@ -314,7 +310,7 @@ impl DeltaWriter {
             let batch_data = schema
                 .fields()
                 .iter()
-                .map(|f| values.column(schema.index_of(&f.name()).unwrap()).clone())
+                .map(|f| values.column(schema.index_of(f.name()).unwrap()).clone())
                 .map(move |col| take(col.as_ref(), &idx, None).unwrap())
                 .collect::<Vec<_>>();
 
@@ -446,8 +442,20 @@ impl DeltaWriter {
 
     /// Returns the arrow schema representation of the delta table schema defined for the wrapped
     /// table.
-    pub fn arrow_schema(&self) -> Arc<arrow::datatypes::Schema> {
+    pub fn arrow_schema(&self) -> ArrowSchemaRef {
         self.arrow_schema_ref.clone()
+    }
+
+    /// Returns the arrow schema representation of the partitioned files written to table
+    pub fn partition_arrow_schema(&self) -> ArrowSchemaRef {
+        Arc::new(ArrowSchema::new(
+            self.arrow_schema_ref
+                .fields()
+                .iter()
+                .filter(|f| !self.partition_columns.contains(f.name()))
+                .map(|f| f.to_owned())
+                .collect::<Vec<_>>(),
+        ))
     }
 }
 
