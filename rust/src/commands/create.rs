@@ -62,6 +62,7 @@ mod tests {
         action::Protocol,
         schema::{Schema, SchemaDataType, SchemaField},
         DeltaTableConfig, DeltaTableMetaData,
+        write::test_utils::create_bare_table,
     };
     use std::collections::HashMap;
     use std::path::Path;
@@ -108,19 +109,5 @@ mod tests {
         let log_path = table_path.join("_delta_log/00000000000000000000.json");
         assert!(log_path.exists());
         assert!(log_path.is_file())
-    }
-
-    fn create_bare_table() -> DeltaTable {
-        let table_dir = tempfile::tempdir().unwrap();
-        let table_path = table_dir.path();
-        let backend = Box::new(crate::storage::file::FileStorageBackend::new(
-            table_path.to_str().unwrap(),
-        ));
-        DeltaTable::new(
-            table_path.to_str().unwrap(),
-            backend,
-            DeltaTableConfig::default(),
-        )
-        .unwrap()
     }
 }

@@ -1,12 +1,7 @@
 //! Arrow writers for writing arrow partitions
 use super::DeltaWriterError;
-use crate::{action::ColumnCountStat, DeltaDataTypeLong};
-use arrow::{
-    array::{as_struct_array, Array, StructArray},
-    datatypes::Schema as ArrowSchema,
-    datatypes::*,
-    record_batch::*,
-};
+use crate::{action::ColumnCountStat, write::stats::apply_null_counts};
+use arrow::{datatypes::Schema as ArrowSchema, record_batch::*};
 // use log::{info, warn};
 use parquet::{
     arrow::ArrowWriter,
@@ -59,10 +54,7 @@ impl PartitionWriter {
     /// Writes the record batch in-memory and updates internal state accordingly.
     /// This method buffers the write stream internally so it can be invoked for many
     /// record batches and flushed after the appropriate number of bytes has been written.
-    pub async fn write_record_batch(
-        &mut self,
-        record_batch: &RecordBatch,
-    ) -> Result<(), DeltaWriterError> {
+    pub async fn write(&mut self, record_batch: &RecordBatch) -> Result<(), DeltaWriterError> {
         if record_batch.schema() != self.arrow_schema {
             return Err(DeltaWriterError::SchemaMismatch {
                 record_batch_schema: record_batch.schema(),
@@ -114,54 +106,4 @@ fn new_underlying_writer(
     writer_properties: WriterProperties,
 ) -> Result<ArrowWriter<InMemoryWriteableCursor>, ParquetError> {
     ArrowWriter::try_new(cursor, arrow_schema, Some(writer_properties))
-}
-
-fn apply_null_counts(
-    array: &StructArray,
-    null_counts: &mut HashMap<String, ColumnCountStat>,
-    nest_level: i32,
-) {
-    let fields = match array.data_type() {
-        DataType::Struct(fields) => fields,
-        _ => unreachable!(),
-    };
-
-    array
-        .columns()
-        .iter()
-        .zip(fields)
-        .for_each(|(column, field)| {
-            let key = field.name().to_owned();
-
-            match column.data_type() {
-                // Recursive case
-                DataType::Struct(_) => {
-                    let col_struct = null_counts
-                        .entry(key)
-                        .or_insert_with(|| ColumnCountStat::Column(HashMap::new()));
-
-                    match col_struct {
-                        ColumnCountStat::Column(map) => {
-                            apply_null_counts(as_struct_array(column), map, nest_level + 1);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                // Base case
-                _ => {
-                    let col_struct = null_counts
-                        .entry(key.clone())
-                        .or_insert_with(|| ColumnCountStat::Value(0));
-
-                    match col_struct {
-                        ColumnCountStat::Value(n) => {
-                            let null_count = column.null_count() as DeltaDataTypeLong;
-                            let n = null_count + *n;
-                            null_counts.insert(key, ColumnCountStat::Value(n));
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-            }
-        });
 }

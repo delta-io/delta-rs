@@ -63,6 +63,14 @@ impl DeltaCommandExec for WriteCommand {
             command.execute(table).await?;
         }
 
+        // let mut adds = writer.flush().await?;
+        // let mut tx = table.create_transaction(None);
+        // tx.add_actions(adds.drain(..).map(Action::add).collect());
+        // if let Some(mut remove_actions) = removals {
+        //     tx.add_actions(remove_actions.drain(..).map(Action::remove).collect());
+        // }
+        // let version = tx.commit(operation).await?;
+
         todo!()
 
         // let metadata = table.get_metadata()?;
@@ -83,7 +91,7 @@ impl DeltaCommandExec for WriteCommand {
         // let write_batch = Box::new(
         //     move |batch: ArrowResult<RecordBatch>| {
         //         let writer_inner = writer.clone();
-        //         Box::pin(async move { writer_inner.write_record_batch(&batch.unwrap()).await })
+        //         Box::pin(async move { writer_inner.write(&batch.unwrap()).await })
         //     },
         // );
 
@@ -114,6 +122,7 @@ mod tests {
         array::{Int32Array, StringArray},
         datatypes::{DataType, Field, Schema as ArrowSchema},
         record_batch::RecordBatch,
+        write::test_utils::create_bare_table,
     };
     use datafusion::physical_plan::common::SizedRecordBatchStream;
     use std::path::Path;
@@ -128,21 +137,6 @@ mod tests {
         };
         let mut table = create_bare_table();
         command.execute(&mut table).await.unwrap();
-    }
-
-    fn create_bare_table() -> DeltaTable {
-        // let table_dir = tempfile::tempdir().unwrap();
-        // let table_path = table_dir.path();
-        let table_path = Path::new("/home/robstar/github/delta-rs/data");
-        let backend = Box::new(crate::storage::file::FileStorageBackend::new(
-            table_path.to_str().unwrap(),
-        ));
-        DeltaTable::new(
-            table_path.to_str().unwrap(),
-            backend,
-            DeltaTableConfig::default(),
-        )
-        .unwrap()
     }
 
     fn get_record_batch_stream() -> SizedRecordBatchStream {

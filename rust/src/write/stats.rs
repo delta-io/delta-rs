@@ -2,9 +2,13 @@ use super::*;
 use crate::{
     action::{Add, ColumnValueStat, Stats},
     writer::time_utils::timestamp_to_delta_stats_string,
+    DeltaDataTypeLong,
 };
 use arrow::{
-    array::{as_boolean_array, as_primitive_array, make_array, Array, ArrayData},
+    array::{
+        as_boolean_array, as_primitive_array, as_struct_array, make_array, Array, ArrayData,
+        StructArray,
+    },
     buffer::MutableBuffer,
 };
 use parquet::{
@@ -19,7 +23,58 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-pub fn create_add(
+// TODO tests for apply null count
+pub(crate) fn apply_null_counts(
+    array: &StructArray,
+    null_counts: &mut HashMap<String, ColumnCountStat>,
+    nest_level: i32,
+) {
+    let fields = match array.data_type() {
+        DataType::Struct(fields) => fields,
+        _ => unreachable!(),
+    };
+
+    array
+        .columns()
+        .iter()
+        .zip(fields)
+        .for_each(|(column, field)| {
+            let key = field.name().to_owned();
+
+            match column.data_type() {
+                // Recursive case
+                DataType::Struct(_) => {
+                    let col_struct = null_counts
+                        .entry(key)
+                        .or_insert_with(|| ColumnCountStat::Column(HashMap::new()));
+
+                    match col_struct {
+                        ColumnCountStat::Column(map) => {
+                            apply_null_counts(as_struct_array(column), map, nest_level + 1);
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+                // Base case
+                _ => {
+                    let col_struct = null_counts
+                        .entry(key.clone())
+                        .or_insert_with(|| ColumnCountStat::Value(0));
+
+                    match col_struct {
+                        ColumnCountStat::Value(n) => {
+                            let null_count = column.null_count() as DeltaDataTypeLong;
+                            let n = null_count + *n;
+                            null_counts.insert(key, ColumnCountStat::Value(n));
+                        }
+                        _ => unreachable!(),
+                    }
+                }
+            }
+        });
+}
+
+pub(crate) fn create_add(
     partition_values: &HashMap<String, Option<String>>,
     null_counts: NullCounts,
     path: String,
@@ -377,7 +432,7 @@ mod tests {
         let batch = record_batch_from_message(arrow_schema, JSON_ROWS.clone().as_ref()).unwrap();
 
         writer.write(&batch).await.unwrap();
-        let add = writer.write_parquet_files(&table.table_uri).await.unwrap();
+        let add = writer.flush().await.unwrap();
         assert_eq!(add.len(), 1);
         let stats = add[0].get_stats().unwrap().unwrap();
 

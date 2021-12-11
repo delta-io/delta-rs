@@ -2,12 +2,11 @@
 use super::partition_writer::PartitionWriter;
 use super::{stats::create_add, *};
 use crate::{
-    action::{Action, Add, DeltaOperation, Remove},
-    get_backend_for_uri_with_options, DeltaDataTypeVersion, DeltaTable, DeltaTableMetaData, Schema,
+    action::Add, get_backend_for_uri_with_options, DeltaTable, DeltaTableMetaData, Schema,
     StorageBackend,
 };
 use arrow::{
-    array::{UInt32Array, as_primitive_array, Array},
+    array::{as_primitive_array, Array, UInt32Array},
     compute::{lexicographical_partition_ranges, lexsort_to_indices, take, SortColumn},
     datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
 };
@@ -20,6 +19,7 @@ use uuid::Uuid;
 /// Writes messages to a delta lake table.
 pub struct DeltaWriter {
     storage: Box<dyn StorageBackend>,
+    table_uri: String,
     arrow_schema_ref: Arc<arrow::datatypes::Schema>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
@@ -53,6 +53,7 @@ impl DeltaWriter {
 
         Ok(Self {
             storage,
+            table_uri: table.table_uri.clone(),
             arrow_schema_ref,
             writer_properties,
             partition_columns,
@@ -92,14 +93,14 @@ impl DeltaWriter {
             let partition_key =
                 DeltaWriter::get_partition_key(&self.partition_columns, &result.partition_values)?;
             match self.arrow_writers.get_mut(&partition_key) {
-                Some(writer) => writer.write_record_batch(&result.record_batch).await?,
+                Some(writer) => writer.write(&result.record_batch).await?,
                 None => {
                     let mut writer = PartitionWriter::new(
                         arrow_schema.clone(),
                         result.partition_values,
                         self.writer_properties.clone(),
                     )?;
-                    writer.write_record_batch(&result.record_batch).await?;
+                    writer.write(&result.record_batch).await?;
                     self.arrow_writers.insert(partition_key, writer);
                 }
             }
@@ -108,21 +109,42 @@ impl DeltaWriter {
         Ok(())
     }
 
-    /// Commit data written to buffers to delta table
-    pub async fn commit(
-        &mut self,
-        table: &mut DeltaTable,
-        operation: Option<DeltaOperation>,
-        removals: Option<Vec<Remove>>,
-    ) -> Result<DeltaDataTypeVersion, DeltaWriterError> {
-        let mut adds = self.write_parquet_files(&table.table_uri).await?;
-        let mut tx = table.create_transaction(None);
-        tx.add_actions(adds.drain(..).map(Action::add).collect());
-        if let Some(mut remove_actions) = removals {
-            tx.add_actions(remove_actions.drain(..).map(Action::remove).collect());
+    /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
+    pub async fn flush(&mut self) -> Result<Vec<Add>, DeltaWriterError> {
+        let writers = std::mem::take(&mut self.arrow_writers);
+        let mut actions = Vec::new();
+
+        for (_, mut writer) in writers {
+            let metadata = writer.arrow_writer.close()?;
+
+            let path = self.next_data_path(&writer.partition_values)?;
+
+            let obj_bytes = writer.cursor.data();
+            let file_size = obj_bytes.len() as i64;
+            let storage_path = self
+                .storage
+                .join_path(self.table_uri.as_str(), path.as_str());
+
+            //
+            // TODO: Wrap in retry loop to handle temporary network errors
+            //
+
+            self.storage
+                .put_obj(&storage_path, obj_bytes.as_slice())
+                .await?;
+
+            // Replace self null_counts with an empty map. Use the other for stats.
+            let null_counts = std::mem::take(&mut writer.null_counts);
+
+            actions.push(create_add(
+                &writer.partition_values,
+                null_counts,
+                path,
+                file_size,
+                &metadata,
+            )?);
         }
-        let version = tx.commit(operation).await?;
-        Ok(version)
+        Ok(actions)
     }
 
     fn divide_by_partition_values(
@@ -201,45 +223,6 @@ impl DeltaWriter {
         }
 
         Ok(partitions)
-    }
-
-    /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
-    pub async fn write_parquet_files(
-        &mut self,
-        table_uri: &str,
-    ) -> Result<Vec<Add>, DeltaWriterError> {
-        let writers = std::mem::take(&mut self.arrow_writers);
-        let mut actions = Vec::new();
-
-        for (_, mut writer) in writers {
-            let metadata = writer.arrow_writer.close()?;
-
-            let path = self.next_data_path(&writer.partition_values)?;
-
-            let obj_bytes = writer.cursor.data();
-            let file_size = obj_bytes.len() as i64;
-            let storage_path = self.storage.join_path(table_uri, path.as_str());
-
-            //
-            // TODO: Wrap in retry loop to handle temporary network errors
-            //
-
-            self.storage
-                .put_obj(&storage_path, obj_bytes.as_slice())
-                .await?;
-
-            // Replace self null_counts with an empty map. Use the other for stats.
-            let null_counts = std::mem::take(&mut writer.null_counts);
-
-            actions.push(create_add(
-                &writer.partition_values,
-                null_counts,
-                path,
-                file_size,
-                &metadata,
-            )?);
-        }
-        Ok(actions)
     }
 
     // TODO: parquet files have a 5 digit zero-padded prefix and a "c\d{3}" suffix that
@@ -334,9 +317,9 @@ impl DeltaWriter {
 // however, stats are optional and can be added later with `dataChange` false log entries, and it may be more appropriate to add stats _later_ to speed up the initial write.
 // a happy middle-road might be to compute stats for partition columns only on the initial write since we should validate partition values anyway, and compute additional stats later (at checkpoint time perhaps?).
 // also this does not currently support nested partition columns and many other data types.
-fn stringified_partition_value(
-    arr: &Arc<dyn Array>,
-) -> Result<Option<String>, DeltaWriterError> {
+// TODO is this comment still valid, since we should be sure now, that the arrays where this
+// gets aplied have a single unique value
+fn stringified_partition_value(arr: &Arc<dyn Array>) -> Result<Option<String>, DeltaWriterError> {
     let data_type = arr.data_type();
 
     if arr.is_null(0) {
@@ -424,28 +407,24 @@ mod tests {
     async fn test_write_no_partitions() {
         let batch = get_record_batch(None);
         let partition_cols = vec![];
-        let mut table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
         writer.write(&batch).await.unwrap();
-        writer.commit(&mut table, None, None).await.unwrap();
-
-        let files = table.get_file_uris();
-        assert_eq!(files.len(), 1);
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
     }
 
     #[tokio::test]
     async fn test_write_multiple_partitions() {
         let batch = get_record_batch(None);
         let partition_cols = vec!["modified".to_string(), "id".to_string()];
-        let mut table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
         writer.write(&batch).await.unwrap();
-        writer.commit(&mut table, None, None).await.unwrap();
-
-        let files = table.get_file_uris();
-        assert_eq!(files.len(), 4);
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 4);
 
         let expected_keys = vec![
             String::from("modified=2021-02-01/id=A"),
