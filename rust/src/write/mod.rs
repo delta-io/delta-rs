@@ -20,9 +20,11 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 pub use writer::*;
 
-mod arrow_buffer;
 pub mod json;
+mod partition_writer;
 mod stats;
+#[cfg(test)]
+pub mod test_utils;
 pub mod writer;
 
 const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
@@ -86,7 +88,7 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
 
 /// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]
-pub enum DataWriterError {
+pub enum DeltaWriterError {
     /// Partition column is missing in a record written to delta.
     #[error("Missing partition column: {0}")]
     MissingPartitionColumn(String),

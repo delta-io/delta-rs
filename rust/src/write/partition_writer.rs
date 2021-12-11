@@ -1,5 +1,5 @@
 //! Arrow writers for writing arrow partitions
-use super::DataWriterError;
+use super::DeltaWriterError;
 use crate::{action::ColumnCountStat, DeltaDataTypeLong};
 use arrow::{
     array::{as_primitive_array, as_struct_array, Array, StructArray},
@@ -19,7 +19,7 @@ use std::sync::Arc;
 
 type NullCounts = HashMap<String, ColumnCountStat>;
 
-pub(super) struct DeltaArrowWriter {
+pub(super) struct PartitionWriter {
     arrow_schema: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
     pub(super) cursor: InMemoryWriteableCursor,
@@ -29,7 +29,7 @@ pub(super) struct DeltaArrowWriter {
     pub(super) buffered_record_batch_count: usize,
 }
 
-impl DeltaArrowWriter {
+impl PartitionWriter {
     pub fn new(
         arrow_schema: Arc<ArrowSchema>,
         writer_properties: WriterProperties,
@@ -56,49 +56,16 @@ impl DeltaArrowWriter {
         })
     }
 
-    /// Writes the given message buffer and updates internal state accordingly.
-    /// This method buffers the write stream internally so it can be invoked for many
-    /// buffers and flushed after the appropriate number of bytes has been written.
-    pub async fn write_values(
-        &mut self,
-        partition_columns: &[String],
-        arrow_schema: Arc<ArrowSchema>,
-        record_batch: &RecordBatch,
-    ) -> Result<(), DataWriterError> {
-        // let record_batch = self
-        //     .message_handler
-        //     .record_batch_from_message(arrow_schema.clone(), message_buffer.as_slice())?;
-
-        if record_batch.schema() != arrow_schema {
-            return Err(DataWriterError::SchemaMismatch {
-                record_batch_schema: record_batch.schema(),
-                expected_schema: arrow_schema,
-            });
-        }
-
-        let result = self
-            .write_record_batch(partition_columns, record_batch)
-            .await;
-
-        // if let Err(DataWriterError::Parquet { source }) = result {
-        //     self.write_partial(partition_columns, arrow_schema, record_batch, source)
-        //         .await
-        // } else {
-        //     result
-        // }
-        Ok(result.unwrap())
-    }
-
     /// Writes the record batch in-memory and updates internal state accordingly.
     /// This method buffers the write stream internally so it can be invoked for many
     /// record batches and flushed after the appropriate number of bytes has been written.
-    async fn write_record_batch(
+    pub async fn write_record_batch(
         &mut self,
         partition_columns: &[String],
         record_batch: &RecordBatch,
-    ) -> Result<(), DataWriterError> {
+    ) -> Result<(), DeltaWriterError> {
         if record_batch.schema() != self.arrow_schema {
-            return Err(DataWriterError::SchemaMismatch {
+            return Err(DeltaWriterError::SchemaMismatch {
                 record_batch_schema: record_batch.schema(),
                 expected_schema: self.arrow_schema.clone(),
             });
@@ -111,10 +78,7 @@ impl DeltaArrowWriter {
 
         // Copy current cursor bytes so we can recover from failures
         let current_cursor_bytes = self.cursor.data();
-
-        let result = self.arrow_writer.write(record_batch);
-
-        match result {
+        match self.arrow_writer.write(record_batch) {
             Ok(_) => {
                 self.buffered_record_batch_count += 1;
 
@@ -122,11 +86,12 @@ impl DeltaArrowWriter {
                     partition_columns,
                     &record_batch.clone().into(),
                     &mut self.null_counts,
+                    // TODO How do we figure out the nesting level, or is this a configurable value?
                     0,
                 );
                 Ok(())
             }
-            // If a write fails we need to reset the state of the DeltaArrowWriter
+            // If a write fails we need to reset the state of the PartitionWriter
             Err(e) => {
                 let new_cursor = cursor_from_bytes(current_cursor_bytes.as_slice())?;
                 let _ = std::mem::replace(&mut self.cursor, new_cursor.clone());
@@ -143,11 +108,17 @@ impl DeltaArrowWriter {
         }
     }
 
+    /// Returns the current byte length of the in memory buffer.
+    /// This may be used by the caller to decide when to finalize the file write.
+    pub fn buffer_len(&self) -> usize {
+        self.cursor.len()
+    }
+
     // fn quarantine_failed_parquet_rows(
     //     &self,
     //     arrow_schema: Arc<ArrowSchema>,
     //     values: Vec<RecordBatch>,
-    // ) -> Result<(Vec<RecordBatch>, Vec<(RecordBatch, ParquetError)>), DataWriterError> {
+    // ) -> Result<(Vec<RecordBatch>, Vec<(RecordBatch, ParquetError)>), DeltaWriterError> {
     //     let mut good: Vec<RecordBatch> = Vec::new();
     //     let mut bad: Vec<(RecordBatch, ParquetError)> = Vec::new();
     //     for value in values {
@@ -167,7 +138,7 @@ impl DeltaArrowWriter {
     //     arrow_schema: Arc<ArrowSchema>,
     //     message_buffer: Vec<RecordBatch>,
     //     parquet_error: ParquetError,
-    // ) -> Result<(), DataWriterError> {
+    // ) -> Result<(), DeltaWriterError> {
     //     warn!("Failed with parquet error while writing record batch. Attempting quarantine of bad records.");
     //     let (good, bad) =
     //         self.quarantine_failed_parquet_rows(arrow_schema.clone(), message_buffer)?;
@@ -180,7 +151,7 @@ impl DeltaArrowWriter {
     //         good.len(),
     //         bad.len()
     //     );
-    //     Err(DataWriterError::PartialParquetWrite {
+    //     Err(DeltaWriterError::PartialParquetWrite {
     //         // TODO handle generic type in Error definition
     //         // skipped_values: bad,
     //         skipped_values: vec![],
@@ -206,7 +177,7 @@ fn new_underlying_writer(
 fn extract_partition_values(
     partition_cols: &[String],
     record_batch: &RecordBatch,
-) -> Result<HashMap<String, Option<String>>, DataWriterError> {
+) -> Result<HashMap<String, Option<String>>, DeltaWriterError> {
     let mut partition_values = HashMap::new();
 
     for col_name in partition_cols.iter() {
@@ -231,7 +202,7 @@ fn extract_partition_values(
 // also this does not currently support nested partition columns and many other data types.
 pub fn stringified_partition_value(
     arr: &Arc<dyn Array>,
-) -> Result<Option<String>, DataWriterError> {
+) -> Result<Option<String>, DeltaWriterError> {
     let data_type = arr.data_type();
 
     if arr.is_null(0) {

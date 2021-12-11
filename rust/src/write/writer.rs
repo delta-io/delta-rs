@@ -1,5 +1,5 @@
 //! Main writer API to write record batches to delta table
-use super::arrow_buffer::{stringified_partition_value, DeltaArrowWriter};
+use super::partition_writer::{stringified_partition_value, PartitionWriter};
 use super::{stats::create_add, *};
 use crate::{
     action::{Action, Add, DeltaOperation, Remove},
@@ -24,7 +24,7 @@ pub struct DeltaWriter {
     arrow_schema_ref: Arc<arrow::datatypes::Schema>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
-    arrow_writers: HashMap<String, DeltaArrowWriter>,
+    arrow_writers: HashMap<String, PartitionWriter>,
 }
 
 impl DeltaWriter {
@@ -32,7 +32,7 @@ impl DeltaWriter {
     pub fn for_table(
         table: &DeltaTable,
         options: HashMap<String, String>,
-    ) -> Result<DeltaWriter, DataWriterError> {
+    ) -> Result<DeltaWriter, DeltaWriterError> {
         let storage = get_backend_for_uri_with_options(&table.table_uri, options)?;
 
         // Initialize an arrow schema ref from the delta table schema
@@ -63,7 +63,7 @@ impl DeltaWriter {
     pub fn update_schema(
         &mut self,
         metadata: &DeltaTableMetaData,
-    ) -> Result<bool, DataWriterError> {
+    ) -> Result<bool, DeltaWriterError> {
         let schema: ArrowSchema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
 
         let schema_updated = self.arrow_schema_ref.as_ref() != &schema
@@ -80,11 +80,12 @@ impl DeltaWriter {
         Ok(schema_updated)
     }
 
-    /// Writes the given values to internal parquet buffers for each represented partition.
+    /// Divides a single record batch into into multiple according to table partitioning.
+    /// Values are written to arrow buffers, to collect data until it should be written to disk.
     pub async fn write_record_batch(
         &mut self,
         values: &RecordBatch,
-    ) -> Result<(), DataWriterError> {
+    ) -> Result<(), DeltaWriterError> {
         let mut partial_writes: Vec<(RecordBatch, ParquetError)> = Vec::new();
         let arrow_schema = self.arrow_schema();
 
@@ -93,17 +94,19 @@ impl DeltaWriter {
                 Some(writer) => DeltaWriter::collect_partial_write_failure(
                     &mut partial_writes,
                     writer
-                        .write_values(&self.partition_columns, arrow_schema.clone(), &batch)
+                        .write_record_batch(&self.partition_columns, &batch)
                         .await,
                 )?,
                 None => {
-                    let mut writer =
-                        DeltaArrowWriter::new(arrow_schema.clone(), self.writer_properties.clone())?;
+                    let mut writer = PartitionWriter::new(
+                        arrow_schema.clone(),
+                        self.writer_properties.clone(),
+                    )?;
 
                     DeltaWriter::collect_partial_write_failure(
                         &mut partial_writes,
                         writer
-                            .write_values(&self.partition_columns, self.arrow_schema(), &batch)
+                            .write_record_batch(&self.partition_columns, &batch)
                             .await,
                     )?;
 
@@ -115,7 +118,7 @@ impl DeltaWriter {
         if !partial_writes.is_empty() {
             let sample = partial_writes.first().map(|t| t.to_owned());
             if let Some((_, e)) = sample {
-                return Err(DataWriterError::PartialParquetWrite {
+                return Err(DeltaWriterError::PartialParquetWrite {
                     // TODO handle error with generic messages
                     skipped_values: vec![],
                     sample_error: e,
@@ -129,7 +132,7 @@ impl DeltaWriter {
     }
 
     /// Writes the given values to internal parquet buffers for each represented partition.
-    pub async fn write(&mut self, values: Vec<RecordBatch>) -> Result<(), DataWriterError> {
+    pub async fn write(&mut self, values: Vec<RecordBatch>) -> Result<(), DeltaWriterError> {
         let mut partial_writes: Vec<(RecordBatch, ParquetError)> = Vec::new();
         let arrow_schema = self.arrow_schema();
 
@@ -140,19 +143,21 @@ impl DeltaWriter {
                         DeltaWriter::collect_partial_write_failure(
                             &mut partial_writes,
                             writer
-                                .write_values(&self.partition_columns, arrow_schema.clone(), &batch)
+                                .write_record_batch(&self.partition_columns, &batch)
                                 .await,
                         )?
                     }
                 }
                 None => {
-                    let mut writer =
-                        DeltaArrowWriter::new(arrow_schema.clone(), self.writer_properties.clone())?;
+                    let mut writer = PartitionWriter::new(
+                        arrow_schema.clone(),
+                        self.writer_properties.clone(),
+                    )?;
                     for batch in partition_values {
                         DeltaWriter::collect_partial_write_failure(
                             &mut partial_writes,
                             writer
-                                .write_values(&self.partition_columns, self.arrow_schema(), &batch)
+                                .write_record_batch(&self.partition_columns, &batch)
                                 .await,
                         )?;
                     }
@@ -164,7 +169,7 @@ impl DeltaWriter {
         if !partial_writes.is_empty() {
             let sample = partial_writes.first().map(|t| t.to_owned());
             if let Some((_, e)) = sample {
-                return Err(DataWriterError::PartialParquetWrite {
+                return Err(DeltaWriterError::PartialParquetWrite {
                     // TODO handle error with generic messages
                     skipped_values: vec![],
                     sample_error: e,
@@ -183,7 +188,7 @@ impl DeltaWriter {
         table: &mut DeltaTable,
         operation: Option<DeltaOperation>,
         removals: Option<Vec<Remove>>,
-    ) -> Result<DeltaDataTypeVersion, DataWriterError> {
+    ) -> Result<DeltaDataTypeVersion, DeltaWriterError> {
         let mut adds = self.write_parquet_files(&table.table_uri).await?;
         let mut tx = table.create_transaction(None);
         tx.add_actions(adds.drain(..).map(Action::add).collect());
@@ -195,25 +200,21 @@ impl DeltaWriter {
     }
 
     /// Write and immediately commit data
-    // TODO trying to pass the table and record batch stream leads to compiler errors.
-    // There is a fix by simply wrapping the stream type, but it seems not worth it given the limited
-    // gain in convenience...
-    // https://github.com/rust-lang/rust/issues/63033#issuecomment-521234696
-    // pub async fn write_and_commit(
-    //     &mut self,
-    //     table: &mut DeltaTable,
-    //     values: SendableRecordBatchStream,
-    //     // operation: Option<DeltaOperation>,
-    // ) -> Result<DeltaDataTypeVersion, DataWriterError> {
-    //     self.write(values).await?;
-    //     // TODO find a way to handle operation, maybe set on writer?
-    //     self.commit(table, None, None).await
-    // }
+    pub async fn write_and_commit(
+        &mut self,
+        table: &mut DeltaTable,
+        values: Vec<RecordBatch>,
+        operation: Option<DeltaOperation>,
+        removals: Option<Vec<Remove>>,
+    ) -> Result<DeltaDataTypeVersion, DeltaWriterError> {
+        self.write(values).await?;
+        self.commit(table, operation, removals).await
+    }
 
     fn divide_by_partition_values(
         &mut self,
         values: &[RecordBatch],
-    ) -> Result<HashMap<String, Vec<RecordBatch>>, DataWriterError> {
+    ) -> Result<HashMap<String, Vec<RecordBatch>>, DeltaWriterError> {
         let mut partitions = HashMap::new();
 
         if self.partition_columns.is_empty() {
@@ -239,7 +240,7 @@ impl DeltaWriter {
     fn divide_record_batch_by_partition_values(
         &mut self,
         values: &RecordBatch,
-    ) -> Result<HashMap<String, RecordBatch>, DataWriterError> {
+    ) -> Result<HashMap<String, RecordBatch>, DeltaWriterError> {
         let mut partitions = HashMap::new();
 
         if self.partition_columns.is_empty() {
@@ -296,7 +297,15 @@ impl DeltaWriter {
                     .unwrap()
                 })
                 .zip(self.partition_columns.clone())
-                .map(|tuple| format!("{}={}", tuple.1, tuple.0.unwrap_or(Value::Null.to_string())))
+                .map(|tuple| {
+                    format!(
+                        "{}={}",
+                        tuple.1,
+                        tuple
+                            .0
+                            .unwrap_or(NULL_PARTITION_VALUE_DATA_PATH.to_string())
+                    )
+                })
                 .collect::<Vec<_>>()
                 .join("/");
 
@@ -321,10 +330,10 @@ impl DeltaWriter {
     // TODO provide meaningful implementation
     fn collect_partial_write_failure(
         _partial_writes: &mut Vec<(RecordBatch, ParquetError)>,
-        writer_result: Result<(), DataWriterError>,
-    ) -> Result<(), DataWriterError> {
+        writer_result: Result<(), DeltaWriterError>,
+    ) -> Result<(), DeltaWriterError> {
         match writer_result {
-            Err(DataWriterError::PartialParquetWrite { .. }) => {
+            Err(DeltaWriterError::PartialParquetWrite { .. }) => {
                 // TODO handle templated type in Error definition
                 // partial_writes.extend(skipped_values);
                 Ok(())
@@ -333,17 +342,11 @@ impl DeltaWriter {
         }
     }
 
-    /// Returns the current byte length of the in memory buffer.
-    /// This may be used by the caller to decide when to finalize the file write.
-    pub fn buffer_len(&self) -> usize {
-        self.arrow_writers.values().map(|w| w.cursor.len()).sum()
-    }
-
     /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
     pub async fn write_parquet_files(
         &mut self,
         table_uri: &str,
-    ) -> Result<Vec<Add>, DataWriterError> {
+    ) -> Result<Vec<Add>, DeltaWriterError> {
         let writers = std::mem::take(&mut self.arrow_writers);
         let mut actions = Vec::new();
 
@@ -379,32 +382,13 @@ impl DeltaWriter {
         Ok(actions)
     }
 
-    /// Returns the number of records held in the current buffer.
-    pub fn buffered_record_batch_count(&self) -> usize {
-        self.arrow_writers
-            .values()
-            .map(|w| w.buffered_record_batch_count)
-            .sum()
-    }
-
-    /// Resets internal state.
-    pub fn reset(&mut self) {
-        self.arrow_writers.clear();
-    }
-
-    /// Returns the arrow schema representation of the delta table schema defined for the wrapped
-    /// table.
-    pub fn arrow_schema(&self) -> Arc<arrow::datatypes::Schema> {
-        self.arrow_schema_ref.clone()
-    }
-
     // TODO: parquet files have a 5 digit zero-padded prefix and a "c\d{3}" suffix that
     // I have not been able to find documentation for yet.
     fn next_data_path(
         &self,
         partition_cols: &[String],
         partition_values: &HashMap<String, Option<String>>,
-    ) -> Result<String, DataWriterError> {
+    ) -> Result<String, DeltaWriterError> {
         // TODO: what does 00000 mean?
         let first_part = "00000";
         let uuid_part = Uuid::new_v4();
@@ -423,7 +407,7 @@ impl DeltaWriter {
             for k in partition_cols.iter() {
                 let partition_value = partition_values
                     .get(k)
-                    .ok_or_else(|| DataWriterError::MissingPartitionColumn(k.to_string()))?;
+                    .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
 
                 let partition_value = partition_value
                     .as_deref()
@@ -440,16 +424,39 @@ impl DeltaWriter {
 
         Ok(data_path)
     }
+
+    /// Returns the current byte length of the in memory buffer.
+    /// This may be used by the caller to decide when to finalize the file write.
+    pub fn buffer_len(&self) -> usize {
+        self.arrow_writers.values().map(|w| w.buffer_len()).sum()
+    }
+
+    /// Returns the number of records held in the current buffer.
+    pub fn buffered_record_batch_count(&self) -> usize {
+        self.arrow_writers
+            .values()
+            .map(|w| w.buffered_record_batch_count)
+            .sum()
+    }
+
+    /// Resets internal state.
+    pub fn reset(&mut self) {
+        self.arrow_writers.clear();
+    }
+
+    /// Returns the arrow schema representation of the delta table schema defined for the wrapped
+    /// table.
+    pub fn arrow_schema(&self) -> Arc<arrow::datatypes::Schema> {
+        self.arrow_schema_ref.clone()
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{action::Protocol, DeltaTableConfig, SchemaDataType, SchemaField};
-    use arrow::array::{Int32Array, StringArray, UInt32Array};
+    use crate::write::test_utils::{create_initialized_table, get_record_batch};
     use std::collections::HashMap;
     use std::path::Path;
-    use std::sync::Arc;
 
     #[tokio::test]
     async fn test_divide_record_batch_no_partition() {
@@ -515,6 +522,21 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_write_and_commit_no_partitions() {
+        let batch = get_record_batch(None);
+        let mut table = create_initialized_table(vec![]).await;
+        let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
+
+        writer
+            .write_and_commit(&mut table, vec![batch], None, None)
+            .await
+            .unwrap();
+
+        let files = table.get_file_uris();
+        assert_eq!(files.len(), 1);
+    }
+
+    #[tokio::test]
     async fn test_write_multiple_partitions() {
         let batch = get_record_batch(None);
         let mut table =
@@ -550,122 +572,5 @@ mod tests {
             let ref_batch = get_record_batch(Some(key.clone()));
             assert_eq!(ref_batch, values);
         }
-    }
-
-    fn get_record_batch(part: Option<String>) -> RecordBatch {
-        let base_int = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-        let base_str =
-            StringArray::from(vec!["A", "B", "A", "B", "A", "A", "A", "B", "B", "A", "A"]);
-        let base_mod = StringArray::from(vec![
-            "2021-02-02",
-            "2021-02-02",
-            "2021-02-02",
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-01",
-        ]);
-        let indices = match &part {
-            Some(key) if key == "modified=2021-02-01" => {
-                UInt32Array::from(vec![3, 4, 5, 6, 7, 8, 9, 10])
-            }
-            Some(key) if key == "modified=2021-02-01/id=A" => {
-                UInt32Array::from(vec![4, 5, 6, 9, 10])
-            }
-            Some(key) if key == "modified=2021-02-01/id=B" => UInt32Array::from(vec![3, 7, 8]),
-            Some(key) if key == "modified=2021-02-02" => UInt32Array::from(vec![0, 1, 2]),
-            Some(key) if key == "modified=2021-02-02/id=A" => UInt32Array::from(vec![0, 2]),
-            Some(key) if key == "modified=2021-02-02/id=B" => UInt32Array::from(vec![1]),
-            _ => UInt32Array::from(vec![0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10]),
-        };
-
-        let int_values = take(&base_int, &indices, None).unwrap();
-        let str_values = take(&base_str, &indices, None).unwrap();
-        let mod_values = take(&base_mod, &indices, None).unwrap();
-
-        // expected results from parsing json payload
-        let schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Utf8, true),
-            Field::new("value", DataType::Int32, true),
-            Field::new("modified", DataType::Utf8, true),
-        ]));
-        RecordBatch::try_new(schema, vec![str_values, int_values, mod_values]).unwrap()
-    }
-
-    fn get_delta_schema() -> Schema {
-        Schema::new(vec![
-            SchemaField::new(
-                "id".to_string(),
-                SchemaDataType::primitive("string".to_string()),
-                true,
-                HashMap::new(),
-            ),
-            SchemaField::new(
-                "value".to_string(),
-                SchemaDataType::primitive("integer".to_string()),
-                true,
-                HashMap::new(),
-            ),
-            SchemaField::new(
-                "modified".to_string(),
-                SchemaDataType::primitive("string".to_string()),
-                true,
-                HashMap::new(),
-            ),
-        ])
-    }
-
-    fn create_bare_table() -> DeltaTable {
-        let table_dir = tempfile::tempdir().unwrap();
-        let table_path = table_dir.path();
-        let backend = Box::new(crate::storage::file::FileStorageBackend::new(
-            table_path.to_str().unwrap(),
-        ));
-        DeltaTable::new(
-            table_path.to_str().unwrap(),
-            backend,
-            DeltaTableConfig::default(),
-        )
-        .unwrap()
-    }
-
-    async fn create_initialized_table(partition_cols: Vec<String>) -> DeltaTable {
-        let mut table = create_bare_table();
-        let table_schema = get_delta_schema();
-
-        let mut commit_info = serde_json::Map::<String, serde_json::Value>::new();
-        commit_info.insert(
-            "operation".to_string(),
-            serde_json::Value::String("CREATE TABLE".to_string()),
-        );
-        commit_info.insert(
-            "userName".to_string(),
-            serde_json::Value::String("test user".to_string()),
-        );
-
-        let protocol = Protocol {
-            min_reader_version: 1,
-            min_writer_version: 2,
-        };
-
-        let metadata = DeltaTableMetaData::new(
-            None,
-            None,
-            None,
-            table_schema,
-            partition_cols,
-            HashMap::new(),
-        );
-
-        table
-            .create(metadata, protocol, Some(commit_info))
-            .await
-            .unwrap();
-
-        table
     }
 }

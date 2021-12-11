@@ -25,7 +25,7 @@ pub fn create_add(
     path: String,
     size: i64,
     file_metadata: &FileMetaData,
-) -> Result<Add, DataWriterError> {
+) -> Result<Add, DeltaWriterError> {
     let (min_values, max_values) =
         min_max_values_from_file_metadata(partition_values, file_metadata)?;
 
@@ -37,7 +37,7 @@ pub fn create_add(
     };
 
     let stats_string = serde_json::to_string(&stats)
-        .or(Err(DataWriterError::StatsSerializationFailed { stats }))?;
+        .or(Err(DeltaWriterError::StatsSerializationFailed { stats }))?;
 
     // Determine the modification timestamp to include in the add action - milliseconds since epoch
     // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
