@@ -444,7 +444,7 @@ mod tests {
         let arrow_schema = writer.arrow_schema();
         let batch = record_batch_from_message(arrow_schema, JSON_ROWS.clone().as_ref()).unwrap();
 
-        writer.write(&batch).await.unwrap();
+        writer.write(&batch).unwrap();
         let add = writer.flush().await.unwrap();
         assert_eq!(add.len(), 1);
         let stats = add[0].get_stats().unwrap().unwrap();

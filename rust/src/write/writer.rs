@@ -71,21 +71,23 @@ impl DeltaWriter {
 
     /// Divides a single record batch into into multiple according to table partitioning.
     /// Values are written to arrow buffers, to collect data until it should be written to disk.
-    pub async fn write(&mut self, values: &RecordBatch) -> Result<(), DeltaWriterError> {
+    pub fn write(&mut self, values: &RecordBatch) -> Result<(), DeltaWriterError> {
         let arrow_schema = self.partition_arrow_schema();
         for result in self.divide_by_partition_values(values)? {
             let partition_key =
                 DeltaWriter::get_partition_key(&self.partition_columns, &result.partition_values)?;
             match self.arrow_writers.get_mut(&partition_key) {
-                Some(writer) => writer.write(&result.record_batch).await?,
+                Some(writer) => {
+                    writer.write(&result.record_batch)?;
+                }
                 None => {
                     let mut writer = PartitionWriter::new(
                         arrow_schema.clone(),
                         result.partition_values,
                         self.writer_properties.clone(),
                     )?;
-                    writer.write(&result.record_batch).await?;
-                    self.arrow_writers.insert(partition_key, writer);
+                    writer.write(&result.record_batch)?;
+                    let _ = self.arrow_writers.insert(partition_key, writer);
                 }
             }
         }
@@ -245,7 +247,7 @@ impl DeltaWriter {
         // data written to one partition needs to be split due to desired file size constraints.
         let first_part = match part {
             Some(count) => format!("{:0>5}", count),
-            _ => "00000".to_string()
+            _ => "00000".to_string(),
         };
         let uuid_part = Uuid::new_v4();
         // TODO: what does c000 mean?
@@ -370,7 +372,7 @@ impl PartitionWriter {
     /// Writes the record batch in-memory and updates internal state accordingly.
     /// This method buffers the write stream internally so it can be invoked for many
     /// record batches and flushed after the appropriate number of bytes has been written.
-    pub async fn write(&mut self, record_batch: &RecordBatch) -> Result<(), DeltaWriterError> {
+    pub fn write(&mut self, record_batch: &RecordBatch) -> Result<(), DeltaWriterError> {
         if record_batch.schema() != self.arrow_schema {
             return Err(DeltaWriterError::SchemaMismatch {
                 record_batch_schema: record_batch.schema(),
@@ -396,7 +398,7 @@ impl PartitionWriter {
                     self.writer_properties.clone(),
                 )?;
                 let _ = std::mem::replace(&mut self.arrow_writer, arrow_writer);
-                // TODO we used to clear partiton values here, but since we pre-partition the
+                // TODO we used to clear partition values here, but since we pre-partition the
                 // record batches, we should never try with mismatching partition values.
 
                 Err(e.into())
@@ -524,7 +526,7 @@ mod tests {
         let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
-        writer.write(&batch).await.unwrap();
+        writer.write(&batch).unwrap();
         let adds = writer.flush().await.unwrap();
         assert_eq!(adds.len(), 1);
     }
@@ -536,7 +538,7 @@ mod tests {
         let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
 
-        writer.write(&batch).await.unwrap();
+        writer.write(&batch).unwrap();
         let adds = writer.flush().await.unwrap();
         assert_eq!(adds.len(), 4);
 

@@ -70,7 +70,7 @@ pub trait DeltaCommandExec {
     async fn execute(&self, table: &mut DeltaTable) -> Result<(), DeltaCommandError>;
 }
 
-async fn check_table_exists(table: &mut DeltaTable) -> Result<bool, DeltaCommandError> {
+async fn check_table_exists(table: &DeltaTable) -> Result<bool, DeltaCommandError> {
     let uri = table.commit_uri_from_version(table.version);
     match table.storage.head_obj(&uri).await {
         Ok(_) => Ok(true),

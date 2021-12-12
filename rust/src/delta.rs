@@ -1374,7 +1374,7 @@ impl<'a> DeltaTransaction<'a> {
 
         if let Some(writer) = &mut self.writer {
             for batch in batches {
-                writer.write(&batch).await?;
+                writer.write(&batch)?;
             }
             let mut adds = writer
                 .flush()
