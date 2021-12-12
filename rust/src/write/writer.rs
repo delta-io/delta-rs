@@ -63,30 +63,6 @@ impl DeltaWriter {
         })
     }
 
-    /// Retrieves the latest schema from table, compares to the current and updates if changed.
-    /// When schema is updated then `true` is returned which signals the caller that parquet
-    /// created file or arrow batch should be revisited.
-    // TODO Test schema update scenarios
-    pub fn update_schema(
-        &mut self,
-        metadata: &DeltaTableMetaData,
-    ) -> Result<bool, DeltaWriterError> {
-        let schema: ArrowSchema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
-
-        let schema_updated = self.arrow_schema_ref.as_ref() != &schema
-            || self.partition_columns != metadata.partition_columns;
-
-        if schema_updated {
-            let _ = std::mem::replace(&mut self.arrow_schema_ref, Arc::new(schema));
-            let _ = std::mem::replace(
-                &mut self.partition_columns,
-                metadata.partition_columns.clone(),
-            );
-        }
-
-        Ok(schema_updated)
-    }
-
     /// Divides a single record batch into into multiple according to table partitioning.
     /// Values are written to arrow buffers, to collect data until it should be written to disk.
     pub async fn write(&mut self, values: &RecordBatch) -> Result<(), DeltaWriterError> {
@@ -147,6 +123,30 @@ impl DeltaWriter {
             )?);
         }
         Ok(actions)
+    }
+
+    /// Retrieves the latest schema from table, compares to the current and updates if changed.
+    /// When schema is updated then `true` is returned which signals the caller that parquet
+    /// created file or arrow batch should be revisited.
+    // TODO Test schema update scenarios
+    pub fn update_schema(
+        &mut self,
+        metadata: &DeltaTableMetaData,
+    ) -> Result<bool, DeltaWriterError> {
+        let schema: ArrowSchema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
+
+        let schema_updated = self.arrow_schema_ref.as_ref() != &schema
+            || self.partition_columns != metadata.partition_columns;
+
+        if schema_updated {
+            let _ = std::mem::replace(&mut self.arrow_schema_ref, Arc::new(schema));
+            let _ = std::mem::replace(
+                &mut self.partition_columns,
+                metadata.partition_columns.clone(),
+            );
+        }
+
+        Ok(schema_updated)
     }
 
     fn divide_by_partition_values(
@@ -459,7 +459,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_divide_record_batch_no_partition() {
-        let batch = get_record_batch(None);
+        let batch = get_record_batch(None, false);
         let partition_cols = vec![];
         let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
@@ -472,7 +472,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_divide_record_batch_single_partition() {
-        let batch = get_record_batch(None);
+        let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string()];
         let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
@@ -488,7 +488,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_divide_record_batch_multiple_partitions() {
-        let batch = get_record_batch(None);
+        let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string(), "id".to_string()];
         let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
@@ -506,7 +506,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_no_partitions() {
-        let batch = get_record_batch(None);
+        let batch = get_record_batch(None, false);
         let partition_cols = vec![];
         let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
@@ -518,7 +518,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_multiple_partitions() {
-        let batch = get_record_batch(None);
+        let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string(), "id".to_string()];
         let table = create_initialized_table(&partition_cols).await;
         let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
@@ -550,7 +550,7 @@ mod tests {
             let partition_key =
                 DeltaWriter::get_partition_key(partition_cols, &result.partition_values).unwrap();
             assert!(expected_keys.contains(&partition_key));
-            let ref_batch = get_record_batch(Some(partition_key.clone()));
+            let ref_batch = get_record_batch(Some(partition_key.clone()), false);
             assert_eq!(ref_batch, result.record_batch);
         }
     }

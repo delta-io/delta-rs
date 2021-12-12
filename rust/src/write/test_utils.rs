@@ -10,22 +10,13 @@ use arrow::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
-pub fn get_record_batch(part: Option<String>) -> RecordBatch {
-    let base_int = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
-    let base_str = StringArray::from(vec!["A", "B", "A", "B", "A", "A", "A", "B", "B", "A", "A"]);
-    let base_mod = StringArray::from(vec![
-        "2021-02-02",
-        "2021-02-02",
-        "2021-02-02",
-        "2021-02-01",
-        "2021-02-01",
-        "2021-02-01",
-        "2021-02-01",
-        "2021-02-01",
-        "2021-02-01",
-        "2021-02-01",
-        "2021-02-01",
-    ]);
+pub fn get_record_batch(part: Option<String>, with_null: bool) -> RecordBatch {
+    let (base_int, base_str, base_mod) = if with_null {
+        data_with_null()
+    } else {
+        data_without_null()
+    };
+
     let indices = match &part {
         Some(key) if key == "modified=2021-02-01" => {
             UInt32Array::from(vec![3, 4, 5, 6, 7, 8, 9, 10])
@@ -67,6 +58,70 @@ pub fn get_record_batch(part: Option<String>) -> RecordBatch {
             RecordBatch::try_new(schema, vec![str_values, int_values, mod_values]).unwrap()
         }
     }
+}
+
+fn data_with_null() -> (Int32Array, StringArray, StringArray) {
+    let base_int = Int32Array::from(vec![
+        Some(1),
+        Some(2),
+        Some(3),
+        Some(4),
+        Some(5),
+        None,
+        Some(7),
+        Some(8),
+        Some(9),
+        Some(10),
+        Some(11),
+    ]);
+    let base_str = StringArray::from(vec![
+        Some("A"),
+        Some("B"),
+        None,
+        Some("B"),
+        Some("A"),
+        Some("A"),
+        None,
+        None,
+        Some("B"),
+        Some("A"),
+        Some("A"),
+    ]);
+    let base_mod = StringArray::from(vec![
+        Some("2021-02-02"),
+        Some("2021-02-02"),
+        Some("2021-02-02"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+        Some("2021-02-01"),
+    ]);
+
+    (base_int, base_str, base_mod)
+}
+
+fn data_without_null() -> (Int32Array, StringArray, StringArray) {
+    let base_int = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    let base_str = StringArray::from(vec!["A", "B", "A", "B", "A", "A", "A", "B", "B", "A", "A"]);
+    let base_mod = StringArray::from(vec![
+        "2021-02-02",
+        "2021-02-02",
+        "2021-02-02",
+        "2021-02-01",
+        "2021-02-01",
+        "2021-02-01",
+        "2021-02-01",
+        "2021-02-01",
+        "2021-02-01",
+        "2021-02-01",
+        "2021-02-01",
+    ]);
+
+    (base_int, base_str, base_mod)
 }
 
 pub fn get_delta_schema() -> Schema {

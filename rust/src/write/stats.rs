@@ -23,7 +23,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-// TODO tests for apply null count
 pub(crate) fn apply_null_counts(
     array: &StructArray,
     null_counts: &mut HashMap<String, ColumnCountStat>,
@@ -405,7 +404,7 @@ fn arrow_array_from_bytes(
 
 #[cfg(test)]
 mod tests {
-    use super::json::record_batch_from_message;
+    use super::{json::record_batch_from_message, test_utils::get_record_batch};
     use super::*;
     use crate::{
         action::{ColumnCountStat, ColumnValueStat},
@@ -416,8 +415,22 @@ mod tests {
     use std::collections::HashMap;
     use std::path::Path;
 
+    #[test]
+    fn test_apply_null_counts() {
+        let record_batch = get_record_batch(None, true);
+        let mut ref_null_counts = HashMap::new();
+        ref_null_counts.insert("id".to_string(), ColumnCountStat::Value(3));
+        ref_null_counts.insert("value".to_string(), ColumnCountStat::Value(1));
+        ref_null_counts.insert("modified".to_string(), ColumnCountStat::Value(0));
+
+        let mut null_counts = HashMap::new();
+        apply_null_counts(&record_batch.clone().into(), &mut null_counts, 0);
+        
+        assert_eq!(null_counts, ref_null_counts)
+    }
+
     #[tokio::test]
-    async fn delta_stats_test() {
+    async fn test_delta_stats() {
         let temp_dir = tempfile::tempdir().unwrap();
         let table_path = temp_dir.path();
         create_temp_table(table_path);
