@@ -404,8 +404,8 @@ fn arrow_array_from_bytes(
 
 #[cfg(test)]
 mod tests {
-    use super::{json::record_batch_from_message, test_utils::get_record_batch};
     use super::*;
+    use super::{json::record_batch_from_message, test_utils::get_record_batch};
     use crate::{
         action::{ColumnCountStat, ColumnValueStat},
         DeltaTable, DeltaTableError,
@@ -425,7 +425,7 @@ mod tests {
 
         let mut null_counts = HashMap::new();
         apply_null_counts(&record_batch.clone().into(), &mut null_counts, 0);
-        
+
         assert_eq!(null_counts, ref_null_counts)
     }
 

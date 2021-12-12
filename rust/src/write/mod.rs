@@ -142,14 +142,6 @@ pub enum DeltaWriterError {
         source: StorageError,
     },
 
-    /// DeltaTable returned an error.
-    #[error("DeltaTable interaction failed: {source}")]
-    DeltaTable {
-        /// The wrapped [`DeltaTableError`]
-        #[from]
-        source: DeltaTableError,
-    },
-
     /// Arrow returned an error.
     #[error("Arrow interaction failed: {source}")]
     Arrow {

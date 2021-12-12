@@ -25,12 +25,18 @@ type NullCounts = HashMap<String, ColumnCountStat>;
 
 /// Writes messages to a delta lake table.
 pub struct DeltaWriter {
-    storage: Box<dyn StorageBackend>,
-    table_uri: String,
-    arrow_schema_ref: Arc<arrow::datatypes::Schema>,
-    writer_properties: WriterProperties,
-    partition_columns: Vec<String>,
-    arrow_writers: HashMap<String, PartitionWriter>,
+    pub(crate) storage: Box<dyn StorageBackend>,
+    pub(crate) table_uri: String,
+    pub(crate) arrow_schema_ref: Arc<arrow::datatypes::Schema>,
+    pub(crate) writer_properties: WriterProperties,
+    pub(crate) partition_columns: Vec<String>,
+    pub(crate) arrow_writers: HashMap<String, PartitionWriter>,
+}
+
+impl std::fmt::Debug for DeltaWriter {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DeltaWriter")
+    }
 }
 
 impl DeltaWriter {
@@ -42,8 +48,8 @@ impl DeltaWriter {
         let storage = get_backend_for_uri_with_options(&table.table_uri, options)?;
 
         // Initialize an arrow schema ref from the delta table schema
-        let metadata = table.get_metadata()?;
-        let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
+        let metadata = table.get_metadata().unwrap();
+        let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema.clone())?;
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns.clone();
 
@@ -95,7 +101,7 @@ impl DeltaWriter {
         for (_, mut writer) in writers {
             let metadata = writer.arrow_writer.close()?;
 
-            let path = self.next_data_path(&writer.partition_values)?;
+            let path = self.next_data_path(&writer.partition_values, None)?;
 
             let obj_bytes = writer.cursor.data();
             let file_size = obj_bytes.len() as i64;
@@ -232,9 +238,15 @@ impl DeltaWriter {
     fn next_data_path(
         &self,
         partition_values: &HashMap<String, Option<String>>,
+        part: Option<i32>,
     ) -> Result<String, DeltaWriterError> {
         // TODO: what does 00000 mean?
-        let first_part = "00000";
+        // TODO (roeap): my understanding is, that the values are used as a counter - i.e. if a single batch of
+        // data written to one partition needs to be split due to desired file size constraints.
+        let first_part = match part {
+            Some(count) => format!("{:0>5}", count),
+            _ => "00000".to_string()
+        };
         let uuid_part = Uuid::new_v4();
         // TODO: what does c000 mean?
         let last_part = "c000";
@@ -318,7 +330,7 @@ struct PartitionResult {
     pub record_batch: RecordBatch,
 }
 
-struct PartitionWriter {
+pub(crate) struct PartitionWriter {
     arrow_schema: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
     pub(super) cursor: InMemoryWriteableCursor,
@@ -384,7 +396,8 @@ impl PartitionWriter {
                     self.writer_properties.clone(),
                 )?;
                 let _ = std::mem::replace(&mut self.arrow_writer, arrow_writer);
-                self.partition_values.clear();
+                // TODO we used to clear partiton values here, but since we pre-partition the
+                // record batches, we should never try with mismatching partition values.
 
                 Err(e.into())
             }

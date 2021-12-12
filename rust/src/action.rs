@@ -904,9 +904,9 @@ mod tests {
     #[test]
     fn test_add_action_without_partition_values_and_stats() {
         let path = "./tests/data/delta-0.2.0/_delta_log/00000000000000000003.checkpoint.parquet";
-        let preader = SerializedFileReader::new(File::open(path).unwrap()).unwrap();
+        let reader = SerializedFileReader::new(File::open(path).unwrap()).unwrap();
 
-        let mut iter = preader.get_row_iter(None).unwrap();
+        let mut iter = reader.get_row_iter(None).unwrap();
         let record = iter.nth(9).unwrap();
         let add_record = record.get_group(1).unwrap();
         let add_action = Add::from_parquet_record(&add_record).unwrap();

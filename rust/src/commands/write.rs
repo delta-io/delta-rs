@@ -18,15 +18,10 @@
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/WriteIntoDelta.scala
 use super::*;
 use crate::{action::Protocol, DeltaTable, DeltaTableMetaData, Schema};
-use datafusion::physical_plan::SendableRecordBatchStream;
-// use arrow::{
-//     datatypes::Schema as ArrowSchema, error::Result as ArrowResult, record_batch::RecordBatch,
-// };
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use create::CreateCommand;
-// use futures::StreamExt;
 use std::collections::HashMap;
-// use std::sync::Arc;
 
 /// The write mode when writing data to delta table.
 pub enum WriteMode {
@@ -38,7 +33,10 @@ pub enum WriteMode {
 
 /// Write command
 pub struct WriteCommand {
-    inputs: SendableRecordBatchStream,
+    inputs: Vec<RecordBatch>,
+    partition_columns: Option<Vec<String>>,
+    // TODO maybe use SendableRecordBatchStream here?
+    // inputs: SendableRecordBatchStream,
     // mode: WriteMode,
 }
 
@@ -48,11 +46,17 @@ impl DeltaCommandExec for WriteCommand {
         let table_exists = check_table_exists(table).await?;
 
         if !table_exists {
-            let delta_schema = Schema::try_from(self.inputs.schema())?;
+            let delta_schema = Schema::try_from(self.inputs[0].schema())?;
 
             // TODO make meta data configurable and get partitions from somewhere
-            let metadata =
-                DeltaTableMetaData::new(None, None, None, delta_schema, vec![], HashMap::new());
+            let metadata = DeltaTableMetaData::new(
+                None,
+                None,
+                None,
+                delta_schema,
+                self.partition_columns.clone().unwrap_or_else(|| vec![]),
+                HashMap::new(),
+            );
 
             let protocol = Protocol {
                 min_reader_version: 1,
@@ -63,117 +67,28 @@ impl DeltaCommandExec for WriteCommand {
             command.execute(table).await?;
         }
 
-        // let mut adds = writer.flush().await?;
-        // let mut tx = table.create_transaction(None);
-        // tx.add_actions(adds.drain(..).map(Action::add).collect());
-        // if let Some(mut remove_actions) = removals {
-        //     tx.add_actions(remove_actions.drain(..).map(Action::remove).collect());
-        // }
-        // let version = tx.commit(operation).await?;
+        let mut txn = table.create_transaction(None);
+        txn.write_files(self.inputs.clone()).await.unwrap();
+        let _ = txn.commit(None).await?;
 
-        todo!()
-
-        // let metadata = table.get_metadata()?;
-        // let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
-        // let arrow_schema_ref = Arc::new(arrow_schema);
-        // let partition_columns = metadata.partition_columns.clone();
-
-        // let writer = Arc::new(
-        //     DeltaWriter::new(
-        //         &table.table_uri,
-        //         partition_columns,
-        //         arrow_schema_ref,
-        //         HashMap::new(),
-        //     )
-        //     .unwrap()
-        // );
-
-        // let write_batch = Box::new(
-        //     move |batch: ArrowResult<RecordBatch>| {
-        //         let writer_inner = writer.clone();
-        //         Box::pin(async move { writer_inner.write(&batch.unwrap()).await })
-        //     },
-        // );
-
-        // match self.mode {
-        //     WriteMode::Append => {
-        //         self.inputs
-        //             .map(|batch| write_batch(batch))
-        //             .collect::<Vec<_>>()
-        //             .await;
-
-        //         let version = writer.commit(&mut table, None, None).await?;
-        //         // writer.write(data).await.unwrap();
-        //     }
-        //     WriteMode::Overwrite => {
-        //         println!("Overwrite")
-        //     }
-        // };
-
-        // Ok(())
+        Ok(())
     }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DeltaTableConfig;
-    use arrow::{
-        array::{Int32Array, StringArray},
-        datatypes::{DataType, Field, Schema as ArrowSchema},
-        record_batch::RecordBatch,
-        write::test_utils::create_bare_table,
-    };
-    use datafusion::physical_plan::common::SizedRecordBatchStream;
-    use std::path::Path;
-    use std::sync::Arc;
+    use crate::write::test_utils::{create_bare_table, get_record_batch};
 
     #[tokio::test]
     async fn write_and_create_table() {
-        let stream = get_record_batch_stream();
+        let batch = get_record_batch(None, false);
         let command = WriteCommand {
-            inputs: Box::pin(stream),
+            inputs: vec![batch],
+            partition_columns: None,
             // mode: WriteMode::Append,
         };
         let mut table = create_bare_table();
         command.execute(&mut table).await.unwrap();
-    }
-
-    fn get_record_batch_stream() -> SizedRecordBatchStream {
-        let int_values = Int32Array::from(vec![42, 44, 46, 48, 50, 52, 54, 56, 148, 150, 152]);
-        let id_values =
-            StringArray::from(vec!["A", "B", "C", "D", "E", "F", "G", "H", "D", "E", "F"]);
-        let modified_values = StringArray::from(vec![
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-01",
-            "2021-02-02",
-            "2021-02-02",
-            "2021-02-02",
-        ]);
-
-        // expected results from parsing json payload
-        let schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Utf8, true),
-            Field::new("value", DataType::Int32, true),
-            Field::new("modified", DataType::Utf8, true),
-        ]));
-        let batch = Arc::new(
-            RecordBatch::try_new(
-                schema.clone(),
-                vec![
-                    Arc::new(id_values),
-                    Arc::new(int_values),
-                    Arc::new(modified_values),
-                ],
-            )
-            .unwrap(),
-        );
-        SizedRecordBatchStream::new(schema.clone(), vec![batch])
     }
 }

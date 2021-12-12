@@ -3,7 +3,7 @@
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 //
 
-use arrow::error::ArrowError;
+use arrow::{error::ArrowError, record_batch::RecordBatch};
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -28,6 +28,7 @@ use super::schema::*;
 use super::storage;
 use super::storage::{parse_uri, StorageBackend, StorageError, UriError};
 use super::table_state::DeltaTableState;
+use super::write::{DeltaWriter, DeltaWriterError};
 use crate::delta_config::DeltaConfigError;
 
 /// Metadata for a checkpoint file
@@ -124,6 +125,13 @@ pub enum DeltaTableError {
         source: std::io::Error,
         /// The Path used of the DeltaTable
         path: String,
+    },
+    /// Error returned when teh DataWriter encounters internal errors writing data to table
+    #[error("Error writing data to storage: {source}")]
+    WriterError {
+        #[from]
+        /// The original error returned by writer
+        source: DeltaWriterError,
     },
     /// Error returned when the datetime string is invalid for a conversion.
     #[error("Invalid datetime string: {}", .source)]
@@ -1289,6 +1297,7 @@ impl std::fmt::Debug for DeltaTable {
     }
 }
 
+// TODO is this really a reasonable default value for retries?
 const DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS: u32 = 10_000_000;
 
 /// Options for customizing behavior of a `DeltaTransaction`
@@ -1331,6 +1340,7 @@ pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
     actions: Vec<Action>,
     options: DeltaTransactionOptions,
+    writer: Option<DeltaWriter>,
 }
 
 impl<'a> DeltaTransaction<'a> {
@@ -1342,6 +1352,7 @@ impl<'a> DeltaTransaction<'a> {
             delta_table,
             actions: vec![],
             options: options.unwrap_or_default(),
+            writer: None,
         }
     }
 
@@ -1354,6 +1365,40 @@ impl<'a> DeltaTransaction<'a> {
     pub fn add_actions(&mut self, actions: Vec<action::Action>) {
         for action in actions.into_iter() {
             self.actions.push(action);
+        }
+    }
+
+    /// Write data to internal transaction buffers
+    pub async fn write_files(&mut self, batches: Vec<RecordBatch>) -> Result<(), DeltaTableError> {
+        self.ensure_writer().await?;
+
+        if let Some(writer) = &mut self.writer {
+            for batch in batches {
+                writer.write(&batch).await?;
+            }
+            let mut adds = writer
+                .flush()
+                .await?
+                .iter()
+                .map(|a| action::Action::add(a.clone()))
+                .collect::<Vec<_>>();
+            self.actions.append(&mut adds);
+            return Ok(());
+        }
+
+        Err(DeltaTableError::Generic(
+            "No writer defined on transaction instance".to_string(),
+        ))
+    }
+
+    async fn ensure_writer(&mut self) -> Result<(), DeltaTableError> {
+        match &mut self.writer {
+            Some(_) => Ok(()),
+            None => {
+                let writer = DeltaWriter::for_table(self.delta_table, HashMap::new())?;
+                self.writer = Some(writer);
+                Ok(())
+            }
         }
     }
 
@@ -1539,15 +1584,12 @@ pub struct PreparedCommit {
     uri: String,
 }
 
-fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Error> {
-    let mut jsons = Vec::<String>::new();
-
-    for action in actions {
-        let json = serde_json::to_string(action)?;
-        jsons.push(json);
-    }
-
-    Ok(jsons.join("\n"))
+fn log_entry_from_actions(actions: &[Action]) -> Result<String, DeltaTableError> {
+    Ok(actions
+        .iter()
+        .map(serde_json::to_string)
+        .collect::<Result<Vec<_>, _>>()?
+        .join("\n"))
 }
 
 /// Creates and loads a DeltaTable from the given path with current metadata.
@@ -1636,6 +1678,7 @@ mod tests {
             delta_table: &mut table,
             actions: vec![],
             options: DeltaTransactionOptions::default(),
+            writer: None,
         };
 
         let partitions = vec![
