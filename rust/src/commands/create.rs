@@ -61,8 +61,8 @@ mod tests {
     use crate::{
         action::Protocol,
         schema::{Schema, SchemaDataType, SchemaField},
-        DeltaTableConfig, DeltaTableMetaData,
         write::test_utils::create_bare_table,
+        DeltaTableConfig, DeltaTableMetaData,
     };
     use std::collections::HashMap;
     use std::path::Path;

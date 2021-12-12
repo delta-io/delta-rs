@@ -50,7 +50,7 @@ pub fn get_record_batch(part: Option<String>) -> RecordBatch {
                 true,
             )]));
             RecordBatch::try_new(schema, vec![int_values]).unwrap()
-        },
+        }
         Some(_) => {
             let schema = Arc::new(ArrowSchema::new(vec![
                 Field::new("id", DataType::Utf8, true),

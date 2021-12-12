@@ -21,7 +21,6 @@ use std::sync::Arc;
 pub use writer::*;
 
 pub mod json;
-mod partition_writer;
 mod stats;
 #[cfg(test)]
 pub mod test_utils;
