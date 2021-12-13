@@ -298,7 +298,6 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_partition_writer() {
-
         let mut table = create_initialized_table(&vec!["modified".to_string()]).await;
         assert_eq!(table.version, 0);
 
