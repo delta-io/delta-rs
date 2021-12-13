@@ -1,6 +1,7 @@
 //! High level delta commands that can be executed against a delta table
 use crate::{
     action::Protocol,
+    commands::{transaction::DeltaTransactionPlan, write::WritePartitionCommand},
     open_table,
     storage::StorageError,
     write::{divide_by_partition_values, DeltaWriter, DeltaWriterError},
@@ -16,6 +17,7 @@ use std::fmt::Debug;
 use std::sync::Arc;
 
 pub mod create;
+pub mod transaction;
 pub mod write;
 
 type DeltaCommandResult<T> = Result<T, DeltaCommandError>;
@@ -70,6 +72,10 @@ pub enum DeltaCommandError {
         #[from]
         source: DataFusionError,
     },
+}
+
+fn to_datafusion_err(e: impl std::error::Error) -> DataFusionError {
+    DataFusionError::Plan(e.to_string())
 }
 
 /// The save mode when writing data.
@@ -142,15 +148,23 @@ impl DeltaCommands {
             }
         }
 
-        let plan =
-            MemoryExec::try_new(&partitions.into_values().collect::<Vec<_>>(), schema, None)?;
-        let command = Arc::new(write::WriteCommand::new(
+        let data_plan = Arc::new(MemoryExec::try_new(
+            &partitions.into_values().collect::<Vec<_>>(),
+            schema,
+            None,
+        )?);
+
+        let write_plan = Arc::new(WritePartitionCommand::new(
             self.table.table_uri.clone(),
-            write::WriteMode::Append,
-            write::PartitionWriteMode::Distributed(Arc::new(plan)),
+            data_plan,
         ));
 
-        let _ = collect(command).await?;
+        let transaction = Arc::new(DeltaTransactionPlan::new(
+            self.table.table_uri.clone(),
+            write_plan,
+        ));
+
+        let _ = collect(transaction).await?;
         self.table.update().await?;
 
         Ok(())
