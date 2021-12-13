@@ -1368,6 +1368,10 @@ impl<'a> DeltaTransaction<'a> {
         }
     }
 
+    pub(crate) fn actions(&self) -> Vec<Action> {
+        self.actions.clone()
+    }
+
     /// Write data to internal transaction buffers
     pub async fn write_files(&mut self, batches: Vec<RecordBatch>) -> Result<(), DeltaTableError> {
         self.ensure_writer().await?;

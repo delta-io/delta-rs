@@ -17,19 +17,39 @@
 
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/WriteIntoDelta.scala
 use super::*;
-use crate::open_table;
+use crate::{action::Action, open_table, write::DeltaWriter};
 use async_trait::async_trait;
 use core::any::Any;
 use datafusion::{
-    arrow::datatypes::SchemaRef,
+    arrow::{
+        array::{Array, StringArray},
+        datatypes::{
+            DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+        },
+    },
     error::{DataFusionError, Result as DataFusionResult},
     physical_plan::{
-        collect, empty::EmptyExec, Distribution, ExecutionPlan, Partitioning,
-        SendableRecordBatchStream, Statistics,
+        collect,
+        common::{
+            collect as collect_batch, compute_record_batch_statistics, SizedRecordBatchStream,
+        },
+        empty::EmptyExec,
+        Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
     },
 };
+use std::collections::HashMap;
 use std::sync::Arc;
 
+#[derive(Debug)]
+/// The write mode when writing data to delta table.
+pub enum PartitionWriteMode {
+    /// write input partitions in single operations
+    Single(Arc<dyn ExecutionPlan>),
+    /// write input partitions in separate operations
+    Distributed(Arc<dyn ExecutionPlan>),
+}
+
+#[derive(Debug)]
 /// The write mode when writing data to delta table.
 pub enum WriteMode {
     /// append data to existing table
@@ -42,9 +62,35 @@ pub enum WriteMode {
 #[derive(Debug)]
 pub struct WriteCommand {
     table_uri: String,
-    // mode: WriteMode,
-    /// The input plan
-    input: Arc<dyn ExecutionPlan>,
+    mode: WriteMode,
+    /// Defines behavior for writing individual partitions
+    partition_write_mode: PartitionWriteMode,
+}
+
+impl WriteCommand {
+    /// Create new [`WriteCommand`] instance
+    pub fn new(
+        table_uri: String,
+        mode: WriteMode,
+        partition_write_mode: PartitionWriteMode,
+    ) -> Self {
+        let exec_plan = match partition_write_mode {
+            PartitionWriteMode::Distributed(plan) => {
+                println!("Setting up distributed mode");
+                let new_plan = Arc::new(WritePartitionCommand {
+                    table_uri: table_uri.clone(),
+                    input: plan.clone(),
+                });
+                PartitionWriteMode::Distributed(new_plan)
+            }
+            other => other,
+        };
+        Self {
+            table_uri,
+            mode,
+            partition_write_mode: exec_plan,
+        }
+    }
 }
 
 #[async_trait]
@@ -54,31 +100,27 @@ impl ExecutionPlan for WriteCommand {
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        self.input.schema()
+    fn schema(&self) -> ArrowSchemaRef {
+        Arc::new(ArrowSchema::new(vec![]))
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+        match &self.partition_write_mode {
+            PartitionWriteMode::Single(plan) => {
+                vec![plan.clone()]
+            }
+            PartitionWriteMode::Distributed(plan) => {
+                vec![plan.clone()]
+            }
+        }
     }
 
-    /// Get the output partitioning of this plan
     fn output_partitioning(&self) -> Partitioning {
-        // if self.preserve_partitioning {
-        //     self.input.output_partitioning()
-        // } else {
-        //     Partitioning::UnknownPartitioning(1)
-        // }
         Partitioning::UnknownPartitioning(1)
     }
 
     fn required_child_distribution(&self) -> Distribution {
-        // if self.preserve_partitioning {
-        //     Distribution::UnspecifiedDistribution
-        // } else {
-        //     Distribution::SinglePartition
-        // }
-        Distribution::SinglePartition
+        Distribution::UnspecifiedDistribution
     }
 
     fn with_new_children(
@@ -97,81 +139,192 @@ impl ExecutionPlan for WriteCommand {
         todo!()
     }
 
-    async fn execute(&self, _partition: usize) -> DataFusionResult<SendableRecordBatchStream> {
+    async fn execute(&self, partition: usize) -> DataFusionResult<SendableRecordBatchStream> {
+        println!("WriteCommand -> partition {:?}", partition);
+
         let mut table = open_table(&self.table_uri)
             .await
-            .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+            .map_err(to_datafusion_err)?;
         let table_exists = check_table_exists(&table)
             .await
-            .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+            .map_err(to_datafusion_err)?;
 
         if !table_exists {
+            println!("{:?}", self.mode);
             todo!()
-            // let delta_schema = Schema::try_from(self.inputs[0].schema())?;
-            //
-            // // TODO make meta data configurable and get partitions from somewhere
-            // let metadata = DeltaTableMetaData::new(
-            //     None,
-            //     None,
-            //     None,
-            //     delta_schema,
-            //     self.partition_columns.clone().unwrap_or_else(|| vec![]),
-            //     HashMap::new(),
-            // );
-            //
-            // let protocol = Protocol {
-            //     min_reader_version: 1,
-            //     min_writer_version: 2,
-            // };
-            //
-            // let command = CreateCommand::new(metadata, protocol);
-            // command.execute(table).await?;
         }
 
-        let data = collect(self.input.clone()).await.unwrap();
-        let schema = data[0].schema();
         let mut txn = table.create_transaction(None);
 
-        txn.write_files(data).await.unwrap();
+        match &self.partition_write_mode {
+            PartitionWriteMode::Single(plan) => {
+                let data = collect(plan.clone()).await?;
+                txn.write_files(data).await.map_err(to_datafusion_err)?;
+                let _asd = txn.actions();
+            }
+            PartitionWriteMode::Distributed(plan) => {
+                // add actions
+                let mut actions = Vec::new();
+                let data = collect(plan.clone()).await?;
+                for batch in data {
+                    // TODO we assume that all children send a single column record batch with serialized actions
+                    let serialized_actions = arrow::array::as_string_array(batch.column(0));
+                    let mut new_actions = (0..serialized_actions.len())
+                        .map(|idx| serde_json::from_str::<Action>(serialized_actions.value(idx)))
+                        .into_iter()
+                        .collect::<Result<Vec<_>, _>>()
+                        .map_err(to_datafusion_err)?;
+                    actions.append(&mut new_actions);
+                }
+                txn.add_actions(actions);
+            }
+        };
 
-        let _ = txn
-            .commit(None)
-            .await
-            .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+        let _ = txn.commit(None).await.map_err(to_datafusion_err)?;
 
-        // TODO 
-        let empty_plan = EmptyExec::new(false, schema);
-        Ok(empty_plan
-            .execute(0)
-            .await
-            .map_err(|e| DataFusionError::Plan(e.to_string()))?)
+        // TODO send back some useful statistics
+        let empty_plan = EmptyExec::new(false, self.schema());
+        Ok(empty_plan.execute(0).await?)
     }
 
     fn statistics(&self) -> Statistics {
-        // TODO
-        self.input.statistics()
+        compute_record_batch_statistics(&vec![], &self.schema(), None)
     }
+}
+
+#[derive(Debug)]
+/// Writes the partitioned input data into separate batches
+/// and forwards the add actions as record batches
+struct WritePartitionCommand {
+    table_uri: String,
+    /// The input plan
+    input: Arc<dyn ExecutionPlan>,
+}
+
+#[async_trait]
+impl ExecutionPlan for WritePartitionCommand {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> ArrowSchemaRef {
+        Arc::new(ArrowSchema::new(vec![ArrowField::new(
+            "serialized",
+            DataType::Utf8,
+            true,
+        )]))
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        vec![self.input.clone()]
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        self.input.output_partitioning()
+    }
+
+    fn required_child_distribution(&self) -> Distribution {
+        Distribution::UnspecifiedDistribution
+    }
+
+    fn with_new_children(
+        &self,
+        _children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        todo!()
+    }
+
+    async fn execute(&self, partition: usize) -> DataFusionResult<SendableRecordBatchStream> {
+        println!("WritePartitionCommand -> partition {:?}", partition);
+
+        let table = open_table(&self.table_uri)
+            .await
+            .map_err(to_datafusion_err)?;
+
+        let data = collect_batch(self.input.execute(partition).await?).await?;
+        if data.len() < 1 {
+            return Err(DataFusionError::Plan(
+                DeltaCommandError::EmptyPartition("no data".to_string()).to_string(),
+            ));
+        }
+
+        let mut writer =
+            DeltaWriter::for_table(&table, HashMap::new()).map_err(to_datafusion_err)?;
+        for batch in data {
+            // TODO we should have an API that allows us to circumvent internal partitioning
+            writer.write(&batch).map_err(to_datafusion_err)?;
+        }
+        let json_adds = writer
+            .flush()
+            .await
+            .map_err(to_datafusion_err)?
+            .iter()
+            .map(|e| serde_json::to_value(Action::add(e.clone())).unwrap())
+            .collect::<Vec<_>>();
+
+        let serialized = StringArray::from(
+            json_adds
+                .iter()
+                .map(serde_json::to_string)
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(to_datafusion_err)?,
+        );
+        let serialized_batch =
+            RecordBatch::try_new(self.schema().clone(), vec![Arc::new(serialized)])?;
+
+        let stream =
+            SizedRecordBatchStream::new(self.schema().clone(), vec![Arc::new(serialized_batch)]);
+
+        Ok(Box::pin(stream))
+    }
+
+    fn statistics(&self) -> Statistics {
+        compute_record_batch_statistics(&vec![], &self.schema(), None)
+    }
+}
+
+fn to_datafusion_err(e: impl std::error::Error) -> DataFusionError {
+    DataFusionError::Plan(e.to_string())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::write::test_utils::get_record_batch;
+    use crate::write::{
+        divide_by_partition_values,
+        test_utils::{create_initialized_table, get_record_batch},
+    };
     use datafusion::physical_plan::{collect, memory::MemoryExec};
 
     #[tokio::test]
-    async fn write_and_create_table() {
+    async fn test_write_partition_writer() {
+
+        let mut table = create_initialized_table(&vec!["modified".to_string()]).await;
+        assert_eq!(table.version, 0);
+
         let batch = get_record_batch(None, false);
         let schema = batch.schema();
-        let plan = MemoryExec::try_new(vec![vec![batch]].as_slice(), schema, None).unwrap();
+        let divided =
+            divide_by_partition_values(schema.clone(), vec!["modified".to_string()], &batch)
+                .unwrap();
+        let mut partitions = Vec::new();
+        for part in divided {
+            partitions.push(vec![part.record_batch]);
+        }
 
-        // let table = create_initialized_table(&vec!["modified".to_string()]).await;
-        let command = Arc::new(WriteCommand {
-            table_uri: "/home/robstar/github/delta-rs/data".to_string(),
-            input: Arc::new(plan),
-            // mode: WriteMode::Append,
-        });
+        let plan = MemoryExec::try_new(partitions.as_slice(), schema.clone(), None).unwrap();
+        let command = Arc::new(WriteCommand::new(
+            table.table_uri.to_string(),
+            WriteMode::Append,
+            PartitionWriteMode::Distributed(Arc::new(plan)),
+        ));
 
-        let _results = collect(command).await.unwrap();
+        let _ = collect(command).await.unwrap();
+
+        table.update().await.unwrap();
+        assert_eq!(table.version, 1);
+
+        let files = table.get_file_uris();
+        assert_eq!(files.len(), 2);
     }
 }

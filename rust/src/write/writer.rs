@@ -161,78 +161,11 @@ impl DeltaWriter {
         &mut self,
         values: &RecordBatch,
     ) -> Result<Vec<PartitionResult>, DeltaWriterError> {
-        let mut partitions = Vec::new();
-
-        if self.partition_columns.is_empty() {
-            partitions.push(PartitionResult {
-                partition_values: HashMap::new(),
-                record_batch: values.clone(),
-            });
-            return Ok(partitions);
-        }
-
-        let schema = values.schema();
-        let batch_schema = self.partition_arrow_schema();
-
-        // collect all columns in order relevant for partitioning
-        let sort_columns = self
-            .partition_columns
-            .clone()
-            .into_iter()
-            .map(|col| SortColumn {
-                values: values.column(schema.index_of(&col).unwrap()).clone(),
-                options: None,
-            })
-            .collect::<Vec<_>>();
-
-        let indices = lexsort_to_indices(sort_columns.as_slice(), None).unwrap();
-        let sorted_partition_columns = sort_columns
-            .iter()
-            .map(|c| SortColumn {
-                values: take(c.values.as_ref(), &indices, None).unwrap(),
-                options: None,
-            })
-            .collect::<Vec<_>>();
-
-        let partition_ranges =
-            lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
-
-        for range in partition_ranges {
-            // get row indices for current partition
-            let idx: UInt32Array = (range.start..range.end)
-                .map(|i| Some(indices.value(i)))
-                .into_iter()
-                .collect();
-
-            let partition_key_iter = sorted_partition_columns.iter().map(|c| {
-                stringified_partition_value(&c.values.slice(range.start, range.end - range.start))
-                    .unwrap()
-            });
-
-            let mut partition_values = HashMap::new();
-            for (key, value) in self
-                .partition_columns
-                .clone()
-                .iter()
-                .zip(partition_key_iter)
-            {
-                partition_values.insert(key.clone(), value);
-            }
-
-            let batch_data = batch_schema
-                .fields()
-                .iter()
-                .map(|f| values.column(schema.index_of(f.name()).unwrap()).clone())
-                .map(move |col| take(col.as_ref(), &idx, None).unwrap())
-                .collect::<Vec<_>>();
-
-            partitions.push(PartitionResult {
-                partition_values,
-                record_batch: RecordBatch::try_new(batch_schema.clone(), batch_data).unwrap(),
-            });
-        }
-
-        Ok(partitions)
+        divide_by_partition_values(
+            self.partition_arrow_schema().clone(),
+            self.partition_columns.clone(),
+            values,
+        )
     }
 
     // TODO: parquet files have a 5 digit zero-padded prefix and a "c\d{3}" suffix that
@@ -268,7 +201,7 @@ impl DeltaWriter {
         Ok(format!("{}/{}", partition_key, file_name))
     }
 
-    fn get_partition_key(
+    pub(crate) fn get_partition_key(
         partition_columns: &[String],
         partition_values: &HashMap<String, Option<String>>,
     ) -> Result<String, DeltaWriterError> {
@@ -327,8 +260,11 @@ impl DeltaWriter {
     }
 }
 
-struct PartitionResult {
+/// Helper container for partitioned record batches
+pub struct PartitionResult {
+    /// values found in partition columns
     pub partition_values: HashMap<String, Option<String>>,
+    /// remaining dataset with partition column values removed
     pub record_batch: RecordBatch,
 }
 
@@ -411,6 +347,78 @@ impl PartitionWriter {
     pub fn buffer_len(&self) -> usize {
         self.cursor.len()
     }
+}
+
+/// Partition a RecordBatch along partition columns
+pub fn divide_by_partition_values(
+    arrow_schema: ArrowSchemaRef,
+    partition_columns: Vec<String>,
+    values: &RecordBatch,
+) -> Result<Vec<PartitionResult>, DeltaWriterError> {
+    let mut partitions = Vec::new();
+
+    if partition_columns.is_empty() {
+        partitions.push(PartitionResult {
+            partition_values: HashMap::new(),
+            record_batch: values.clone(),
+        });
+        return Ok(partitions);
+    }
+
+    let schema = values.schema();
+
+    // collect all columns in order relevant for partitioning
+    let sort_columns = partition_columns
+        .clone()
+        .into_iter()
+        .map(|col| SortColumn {
+            values: values.column(schema.index_of(&col).unwrap()).clone(),
+            options: None,
+        })
+        .collect::<Vec<_>>();
+
+    let indices = lexsort_to_indices(sort_columns.as_slice(), None).unwrap();
+    let sorted_partition_columns = sort_columns
+        .iter()
+        .map(|c| SortColumn {
+            values: take(c.values.as_ref(), &indices, None).unwrap(),
+            options: None,
+        })
+        .collect::<Vec<_>>();
+
+    let partition_ranges = lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
+
+    for range in partition_ranges {
+        // get row indices for current partition
+        let idx: UInt32Array = (range.start..range.end)
+            .map(|i| Some(indices.value(i)))
+            .into_iter()
+            .collect();
+
+        let partition_key_iter = sorted_partition_columns.iter().map(|c| {
+            stringified_partition_value(&c.values.slice(range.start, range.end - range.start))
+                .unwrap()
+        });
+
+        let mut partition_values = HashMap::new();
+        for (key, value) in partition_columns.clone().iter().zip(partition_key_iter) {
+            partition_values.insert(key.clone(), value);
+        }
+
+        let batch_data = arrow_schema
+            .fields()
+            .iter()
+            .map(|f| values.column(schema.index_of(f.name()).unwrap()).clone())
+            .map(move |col| take(col.as_ref(), &idx, None).unwrap())
+            .collect::<Vec<_>>();
+
+        partitions.push(PartitionResult {
+            partition_values,
+            record_batch: RecordBatch::try_new(arrow_schema.clone(), batch_data).unwrap(),
+        });
+    }
+
+    Ok(partitions)
 }
 
 fn cursor_from_bytes(bytes: &[u8]) -> Result<InMemoryWriteableCursor, std::io::Error> {

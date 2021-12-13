@@ -130,7 +130,7 @@ impl ExecutionPlan for CreateCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{action::Protocol, DeltaTableMetaData, open_table};
+    use crate::{action::Protocol, open_table, DeltaTableMetaData};
     use datafusion::physical_plan::collect;
     use std::collections::HashMap;
 

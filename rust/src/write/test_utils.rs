@@ -147,6 +147,18 @@ pub fn get_delta_schema() -> Schema {
     ])
 }
 
+pub fn get_delta_metadata(partition_cols: &[String]) -> DeltaTableMetaData {
+    let table_schema = get_delta_schema();
+    DeltaTableMetaData::new(
+        None,
+        None,
+        None,
+        table_schema,
+        partition_cols.to_vec(),
+        HashMap::new(),
+    )
+}
+
 pub fn create_bare_table() -> DeltaTable {
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
