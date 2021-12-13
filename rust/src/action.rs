@@ -2,6 +2,7 @@
 
 #![allow(non_snake_case, non_camel_case_types)]
 
+use crate::DeltaTableMetaData;
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
@@ -847,28 +848,67 @@ impl Action {
 
 /// Operation performed when creating a new log entry with one or more actions.
 /// This is a key element of the `CommitInfo` action.
+#[allow(clippy::large_enum_variant)]
 #[derive(Serialize, Deserialize, Debug)]
+#[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
+    /// Represents a Delta `Create` operation.
+    /// Command for creating a new delta table
+    Create {
+        /// Location where table is stored
+        location: String,
+        /// Metadata for creating table
+        metadata: DeltaTableMetaData,
+    },
     /// Represents a Delta `Write` operation.
     /// Write operations will typically only include `Add` actions.
     Write {
         /// The save mode used during the write.
         mode: SaveMode,
         /// The columns the write is partitioned by.
-        partitionBy: Option<Vec<String>>,
+        partition_by: Option<Vec<String>>,
         /// The predicate used during the write.
         predicate: Option<String>,
     },
     /// Represents a Delta `StreamingUpdate` operation.
     StreamingUpdate {
         /// The output mode the streaming writer is using.
-        outputMode: OutputMode,
+        output_mode: OutputMode,
         /// The query id of the streaming writer.
-        queryId: String,
+        query_id: String,
         /// The epoch id of the written micro-batch.
-        epochId: i64,
+        epoch_id: i64,
     },
-    // TODO: Add more operations
+    /// Represents a Delta `Update` operation.
+    Update {
+        /// Query string
+        query: String,
+    }, // TODO: Add more operations
+}
+
+impl DeltaOperation {
+    /// Retrieve basic commit information to be added to Delta commits
+    pub fn get_commit_info(&self) -> Map<String, Value> {
+        let mut commit_info = Map::<String, Value>::new();
+
+        match &self {
+            DeltaOperation::Create { .. } => {
+                commit_info.insert(
+                    "operation".to_string(),
+                    serde_json::Value::String("delta-rs.Create".to_string()),
+                );
+            }
+            DeltaOperation::Write { .. } => {
+                commit_info.insert(
+                    "operation".to_string(),
+                    serde_json::Value::String("delta-rs.Write".to_string()),
+                );
+            } // DeltaOperation::Delete => "delta-rs.Delete".to_string(),
+            _ => (),
+        };
+
+        commit_info
+    }
 }
 
 /// The SaveMode used when performing a DeltaOperation

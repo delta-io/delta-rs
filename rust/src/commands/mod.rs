@@ -1,11 +1,11 @@
 //! High level delta commands that can be executed against a delta table
 use crate::{
-    action::Protocol,
+    action::{DeltaOperation, Protocol},
     commands::{transaction::DeltaTransactionPlan, write::WritePartitionCommand},
-    open_table,
+    get_backend_for_uri_with_options, open_table,
     storage::StorageError,
     write::{divide_by_partition_values, DeltaWriter, DeltaWriterError},
-    DeltaTable, DeltaTableError, DeltaTableMetaData,
+    DeltaTable, DeltaTableConfig, DeltaTableError, DeltaTableMetaData,
 };
 use arrow::{error::ArrowError, record_batch::RecordBatch};
 use datafusion::{
@@ -28,6 +28,10 @@ pub enum DeltaCommandError {
     /// Error returned when the table to be created already exists
     #[error("Received empty data partition {0}")]
     EmptyPartition(String),
+
+    /// Error returned when the table to be created already exists
+    #[error("Command not available {0}")]
+    UnsupportedCommand(String),
 
     /// Error returned when the table to be created already exists
     #[error("Table: '{0}' already exists")]
@@ -107,20 +111,32 @@ impl DeltaCommands {
         table_uri: String,
         metadata: DeltaTableMetaData,
     ) -> DeltaCommandResult<Self> {
-        let protocol = Protocol {
-            min_reader_version: 1,
-            min_writer_version: 2,
+        let op = DeltaOperation::Create {
+            location: table_uri,
+            metadata,
         };
 
-        let command = Arc::new(create::CreateCommand::new(
-            table_uri.clone(),
-            metadata,
-            protocol,
-        ));
-        let _ = collect(command).await?;
-        let table = open_table(&table_uri).await?;
+        match &op {
+            DeltaOperation::Create { location, metadata } => {
+                let backend = get_backend_for_uri_with_options(location, HashMap::new())
+                    .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+                let mut table = DeltaTable::new(location, backend, DeltaTableConfig::default())
+                    .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+                let protocol = Protocol {
+                    min_reader_version: 1,
+                    min_writer_version: 2,
+                };
 
-        Ok(Self { table })
+                table
+                    .create(metadata.clone(), protocol.clone(), None)
+                    .await?;
+
+                Ok(Self { table })
+            }
+            _ => Err(DeltaCommandError::UnsupportedCommand(
+                "unsupported".to_string(),
+            )),
+        }
     }
 
     /// Write data to Delta table
@@ -130,7 +146,6 @@ impl DeltaCommands {
 
         let mut partitions: HashMap<String, Vec<RecordBatch>> = HashMap::new();
         for batch in data {
-            // let mut partition = Vec::new();
             let divided =
                 divide_by_partition_values(schema.clone(), partition_columns.clone(), &batch)
                     .unwrap();
@@ -153,12 +168,10 @@ impl DeltaCommands {
             schema,
             None,
         )?);
-
         let write_plan = Arc::new(WritePartitionCommand::new(
             self.table.table_uri.clone(),
             data_plan,
         ));
-
         let transaction = Arc::new(DeltaTransactionPlan::new(
             self.table.table_uri.clone(),
             write_plan,
