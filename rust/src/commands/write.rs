@@ -188,7 +188,7 @@ impl ExecutionPlan for WriteCommand {
     }
 
     fn statistics(&self) -> Statistics {
-        compute_record_batch_statistics(&vec![], &self.schema(), None)
+        compute_record_batch_statistics(&[], &self.schema(), None)
     }
 }
 
@@ -242,7 +242,7 @@ impl ExecutionPlan for WritePartitionCommand {
             .map_err(to_datafusion_err)?;
 
         let data = collect_batch(self.input.execute(partition).await?).await?;
-        if data.len() < 1 {
+        if data.is_empty() {
             return Err(DataFusionError::Plan(
                 DeltaCommandError::EmptyPartition("no data".to_string()).to_string(),
             ));
@@ -269,17 +269,15 @@ impl ExecutionPlan for WritePartitionCommand {
                 .collect::<Result<Vec<_>, _>>()
                 .map_err(to_datafusion_err)?,
         );
-        let serialized_batch =
-            RecordBatch::try_new(self.schema().clone(), vec![Arc::new(serialized)])?;
+        let serialized_batch = RecordBatch::try_new(self.schema(), vec![Arc::new(serialized)])?;
 
-        let stream =
-            SizedRecordBatchStream::new(self.schema().clone(), vec![Arc::new(serialized_batch)]);
+        let stream = SizedRecordBatchStream::new(self.schema(), vec![Arc::new(serialized_batch)]);
 
         Ok(Box::pin(stream))
     }
 
     fn statistics(&self) -> Statistics {
-        compute_record_batch_statistics(&vec![], &self.schema(), None)
+        compute_record_batch_statistics(&[], &self.schema(), None)
     }
 }
 

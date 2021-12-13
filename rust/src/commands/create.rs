@@ -123,7 +123,7 @@ impl ExecutionPlan for CreateCommand {
     }
 
     fn statistics(&self) -> Statistics {
-        compute_record_batch_statistics(&vec![], &self.schema(), None)
+        compute_record_batch_statistics(&[], &self.schema(), None)
     }
 }
 

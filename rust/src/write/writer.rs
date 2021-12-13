@@ -162,7 +162,7 @@ impl DeltaWriter {
         values: &RecordBatch,
     ) -> Result<Vec<PartitionResult>, DeltaWriterError> {
         divide_by_partition_values(
-            self.partition_arrow_schema().clone(),
+            self.partition_arrow_schema(),
             self.partition_columns.clone(),
             values,
         )
