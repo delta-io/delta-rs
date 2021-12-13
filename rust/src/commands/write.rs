@@ -160,7 +160,6 @@ impl ExecutionPlan for WriteCommand {
             PartitionWriteMode::Single(plan) => {
                 let data = collect(plan.clone()).await?;
                 txn.write_files(data).await.map_err(to_datafusion_err)?;
-                let _asd = txn.actions();
             }
             PartitionWriteMode::Distributed(plan) => {
                 // add actions
