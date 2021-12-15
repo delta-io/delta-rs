@@ -63,24 +63,6 @@
 //! };
 //! ```
 //!
-//! Querying from s3:
-//! ```rust
-//! use std::sync::Arc;
-//! use datafusion::execution::context::ExecutionContext;
-//! // TODO: Add S3 import
-//! async {
-//!   let mut ctx = ExecutionContext::new();
-//!   let table = deltalake::open_table("./tests/data/simple_table")
-//!       .await
-//!       .unwrap();
-//!   ctx.register_table("demo", Arc::new(table)).unwrap();
-//!
-//!   let batches = ctx
-//!       .sql("SELECT * FROM demo").await.unwrap()
-//!       .collect()
-//!       .await.unwrap();
-//! };
-//! ```
 //! It's important to note that the DataFusion library is evolving quickly, often with breaking api
 //! changes, and this may cause compilation issues as a result.  If you are having issues with the most
 //! recently released `delta-rs` you can set a specific branch or commit in your `Cargo.toml`.
