@@ -41,6 +41,35 @@
 //! - `glue` - enable the Glue data catalog to work with Delta Tables with AWS Glue.
 //! - `azure` - enable the Azure storage backend to work with Delta Tables in Azure Data Lake Storage Gen2 accounts.
 //! - `datafusion-ext` - enable the `datafusion::datasource::TableProvider` trait implementation for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow-datafusion).
+//!
+//! # Querying Delta Tables with Datafusion
+//!
+//! Querying from local filesystem:
+//! ```ignore
+//! use std::sync::Arc;
+//! use datafusion::execution::context::ExecutionContext;
+//!
+//! async {
+//!   let mut ctx = ExecutionContext::new();
+//!   let table = deltalake::open_table("./tests/data/simple_table")
+//!       .await
+//!       .unwrap();
+//!   ctx.register_table("demo", Arc::new(table)).unwrap();
+//!
+//!   let batches = ctx
+//!       .sql("SELECT * FROM demo").await.unwrap()
+//!       .collect()
+//!       .await.unwrap();
+//! };
+//! ```
+//!
+//! It's important to note that the DataFusion library is evolving quickly, often with breaking api
+//! changes, and this may cause compilation issues as a result.  If you are having issues with the most
+//! recently released `delta-rs` you can set a specific branch or commit in your `Cargo.toml`.
+//!
+//! ```toml
+//! datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "07bc2c754805f536fe1cd873dbe6adfc0a21cbb3" }
+//! ```
 
 #![deny(warnings)]
 #![deny(missing_docs)]
