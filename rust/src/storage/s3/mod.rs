@@ -1,7 +1,6 @@
 //! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::{fmt, pin::Pin};
 
@@ -361,17 +360,15 @@ fn parse_head_obj_last_modified_time(
     Ok(DateTime::<Utc>::from(dt))
 }
 
-impl TryFrom<rusoto_s3::Object> for ObjectMeta {
-    type Error = StorageError;
+fn try_object_meta_from(bucket: &str, obj: rusoto_s3::Object) -> Result<ObjectMeta, StorageError> {
+    let key = obj
+        .key
+        .ok_or_else(|| StorageError::S3Generic("S3 Object missing key attribute".to_string()))?;
 
-    fn try_from(obj: rusoto_s3::Object) -> Result<Self, Self::Error> {
-        Ok(ObjectMeta {
-            path: obj.key.ok_or_else(|| {
-                StorageError::S3Generic("S3 Object missing key attribute".to_string())
-            })?,
-            modified: parse_obj_last_modified_time(&obj.last_modified)?,
-        })
-    }
+    Ok(ObjectMeta {
+        path: format!("s3://{}/{}", bucket, key),
+        modified: parse_obj_last_modified_time(&obj.last_modified)?,
+    })
 }
 
 /// Struct describing an object stored in S3.
@@ -572,7 +569,7 @@ impl StorageBackend for S3StorageBackend {
             mut ctx: ListContext,
         ) -> Option<(Result<ObjectMeta, StorageError>, ListContext)> {
             match ctx.obj_iter.next() {
-                Some(obj) => Some((ObjectMeta::try_from(obj), ctx)),
+                Some(obj) => Some((try_object_meta_from(&ctx.bucket, obj), ctx)),
                 None => match &ctx.continuation_token {
                     ContinuationToken::End => None,
                     ContinuationToken::Value(v) => {
@@ -595,7 +592,7 @@ impl StorageBackend for S3StorageBackend {
                         ctx.obj_iter = result.contents.unwrap_or_else(Vec::new).into_iter();
                         ctx.obj_iter
                             .next()
-                            .map(|obj| (ObjectMeta::try_from(obj), ctx))
+                            .map(|obj| (try_object_meta_from(&ctx.bucket, obj), ctx))
                     }
                 },
             }
@@ -910,6 +907,7 @@ mod tests {
     use super::*;
 
     use maplit::hashmap;
+    use serial_test::serial;
 
     #[test]
     fn join_multiple_paths() {
@@ -942,6 +940,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn storage_options_default_test() {
         std::env::set_var(s3_storage_options::AWS_ENDPOINT_URL, "http://localhost");
         std::env::set_var(s3_storage_options::AWS_REGION, "us-west-1");
@@ -955,6 +954,9 @@ mod tests {
             s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE,
             "token_file",
         );
+        std::env::remove_var(s3_storage_options::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS);
+        std::env::remove_var(s3_storage_options::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS);
+        std::env::remove_var(s3_storage_options::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES);
 
         let options = S3StorageOptions::default();
 
@@ -979,6 +981,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn storage_options_from_map_test() {
         let options = S3StorageOptions::from_map(hashmap! {
             s3_storage_options::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
@@ -1013,6 +1016,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn storage_options_mixed_test() {
         std::env::set_var(s3_storage_options::AWS_ENDPOINT_URL, "http://localhost");
         std::env::set_var(s3_storage_options::AWS_REGION, "us-west-1");
@@ -1062,6 +1066,7 @@ mod tests {
         );
     }
     #[test]
+    #[serial]
     fn storage_options_web_identity_test() {
         let _options = S3StorageOptions::from_map(hashmap! {
             s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "web_identity_token_file".to_string(),

@@ -151,7 +151,7 @@ async fn read_null_partitions_from_checkpoint() {
 
     fs_common::commit_add(&mut table, &add(Some("red".to_string()))).await;
     fs_common::commit_add(&mut table, &add(None)).await;
-    deltalake::checkpoints::create_checkpoint_from_table(&table)
+    deltalake::checkpoints::create_checkpoint(&table)
         .await
         .unwrap();
 
