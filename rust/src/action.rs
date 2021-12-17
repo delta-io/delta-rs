@@ -859,6 +859,8 @@ pub enum DeltaOperation {
         location: String,
         /// Metadata for creating table
         metadata: DeltaTableMetaData,
+        /// The save mode used during creation.
+        mode: SaveMode,
     },
     /// Represents a Delta `Write` operation.
     /// Write operations will typically only include `Add` actions.

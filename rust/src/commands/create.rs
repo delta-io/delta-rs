@@ -149,6 +149,7 @@ mod tests {
         let op = DeltaOperation::Create {
             location: table_uri.clone(),
             metadata: metadata.clone(),
+            mode: SaveMode::Ignore,
         };
 
         let transaction = Arc::new(DeltaTransactionPlan::new(

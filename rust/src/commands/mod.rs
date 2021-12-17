@@ -1,7 +1,9 @@
 //! High level delta commands that can be executed against a delta table
 use crate::{
     action::{self, DeltaOperation, Protocol},
-    commands::{transaction::DeltaTransactionPlan, write::WritePartitionCommand},
+    commands::{
+        create::CreateCommand, transaction::DeltaTransactionPlan, write::WritePartitionCommand,
+    },
     get_backend_for_uri_with_options, open_table,
     storage::StorageError,
     write::{divide_by_partition_values, DeltaWriter, DeltaWriterError},
@@ -10,7 +12,7 @@ use crate::{
 use arrow::{error::ArrowError, record_batch::RecordBatch};
 use datafusion::{
     error::DataFusionError,
-    physical_plan::{collect, memory::MemoryExec},
+    physical_plan::{collect, memory::MemoryExec, ExecutionPlan},
 };
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -90,75 +92,18 @@ pub struct DeltaCommands {
 impl DeltaCommands {
     /// load table from uri
     pub async fn try_from_uri(uri: String) -> DeltaCommandResult<Self> {
-        let table = open_table(&uri).await?;
+        let table = get_table_from_uri_without_update(uri)?;
         Ok(Self { table })
-    }
-
-    /// create an instance of the table
-    pub async fn try_with_new_table(
-        table_uri: String,
-        metadata: DeltaTableMetaData,
-    ) -> DeltaCommandResult<Self> {
-        let op = DeltaOperation::Create {
-            location: table_uri,
-            metadata,
-        };
-
-        match &op {
-            DeltaOperation::Create { location, metadata } => {
-                let backend = get_backend_for_uri_with_options(location, HashMap::new())
-                    .map_err(|e| DataFusionError::Plan(e.to_string()))?;
-                let mut table = DeltaTable::new(location, backend, DeltaTableConfig::default())
-                    .map_err(|e| DataFusionError::Plan(e.to_string()))?;
-                let protocol = Protocol {
-                    min_reader_version: 1,
-                    min_writer_version: 2,
-                };
-
-                table
-                    .create(metadata.clone(), protocol.clone(), None)
-                    .await?;
-
-                Ok(Self { table })
-            }
-            _ => Err(DeltaCommandError::UnsupportedCommand(
-                "unsupported".to_string(),
-            )),
-        }
     }
 
     async fn execute(
         &mut self,
         operation: DeltaOperation,
-        data: Option<Vec<Vec<RecordBatch>>>,
+        plan: Arc<dyn ExecutionPlan>,
     ) -> DeltaCommandResult<()> {
-        let data_plan = if let Some(batches) = data {
-            let schema = batches[0][0].schema();
-            Some(Arc::new(MemoryExec::try_new(&batches, schema, None)?))
-        } else {
-            None
-        };
-
-        let operation_plan = match &operation {
-            DeltaOperation::Write { .. } => {
-                // TODO we should probably do partitioning within datafusion here, rather than
-                // let the writer deal with it...
-                match data_plan {
-                    Some(plan) => Ok(Arc::new(WritePartitionCommand::new(
-                        self.table.table_uri.clone(),
-                        plan,
-                    ))),
-                    _ => Err(DeltaCommandError::UnsupportedCommand(
-                        "data required".to_string(),
-                    )),
-                }?
-            }
-            _ => todo!(),
-        };
-
         let transaction = Arc::new(DeltaTransactionPlan::new(
             self.table.table_uri.clone(),
-            operation_plan,
+            plan,
             operation,
             None,
         ));
@@ -167,6 +112,32 @@ impl DeltaCommands {
         self.table.update().await?;
 
         Ok(())
+    }
+
+    /// Create a new Delta table
+    pub async fn create(
+        &mut self,
+        table_uri: String,
+        metadata: DeltaTableMetaData,
+        mode: Option<action::SaveMode>,
+    ) -> DeltaCommandResult<()> {
+        let operation = DeltaOperation::Create {
+            mode: mode.clone().unwrap_or(action::SaveMode::Ignore),
+            metadata: metadata.clone(),
+            location: table_uri.clone(),
+        };
+        let protocol = Protocol {
+            min_reader_version: 1,
+            min_writer_version: 2,
+        };
+        let plan = Arc::new(CreateCommand::new(
+            table_uri.clone(),
+            mode.unwrap_or(action::SaveMode::Ignore),
+            metadata.clone(),
+            protocol,
+        ));
+
+        self.execute(operation, plan).await
     }
 
     /// Write data to Delta table
@@ -198,12 +169,16 @@ impl DeltaCommands {
             partition_by: Some(partition_columns),
             predicate: None,
         };
+        let plan = Arc::new(WritePartitionCommand::new(
+            self.table.table_uri.clone(),
+            Arc::new(MemoryExec::try_new(
+                &partitions.into_values().collect::<Vec<_>>(),
+                schema,
+                None,
+            )?),
+        ));
 
-        self.execute(
-            operation,
-            Some(partitions.into_values().collect::<Vec<_>>()),
-        )
-        .await
+        self.execute(operation, plan).await
     }
 }
 
