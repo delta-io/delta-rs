@@ -87,3 +87,7 @@ pretty_assertions = "0"
 tempdir = "0"
 tempfile = "3"
 maplit = { version = "1" }
+
+[[example]]
+name="write_delta_table"
+required-features=["datafusion-ext"]
