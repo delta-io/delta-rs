@@ -1,7 +1,8 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
+use super::transaction::serialize_actions;
 use crate::{
-    action::Protocol, get_backend_for_uri_with_options, DeltaTable, DeltaTableConfig,
+    action::{Action, MetaData, Protocol},
     DeltaTableMetaData, Schema,
 };
 use arrow::datatypes::Schema as ArrowSchema;
@@ -11,12 +12,10 @@ use datafusion::{
     arrow::datatypes::SchemaRef,
     error::{DataFusionError, Result as DataFusionResult},
     physical_plan::{
-        common::compute_record_batch_statistics, empty::EmptyExec, Distribution, ExecutionPlan,
-        Partitioning, SendableRecordBatchStream, Statistics,
+        common::{compute_record_batch_statistics, SizedRecordBatchStream},
+        Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
     },
 };
-use serde_json::{Map as JsonMap, Value};
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// The save mode when creating new table.
@@ -31,22 +30,15 @@ pub enum TableCreationMode {
 
 /// Command for creating ne delta table
 pub struct CreateCommand {
-    table_uri: String,
     // mode: TableCreationMode,
     metadata: DeltaTableMetaData,
     protocol: Protocol,
-    commit_info: JsonMap<String, Value>,
 }
 
 impl CreateCommand {
     /// Create new CreateCommand
-    pub fn new(table_uri: String, metadata: DeltaTableMetaData, protocol: Protocol) -> Self {
-        Self {
-            table_uri,
-            metadata,
-            protocol,
-            commit_info: JsonMap::<String, Value>::new(),
-        }
+    pub fn new(metadata: DeltaTableMetaData, protocol: Protocol) -> Self {
+        Self { metadata, protocol }
     }
 }
 
@@ -94,32 +86,18 @@ impl ExecutionPlan for CreateCommand {
     }
 
     async fn execute(&self, _partition: usize) -> DataFusionResult<SendableRecordBatchStream> {
-        let backend = get_backend_for_uri_with_options(&self.table_uri, HashMap::new())
-            .map_err(|e| DataFusionError::Plan(e.to_string()))?;
-        let mut table = DeltaTable::new(&self.table_uri, backend, DeltaTableConfig::default())
-            .map_err(|e| DataFusionError::Plan(e.to_string()))?;
+        let actions = vec![
+            Action::protocol(self.protocol.clone()),
+            Action::metaData(MetaData::try_from(self.metadata.clone()).unwrap()),
+        ];
 
-        let mut commit_info = self.commit_info.clone();
-        commit_info.insert(
-            "operation".to_string(),
-            serde_json::Value::String("CREATE TABLE".to_string()),
+        let serialized_batch = serialize_actions(actions)?;
+        let stream = SizedRecordBatchStream::new(
+            serialized_batch.schema(),
+            vec![Arc::new(serialized_batch)],
         );
-        table
-            .create(
-                self.metadata.clone(),
-                self.protocol.clone(),
-                Some(commit_info),
-            )
-            .await
-            .map_err(|e| DataFusionError::Plan(e.to_string()))?;
 
-        let arrow_schema =
-            <ArrowSchema as TryFrom<&Schema>>::try_from(&self.metadata.schema.clone())?;
-        let empty_plan = EmptyExec::new(false, Arc::new(arrow_schema));
-        Ok(empty_plan
-            .execute(0)
-            .await
-            .map_err(|e| DataFusionError::Plan(e.to_string()))?)
+        Ok(Box::pin(stream))
     }
 
     fn statistics(&self) -> Statistics {
@@ -130,7 +108,11 @@ impl ExecutionPlan for CreateCommand {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{action::Protocol, open_table, DeltaTableMetaData};
+    use crate::{
+        action::{DeltaOperation, Protocol},
+        commands::transaction::DeltaTransactionPlan,
+        open_table, DeltaTableMetaData,
+    };
     use datafusion::physical_plan::collect;
     use std::collections::HashMap;
 
@@ -144,16 +126,25 @@ mod tests {
             min_writer_version: 2,
         };
 
-        let table_path = tempfile::tempdir().unwrap();
-        let table_uri = table_path.path().to_str().unwrap().to_string();
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path();
+        let table_uri = table_path.to_str().unwrap().to_string();
 
-        let command = Arc::new(CreateCommand::new(table_uri.clone(), metadata, protocol));
-        let _ = collect(command).await.unwrap();
+        let op = DeltaOperation::Create {
+            location: table_uri.clone(),
+            metadata: metadata.clone(),
+        };
 
-        assert!(table_path.path().exists());
-        let log_path = table_path
-            .path()
-            .join("_delta_log/00000000000000000000.json");
+        let transaction = Arc::new(DeltaTransactionPlan::new(
+            table_uri.clone(),
+            Arc::new(CreateCommand::new(metadata, protocol)),
+            op,
+            None,
+        ));
+        let _ = collect(transaction).await.unwrap();
+
+        assert!(table_path.exists());
+        let log_path = table_path.join("_delta_log/00000000000000000000.json");
         assert!(log_path.exists());
         assert!(log_path.is_file());
 

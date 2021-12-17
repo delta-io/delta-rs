@@ -16,16 +16,13 @@
 //! replace data that matches a predicate.
 
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/WriteIntoDelta.scala
-use super::*;
-use crate::{action::Action, open_table, write::DeltaWriter};
+use super::{transaction::serialize_actions, *};
+use crate::{action::Action, write::DeltaWriter};
 use async_trait::async_trait;
 use core::any::Any;
 use datafusion::{
-    arrow::{
-        array::StringArray,
-        datatypes::{
-            DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
-        },
+    arrow::datatypes::{
+        DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
     },
     error::{DataFusionError, Result as DataFusionResult},
     physical_plan::{
@@ -61,13 +58,19 @@ pub enum WriteMode {
 /// and forwards the add actions as record batches
 pub(crate) struct WritePartitionCommand {
     table_uri: String,
+    /// The save mode used in operation
+    mode: action::SaveMode,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
 }
 
 impl WritePartitionCommand {
     pub fn new(table_uri: String, input: Arc<dyn ExecutionPlan>) -> Self {
-        Self { table_uri, input }
+        Self {
+            table_uri,
+            mode: action::SaveMode::Append,
+            input,
+        }
     }
 }
 
@@ -105,11 +108,15 @@ impl ExecutionPlan for WritePartitionCommand {
     }
 
     async fn execute(&self, partition: usize) -> DataFusionResult<SendableRecordBatchStream> {
-        println!("WritePartitionCommand -> partition {:?}", partition);
+        println!("WritePartitionCommand -> partition {:?}/0", partition);
 
-        let table = open_table(&self.table_uri)
-            .await
-            .map_err(to_datafusion_err)?;
+        let mut table =
+            get_table_from_uri_without_update(self.table_uri.clone()).map_err(to_datafusion_err)?;
+
+        // TODO check operation
+        match self.mode {
+            _ => table.update().await.map_err(to_datafusion_err)?,
+        };
 
         let data = collect_batch(self.input.execute(partition).await?).await?;
         if data.is_empty() {
@@ -117,6 +124,11 @@ impl ExecutionPlan for WritePartitionCommand {
                 DeltaCommandError::EmptyPartition("no data".to_string()).to_string(),
             ));
         }
+
+        println!(
+            "WritePartitionCommand -> partition {:?}/1 {:?}",
+            partition, table.table_uri
+        );
 
         let mut writer =
             DeltaWriter::for_table(&table, HashMap::new()).map_err(to_datafusion_err)?;
@@ -129,19 +141,16 @@ impl ExecutionPlan for WritePartitionCommand {
             .await
             .map_err(to_datafusion_err)?
             .iter()
-            .map(|e| serde_json::to_value(Action::add(e.clone())).unwrap())
+            .map(|e| Action::add(e.clone()))
             .collect::<Vec<_>>();
 
-        let serialized = StringArray::from(
-            json_adds
-                .iter()
-                .map(serde_json::to_string)
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(to_datafusion_err)?,
+        let serialized_batch = serialize_actions(json_adds)?;
+        let stream = SizedRecordBatchStream::new(
+            serialized_batch.schema(),
+            vec![Arc::new(serialized_batch)],
         );
-        let serialized_batch = RecordBatch::try_new(self.schema(), vec![Arc::new(serialized)])?;
 
-        let stream = SizedRecordBatchStream::new(self.schema(), vec![Arc::new(serialized_batch)]);
+        println!("WritePartitionCommand -> partition {:?}/2", partition);
 
         Ok(Box::pin(stream))
     }

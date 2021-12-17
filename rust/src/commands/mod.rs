@@ -1,6 +1,6 @@
 //! High level delta commands that can be executed against a delta table
 use crate::{
-    action::{DeltaOperation, Protocol},
+    action::{self, DeltaOperation, Protocol},
     commands::{transaction::DeltaTransactionPlan, write::WritePartitionCommand},
     get_backend_for_uri_with_options, open_table,
     storage::StorageError,
@@ -82,18 +82,6 @@ fn to_datafusion_err(e: impl std::error::Error) -> DataFusionError {
     DataFusionError::Plan(e.to_string())
 }
 
-/// The save mode when writing data.
-pub enum SaveMode {
-    /// append data to existing table
-    Append,
-    /// overwrite table with new data
-    Overwrite,
-    /// TODO
-    Ignore,
-    /// Raise an error if data exists
-    ErrorIfExists,
-}
-
 /// High level interface for executing commands against a DeltaTable
 pub struct DeltaCommands {
     table: DeltaTable,
@@ -139,6 +127,48 @@ impl DeltaCommands {
         }
     }
 
+    async fn execute(
+        &mut self,
+        operation: DeltaOperation,
+        data: Option<Vec<Vec<RecordBatch>>>,
+    ) -> DeltaCommandResult<()> {
+        let data_plan = if let Some(batches) = data {
+            let schema = batches[0][0].schema();
+            Some(Arc::new(MemoryExec::try_new(&batches, schema, None)?))
+        } else {
+            None
+        };
+
+        let operation_plan = match &operation {
+            DeltaOperation::Write { .. } => {
+                // TODO we should probably do partitioning within datafusion here, rather than
+                // let the writer deal with it...
+                match data_plan {
+                    Some(plan) => Ok(Arc::new(WritePartitionCommand::new(
+                        self.table.table_uri.clone(),
+                        plan,
+                    ))),
+                    _ => Err(DeltaCommandError::UnsupportedCommand(
+                        "data required".to_string(),
+                    )),
+                }?
+            }
+            _ => todo!(),
+        };
+
+        let transaction = Arc::new(DeltaTransactionPlan::new(
+            self.table.table_uri.clone(),
+            operation_plan,
+            operation,
+            None,
+        ));
+
+        let _ = collect(transaction).await?;
+        self.table.update().await?;
+
+        Ok(())
+    }
+
     /// Write data to Delta table
     pub async fn write(&mut self, data: Vec<RecordBatch>) -> DeltaCommandResult<()> {
         let schema = data[0].schema();
@@ -163,35 +193,27 @@ impl DeltaCommands {
             }
         }
 
-        let data_plan = Arc::new(MemoryExec::try_new(
-            &partitions.into_values().collect::<Vec<_>>(),
-            schema,
-            None,
-        )?);
-        let write_plan = Arc::new(WritePartitionCommand::new(
-            self.table.table_uri.clone(),
-            data_plan,
-        ));
-        let transaction = Arc::new(DeltaTransactionPlan::new(
-            self.table.table_uri.clone(),
-            write_plan,
-        ));
+        let operation = DeltaOperation::Write {
+            mode: action::SaveMode::Append,
+            partition_by: Some(partition_columns),
+            predicate: None,
+        };
 
-        let _ = collect(transaction).await?;
-        self.table.update().await?;
-
-        Ok(())
+        self.execute(
+            operation,
+            Some(partitions.into_values().collect::<Vec<_>>()),
+        )
+        .await
     }
 }
 
-async fn check_table_exists(table: &DeltaTable) -> DeltaCommandResult<bool> {
-    let uri = table.commit_uri_from_version(table.version);
-    match table.storage.head_obj(&uri).await {
-        Ok(_) => Ok(true),
-        Err(StorageError::NotFound) => Ok(false),
-        Err(source) => Err(DeltaCommandError::StorageError { source }),
-    }
+fn get_table_from_uri_without_update(table_uri: String) -> DeltaCommandResult<DeltaTable> {
+    let backend = get_backend_for_uri_with_options(&table_uri, HashMap::new())?;
+    let table = DeltaTable::new(&table_uri, backend, DeltaTableConfig::default())?;
+
+    Ok(table)
 }
+
 
 #[cfg(test)]
 mod tests {
@@ -208,6 +230,7 @@ mod tests {
         let mut commands = DeltaCommands::try_from_uri(table.table_uri.to_string())
             .await
             .unwrap();
+
         commands.write(vec![batch]).await.unwrap();
 
         table.update().await.unwrap();

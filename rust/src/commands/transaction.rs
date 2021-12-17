@@ -1,14 +1,16 @@
 //! Wrapper Execution plan to handle distributed operations
 use super::*;
 use crate::action::Action;
+use crate::commands::create::CreateCommand;
 use async_trait::async_trait;
 use core::any::Any;
 use datafusion::{
     arrow::{
-        array::Array,
+        array::{Array, StringArray},
         datatypes::{
             DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
         },
+        record_batch::RecordBatch,
     },
     error::Result as DataFusionResult,
     physical_plan::{
@@ -26,19 +28,42 @@ lazy_static! {
         ArrowSchema::new(vec![ArrowField::new("serialized", DataType::Utf8, true,)]);
 }
 
+pub(crate) fn serialize_actions(actions: Vec<Action>) -> DataFusionResult<RecordBatch> {
+    let serialized = StringArray::from(
+        actions
+            .iter()
+            .map(serde_json::to_string)
+            .collect::<Result<Vec<_>, _>>()
+            .map_err(to_datafusion_err)?,
+    );
+    Ok(RecordBatch::try_new(
+        Arc::new(OPERATION_SCHEMA.clone()),
+        vec![Arc::new(serialized)],
+    )?)
+}
+
 /// Write command
 #[derive(Debug)]
 pub struct DeltaTransactionPlan {
     table_uri: String,
     input: Arc<dyn ExecutionPlan>,
+    operation: DeltaOperation,
+    app_metadata: Option<serde_json::Map<String, serde_json::Value>>,
 }
 
 impl DeltaTransactionPlan {
     /// Wrap partitioned delta operations in a DeltaTransaction
-    pub fn new(table_uri: String, input: Arc<dyn ExecutionPlan>) -> Self {
+    pub fn new(
+        table_uri: String,
+        input: Arc<dyn ExecutionPlan>,
+        operation: DeltaOperation,
+        app_metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    ) -> Self {
         Self {
             table_uri,
             input: Arc::new(CoalescePartitionsExec::new(input)),
+            operation,
+            app_metadata,
         }
     }
 
@@ -79,35 +104,66 @@ impl ExecutionPlan for DeltaTransactionPlan {
     }
 
     async fn execute(&self, _partition: usize) -> DataFusionResult<SendableRecordBatchStream> {
-        let mut table = open_table(&self.table_uri)
-            .await
-            .map_err(to_datafusion_err)?;
-        let table_exists = check_table_exists(&table)
-            .await
-            .map_err(to_datafusion_err)?;
+        let mut table =
+            get_table_from_uri_without_update(self.table_uri.clone()).map_err(to_datafusion_err)?;
 
-        if !table_exists {
-            todo!()
-        }
+        let mut actions = match table.load().await {
+            Err(_) => match &self.operation {
+                DeltaOperation::Create { metadata, .. } => {
+                    // TODO how do we configure protocols, i guess the reader / writer implementations know best ...
+                    let protocol = Protocol {
+                        min_reader_version: 1,
+                        min_writer_version: 2,
+                    };
+                    let create_command = Arc::new(CreateCommand::new(metadata.clone(), protocol));
+                    let create_batch = collect(create_command.clone()).await?;
+                    let mut create_actions = Vec::new();
+                    for batch in create_batch {
+                        let mut new_actions = deserialize_actions(&batch)?;
+                        create_actions.append(&mut new_actions);
+                    }
+                    create_actions
+                }
+                _ => Vec::new(),
+            },
+            Ok(_) => Vec::new(),
+        };
 
-        let mut txn = table.create_transaction(None);
-
-        let mut actions = Vec::new();
         let data = collect(self.input.clone()).await?;
         for batch in data {
             // TODO we assume that all children send a single column record batch with serialized actions
-            let serialized_actions = arrow::array::as_string_array(batch.column(0));
-            let mut new_actions = (0..serialized_actions.len())
-                .map(|idx| serde_json::from_str::<Action>(serialized_actions.value(idx)))
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(to_datafusion_err)?;
+            let mut new_actions = deserialize_actions(&batch)?;
             actions.append(&mut new_actions);
         }
 
+        let mut txn = table.create_transaction(None);
         txn.add_actions(actions);
-        txn.commit(None).await.map_err(to_datafusion_err)?;
 
+        let _new_version = match &self.operation {
+            DeltaOperation::Create { .. } => {
+                let prepared_commit = txn
+                    .prepare_commit_with_info(
+                        Some(self.operation.clone()),
+                        self.app_metadata.clone(),
+                    )
+                    .await
+                    .map_err(to_datafusion_err)?;
+                let committed_version = table
+                    .try_commit_transaction(&prepared_commit, 0)
+                    .await
+                    .map_err(to_datafusion_err)?;
+                committed_version
+            }
+            _ => {
+                let committed_version = txn
+                    .commit_with_info(Some(self.operation.clone()), self.app_metadata.clone())
+                    .await
+                    .map_err(to_datafusion_err)?;
+                committed_version
+            }
+        };
+
+        // TODO report some helpful data - at least current version
         let empty_plan = EmptyExec::new(false, self.schema());
         Ok(empty_plan.execute(0).await?)
     }
@@ -115,4 +171,13 @@ impl ExecutionPlan for DeltaTransactionPlan {
     fn statistics(&self) -> Statistics {
         compute_record_batch_statistics(&[], &self.schema(), None)
     }
+}
+
+fn deserialize_actions(data: &RecordBatch) -> DataFusionResult<Vec<Action>> {
+    let serialized_actions = arrow::array::as_string_array(data.column(0));
+    (0..serialized_actions.len())
+        .map(|idx| serde_json::from_str::<Action>(serialized_actions.value(idx)))
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(to_datafusion_err)
 }

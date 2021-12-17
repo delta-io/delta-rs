@@ -849,7 +849,7 @@ impl Action {
 /// Operation performed when creating a new log entry with one or more actions.
 /// This is a key element of the `CommitInfo` action.
 #[allow(clippy::large_enum_variant)]
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 #[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
     /// Represents a Delta `Create` operation.
@@ -912,7 +912,7 @@ impl DeltaOperation {
 }
 
 /// The SaveMode used when performing a DeltaOperation
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum SaveMode {
     /// Files will be appended to the target location.
     Append,
@@ -925,7 +925,7 @@ pub enum SaveMode {
 }
 
 /// The OutputMode used in streaming operations.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum OutputMode {
     /// Only new rows will be written when new data is available.
     Append,
