@@ -109,7 +109,9 @@ impl ExecutionPlan for WritePartitionCommand {
 
     async fn execute(&self, partition: usize) -> DataFusionResult<SendableRecordBatchStream> {
         println!("{:?}", self.mode);
-        let table = open_table(&self.table_uri).await.map_err(to_datafusion_err)?;
+        let table = open_table(&self.table_uri)
+            .await
+            .map_err(to_datafusion_err)?;
 
         let data = collect_batch(self.input.execute(partition).await?).await?;
         if data.is_empty() {
