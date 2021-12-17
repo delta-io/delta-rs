@@ -115,9 +115,9 @@ impl ExecutionPlan for DeltaTransactionPlan {
             actions.append(&mut new_actions);
         }
 
-        if actions.len() < 1 {
+        if actions.is_empty() {
             let empty_plan = EmptyExec::new(false, self.schema());
-            return Ok(empty_plan.execute(0).await?)
+            return empty_plan.execute(0).await;
         }
 
         let mut txn = table.create_transaction(None);
@@ -149,7 +149,7 @@ impl ExecutionPlan for DeltaTransactionPlan {
 
         // TODO report some helpful data - at least current version
         let empty_plan = EmptyExec::new(false, self.schema());
-        Ok(empty_plan.execute(0).await?)
+        empty_plan.execute(0).await
     }
 
     fn statistics(&self) -> Statistics {

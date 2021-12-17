@@ -100,7 +100,9 @@ impl ExecutionPlan for CreateCommand {
             ]),
             Ok(_) => match self.mode {
                 SaveMode::Ignore => Ok(Vec::new()),
-                _ => Err(DeltaCommandError::TableAlreadyExists(self.table_uri.clone())),
+                _ => Err(DeltaCommandError::TableAlreadyExists(
+                    self.table_uri.clone(),
+                )),
             },
         }
         .map_err(to_datafusion_err)?;
