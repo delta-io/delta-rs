@@ -57,22 +57,23 @@ pub struct WriteCommand {
 
 impl WriteCommand {
     /// Create a new write command
-    pub fn new(
-        table_uri: String,
+    pub fn new<T: Into<String> + Clone>(
+        table_uri: T,
         mode: SaveMode,
         partition_columns: Option<Vec<String>>,
         predicate: Option<String>,
         input: Arc<dyn ExecutionPlan>,
     ) -> Self {
+        let uri = table_uri.into();
         let plan = Arc::new(WritePartitionCommand::new(
-            table_uri.clone(),
+            uri.clone(),
             mode.clone(),
             partition_columns.clone(),
             None,
             input.clone(),
         ));
         Self {
-            table_uri,
+            table_uri: uri.clone(),
             mode,
             partition_columns,
             predicate,
@@ -286,10 +287,47 @@ impl ExecutionPlan for WritePartitionCommand {
     }
 }
 
-// #[cfg(test)]
-// mod tests {
-//     #[tokio::test]
-//     async fn test_append_data() {
-//         todo!()
-//     }
-// }
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::write::test_utils::{create_initialized_table, get_record_batch};
+
+    #[tokio::test]
+    async fn test_append_data() {
+        let batch = get_record_batch(None, false);
+        let partition_cols = vec!["modified".to_string()];
+        let mut table = create_initialized_table(&partition_cols).await;
+        assert_eq!(table.version, 0);
+
+        let schema = batch.schema();
+        let data_plan = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
+        let command = WriteCommand::new(
+            table.table_uri.to_string(),
+            SaveMode::Append,
+            Some(partition_cols.clone()),
+            None,
+            data_plan,
+        );
+
+        let op = DeltaOperation::Write {
+            partition_by: Some(partition_cols),
+            mode: SaveMode::Append,
+            predicate: None,
+        };
+
+        let transaction = Arc::new(DeltaTransactionPlan::new(
+            table.table_uri.to_string(),
+            Arc::new(command),
+            op,
+            None,
+        ));
+
+        let _ = collect(transaction.clone()).await.unwrap();
+        table.update().await.unwrap();
+        assert_eq!(table.get_file_uris().len(), 2);
+
+        let _ = collect(transaction.clone()).await.unwrap();
+        table.update().await.unwrap();
+        assert_eq!(table.get_file_uris().len(), 4);
+    }
+}

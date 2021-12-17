@@ -148,10 +148,8 @@ mod tests {
         let _ = collect(transaction.clone()).await.unwrap();
 
         let table_path = std::path::Path::new(&table_uri);
-        assert!(table_path.exists());
         let log_path = table_path.join("_delta_log/00000000000000000000.json");
         assert!(log_path.exists());
-        assert!(log_path.is_file());
 
         let mut table = open_table(&table_uri).await.unwrap();
         assert_eq!(table.version, 0);
