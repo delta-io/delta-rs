@@ -31,16 +31,19 @@ async fn main() -> anyhow::Result<()> {
     .unwrap();
 
     // Action
-    dt.create(table_metadata.clone(), protocol.clone(), None)
-        .await
-        .unwrap();
+    // dt.create(table_metadata.clone(), protocol.clone(), None)
+    //     .await
+    //     .unwrap();
 
     let mut commands = DeltaCommands::try_from_uri(dt.table_uri.to_string())
         .await
         .unwrap();
 
     let batch = get_record_batch();
-    commands.write(vec![batch]).await.unwrap();
+    commands
+        .write(vec![batch], None, Some(vec!["modified".to_string()]))
+        .await
+        .unwrap();
 
     dt.update().await.unwrap();
     println!("{}", dt.version);

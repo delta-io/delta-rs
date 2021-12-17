@@ -40,6 +40,32 @@ impl std::fmt::Debug for DeltaWriter {
 }
 
 impl DeltaWriter {
+    /// Create a new DeltaWriter instance
+    pub fn try_new(
+        table_uri: String,
+        schema: ArrowSchemaRef,
+        partition_columns: Option<Vec<String>>,
+        storage_options: Option<HashMap<String, String>>,
+    ) -> Result<Self, DeltaWriterError> {
+        let storage =
+            get_backend_for_uri_with_options(&table_uri, storage_options.unwrap_or_default())?;
+
+        // Initialize writer properties for the underlying arrow writer
+        let writer_properties = WriterProperties::builder()
+            // NOTE: Consider extracting config for writer properties and setting more than just compression
+            .set_compression(Compression::SNAPPY)
+            .build();
+
+        Ok(Self {
+            storage,
+            table_uri: table_uri.clone(),
+            arrow_schema_ref: schema,
+            writer_properties,
+            partition_columns: partition_columns.unwrap_or_default(),
+            arrow_writers: HashMap::new(),
+        })
+    }
+
     /// Creates a DeltaWriter to write to the given table
     pub fn for_table(
         table: &DeltaTable,

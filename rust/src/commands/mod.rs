@@ -1,10 +1,8 @@
 //! High level delta commands that can be executed against a delta table
 use crate::{
-    action::{self, DeltaOperation, Protocol, SaveMode},
-    commands::{
-        create::CreateCommand, transaction::DeltaTransactionPlan, write::WritePartitionCommand,
-    },
-    get_backend_for_uri_with_options, open_table,
+    action::{DeltaOperation, Protocol, SaveMode},
+    commands::{create::CreateCommand, transaction::DeltaTransactionPlan, write::WriteCommand},
+    get_backend_for_uri_with_options,
     storage::StorageError,
     write::{divide_by_partition_values, DeltaWriter, DeltaWriterError},
     DeltaTable, DeltaTableConfig, DeltaTableError, DeltaTableMetaData,
@@ -145,43 +143,63 @@ impl DeltaCommands {
     }
 
     /// Write data to Delta table
-    pub async fn write(&mut self, data: Vec<RecordBatch>) -> DeltaCommandResult<()> {
+    pub async fn write(
+        &mut self,
+        data: Vec<RecordBatch>,
+        mode: Option<SaveMode>,
+        partition_columns: Option<Vec<String>>,
+    ) -> DeltaCommandResult<()> {
         let schema = data[0].schema();
-        let partition_columns = self.table.get_metadata()?.partition_columns.clone();
-
-        let mut partitions: HashMap<String, Vec<RecordBatch>> = HashMap::new();
-        for batch in data {
-            let divided =
-                divide_by_partition_values(schema.clone(), partition_columns.clone(), &batch)
-                    .unwrap();
-            for part in divided {
-                let key =
-                    DeltaWriter::get_partition_key(&partition_columns, &part.partition_values)?;
-                match partitions.get_mut(&key) {
-                    Some(batches) => {
-                        batches.push(part.record_batch);
+        let current_part = match self.table.update().await {
+            Ok(_) => {
+                println!("update succeeded");
+                let metadata = self.table.get_metadata()?;
+                if let Some(cols) = partition_columns {
+                    if cols != metadata.partition_columns {
+                        todo!("Schema updates not yet implemented")
                     }
-                    None => {
-                        partitions.insert(key, vec![part.record_batch]);
+                };
+                Some(metadata.partition_columns.clone())
+            }
+            _ => partition_columns,
+        };
+
+        let data = if let Some(ref cols) = current_part {
+            // TODO partitioning should probably happen in its own plan ...
+            let mut partitions: HashMap<String, Vec<RecordBatch>> = HashMap::new();
+            for batch in data {
+                let divided =
+                    divide_by_partition_values(schema.clone(), cols.clone(), &batch).unwrap();
+                for part in divided {
+                    let key = DeltaWriter::get_partition_key(cols, &part.partition_values)?;
+                    match partitions.get_mut(&key) {
+                        Some(batches) => {
+                            batches.push(part.record_batch);
+                        }
+                        None => {
+                            partitions.insert(key, vec![part.record_batch]);
+                        }
                     }
                 }
             }
-        }
+            partitions.into_values().collect::<Vec<_>>()
+        } else {
+            vec![data]
+        };
 
         let operation = DeltaOperation::Write {
-            mode: SaveMode::Append,
-            partition_by: Some(partition_columns),
+            mode: mode.clone().unwrap_or(SaveMode::Append),
+            partition_by: current_part.clone(),
             predicate: None,
         };
-        let plan = Arc::new(WritePartitionCommand::new(
+        let data_plan = Arc::new(MemoryExec::try_new(&data, schema, None)?);
+        let plan = Arc::new(WriteCommand::new(
             self.table.table_uri.clone(),
-            Arc::new(MemoryExec::try_new(
-                &partitions.into_values().collect::<Vec<_>>(),
-                schema,
-                None,
-            )?),
+            mode.clone().unwrap_or(SaveMode::Append),
+            current_part.clone(),
+            None,
+            data_plan,
         ));
-
         self.execute(operation, plan).await
     }
 }
@@ -196,7 +214,10 @@ fn get_table_from_uri_without_update(table_uri: String) -> DeltaCommandResult<De
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::write::test_utils::{create_initialized_table, get_record_batch};
+    use crate::{
+        open_table,
+        write::test_utils::{create_initialized_table, get_record_batch},
+    };
 
     #[tokio::test]
     async fn test_create_command() {
@@ -237,7 +258,14 @@ mod tests {
             .await
             .unwrap();
 
-        commands.write(vec![batch]).await.unwrap();
+        commands
+            .write(
+                vec![batch],
+                Some(SaveMode::Append),
+                Some(vec!["modified".to_string()]),
+            )
+            .await
+            .unwrap();
 
         table.update().await.unwrap();
         assert_eq!(table.version, 1);

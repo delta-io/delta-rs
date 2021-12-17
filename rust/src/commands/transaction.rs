@@ -120,11 +120,10 @@ impl ExecutionPlan for DeltaTransactionPlan {
             return empty_plan.execute(0).await;
         }
 
-        let mut txn = table.create_transaction(None);
-        txn.add_actions(actions);
-
-        let _new_version = match &self.operation {
-            DeltaOperation::Create { .. } => {
+        let _new_version = match table.update().await {
+            Err(_) => {
+                let mut txn = table.create_transaction(None);
+                txn.add_actions(actions);
                 let prepared_commit = txn
                     .prepare_commit_with_info(
                         Some(self.operation.clone()),
@@ -139,6 +138,8 @@ impl ExecutionPlan for DeltaTransactionPlan {
                 committed_version
             }
             _ => {
+                let mut txn = table.create_transaction(None);
+                txn.add_actions(actions);
                 let committed_version = txn
                     .commit_with_info(Some(self.operation.clone()), self.app_metadata.clone())
                     .await
