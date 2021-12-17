@@ -108,15 +108,8 @@ impl ExecutionPlan for WritePartitionCommand {
     }
 
     async fn execute(&self, partition: usize) -> DataFusionResult<SendableRecordBatchStream> {
-        println!("WritePartitionCommand -> partition {:?}/0", partition);
-
-        let mut table =
-            get_table_from_uri_without_update(self.table_uri.clone()).map_err(to_datafusion_err)?;
-
-        // TODO check operation
-        match self.mode {
-            _ => table.update().await.map_err(to_datafusion_err)?,
-        };
+        println!("{:?}", self.mode);
+        let table = open_table(&self.table_uri).await.map_err(to_datafusion_err)?;
 
         let data = collect_batch(self.input.execute(partition).await?).await?;
         if data.is_empty() {
@@ -124,11 +117,6 @@ impl ExecutionPlan for WritePartitionCommand {
                 DeltaCommandError::EmptyPartition("no data".to_string()).to_string(),
             ));
         }
-
-        println!(
-            "WritePartitionCommand -> partition {:?}/1 {:?}",
-            partition, table.table_uri
-        );
 
         let mut writer =
             DeltaWriter::for_table(&table, HashMap::new()).map_err(to_datafusion_err)?;
@@ -149,8 +137,6 @@ impl ExecutionPlan for WritePartitionCommand {
             serialized_batch.schema(),
             vec![Arc::new(serialized_batch)],
         );
-
-        println!("WritePartitionCommand -> partition {:?}/2", partition);
 
         Ok(Box::pin(stream))
     }
