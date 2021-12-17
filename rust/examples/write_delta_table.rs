@@ -4,10 +4,7 @@ extern crate deltalake;
 use arrow::array::{Int32Array, StringArray};
 use arrow::datatypes::{DataType, Field, Schema as ArrowSchema};
 use arrow::record_batch::RecordBatch;
-use deltalake::action;
-use deltalake::schema::{Schema, SchemaDataType, SchemaField};
-use deltalake::{commands::DeltaCommands, DeltaTable, DeltaTableConfig, DeltaTableMetaData};
-use std::collections::HashMap;
+use deltalake::{commands::DeltaCommands, DeltaTable, DeltaTableConfig};
 use std::sync::Arc;
 
 #[tokio::main(flavor = "current_thread")]
@@ -16,8 +13,6 @@ async fn main() -> anyhow::Result<()> {
 
     let table_path = std::env::current_dir()?; // .join("/data");
     let table_path = table_path.as_path().join("data");
-
-    let (table_metadata, protocol) = get_table_structs();
 
     let backend = Box::new(deltalake::storage::file::FileStorageBackend::new(
         table_path.as_path().to_str().unwrap(),
@@ -29,11 +24,6 @@ async fn main() -> anyhow::Result<()> {
         DeltaTableConfig::default(),
     )
     .unwrap();
-
-    // Action
-    // dt.create(table_metadata.clone(), protocol.clone(), None)
-    //     .await
-    //     .unwrap();
 
     let mut commands = DeltaCommands::try_from_uri(dt.table_uri.to_string())
         .await
@@ -49,45 +39,6 @@ async fn main() -> anyhow::Result<()> {
     println!("{}", dt.version);
 
     Ok(())
-}
-
-fn get_table_structs() -> (DeltaTableMetaData, action::Protocol) {
-    let table_schema = Schema::new(vec![
-        SchemaField::new(
-            "id".to_string(),
-            SchemaDataType::primitive("string".to_string()),
-            true,
-            HashMap::new(),
-        ),
-        SchemaField::new(
-            "value".to_string(),
-            SchemaDataType::primitive("integer".to_string()),
-            true,
-            HashMap::new(),
-        ),
-        SchemaField::new(
-            "modified".to_string(),
-            SchemaDataType::primitive("string".to_string()),
-            true,
-            HashMap::new(),
-        ),
-    ]);
-
-    let table_metadata = DeltaTableMetaData::new(
-        Some("Test Table Create".to_string()),
-        Some("This table is made to test the create function for a DeltaTable".to_string()),
-        None,
-        table_schema,
-        vec!["modified".to_string()],
-        HashMap::new(),
-    );
-
-    let protocol = action::Protocol {
-        min_reader_version: 1,
-        min_writer_version: 2,
-    };
-
-    (table_metadata, protocol)
 }
 
 fn get_record_batch() -> RecordBatch {

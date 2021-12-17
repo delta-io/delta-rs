@@ -180,7 +180,7 @@ impl ExecutionPlan for WriteCommand {
 #[derive(Debug)]
 /// Writes the partitioned input data into separate batches
 /// and forwards the add actions as record batches
-pub(crate) struct WritePartitionCommand {
+struct WritePartitionCommand {
     table_uri: String,
     /// The save mode used in operation
     mode: SaveMode,
@@ -244,13 +244,7 @@ impl ExecutionPlan for WritePartitionCommand {
     }
 
     async fn execute(&self, partition: usize) -> DataFusionResult<SendableRecordBatchStream> {
-        println!(
-            "{:?} {:?} {:?}",
-            self.mode, self.partition_columns, self.predicate
-        );
-        // let table = open_table(&self.table_uri)
-        //     .await
-        //     .map_err(to_datafusion_err)?;
+        println!("{:?} {:?}", self.mode, self.predicate);
 
         let data = collect_batch(self.input.execute(partition).await?).await?;
         if data.is_empty() {
@@ -270,7 +264,7 @@ impl ExecutionPlan for WritePartitionCommand {
             // TODO we should have an API that allows us to circumvent internal partitioning
             writer.write(&batch).map_err(to_datafusion_err)?;
         }
-        let json_adds = writer
+        let actions = writer
             .flush()
             .await
             .map_err(to_datafusion_err)?
@@ -278,10 +272,10 @@ impl ExecutionPlan for WritePartitionCommand {
             .map(|e| Action::add(e.clone()))
             .collect::<Vec<_>>();
 
-        let serialized_batch = serialize_actions(json_adds)?;
+        let serialized_actions = serialize_actions(actions)?;
         let stream = SizedRecordBatchStream::new(
-            serialized_batch.schema(),
-            vec![Arc::new(serialized_batch)],
+            serialized_actions.schema(),
+            vec![Arc::new(serialized_actions)],
         );
 
         Ok(Box::pin(stream))
