@@ -197,6 +197,7 @@ impl DeltaCommands {
             mode: action::SaveMode::Append,
             partition_by: Some(partition_columns),
             predicate: None,
+            metadata: None,
         };
 
         self.execute(

@@ -869,6 +869,8 @@ pub enum DeltaOperation {
         partition_by: Option<Vec<String>>,
         /// The predicate used during the write.
         predicate: Option<String>,
+        /// Metadata for creating table, if the write mode allows
+        metadata: Option<DeltaTableMetaData>,
     },
     /// Represents a Delta `StreamingUpdate` operation.
     StreamingUpdate {
@@ -883,6 +885,11 @@ pub enum DeltaOperation {
     Update {
         /// Query string
         query: String,
+    },
+    /// Represents a Delta `Delete` operation.
+    Delete {
+        /// The predicate used during the write.
+        predicate: Option<String>,
     }, // TODO: Add more operations
 }
 
@@ -890,7 +897,7 @@ impl DeltaOperation {
     /// Retrieve basic commit information to be added to Delta commits
     pub fn get_commit_info(&self) -> Map<String, Value> {
         let mut commit_info = Map::<String, Value>::new();
-
+        // TODO add operation parameter to commit info
         match &self {
             DeltaOperation::Create { .. } => {
                 commit_info.insert(
@@ -903,8 +910,32 @@ impl DeltaOperation {
                     "operation".to_string(),
                     serde_json::Value::String("delta-rs.Write".to_string()),
                 );
-            } // DeltaOperation::Delete => "delta-rs.Delete".to_string(),
-            _ => (),
+            }
+            DeltaOperation::Delete { .. } => {
+                commit_info.insert(
+                    "operation".to_string(),
+                    serde_json::Value::String("delta-rs.Delete".to_string()),
+                );
+            }
+            DeltaOperation::Update { .. } => {
+                commit_info.insert(
+                    "operation".to_string(),
+                    serde_json::Value::String("delta-rs.Update".to_string()),
+                );
+            }
+            DeltaOperation::StreamingUpdate { .. } => {
+                commit_info.insert(
+                    "operation".to_string(),
+                    serde_json::Value::String("delta-rs.StreamingUpdate".to_string()),
+                );
+            }
+        };
+
+        if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(self) {
+            commit_info.insert(
+                "operationParameters".to_string(),
+                map.values().next().unwrap().clone(),
+            );
         };
 
         commit_info
