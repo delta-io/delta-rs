@@ -1,6 +1,6 @@
 //! High level delta commands that can be executed against a delta table
 use crate::{
-    action::{self, DeltaOperation, Protocol},
+    action::{self, DeltaOperation, Protocol, SaveMode},
     commands::{
         create::CreateCommand, transaction::DeltaTransactionPlan, write::WritePartitionCommand,
     },
@@ -96,6 +96,11 @@ impl DeltaCommands {
         Ok(Self { table })
     }
 
+    /// Get a reference to the underlying table
+    pub fn table(&self) -> &DeltaTable {
+        &self.table
+    }
+
     async fn execute(
         &mut self,
         operation: DeltaOperation,
@@ -117,22 +122,21 @@ impl DeltaCommands {
     /// Create a new Delta table
     pub async fn create(
         &mut self,
-        table_uri: String,
         metadata: DeltaTableMetaData,
-        mode: Option<action::SaveMode>,
+        mode: Option<SaveMode>,
     ) -> DeltaCommandResult<()> {
         let operation = DeltaOperation::Create {
-            mode: mode.clone().unwrap_or(action::SaveMode::Ignore),
+            mode: mode.clone().unwrap_or(SaveMode::Ignore),
             metadata: metadata.clone(),
-            location: table_uri.clone(),
+            location: self.table.table_uri.clone(),
         };
         let protocol = Protocol {
             min_reader_version: 1,
             min_writer_version: 2,
         };
         let plan = Arc::new(CreateCommand::new(
-            table_uri.clone(),
-            mode.unwrap_or(action::SaveMode::Ignore),
+            self.table.table_uri.clone(),
+            mode.unwrap_or(SaveMode::Ignore),
             metadata.clone(),
             protocol,
         ));
@@ -165,7 +169,7 @@ impl DeltaCommands {
         }
 
         let operation = DeltaOperation::Write {
-            mode: action::SaveMode::Append,
+            mode: SaveMode::Append,
             partition_by: Some(partition_columns),
             predicate: None,
         };
@@ -193,6 +197,34 @@ fn get_table_from_uri_without_update(table_uri: String) -> DeltaCommandResult<De
 mod tests {
     use super::*;
     use crate::write::test_utils::{create_initialized_table, get_record_batch};
+
+    #[tokio::test]
+    async fn test_create_command() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path();
+        let table_uri = table_path.to_str().unwrap().to_string();
+
+        let mut commands = DeltaCommands::try_from_uri(table_uri.clone())
+            .await
+            .unwrap();
+
+        let table_schema = crate::write::test_utils::get_delta_schema();
+        let metadata =
+            DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
+
+        let _ = commands
+            .create(metadata.clone(), Some(SaveMode::Ignore))
+            .await
+            .unwrap();
+
+        let table = open_table(&table_uri).await.unwrap();
+        assert_eq!(table.version, 0);
+
+        let res = commands
+            .create(metadata, Some(SaveMode::ErrorIfExists))
+            .await;
+        assert!(res.is_err())
+    }
 
     #[tokio::test]
     async fn test_write_command() {

@@ -825,7 +825,7 @@ impl DeltaTable {
         Ok(())
     }
 
-    async fn get_version_timestamp(
+    pub(crate) async fn get_version_timestamp(
         &mut self,
         version: DeltaDataTypeVersion,
     ) -> Result<i64, DeltaTableError> {

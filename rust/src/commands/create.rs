@@ -100,9 +100,10 @@ impl ExecutionPlan for CreateCommand {
             ]),
             Ok(_) => match self.mode {
                 SaveMode::Ignore => Ok(Vec::new()),
-                _ => Err(DeltaCommandError::TableAlreadyExists(
+                SaveMode::ErrorIfExists => Err(DeltaCommandError::TableAlreadyExists(
                     self.table_uri.clone(),
                 )),
+                _ => todo!("Write mode not implemented {:?}", self.mode),
             },
         }
         .map_err(to_datafusion_err)?;
@@ -131,46 +132,74 @@ mod tests {
     };
     use datafusion::physical_plan::collect;
     use std::collections::HashMap;
+    use std::process::Command;
 
     #[tokio::test]
     async fn create_table_without_partitions() {
         let table_schema = crate::write::test_utils::get_delta_schema();
         let metadata =
             DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
-        let protocol = Protocol {
-            min_reader_version: 1,
-            min_writer_version: 2,
-        };
 
         let table_dir = tempfile::tempdir().unwrap();
         let table_path = table_dir.path();
         let table_uri = table_path.to_str().unwrap().to_string();
 
+        let transaction = get_transaction(table_uri.clone(), metadata.clone(), SaveMode::Ignore);
+        let _ = collect(transaction.clone()).await.unwrap();
+
+        let table_path = std::path::Path::new(&table_uri);
+        assert!(table_path.exists());
+        let log_path = table_path.join("_delta_log/00000000000000000000.json");
+        assert!(log_path.exists());
+        assert!(log_path.is_file());
+
+        let mut table = open_table(&table_uri).await.unwrap();
+        assert_eq!(table.version, 0);
+
+        // Check we can create an existing table with ignore
+        let ts1 = table.get_version_timestamp(0).await.unwrap();
+        let mut child = Command::new("sleep").arg("1").spawn().unwrap();
+        let _result = child.wait().unwrap();
+        let _ = collect(transaction).await.unwrap();
+        let mut table = open_table(&table_uri).await.unwrap();
+        assert_eq!(table.version, 0);
+        let ts2 = table.get_version_timestamp(0).await.unwrap();
+        assert_eq!(ts1, ts2);
+
+        // Check error for ErrorIfExists mode
+        let transaction = get_transaction(table_uri, metadata, SaveMode::ErrorIfExists);
+        let result = collect(transaction.clone()).await;
+        assert!(result.is_err())
+    }
+
+    fn get_transaction(
+        table_uri: String,
+        metadata: DeltaTableMetaData,
+        mode: SaveMode,
+    ) -> Arc<DeltaTransactionPlan> {
+        let protocol = Protocol {
+            min_reader_version: 1,
+            min_writer_version: 2,
+        };
+
         let op = DeltaOperation::Create {
             location: table_uri.clone(),
             metadata: metadata.clone(),
-            mode: SaveMode::Ignore,
+            mode: mode.clone(),
         };
 
         let transaction = Arc::new(DeltaTransactionPlan::new(
             table_uri.clone(),
             Arc::new(CreateCommand::new(
                 table_uri.clone(),
-                SaveMode::Ignore,
+                mode,
                 metadata,
                 protocol,
             )),
             op,
             None,
         ));
-        let _ = collect(transaction).await.unwrap();
 
-        assert!(table_path.exists());
-        let log_path = table_path.join("_delta_log/00000000000000000000.json");
-        assert!(log_path.exists());
-        assert!(log_path.is_file());
-
-        let table = open_table(&table_uri).await.unwrap();
-        assert_eq!(table.version, 0);
+        transaction
     }
 }
