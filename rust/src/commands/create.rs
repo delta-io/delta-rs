@@ -1,8 +1,11 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
-use super::transaction::serialize_actions;
+use super::{
+    get_table_from_uri_without_update, to_datafusion_err, transaction::serialize_actions,
+    DeltaCommandError,
+};
 use crate::{
-    action::{Action, MetaData, Protocol},
+    action::{Action, MetaData, Protocol, SaveMode},
     DeltaTableMetaData, Schema,
 };
 use arrow::datatypes::Schema as ArrowSchema;
@@ -18,27 +21,28 @@ use datafusion::{
 };
 use std::sync::Arc;
 
-/// The save mode when creating new table.
-pub enum TableCreationMode {
-    /// Create a new table that does not exist
-    Create,
-    /// Replace an existing table
-    Replace,
-    /// Create a new table replacing an existing one
-    CrateOrReplace,
-}
-
 /// Command for creating ne delta table
 pub struct CreateCommand {
-    // mode: TableCreationMode,
+    table_uri: String,
+    mode: SaveMode,
     metadata: DeltaTableMetaData,
     protocol: Protocol,
 }
 
 impl CreateCommand {
     /// Create new CreateCommand
-    pub fn new(metadata: DeltaTableMetaData, protocol: Protocol) -> Self {
-        Self { metadata, protocol }
+    pub fn new(
+        table_uri: String,
+        mode: SaveMode,
+        metadata: DeltaTableMetaData,
+        protocol: Protocol,
+    ) -> Self {
+        Self {
+            table_uri,
+            mode,
+            metadata,
+            protocol,
+        }
     }
 }
 
@@ -86,10 +90,20 @@ impl ExecutionPlan for CreateCommand {
     }
 
     async fn execute(&self, _partition: usize) -> DataFusionResult<SendableRecordBatchStream> {
-        let actions = vec![
-            Action::protocol(self.protocol.clone()),
-            Action::metaData(MetaData::try_from(self.metadata.clone()).unwrap()),
-        ];
+        let mut table =
+            get_table_from_uri_without_update(self.table_uri.clone()).map_err(to_datafusion_err)?;
+
+        let actions = match table.load_version(0).await {
+            Err(_) => Ok(vec![
+                Action::protocol(self.protocol.clone()),
+                Action::metaData(MetaData::try_from(self.metadata.clone()).unwrap()),
+            ]),
+            Ok(_) => match self.mode {
+                SaveMode::Ignore => Ok(Vec::new()),
+                _ => Err(DeltaCommandError::TableAlreadyExists(self.table_uri.clone())),
+            },
+        }
+        .map_err(to_datafusion_err)?;
 
         let serialized_batch = serialize_actions(actions)?;
         let stream = SizedRecordBatchStream::new(
@@ -137,7 +151,12 @@ mod tests {
 
         let transaction = Arc::new(DeltaTransactionPlan::new(
             table_uri.clone(),
-            Arc::new(CreateCommand::new(metadata, protocol)),
+            Arc::new(CreateCommand::new(
+                table_uri.clone(),
+                SaveMode::Ignore,
+                metadata,
+                protocol,
+            )),
             op,
             None,
         ));

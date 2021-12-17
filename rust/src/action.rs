@@ -862,6 +862,7 @@ pub enum DeltaOperation {
     },
     /// Represents a Delta `Write` operation.
     /// Write operations will typically only include `Add` actions.
+    #[serde(rename_all = "camelCase")]
     Write {
         /// The save mode used during the write.
         mode: SaveMode,
@@ -869,9 +870,8 @@ pub enum DeltaOperation {
         partition_by: Option<Vec<String>>,
         /// The predicate used during the write.
         predicate: Option<String>,
-        /// Metadata for creating table, if the write mode allows
-        metadata: Option<DeltaTableMetaData>,
     },
+    #[serde(rename_all = "camelCase")]
     /// Represents a Delta `StreamingUpdate` operation.
     StreamingUpdate {
         /// The output mode the streaming writer is using.

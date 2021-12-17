@@ -1,7 +1,7 @@
 //! Wrapper Execution plan to handle distributed operations
 use super::*;
 use crate::action::Action;
-use crate::commands::create::CreateCommand;
+// use crate::commands::create::CreateCommand;
 use async_trait::async_trait;
 use core::any::Any;
 use datafusion::{
@@ -107,33 +107,17 @@ impl ExecutionPlan for DeltaTransactionPlan {
         let mut table =
             get_table_from_uri_without_update(self.table_uri.clone()).map_err(to_datafusion_err)?;
 
-        let mut actions = match table.load().await {
-            Err(_) => match &self.operation {
-                DeltaOperation::Create { metadata, .. } => {
-                    // TODO how do we configure protocols, i guess the reader / writer implementations know best ...
-                    let protocol = Protocol {
-                        min_reader_version: 1,
-                        min_writer_version: 2,
-                    };
-                    let create_command = Arc::new(CreateCommand::new(metadata.clone(), protocol));
-                    let create_batch = collect(create_command.clone()).await?;
-                    let mut create_actions = Vec::new();
-                    for batch in create_batch {
-                        let mut new_actions = deserialize_actions(&batch)?;
-                        create_actions.append(&mut new_actions);
-                    }
-                    create_actions
-                }
-                _ => Vec::new(),
-            },
-            Ok(_) => Vec::new(),
-        };
-
+        let mut actions = Vec::new();
         let data = collect(self.input.clone()).await?;
         for batch in data {
             // TODO we assume that all children send a single column record batch with serialized actions
             let mut new_actions = deserialize_actions(&batch)?;
             actions.append(&mut new_actions);
+        }
+
+        if actions.len() < 1 {
+            let empty_plan = EmptyExec::new(false, self.schema());
+            return Ok(empty_plan.execute(0).await?)
         }
 
         let mut txn = table.create_transaction(None);
