@@ -6,13 +6,13 @@ from urllib.parse import urlparse
 
 import pyarrow
 import pyarrow.fs as pa_fs
-from pyarrow.dataset import dataset, partitioning
+from pyarrow.dataset import FileSystemDataset, ParquetFileFormat
 
 if TYPE_CHECKING:
     import pandas
 
 from .data_catalog import DataCatalog
-from .deltalake import RawDeltaTable
+from .deltalake import RawDeltaTable, FileStats
 from .fs import DeltaStorageHandler
 from .schema import Schema, pyarrow_schema_from_json
 
@@ -259,33 +259,24 @@ class DeltaTable:
         :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
         :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
         :return: the PyArrow dataset in PyArrow
-        """
-        if not partitions:
-            file_paths = self._table.file_uris()
-        else:
-            file_paths = self._table.files_by_partitions(partitions)
-
-        empty_delta_table = len(file_paths) == 0
-        if empty_delta_table:
-            return dataset(
-                [],
-                schema=self.pyarrow_schema(),
-                partitioning=partitioning(flavor="hive"),
-            )
-
-        parsed = urlparse(file_paths[0])
-        if not filesystem and parsed.netloc:
+        """        
+        if not filesystem:
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler(self._table.table_uri())
             )
 
-        return dataset(
-            file_paths,
-            schema=self.pyarrow_schema(),
-            format="parquet",
-            filesystem=filesystem,
-            partitioning=partitioning(flavor="hive"),
+        files = self._table.files_with_stats()
+        if partitions:
+            filter_set = set(self._table.files_by_partitions(partitions))
+            files = [stat for stat in files if stat.path in filter_set]
+
+        fragments = (
+            ParquetFileFormat.make_fragment(file.path, filesystem=filesystem, 
+                                            partition_expression=stats_to_pyarrow_expression(file))
+            for file in files
         )
+
+        return FileSystemDataset(fragments, self.pyarrow_schema(), ParquetFileFormat, filesystem)
 
     def to_pyarrow_table(
         self,
@@ -329,3 +320,7 @@ class DeltaTable:
         newer versions.
         """
         self._table.update_incremental()
+
+def stats_to_pyarrow_expression(stats: FileStats) -> pyarrow.datasets.Expression:
+    # TODO
+    pass

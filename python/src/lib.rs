@@ -232,6 +232,49 @@ impl RawDeltaTable {
             .block_on(self._table.update_incremental())
             .map_err(PyDeltaTableError::from_raw)
     }
+
+    pub fn files_with_stats(&mut self) -> PyResult<Vec<FileStats>> {
+        self._table.get_stats_iter()
+            .map(|res| {
+                let result = match res {
+                    Ok((path, Some(stats))) => {
+                        FileStats {
+                            file_path: path.to_string(),
+                            num_records: stats.num_records,
+                            min_values: HashMap::new(),
+                            max_values: HashMap::new(),
+                            null_counts: HashMap::new()
+                        }
+                    },
+                    Ok((path, None)) => {
+                        FileStats {
+                            file_path: path.to_string(),
+                            num_records: 0,
+                            min_values: HashMap::new(),
+                            max_values: HashMap::new(),
+                            null_counts: HashMap::new()
+                        }
+                    },
+                    Err(err) => return Err(PyDeltaTableError::from_raw(err))
+                };
+                Ok(result)
+            })
+            .collect()
+    }
+}
+
+#[pyclass]
+pub struct FileStats {
+    #[pyo3(get)]
+    file_path: String,
+    #[pyo3(get)]
+    num_records: i64,
+    #[pyo3(get)]
+    min_values: HashMap<String, Py<PyAny>>,
+    #[pyo3(get)]
+    max_values: HashMap<String, Py<PyAny>>,
+    #[pyo3(get)]
+    null_counts: HashMap<String, i64>,
 }
 
 #[pyclass]
@@ -284,6 +327,7 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<DeltaStorageFsBackend>()?;
+    m.add_class::<FileStats>()?;
     m.add("PyDeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())
 }

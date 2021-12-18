@@ -971,6 +971,17 @@ impl DeltaTable {
             .collect()
     }
 
+    /// Returns iterator over file statistics
+    pub fn get_stats_iter(&self) -> impl Iterator<Item = Result<(&str, Option<Stats>), DeltaTableError>> + '_ {
+        self.state
+            .files()
+            .iter()
+            .map(|add| {
+                let stats = add.get_stats().map_err(DeltaTableError::from)?;
+                Ok((add.path.as_ref(), stats))
+            })
+    }
+
     /// Returns the currently loaded state snapshot.
     pub fn get_state(&self) -> &DeltaTableState {
         &self.state
