@@ -6,13 +6,13 @@ from urllib.parse import urlparse
 
 import pyarrow
 import pyarrow.fs as pa_fs
-from pyarrow.dataset import FileSystemDataset, ParquetFileFormat
+from pyarrow.dataset import FileSystemDataset, ParquetFileFormat, field, Expression
 
 if TYPE_CHECKING:
     import pandas
 
 from .data_catalog import DataCatalog
-from .deltalake import RawDeltaTable, FileStats
+from .deltalake import FileStats, RawDeltaTable
 from .fs import DeltaStorageHandler
 from .schema import Schema, pyarrow_schema_from_json
 
@@ -259,7 +259,7 @@ class DeltaTable:
         :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
         :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
         :return: the PyArrow dataset in PyArrow
-        """        
+        """
         if not filesystem:
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler(self._table.table_uri())
@@ -270,13 +270,20 @@ class DeltaTable:
             filter_set = set(self._table.files_by_partitions(partitions))
             files = [stat for stat in files if stat.path in filter_set]
 
+        # TODO: Add partition values
+
         fragments = (
-            ParquetFileFormat.make_fragment(file.path, filesystem=filesystem, 
-                                            partition_expression=stats_to_pyarrow_expression(file))
+            ParquetFileFormat.make_fragment(
+                file.path,
+                filesystem=filesystem,
+                partition_expression=_stats_to_pyarrow_expression(file),
+            )
             for file in files
         )
 
-        return FileSystemDataset(fragments, self.pyarrow_schema(), ParquetFileFormat, filesystem)
+        return FileSystemDataset(
+            fragments, self.pyarrow_schema(), ParquetFileFormat, filesystem
+        )
 
     def to_pyarrow_table(
         self,
@@ -321,6 +328,6 @@ class DeltaTable:
         """
         self._table.update_incremental()
 
-def stats_to_pyarrow_expression(stats: FileStats) -> pyarrow.datasets.Expression:
-    # TODO
-    pass
+
+def _stats_to_pyarrow_expression(stats: FileStats) -> Expression:
+    return field("year") == 2020

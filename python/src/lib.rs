@@ -234,28 +234,25 @@ impl RawDeltaTable {
     }
 
     pub fn files_with_stats(&mut self) -> PyResult<Vec<FileStats>> {
-        self._table.get_stats_iter()
+        self._table
+            .get_stats_iter()
             .map(|res| {
                 let result = match res {
-                    Ok((path, Some(stats))) => {
-                        FileStats {
-                            file_path: path.to_string(),
-                            num_records: stats.num_records,
-                            min_values: HashMap::new(),
-                            max_values: HashMap::new(),
-                            null_counts: HashMap::new()
-                        }
+                    Ok((path, Some(stats))) => FileStats {
+                        file_path: path.to_string(),
+                        num_records: stats.num_records,
+                        min_values: HashMap::new(),
+                        max_values: HashMap::new(),
+                        null_counts: HashMap::new(),
                     },
-                    Ok((path, None)) => {
-                        FileStats {
-                            file_path: path.to_string(),
-                            num_records: 0,
-                            min_values: HashMap::new(),
-                            max_values: HashMap::new(),
-                            null_counts: HashMap::new()
-                        }
+                    Ok((path, None)) => FileStats {
+                        file_path: path.to_string(),
+                        num_records: 0,
+                        min_values: HashMap::new(),
+                        max_values: HashMap::new(),
+                        null_counts: HashMap::new(),
                     },
-                    Err(err) => return Err(PyDeltaTableError::from_raw(err))
+                    Err(err) => return Err(PyDeltaTableError::from_raw(err)),
                 };
                 Ok(result)
             })

@@ -2,6 +2,7 @@ import os
 from threading import Barrier, Thread
 
 import pandas as pd
+import pyarrow.dataset as ds
 import pytest
 from pyarrow.fs import LocalFileSystem
 
@@ -119,6 +120,31 @@ def test_read_table_with_column_subset():
         dt.to_pyarrow_dataset().to_table(columns=["value", "day"]).to_pydict()
         == expected
     )
+
+
+def test_read_table_with_filter():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = {
+        "value": ["6", "7", "5"],
+        "year": ["2021", "2021", "2021"],
+        "month": ["12", "12", "12"],
+        "day": ["20", "20", "4"],
+    }
+    filter_expr = (ds.field("year") == 2021) and (ds.field("month") == 12)
+
+    assert dt.to_pyarrow_dataset().to_table(filter=filter_expr).to_pydict() == expected
+
+
+def test_read_table_with_stats():
+    table_path = "../rust/tests/data/COVID-19_NYT"
+    dt = DeltaTable(table_path)
+    expected = {}
+    filter_expr = ds.field("date") > "2021-02-20"
+
+    data = dt.to_pyarrow_dataset().to_table(filter=filter_expr)
+
+    assert data.num_rows < 147181 + 47559
 
 
 def test_vacuum_dry_run_simple_table():
