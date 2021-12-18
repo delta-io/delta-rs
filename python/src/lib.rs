@@ -239,14 +239,14 @@ impl RawDeltaTable {
             .map(|res| {
                 let result = match res {
                     Ok((path, Some(stats))) => FileStats {
-                        file_path: path.to_string(),
+                        path: path.to_string(),
                         num_records: stats.num_records,
                         min_values: HashMap::new(),
                         max_values: HashMap::new(),
                         null_counts: HashMap::new(),
                     },
                     Ok((path, None)) => FileStats {
-                        file_path: path.to_string(),
+                        path: path.to_string(),
                         num_records: 0,
                         min_values: HashMap::new(),
                         max_values: HashMap::new(),
@@ -263,7 +263,7 @@ impl RawDeltaTable {
 #[pyclass]
 pub struct FileStats {
     #[pyo3(get)]
-    file_path: String,
+    path: String,
     #[pyo3(get)]
     num_records: i64,
     #[pyo3(get)]
@@ -324,7 +324,7 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<DeltaStorageFsBackend>()?;
-    m.add_class::<FileStats>()?;
+    // m.add_class::<FileStats>()?;
     m.add("PyDeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())
 }

@@ -264,6 +264,8 @@ class DeltaTable:
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler(self._table.table_uri())
             )
+        
+        format = ParquetFileFormat()
 
         files = self._table.files_with_stats()
         if partitions:
@@ -273,7 +275,7 @@ class DeltaTable:
         # TODO: Add partition values
 
         fragments = (
-            ParquetFileFormat.make_fragment(
+            format.make_fragment(
                 file.path,
                 filesystem=filesystem,
                 partition_expression=_stats_to_pyarrow_expression(file),
@@ -282,7 +284,7 @@ class DeltaTable:
         )
 
         return FileSystemDataset(
-            fragments, self.pyarrow_schema(), ParquetFileFormat, filesystem
+            fragments, self.pyarrow_schema(), format, filesystem
         )
 
     def to_pyarrow_table(

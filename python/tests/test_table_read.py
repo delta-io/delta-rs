@@ -131,7 +131,7 @@ def test_read_table_with_filter():
         "month": ["12", "12", "12"],
         "day": ["20", "20", "4"],
     }
-    filter_expr = (ds.field("year") == 2021) and (ds.field("month") == 12)
+    filter_expr = (ds.field("year") == 2021) & (ds.field("month") == 12)
 
     assert dt.to_pyarrow_dataset().to_table(filter=filter_expr).to_pydict() == expected
 
