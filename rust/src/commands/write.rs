@@ -18,7 +18,7 @@
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/WriteIntoDelta.scala
 use super::{create::CreateCommand, transaction::serialize_actions, *};
 use crate::{
-    action::{Action, SaveMode},
+    action::{Action, Add, Remove, SaveMode},
     write::DeltaWriter,
     Schema,
 };
@@ -38,6 +38,7 @@ use datafusion::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Command for writing data into Delta table
 #[derive(Debug)]
@@ -57,23 +58,24 @@ pub struct WriteCommand {
 
 impl WriteCommand {
     /// Create a new write command
-    pub fn new<T: Into<String> + Clone>(
+    pub fn new<T>(
         table_uri: T,
         mode: SaveMode,
         partition_columns: Option<Vec<String>>,
         predicate: Option<String>,
         input: Arc<dyn ExecutionPlan>,
-    ) -> Self {
+    ) -> Self
+    where
+        T: Into<String> + Clone,
+    {
         let uri = table_uri.into();
         let plan = Arc::new(WritePartitionCommand::new(
             uri.clone(),
-            mode.clone(),
             partition_columns.clone(),
-            None,
             input.clone(),
         ));
         Self {
-            table_uri: uri.clone(),
+            table_uri: uri,
             mode,
             partition_columns,
             predicate,
@@ -161,7 +163,37 @@ impl ExecutionPlan for WriteCommand {
         .map_err(to_datafusion_err)?;
 
         actions.append(&mut collect(self.input.clone()).await?);
-        println!("{:?}", self.predicate);
+
+        if let SaveMode::Overwrite = self.mode {
+            let deletion_timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+            let deletion_timestamp = deletion_timestamp.as_millis() as i64;
+
+            let to_remove_action = |add: &Add| {
+                Action::remove(Remove {
+                    path: add.path.clone(),
+                    deletion_timestamp: Some(deletion_timestamp),
+                    data_change: true,
+                    // TODO add file metadata to remove action (tags missing)
+                    extended_file_metadata: Some(false),
+                    partition_values: Some(add.partition_values.clone()),
+                    size: Some(add.size),
+                    tags: None,
+                })
+            };
+
+            match self.predicate {
+                Some(_) => todo!("Overwriting data based on predicate is not yet implemented"),
+                _ => {
+                    let remove_actions = table
+                        .get_state()
+                        .files()
+                        .iter()
+                        .map(to_remove_action)
+                        .collect::<Vec<_>>();
+                    actions.push(serialize_actions(remove_actions)?);
+                }
+            }
+        };
 
         let stream = SizedRecordBatchStream::new(
             self.schema(),
@@ -183,29 +215,32 @@ impl ExecutionPlan for WriteCommand {
 /// and forwards the add actions as record batches
 struct WritePartitionCommand {
     table_uri: String,
-    /// The save mode used in operation
-    mode: SaveMode,
+    // The save mode used in operation
+    // mode: SaveMode,
     /// Column names for table partitioning
     partition_columns: Option<Vec<String>>,
-    /// When using `Overwrite` mode, replace data that matches a predicate
-    predicate: Option<String>,
+    // When using `Overwrite` mode, replace data that matches a predicate
+    // predicate: Option<String>,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
 }
 
 impl WritePartitionCommand {
-    pub fn new(
-        table_uri: String,
-        mode: SaveMode,
+    pub fn new<T>(
+        table_uri: T,
+        // mode: SaveMode,
         partition_columns: Option<Vec<String>>,
-        predicate: Option<String>,
+        // predicate: Option<String>,
         input: Arc<dyn ExecutionPlan>,
-    ) -> Self {
+    ) -> Self
+    where
+        T: Into<String>,
+    {
         Self {
-            table_uri,
-            mode,
+            table_uri: table_uri.into(),
+            // mode,
             partition_columns,
-            predicate,
+            // predicate,
             input,
         }
     }
@@ -245,8 +280,6 @@ impl ExecutionPlan for WritePartitionCommand {
     }
 
     async fn execute(&self, partition: usize) -> DataFusionResult<SendableRecordBatchStream> {
-        println!("{:?} {:?}", self.mode, self.predicate);
-
         let data = collect_batch(self.input.execute(partition).await?).await?;
         if data.is_empty() {
             return Err(DataFusionError::Plan(
@@ -294,33 +327,11 @@ mod tests {
 
     #[tokio::test]
     async fn test_append_data() {
-        let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string()];
         let mut table = create_initialized_table(&partition_cols).await;
         assert_eq!(table.version, 0);
 
-        let schema = batch.schema();
-        let data_plan = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
-        let command = WriteCommand::new(
-            table.table_uri.to_string(),
-            SaveMode::Append,
-            Some(partition_cols.clone()),
-            None,
-            data_plan,
-        );
-
-        let op = DeltaOperation::Write {
-            partition_by: Some(partition_cols),
-            mode: SaveMode::Append,
-            predicate: None,
-        };
-
-        let transaction = Arc::new(DeltaTransactionPlan::new(
-            table.table_uri.to_string(),
-            Arc::new(command),
-            op,
-            None,
-        ));
+        let transaction = get_transaction(table.table_uri.clone(), SaveMode::Append);
 
         let _ = collect(transaction.clone()).await.unwrap();
         table.update().await.unwrap();
@@ -329,5 +340,48 @@ mod tests {
         let _ = collect(transaction.clone()).await.unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().len(), 4);
+    }
+
+    #[tokio::test]
+    async fn test_overwrite_data() {
+        let partition_cols = vec!["modified".to_string()];
+        let mut table = create_initialized_table(&partition_cols).await;
+        assert_eq!(table.version, 0);
+
+        let transaction = get_transaction(table.table_uri.clone(), SaveMode::Overwrite);
+
+        let _ = collect(transaction.clone()).await.unwrap();
+        table.update().await.unwrap();
+        assert_eq!(table.get_file_uris().len(), 2);
+
+        let _ = collect(transaction.clone()).await.unwrap();
+        table.update().await.unwrap();
+        assert_eq!(table.get_file_uris().len(), 2);
+    }
+
+    fn get_transaction(table_uri: String, mode: SaveMode) -> Arc<DeltaTransactionPlan> {
+        let batch = get_record_batch(None, false);
+        let schema = batch.schema();
+        let data_plan = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
+        let command = WriteCommand::new(
+            &table_uri,
+            mode.clone(),
+            Some(vec!["modified".to_string()]),
+            None,
+            data_plan,
+        );
+
+        let op = DeltaOperation::Write {
+            partition_by: Some(vec!["modified".to_string()]),
+            mode,
+            predicate: None,
+        };
+
+        Arc::new(DeltaTransactionPlan::new(
+            table_uri,
+            Arc::new(command),
+            op,
+            None,
+        ))
     }
 }

@@ -89,8 +89,11 @@ pub struct DeltaCommands {
 
 impl DeltaCommands {
     /// load table from uri
-    pub async fn try_from_uri(uri: String) -> DeltaCommandResult<Self> {
-        let table = get_table_from_uri_without_update(uri)?;
+    pub async fn try_from_uri<T>(uri: T) -> DeltaCommandResult<Self>
+    where
+        T: Into<String>,
+    {
+        let table = get_table_from_uri_without_update(uri.into())?;
         Ok(Self { table })
     }
 
@@ -133,7 +136,7 @@ impl DeltaCommands {
             min_writer_version: 2,
         };
         let plan = Arc::new(CreateCommand::new(
-            self.table.table_uri.clone(),
+            &self.table.table_uri,
             mode.unwrap_or(SaveMode::Ignore),
             metadata.clone(),
             protocol,
@@ -194,7 +197,7 @@ impl DeltaCommands {
         };
         let data_plan = Arc::new(MemoryExec::try_new(&data, schema, None)?);
         let plan = Arc::new(WriteCommand::new(
-            self.table.table_uri.clone(),
+            &self.table.table_uri,
             mode.clone().unwrap_or(SaveMode::Append),
             current_part.clone(),
             None,

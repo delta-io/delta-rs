@@ -53,14 +53,17 @@ pub struct DeltaTransactionPlan {
 
 impl DeltaTransactionPlan {
     /// Wrap partitioned delta operations in a DeltaTransaction
-    pub fn new(
-        table_uri: String,
+    pub fn new<T>(
+        table_uri: T,
         input: Arc<dyn ExecutionPlan>,
         operation: DeltaOperation,
         app_metadata: Option<serde_json::Map<String, serde_json::Value>>,
-    ) -> Self {
+    ) -> Self
+    where
+        T: Into<String>,
+    {
         Self {
-            table_uri,
+            table_uri: table_uri.into(),
             input: Arc::new(CoalescePartitionsExec::new(input)),
             operation,
             app_metadata,

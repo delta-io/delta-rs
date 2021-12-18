@@ -31,14 +31,17 @@ pub struct CreateCommand {
 
 impl CreateCommand {
     /// Create new CreateCommand
-    pub fn new(
-        table_uri: String,
+    pub fn new<T>(
+        table_uri: T,
         mode: SaveMode,
         metadata: DeltaTableMetaData,
         protocol: Protocol,
-    ) -> Self {
+    ) -> Self
+    where
+        T: Into<String>,
+    {
         Self {
-            table_uri,
+            table_uri: table_uri.into(),
             mode,
             metadata,
             protocol,
