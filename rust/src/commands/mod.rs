@@ -130,17 +130,16 @@ impl DeltaCommands {
             mode: mode.clone().unwrap_or(SaveMode::Ignore),
             metadata: metadata.clone(),
             location: self.table.table_uri.clone(),
+            // TODO get the protocol from somewhere central
+            protocol: Protocol {
+                min_reader_version: 1,
+                min_writer_version: 2,
+            },
         };
-        let protocol = Protocol {
-            min_reader_version: 1,
-            min_writer_version: 2,
-        };
-        let plan = Arc::new(CreateCommand::new(
+        let plan = Arc::new(CreateCommand::try_new(
             &self.table.table_uri,
-            mode.unwrap_or(SaveMode::Ignore),
-            metadata.clone(),
-            protocol,
-        ));
+            operation.clone(),
+        )?);
 
         self.execute(operation, plan).await
     }
@@ -152,6 +151,9 @@ impl DeltaCommands {
         mode: Option<SaveMode>,
         partition_columns: Option<Vec<String>>,
     ) -> DeltaCommandResult<()> {
+        if data.is_empty() {
+            return Ok(());
+        }
         let schema = data[0].schema();
         let current_part = match self.table.update().await {
             Ok(_) => {
@@ -196,13 +198,11 @@ impl DeltaCommands {
             predicate: None,
         };
         let data_plan = Arc::new(MemoryExec::try_new(&data, schema, None)?);
-        let plan = Arc::new(WriteCommand::new(
+        let plan = Arc::new(WriteCommand::try_new(
             &self.table.table_uri,
-            mode.clone().unwrap_or(SaveMode::Append),
-            current_part.clone(),
-            None,
+            operation.clone(),
             data_plan,
-        ));
+        )?);
         self.execute(operation, plan).await
     }
 }

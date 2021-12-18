@@ -5,7 +5,7 @@ use super::{
     DeltaCommandError,
 };
 use crate::{
-    action::{Action, MetaData, Protocol, SaveMode},
+    action::{Action, DeltaOperation, MetaData, Protocol, SaveMode},
     DeltaTableMetaData, Schema,
 };
 use arrow::datatypes::Schema as ArrowSchema;
@@ -31,20 +31,25 @@ pub struct CreateCommand {
 
 impl CreateCommand {
     /// Create new CreateCommand
-    pub fn new<T>(
-        table_uri: T,
-        mode: SaveMode,
-        metadata: DeltaTableMetaData,
-        protocol: Protocol,
-    ) -> Self
+    pub fn try_new<T>(table_uri: T, operation: DeltaOperation) -> Result<Self, DeltaCommandError>
     where
         T: Into<String>,
     {
-        Self {
-            table_uri: table_uri.into(),
-            mode,
-            metadata,
-            protocol,
+        match operation {
+            DeltaOperation::Create {
+                metadata,
+                mode,
+                protocol,
+                ..
+            } => Ok(Self {
+                table_uri: table_uri.into(),
+                mode,
+                metadata,
+                protocol,
+            }),
+            _ => Err(DeltaCommandError::UnsupportedCommand(
+                "WriteCommand only implemented for write operation".to_string(),
+            )),
         }
     }
 }
@@ -178,25 +183,19 @@ mod tests {
         metadata: DeltaTableMetaData,
         mode: SaveMode,
     ) -> Arc<DeltaTransactionPlan> {
-        let protocol = Protocol {
-            min_reader_version: 1,
-            min_writer_version: 2,
-        };
-
         let op = DeltaOperation::Create {
             location: table_uri.clone(),
             metadata: metadata.clone(),
             mode: mode.clone(),
+            protocol: Protocol {
+                min_reader_version: 1,
+                min_writer_version: 2,
+            },
         };
 
         let transaction = Arc::new(DeltaTransactionPlan::new(
             table_uri.clone(),
-            Arc::new(CreateCommand::new(
-                table_uri.clone(),
-                mode,
-                metadata,
-                protocol,
-            )),
+            Arc::new(CreateCommand::try_new(table_uri.clone(), op.clone()).unwrap()),
             op,
             None,
         ));

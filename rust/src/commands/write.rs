@@ -58,29 +58,38 @@ pub struct WriteCommand {
 
 impl WriteCommand {
     /// Create a new write command
-    pub fn new<T>(
+    pub fn try_new<T>(
         table_uri: T,
-        mode: SaveMode,
-        partition_columns: Option<Vec<String>>,
-        predicate: Option<String>,
+        operation: DeltaOperation,
         input: Arc<dyn ExecutionPlan>,
-    ) -> Self
+    ) -> Result<Self, DeltaCommandError>
     where
         T: Into<String> + Clone,
     {
-        let uri = table_uri.into();
-        let plan = Arc::new(WritePartitionCommand::new(
-            uri.clone(),
-            partition_columns.clone(),
-            input.clone(),
-        ));
-        Self {
-            table_uri: uri,
-            mode,
-            partition_columns,
-            predicate,
-            schema: input.schema(),
-            input: plan,
+        match operation {
+            DeltaOperation::Write {
+                mode,
+                partition_by,
+                predicate,
+            } => {
+                let uri = table_uri.into();
+                let plan = Arc::new(WritePartitionCommand::new(
+                    uri.clone(),
+                    partition_by.clone(),
+                    input.clone(),
+                ));
+                Ok(Self {
+                    table_uri: uri,
+                    mode,
+                    partition_columns: partition_by,
+                    predicate,
+                    schema: input.schema(),
+                    input: plan,
+                })
+            }
+            _ => Err(DeltaCommandError::UnsupportedCommand(
+                "WriteCommand only implemented for write operation".to_string(),
+            )),
         }
     }
 }
@@ -134,17 +143,20 @@ impl ExecutionPlan for WriteCommand {
                     self.partition_columns.clone().unwrap_or_default(),
                     HashMap::new(),
                 );
-                // TODO get the protocol from somewhere central
-                let protocol = Protocol {
-                    min_reader_version: 1,
-                    min_writer_version: 2,
+                let op = DeltaOperation::Create {
+                    location: self.table_uri.clone(),
+                    metadata: metadata.clone(),
+                    mode: SaveMode::ErrorIfExists,
+                    // TODO get the protocol from somewhere central
+                    protocol: Protocol {
+                        min_reader_version: 1,
+                        min_writer_version: 2,
+                    },
                 };
-                let plan = Arc::new(CreateCommand::new(
-                    self.table_uri.clone(),
-                    SaveMode::ErrorIfExists,
-                    metadata.clone(),
-                    protocol,
-                ));
+                let plan = Arc::new(
+                    CreateCommand::try_new(self.table_uri.clone(), op)
+                        .map_err(to_datafusion_err)?,
+                );
 
                 let create_actions = collect(plan.clone()).await?;
 
@@ -336,10 +348,12 @@ mod tests {
         let _ = collect(transaction.clone()).await.unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().len(), 2);
+        assert_eq!(table.version, 1);
 
         let _ = collect(transaction.clone()).await.unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().len(), 4);
+        assert_eq!(table.version, 2);
     }
 
     #[tokio::test]
@@ -353,29 +367,24 @@ mod tests {
         let _ = collect(transaction.clone()).await.unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().len(), 2);
+        assert_eq!(table.version, 1);
 
         let _ = collect(transaction.clone()).await.unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().len(), 2);
+        assert_eq!(table.version, 2);
     }
 
     fn get_transaction(table_uri: String, mode: SaveMode) -> Arc<DeltaTransactionPlan> {
         let batch = get_record_batch(None, false);
         let schema = batch.schema();
         let data_plan = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
-        let command = WriteCommand::new(
-            &table_uri,
-            mode.clone(),
-            Some(vec!["modified".to_string()]),
-            None,
-            data_plan,
-        );
-
         let op = DeltaOperation::Write {
             partition_by: Some(vec!["modified".to_string()]),
             mode,
             predicate: None,
         };
+        let command = WriteCommand::try_new(&table_uri, op.clone(), data_plan).unwrap();
 
         Arc::new(DeltaTransactionPlan::new(
             table_uri,

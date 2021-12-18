@@ -861,6 +861,8 @@ pub enum DeltaOperation {
         metadata: DeltaTableMetaData,
         /// The save mode used during creation.
         mode: SaveMode,
+        /// Reader / writer protocols requirements for table
+        protocol: Protocol,
     },
     /// Represents a Delta `Write` operation.
     /// Write operations will typically only include `Add` actions.
