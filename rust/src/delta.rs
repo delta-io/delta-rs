@@ -839,14 +839,47 @@ impl DeltaTable {
 
     /// Returns provenance information, including the operation, user, and so on, for each write to a table.
     /// The table history retention is based on the `logRetentionDuration` property of the Delta Table, 30 days by default.
-    pub fn history(
+    pub async fn history(
         &mut self,
         limit: Option<usize>,
     ) -> Result<Vec<Map<String, Value>>, DeltaTableError> {
-        let commit_infos_list = self.state.commit_infos().iter().rev().map(Map::clone);
-        match limit {
-            Some(l) => Ok(commit_infos_list.take(l).collect()),
-            None => Ok(commit_infos_list.collect()),
+        let mut version = 0;
+        let mut commit_infos_list = vec![];
+
+        loop {
+            match DeltaTableState::from_commit(self, version).await {
+                Ok(state) => {
+                    commit_infos_list.append(state.commit_infos().clone().as_mut());
+                    version += 1;
+                    println!("version: {:?}", version);
+                    match limit {
+                        Some(history_limit) => {
+                            if version >= (history_limit as i64) {
+                                return Ok(commit_infos_list);
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+                Err(e) => {
+                    match e {
+                        ApplyLogError::EndOfLog => {
+                            version -= 1;
+                            if version == -1 {
+                                let err = format!(
+                                    "No snapshot or version 0 found, perhaps {} is an empty dir?",
+                                    self.table_uri
+                                );
+                                return Err(DeltaTableError::NotATable(err));
+                            }
+                        }
+                        _ => {
+                            return Err(DeltaTableError::from(e));
+                        }
+                    }
+                    return Ok(commit_infos_list);
+                }
+            }
         }
     }
 
