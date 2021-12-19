@@ -2,7 +2,7 @@
 name = "dynamodb_lock"
 description = "Distributed lock backed by Dynamodb"
 version = "0.4.1"
-authors = ["Qingping Hou <qph@scribd.com>"]
+authors = ["Mykhailo Osypov <mykhailo.osypov@gmail.com>"]
 edition = "2018"
 readme = "README.md"
 license = "Apache-2.0"
