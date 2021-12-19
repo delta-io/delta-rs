@@ -115,4 +115,4 @@ pub use self::storage::{
 };
 
 #[cfg(feature = "s3")]
-pub use self::storage::s3::{dynamodb_lock::dynamo_lock_options, s3_storage_options};
+pub use self::storage::s3::s3_storage_options;

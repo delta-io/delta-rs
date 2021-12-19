@@ -5,8 +5,9 @@ mod s3_common;
 #[cfg(feature = "s3")]
 mod s3 {
     use crate::s3_common::setup;
+    use deltalake::s3_storage_options;
     use deltalake::storage;
-    use deltalake::{dynamo_lock_options, s3_storage_options};
+    use dynamodb_lock::dynamo_lock_options;
     use maplit::hashmap;
     use serial_test::serial;
 
