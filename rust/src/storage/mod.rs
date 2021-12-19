@@ -345,7 +345,7 @@ pub enum StorageError {
     DynamoDb {
         /// Wrapped DynamoDB error
         #[from]
-        source: s3::dynamodb_lock::DynamoError,
+        source: dynamodb_lock::DynamoError,
     },
     /// Error representing a failure to retrieve AWS credentials.
     #[cfg(any(feature = "s3", feature = "s3-rustls"))]
