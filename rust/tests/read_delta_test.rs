@@ -465,7 +465,7 @@ async fn test_table_history() {
 
     assert_eq!(history1, history2);
 
-    let history3 = table
+    let history3 = latest_table
         .history(Some(5))
         .await
         .expect("Cannot get table history");

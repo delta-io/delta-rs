@@ -876,7 +876,7 @@ impl DeltaTable {
         limit: Option<usize>,
     ) -> Result<Vec<Map<String, Value>>, DeltaTableError> {
         let mut version = match limit {
-            Some(l) => max(self.get_latest_version().await? - l as i64 + 1, 0),
+            Some(l) => max(self.version - l as i64 + 1, 0),
             None => self.get_earliest_delta_log_version().await?,
         };
         let mut commit_infos_list = vec![];
