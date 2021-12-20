@@ -449,3 +449,25 @@ async fn test_action_reconciliation() {
     // tombstone is removed.
     assert_eq!(table.get_state().all_tombstones().len(), 0);
 }
+
+#[tokio::test]
+async fn test_table_history() {
+    let path = "./tests/data/simple_table_with_checkpoint";
+    let mut latest_table = deltalake::open_table(path).await.unwrap();
+
+    let mut table = deltalake::open_table_with_version(path, 1).await.unwrap();
+
+    let history1 = table.history(None).await.expect("Cannot get table history");
+    let history2 = latest_table
+        .history(None)
+        .await
+        .expect("Cannot get table history");
+
+    assert_eq!(history1, history2);
+
+    let history3 = latest_table
+        .history(Some(5))
+        .await
+        .expect("Cannot get table history");
+    assert_eq!(history3.len(), 5);
+}
