@@ -974,10 +974,16 @@ impl DeltaTable {
     /// Returns iterator over file statistics
     pub fn get_stats_iter(
         &self,
-    ) -> impl Iterator<Item = Result<(String, Option<Stats>), DeltaTableError>> + '_ {
+    ) -> impl Iterator<
+        Item = Result<(String, &HashMap<String, Option<String>>, Option<Stats>), DeltaTableError>,
+    > + '_ {
         self.state.files().iter().map(|add| {
             let stats = add.get_stats().map_err(DeltaTableError::from)?;
-            Ok((self.storage.join_path(&self.table_uri, &add.path), stats))
+            Ok((
+                self.storage.join_path(&self.table_uri, &add.path),
+                &add.partition_values,
+                stats,
+            ))
         })
     }
 

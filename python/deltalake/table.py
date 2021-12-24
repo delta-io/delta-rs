@@ -1,12 +1,13 @@
 import json
 import warnings
 from dataclasses import dataclass
+from functools import reduce
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 from urllib.parse import urlparse
 
 import pyarrow
 import pyarrow.fs as pa_fs
-from pyarrow.dataset import FileSystemDataset, ParquetFileFormat, field, Expression
+from pyarrow.dataset import FileSystemDataset, ParquetFileFormat, field, scalar, Expression
 
 if TYPE_CHECKING:
     import pandas
@@ -264,7 +265,7 @@ class DeltaTable:
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler(self._table.table_uri())
             )
-        
+
         format = ParquetFileFormat()
 
         files = self._table.files_with_stats()
@@ -332,4 +333,11 @@ class DeltaTable:
 
 
 def _stats_to_pyarrow_expression(stats: FileStats) -> Expression:
-    return field("year") == 2020
+    expressions = []
+    for partition_column, partition_value in stats.partition_values.items():
+        expressions.append(field(partition_column) == partition_value)
+
+    if len(expressions) > 0:
+        return reduce(lambda a, b: a & b, expressions)
+    else:
+        return None

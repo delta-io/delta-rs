@@ -238,15 +238,17 @@ impl RawDeltaTable {
             .get_stats_iter()
             .map(|res| {
                 let result = match res {
-                    Ok((path, Some(stats))) => FileStats {
-                        path: path,
+                    Ok((path, partition_values, Some(stats))) => FileStats {
+                        path,
+                        partition_values: partition_values.clone(),
                         num_records: stats.num_records,
                         min_values: HashMap::new(),
                         max_values: HashMap::new(),
                         null_counts: HashMap::new(),
                     },
-                    Ok((path, None)) => FileStats {
-                        path: path,
+                    Ok((path, partition_values, None)) => FileStats {
+                        path,
+                        partition_values: partition_values.clone(),
                         num_records: 0,
                         min_values: HashMap::new(),
                         max_values: HashMap::new(),
@@ -264,6 +266,8 @@ impl RawDeltaTable {
 pub struct FileStats {
     #[pyo3(get)]
     path: String,
+    #[pyo3(get)]
+    partition_values: HashMap<String, Option<String>>,
     #[pyo3(get)]
     num_records: i64,
     #[pyo3(get)]

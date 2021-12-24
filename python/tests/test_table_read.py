@@ -18,7 +18,8 @@ def test_read_simple_table_to_dict():
 def test_read_simple_table_by_version_to_dict():
     table_path = "../rust/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2)
-    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
+    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {
+        "value": [1, 2, 3]}
 
 
 def test_load_with_datetime():
@@ -70,7 +71,8 @@ def test_load_with_datetime_bad_format():
 def test_read_simple_table_update_incremental():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path, version=0)
-    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [0, 1, 2, 3, 4]}
+    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {
+        "id": [0, 1, 2, 3, 4]}
     dt.update_incremental()
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
 
@@ -131,9 +133,10 @@ def test_read_table_with_filter():
         "month": ["12", "12", "12"],
         "day": ["20", "20", "4"],
     }
-    filter_expr = (ds.field("year") == 2021) & (ds.field("month") == 12)
+    filter_expr = (ds.field("year") == "2021") & (ds.field("month") == "12")
 
-    assert dt.to_pyarrow_dataset().to_table(filter=filter_expr).to_pydict() == expected
+    assert dt.to_pyarrow_dataset().to_table(
+        filter=filter_expr).to_pydict() == expected
 
 
 def test_read_table_with_stats():
@@ -284,7 +287,8 @@ def test_delta_table_with_filesystem():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
     filesystem = LocalFileSystem()
-    assert dt.to_pandas(filesystem=filesystem).equals(pd.DataFrame({"id": [5, 7, 9]}))
+    assert dt.to_pandas(filesystem=filesystem).equals(
+        pd.DataFrame({"id": [5, 7, 9]}))
 
 
 def test_import_delta_table_error():
@@ -373,7 +377,8 @@ def test_read_multiple_tables_from_s3_multi_threaded(s3_localstack):
             "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
         ]
 
-    threads = [ExcPassThroughThread(target=read_table) for _ in range(thread_count)]
+    threads = [ExcPassThroughThread(target=read_table)
+               for _ in range(thread_count)]
     for t in threads:
         t.start()
     for t in threads:
