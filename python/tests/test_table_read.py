@@ -135,8 +135,10 @@ def test_read_table_with_filter():
     }
     filter_expr = (ds.field("year") == "2021") & (ds.field("month") == "12")
 
-    assert dt.to_pyarrow_dataset().to_table(
-        filter=filter_expr).to_pydict() == expected
+    dataset = dt.to_pyarrow_dataset()
+
+    assert len(list(dataset.get_fragments(filter=filter_expr))) == 2
+    assert dataset.to_table(filter=filter_expr).to_pydict() == expected
 
 
 def test_read_table_with_stats():
@@ -145,8 +147,11 @@ def test_read_table_with_stats():
     expected = {}
     filter_expr = ds.field("date") > "2021-02-20"
 
-    data = dt.to_pyarrow_dataset().to_table(filter=filter_expr)
+    dataset = dt.to_pyarrow_dataset()
 
+    assert len(list(dataset.get_fragments(filter=filter_expr))) == 2
+
+    data = dataset.to_table(filter=filter_expr)
     assert data.num_rows < 147181 + 47559
 
 

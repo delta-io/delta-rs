@@ -3,6 +3,7 @@
 extern crate pyo3;
 
 use chrono::{DateTime, FixedOffset, Utc};
+use deltalake::action::ColumnValueStat;
 use deltalake::arrow::datatypes::Schema as ArrowSchema;
 use deltalake::partitions::PartitionFilter;
 use deltalake::storage;
@@ -233,7 +234,7 @@ impl RawDeltaTable {
             .map_err(PyDeltaTableError::from_raw)
     }
 
-    pub fn files_with_stats(&mut self) -> PyResult<Vec<FileStats>> {
+    pub fn files_with_stats(&mut self, py: Python) -> PyResult<Vec<FileStats>> {
         self._table
             .get_stats_iter()
             .map(|res| {
@@ -242,14 +243,34 @@ impl RawDeltaTable {
                         path,
                         partition_values: partition_values.clone(),
                         num_records: stats.num_records,
-                        min_values: HashMap::new(),
-                        max_values: HashMap::new(),
+                        min_values: stats
+                            .min_values
+                            .iter()
+                            .filter_map(|(k, v)| match v {
+                                ColumnValueStat::Value(val) => {
+                                    Some((k.clone(), json_value_to_py(val, py)))
+                                }
+                                // Ignoring nested values (I think that's what this does...)
+                                _ => None,
+                            })
+                            .collect(),
+                        max_values: stats
+                            .max_values
+                            .iter()
+                            .filter_map(|(k, v)| match v {
+                                ColumnValueStat::Value(val) => {
+                                    Some((k.clone(), json_value_to_py(val, py)))
+                                }
+                                // Ignoring nested values (I think that's what this does...)
+                                _ => None,
+                            })
+                            .collect(),
                         null_counts: HashMap::new(),
                     },
                     Ok((path, partition_values, None)) => FileStats {
                         path,
                         partition_values: partition_values.clone(),
-                        num_records: 0,
+                        num_records: -1, // TODO: What should this be
                         min_values: HashMap::new(),
                         max_values: HashMap::new(),
                         null_counts: HashMap::new(),
@@ -259,6 +280,24 @@ impl RawDeltaTable {
                 Ok(result)
             })
             .collect()
+    }
+}
+
+fn json_value_to_py(value: &serde_json::Value, py: Python) -> Py<PyAny> {
+    match value {
+        serde_json::Value::Null => py.None(),
+        serde_json::Value::Bool(val) => val.to_object(py),
+        serde_json::Value::Number(val) => {
+            if val.is_f64() {
+                return val.as_f64().expect("not an f64").to_object(py);
+            } else if val.is_i64() {
+                return val.as_i64().expect("not an i64").to_object(py);
+            } else {
+                return val.as_u64().expect("not an u64").to_object(py);
+            }
+        }
+        serde_json::Value::String(val) => val.to_object(py),
+        _ => py.None(),
     }
 }
 

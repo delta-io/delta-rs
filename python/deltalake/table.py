@@ -273,8 +273,6 @@ class DeltaTable:
             filter_set = set(self._table.files_by_partitions(partitions))
             files = [stat for stat in files if stat.path in filter_set]
 
-        # TODO: Add partition values
-
         fragments = (
             format.make_fragment(
                 file.path,
@@ -334,8 +332,15 @@ class DeltaTable:
 
 def _stats_to_pyarrow_expression(stats: FileStats) -> Expression:
     expressions = []
+
     for partition_column, partition_value in stats.partition_values.items():
         expressions.append(field(partition_column) == partition_value)
+
+    for column, minimum in stats.min_values.items():
+        expressions.append(field(column) >= minimum)
+
+    for column, maximum in stats.max_values.items():
+        expressions.append(field(column) <= maximum)
 
     if len(expressions) > 0:
         return reduce(lambda a, b: a & b, expressions)
