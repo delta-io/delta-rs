@@ -950,41 +950,30 @@ impl DeltaTable {
         note = "Please use the get_file_uris function instead"
     )]
     pub fn get_file_paths(&self) -> Vec<String> {
-        self.get_file_uris()
+        self.get_file_uris().collect()
     }
 
     /// Returns a URIs for all active files present in the current table version.
-    pub fn get_file_uris(&self) -> Vec<String> {
+    pub fn get_file_uris(&self) -> impl Iterator<Item = String> + '_ {
         self.state
             .files()
             .iter()
             .map(|add| self.storage.join_path(&self.table_uri, &add.path))
-            .collect()
     }
 
     /// Returns statistics for files, in order
-    pub fn get_stats(&self) -> Vec<Result<Option<Stats>, DeltaTableError>> {
+    pub fn get_stats(&self) -> impl Iterator<Item = Result<Option<Stats>, DeltaTableError>> + '_ {
         self.state
             .files()
             .iter()
             .map(|add| add.get_stats().map_err(DeltaTableError::from))
-            .collect()
     }
 
-    /// Returns iterator over file statistics
-    pub fn get_stats_iter(
+    /// Returns partition values for files, in order
+    pub fn get_partition_values(
         &self,
-    ) -> impl Iterator<
-        Item = Result<(String, &HashMap<String, Option<String>>, Option<Stats>), DeltaTableError>,
-    > + '_ {
-        self.state.files().iter().map(|add| {
-            let stats = add.get_stats().map_err(DeltaTableError::from)?;
-            Ok((
-                self.storage.join_path(&self.table_uri, &add.path),
-                &add.partition_values,
-                stats,
-            ))
-        })
+    ) -> impl Iterator<Item = &HashMap<String, Option<String>>> + '_ {
+        self.state.files().iter().map(|add| &add.partition_values)
     }
 
     /// Returns the currently loaded state snapshot.

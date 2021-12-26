@@ -342,6 +342,13 @@ def _stats_to_pyarrow_expression(stats: FileStats) -> Expression:
     for column, maximum in stats.max_values.items():
         expressions.append(field(column) <= maximum)
 
+    for column, null_count in stats.null_counts.items():
+        if null_count == stats.num_records:
+            expressions.append(field(column).is_null())
+
+        if null_count == 0:
+            expressions.append(~field(column).is_null())
+
     if len(expressions) > 0:
         return reduce(lambda a, b: a & b, expressions)
     else:

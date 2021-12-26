@@ -144,15 +144,26 @@ def test_read_table_with_filter():
 def test_read_table_with_stats():
     table_path = "../rust/tests/data/COVID-19_NYT"
     dt = DeltaTable(table_path)
-    expected = {}
-    filter_expr = ds.field("date") > "2021-02-20"
-
     dataset = dt.to_pyarrow_dataset()
 
+    filter_expr = ds.field("date") > "2021-02-20"
     assert len(list(dataset.get_fragments(filter=filter_expr))) == 2
 
     data = dataset.to_table(filter=filter_expr)
     assert data.num_rows < 147181 + 47559
+
+    filter_expr = ds.field("cases") < 0
+    assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
+
+    data = dataset.to_table(filter=filter_expr)
+    assert data.num_rows == 0
+
+    # This does not currently work, but should in the future.
+    # filter_expr = ds.field("cases").is_null()
+    # assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
+
+    # data = dataset.to_table(filter=filter_expr)
+    # assert data.num_rows == 0
 
 
 def test_vacuum_dry_run_simple_table():

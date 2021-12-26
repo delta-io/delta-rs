@@ -3,7 +3,7 @@
 extern crate pyo3;
 
 use chrono::{DateTime, FixedOffset, Utc};
-use deltalake::action::ColumnValueStat;
+use deltalake::action::{ColumnCountStat, ColumnValueStat};
 use deltalake::arrow::datatypes::Schema as ArrowSchema;
 use deltalake::partitions::PartitionFilter;
 use deltalake::storage;
@@ -184,7 +184,7 @@ impl RawDeltaTable {
     }
 
     pub fn file_uris(&self) -> PyResult<Vec<String>> {
-        Ok(self._table.get_file_uris())
+        Ok(self._table.get_file_uris().collect())
     }
 
     pub fn schema_json(&self) -> PyResult<String> {
@@ -236,10 +236,12 @@ impl RawDeltaTable {
 
     pub fn files_with_stats(&mut self, py: Python) -> PyResult<Vec<FileStats>> {
         self._table
-            .get_stats_iter()
+            .get_file_uris()
+            .zip(self._table.get_partition_values())
+            .zip(self._table.get_stats())
             .map(|res| {
                 let result = match res {
-                    Ok((path, partition_values, Some(stats))) => FileStats {
+                    ((path, partition_values), Ok(Some(stats))) => FileStats {
                         path,
                         partition_values: partition_values.clone(),
                         num_records: stats.num_records,
@@ -265,9 +267,17 @@ impl RawDeltaTable {
                                 _ => None,
                             })
                             .collect(),
-                        null_counts: HashMap::new(),
+                        null_counts: stats
+                            .null_count
+                            .iter()
+                            .filter_map(|(k, v)| match v {
+                                ColumnCountStat::Value(val) => Some((k.clone(), val.to_object(py))),
+                                // Ignoring nested values (I think that's what this does...)
+                                _ => None,
+                            })
+                            .collect(),
                     },
-                    Ok((path, partition_values, None)) => FileStats {
+                    ((path, partition_values), Ok(None)) => FileStats {
                         path,
                         partition_values: partition_values.clone(),
                         num_records: -1, // TODO: What should this be
@@ -275,7 +285,7 @@ impl RawDeltaTable {
                         max_values: HashMap::new(),
                         null_counts: HashMap::new(),
                     },
-                    Err(err) => return Err(PyDeltaTableError::from_raw(err)),
+                    (_, Err(err)) => return Err(PyDeltaTableError::from_raw(err)),
                 };
                 Ok(result)
             })
@@ -314,7 +324,7 @@ pub struct FileStats {
     #[pyo3(get)]
     max_values: HashMap<String, Py<PyAny>>,
     #[pyo3(get)]
-    null_counts: HashMap<String, i64>,
+    null_counts: HashMap<String, Py<PyAny>>,
 }
 
 #[pyclass]
