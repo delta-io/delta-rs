@@ -41,10 +41,7 @@ impl PyDeltaTableError {
     }
 
     fn from_chrono(err: chrono::ParseError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(format!(
-            "Parse date and time string failed: {}",
-            err.to_string()
-        ))
+        PyDeltaTableError::new_err(format!("Parse date and time string failed: {}", err))
     }
 }
 
@@ -257,7 +254,7 @@ impl RawDeltaTable {
                 None => true,
             })
             .map(|((path, partition_values), stats)| {
-                let stats = stats.map_err(|err| PyDeltaTableError::from_raw(err))?;
+                let stats = stats.map_err(PyDeltaTableError::from_raw)?;
                 let expression = filestats_to_expression(py, partition_values, stats)?;
                 Ok((path, expression))
             })
@@ -271,11 +268,11 @@ fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
         serde_json::Value::Bool(val) => val.to_object(py),
         serde_json::Value::Number(val) => {
             if val.is_f64() {
-                return val.as_f64().expect("not an f64").to_object(py);
+                val.as_f64().expect("not an f64").to_object(py)
             } else if val.is_i64() {
-                return val.as_i64().expect("not an i64").to_object(py);
+                val.as_i64().expect("not an i64").to_object(py)
             } else {
-                return val.as_u64().expect("not an u64").to_object(py);
+                val.as_u64().expect("not an u64").to_object(py)
             }
         }
         serde_json::Value::String(val) => val.to_object(py),
@@ -337,13 +334,13 @@ fn filestats_to_expression<'py>(
         }
     }
 
-    if expressions.len() == 0 {
-        return Ok(None);
+    if expressions.is_empty() {
+        Ok(None)
     } else {
-        return expressions
+        expressions
             .into_iter()
             .reduce(|accum, item| accum?.getattr("__and__")?.call1((item?,)))
-            .transpose();
+            .transpose()
     }
 }
 
