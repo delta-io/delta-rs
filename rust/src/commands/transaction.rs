@@ -110,13 +110,9 @@ impl ExecutionPlan for DeltaTransactionPlan {
         let mut table =
             get_table_from_uri_without_update(self.table_uri.clone()).map_err(to_datafusion_err)?;
 
-        let mut actions = Vec::new();
         let data = collect(self.input.clone()).await?;
-        for batch in data {
-            // TODO we assume that all children send a single column record batch with serialized actions
-            let mut new_actions = deserialize_actions(&batch)?;
-            actions.append(&mut new_actions);
-        }
+        // TODO we assume that all children send a single column record batch with serialized actions
+        let actions = data.into_iter(|batch| Ok(deserialize_actions(batch)?)).collect::<Vec<_>>()?;
 
         if actions.is_empty() {
             let empty_plan = EmptyExec::new(false, self.schema());
