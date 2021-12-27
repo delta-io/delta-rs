@@ -3,6 +3,7 @@
 extern crate pyo3;
 
 use chrono::{DateTime, FixedOffset, Utc};
+use deltalake::action::Stats;
 use deltalake::action::{ColumnCountStat, ColumnValueStat};
 use deltalake::arrow::datatypes::Schema as ArrowSchema;
 use deltalake::partitions::PartitionFilter;
@@ -13,6 +14,7 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple, PyType};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::convert::TryFrom;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
@@ -234,66 +236,36 @@ impl RawDeltaTable {
             .map_err(PyDeltaTableError::from_raw)
     }
 
-    pub fn files_with_stats(&mut self, py: Python) -> PyResult<Vec<FileStats>> {
+    pub fn dataset_partitions<'py>(
+        &mut self,
+        py: Python<'py>,
+        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+    ) -> PyResult<Vec<(String, Option<&'py PyAny>)>> {
+        let path_set = match partition_filters {
+            Some(filters) => Some(HashSet::<_>::from_iter(
+                self.files_by_partitions(filters)?.iter().cloned(),
+            )),
+            None => None,
+        };
+
         self._table
             .get_file_uris()
             .zip(self._table.get_partition_values())
             .zip(self._table.get_stats())
-            .map(|res| {
-                let result = match res {
-                    ((path, partition_values), Ok(Some(stats))) => FileStats {
-                        path,
-                        partition_values: partition_values.clone(),
-                        num_records: stats.num_records,
-                        min_values: stats
-                            .min_values
-                            .iter()
-                            .filter_map(|(k, v)| match v {
-                                ColumnValueStat::Value(val) => {
-                                    Some((k.clone(), json_value_to_py(val, py)))
-                                }
-                                // Ignoring nested values (I think that's what this does...)
-                                _ => None,
-                            })
-                            .collect(),
-                        max_values: stats
-                            .max_values
-                            .iter()
-                            .filter_map(|(k, v)| match v {
-                                ColumnValueStat::Value(val) => {
-                                    Some((k.clone(), json_value_to_py(val, py)))
-                                }
-                                // Ignoring nested values (I think that's what this does...)
-                                _ => None,
-                            })
-                            .collect(),
-                        null_counts: stats
-                            .null_count
-                            .iter()
-                            .filter_map(|(k, v)| match v {
-                                ColumnCountStat::Value(val) => Some((k.clone(), val.to_object(py))),
-                                // Ignoring nested values (I think that's what this does...)
-                                _ => None,
-                            })
-                            .collect(),
-                    },
-                    ((path, partition_values), Ok(None)) => FileStats {
-                        path,
-                        partition_values: partition_values.clone(),
-                        num_records: -1, // TODO: What should this be
-                        min_values: HashMap::new(),
-                        max_values: HashMap::new(),
-                        null_counts: HashMap::new(),
-                    },
-                    (_, Err(err)) => return Err(PyDeltaTableError::from_raw(err)),
-                };
-                Ok(result)
+            .filter(|((path, _), _)| match &path_set {
+                Some(path_set) => path_set.contains(path),
+                None => true,
+            })
+            .map(|((path, partition_values), stats)| {
+                let stats = stats.map_err(|err| PyDeltaTableError::from_raw(err))?;
+                let expression = filestats_to_expression(py, partition_values, stats)?;
+                Ok((path, expression))
             })
             .collect()
     }
 }
 
-fn json_value_to_py(value: &serde_json::Value, py: Python) -> Py<PyAny> {
+fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
     match value {
         serde_json::Value::Null => py.None(),
         serde_json::Value::Bool(val) => val.to_object(py),
@@ -311,20 +283,74 @@ fn json_value_to_py(value: &serde_json::Value, py: Python) -> Py<PyAny> {
     }
 }
 
-#[pyclass]
-pub struct FileStats {
-    #[pyo3(get)]
-    path: String,
-    #[pyo3(get)]
-    partition_values: HashMap<String, Option<String>>,
-    #[pyo3(get)]
-    num_records: i64,
-    #[pyo3(get)]
-    min_values: HashMap<String, Py<PyAny>>,
-    #[pyo3(get)]
-    max_values: HashMap<String, Py<PyAny>>,
-    #[pyo3(get)]
-    null_counts: HashMap<String, Py<PyAny>>,
+/// Create expression that file statistics guarantee to be true.
+///
+/// PyArrow uses this expression to determine which Dataset fragments may be
+/// skipped during a scan.
+fn filestats_to_expression<'py>(
+    py: Python<'py>,
+    partitions_values: &HashMap<String, Option<String>>,
+    stats: Option<Stats>,
+) -> PyResult<Option<&'py PyAny>> {
+    let ds = PyModule::import(py, "pyarrow.dataset")?;
+    let field = ds.getattr("field")?;
+    let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
+
+    for (column, value) in partitions_values.iter() {
+        if let Some(value) = value {
+            expressions.push(
+                field
+                    .call1((column,))?
+                    .call_method1("__eq__", (value.to_object(py),)),
+            );
+        }
+    }
+
+    if let Some(stats) = stats {
+        for (column, minimum) in stats.min_values.iter().filter_map(|(k, v)| match v {
+            ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
+            // Ignoring nested values (I think that's what this does...)
+            _ => None,
+        }) {
+            expressions.push(field.call1((column,))?.call_method1("__gt__", (minimum,)));
+        }
+
+        for (column, maximum) in stats.max_values.iter().filter_map(|(k, v)| match v {
+            ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
+            // Ignoring nested values (I think that's what this does...)
+            _ => None,
+        }) {
+            expressions.push(field.call1((column,))?.call_method1("__lt__", (maximum,)));
+        }
+
+        for (column, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
+            ColumnCountStat::Value(val) => Some((k, val)),
+            // Ignoring nested values (I think that's what this does...)
+            _ => None,
+        }) {
+            if *null_count == stats.num_records {
+                expressions.push(field.call1((column.clone(),))?.call_method0("is_null"));
+            }
+
+            if *null_count == 0 {
+                expressions.push(
+                    field
+                        .call1((column.clone(),))?
+                        .call_method0("is_null")?
+                        .call_method0("__invert__"),
+                );
+            }
+        }
+    }
+
+    if expressions.len() == 0 {
+        return Ok(None);
+    } else {
+        return expressions
+            .into_iter()
+            .reduce(|accum, item| accum?.getattr("__and__")?.call1((item?,)))
+            .transpose();
+    }
 }
 
 #[pyclass]
@@ -377,7 +403,6 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<DeltaStorageFsBackend>()?;
-    m.add_class::<FileStats>()?;
     m.add("PyDeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())
 }

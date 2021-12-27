@@ -1,19 +1,17 @@
 import json
 import warnings
 from dataclasses import dataclass
-from functools import reduce
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
-from urllib.parse import urlparse
 
 import pyarrow
 import pyarrow.fs as pa_fs
-from pyarrow.dataset import FileSystemDataset, ParquetFileFormat, field, scalar, Expression
+from pyarrow.dataset import FileSystemDataset, ParquetFileFormat
 
 if TYPE_CHECKING:
     import pandas
 
 from .data_catalog import DataCatalog
-from .deltalake import FileStats, RawDeltaTable
+from .deltalake import RawDeltaTable
 from .fs import DeltaStorageHandler
 from .schema import Schema, pyarrow_schema_from_json
 
@@ -268,19 +266,14 @@ class DeltaTable:
 
         format = ParquetFileFormat()
 
-        files = self._table.files_with_stats()
-        if partitions:
-            filter_set = set(self._table.files_by_partitions(partitions))
-            files = [stat for stat in files if stat.path in filter_set]
-
-        fragments = (
+        fragments = [
             format.make_fragment(
-                file.path,
+                file,
                 filesystem=filesystem,
-                partition_expression=_stats_to_pyarrow_expression(file),
+                partition_expression=part_expression,
             )
-            for file in files
-        )
+            for file, part_expression in self._table.dataset_partitions(partitions)
+        ]
 
         return FileSystemDataset(
             fragments, self.pyarrow_schema(), format, filesystem
@@ -328,28 +321,3 @@ class DeltaTable:
         newer versions.
         """
         self._table.update_incremental()
-
-
-def _stats_to_pyarrow_expression(stats: FileStats) -> Expression:
-    expressions = []
-
-    for partition_column, partition_value in stats.partition_values.items():
-        expressions.append(field(partition_column) == partition_value)
-
-    for column, minimum in stats.min_values.items():
-        expressions.append(field(column) >= minimum)
-
-    for column, maximum in stats.max_values.items():
-        expressions.append(field(column) <= maximum)
-
-    for column, null_count in stats.null_counts.items():
-        if null_count == stats.num_records:
-            expressions.append(field(column).is_null())
-
-        if null_count == 0:
-            expressions.append(~field(column).is_null())
-
-    if len(expressions) > 0:
-        return reduce(lambda a, b: a & b, expressions)
-    else:
-        return None
