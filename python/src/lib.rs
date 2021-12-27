@@ -309,7 +309,8 @@ fn filestats_to_expression<'py>(
     if let Some(stats) = stats {
         for (column, minimum) in stats.min_values.iter().filter_map(|(k, v)| match v {
             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
-            // Ignoring nested values (I think that's what this does...)
+            // TODO(wjones127): Handle nested field statistics.
+            // Blocked on https://issues.apache.org/jira/browse/ARROW-11259
             _ => None,
         }) {
             expressions.push(field.call1((column,))?.call_method1("__gt__", (minimum,)));
@@ -317,7 +318,6 @@ fn filestats_to_expression<'py>(
 
         for (column, maximum) in stats.max_values.iter().filter_map(|(k, v)| match v {
             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
-            // Ignoring nested values (I think that's what this does...)
             _ => None,
         }) {
             expressions.push(field.call1((column,))?.call_method1("__lt__", (maximum,)));
@@ -325,7 +325,6 @@ fn filestats_to_expression<'py>(
 
         for (column, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
             ColumnCountStat::Value(val) => Some((k, val)),
-            // Ignoring nested values (I think that's what this does...)
             _ => None,
         }) {
             if *null_count == stats.num_records {
@@ -333,12 +332,7 @@ fn filestats_to_expression<'py>(
             }
 
             if *null_count == 0 {
-                expressions.push(
-                    field
-                        .call1((column.clone(),))?
-                        .call_method0("is_null")?
-                        .call_method0("__invert__"),
-                );
+                expressions.push(field.call1((column.clone(),))?.call_method0("is_valid"));
             }
         }
     }

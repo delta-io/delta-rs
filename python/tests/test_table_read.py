@@ -158,7 +158,9 @@ def test_read_table_with_stats():
     data = dataset.to_table(filter=filter_expr)
     assert data.num_rows == 0
 
-    # This does not currently work, but should in the future.
+    # TODO(wjones127): Enable these tests once C++ Arrow implements is_null and is_valid
+    # simplification. Blocked on: https://issues.apache.org/jira/browse/ARROW-12659
+
     # filter_expr = ds.field("cases").is_null()
     # assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
 
