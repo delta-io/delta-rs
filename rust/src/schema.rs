@@ -54,7 +54,9 @@ pub struct SchemaField {
     nullable: bool,
     // A JSON map containing information about this column. Keys prefixed with Delta are reserved
     // for the implementation.
-    metadata: HashMap<String, String>,
+    metadata: HashMap<String, serde_json::Value>,
+    // bug fix for issue 457, 524. This will enable
+    // to read metadata containing numerical value
 }
 
 impl SchemaField {
