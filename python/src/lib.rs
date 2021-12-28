@@ -310,14 +310,14 @@ fn filestats_to_expression<'py>(
             // Blocked on https://issues.apache.org/jira/browse/ARROW-11259
             _ => None,
         }) {
-            expressions.push(field.call1((column,))?.call_method1("__gt__", (minimum,)));
+            expressions.push(field.call1((column,))?.call_method1("__ge__", (minimum,)));
         }
 
         for (column, maximum) in stats.max_values.iter().filter_map(|(k, v)| match v {
             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
             _ => None,
         }) {
-            expressions.push(field.call1((column,))?.call_method1("__lt__", (maximum,)));
+            expressions.push(field.call1((column,))?.call_method1("__le__", (maximum,)));
         }
 
         for (column, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {

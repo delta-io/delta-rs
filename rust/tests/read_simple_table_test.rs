@@ -50,7 +50,7 @@ async fn read_simple_table() {
     }
     #[cfg(windows)]
     {
-        let mut paths = table.get_file_uris();
+        let mut paths: Vec<String> = table.get_file_uris().collect();
         paths.sort();
         let mut expected_paths: Vec<String> = vec![
                 "./tests/data/simple_table\\part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet".to_string(),
