@@ -871,8 +871,10 @@ pub enum DeltaOperation {
         /// The save mode used during the write.
         mode: SaveMode,
         /// The columns the write is partitioned by.
+        #[serde(skip_serializing_if = "Option::is_none")]
         partition_by: Option<Vec<String>>,
         /// The predicate used during the write.
+        #[serde(skip_serializing_if = "Option::is_none")]
         predicate: Option<String>,
     },
     #[serde(rename_all = "camelCase")]
@@ -893,6 +895,7 @@ pub enum DeltaOperation {
     /// Represents a Delta `Delete` operation.
     Delete {
         /// The predicate used during the write.
+        #[serde(skip_serializing_if = "Option::is_none")]
         predicate: Option<String>,
     }, // TODO: Add more operations
 }
