@@ -157,7 +157,6 @@ impl DeltaCommands {
         let schema = data[0].schema();
         let current_part = match self.table.update().await {
             Ok(_) => {
-                println!("update succeeded");
                 let metadata = self.table.get_metadata()?;
                 if let Some(cols) = partition_columns {
                     if cols != metadata.partition_columns {
