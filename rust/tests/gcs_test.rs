@@ -14,9 +14,7 @@ mod gcs {
     #[tokio::test]
     async fn test_gcs_simple() {
         let bucket = std::env::var("GCS_DELTA_BUCKET").unwrap();
-        let table = deltalake::open_table(
-            format!("gs://{}/simple_table", bucket).as_str(),
-        )
+        let table = deltalake::open_table(format!("gs://{}/simple_table", bucket).as_str())
             .await
             .unwrap();
         assert_eq!(table.version, 4);

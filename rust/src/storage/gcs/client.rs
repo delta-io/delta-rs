@@ -30,12 +30,10 @@ impl TryFrom<PathBuf> for GCSStorageBackend {
     type Error = GCSClientError;
     fn try_from(cred_path: PathBuf) -> Result<Self, Self::Error> {
         let client = reqwest::Client::builder().build()?;
-        let cred_contents = std::fs::read_to_string(&cred_path).map_err(|source| {
-            Self::Error::CredentialsError {source}
-        })?;
+        let cred_contents = std::fs::read_to_string(&cred_path)
+            .map_err(|source| Self::Error::CredentialsError { source })?;
         let svc_account_info = oauth::ServiceAccountInfo::deserialize(cred_contents)?;
         let svc_account_access = oauth::ServiceAccountAccess::new(svc_account_info)?;
-
 
         Ok(Self {
             client,

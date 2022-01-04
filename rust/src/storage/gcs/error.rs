@@ -42,7 +42,5 @@ pub enum GCSClientError {
     Other(String),
 
     #[error("Credentials error: {source}")]
-    CredentialsError {
-        source: std::io::Error,
-    },
+    CredentialsError { source: std::io::Error },
 }
