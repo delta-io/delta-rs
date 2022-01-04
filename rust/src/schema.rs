@@ -2,7 +2,7 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
 use serde::{Deserialize, Serialize};
-use serde_json::Value
+use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
