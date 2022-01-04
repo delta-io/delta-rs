@@ -11,6 +11,7 @@ mod gcs {
      *
      * remove the ignore statement below and execute tests via 'cargo test --features gcs'
      */
+    #[ignore]
     #[tokio::test]
     async fn test_gcs_simple() {
         let bucket = std::env::var("GCS_DELTA_BUCKET").unwrap();
