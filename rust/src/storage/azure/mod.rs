@@ -6,9 +6,8 @@
 ///
 /// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
 /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
-
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError, UriError};
-use azure_core::{prelude::*};
+use azure_core::prelude::*;
 // use azure_core::TokenCredential;
 // use azure_identity::token_credentials::DefaultAzureCredential;
 use azure_storage::blob::prelude::*;
@@ -76,8 +75,11 @@ impl AdlsGen2Backend {
 
         // TODO: The storage_account_client should go away long term in favor of creating a data lake client directly
         // See: https://github.com/Azure/azure-sdk-for-rust/issues/490
-        let storage_account_client =
-            StorageAccountClient::new_access_key(http_client.clone(), storage_account_name.to_owned(), storage_account_key.to_owned());
+        let storage_account_client = StorageAccountClient::new_access_key(
+            http_client.clone(),
+            storage_account_name.to_owned(),
+            storage_account_key.to_owned(),
+        );
         let storage_client = storage_account_client.as_storage_client();
 
         let data_lake_client = DataLakeClient::new(
@@ -120,7 +122,9 @@ impl AdlsGen2Backend {
 
 fn to_storage_err(err: Box<dyn Error + Sync + std::marker::Send>) -> StorageError {
     match err.downcast_ref::<azure_core::HttpError>() {
-        Some(azure_core::HttpError::ErrorStatusCode { status, body: _ }) if status.as_u16() == 404 => {
+        Some(azure_core::HttpError::ErrorStatusCode { status, body: _ })
+            if status.as_u16() == 404 =>
+        {
             StorageError::NotFound
         }
         _ => StorageError::AzureGeneric { source: err },
