@@ -42,7 +42,7 @@ impl<'a> fmt::Display for AdlsGen2Object<'a> {
     }
 }
 
-/// A storage backend backed by an Azure Data Lake Storage Gen2 account.
+/// A storage backend for use with an Azure Data Lake Storage Gen2 account (HNS=enabled).
 ///
 /// This uses the `dfs.core.windows.net` endpoint.
 #[derive(Debug)]
