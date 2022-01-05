@@ -584,7 +584,8 @@ dependencies = [
 [[package]]
 name = "datafusion"
 version = "6.0.0"
-source = "git+https://github.com/apache/arrow-datafusion?rev=e62cb455955e120cfe9d8935aa3ebc8726369d15#e62cb455955e120cfe9d8935aa3ebc8726369d15"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "79e4a8a1f1ee057b2c27a01f050b9dffe56e8d43605d0201234b353a3cc1eb2f"
 dependencies = [
  "ahash",
  "arrow",

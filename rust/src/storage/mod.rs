@@ -9,8 +9,6 @@ use futures::Stream;
 #[cfg(feature = "azure")]
 use azure_core::{Error as AzureError, HttpError as AzureHttpError};
 #[cfg(feature = "azure")]
-use azure_storage::Error as AzureStorageError;
-#[cfg(feature = "azure")]
 use std::error::Error;
 
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
@@ -376,7 +374,7 @@ pub enum StorageError {
     #[error("Error interacting with AzureStorage: {source}")]
     AzureStorage {
         /// Azure error reason
-        source: AzureStorageError,
+        source: azure_storage::Error,
     },
     /// Generic Azure error
     #[cfg(feature = "azure")]
@@ -452,8 +450,8 @@ impl From<AzureHttpError> for StorageError {
 }
 
 #[cfg(feature = "azure")]
-impl From<AzureStorageError> for StorageError {
-    fn from(error: AzureStorageError) -> Self {
+impl From<azure_storage::Error> for StorageError {
+    fn from(error: azure_storage::Error) -> Self {
         StorageError::AzureStorage { source: error }
     }
 }
