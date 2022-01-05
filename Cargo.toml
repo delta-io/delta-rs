@@ -5,6 +5,7 @@ members = [
     "python",
     "glibc_version",
     "aws/delta-checkpoint",
+    "dynamodb_lock",
 ]
 
 [profile.dev]

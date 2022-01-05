@@ -1,7 +1,6 @@
 //! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
 
 use std::collections::HashMap;
-use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::{fmt, pin::Pin};
 
@@ -16,17 +15,141 @@ use rusoto_s3::{
     PutObjectRequest, S3Client, S3,
 };
 use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient, WebIdentityProvider};
-use serde::{Deserialize, Serialize};
 use tokio::io::AsyncReadExt;
 
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
 use rusoto_core::credential::{
     AwsCredentials, CredentialsError, DefaultCredentialsProvider, ProvideAwsCredentials,
 };
+use serde::Deserialize;
+use serde::Serialize;
 use std::time::Duration;
 use uuid::Uuid;
 
-pub mod dynamodb_lock;
+use dynamodb_lock::{
+    DynamoDbLockClient, LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS,
+};
+
+/// Lock data which stores an attempt to rename `source` into `destination`
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LockData {
+    /// Source object key
+    pub source: String,
+    /// Destination object ket
+    pub destination: String,
+}
+
+impl LockData {
+    /// Builds new `LockData` instance and then creates json string from it.
+    pub fn json(src: &str, dst: &str) -> Result<String, StorageError> {
+        let data = LockData {
+            source: src.to_string(),
+            destination: dst.to_string(),
+        };
+        let json = serde_json::to_string(&data)
+            .map_err(|_| StorageError::S3Generic("Lock data serialize error".to_string()))?;
+
+        Ok(json)
+    }
+}
+
+/// A kind of `LockClient` specified for Deltalake S3 Storage Backend
+#[async_trait::async_trait]
+pub trait S3LockClient: LockClient + Send + Sync + Debug {
+    /// Rename a S3 object by acquiring lock
+    async fn rename_with_lock(
+        &self,
+        s3: &S3StorageBackend,
+        src: &str,
+        dst: &str,
+    ) -> Result<(), StorageError>;
+
+    /// Try to acquire a lock in a loop until success or maximum retries
+    async fn acquire_lock_loop(&self, src: &str, dst: &str) -> Result<LockItem, StorageError>;
+}
+
+#[async_trait::async_trait]
+impl S3LockClient for DynamoDbLockClient {
+    async fn rename_with_lock(
+        &self,
+        s3: &S3StorageBackend,
+        src: &str,
+        dst: &str,
+    ) -> Result<(), StorageError> {
+        let mut lock = self.acquire_lock_loop(src, dst).await?;
+
+        if let Some(ref data) = lock.data {
+            let data: LockData = serde_json::from_str(data)
+                .map_err(|_| StorageError::S3Generic("Lock data deserialize error".to_string()))?;
+
+            if lock.acquired_expired_lock {
+                log::info!(
+                    "Acquired expired lock. Repairing the rename of {} to {}.",
+                    &data.source,
+                    &data.destination
+                );
+            }
+
+            let mut rename_result = s3.unsafe_rename_obj(&data.source, &data.destination).await;
+
+            if lock.acquired_expired_lock {
+                match rename_result {
+                    // AlreadyExists when the stale rename is done, but the lock not released
+                    // NotFound when the source file of rename is missing
+                    Err(StorageError::AlreadyExists(_)) | Err(StorageError::NotFound) => (),
+                    _ => rename_result?,
+                }
+
+                // If we acquired expired lock then the rename done above is
+                // a repair of expired one. So on this time we try the intended rename.
+                lock.data = Some(LockData::json(src, dst)?);
+                lock = self.update_data(&lock).await?;
+                rename_result = s3.unsafe_rename_obj(src, dst).await;
+            }
+
+            let release_result = self.release_lock(&lock).await;
+
+            // before unwrapping `rename_result` the `release_result` is called to ensure that we
+            // no longer hold the lock
+            rename_result?;
+
+            if !release_result? {
+                log::error!("Could not release lock {:?}", &lock);
+                return Err(StorageError::S3Generic("Lock is not released".to_string()));
+            }
+
+            Ok(())
+        } else {
+            Err(StorageError::S3Generic(
+                "Acquired lock with no lock data".to_string(),
+            ))
+        }
+    }
+
+    async fn acquire_lock_loop(&self, src: &str, dst: &str) -> Result<LockItem, StorageError> {
+        let data = LockData::json(src, dst)?;
+
+        let lock;
+        let mut retries = 0;
+
+        loop {
+            match self.try_acquire_lock(Some(data.as_str())).await? {
+                Some(l) => {
+                    lock = l;
+                    break;
+                }
+                None => {
+                    retries += 1;
+                    if retries > DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS {
+                        return Err(StorageError::S3Generic("Cannot acquire lock".to_string()));
+                    }
+                }
+            }
+        }
+
+        Ok(lock)
+    }
+}
 
 /// Storage option keys to use when creating [crate::storage::s3::S3StorageOptions].
 /// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
@@ -50,7 +173,7 @@ pub mod s3_storage_options {
     /// Hence, the `connection closed before message completed` could occur.
     /// To avoid that, the default value of this setting is 15 seconds if it's not set otherwise.
     pub const AWS_S3_POOL_IDLE_TIMEOUT_SECONDS: &str = "AWS_S3_POOL_IDLE_TIMEOUT_SECONDS";
-    /// The `pool_idle_timeout` for the aws sts client. See the reasoning in `AWS_S3_POOL_IDLE_TIMEOUT_SECONDS`.
+    /// The `pool_idle_timeout` for the as3_storage_optionsws sts client. See the reasoning in `AWS_S3_POOL_IDLE_TIMEOUT_SECONDS`.
     pub const AWS_STS_POOL_IDLE_TIMEOUT_SECONDS: &str = "AWS_STS_POOL_IDLE_TIMEOUT_SECONDS";
     /// The number of retries for S3 GET requests failed with 500 Internal Server Error.
     pub const AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES: &str =
@@ -361,17 +484,15 @@ fn parse_head_obj_last_modified_time(
     Ok(DateTime::<Utc>::from(dt))
 }
 
-impl TryFrom<rusoto_s3::Object> for ObjectMeta {
-    type Error = StorageError;
+fn try_object_meta_from(bucket: &str, obj: rusoto_s3::Object) -> Result<ObjectMeta, StorageError> {
+    let key = obj
+        .key
+        .ok_or_else(|| StorageError::S3Generic("S3 Object missing key attribute".to_string()))?;
 
-    fn try_from(obj: rusoto_s3::Object) -> Result<Self, Self::Error> {
-        Ok(ObjectMeta {
-            path: obj.key.ok_or_else(|| {
-                StorageError::S3Generic("S3 Object missing key attribute".to_string())
-            })?,
-            modified: parse_obj_last_modified_time(&obj.last_modified)?,
-        })
-    }
+    Ok(ObjectMeta {
+        path: format!("s3://{}/{}", bucket, key),
+        modified: parse_obj_last_modified_time(&obj.last_modified)?,
+    })
 }
 
 /// Struct describing an object stored in S3.
@@ -392,7 +513,7 @@ impl<'a> fmt::Display for S3Object<'a> {
 /// An S3 implementation of the `StorageBackend` trait
 pub struct S3StorageBackend {
     client: rusoto_s3::S3Client,
-    lock_client: Option<Box<dyn LockClient>>,
+    lock_client: Option<Box<dyn S3LockClient>>,
     options: S3StorageOptions,
 }
 
@@ -427,7 +548,7 @@ impl S3StorageBackend {
     /// Creates a new S3StorageBackend with given options, s3 client and lock client.
     pub fn new_with(
         client: rusoto_s3::S3Client,
-        lock_client: Option<Box<dyn LockClient>>,
+        lock_client: Option<Box<dyn S3LockClient>>,
         options: S3StorageOptions,
     ) -> Self {
         Self {
@@ -572,7 +693,7 @@ impl StorageBackend for S3StorageBackend {
             mut ctx: ListContext,
         ) -> Option<(Result<ObjectMeta, StorageError>, ListContext)> {
             match ctx.obj_iter.next() {
-                Some(obj) => Some((ObjectMeta::try_from(obj), ctx)),
+                Some(obj) => Some((try_object_meta_from(&ctx.bucket, obj), ctx)),
                 None => match &ctx.continuation_token {
                     ContinuationToken::End => None,
                     ContinuationToken::Value(v) => {
@@ -595,7 +716,7 @@ impl StorageBackend for S3StorageBackend {
                         ctx.obj_iter = result.contents.unwrap_or_else(Vec::new).into_iter();
                         ctx.obj_iter
                             .next()
-                            .map(|obj| (ObjectMeta::try_from(obj), ctx))
+                            .map(|obj| (try_object_meta_from(&ctx.bucket, obj), ctx))
                     }
                 },
             }
@@ -701,55 +822,9 @@ impl StorageBackend for S3StorageBackend {
     }
 }
 
-/// A lock that has been successfully acquired
-#[derive(Clone, Debug)]
-pub struct LockItem {
-    /// The name of the owner that owns this lock.
-    pub owner_name: String,
-    /// Current version number of the lock in DynamoDB. This is what tells the lock client
-    /// when the lock is stale.
-    pub record_version_number: String,
-    /// The amount of time (in seconds) that the owner has this lock for.
-    /// If lease_duration is None then the lock is non-expirable.
-    pub lease_duration: Option<u64>,
-    /// Tells whether or not the lock was marked as released when loaded from DynamoDB.
-    pub is_released: bool,
-    /// Optional data associated with this lock.
-    pub data: Option<String>,
-    /// The last time this lock was updated or retrieved.
-    pub lookup_time: u128,
-    /// Tells whether this lock was acquired by expiring existing one.
-    pub acquired_expired_lock: bool,
-    /// If true then this lock could not be acquired.
-    pub is_non_acquirable: bool,
-}
-
-/// Lock data which stores an attempt to rename `source` into `destination`
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct LockData {
-    /// Source object key
-    pub source: String,
-    /// Destination object ket
-    pub destination: String,
-}
-
-impl LockData {
-    /// Builds new `LockData` instance and then creates json string from it.
-    pub fn json(src: &str, dst: &str) -> Result<String, StorageError> {
-        let data = LockData {
-            source: src.to_string(),
-            destination: dst.to_string(),
-        };
-        let json = serde_json::to_string(&data)
-            .map_err(|_| StorageError::S3Generic("Lock data serialize error".to_string()))?;
-
-        Ok(json)
-    }
-}
-
 fn try_create_lock_client(
     options: &S3StorageOptions,
-) -> Result<Option<Box<dyn LockClient>>, StorageError> {
+) -> Result<Option<Box<dyn S3LockClient>>, StorageError> {
     let dispatcher = HttpClient::new()?;
 
     match &options.locking_provider {
@@ -769,111 +844,6 @@ fn try_create_lock_client(
             Ok(Some(Box::new(lock_client)))
         }
         _ => Ok(None),
-    }
-}
-
-/// Abstraction over a distributive lock provider
-#[async_trait::async_trait]
-pub trait LockClient: Send + Sync + Debug {
-    /// Attempts to acquire lock. If successful, returns the lock.
-    /// Otherwise returns [`Option::None`] which is retryable action.
-    /// Visit implementation docs for more details.
-    async fn try_acquire_lock(&self, data: &str) -> Result<Option<LockItem>, StorageError>;
-
-    /// Returns current lock from DynamoDB (if any).
-    async fn get_lock(&self) -> Result<Option<LockItem>, StorageError>;
-
-    /// Update data in the upstream lock of the current user still has it.
-    /// The returned lock will have a new `rvn` so it'll increase the lease duration
-    /// as this method is usually called when the work with a lock is extended.
-    async fn update_data(&self, lock: &LockItem) -> Result<LockItem, StorageError>;
-
-    /// Releases the given lock if the current user still has it, returning true if the lock was
-    /// successfully released, and false if someone else already stole the lock
-    async fn release_lock(&self, lock: &LockItem) -> Result<bool, StorageError>;
-}
-
-const DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS: u32 = 10_000;
-
-impl dyn LockClient {
-    async fn rename_with_lock(
-        &self,
-        s3: &S3StorageBackend,
-        src: &str,
-        dst: &str,
-    ) -> Result<(), StorageError> {
-        let mut lock = self.acquire_lock_loop(src, dst).await?;
-
-        if let Some(ref data) = lock.data {
-            let data: LockData = serde_json::from_str(data)
-                .map_err(|_| StorageError::S3Generic("Lock data deserialize error".to_string()))?;
-
-            if lock.acquired_expired_lock {
-                log::info!(
-                    "Acquired expired lock. Repairing the rename of {} to {}.",
-                    &data.source,
-                    &data.destination
-                );
-            }
-
-            let mut rename_result = s3.unsafe_rename_obj(&data.source, &data.destination).await;
-
-            if lock.acquired_expired_lock {
-                match rename_result {
-                    // AlreadyExists when the stale rename is done, but the lock not released
-                    // NotFound when the source file of rename is missing
-                    Err(StorageError::AlreadyExists(_)) | Err(StorageError::NotFound) => (),
-                    _ => rename_result?,
-                }
-
-                // If we acquired expired lock then the rename done above is
-                // a repair of expired one. So on this time we try the intended rename.
-                lock.data = Some(LockData::json(src, dst)?);
-                lock = self.update_data(&lock).await?;
-                rename_result = s3.unsafe_rename_obj(src, dst).await;
-            }
-
-            let release_result = self.release_lock(&lock).await;
-
-            // before unwrapping `rename_result` the `release_result` is called to ensure that we
-            // no longer hold the lock
-            rename_result?;
-
-            if !release_result? {
-                log::error!("Could not release lock {:?}", &lock);
-                return Err(StorageError::S3Generic("Lock is not released".to_string()));
-            }
-
-            Ok(())
-        } else {
-            Err(StorageError::S3Generic(
-                "Acquired lock with no lock data".to_string(),
-            ))
-        }
-    }
-
-    async fn acquire_lock_loop(&self, src: &str, dst: &str) -> Result<LockItem, StorageError> {
-        let data = LockData::json(src, dst)?;
-
-        let lock;
-        let mut retries = 0;
-
-        loop {
-            match self.try_acquire_lock(&data).await? {
-                Some(l) => {
-                    lock = l;
-                    break;
-                }
-                None => {
-                    retries += 1;
-                    if retries > DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS {
-                        return Err(StorageError::S3Generic("Cannot acquire lock".to_string()));
-                    }
-                }
-            }
-        }
-
-        Ok(lock)
     }
 }
 
@@ -910,6 +880,7 @@ mod tests {
     use super::*;
 
     use maplit::hashmap;
+    use serial_test::serial;
 
     #[test]
     fn join_multiple_paths() {
@@ -942,6 +913,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn storage_options_default_test() {
         std::env::set_var(s3_storage_options::AWS_ENDPOINT_URL, "http://localhost");
         std::env::set_var(s3_storage_options::AWS_REGION, "us-west-1");
@@ -955,6 +927,9 @@ mod tests {
             s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE,
             "token_file",
         );
+        std::env::remove_var(s3_storage_options::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS);
+        std::env::remove_var(s3_storage_options::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS);
+        std::env::remove_var(s3_storage_options::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES);
 
         let options = S3StorageOptions::default();
 
@@ -979,6 +954,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn storage_options_from_map_test() {
         let options = S3StorageOptions::from_map(hashmap! {
             s3_storage_options::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
@@ -1013,6 +989,7 @@ mod tests {
     }
 
     #[test]
+    #[serial]
     fn storage_options_mixed_test() {
         std::env::set_var(s3_storage_options::AWS_ENDPOINT_URL, "http://localhost");
         std::env::set_var(s3_storage_options::AWS_REGION, "us-west-1");
@@ -1062,6 +1039,7 @@ mod tests {
         );
     }
     #[test]
+    #[serial]
     fn storage_options_web_identity_test() {
         let _options = S3StorageOptions::from_map(hashmap! {
             s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "web_identity_token_file".to_string(),

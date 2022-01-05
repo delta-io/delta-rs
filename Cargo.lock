@@ -78,9 +78,9 @@ checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
 
 [[package]]
 name = "arrow"
-version = "6.1.0"
+version = "6.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a900a6164aa0abf26d7a6dfea727116a3619456decfbf573e60c7615bf49e84c"
+checksum = "46cb449d481a6b13ea4e82e9fc662ea3e29cb5dc0a310fc42e27592cef3cb611"
 dependencies = [
  "bitflags",
  "chrono",
@@ -397,9 +397,9 @@ dependencies = [
 
 [[package]]
 name = "comfy-table"
-version = "4.1.1"
+version = "5.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "11e95a3e867422fd8d04049041f5671f94d53c32a9dcd82e2be268714942f3f3"
+checksum = "c42350b81f044f576ff88ac750419f914abb46a03831bb1747134344ee7a4e64"
 dependencies = [
  "strum",
  "strum_macros",
@@ -630,6 +630,7 @@ dependencies = [
  "clap",
  "crossbeam",
  "datafusion",
+ "dynamodb_lock",
  "env_logger 0.9.0",
  "errno",
  "futures",
@@ -669,7 +670,7 @@ version = "0.5.4"
 dependencies = [
  "chrono",
  "deltalake",
- "env_logger 0.7.1",
+ "env_logger 0.9.0",
  "pyo3",
  "reqwest",
  "serde_json",
@@ -739,6 +740,20 @@ name = "dyn-clone"
 version = "1.0.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ee2626afccd7561a06cf1367e2950c4718ea04565e20fb5029b6c7d8ad09abcf"
+
+[[package]]
+name = "dynamodb_lock"
+version = "0.4.1"
+dependencies = [
+ "async-trait",
+ "log",
+ "maplit",
+ "rusoto_core",
+ "rusoto_dynamodb",
+ "thiserror",
+ "tokio",
+ "uuid",
+]
 
 [[package]]
 name = "encoding_rs"
@@ -1768,9 +1783,9 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "6.1.0"
+version = "6.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "4a30c6117ed7e42e115887483c0b81277f4c2e3c17cc10c6c4244c1113e6e611"
+checksum = "479de475fbb7abf51e39cde69da3cc902d13a6fcb9259993f98688325e6a1ee7"
 dependencies = [
  "arrow",
  "base64",
@@ -2680,15 +2695,15 @@ checksum = "73473c0e59e6d5812c5dfe2a064a6444949f089e20eec9a2e5506596494e4623"
 
 [[package]]
 name = "strum"
-version = "0.21.0"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "aaf86bbcfd1fa9670b7a129f64fc0c9fcbbfe4f1bc4210e9e98fe71ffc12cde2"
+checksum = "f7ac893c7d471c8a21f31cfe213ec4f6d9afeed25537c772e08ef3f005f8729e"
 
 [[package]]
 name = "strum_macros"
-version = "0.21.1"
+version = "0.22.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d06aaeeee809dbc59eb4556183dd927df67db1540de5be8d3ec0b6636358a5ec"
+checksum = "339f799d8b549e3744c7ac7feb216383e4005d94bdb22561b3ab8f3b808ae9fb"
 dependencies = [
  "heck",
  "proc-macro2",

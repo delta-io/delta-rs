@@ -204,9 +204,8 @@ impl RawDeltaTable {
 
     // Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.
     pub fn history(&mut self, limit: Option<usize>) -> PyResult<Vec<String>> {
-        let history = self
-            ._table
-            .history(limit)
+        let history = rt()?
+            .block_on(self._table.history(limit))
             .map_err(PyDeltaTableError::from_raw)?;
         Ok(history
             .iter()

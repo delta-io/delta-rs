@@ -16,7 +16,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
-use std::{cmp::Ordering, collections::HashSet};
+use std::{cmp::max, cmp::Ordering, collections::HashSet};
 use uuid::Uuid;
 
 use crate::action::Stats;
@@ -589,6 +589,36 @@ impl DeltaTable {
         checkpoint_data_paths
     }
 
+    /// This method scans delta logs to find the earliest delta log version
+    async fn get_earliest_delta_log_version(
+        &self,
+    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
+        lazy_static! {
+            static ref DELTA_LOG_REGEX: Regex =
+                Regex::new(r#"^*[/\\]_delta_log[/\\](\d{20})\.(json|checkpoint)*$"#).unwrap();
+        }
+
+        let mut current_delta_log_ver = DeltaDataTypeVersion::MAX;
+
+        // Get file objects from table.
+        let log_uri = self
+            .storage
+            .join_path(self.table_uri.as_str(), "_delta_log");
+        let mut stream = self.storage.list_objs(&log_uri).await?;
+        while let Some(obj_meta) = stream.next().await {
+            let obj_meta = obj_meta?;
+
+            if let Some(captures) = DELTA_LOG_REGEX.captures(&obj_meta.path) {
+                let log_ver_str = captures.get(1).unwrap().as_str();
+                let log_ver: DeltaDataTypeVersion = log_ver_str.parse().unwrap();
+                if log_ver < current_delta_log_ver {
+                    current_delta_log_ver = log_ver;
+                }
+            }
+        }
+        Ok(current_delta_log_ver)
+    }
+
     async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
         let last_checkpoint_path = self.storage.join_path(&self.log_uri, "_last_checkpoint");
         let data = self.storage.get_obj(&last_checkpoint_path).await?;
@@ -839,14 +869,43 @@ impl DeltaTable {
 
     /// Returns provenance information, including the operation, user, and so on, for each write to a table.
     /// The table history retention is based on the `logRetentionDuration` property of the Delta Table, 30 days by default.
-    pub fn history(
+    /// If `limit` is given, this returns the information of the latest `limit` commits made to this table. Otherwise,
+    /// it returns all commits from the earliest commit.
+    pub async fn history(
         &mut self,
         limit: Option<usize>,
     ) -> Result<Vec<Map<String, Value>>, DeltaTableError> {
-        let commit_infos_list = self.state.commit_infos().iter().rev().map(Map::clone);
-        match limit {
-            Some(l) => Ok(commit_infos_list.take(l).collect()),
-            None => Ok(commit_infos_list.collect()),
+        let mut version = match limit {
+            Some(l) => max(self.version - l as i64 + 1, 0),
+            None => self.get_earliest_delta_log_version().await?,
+        };
+        let mut commit_infos_list = vec![];
+
+        loop {
+            match DeltaTableState::from_commit(self, version).await {
+                Ok(state) => {
+                    commit_infos_list.append(state.commit_infos().clone().as_mut());
+                    version += 1;
+                }
+                Err(e) => {
+                    match e {
+                        ApplyLogError::EndOfLog => {
+                            version -= 1;
+                            if version == -1 {
+                                let err = format!(
+                                    "No snapshot or version 0 found, perhaps {} is an empty dir?",
+                                    self.table_uri
+                                );
+                                return Err(DeltaTableError::NotATable(err));
+                            }
+                        }
+                        _ => {
+                            return Err(DeltaTableError::from(e));
+                        }
+                    }
+                    return Ok(commit_infos_list);
+                }
+            }
         }
     }
 

@@ -1,0 +1,24 @@
+[package]
+name = "dynamodb_lock"
+description = "Distributed lock backed by Dynamodb"
+version = "0.4.1"
+authors = ["Mykhailo Osypov <mykhailo.osypov@gmail.com>"]
+edition = "2018"
+readme = "README.md"
+license = "Apache-2.0"
+homepage = "https://github.com/delta-io/delta.rs"
+
+[dependencies]
+async-trait = "0.1"
+thiserror = "1"
+log = "0"
+uuid = { version = "0.8", features = ["serde", "v4"] }
+
+rusoto_core = { version = "0.46", default-features = false }
+rusoto_dynamodb = { version = "0.46", default-features = false }
+maplit = "1"
+tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
+
+[features]
+native-tls = ["rusoto_core/native-tls", "rusoto_dynamodb/native-tls"]
+rustls = ["rusoto_core/rustls", "rusoto_dynamodb/rustls"]
