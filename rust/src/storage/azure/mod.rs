@@ -8,8 +8,6 @@
 /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError, UriError};
 use azure_core::prelude::*;
-// use azure_core::TokenCredential;
-// use azure_identity::token_credentials::DefaultAzureCredential;
 use azure_storage::blob::prelude::*;
 use azure_storage::core::clients::{AsStorageClient, StorageAccountClient};
 use azure_storage::data_lake::prelude::*;
