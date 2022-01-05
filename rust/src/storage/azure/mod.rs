@@ -84,7 +84,7 @@ impl AdlsGen2Backend {
             storage_client.clone(),
             storage_account_name.to_owned(),
             // TODO: THIS WILL CHANGE TO ACCESS KEY SOON. LET'S PRETEND IT ALREADY HAS
-            storage_account_key.to_owned(),
+            storage_account_key,
             None,
         );
 
@@ -97,7 +97,7 @@ impl AdlsGen2Backend {
         let container_client = storage_client.as_container_client(file_system_name.to_owned());
 
         Ok(Self {
-            storage_account_name: storage_account_name.to_owned(),
+            storage_account_name,
             file_system_name: file_system_name.to_owned(),
             file_system_client,
             container_client,
