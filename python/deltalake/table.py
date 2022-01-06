@@ -2,11 +2,10 @@ import json
 import warnings
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
-from urllib.parse import urlparse
 
 import pyarrow
 import pyarrow.fs as pa_fs
-from pyarrow.dataset import dataset, partitioning
+from pyarrow.dataset import FileSystemDataset, ParquetFileFormat
 
 if TYPE_CHECKING:
     import pandas
@@ -260,31 +259,24 @@ class DeltaTable:
         :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
         :return: the PyArrow dataset in PyArrow
         """
-        if not partitions:
-            file_paths = self._table.file_uris()
-        else:
-            file_paths = self._table.files_by_partitions(partitions)
-
-        empty_delta_table = len(file_paths) == 0
-        if empty_delta_table:
-            return dataset(
-                [],
-                schema=self.pyarrow_schema(),
-                partitioning=partitioning(flavor="hive"),
-            )
-
-        parsed = urlparse(file_paths[0])
-        if not filesystem and parsed.netloc:
+        if not filesystem:
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler(self._table.table_uri())
             )
 
-        return dataset(
-            file_paths,
-            schema=self.pyarrow_schema(),
-            format="parquet",
-            filesystem=filesystem,
-            partitioning=partitioning(flavor="hive"),
+        format = ParquetFileFormat()
+
+        fragments = [
+            format.make_fragment(
+                file,
+                filesystem=filesystem,
+                partition_expression=part_expression,
+            )
+            for file, part_expression in self._table.dataset_partitions(partitions)
+        ]
+
+        return FileSystemDataset(
+            fragments, self.pyarrow_schema(), format, filesystem
         )
 
     def to_pyarrow_table(

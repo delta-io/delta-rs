@@ -90,7 +90,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                         let extract = DECIMAL_REGEX.captures(decimal).ok_or_else(|| {
                             ArrowError::SchemaError(format!(
                                 "Invalid decimal type for Arrow: {}",
-                                decimal.to_string()
+                                decimal
                             ))
                         })?;
                         let precision = extract
@@ -103,7 +103,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                             (Some(p), Some(s)) => Ok(ArrowDataType::Decimal(p, s)),
                             _ => Err(ArrowError::SchemaError(format!(
                                 "Invalid precision or scale decimal type for Arrow: {}",
-                                decimal.to_string()
+                                decimal
                             ))),
                         }
                     }
@@ -118,7 +118,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                     }
                     s => Err(ArrowError::SchemaError(format!(
                         "Invalid data type for Arrow: {}",
-                        s.to_string()
+                        s
                     ))),
                 }
             }

@@ -2,6 +2,7 @@ import os
 from threading import Barrier, Thread
 
 import pandas as pd
+import pyarrow.dataset as ds
 import pytest
 from pyarrow.fs import LocalFileSystem
 
@@ -17,7 +18,8 @@ def test_read_simple_table_to_dict():
 def test_read_simple_table_by_version_to_dict():
     table_path = "../rust/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2)
-    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
+    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {
+        "value": [1, 2, 3]}
 
 
 def test_load_with_datetime():
@@ -69,7 +71,8 @@ def test_load_with_datetime_bad_format():
 def test_read_simple_table_update_incremental():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path, version=0)
-    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [0, 1, 2, 3, 4]}
+    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {
+        "id": [0, 1, 2, 3, 4]}
     dt.update_incremental()
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
 
@@ -119,6 +122,50 @@ def test_read_table_with_column_subset():
         dt.to_pyarrow_dataset().to_table(columns=["value", "day"]).to_pydict()
         == expected
     )
+
+
+def test_read_table_with_filter():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    expected = {
+        "value": ["6", "7", "5"],
+        "year": ["2021", "2021", "2021"],
+        "month": ["12", "12", "12"],
+        "day": ["20", "20", "4"],
+    }
+    filter_expr = (ds.field("year") == "2021") & (ds.field("month") == "12")
+
+    dataset = dt.to_pyarrow_dataset()
+
+    assert len(list(dataset.get_fragments(filter=filter_expr))) == 2
+    assert dataset.to_table(filter=filter_expr).to_pydict() == expected
+
+
+def test_read_table_with_stats():
+    table_path = "../rust/tests/data/COVID-19_NYT"
+    dt = DeltaTable(table_path)
+    dataset = dt.to_pyarrow_dataset()
+
+    filter_expr = ds.field("date") > "2021-02-20"
+    assert len(list(dataset.get_fragments(filter=filter_expr))) == 2
+
+    data = dataset.to_table(filter=filter_expr)
+    assert data.num_rows < 147181 + 47559
+
+    filter_expr = ds.field("cases") < 0
+    assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
+
+    data = dataset.to_table(filter=filter_expr)
+    assert data.num_rows == 0
+
+    # TODO(wjones127): Enable these tests once C++ Arrow implements is_null and is_valid
+    # simplification. Blocked on: https://issues.apache.org/jira/browse/ARROW-12659
+
+    # filter_expr = ds.field("cases").is_null()
+    # assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
+
+    # data = dataset.to_table(filter=filter_expr)
+    # assert data.num_rows == 0
 
 
 def test_vacuum_dry_run_simple_table():
@@ -258,7 +305,8 @@ def test_delta_table_with_filesystem():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
     filesystem = LocalFileSystem()
-    assert dt.to_pandas(filesystem=filesystem).equals(pd.DataFrame({"id": [5, 7, 9]}))
+    assert dt.to_pandas(filesystem=filesystem).equals(
+        pd.DataFrame({"id": [5, 7, 9]}))
 
 
 def test_import_delta_table_error():
@@ -347,7 +395,8 @@ def test_read_multiple_tables_from_s3_multi_threaded(s3_localstack):
             "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
         ]
 
-    threads = [ExcPassThroughThread(target=read_table) for _ in range(thread_count)]
+    threads = [ExcPassThroughThread(target=read_table)
+               for _ in range(thread_count)]
     for t in threads:
         t.start()
     for t in threads:
