@@ -61,6 +61,7 @@ rustup default stable
 cargo install --git https://github.com/PyO3/maturin.git --rev 98636cea89c328b3eba4ebb548124f75c8018200 maturin
 cd /io/python
 export PATH=/opt/python/cp37-cp37m/bin:/opt/python/cp38-cp38/bin:$PATH
+yum install perl-IPC-Cmd
 maturin publish -b pyo3 --target x86_64-unknown-linux-gnu --no-sdist
 ```
 
