@@ -1,4 +1,4 @@
- //! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
+//! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -53,7 +53,7 @@ impl LockData {
     }
 }
 
-/// A kind of `LockClient` specified for Deltalake S3 Storage Backend
+/// Uses a `LockClient` to support additional features required by S3 Storage.
 pub struct S3LockClient {
     lock_client: Box<dyn LockClient>
 }
