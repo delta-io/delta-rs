@@ -26,9 +26,7 @@ use serde::Serialize;
 use std::time::Duration;
 use uuid::Uuid;
 
-use dynamodb_lock::{
-    LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS,
-};
+use dynamodb_lock::{LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};
 
 /// Lock data which stores an attempt to rename `source` into `destination`
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -55,7 +53,7 @@ impl LockData {
 
 /// Uses a `LockClient` to support additional features required by S3 Storage.
 pub struct S3LockClient {
-    lock_client: Box<dyn LockClient>
+    lock_client: Box<dyn LockClient>,
 }
 
 impl S3LockClient {
@@ -540,9 +538,7 @@ impl S3StorageBackend {
         lock_client: Option<Box<dyn LockClient>>,
         options: S3StorageOptions,
     ) -> Self {
-	let s3_lock_client = lock_client.map(|lc| S3LockClient {
-	    lock_client: lc
-	});
+        let s3_lock_client = lock_client.map(|lc| S3LockClient { lock_client: lc });
         Self {
             client,
             s3_lock_client,
@@ -833,11 +829,9 @@ fn try_create_lock_client(
                 dynamodb_client,
                 dynamodb_lock::DynamoDbOptions::from_map(options.extra_opts.clone()),
             );
-            Ok(Some(
-		S3LockClient {
-		    lock_client: Box::new(lock_client)
-		}
-	    ))
+            Ok(Some(S3LockClient {
+                lock_client: Box::new(lock_client),
+            }))
         }
         _ => Ok(None),
     }
