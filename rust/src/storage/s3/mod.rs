@@ -1,4 +1,4 @@
-//! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
+ //! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
 
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -27,7 +27,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use dynamodb_lock::{
-    DynamoDbLockClient, LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS,
+    LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS,
 };
 
 /// Lock data which stores an attempt to rename `source` into `destination`
@@ -54,22 +54,11 @@ impl LockData {
 }
 
 /// A kind of `LockClient` specified for Deltalake S3 Storage Backend
-#[async_trait::async_trait]
-pub trait S3LockClient: LockClient + Send + Sync + Debug {
-    /// Rename a S3 object by acquiring lock
-    async fn rename_with_lock(
-        &self,
-        s3: &S3StorageBackend,
-        src: &str,
-        dst: &str,
-    ) -> Result<(), StorageError>;
-
-    /// Try to acquire a lock in a loop until success or maximum retries
-    async fn acquire_lock_loop(&self, src: &str, dst: &str) -> Result<LockItem, StorageError>;
+pub struct S3LockClient {
+    lock_client: Box<dyn LockClient>
 }
 
-#[async_trait::async_trait]
-impl S3LockClient for DynamoDbLockClient {
+impl S3LockClient {
     async fn rename_with_lock(
         &self,
         s3: &S3StorageBackend,
@@ -103,11 +92,11 @@ impl S3LockClient for DynamoDbLockClient {
                 // If we acquired expired lock then the rename done above is
                 // a repair of expired one. So on this time we try the intended rename.
                 lock.data = Some(LockData::json(src, dst)?);
-                lock = self.update_data(&lock).await?;
+                lock = self.lock_client.update_data(&lock).await?;
                 rename_result = s3.unsafe_rename_obj(src, dst).await;
             }
 
-            let release_result = self.release_lock(&lock).await;
+            let release_result = self.lock_client.release_lock(&lock).await;
 
             // before unwrapping `rename_result` the `release_result` is called to ensure that we
             // no longer hold the lock
@@ -133,7 +122,7 @@ impl S3LockClient for DynamoDbLockClient {
         let mut retries = 0;
 
         loop {
-            match self.try_acquire_lock(Some(data.as_str())).await? {
+            match self.lock_client.try_acquire_lock(data.as_str()).await? {
                 Some(l) => {
                     lock = l;
                     break;
@@ -513,7 +502,7 @@ impl<'a> fmt::Display for S3Object<'a> {
 /// An S3 implementation of the `StorageBackend` trait
 pub struct S3StorageBackend {
     client: rusoto_s3::S3Client,
-    lock_client: Option<Box<dyn S3LockClient>>,
+    s3_lock_client: Option<S3LockClient>,
     options: S3StorageOptions,
 }
 
@@ -522,11 +511,11 @@ impl S3StorageBackend {
     pub fn new() -> Result<Self, StorageError> {
         let options = S3StorageOptions::default();
         let client = create_s3_client(&options)?;
-        let lock_client = try_create_lock_client(&options)?;
+        let s3_lock_client = try_create_lock_client(&options)?;
 
         Ok(Self {
             client,
-            lock_client,
+            s3_lock_client,
             options,
         })
     }
@@ -536,11 +525,11 @@ impl S3StorageBackend {
     /// Options are described in
     pub fn new_from_options(options: S3StorageOptions) -> Result<Self, StorageError> {
         let client = create_s3_client(&options)?;
-        let lock_client = try_create_lock_client(&options)?;
+        let s3_lock_client = try_create_lock_client(&options)?;
 
         Ok(Self {
             client,
-            lock_client,
+            s3_lock_client,
             options,
         })
     }
@@ -548,12 +537,15 @@ impl S3StorageBackend {
     /// Creates a new S3StorageBackend with given options, s3 client and lock client.
     pub fn new_with(
         client: rusoto_s3::S3Client,
-        lock_client: Option<Box<dyn S3LockClient>>,
+        lock_client: Option<Box<dyn LockClient>>,
         options: S3StorageOptions,
     ) -> Self {
+	let s3_lock_client = lock_client.map(|lc| S3LockClient {
+	    lock_client: lc
+	});
         Self {
             client,
-            lock_client,
+            s3_lock_client,
             options,
         }
     }
@@ -744,7 +736,7 @@ impl StorageBackend for S3StorageBackend {
     async fn rename_obj_noreplace(&self, src: &str, dst: &str) -> Result<(), StorageError> {
         debug!("rename s3 object: {} -> {}...", src, dst);
 
-        let lock_client = match self.lock_client {
+        let lock_client = match self.s3_lock_client {
             Some(ref lock_client) => lock_client,
             None => {
                 return Err(StorageError::S3Generic(
@@ -824,7 +816,7 @@ impl StorageBackend for S3StorageBackend {
 
 fn try_create_lock_client(
     options: &S3StorageOptions,
-) -> Result<Option<Box<dyn S3LockClient>>, StorageError> {
+) -> Result<Option<S3LockClient>, StorageError> {
     let dispatcher = HttpClient::new()?;
 
     match &options.locking_provider {
@@ -841,7 +833,11 @@ fn try_create_lock_client(
                 dynamodb_client,
                 dynamodb_lock::DynamoDbOptions::from_map(options.extra_opts.clone()),
             );
-            Ok(Some(Box::new(lock_client)))
+            Ok(Some(
+		S3LockClient {
+		    lock_client: Box::new(lock_client)
+		}
+	    ))
         }
         _ => Ok(None),
     }
