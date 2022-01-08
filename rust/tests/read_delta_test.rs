@@ -6,10 +6,34 @@ use deltalake::DeltaTableBuilder;
 use deltalake::StorageBackend;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
+use std::fs;
 use std::time::SystemTime;
 
 #[allow(dead_code)]
 mod fs_common;
+
+// TODO: Split into multiple tests and create GH issues for failing ones.
+#[tokio::test]
+async fn read_all_goldens() {
+    let path = "./tests/data/golden";
+    let subdirs = fs::read_dir(path)
+        .unwrap()
+        .map(|res| res.unwrap().path())
+        .filter_map(|res| Some(res.to_str()?.to_string()))
+        .collect::<Vec<String>>();
+
+    let mut results = Vec::new();
+
+    for subdir in subdirs {
+        let result = deltalake::open_table(&subdir).await;
+        results.push(result);
+    }
+
+    assert_eq!(
+        results.iter().filter(|res| res.is_ok()).count(),
+        results.len()
+    );
+}
 
 #[tokio::test]
 async fn read_delta_2_0_table_without_version() {
