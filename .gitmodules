@@ -1,0 +1,3 @@
+[submodule "submodules/delta-io/connectors"]
+	path = submodules/delta-io/connectors
+	url = https://github.com/delta-io/connectors.git
