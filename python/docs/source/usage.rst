@@ -1,9 +1,22 @@
 Usage
 ====================================
 
+.. TODO:
+.. [ ] Add links to classes
+.. [ ] How to query data (being considerate of memory size) (Pandas vs Dask vs DuckDB vs Datafusion)
+.. [ ] Clarify history and checkpoints
+.. [ ] What's a data catalog, which ones are supported?
+.. [ ] How to load file S3 and other services
+
+
 DeltaTable
 ----------
-Resolve partitions for current version of the DeltaTable
+
+.. py:currentmodule:: deltalake.table
+
+A :class:`DeltaTable` represents the state of a delta table at a particular
+version. This includes which files are currently part of the table, the schema
+of the table, and other metadata such as creation time.
 
 .. code-block:: python
 
@@ -12,60 +25,24 @@ Resolve partitions for current version of the DeltaTable
     >>> dt.version()
     3
     >>> dt.files()
-    ['part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet', 'part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet', 'part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
+    ['part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet', 
+     'part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet', 
+     'part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
 
 
-Apply filtering on partitions for current version of the partitioned DeltaTable
+Loading a delta table
+~~~~~~~~~~~~~~~~~~~~~
 
-.. code-block:: python
-
-    >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0-partitioned")
-    >>> dt.version()
-    0
-    >>> dt.files()
-    ['year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet', 'year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet', 'year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet', 'year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet', 'year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet', 'year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet']
-    >>> partition_filters = [("day", "=", "5")]
-    >>> dt.files_by_partitions(partition_filters)
-    ['year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet', 'year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet']
-
-Convert DeltaTable into PyArrow Table and Pandas Dataframe
+To load the current version, use the constructor:
 
 .. code-block:: python
 
-    >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../rust/tests/data/simple_table")
-    >>> df = dt.to_pandas()
-    >>> df
-       id
-    0   5
-    1   7
-    2   9
-    >>> df[df['id'] > 5]
-       id
-    1   7
-    2   9
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0")
 
-Time travel
+Alternatively, if you have a data catalog you can load it by reference to a 
+database and table name. Currently only AWS Glue is supported.
 
-.. code-block:: python
-
-    >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../rust/tests/data/simple_table")
-    >>> dt.load_version(2)
-    >>> dt.to_pyarrow_table().to_pydict()
-    {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
-
-History
-
-.. code-block:: python
-
-    >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../rust/tests/data/simple_table")
-    >>> dt.history()
-    [{'timestamp': 1587968626537, 'operation': 'DELETE', 'operationParameters': {'predicate': '["((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))"]'}, 'readVersion': 3, 'isBlindAppend': False}, {'timestamp': 1587968614187, 'operation': 'UPDATE', 'operationParameters': {'predicate': '((id#697L % cast(2 as bigint)) = cast(0 as bigint))'}, 'readVersion': 2, 'isBlindAppend': False}, {'timestamp': 1587968604143, 'operation': 'WRITE', 'operationParameters': {'mode': 'Overwrite', 'partitionBy': '[]'}, 'readVersion': 1, 'isBlindAppend': False}, {'timestamp': 1587968596254, 'operation': 'MERGE', 'operationParameters': {'predicate': '(oldData.`id` = newData.`id`)'}, 'readVersion': 0, 'isBlindAppend': False}, {'timestamp': 1587968586154, 'operation': 'WRITE', 'operationParameters': {'mode': 'ErrorIfExists', 'partitionBy': '[]'}, 'isBlindAppend': True}]
-
-Create a DeltaTable using a Data Catalog
+.. TODO: auth to data catalog?
 
 .. code-block:: python
 
@@ -77,6 +54,147 @@ Create a DeltaTable using a Data Catalog
     >>> dt = DeltaTable.from_data_catalog(data_catalog=data_catalog, database_name=database_name, table_name=table_name)
     >>> dt.to_pyarrow_table().to_pydict()
     {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
+
+Besides local filesystems, the following backends are supported:
+
+* AWS S3, detected by the prefix ``s3://``. AWS credentials can be specified using
+  environment variables in the same way as the CLI.
+* Azure Data Lake Storage Gen 2, detected by the prefix ``abffs://``. Note that
+  `specific instructions`_ must be followed to setup the Azure Storage Account.
+* Google Cloud Storage, detected by the prefix ``gs://``.
+
+.. _`specific instructions`: https://github.com/delta-io/delta-rs/blob/main/docs/ADLSGen2-HOWTO.md
+
+
+Time travel
+~~~~~~~~~~~
+
+To load previous table states, you can provide the version number you wish to
+load:
+
+.. code-block:: python
+
+    >>> dt = DeltaTable("../rust/tests/data/simple_table", version=2)
+
+Once you've loaded a table, you can also change versions using either a version
+number or datetime string:
+
+.. code-block:: python
+
+    >>> dt.load_version(1)
+    >>> dt.load_with_timestamp("2021-11-04 00:05:23.283+00:00")
+
+.. TODO: What guarantees are there about being able to find versions? Are old ones
+   cleaned up? Are we able to see before the latest checkpoint?
+
+History
+~~~~~~~
+
+.. TODO: which parts of the history are guaranteed to be there?
+
+.. code-block:: python
+
+    >>> from deltalake import DeltaTable
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.history()
+    [{'timestamp': 1587968626537, 'operation': 'DELETE', 'operationParameters': {'predicate': '["((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))"]'}, 'readVersion': 3, 'isBlindAppend': False}, {'timestamp': 1587968614187, 'operation': 'UPDATE', 'operationParameters': {'predicate': '((id#697L % cast(2 as bigint)) = cast(0 as bigint))'}, 'readVersion': 2, 'isBlindAppend': False}, {'timestamp': 1587968604143, 'operation': 'WRITE', 'operationParameters': {'mode': 'Overwrite', 'partitionBy': '[]'}, 'readVersion': 1, 'isBlindAppend': False}, {'timestamp': 1587968596254, 'operation': 'MERGE', 'operationParameters': {'predicate': '(oldData.`id` = newData.`id`)'}, 'readVersion': 0, 'isBlindAppend': False}, {'timestamp': 1587968586154, 'operation': 'WRITE', 'operationParameters': {'mode': 'ErrorIfExists', 'partitionBy': '[]'}, 'isBlindAppend': True}]
+
+
+Querying delta tables
+~~~~~~~~~~~~~~~~~~~~~
+
+Delta tables can be queried in several ways. By loading as Arrow data or an Arrow
+dataset, they can be used by compatible engines such as Pandas and DuckDB. By 
+passing on the list of files, they can be loaded into other engines such as Dask.
+
+Delta tables are often larger than can fit into memory on a single computer, so
+this module provides ways to read only parts of the data you need. Partition 
+filters allow you to skip reading files that are part of irrelevant partitions.
+Only loading the columns required also saves memory. Finally, some methods allow
+reading tables batch-by-batch, allowing you to process the whole table while only
+having a portion loaded at any given time.
+
+To load into Pandas or a PyArrow table use the :meth:`DeltaTable.to_pandas` and
+:meth:`DeltaTable.to_pyarrow_table` methods, respectively. Both of these 
+support filtering partitions and selecting particular columns.
+
+.. code-block:: python
+
+    >>> from deltalake import DeltaTable
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0-partitioned")
+    >>> dt.dt.pyarrow_schema()
+    value: string
+    year: string
+    month: string
+    day: string
+    >>> dt.to_pandas(partitions=[("year", "=", "2021")], columns=["value"])
+          value
+    0     6
+    1     7
+    2     5
+    3     4
+    >>> dt.to_pyarrow_table(partitions=[("year", "=", "2021")], columns=["value"])
+    pyarrow.Table
+    value: string
+
+Converting to a PyArrow Dataset allows you to filter on columns other than 
+partition columns and load the results as a stream of batches rather as a single
+table. Conver to a dataset using :meth:`DeltaTable.to_pyarrow_dataset`. Filters 
+applied to datasets will use the partition values and file statistics from the 
+Delta transaction log and push down any other filters to the scanning operation.
+
+.. code-block:: python
+
+    >>> import pyarrow.dataset as ds
+    >>> dataset = dt.to_pyarrow_dataset()
+    >>> condition = (ds.field("year") == "2021") & (ds.field("value") > "4")
+    >>> dataset.to_table(filter=condition, columns=["value"]).to_pandas()
+      value
+    0     6
+    1     7
+    2     5
+    >>> batch_iter = dataset.to_batches(filter=condition, columns=["value"], batch_size=2)
+    >>> for batch in batch_iter: print(batch.to_pandas())
+      value
+    0     6
+    1     7
+      value
+    0     5
+
+PyArrow datasets may also be passed to compatible query engines, such as DuckDB_.
+
+.. _DuckDB: https://duckdb.org/docs/api/python
+
+.. code-block:: python
+
+    >>> import duckdb
+    >>> ex_data = duckdb.arrow(dataset)
+    >>> ex_data.filter("year = 2021 and value > 4").project("value")
+    ---------------------
+    -- Expression Tree --
+    ---------------------
+    Projection [value]
+      Filter [year=2021 AND value>4]
+        arrow_scan(140409099470144, 4828104688, 1000000)
+
+    ---------------------
+    -- Result Columns  --
+    ---------------------
+    - value (VARCHAR)
+
+    ---------------------
+    -- Result Preview  --
+    ---------------------
+    value
+    VARCHAR
+    [ Rows: 3]
+    6
+    7
+    5
+
+
+Pass files to Dask or other engine to run on a cluster.
+
 
 DeltaSchema
 -----------
