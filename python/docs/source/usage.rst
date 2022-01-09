@@ -1,17 +1,6 @@
 Usage
 ====================================
 
-.. TODO:
-.. [ ] Add links to classes
-.. [ ] How to query data (being considerate of memory size) (Pandas vs Dask vs DuckDB vs Datafusion)
-.. [ ] Clarify history and checkpoints
-.. [ ] What's a data catalog, which ones are supported?
-.. [ ] How to load file S3 and other services
-
-
-DeltaTable
-----------
-
 .. py:currentmodule:: deltalake.table
 
 A :class:`DeltaTable` represents the state of a delta table at a particular
@@ -30,8 +19,8 @@ of the table, and other metadata such as creation time.
      'part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
 
 
-Loading a delta table
-~~~~~~~~~~~~~~~~~~~~~
+Loading a Delta Table
+---------------------
 
 To load the current version, use the constructor:
 
@@ -66,7 +55,7 @@ Besides local filesystems, the following backends are supported:
 .. _`specific instructions`: https://github.com/delta-io/delta-rs/blob/main/docs/ADLSGen2-HOWTO.md
 
 
-Time travel
+Time Travel
 ~~~~~~~~~~~
 
 To load previous table states, you can provide the version number you wish to
@@ -87,28 +76,95 @@ number or datetime string:
 .. TODO: What guarantees are there about being able to find versions? Are old ones
    cleaned up? Are we able to see before the latest checkpoint?
 
+Examining a Table
+-----------------
+
+Metadata
+~~~~~~~~
+
+The delta log maintains basic metadata about a table, including:
+
+* A unique ``id``
+* A ``name``, if provided
+* A ``description``, if provided
+* The list of ``partitionColumns``.
+* The ``created_time`` of the table
+* A map of table ``configuration``. This includes fields such as ``delta.appendOnly``,
+  which if ``true`` indicates the table is not meant to have data deleted from it.
+
+Get metadata from a table with the :meth:`DeltaTable.metadata` method:
+
+.. code-block:: python
+
+    >>> from deltalake import DeltaTable
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.metadata()
+    Metadata(id: 5fba94ed-9794-4965-ba6e-6ee3c0d22af9, name: None, description: None, partitionColumns: [], created_time: 1587968585495, configuration={})
+
+Schema
+~~~~~~
+
+The schema for the table is also saved in the transaction log. It can either be
+retrieved in the Delta Lake form as :class:`deltalake.schema.Schema` or as a PyArrow 
+schema. The first allows you to introspect any column-level metadata stored in 
+the schema, while the latter represents the schema the table will be loaded into.
+
+Use :meth:`DeltaTable.schema` to retrieve the delta lake schema:
+
+.. code-block:: python
+
+    >>> from deltalake import DeltaTable
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.schema()
+    Schema(Field(id: DataType(long) nullable(True) metadata({})))
+
+These schemas have a JSON representation that can be retrieved. To reconstruct
+from json, use :meth:`deltalake.schema.Schema.from_json`.
+
+.. code-block:: python
+
+    >>> dt.schema().json()
+    {'type': 'struct', 'fields': [{'name': 'id', 'type': 'long', 'nullable': True, 'metadata': {}}]}
+
+Use :meth:`DeltaTable.pyarrow_schema` to retrieve the PyArrow schema:
+
+.. code-block:: python
+
+    >>> dt.pyarrow_schema()
+    id: int64
+
+
 History
 ~~~~~~~
 
-.. TODO: which parts of the history are guaranteed to be there?
+Depending on what system wrote the table, the delta table may have provenance
+information describing what operations were performed on the table and when. 
+This information is not written by all writers and different writers may use
+different schemas to encode the actions.
+
+To view the available history, use :meth:`DeltaTable.history`:
 
 .. code-block:: python
 
     >>> from deltalake import DeltaTable
     >>> dt = DeltaTable("../rust/tests/data/simple_table")
     >>> dt.history()
-    [{'timestamp': 1587968626537, 'operation': 'DELETE', 'operationParameters': {'predicate': '["((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))"]'}, 'readVersion': 3, 'isBlindAppend': False}, {'timestamp': 1587968614187, 'operation': 'UPDATE', 'operationParameters': {'predicate': '((id#697L % cast(2 as bigint)) = cast(0 as bigint))'}, 'readVersion': 2, 'isBlindAppend': False}, {'timestamp': 1587968604143, 'operation': 'WRITE', 'operationParameters': {'mode': 'Overwrite', 'partitionBy': '[]'}, 'readVersion': 1, 'isBlindAppend': False}, {'timestamp': 1587968596254, 'operation': 'MERGE', 'operationParameters': {'predicate': '(oldData.`id` = newData.`id`)'}, 'readVersion': 0, 'isBlindAppend': False}, {'timestamp': 1587968586154, 'operation': 'WRITE', 'operationParameters': {'mode': 'ErrorIfExists', 'partitionBy': '[]'}, 'isBlindAppend': True}]
+    [{'timestamp': 1587968626537, 'operation': 'DELETE', 'operationParameters': {'predicate': '["((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))"]'}, 'readVersion': 3, 'isBlindAppend': False},
+     {'timestamp': 1587968614187, 'operation': 'UPDATE', 'operationParameters': {'predicate': '((id#697L % cast(2 as bigint)) = cast(0 as bigint))'}, 'readVersion': 2, 'isBlindAppend': False},
+     {'timestamp': 1587968604143, 'operation': 'WRITE', 'operationParameters': {'mode': 'Overwrite', 'partitionBy': '[]'}, 'readVersion': 1, 'isBlindAppend': False},
+     {'timestamp': 1587968596254, 'operation': 'MERGE', 'operationParameters': {'predicate': '(oldData.`id` = newData.`id`)'}, 'readVersion': 0, 'isBlindAppend': False},
+     {'timestamp': 1587968586154, 'operation': 'WRITE', 'operationParameters': {'mode': 'ErrorIfExists', 'partitionBy': '[]'}, 'isBlindAppend': True}]
 
 
-Querying delta tables
-~~~~~~~~~~~~~~~~~~~~~
+Querying Delta Tables
+---------------------
 
 Delta tables can be queried in several ways. By loading as Arrow data or an Arrow
 dataset, they can be used by compatible engines such as Pandas and DuckDB. By 
 passing on the list of files, they can be loaded into other engines such as Dask.
 
 Delta tables are often larger than can fit into memory on a single computer, so
-this module provides ways to read only parts of the data you need. Partition 
+this module provides ways to read only the parts of the data you need. Partition 
 filters allow you to skip reading files that are part of irrelevant partitions.
 Only loading the columns required also saves memory. Finally, some methods allow
 reading tables batch-by-batch, allowing you to process the whole table while only
@@ -138,8 +194,8 @@ support filtering partitions and selecting particular columns.
     value: string
 
 Converting to a PyArrow Dataset allows you to filter on columns other than 
-partition columns and load the results as a stream of batches rather as a single
-table. Conver to a dataset using :meth:`DeltaTable.to_pyarrow_dataset`. Filters 
+partition columns and load the result as a stream of batches rather than a single
+table. Convert to a dataset using :meth:`DeltaTable.to_pyarrow_dataset`. Filters 
 applied to datasets will use the partition values and file statistics from the 
 Delta transaction log and push down any other filters to the scanning operation.
 
@@ -192,37 +248,68 @@ PyArrow datasets may also be passed to compatible query engines, such as DuckDB_
     7
     5
 
-
-Pass files to Dask or other engine to run on a cluster.
-
-
-DeltaSchema
------------
-
-Delta format
+Finally, you can always pass the list of file paths to an engine. For example,
+you can pass them to :py:meth:`dask.dataframe.read_parquet`:
 
 .. code-block:: python
 
-    >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../rust/tests/data/simple_table")
-    >>> dt.schema()
-    Schema(Field(id: DataType(long) nullable(True) metadata({})))
+    >>> import dask.dataframe as dd
+    >>> df = dd.read_parquet(dt.file_uris())
+    >>> df
+    Dask DataFrame Structure:
+                    value             year            month              day
+    npartitions=6                                                           
+                   object  category[known]  category[known]  category[known]
+                      ...              ...              ...              ...
+    ...               ...              ...              ...              ...
+                      ...              ...              ...              ...
+                      ...              ...              ...              ...
+    Dask Name: read-parquet, 6 tasks
+    >>> df.compute()
+      value  year month day
+    0     1  2020     1   1
+    0     2  2020     2   3
+    0     3  2020     2   5
+    0     4  2021     4   5
+    0     5  2021    12   4
+    0     6  2021    12  20
+    1     7  2021    12  20
 
-PyArrow format
+
+Managing Delta Tables
+---------------------
+
+Vacuuming tables
+~~~~~~~~~~~~~~~~
+
+Vacuuming a table will delete any files that have been marked for deletion. This
+may make some past versions of a table invalid, so this can break time travel. 
+However, it will save storage space. Vacuum will retain files in a certain window,
+by default one week, so time travel will still work in shorter ranges.
+
+Delta tables usually don't delete old files automatically, so vacuuming regularly
+is considered good practice, unless the table is only appended to.
+
+Use :meth:`DeltaTable.vacuum` to perform the vacuum operation. Note that to
+prevent accidental deletion, the function performs a dry-run by default: it will
+only list the files to be deleted. Pass ``dry_run=False`` to actually delete files.
 
 .. code-block:: python
 
-    >>> from deltalake import DeltaTable
     >>> dt = DeltaTable("../rust/tests/data/simple_table")
-    >>> dt.pyarrow_schema()
-    id: int64
+    >>> dt.vacuum()
+    ['../rust/tests/data/simple_table/part-00006-46f2ff20-eb5d-4dda-8498-7bfb2940713b-c000.snappy.parquet', 
+     '../rust/tests/data/simple_table/part-00190-8ac0ae67-fb1d-461d-a3d3-8dc112766ff5-c000.snappy.parquet', 
+     '../rust/tests/data/simple_table/part-00164-bf40481c-4afd-4c02-befa-90f056c2d77a-c000.snappy.parquet',
+     ...]
+    >>> dt.vacuum(dry_run=False) # Don't run this unless you are sure!
 
-Metadata
------------
+Optimizing tables
+~~~~~~~~~~~~~~~~~
 
-.. code-block:: python
+Optimizing tables is not currently supported.
 
-    >>> from deltalake import DeltaTable
-    >>> dt = DeltaTable("../rust/tests/data/simple_table")
-    >>> dt.metadata()
-    Metadata(id: 5fba94ed-9794-4965-ba6e-6ee3c0d22af9, name: None, description: None, partitionColumns: [], created_time: 1587968585495, configuration={})
+Writing Delta Tables
+--------------------
+
+Writing Delta tables is not currently supported.
