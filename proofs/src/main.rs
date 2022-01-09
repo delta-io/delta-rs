@@ -1,5 +1,5 @@
 use stateright::*;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::ops::Range;
 
 const LOCK_TIMEOUT: u8 = 3;
@@ -17,6 +17,10 @@ enum WriterState {
     Init,
     LockAcquired,
     LockFailed,
+    RepairConflictChecked,
+    RepairObjectCopied,
+    RepairRenameReturned,
+    ExpiredLockUpdated,
     NewVersionChecked,
     NewVersionObjectCopied,
     RenameReturned,
@@ -27,6 +31,10 @@ enum WriterState {
 #[derive(Clone, Debug)]
 enum Action {
     TryAcquireLock(WriterId),
+    RepairObjectCheckExists(WriterId),
+    RepairObjectCopy(WriterId),
+    RepairObjectDelete(WriterId),
+    UpdateLockData(WriterId),
     NewVersionObjectCheckExists(WriterId),
     NewVersionObjectCopy(WriterId),
     OldVersionObjectDelete(WriterId),
@@ -35,9 +43,9 @@ enum Action {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
-enum RenameResult {
-    Success,
-    ErrAlreadyExists,
+enum RenameErr {
+    AlreadyExists,
+    NotFound,
 }
 
 #[derive(Clone, Debug, Hash)]
@@ -52,7 +60,8 @@ type BlobObjectPut = LockData;
 struct WriterContext {
     state: WriterState,
     lock_data: LockData,
-    rename_result: Option<RenameResult>,
+    acquired_expired_lock: bool,
+    rename_err: Option<RenameErr>,
     target_version: usize,
 }
 
@@ -80,29 +89,28 @@ impl AtomicRenameState {
         actual_deletes.sort();
         actual_deletes
     }
+
+    #[inline]
+    fn blob_store_obj_keys(&self) -> HashSet<String> {
+        // TODO: change to return HashSet<&str>
+        self.blob_store_copy
+            .iter()
+            .map(|data| data.dst.clone())
+            .collect::<HashSet<_>>()
+    }
+
+    #[inline]
+    fn writer_versions(&self) -> HashSet<String> {
+        self.writer_ctx
+            .iter()
+            .map(|ctx| format!("{}", ctx.target_version))
+            .collect::<HashSet<_>>()
+    }
 }
 
 #[inline]
 fn source_key_from_wid(wid: WriterId) -> String {
     format!("writer_{}", wid)
-}
-
-fn writer_acquire_lock(state: &mut AtomicRenameState, wid: WriterId) {
-    let mut writer = &mut state.writer_ctx[wid];
-    let src = source_key_from_wid(wid);
-    let dst = format!("{}", writer.target_version);
-    // lock is not held by any other worker
-    state.lock = Some(GlobalLock {
-        data: LockData {
-            src: src.clone(),
-            dst: dst.clone(),
-        },
-        lock_failures: 0,
-        owner: wid,
-    });
-    writer.lock_data = LockData { src, dst };
-    // issue S3 API call to check for version conflict while holding the lock
-    writer.state = WriterState::LockAcquired;
 }
 
 impl AtomicRenameSys {
@@ -140,7 +148,8 @@ impl Model for AtomicRenameSys {
                         src: "".to_string(),
                         dst: "".to_string(),
                     },
-                    rename_result: None,
+                    rename_err: None,
+                    acquired_expired_lock: false,
                     target_version: 0,
                 })
                 .collect(),
@@ -152,12 +161,39 @@ impl Model for AtomicRenameSys {
 
     fn actions(&self, state: &Self::State, actions: &mut Vec<Self::Action>) {
         for wid in self.writers.clone() {
-            match &state.writer_ctx[wid].state {
+            let writer = &state.writer_ctx[wid];
+            match writer.state {
                 WriterState::Init | WriterState::LockFailed => {
                     actions.push(Action::TryAcquireLock(wid));
                 }
                 // begin of unsafe rename
                 WriterState::LockAcquired => {
+                    if writer.acquired_expired_lock {
+                        actions.push(Action::RepairObjectCheckExists(wid));
+                    } else {
+                        actions.push(Action::NewVersionObjectCheckExists(wid));
+                    }
+                }
+                WriterState::RepairConflictChecked => {
+                    actions.push(Action::RepairObjectCopy(wid));
+                }
+                WriterState::RepairObjectCopied => {
+                    actions.push(Action::RepairObjectDelete(wid));
+                }
+                WriterState::RepairRenameReturned => {
+                    match writer.rename_err {
+                        Some(RenameErr::AlreadyExists) => {
+                            // already reapired by other writer
+                            // TODO: still need to perform the delete cleanup?
+                            actions.push(Action::UpdateLockData(wid));
+                        }
+                        // not found happens when clean was already performend by another worker
+                        None | Some(RenameErr::NotFound) => {
+                            actions.push(Action::UpdateLockData(wid));
+                        } // TODO: model other unrecoverable network error?
+                    }
+                }
+                WriterState::ExpiredLockUpdated => {
                     actions.push(Action::NewVersionObjectCheckExists(wid));
                 }
                 WriterState::NewVersionChecked => {
@@ -183,22 +219,98 @@ impl Model for AtomicRenameSys {
         let mut state = last_state.clone();
         match action {
             Action::TryAcquireLock(wid) => {
+                let mut writer = &mut state.writer_ctx[wid];
                 match &mut state.lock {
                     Some(lock) => {
                         // use lock_failures to simulate timeout
                         if lock.lock_failures >= LOCK_TIMEOUT {
                             // lock expired, let writer preempt it
-                            writer_acquire_lock(&mut state, wid);
+                            lock.owner = wid;
+                            lock.lock_failures = 0;
+                            writer.acquired_expired_lock = true;
+                            writer.lock_data = lock.data.clone();
+                            writer.state = WriterState::LockAcquired;
                         } else {
                             // retry lock
-                            let mut writer = &mut state.writer_ctx[wid];
-                            writer.state = WriterState::LockFailed;
                             lock.lock_failures += 1;
+                            writer.state = WriterState::LockFailed;
                         }
                     }
                     None => {
-                        writer_acquire_lock(&mut state, wid);
+                        let src = source_key_from_wid(wid);
+                        let dst = format!("{}", writer.target_version);
+                        // lock is not held by any other worker
+                        state.lock = Some(GlobalLock {
+                            data: LockData {
+                                src: src.clone(),
+                                dst: dst.clone(),
+                            },
+                            lock_failures: 0,
+                            owner: wid,
+                        });
+                        writer.acquired_expired_lock = false;
+                        writer.lock_data = LockData { src, dst };
+                        writer.state = WriterState::LockAcquired;
                     }
+                }
+            }
+            Action::RepairObjectCheckExists(wid) => {
+                let mut writer = &mut state.writer_ctx[wid];
+                if state
+                    .blob_store_copy
+                    .iter()
+                    .any(|data| data.dst == writer.lock_data.dst)
+                {
+                    writer.rename_err = Some(RenameErr::AlreadyExists);
+                    writer.state = WriterState::RepairRenameReturned;
+                } else {
+                    writer.rename_err = None;
+                    writer.state = WriterState::RepairConflictChecked;
+                }
+            }
+            Action::RepairObjectCopy(wid) => {
+                let mut writer = &mut state.writer_ctx[wid];
+                state.blob_store_copy.push(writer.lock_data.clone());
+                writer.state = WriterState::RepairObjectCopied;
+            }
+            Action::RepairObjectDelete(wid) => {
+                let mut writer = &mut state.writer_ctx[wid];
+                // TODO: model delete error, i.e. already deleted by another worker
+                if state.blob_store_delete.contains(&writer.lock_data.src) {
+                    writer.rename_err = Some(RenameErr::NotFound);
+                } else {
+                    state.blob_store_delete.push(writer.lock_data.src.clone());
+                    writer.rename_err = None;
+                }
+                writer.state = WriterState::RepairRenameReturned;
+            }
+            Action::UpdateLockData(wid) => {
+                let mut writer = &mut state.writer_ctx[wid];
+
+                // TODO: add lock rvn
+                if let Some(lock) = state.lock.as_mut() {
+                    if lock.owner != wid {
+                        // lock already expired and acquired by another worker
+                        // try rename from scratch
+                        writer.state = WriterState::Init;
+                    } else {
+                        let src = source_key_from_wid(wid);
+                        let dst = format!("{}", writer.target_version);
+
+                        lock.data = LockData {
+                            src: src.clone(),
+                            dst: dst.clone(),
+                        };
+                        lock.lock_failures = 0;
+                        lock.owner = wid;
+                        writer.acquired_expired_lock = false;
+                        writer.lock_data = LockData { src, dst };
+                        writer.state = WriterState::ExpiredLockUpdated;
+                    }
+                } else {
+                    // lock already expired and released by another worker
+                    // try rename from scratch
+                    writer.state = WriterState::Init;
                 }
             }
             Action::NewVersionObjectCheckExists(wid) => {
@@ -209,10 +321,10 @@ impl Model for AtomicRenameSys {
                     .any(|data| data.dst == writer.lock_data.dst)
                 {
                     // retry with newer version
-                    // TODO: support specific failure reason?
-                    writer.rename_result = Some(RenameResult::ErrAlreadyExists);
+                    writer.rename_err = Some(RenameErr::AlreadyExists);
                     writer.state = WriterState::RenameReturned;
                 } else {
+                    writer.rename_err = None;
                     writer.state = WriterState::NewVersionChecked;
                 }
             }
@@ -225,7 +337,7 @@ impl Model for AtomicRenameSys {
                 let mut writer = &mut state.writer_ctx[wid];
                 // TODO: model delete error, i.e. already deleted by another worker
                 state.blob_store_delete.push(writer.lock_data.src.clone());
-                writer.rename_result = Some(RenameResult::Success);
+                writer.rename_err = None;
                 writer.state = WriterState::RenameReturned;
             }
             Action::ReleaseLock(wid) => {
@@ -248,16 +360,27 @@ impl Model for AtomicRenameSys {
             }
             Action::CheckRenameStatus(wid) => {
                 let mut writer = &mut state.writer_ctx[wid];
-                if let Some(re) = &writer.rename_result {
+                if let Some(re) = &writer.rename_err {
                     match re {
-                        RenameResult::Success => {}
-                        _err => {
-                            // TODO: do something about the error?
+                        RenameErr::AlreadyExists => {
+                            // previous repair caused the version conflict, retry with a newer
+                            // version
+                            writer.target_version += 1;
+                            writer.state = WriterState::Init;
+                        }
+                        RenameErr::NotFound => {
+                            // TODO: not found should be fine? old object already purged by another
+                            // repair
+                            //
+                            // setting to shutdown for now because we expect application to hard
+                            // crash and start from scratch, see:
+                            // https://github.com/delta-io/delta-rs/pull/391
+                            writer.state = WriterState::Shutdown;
                         }
                     }
+                } else {
+                    writer.state = WriterState::Shutdown;
                 }
-                // TODO: error if status not set
-                writer.state = WriterState::Shutdown;
             }
         }
         Some(state)
@@ -277,28 +400,53 @@ impl Model for AtomicRenameSys {
                 "actual_deletes: {:?}",
                 next_state.derive_actual_deletes()
             ));
+
+            lines.push(format!(
+                "writer_versions: {:?}",
+                next_state.writer_versions()
+            ));
+
+            lines.push(format!(
+                "blob_store_obj_keys: {:?}",
+                next_state.blob_store_obj_keys()
+            ));
+
             lines.join("\n")
         })
     }
 
     fn properties(&self) -> Vec<Property<Self>> {
-        vec![
-            Property::<Self>::sometimes("lock contention", |_, state| {
-                if let Some(lock) = &state.lock {
-                    return lock.lock_failures > 0;
-                }
-                return false;
-            }),
+        let mut properties = vec![
             Property::<Self>::always("no overwrite", |_, state| {
                 // make sure each object key is only written once
-                let mut written = HashSet::new();
+                let mut written = HashMap::new();
                 state.blob_store_copy.iter().all(|data| {
-                    if written.contains(&data.dst) {
-                        false
+                    if let Some(src) = written.insert(&data.dst, &data.src) {
+                        // copy from same source to the same dest is considered idempotent and safe
+                        src == &data.src
                     } else {
-                        written.insert(data.dst.clone());
                         true
                     }
+                })
+            }),
+            Property::<Self>::always("no unexpected rename", |sys, state| {
+                let writer_versions = state.writer_versions();
+                let blob_store_obj_keys = state.blob_store_obj_keys();
+
+                blob_store_obj_keys.len() <= sys.writer_cnt
+                    && writer_versions.len() <= sys.writer_cnt
+                    && writer_versions.is_superset(&blob_store_obj_keys)
+            }),
+            Property::<Self>::always("not retry on successful rename", |sys, state| {
+                let blob_store_source_keys = state
+                    .blob_store_copy
+                    .iter()
+                    .map(|data| data.src.as_str())
+                    .collect::<HashSet<&str>>();
+                sys.writers.clone().all(|wid| {
+                    let writer = &state.writer_ctx[wid];
+                    !(writer.state == WriterState::Init
+                        && blob_store_source_keys.contains(source_key_from_wid(wid).as_str()))
                 })
             }),
             Property::<Self>::eventually("all writer clean shutdown", |_, state| {
@@ -316,28 +464,37 @@ impl Model for AtomicRenameSys {
                     .all(|(x, y)| x == &y)
             }),
             Property::<Self>::eventually("all renames are performed", |sys, state| {
-                let written_versions = state
-                    .writer_ctx
-                    .iter()
-                    .map(|ctx| format!("{}", ctx.target_version))
-                    .collect::<HashSet<_>>();
+                let writer_versions = state.writer_versions();
+                let blob_store_obj_keys = state.blob_store_obj_keys();
 
                 // TODO: check for object content
 
-                // object count equals writer count
-                state.blob_store_copy.len() == sys.writer_cnt
+                // object count greater writer count
+                blob_store_obj_keys.len() >= sys.writer_cnt
                     // each writer writes a different version in
-                    && written_versions.len() == sys.writer_cnt
+                    && writer_versions.len() >= sys.writer_cnt
                     // all versions have been written into blobl store
-                    && written_versions
-                        == state.blob_store_copy.iter().map(|data| data.dst.clone()).collect::<HashSet<_>>()
+                    && blob_store_obj_keys.is_superset(&writer_versions)
                     // all rename calls returned with success
                     && state.writer_ctx.iter().all(|ctx| {
-                        // hack to make sure we error out if rename result is not set
-                        ctx.rename_result.as_ref().unwrap_or(&RenameResult::ErrAlreadyExists) == &RenameResult::Success
+                        ctx.rename_err.is_none()
                     })
             }),
-        ]
+        ];
+
+        if self.writer_cnt > 1 {
+            properties.push(Property::<Self>::sometimes(
+                "lock contention",
+                |_, state| {
+                    if let Some(lock) = &state.lock {
+                        return lock.lock_failures > 0;
+                    }
+                    return false;
+                },
+            ));
+        }
+
+        properties
     }
 }
 
