@@ -257,7 +257,7 @@ PyArrow datasets may also be passed to compatible query engines, such as DuckDB_
     5
 
 Finally, you can always pass the list of file paths to an engine. For example,
-you can pass them to :py:meth:`dask.dataframe.read_parquet`:
+you can pass them to ``dask.dataframe.read_parquet``:
 
 .. code-block:: python
 
