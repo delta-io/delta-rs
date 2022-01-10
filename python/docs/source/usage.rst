@@ -31,7 +31,7 @@ To load the current version, use the constructor:
 Alternatively, if you have a data catalog you can load it by reference to a 
 database and table name. Currently only AWS Glue is supported.
 
-.. TODO: auth to data catalog?
+For AWS Glue catalog, use AWS environment variables to authenticate.
 
 .. code-block:: python
 
