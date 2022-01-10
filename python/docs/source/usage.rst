@@ -73,8 +73,10 @@ number or datetime string:
     >>> dt.load_version(1)
     >>> dt.load_with_timestamp("2021-11-04 00:05:23.283+00:00")
 
-.. TODO: What guarantees are there about being able to find versions? Are old ones
-   cleaned up? Are we able to see before the latest checkpoint?
+.. warning::
+
+    Previous table versions may not exist if they have been vacuumed, in which
+    case an exception will be thrown. See `Vacuuming tables`_ for more information.
 
 Examining a Table
 -----------------
@@ -138,9 +140,15 @@ History
 ~~~~~~~
 
 Depending on what system wrote the table, the delta table may have provenance
-information describing what operations were performed on the table and when. 
-This information is not written by all writers and different writers may use
-different schemas to encode the actions.
+information describing what operations were performed on the table, when, and 
+by whom. This information is retained for 30 days by default, unless otherwise
+specified by the table configuration ``delta.logRetentionDuration``.
+
+.. note::
+
+    This information is not written by all writers and different writers may use 
+    different schemas to encode the actions. For Spark's format, see: 
+    https://docs.delta.io/latest/delta-utility.html#history-schema
 
 To view the available history, use :meth:`DeltaTable.history`:
 
