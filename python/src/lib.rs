@@ -80,12 +80,24 @@ struct RawDeltaTableMetaData {
 #[pymethods]
 impl RawDeltaTable {
     #[new]
-    fn new(table_uri: &str, version: Option<deltalake::DeltaDataTypeLong>) -> PyResult<Self> {
-        let table = match version {
-            None => rt()?.block_on(deltalake::open_table(table_uri)),
-            Some(version) => rt()?.block_on(deltalake::open_table_with_version(table_uri, version)),
+    fn new(
+        table_uri: &str,
+        version: Option<deltalake::DeltaDataTypeLong>,
+        storage_options: Option<HashMap<String, String>>,
+    ) -> PyResult<Self> {
+        let mut table = deltalake::DeltaTableBuilder::from_uri(table_uri)
+            .map_err(PyDeltaTableError::from_raw)?;
+        if let Some(storage_options) = storage_options {
+            let backend = deltalake::get_backend_for_uri_with_options(table_uri, storage_options)
+                .map_err(PyDeltaTableError::from_storage)?;
+            table = table.with_storage_backend(backend)
         }
-        .map_err(PyDeltaTableError::from_raw)?;
+        if let Some(version) = version {
+            table = table.with_version(version)
+        }
+        let table = rt()?
+            .block_on(table.load())
+            .map_err(PyDeltaTableError::from_raw)?;
         Ok(RawDeltaTable { _table: table })
     }
 
