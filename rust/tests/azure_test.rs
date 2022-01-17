@@ -15,6 +15,7 @@ mod azure {
      *
      * remove the ignore statement below and execute tests via 'cargo test --features azure'
      */
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_azure_simple() {
@@ -50,6 +51,7 @@ mod azure {
         }));
     }
 
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_azure_delete_obj() {
