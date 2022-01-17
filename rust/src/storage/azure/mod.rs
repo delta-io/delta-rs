@@ -90,7 +90,7 @@ impl AdlsGen2Backend {
         let storage_account_client = StorageAccountClient::new_access_key(
             http_client.clone(),
             storage_account_name.to_owned(),
-            storage_account_key.to_owned(),
+            storage_account_key,
         );
         let storage_client = storage_account_client.as_storage_client();
         let container_client = storage_client.as_container_client(file_system_name.to_owned());
