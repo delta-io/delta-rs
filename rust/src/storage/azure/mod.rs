@@ -7,8 +7,8 @@
 /// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
 /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError, UriError};
-use azure_core::prelude::*;
 use azure_core::new_http_client;
+use azure_core::prelude::*;
 use azure_storage::core::clients::{AsStorageClient, StorageAccountClient};
 use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
 use azure_storage_blobs::prelude::*;
@@ -72,7 +72,10 @@ impl AdlsGen2Backend {
         })?;
 
         let data_lake_client = DataLakeClient::new(
-            StorageSharedKeyCredential::new(storage_account_name.to_owned(), storage_account_key.to_owned()),
+            StorageSharedKeyCredential::new(
+                storage_account_name.to_owned(),
+                storage_account_key.to_owned(),
+            ),
             None,
         );
 
@@ -116,9 +119,7 @@ impl AdlsGen2Backend {
 
 fn to_storage_err(err: Box<dyn Error + Sync + std::marker::Send>) -> StorageError {
     match err.downcast_ref::<azure_core::HttpError>() {
-        Some(azure_core::HttpError::StatusCode { status, body: _ })
-            if status.as_u16() == 404 =>
-        {
+        Some(azure_core::HttpError::StatusCode { status, body: _ }) if status.as_u16() == 404 => {
             StorageError::NotFound
         }
         _ => StorageError::AzureGeneric { source: err },

@@ -15,7 +15,6 @@ mod azure {
      *
      * remove the ignore statement below and execute tests via 'cargo test --features azure'
      */
-    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_azure_simple() {
@@ -64,7 +63,10 @@ mod azure {
         println!("azure_test data_lake_path = '{}'\n", data_lake_path);
         println!("azure_test blob_file_path = '{}'\n", blob_file_path);
 
-        backend.put_obj(data_lake_path, &[12, 13, 14]).await.unwrap();
+        backend
+            .put_obj(data_lake_path, &[12, 13, 14])
+            .await
+            .unwrap();
 
         let file_meta_data = backend.head_obj(blob_file_path).await.unwrap();
         assert_eq!(file_meta_data.path, *blob_file_path);
