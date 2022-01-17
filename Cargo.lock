@@ -164,7 +164,7 @@ checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 [[package]]
 name = "azure_core"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=2f2caff49b3e1ba08f430f82e16994670dddda95#2f2caff49b3e1ba08f430f82e16994670dddda95"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
 dependencies = [
  "async-trait",
  "base64",
@@ -190,7 +190,7 @@ dependencies = [
 [[package]]
 name = "azure_identity"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=2f2caff49b3e1ba08f430f82e16994670dddda95#2f2caff49b3e1ba08f430f82e16994670dddda95"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
 dependencies = [
  "async-timer",
  "async-trait",
@@ -209,7 +209,7 @@ dependencies = [
 [[package]]
 name = "azure_storage"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=2f2caff49b3e1ba08f430f82e16994670dddda95#2f2caff49b3e1ba08f430f82e16994670dddda95"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -220,7 +220,6 @@ dependencies = [
  "futures",
  "http",
  "log",
- "md5",
  "once_cell",
  "ring",
  "serde",
@@ -228,6 +227,53 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "thiserror",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "azure_storage_blobs"
+version = "0.1.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
+dependencies = [
+ "RustyXML",
+ "azure_core",
+ "azure_storage",
+ "base64",
+ "bytes",
+ "chrono",
+ "futures",
+ "http",
+ "log",
+ "md5",
+ "serde",
+ "serde-xml-rs",
+ "serde_derive",
+ "serde_json",
+ "thiserror",
+ "url",
+ "uuid",
+]
+
+[[package]]
+name = "azure_storage_datalake"
+version = "0.1.0"
+source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
+dependencies = [
+ "async-trait",
+ "azure_core",
+ "azure_storage",
+ "base64",
+ "bytes",
+ "chrono",
+ "futures",
+ "http",
+ "log",
+ "ring",
+ "serde",
+ "serde-xml-rs",
+ "serde_derive",
+ "serde_json",
  "url",
  "uuid",
 ]
@@ -624,6 +670,8 @@ dependencies = [
  "azure_core",
  "azure_identity",
  "azure_storage",
+ "azure_storage_blobs",
+ "azure_storage_datalake",
  "bytes",
  "cfg-if",
  "chrono",
@@ -2443,9 +2491,9 @@ dependencies = [
 
 [[package]]
 name = "serde-xml-rs"
-version = "0.4.1"
+version = "0.5.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f0bf1ba0696ccf0872866277143ff1fd14d22eec235d2b23702f95e6660f7dfa"
+checksum = "65162e9059be2f6a3421ebbb4fef3e74b7d9e7c60c50a0e292c6239f19f1edfa"
 dependencies = [
  "log",
  "serde",

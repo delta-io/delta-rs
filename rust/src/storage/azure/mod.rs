@@ -8,9 +8,11 @@
 /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError, UriError};
 use azure_core::prelude::*;
-use azure_storage::blob::prelude::*;
+use azure_core::new_http_client;
 use azure_storage::core::clients::{AsStorageClient, StorageAccountClient};
-use azure_storage::data_lake::prelude::*;
+use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
+use azure_storage_blobs::prelude::*;
+use azure_storage_datalake::prelude::*;
 use futures::stream::Stream;
 use log::debug;
 use std::env;
@@ -69,31 +71,25 @@ impl AdlsGen2Backend {
             StorageError::AzureConfig("AZURE_STORAGE_ACCOUNT_KEY must be set".to_string())
         })?;
 
-        let http_client = new_http_client();
-
-        // TODO: The storage_account_client should go away long term in favor of creating a data lake client directly
-        // See: https://github.com/Azure/azure-sdk-for-rust/issues/490
-        let storage_account_client = StorageAccountClient::new_access_key(
-            http_client.clone(),
-            storage_account_name.to_owned(),
-            storage_account_key.to_owned(),
-        );
-        let storage_client = storage_account_client.as_storage_client();
-
         let data_lake_client = DataLakeClient::new(
-            storage_client.clone(),
-            storage_account_name.to_owned(),
-            // TODO: THIS WILL CHANGE TO ACCESS KEY SOON. LET'S PRETEND IT ALREADY HAS
-            storage_account_key,
+            StorageSharedKeyCredential::new(storage_account_name.to_owned(), storage_account_key.to_owned()),
             None,
         );
 
         let file_system_client =
             data_lake_client.into_file_system_client(file_system_name.to_owned());
 
-        // TODO: The container_client should go away in favor of using data_lake_client once all required methods are implemented in DataLakeClient
+        // TODO: The container_client should go away in favor of using DirectoryClient and FileClient
         // See: https://github.com/Azure/azure-sdk-for-rust/issues/496
+        // See: https://github.com/Azure/azure-sdk-for-rust/pull/610
         // Missing: get_file_properties, read_file, list_directory
+        let http_client = new_http_client();
+        let storage_account_client = StorageAccountClient::new_access_key(
+            http_client.clone(),
+            storage_account_name.to_owned(),
+            storage_account_key.to_owned(),
+        );
+        let storage_client = storage_account_client.as_storage_client();
         let container_client = storage_client.as_container_client(file_system_name.to_owned());
 
         Ok(Self {
@@ -120,7 +116,7 @@ impl AdlsGen2Backend {
 
 fn to_storage_err(err: Box<dyn Error + Sync + std::marker::Send>) -> StorageError {
     match err.downcast_ref::<azure_core::HttpError>() {
-        Some(azure_core::HttpError::ErrorStatusCode { status, body: _ })
+        Some(azure_core::HttpError::StatusCode { status, body: _ })
             if status.as_u16() == 404 =>
         {
             StorageError::NotFound
@@ -215,8 +211,8 @@ impl StorageBackend for AdlsGen2Backend {
     }
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
-        let obj = parse_uri(path)?.into_adlsgen2_object()?;
-        self.validate_container(&obj)?;
+        // TODO: remove
+        println!("put_obj path = '{}'\n", path);
 
         let data = bytes::Bytes::from(obj_bytes.to_owned()); // TODO: Review obj_bytes.to_owned()
         let length = data.len() as i64;
@@ -252,11 +248,6 @@ impl StorageBackend for AdlsGen2Backend {
     }
 
     async fn rename_obj_noreplace(&self, src: &str, dst: &str) -> Result<(), StorageError> {
-        let src_obj = parse_uri(src)?.into_adlsgen2_object()?;
-        self.validate_container(&src_obj)?;
-        let dst_obj = parse_uri(dst)?.into_adlsgen2_object()?;
-        self.validate_container(&dst_obj)?;
-
         self.file_system_client
             .rename_file_if_not_exists(Context::default(), src, dst)
             .await
@@ -266,9 +257,6 @@ impl StorageBackend for AdlsGen2Backend {
     }
 
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
-        let obj = parse_uri(path)?.into_adlsgen2_object()?;
-        self.validate_container(&obj)?;
-
         self.file_system_client
             .delete_file(Context::default(), path, FileDeleteOptions::default())
             .await

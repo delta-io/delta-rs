@@ -7,11 +7,11 @@ mod azure {
     /*
      * The storage account to run this test must be provided by the developer and test are executed locally.
      *
-     * To prepare test execution, make sure a container / file system with the name "simple" exists within the account
+     * To prepare test execution, make sure a file system with the name "simple" exists within the account
      * and upload the contents of ./rust/tests/data/simple_table into that file system.
      *
      * Set the environment variables used for authentication as outlined in rust/src/storage/azure/mod.rs
-     * Also set AZURE_STORAGE_ACCOUNT for setting up the test.
+     * Also set AZURE_STORAGE_ACCOUNT_NAME for setting up the test.
      *
      * remove the ignore statement below and execute tests via 'cargo test --features azure'
      */
@@ -19,7 +19,7 @@ mod azure {
     #[tokio::test]
     #[serial]
     async fn test_azure_simple() {
-        let account = std::env::var("AZURE_STORAGE_ACCOUNT").unwrap();
+        let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
         // https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri
         let table = deltalake::open_table(
             format!("abfss://simple@{}.dfs.core.windows.net/", account).as_str(),
@@ -51,25 +51,27 @@ mod azure {
         }));
     }
 
-    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_azure_delete_obj() {
-        let account = std::env::var("AZURE_STORAGE_ACCOUNT").unwrap();
+        let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
         let base_path = &format!("abfss://simple@{}.dfs.core.windows.net/", account);
         let backend = deltalake::get_backend_for_uri(base_path).unwrap();
 
-        let file_path = &format!(
-            "{}test_azure_delete_obj-{}.txt",
-            base_path,
-            Utc::now().timestamp()
-        );
-        backend.put_obj(file_path, &[12, 13, 14]).await.unwrap();
-        let file_meta_data = backend.head_obj(file_path).await.unwrap();
-        assert_eq!(file_meta_data.path, *file_path);
+        let ts = Utc::now().timestamp();
+        let data_lake_path = &format!("test_azure_delete_obj-{}.txt", ts);
+        let blob_file_path = &format!("{}test_azure_delete_obj-{}.txt", base_path, ts);
+        println!("azure_test data_lake_path = '{}'\n", data_lake_path);
+        println!("azure_test blob_file_path = '{}'\n", blob_file_path);
 
-        backend.delete_obj(file_path).await.unwrap();
-        let head_err = backend.head_obj(file_path).await.err().unwrap();
+        backend.put_obj(data_lake_path, &[12, 13, 14]).await.unwrap();
+
+        let file_meta_data = backend.head_obj(blob_file_path).await.unwrap();
+        assert_eq!(file_meta_data.path, *blob_file_path);
+
+        backend.delete_obj(data_lake_path).await.unwrap();
+
+        let head_err = backend.head_obj(blob_file_path).await.err().unwrap();
         assert!(matches!(head_err, StorageError::NotFound));
     }
 }

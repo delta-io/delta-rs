@@ -441,7 +441,7 @@ impl From<std::io::Error> for StorageError {
 impl From<AzureHttpError> for StorageError {
     fn from(error: AzureHttpError) -> Self {
         match error {
-            AzureHttpError::ErrorStatusCode { status, body: _ } if status.as_u16() == 404 => {
+            AzureHttpError::StatusCode { status, body: _ } if status.as_u16() == 404 => {
                 StorageError::NotFound
             }
             _ => StorageError::Azure { source: error },
