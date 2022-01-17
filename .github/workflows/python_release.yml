@@ -31,6 +31,7 @@ jobs:
       matrix:
         os:
           - macOS-10.15
+          - macOS-11
           - windows-2019
         include:
           - target: x86_64-apple-darwin

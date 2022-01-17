@@ -3,6 +3,8 @@
 extern crate pyo3;
 
 use chrono::{DateTime, FixedOffset, Utc};
+use deltalake::action::Stats;
+use deltalake::action::{ColumnCountStat, ColumnValueStat};
 use deltalake::arrow::datatypes::Schema as ArrowSchema;
 use deltalake::partitions::PartitionFilter;
 use deltalake::storage;
@@ -12,6 +14,7 @@ use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple, PyType};
 use std::collections::HashMap;
+use std::collections::HashSet;
 use std::convert::TryFrom;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
@@ -38,10 +41,7 @@ impl PyDeltaTableError {
     }
 
     fn from_chrono(err: chrono::ParseError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(format!(
-            "Parse date and time string failed: {}",
-            err.to_string()
-        ))
+        PyDeltaTableError::new_err(format!("Parse date and time string failed: {}", err))
     }
 }
 
@@ -183,7 +183,7 @@ impl RawDeltaTable {
     }
 
     pub fn file_uris(&self) -> PyResult<Vec<String>> {
-        Ok(self._table.get_file_uris())
+        Ok(self._table.get_file_uris().collect())
     }
 
     pub fn schema_json(&self) -> PyResult<String> {
@@ -230,6 +230,116 @@ impl RawDeltaTable {
         rt()?
             .block_on(self._table.update_incremental())
             .map_err(PyDeltaTableError::from_raw)
+    }
+
+    pub fn dataset_partitions<'py>(
+        &mut self,
+        py: Python<'py>,
+        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+    ) -> PyResult<Vec<(String, Option<&'py PyAny>)>> {
+        let path_set = match partition_filters {
+            Some(filters) => Some(HashSet::<_>::from_iter(
+                self.files_by_partitions(filters)?.iter().cloned(),
+            )),
+            None => None,
+        };
+
+        self._table
+            .get_file_uris()
+            .zip(self._table.get_partition_values())
+            .zip(self._table.get_stats())
+            .filter(|((path, _), _)| match &path_set {
+                Some(path_set) => path_set.contains(path),
+                None => true,
+            })
+            .map(|((path, partition_values), stats)| {
+                let stats = stats.map_err(PyDeltaTableError::from_raw)?;
+                let expression = filestats_to_expression(py, partition_values, stats)?;
+                Ok((path, expression))
+            })
+            .collect()
+    }
+}
+
+fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
+    match value {
+        serde_json::Value::Null => py.None(),
+        serde_json::Value::Bool(val) => val.to_object(py),
+        serde_json::Value::Number(val) => {
+            if val.is_f64() {
+                val.as_f64().expect("not an f64").to_object(py)
+            } else if val.is_i64() {
+                val.as_i64().expect("not an i64").to_object(py)
+            } else {
+                val.as_u64().expect("not an u64").to_object(py)
+            }
+        }
+        serde_json::Value::String(val) => val.to_object(py),
+        _ => py.None(),
+    }
+}
+
+/// Create expression that file statistics guarantee to be true.
+///
+/// PyArrow uses this expression to determine which Dataset fragments may be
+/// skipped during a scan.
+fn filestats_to_expression<'py>(
+    py: Python<'py>,
+    partitions_values: &HashMap<String, Option<String>>,
+    stats: Option<Stats>,
+) -> PyResult<Option<&'py PyAny>> {
+    let ds = PyModule::import(py, "pyarrow.dataset")?;
+    let field = ds.getattr("field")?;
+    let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
+
+    for (column, value) in partitions_values.iter() {
+        if let Some(value) = value {
+            expressions.push(
+                field
+                    .call1((column,))?
+                    .call_method1("__eq__", (value.to_object(py),)),
+            );
+        }
+    }
+
+    if let Some(stats) = stats {
+        for (column, minimum) in stats.min_values.iter().filter_map(|(k, v)| match v {
+            ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
+            // TODO(wjones127): Handle nested field statistics.
+            // Blocked on https://issues.apache.org/jira/browse/ARROW-11259
+            _ => None,
+        }) {
+            expressions.push(field.call1((column,))?.call_method1("__ge__", (minimum,)));
+        }
+
+        for (column, maximum) in stats.max_values.iter().filter_map(|(k, v)| match v {
+            ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
+            _ => None,
+        }) {
+            expressions.push(field.call1((column,))?.call_method1("__le__", (maximum,)));
+        }
+
+        for (column, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
+            ColumnCountStat::Value(val) => Some((k, val)),
+            _ => None,
+        }) {
+            if *null_count == stats.num_records {
+                expressions.push(field.call1((column.clone(),))?.call_method0("is_null"));
+            }
+
+            if *null_count == 0 {
+                expressions.push(field.call1((column.clone(),))?.call_method0("is_valid"));
+            }
+        }
+    }
+
+    if expressions.is_empty() {
+        Ok(None)
+    } else {
+        expressions
+            .into_iter()
+            .reduce(|accum, item| accum?.getattr("__and__")?.call1((item?,)))
+            .transpose()
     }
 }
 

@@ -137,12 +137,11 @@ async fn read_delta_8_0_table_without_version() {
             "part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet"
         ]
     );
-    assert_eq!(table.get_stats().len(), 2);
+    assert_eq!(table.get_stats().count(), 2);
 
     assert_eq!(
         table
             .get_stats()
-            .into_iter()
             .map(|x| x.unwrap().unwrap().num_records)
             .sum::<i64>(),
         4
@@ -151,7 +150,6 @@ async fn read_delta_8_0_table_without_version() {
     assert_eq!(
         table
             .get_stats()
-            .into_iter()
             .map(|x| x.unwrap().unwrap().null_count["value"].as_value().unwrap())
             .collect::<Vec<i64>>(),
         vec![0, 0]
