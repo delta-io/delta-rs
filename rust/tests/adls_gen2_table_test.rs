@@ -1,5 +1,5 @@
 #[cfg(feature = "azure")]
-mod azure {
+mod adls_gen2_table {
     use serial_test::serial;
 
     /*
