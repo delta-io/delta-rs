@@ -16,7 +16,7 @@ mod adls_gen2_table {
     #[ignore]
     #[tokio::test]
     #[serial]
-    async fn test_azure_simple() {
+    async fn read_simple_table() {
         let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
         // https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri
         let table = deltalake::open_table(
