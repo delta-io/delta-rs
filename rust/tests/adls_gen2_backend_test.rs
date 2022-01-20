@@ -10,7 +10,9 @@ mod adls_gen2_backend {
      * Set the environment variables used for authentication as outlined in rust/src/storage/azure/mod.rs
      * Also set AZURE_STORAGE_ACCOUNT_NAME for setting up the test.
      *
-     * remove the ignore statement below and execute tests via 'cargo test --features azure'
+     * remove the ignore statement below and execute...
+     * via 'cargo test --features azure' or
+     * via 'cargo test --features azure -p deltalake --test adls_gen2_backend_test -- --nocapture'
      */
     #[ignore]
     #[tokio::test]
