@@ -1,7 +1,5 @@
 #[cfg(feature = "azure")]
 mod azure {
-    use chrono::Utc;
-    use deltalake::StorageError;
     use serial_test::serial;
 
     /*
@@ -49,33 +47,5 @@ mod azure {
             data_change: true,
             ..Default::default()
         }));
-    }
-
-    #[ignore]
-    #[tokio::test]
-    #[serial]
-    async fn test_azure_delete_obj() {
-        let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
-        let base_path = &format!("abfss://simple@{}.dfs.core.windows.net/", account);
-        let backend = deltalake::get_backend_for_uri(base_path).unwrap();
-
-        let ts = Utc::now().timestamp();
-        let data_lake_path = &format!("test_azure_delete_obj-{}.txt", ts);
-        let blob_file_path = &format!("{}test_azure_delete_obj-{}.txt", base_path, ts);
-        println!("azure_test data_lake_path = '{}'\n", data_lake_path);
-        println!("azure_test blob_file_path = '{}'\n", blob_file_path);
-
-        backend
-            .put_obj(data_lake_path, &[12, 13, 14])
-            .await
-            .unwrap();
-
-        let file_meta_data = backend.head_obj(blob_file_path).await.unwrap();
-        assert_eq!(file_meta_data.path, *blob_file_path);
-
-        backend.delete_obj(data_lake_path).await.unwrap();
-
-        let head_err = backend.head_obj(blob_file_path).await.err().unwrap();
-        assert!(matches!(head_err, StorageError::NotFound));
     }
 }
