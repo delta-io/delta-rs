@@ -28,6 +28,14 @@ To load the current version, use the constructor:
 
     >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0")
 
+Depending on your storage backend, you could use the ``storage_options`` parameter to provide some configuration.
+Currently only AWS S3 is supported.
+
+.. code-block:: python
+
+    >>> storage_options = {"AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY":"THE_AWS_SECRET_ACCESS_KEY"}
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0", storage_options=storage_options)
+
 Alternatively, if you have a data catalog you can load it by reference to a 
 database and table name. Currently only AWS Glue is supported.
 
