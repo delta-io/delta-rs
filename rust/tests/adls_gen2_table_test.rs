@@ -1,6 +1,12 @@
 #[cfg(feature = "azure")]
 mod adls_gen2_table {
+    use deltalake::{
+        action, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema, SchemaDataType,
+        SchemaField,
+    };
+    use serde_json::{Map, Value};
     use serial_test::serial;
+    use std::collections::HashMap;
 
     /*
      * The storage account to run this test must be provided by the developer and test are executed locally.
@@ -47,5 +53,61 @@ mod adls_gen2_table {
             ..Default::default()
         };
         assert!(tombstones.contains(&remove));
+    }
+
+    // Note: this test fails if the table already exists
+    #[ignore]
+    #[tokio::test]
+    #[serial]
+    async fn create_simple_table() {
+        // Setup
+        let test_schema = Schema::new(vec![
+            SchemaField::new(
+                "Id".to_string(),
+                SchemaDataType::primitive("integer".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "Name".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+        ]);
+
+        let delta_md = DeltaTableMetaData::new(
+            Some("Test Table Create".to_string()),
+            Some("This table is made to test the create function for a DeltaTable".to_string()),
+            None,
+            test_schema,
+            vec![],
+            HashMap::new(),
+        );
+
+        let protocol = action::Protocol {
+            min_reader_version: 1,
+            min_writer_version: 2,
+        };
+
+        let account = "thovollazurerustsdk";
+        let file_system = "fs-create-simple-table";
+        let table_uri = &format!("dl://{}/{}/", account, file_system);
+        let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
+        let mut dt = DeltaTable::new(table_uri, backend, DeltaTableConfig::default()).unwrap();
+
+        let mut commit_info = Map::<String, Value>::new();
+        commit_info.insert(
+            "operation".to_string(),
+            serde_json::Value::String("CREATE TABLE".to_string()),
+        );
+        commit_info.insert(
+            "userName".to_string(),
+            serde_json::Value::String("test user".to_string()),
+        );
+        // Action
+        dt.create(delta_md.clone(), protocol.clone(), Some(commit_info))
+            .await
+            .unwrap();
     }
 }
