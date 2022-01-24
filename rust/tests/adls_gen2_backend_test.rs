@@ -14,7 +14,7 @@ mod adls_gen2_backend {
      * via 'cargo test --features azure' or
      * via 'cargo test --features azure -p deltalake --test adls_gen2_backend_test -- --nocapture'
      */
-    // #[ignore]
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_adls_gen2_backend_put_and_delete_obj_with_dir() {
