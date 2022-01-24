@@ -20,12 +20,9 @@ mod adls_gen2_table {
     #[serial]
     async fn read_simple_table() {
         let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
-        // https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri
-        let table = deltalake::open_table(
-            format!("abfss://simple@{}.dfs.core.windows.net/", account).as_str(),
-        )
-        .await
-        .unwrap();
+        let table = deltalake::open_table(format!("dl://{}/simple/", account).as_str())
+            .await
+            .unwrap();
 
         assert_eq!(table.version, 4);
         assert_eq!(table.get_min_writer_version(), 2);
