@@ -56,7 +56,7 @@ mod adls_gen2_table {
     }
 
     // Note: this test fails if the table already exists
-    #[ignore]
+    // #[ignore]
     #[tokio::test]
     #[serial]
     async fn create_simple_table() {
@@ -90,7 +90,7 @@ mod adls_gen2_table {
             min_writer_version: 2,
         };
 
-        let account = "thovollazurerustsdk";
+        let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
         let file_system = "fs-create-simple-table";
         let table_uri = &format!("dl://{}/{}/", account, file_system);
         let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
