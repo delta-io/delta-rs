@@ -34,12 +34,12 @@ pub struct AdlsGen2Object<'a> {
 
 impl<'a> fmt::Display for AdlsGen2Object<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // This URI syntax is documented at
-        // https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri
+        // This URI syntax is an invention of delta-rs.
+        // ABFS URIs should not be used since delta-rs doesn't use the Hadoop ABFS driver.
         write!(
             f,
-            "abfss://{}@{}.dfs.core.windows.net/{}",
-            self.file_system, self.account_name, self.path
+            "dl://{}/{}/{}",
+            self.account_name, self.file_system, self.path
         )
     }
 }
@@ -212,21 +212,22 @@ impl StorageBackend for AdlsGen2Backend {
     }
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
-        // TODO: remove
-        println!("put_obj path = '{}'\n", path);
+        let obj = parse_uri(path)?.into_adlsgen2_object()?;
+        self.validate_container(&obj)?;
 
         let data = bytes::Bytes::from(obj_bytes.to_owned()); // TODO: Review obj_bytes.to_owned()
         let length = data.len() as i64;
 
+        // TODO: Consider using Blob API again since it's just 1 REST call instead of 3
         self.file_system_client
-            .create_file(Context::default(), path, FileCreateOptions::default())
+            .create_file(Context::default(), obj.path, FileCreateOptions::default())
             .await
             .map_err(to_storage_err2)?;
 
         self.file_system_client
             .append_to_file(
                 Context::default(),
-                path,
+                obj.path,
                 data,
                 0,
                 FileAppendOptions::default(),
@@ -237,7 +238,7 @@ impl StorageBackend for AdlsGen2Backend {
         self.file_system_client
             .flush_file(
                 Context::default(),
-                path,
+                obj.path,
                 length,
                 true,
                 FileFlushOptions::default(),
@@ -249,8 +250,14 @@ impl StorageBackend for AdlsGen2Backend {
     }
 
     async fn rename_obj_noreplace(&self, src: &str, dst: &str) -> Result<(), StorageError> {
+        let src_obj = parse_uri(src)?.into_adlsgen2_object()?;
+        self.validate_container(&src_obj)?;
+
+        let dst_obj = parse_uri(dst)?.into_adlsgen2_object()?;
+        self.validate_container(&dst_obj)?;
+
         self.file_system_client
-            .rename_file_if_not_exists(Context::default(), src, dst)
+            .rename_file_if_not_exists(Context::default(), src_obj.path, dst_obj.path)
             .await
             .map_err(to_storage_err2)?;
 
@@ -258,8 +265,11 @@ impl StorageBackend for AdlsGen2Backend {
     }
 
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
+        let obj = parse_uri(path)?.into_adlsgen2_object()?;
+        self.validate_container(&obj)?;
+
         self.file_system_client
-            .delete_file(Context::default(), path, FileDeleteOptions::default())
+            .delete_file(Context::default(), obj.path, FileDeleteOptions::default())
             .await
             .map_err(to_storage_err2)?;
 
@@ -273,14 +283,14 @@ mod tests {
 
     #[test]
     fn parse_azure_object_uri() {
-        let uri = parse_uri("abfss://fs@sa.dfs.core.windows.net/foo").unwrap();
-        assert_eq!(uri.path(), "foo");
+        let uri = parse_uri("dl://my_account_name/my_file_system_name/my_path").unwrap();
+        assert_eq!(uri.path(), "my_path");
         assert_eq!(
             uri.into_adlsgen2_object().unwrap(),
             AdlsGen2Object {
-                account_name: "sa",
-                file_system: "fs",
-                path: "foo",
+                account_name: "my_account_name",
+                file_system: "my_file_system_name",
+                path: "my_path",
             }
         );
     }

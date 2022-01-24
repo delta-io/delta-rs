@@ -50,8 +50,7 @@ pub enum UriError {
     #[error("Expected GCS URI, found: {0}")]
     ExpectedGCSUri(String),
 
-    /// Error returned when an Azure URI is expected, but the URI is not an Azure file system
-    /// (abfs\[s\]) URI.
+    /// Error returned when an Azure URI is expected, but the URI is not an Azure URI.
     #[cfg(feature = "azure")]
     #[error("Expected Azure URI, found: {0}")]
     ExpectedAzureUri(String),
@@ -64,7 +63,7 @@ pub enum UriError {
     /// path.
     #[cfg(feature = "azure")]
     #[error("Object URI missing account name and path")]
-    MissingObjectAccountAndPath,
+    MissingObjectAccount,
     /// Error returned when an Azure URI is expected, but the URI is missing the account name.
     #[cfg(feature = "azure")]
     #[error("Object URI missing account name")]
@@ -232,17 +231,33 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
         }
 
         "file" => Ok(Uri::LocalPath(parts[1])),
-        "abfss" => {
+
+        // Azure Data Lake Storage Gen2
+        // This URI syntax is an invention of delta-rs.
+        // ABFS URIs should not be used since delta-rs doesn't use the Hadoop ABFS driver.
+        "dl" => {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "azure")] {
-                    // URI scheme: abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>/<file_name>
-                    let mut parts = parts[1].splitn(2, '@');
-                    let file_system = parts.next().ok_or(UriError::MissingObjectFileSystem)?;
-                    let mut parts = parts.next().map(|x| x.splitn(2, '.')).ok_or(UriError::MissingObjectAccountAndPath)?;
-                    let account_name = parts.next().ok_or(UriError::MissingObjectAccountName)?;
-                    let mut paths = parts.next().map(|x| x.splitn(2, '/')).ok_or(UriError::MissingObjectPath)?;
-                    // assume root when uri ends without `/`
-                    let path = paths.nth(1).unwrap_or("");
+                    let mut path_parts = parts[1].splitn(3, '/');
+                    let account_name = match path_parts.next() {
+                        Some(x) => x,
+                        None => {
+                            return Err(UriError::MissingObjectAccount);
+                        }
+                    };
+                    let file_system = match path_parts.next() {
+                        Some(x) => x,
+                        None => {
+                            return Err(UriError::MissingObjectFileSystem);
+                        }
+                    };
+                    let path = match path_parts.next() {
+                        Some(x) => x,
+                        None => {
+                            return Err(UriError::MissingObjectPath);
+                        }
+                    };
+
                     Ok(Uri::AdlsGen2Object(azure::AdlsGen2Object { account_name, file_system, path }))
                 } else {
                     Err(UriError::InvalidScheme(String::from(parts[0])))
