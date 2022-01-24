@@ -67,15 +67,24 @@ class Metadata:
 class DeltaTable:
     """Create a DeltaTable instance."""
 
-    def __init__(self, table_uri: str, version: Optional[int] = None):
+    def __init__(
+        self,
+        table_uri: str,
+        version: Optional[int] = None,
+        storage_options: Optional[Dict[str, str]] = None,
+    ):
         """
         Create the Delta Table from a path with an optional version.
         Multiple StorageBackends are currently supported: AWS S3, Azure Data Lake Storage Gen2, Google Cloud Storage (GCS) and local URI.
+        Depending on the storage backend used, you could provide options values using the ``storage_options`` parameter.
 
         :param table_uri: the path of the DeltaTable
         :param version: version of the DeltaTable
+        :param storage_options: a dictionary of the options to use for the storage backend
         """
-        self._table = RawDeltaTable(table_uri, version=version)
+        self._table = RawDeltaTable(
+            table_uri, version=version, storage_options=storage_options
+        )
         self._metadata = Metadata(self._table)
 
     @classmethod
@@ -275,9 +284,7 @@ class DeltaTable:
             for file, part_expression in self._table.dataset_partitions(partitions)
         ]
 
-        return FileSystemDataset(
-            fragments, self.pyarrow_schema(), format, filesystem
-        )
+        return FileSystemDataset(fragments, self.pyarrow_schema(), format, filesystem)
 
     def to_pyarrow_table(
         self,
