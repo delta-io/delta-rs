@@ -56,7 +56,7 @@ mod adls_gen2_table {
     }
 
     // Note: this test fails if the table already exists
-    // #[ignore]
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn create_simple_table() {
