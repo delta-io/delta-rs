@@ -36,6 +36,8 @@ jobs:
         include:
           - target: x86_64-apple-darwin
             os: macOS-10.15
+          - target: aarch64-apple-darwin
+            os: macOS-11
           - target: x86_64-pc-windows-msvc
             os: windows-2019
     runs-on: ${{ matrix.os }}
