@@ -17,7 +17,7 @@ mod adls_gen2_backend {
     #[ignore]
     #[tokio::test]
     #[serial]
-    async fn test_adls_gen2_backend_put_and_delete_obj() {
+    async fn test_adls_gen2_backend_put_and_delete_obj_with_dir() {
         // The AdlsGen2Backend currently uses both the Blob and Data Lake APIs. This is why the
         // paths are a bit of a mess here. This will soon be improved.
 
@@ -26,8 +26,8 @@ mod adls_gen2_backend {
         let backend = deltalake::get_backend_for_uri(base_path).unwrap();
 
         let ts = Utc::now().timestamp();
-        let data_lake_path = &format!("test_azure_delete_obj-{}.txt", ts);
-        let blob_file_path = &format!("{}test_azure_delete_obj-{}.txt", base_path, ts);
+        let data_lake_path = &format!("dir1/test_azure_delete_obj-{}.txt", ts);
+        let blob_file_path = &format!("{}dir1/test_azure_delete_obj-{}.txt", base_path, ts);
         println!("azure_test data_lake_path = '{}'\n", data_lake_path);
         println!("azure_test blob_file_path = '{}'\n", blob_file_path);
 
