@@ -25,6 +25,8 @@ enum WriterState {
     NewVersionObjectCopied,
     RenameReturned,
     LockReleased,
+    ValidateConflict,
+    ValidateSourceObjectCopy,
     Shutdown,
 }
 
@@ -40,6 +42,8 @@ enum Action {
     OldVersionObjectDelete(WriterId),
     ReleaseLock(WriterId),
     CheckRenameStatus(WriterId),
+    CheckSourceObjectDeleted(WriterId),
+    CompareSourceAndDestObjectContent(WriterId),
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -61,6 +65,7 @@ struct WriterContext {
     state: WriterState,
     lock_data: LockData,
     acquired_expired_lock: bool,
+    released_expired_lock: bool,
     rename_err: Option<RenameErr>,
     target_version: usize,
 }
@@ -106,6 +111,25 @@ impl AtomicRenameState {
             .map(|ctx| format!("{}", ctx.target_version))
             .collect::<HashSet<_>>()
     }
+
+    #[inline]
+    fn blob_store_deleted(&self, key: &str) -> bool {
+        self.blob_store_delete.iter().any(|k| k == key)
+    }
+
+    #[inline]
+    fn blob_store_get<'a, 'b>(&'b self, key: &'a str) -> Option<&'b str> {
+        if self.blob_store_deleted(key) {
+            // TODO: what if a PUT was issued after a delete?
+            return None;
+        }
+        for entry in &self.blob_store_copy {
+            if entry.dst == key {
+                return Some(entry.src.as_str());
+            }
+        }
+        None
+    }
 }
 
 #[inline]
@@ -150,6 +174,7 @@ impl Model for AtomicRenameSys {
                     },
                     rename_err: None,
                     acquired_expired_lock: false,
+                    released_expired_lock: false,
                     target_version: 0,
                 })
                 .collect(),
@@ -166,7 +191,6 @@ impl Model for AtomicRenameSys {
                 WriterState::Init | WriterState::LockFailed => {
                     actions.push(Action::TryAcquireLock(wid));
                 }
-                // begin of unsafe rename
                 WriterState::LockAcquired => {
                     if writer.acquired_expired_lock {
                         actions.push(Action::RepairObjectCheckExists(wid));
@@ -193,6 +217,7 @@ impl Model for AtomicRenameSys {
                         } // TODO: model other unrecoverable network error?
                     }
                 }
+                // begin of unsafe rename
                 WriterState::ExpiredLockUpdated => {
                     actions.push(Action::NewVersionObjectCheckExists(wid));
                 }
@@ -208,6 +233,12 @@ impl Model for AtomicRenameSys {
                 }
                 WriterState::LockReleased => {
                     actions.push(Action::CheckRenameStatus(wid));
+                }
+                WriterState::ValidateConflict => {
+                    actions.push(Action::CheckSourceObjectDeleted(wid));
+                }
+                WriterState::ValidateSourceObjectCopy => {
+                    actions.push(Action::CompareSourceAndDestObjectContent(wid));
                 }
                 // nothing to for shutdown
                 WriterState::Shutdown => {}
@@ -349,11 +380,13 @@ impl Model for AtomicRenameSys {
                             // still owner of the lock, good to release
                             state.lock = None;
                         } else {
-                            // TODO: lock already acquired by another worker
+                            // lock already acquired by another worker
+                            writer.released_expired_lock = true;
                         }
                     }
                     None => {
-                        // TODO: lock already released by another worker
+                        // lock already released by another worker
+                        writer.released_expired_lock = true;
                     }
                 }
                 writer.state = WriterState::LockReleased;
@@ -363,10 +396,24 @@ impl Model for AtomicRenameSys {
                 if let Some(re) = &writer.rename_err {
                     match re {
                         RenameErr::AlreadyExists => {
-                            // previous repair caused the version conflict, retry with a newer
-                            // version
-                            writer.target_version += 1;
-                            writer.state = WriterState::Init;
+                            if writer.released_expired_lock {
+                                // two cases that could result in version conflict while holding an
+                                // expired lock:
+                                //
+                                // 1. source object cleaned up by repair from another worker
+                                // 2. it's a valid conflict, but we pause and expired the lock
+                                //    right before issuing the HEAD object check
+                                //
+                                // Enter ValidateConflict state to distinguish these two scenarios
+                                // because they should result in different return values to the
+                                // caller
+                                writer.state = WriterState::ValidateConflict;
+                            } else {
+                                // version conflict detected while holding the lock, this means it
+                                // is valid, retry with a newer version
+                                writer.target_version += 1;
+                                writer.state = WriterState::Init;
+                            }
                         }
                         RenameErr::NotFound => {
                             // TODO: not found should be fine? old object already purged by another
@@ -380,6 +427,54 @@ impl Model for AtomicRenameSys {
                     }
                 } else {
                     writer.state = WriterState::Shutdown;
+                }
+            }
+            Action::CheckSourceObjectDeleted(wid) => {
+                let src = state.writer_ctx[wid].lock_data.src.as_str();
+                // HEAD objec to check for existence
+                if state.blob_store_deleted(src) {
+                    let mut writer = &mut state.writer_ctx[wid];
+                    // source object cleaned by up another worker's repair, it's not a real
+                    // conflict, save to assume the rename was successfull
+                    writer.state = WriterState::Shutdown;
+                } else {
+                    let mut writer = &mut state.writer_ctx[wid];
+                    // this could happen in the following two cases:
+                    // 1. conflict was valid, we paused for too long before issuing the HEAD object
+                    //    call.
+                    // 2. the other worker was in the middle of a repair, after copied src to dst,
+                    //    but before purging src.
+                    //
+                    // To distinguish between these two scenarios, we need to compare the content
+                    // between src and dst (can be optimized through comparing object checksum)
+                    // TODO: what's the chances of new commit version has the exact same content as
+                    // an old existing conflicting version?
+                    writer.state = WriterState::ValidateSourceObjectCopy;
+                }
+            }
+            Action::CompareSourceAndDestObjectContent(wid) => {
+                let dst_key = state.writer_ctx[wid].lock_data.dst.as_str();
+                let src_key = state.writer_ctx[wid].lock_data.src.as_str();
+                let dst_content = state.blob_store_get(dst_key);
+                match dst_content {
+                    Some(dst_content) => {
+                        if dst_content == src_key {
+                            let mut writer = &mut state.writer_ctx[wid];
+                            // dst and source have the same content, most likely that dst conflict was
+                            // created by a repair from another worker
+                            writer.state = WriterState::Shutdown;
+                        } else {
+                            let mut writer = &mut state.writer_ctx[wid];
+                            // dst and source are not the same, it's a valid version conflict,
+                            // signal caller to retry with next version
+                            writer.target_version += 1;
+                            writer.state = WriterState::Init;
+                        }
+                    }
+                    None => {
+                        // this should never happen. version conflict means dst must exist
+                        unreachable!();
+                    }
                 }
             }
         }
@@ -401,14 +496,18 @@ impl Model for AtomicRenameSys {
                 next_state.derive_actual_deletes()
             ));
 
+            let writer_versions = next_state.writer_versions();
             lines.push(format!(
-                "writer_versions: {:?}",
-                next_state.writer_versions()
+                "writer_versions({}): {:?}",
+                writer_versions.len(),
+                writer_versions,
             ));
 
+            let blob_store_obj_keys = next_state.blob_store_obj_keys();
             lines.push(format!(
-                "blob_store_obj_keys: {:?}",
-                next_state.blob_store_obj_keys()
+                "blob_store_obj_keys({}): {:?}",
+                blob_store_obj_keys.len(),
+                blob_store_obj_keys,
             ));
 
             lines.join("\n")
@@ -475,10 +574,6 @@ impl Model for AtomicRenameSys {
                     && writer_versions.len() >= sys.writer_cnt
                     // all versions have been written into blobl store
                     && blob_store_obj_keys.is_superset(&writer_versions)
-                    // all rename calls returned with success
-                    && state.writer_ctx.iter().all(|ctx| {
-                        ctx.rename_err.is_none()
-                    })
             }),
         ];
 
