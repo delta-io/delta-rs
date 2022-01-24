@@ -25,10 +25,7 @@ mod adls_gen2_backend {
         let ts = Utc::now().timestamp();
         let file_path = &format!("{}dir1/file-{}.txt", base_path, ts);
 
-        backend
-            .put_obj(file_path, &[12, 13, 14])
-            .await
-            .unwrap();
+        backend.put_obj(file_path, &[12, 13, 14]).await.unwrap();
 
         let file_meta_data = backend.head_obj(file_path).await.unwrap();
         assert_eq!(file_meta_data.path, *file_path);
