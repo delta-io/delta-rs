@@ -1,12 +1,15 @@
 #[cfg(feature = "azure")]
 mod adls_gen2_table {
+    use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
+    use azure_storage_datalake::prelude::DataLakeClient;
+    use chrono::Utc;
     use deltalake::{
         action, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema, SchemaDataType,
         SchemaField,
     };
-    use serde_json::{Map, Value};
     use serial_test::serial;
     use std::collections::HashMap;
+    use std::env;
 
     /*
      * The storage account to run this test must be provided by the developer and test are executed locally.
@@ -55,32 +58,40 @@ mod adls_gen2_table {
         assert!(tombstones.contains(&remove));
     }
 
-    // Note: this test fails if the table already exists
     #[ignore]
     #[tokio::test]
     #[serial]
     async fn create_simple_table() {
-        // Setup
-        let test_schema = Schema::new(vec![
-            SchemaField::new(
-                "Id".to_string(),
-                SchemaDataType::primitive("integer".to_string()),
-                true,
-                HashMap::new(),
-            ),
-            SchemaField::new(
-                "Name".to_string(),
-                SchemaDataType::primitive("string".to_string()),
-                true,
-                HashMap::new(),
-            ),
-        ]);
+        // Arrange
+        let storage_account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
+        let storage_account_key = env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
 
-        let delta_md = DeltaTableMetaData::new(
-            Some("Test Table Create".to_string()),
-            Some("This table is made to test the create function for a DeltaTable".to_string()),
+        let data_lake_client = DataLakeClient::new(
+            StorageSharedKeyCredential::new(
+                storage_account_name.to_owned(),
+                storage_account_key.to_owned(),
+            ),
             None,
-            test_schema,
+        );
+
+        // Create a new file system for test isolation
+        let file_system_name = format!("fs-create-simple-table-{}", Utc::now().timestamp());
+        let file_system_client =
+            data_lake_client.into_file_system_client(file_system_name.to_owned());
+        file_system_client.create().into_future().await.unwrap();
+
+        let schema = Schema::new(vec![SchemaField::new(
+            "Id".to_string(),
+            SchemaDataType::primitive("integer".to_string()),
+            true,
+            HashMap::new(),
+        )]);
+
+        let metadata = DeltaTableMetaData::new(
+            Some("Azure Test Table".to_string()),
+            None,
+            None,
+            schema,
             vec![],
             HashMap::new(),
         );
@@ -90,24 +101,23 @@ mod adls_gen2_table {
             min_writer_version: 2,
         };
 
-        let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
-        let file_system = "fs-create-simple-table";
-        let table_uri = &format!("adls2://{}/{}/", account, file_system);
+        let table_uri = &format!("adls2://{}/{}/", storage_account_name, file_system_name);
         let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
         let mut dt = DeltaTable::new(table_uri, backend, DeltaTableConfig::default()).unwrap();
 
-        let mut commit_info = Map::<String, Value>::new();
-        commit_info.insert(
-            "operation".to_string(),
-            serde_json::Value::String("CREATE TABLE".to_string()),
-        );
-        commit_info.insert(
-            "userName".to_string(),
-            serde_json::Value::String("test user".to_string()),
-        );
-        // Action
-        dt.create(delta_md.clone(), protocol.clone(), Some(commit_info))
+        // Act
+        dt.create(metadata.clone(), protocol.clone(), None)
             .await
             .unwrap();
+
+        // Assert
+        assert_eq!(dt.version, 0);
+        assert_eq!(dt.get_min_reader_version(), 1);
+        assert_eq!(dt.get_min_writer_version(), 2);
+        assert_eq!(dt.get_files().len(), 0);
+        assert_eq!(dt.table_uri, table_uri.trim_end_matches('/').to_string());
+
+        // Cleanup
+        file_system_client.delete().into_future().await.unwrap();
     }
 }
