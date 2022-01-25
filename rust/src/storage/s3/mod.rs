@@ -146,6 +146,12 @@ pub mod s3_storage_options {
     pub const AWS_ENDPOINT_URL: &str = "AWS_ENDPOINT_URL";
     /// The AWS region.
     pub const AWS_REGION: &str = "AWS_REGION";
+    /// The AWS_ACCESS_KEY_ID to use for S3.
+    pub const AWS_ACCESS_KEY_ID: &str = "AWS_ACCESS_KEY_ID";
+    /// The AWS_SECRET_ACCESS_ID to use for S3.
+    pub const AWS_SECRET_ACCESS_KEY: &str = "AWS_SECRET_ACCESS_KEY";
+    /// The AWS_SESSION_TOKEN to use for S3.
+    pub const AWS_SESSION_TOKEN: &str = "AWS_SESSION_TOKEN";
     /// Locking provider to use for safe atomic rename.
     /// `dynamodb` is currently the only supported locking provider.
     /// If not set, safe atomic rename is not available.
@@ -184,6 +190,9 @@ pub mod s3_storage_options {
     pub const S3_OPTS: &[&str] = &[
         AWS_ENDPOINT_URL,
         AWS_REGION,
+        AWS_ACCESS_KEY_ID,
+        AWS_SECRET_ACCESS_KEY,
+        AWS_SESSION_TOKEN,
         AWS_S3_LOCKING_PROVIDER,
         AWS_S3_ASSUME_ROLE_ARN,
         AWS_S3_ROLE_SESSION_NAME,
@@ -203,6 +212,9 @@ pub mod s3_storage_options {
 pub struct S3StorageOptions {
     _endpoint_url: Option<String>,
     region: Region,
+    aws_access_key_id: Option<String>,
+    aws_secret_access_key: Option<String>,
+    aws_session_token: Option<String>,
     locking_provider: Option<String>,
     assume_role_arn: Option<String>,
     assume_role_session_name: Option<String>,
@@ -238,6 +250,9 @@ impl S3StorageOptions {
 
         // Copy web identity values provided in options but not the environment into the environment
         // to get picked up by the `from_k8s_env` call in `get_web_identity_provider`.
+        Self::ensure_env_var(&options, s3_storage_options::AWS_ACCESS_KEY_ID);
+        Self::ensure_env_var(&options, s3_storage_options::AWS_SECRET_ACCESS_KEY);
+        Self::ensure_env_var(&options, s3_storage_options::AWS_SESSION_TOKEN);
         Self::ensure_env_var(&options, s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE);
         Self::ensure_env_var(&options, s3_storage_options::AWS_ROLE_ARN);
         Self::ensure_env_var(&options, s3_storage_options::AWS_ROLE_SESSION_NAME);
@@ -262,6 +277,12 @@ impl S3StorageOptions {
         Self {
             _endpoint_url: endpoint_url,
             region,
+            aws_access_key_id: Self::str_option(&options, s3_storage_options::AWS_ACCESS_KEY_ID),
+            aws_secret_access_key: Self::str_option(
+                &options,
+                s3_storage_options::AWS_SECRET_ACCESS_KEY,
+            ),
+            aws_session_token: Self::str_option(&options, s3_storage_options::AWS_SESSION_TOKEN),
             locking_provider: Self::str_option(
                 &options,
                 s3_storage_options::AWS_S3_LOCKING_PROVIDER,
@@ -930,6 +951,9 @@ mod tests {
                     name: "us-west-1".to_string(),
                     endpoint: "http://localhost".to_string()
                 },
+                aws_access_key_id: Some("test".to_string()),
+                aws_secret_access_key: Some("test".to_string()),
+                aws_session_token: None,
                 assume_role_arn: Some("arn:aws:iam::123456789012:role/some_role".to_string()),
                 assume_role_session_name: Some("session_name".to_string()),
                 use_web_identity: true,
@@ -965,6 +989,9 @@ mod tests {
                     name: "us-west-2".to_string(),
                     endpoint: "http://localhost:1234".to_string()
                 },
+                aws_access_key_id: Some("test".to_string()),
+                aws_secret_access_key: Some("test".to_string()),
+                aws_session_token: None,
                 assume_role_arn: Some("arn:aws:iam::123456789012:role/another_role".to_string()),
                 assume_role_session_name: Some("another_session_name".to_string()),
                 use_web_identity: true,
@@ -1014,6 +1041,9 @@ mod tests {
                     name: "us-west-2".to_string(),
                     endpoint: "http://localhost".to_string()
                 },
+                aws_access_key_id: Some("test".to_string()),
+                aws_secret_access_key: Some("test".to_string()),
+                aws_session_token: None,
                 assume_role_arn: Some("arn:aws:iam::123456789012:role/some_role".to_string()),
                 assume_role_session_name: Some("session_name".to_string()),
                 use_web_identity: true,
