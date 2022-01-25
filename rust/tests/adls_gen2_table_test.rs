@@ -118,9 +118,9 @@ mod adls_gen2_table {
         assert_eq!(table_uri.trim_end_matches('/').to_string(), dt.table_uri);
 
         // Act 2
-        let mut tx1 = dt.create_transaction(None);
-        tx1.add_actions(tx1_actions());
-        let version = tx1.commit(None).await.unwrap();
+        let mut tx = dt.create_transaction(None);
+        tx.add_actions(tx_actions());
+        let version = tx.commit(None).await.unwrap();
 
         // Assert 2
         assert_eq!(1, version);
@@ -131,7 +131,7 @@ mod adls_gen2_table {
         file_system_client.delete().into_future().await.unwrap();
     }
 
-    fn tx1_actions() -> Vec<action::Action> {
+    fn tx_actions() -> Vec<action::Action> {
         vec![
             action::Action::add(action::Add {
                 path: String::from(
