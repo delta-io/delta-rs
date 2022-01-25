@@ -61,7 +61,7 @@ mod adls_gen2_table {
     #[ignore]
     #[tokio::test]
     #[serial]
-    async fn create_simple_table() {
+    async fn create_table_and_commit() {
         // Arrange
         let storage_account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
         let storage_account_key = env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
@@ -75,7 +75,7 @@ mod adls_gen2_table {
         );
 
         // Create a new file system for test isolation
-        let file_system_name = format!("fs-create-simple-table-{}", Utc::now().timestamp());
+        let file_system_name = format!("test-delta-table-{}", Utc::now().timestamp());
         let file_system_client =
             data_lake_client.into_file_system_client(file_system_name.to_owned());
         file_system_client.create().into_future().await.unwrap();
@@ -105,19 +105,60 @@ mod adls_gen2_table {
         let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
         let mut dt = DeltaTable::new(table_uri, backend, DeltaTableConfig::default()).unwrap();
 
-        // Act
+        // Act 1
         dt.create(metadata.clone(), protocol.clone(), None)
             .await
             .unwrap();
 
-        // Assert
-        assert_eq!(dt.version, 0);
-        assert_eq!(dt.get_min_reader_version(), 1);
-        assert_eq!(dt.get_min_writer_version(), 2);
-        assert_eq!(dt.get_files().len(), 0);
-        assert_eq!(dt.table_uri, table_uri.trim_end_matches('/').to_string());
+        // Assert 1
+        assert_eq!(0, dt.version);
+        assert_eq!(1, dt.get_min_reader_version());
+        assert_eq!(2, dt.get_min_writer_version());
+        assert_eq!(0, dt.get_files().len());
+        assert_eq!(table_uri.trim_end_matches('/').to_string(), dt.table_uri);
+
+        // Act 2
+        let mut tx1 = dt.create_transaction(None);
+        tx1.add_actions(tx1_actions());
+        let version = tx1.commit(None).await.unwrap();
+
+        // Assert 2
+        assert_eq!(1, version);
+        assert_eq!(version, dt.version);
+        assert_eq!(2, dt.get_files().len());
 
         // Cleanup
         file_system_client.delete().into_future().await.unwrap();
+    }
+
+    fn tx1_actions() -> Vec<action::Action> {
+        vec![
+            action::Action::add(action::Add {
+                path: String::from(
+                    "non-existent-file1.snappy.parquet",
+                ),
+                size: 396,
+                partition_values: HashMap::new(),
+                partition_values_parsed: None,
+                modification_time: 1564524294000,
+                data_change: true,
+                stats: None,
+                stats_parsed: None,
+                tags: None,
+            }),
+            action::Action::add(action::Add {
+                path: String::from(
+                    "non-existent-file2.snappy.parquet",
+                ),
+                size: 400,
+                partition_values: HashMap::new(),
+                partition_values_parsed: None,
+                modification_time: 1564524294000,
+                data_change: true,
+                stats: None,
+                stats_parsed: None,
+                tags: None,
+            }),
+        ]
     }
 }
