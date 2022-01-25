@@ -38,7 +38,7 @@ impl<'a> fmt::Display for AdlsGen2Object<'a> {
         // ABFS URIs should not be used since delta-rs doesn't use the Hadoop ABFS driver.
         write!(
             f,
-            "dl://{}/{}/{}",
+            "adls2://{}/{}/{}",
             self.account_name, self.file_system, self.path
         )
     }
@@ -283,7 +283,7 @@ mod tests {
 
     #[test]
     fn parse_azure_object_uri() {
-        let uri = parse_uri("dl://my_account_name/my_file_system_name/my_path").unwrap();
+        let uri = parse_uri("adls2://my_account_name/my_file_system_name/my_path").unwrap();
         assert_eq!(uri.path(), "my_path");
         assert_eq!(
             uri.into_adlsgen2_object().unwrap(),

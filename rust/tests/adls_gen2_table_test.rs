@@ -26,7 +26,7 @@ mod adls_gen2_table {
     #[serial]
     async fn read_simple_table() {
         let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
-        let table = deltalake::open_table(format!("dl://{}/simple/", account).as_str())
+        let table = deltalake::open_table(format!("adls2://{}/simple/", account).as_str())
             .await
             .unwrap();
 
@@ -92,7 +92,7 @@ mod adls_gen2_table {
 
         let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
         let file_system = "fs-create-simple-table";
-        let table_uri = &format!("dl://{}/{}/", account, file_system);
+        let table_uri = &format!("adls2://{}/{}/", account, file_system);
         let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
         let mut dt = DeltaTable::new(table_uri, backend, DeltaTableConfig::default()).unwrap();
 

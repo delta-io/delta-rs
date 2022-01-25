@@ -19,7 +19,7 @@ mod adls_gen2_backend {
     #[serial]
     async fn test_adls_gen2_backend_put_and_delete_obj_with_dir() {
         let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
-        let base_path = &format!("dl://{}/fs-put-and-delete-obj-with-dir/", account);
+        let base_path = &format!("adls2://{}/fs-put-and-delete-obj-with-dir/", account);
         let backend = deltalake::get_backend_for_uri(base_path).unwrap();
 
         let ts = Utc::now().timestamp();

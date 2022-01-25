@@ -235,7 +235,7 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
         // Azure Data Lake Storage Gen2
         // This URI syntax is an invention of delta-rs.
         // ABFS URIs should not be used since delta-rs doesn't use the Hadoop ABFS driver.
-        "dl" => {
+        "adls2" => {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "azure")] {
                     let mut path_parts = parts[1].splitn(3, '/');
