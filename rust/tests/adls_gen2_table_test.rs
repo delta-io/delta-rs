@@ -134,9 +134,7 @@ mod adls_gen2_table {
     fn tx_actions() -> Vec<action::Action> {
         vec![
             action::Action::add(action::Add {
-                path: String::from(
-                    "non-existent-file1.snappy.parquet",
-                ),
+                path: String::from("non-existent-file1.snappy.parquet"),
                 size: 396,
                 partition_values: HashMap::new(),
                 partition_values_parsed: None,
@@ -147,9 +145,7 @@ mod adls_gen2_table {
                 tags: None,
             }),
             action::Action::add(action::Add {
-                path: String::from(
-                    "non-existent-file2.snappy.parquet",
-                ),
+                path: String::from("non-existent-file2.snappy.parquet"),
                 size: 400,
                 partition_values: HashMap::new(),
                 partition_values_parsed: None,
