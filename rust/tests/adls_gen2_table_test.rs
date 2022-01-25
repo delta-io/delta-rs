@@ -80,30 +80,10 @@ mod adls_gen2_table {
             data_lake_client.into_file_system_client(file_system_name.to_owned());
         file_system_client.create().into_future().await.unwrap();
 
-        let schema = Schema::new(vec![SchemaField::new(
-            "Id".to_string(),
-            SchemaDataType::primitive("integer".to_string()),
-            true,
-            HashMap::new(),
-        )]);
-
-        let metadata = DeltaTableMetaData::new(
-            Some("Azure Test Table".to_string()),
-            None,
-            None,
-            schema,
-            vec![],
-            HashMap::new(),
-        );
-
-        let protocol = action::Protocol {
-            min_reader_version: 1,
-            min_writer_version: 2,
-        };
-
         let table_uri = &format!("adls2://{}/{}/", storage_account_name, file_system_name);
         let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
         let mut dt = DeltaTable::new(table_uri, backend, DeltaTableConfig::default()).unwrap();
+        let (metadata, protocol) = table_info();
 
         // Act 1
         dt.create(metadata.clone(), protocol.clone(), None)
@@ -129,6 +109,31 @@ mod adls_gen2_table {
 
         // Cleanup
         file_system_client.delete().into_future().await.unwrap();
+    }
+
+    fn table_info() -> (DeltaTableMetaData, action::Protocol) {
+        let schema = Schema::new(vec![SchemaField::new(
+            "Id".to_string(),
+            SchemaDataType::primitive("integer".to_string()),
+            true,
+            HashMap::new(),
+        )]);
+
+        let metadata = DeltaTableMetaData::new(
+            Some("Azure Test Table".to_string()),
+            None,
+            None,
+            schema,
+            vec![],
+            HashMap::new(),
+        );
+
+        let protocol = action::Protocol {
+            min_reader_version: 1,
+            min_writer_version: 2,
+        };
+
+        (metadata, protocol)
     }
 
     fn tx_actions() -> Vec<action::Action> {
