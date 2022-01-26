@@ -1,4 +1,11 @@
 #[cfg(feature = "azure")]
+/// An Azure Data Lake Gen2 Storage Account is required to run these tests and must be provided by
+/// the developer. Because of this requirement, the tests cannot run in CI and are therefore marked
+/// #[ignore]. As a result, the developer must execute these tests on their machine.
+/// In order to execute tests, remove the desired #[ignore] below and execute via:
+/// 'cargo test --features azure -p deltalake --test adls_gen2_table_test -- --nocapture'
+/// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
+/// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
 mod adls_gen2_table {
     use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
     use azure_storage_datalake::prelude::DataLakeClient;
@@ -12,17 +19,9 @@ mod adls_gen2_table {
     use std::env;
 
     /*
-     * The storage account to run this test must be provided by the developer and test are executed locally.
-     *
-     * To prepare test execution, make sure a file system with the name "simple" exists within the account
-     * and upload the contents of ./rust/tests/data/simple_table into that file system.
-     *
-     * Set the environment variables used for authentication as outlined in rust/src/storage/azure/mod.rs
-     * Also set AZURE_STORAGE_ACCOUNT_NAME for setting up the test.
-     *
-     * remove the ignore statement below and execute...
-     * via 'cargo test --features azure' or
-     * via 'cargo test --features azure -p deltalake --test adls_gen2_table_test -- --nocapture'
+     * This test requires that a file system with the name "simple" exists within the
+     * Storage Account and that the contents of rust/tests/data/simple_table are uploaded into
+     * that file system.
      */
     #[ignore]
     #[tokio::test]
@@ -58,6 +57,9 @@ mod adls_gen2_table {
         assert!(tombstones.contains(&remove));
     }
 
+    /*
+     * This test has no prerequisites.
+     */
     #[ignore]
     #[tokio::test]
     #[serial]
