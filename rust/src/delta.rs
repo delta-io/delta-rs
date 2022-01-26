@@ -26,7 +26,7 @@ use super::action::{Action, DeltaOperation};
 use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
-use super::storage::{parse_uri, StorageBackend, StorageError, UriError};
+use super::storage::{StorageBackend, StorageError, UriError};
 use super::table_state::DeltaTableState;
 use crate::delta_config::DeltaConfigError;
 
@@ -1132,16 +1132,9 @@ impl DeltaTable {
         let mut files_to_delete = vec![];
         let mut all_files = self.storage.list_objs(&self.table_uri).await?;
 
-        // TODO: table_path is currently only used in vacuum, consider precalcualte it during table
-        // struct initialization if it ends up being used in other hot paths
-        let table_path = parse_uri(&self.table_uri)?.path();
-
         while let Some(obj_meta) = all_files.next().await {
             let obj_meta = obj_meta?;
-            // We can't use self.table_uri as the prefix to extract relative path because
-            // obj_meta.path is not a URI. For example, for S3 objects, obj_meta.path is just the
-            // object key without `s3://` and bucket name.
-            let rel_path = extract_rel_path(&table_path, &obj_meta.path)?;
+            let rel_path = extract_rel_path(&self.table_uri, &obj_meta.path)?;
 
             if valid_files.contains(rel_path) // file is still being tracked in table
                 || !expired_tombstones.contains(rel_path) // file is not an expired tombstone
@@ -1686,6 +1679,14 @@ mod tests {
         assert!(matches!(
             extract_rel_path("data/delta-0.8.0", "tests/abc.json"),
             Err(DeltaTableError::Generic(_)),
+        ));
+
+        assert!(matches!(
+            extract_rel_path(
+                "s3://bucket/database/table/delta-0.8.0",
+                "s3://bucket/database/table/delta-0.8.0/abc.json"
+            ),
+            Ok("abc.json"),
         ));
     }
 
