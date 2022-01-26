@@ -17,6 +17,7 @@ use std::convert::TryFrom;
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
+use std::io::{BufRead, BufReader, Cursor};
 use uuid::Uuid;
 
 use crate::action::Stats;
@@ -178,9 +179,19 @@ pub enum DeltaTableError {
         "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
     )]
     InvalidVacuumRetentionPeriod,
+    /// Error returned when a line from log record is invalid.
+    #[error("Failed to read line from log record")]
+    Io {
+        /// Source error details returned while reading the log record.
+        #[from]
+        source: std::io::Error,
+    },
     /// Error returned when transaction is failed to be committed because given version already exists.
     #[error("Delta transaction failed, version {0} already exists.")]
     VersionAlreadyExists(DeltaDataTypeVersion),
+    /// Error returned when user attempts to commit actions that don't belong to the next version.
+    #[error("Delta transaction failed, version {0} does not follow {1}")]
+    VersionMismatch(DeltaDataTypeVersion, DeltaDataTypeVersion),
     /// Generic Delta Table error
     #[error("Generic DeltaTable error: {0}")]
     Generic(String),
@@ -407,7 +418,7 @@ fn extract_rel_path<'a, 'b>(
 pub enum DeltaVersion {
     /// load the newest version
     Newest,
-    /// specify the version to laod
+    /// specify the version to load
     Version(DeltaDataTypeVersion),
     /// specify the timestamp in UTC
     Timestamp(DateTime<Utc>),
@@ -533,6 +544,17 @@ impl DeltaTableBuilder {
 
         Ok(table)
     }
+}
+
+/// The next commit that's available from underlying storage
+/// TODO: Maybe remove this and replace it with Some/None and create a `Commit` struct to contain the next commit
+/// 
+#[derive(Debug)]
+pub enum PeekCommit {
+    /// The next commit version and assoicated actions
+    New(DeltaDataTypeVersion, Vec<Action>),
+    /// Provided DeltaVersion is up to date
+    UpToDate,
 }
 
 /// In memory representation of a Delta Table
@@ -755,6 +777,41 @@ impl DeltaTable {
         self.update().await
     }
 
+    /// Get the list of actions for the next commit
+    pub async fn peek_next_commit(&self, current_version: DeltaDataTypeVersion) -> Result<PeekCommit, DeltaTableError> {
+
+        let next_version = current_version + 1;
+        let commit_uri = self.commit_uri_from_version(next_version);
+        let commit_log_bytes = self.storage.get_obj(&commit_uri).await;
+        let commit_log_bytes = match commit_log_bytes {
+            Err(StorageError::NotFound) => return Ok(PeekCommit::UpToDate),
+            _ => commit_log_bytes?
+        };
+
+        let reader = BufReader::new(Cursor::new(commit_log_bytes));
+
+        let mut actions = Vec::new();
+        for line in reader.lines() {
+            let action: action::Action = serde_json::from_str(line?.as_str())?;
+            actions.push(action);
+        }
+        Ok(PeekCommit::New(next_version, actions))
+    }
+
+    ///Apply any actions assoicated with the PeekCommit to the DeltaTable
+    pub fn apply_actions(&mut self, new_version: DeltaDataTypeVersion, actions: Vec<Action>) 
+    -> Result<(), DeltaTableError> {
+        if self.version + 1 != new_version {
+            return Err(DeltaTableError::VersionMismatch(new_version, self.version));
+        }
+
+        let s = DeltaTableState::from_actions(actions)?;
+        self.state.merge(s, self.config.require_tombstones);
+        self.version = new_version;
+
+        Ok(())
+    }
+
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
@@ -777,33 +834,23 @@ impl DeltaTable {
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
     pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
-        self.version += 1;
 
         loop {
-            match self.apply_log(self.version).await {
-                Ok(_) => {
-                    self.version += 1;
-                }
-                Err(e) => {
-                    match e {
-                        ApplyLogError::EndOfLog => {
-                            self.version -= 1;
-                            if self.version == -1 {
-                                let err = format!(
-                                    "No snapshot or version 0 found, perhaps {} is an empty dir?",
-                                    self.table_uri
-                                );
-                                return Err(DeltaTableError::NotATable(err));
-                            }
-                        }
-                        _ => {
-                            return Err(DeltaTableError::from(e));
-                        }
-                    }
-                    return Ok(());
-                }
+            match self.peek_next_commit(self.version).await? {
+                PeekCommit::New(version, actions) => self.apply_actions(version, actions)?,
+                PeekCommit::UpToDate => break,
             }
         }
+
+        if self.version == -1 {
+            let err = format!(
+                "No snapshot or version 0 found, perhaps {} is an empty dir?",
+                self.table_uri
+            );
+            return Err(DeltaTableError::NotATable(err));
+        }
+
+        Ok(())
     }
 
     /// Loads the DeltaTable state for the given version.
