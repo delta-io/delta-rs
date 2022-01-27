@@ -15,9 +15,9 @@ use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
+use std::io::{BufRead, BufReader, Cursor};
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
-use std::io::{BufRead, BufReader, Cursor};
 use uuid::Uuid;
 
 use crate::action::Stats;
@@ -548,7 +548,7 @@ impl DeltaTableBuilder {
 
 /// The next commit that's available from underlying storage
 /// TODO: Maybe remove this and replace it with Some/None and create a `Commit` struct to contain the next commit
-/// 
+///
 #[derive(Debug)]
 pub enum PeekCommit {
     /// The next commit version and assoicated actions
@@ -778,14 +778,16 @@ impl DeltaTable {
     }
 
     /// Get the list of actions for the next commit
-    pub async fn peek_next_commit(&self, current_version: DeltaDataTypeVersion) -> Result<PeekCommit, DeltaTableError> {
-
+    pub async fn peek_next_commit(
+        &self,
+        current_version: DeltaDataTypeVersion,
+    ) -> Result<PeekCommit, DeltaTableError> {
         let next_version = current_version + 1;
         let commit_uri = self.commit_uri_from_version(next_version);
         let commit_log_bytes = self.storage.get_obj(&commit_uri).await;
         let commit_log_bytes = match commit_log_bytes {
             Err(StorageError::NotFound) => return Ok(PeekCommit::UpToDate),
-            _ => commit_log_bytes?
+            _ => commit_log_bytes?,
         };
 
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
@@ -799,8 +801,11 @@ impl DeltaTable {
     }
 
     ///Apply any actions assoicated with the PeekCommit to the DeltaTable
-    pub fn apply_actions(&mut self, new_version: DeltaDataTypeVersion, actions: Vec<Action>) 
-    -> Result<(), DeltaTableError> {
+    pub fn apply_actions(
+        &mut self,
+        new_version: DeltaDataTypeVersion,
+        actions: Vec<Action>,
+    ) -> Result<(), DeltaTableError> {
         if self.version + 1 != new_version {
             return Err(DeltaTableError::VersionMismatch(new_version, self.version));
         }
@@ -834,12 +839,8 @@ impl DeltaTable {
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
     pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
-
-        loop {
-            match self.peek_next_commit(self.version).await? {
-                PeekCommit::New(version, actions) => self.apply_actions(version, actions)?,
-                PeekCommit::UpToDate => break,
-            }
+        while let PeekCommit::New(version, actions) = self.peek_next_commit(self.version).await? {
+            self.apply_actions(version, actions)?;
         }
 
         if self.version == -1 {

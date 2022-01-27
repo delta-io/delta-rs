@@ -1,9 +1,9 @@
 extern crate deltalake;
 
 use chrono::Utc;
-use deltalake::PeekCommit;
 use deltalake::storage::file::FileStorageBackend;
 use deltalake::DeltaTableBuilder;
+use deltalake::PeekCommit;
 use deltalake::StorageBackend;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
@@ -471,7 +471,6 @@ async fn test_table_history() {
     assert_eq!(history3.len(), 5);
 }
 
-
 #[tokio::test]
 async fn test_poll_table_commits() {
     let path = "./tests/data/simple_table_with_checkpoint";
@@ -482,8 +481,7 @@ async fn test_poll_table_commits() {
         assert_eq!(table.version, 9);
         assert!(!table
             .get_files_iter()
-            .any(|f| f == "part-00000-f0e955c5-a1e3-4eec-834e-dcc098fc9005-c000.snappy.parquet")
-        );
+            .any(|f| f == "part-00000-f0e955c5-a1e3-4eec-834e-dcc098fc9005-c000.snappy.parquet"));
 
         assert_eq!(version, 10);
         assert_eq!(actions.len(), 2);
@@ -493,8 +491,7 @@ async fn test_poll_table_commits() {
         assert_eq!(table.version, 10);
         assert!(table
             .get_files_iter()
-            .any(|f| f == "part-00000-f0e955c5-a1e3-4eec-834e-dcc098fc9005-c000.snappy.parquet")
-        );
+            .any(|f| f == "part-00000-f0e955c5-a1e3-4eec-834e-dcc098fc9005-c000.snappy.parquet"));
 
         true
     } else {
@@ -506,7 +503,6 @@ async fn test_poll_table_commits() {
     let is_up_to_date = match peek {
         PeekCommit::UpToDate => true,
         _ => false,
-    }; 
+    };
     assert!(is_up_to_date);
-
 }
