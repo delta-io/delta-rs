@@ -15,7 +15,7 @@ use super::{
     ApplyLogError, CheckPoint, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable,
     DeltaTableError, DeltaTableMetaData,
 };
-use crate::action;
+use crate::action::{self, Action};
 use crate::delta_config;
 
 /// State snapshot currently held by the Delta Table instance.
@@ -51,6 +51,15 @@ impl DeltaTableState {
             new_state.process_action(action, true)?;
         }
 
+        Ok(new_state)
+    }
+
+    /// Construct a delta table state object from a list of actions
+    pub fn from_actions(actions: Vec<Action>) -> Result<Self, ApplyLogError> {
+        let mut new_state = DeltaTableState::default();
+        for action in actions {
+            new_state.process_action(action, true)?;
+        }
         Ok(new_state)
     }
 
