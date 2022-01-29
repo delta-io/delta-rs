@@ -9,8 +9,6 @@ use futures::Stream;
 #[cfg(feature = "azure")]
 use azure_core::{Error as AzureError, HttpError as AzureHttpError};
 #[cfg(feature = "azure")]
-use azure_storage::Error as AzureStorageError;
-#[cfg(feature = "azure")]
 use std::error::Error;
 
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
@@ -52,8 +50,7 @@ pub enum UriError {
     #[error("Expected GCS URI, found: {0}")]
     ExpectedGCSUri(String),
 
-    /// Error returned when an Azure URI is expected, but the URI is not an Azure file system
-    /// (abfs\[s\]) URI.
+    /// Error returned when an Azure URI is expected, but the URI is not an Azure URI.
     #[cfg(feature = "azure")]
     #[error("Expected Azure URI, found: {0}")]
     ExpectedAzureUri(String),
@@ -66,7 +63,7 @@ pub enum UriError {
     /// path.
     #[cfg(feature = "azure")]
     #[error("Object URI missing account name and path")]
-    MissingObjectAccountAndPath,
+    MissingObjectAccount,
     /// Error returned when an Azure URI is expected, but the URI is missing the account name.
     #[cfg(feature = "azure")]
     #[error("Object URI missing account name")]
@@ -234,17 +231,33 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
         }
 
         "file" => Ok(Uri::LocalPath(parts[1])),
-        "abfss" => {
+
+        // Azure Data Lake Storage Gen2
+        // This URI syntax is an invention of delta-rs.
+        // ABFS URIs should not be used since delta-rs doesn't use the Hadoop ABFS driver.
+        "adls2" => {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "azure")] {
-                    // URI scheme: abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>/<file_name>
-                    let mut parts = parts[1].splitn(2, '@');
-                    let file_system = parts.next().ok_or(UriError::MissingObjectFileSystem)?;
-                    let mut parts = parts.next().map(|x| x.splitn(2, '.')).ok_or(UriError::MissingObjectAccountAndPath)?;
-                    let account_name = parts.next().ok_or(UriError::MissingObjectAccountName)?;
-                    let mut paths = parts.next().map(|x| x.splitn(2, '/')).ok_or(UriError::MissingObjectPath)?;
-                    // assume root when uri ends without `/`
-                    let path = paths.nth(1).unwrap_or("");
+                    let mut path_parts = parts[1].splitn(3, '/');
+                    let account_name = match path_parts.next() {
+                        Some(x) => x,
+                        None => {
+                            return Err(UriError::MissingObjectAccount);
+                        }
+                    };
+                    let file_system = match path_parts.next() {
+                        Some(x) => x,
+                        None => {
+                            return Err(UriError::MissingObjectFileSystem);
+                        }
+                    };
+                    let path = match path_parts.next() {
+                        Some(x) => x,
+                        None => {
+                            return Err(UriError::MissingObjectPath);
+                        }
+                    };
+
                     Ok(Uri::AdlsGen2Object(azure::AdlsGen2Object { account_name, file_system, path }))
                 } else {
                     Err(UriError::InvalidScheme(String::from(parts[0])))
@@ -376,7 +389,7 @@ pub enum StorageError {
     #[error("Error interacting with AzureStorage: {source}")]
     AzureStorage {
         /// Azure error reason
-        source: AzureStorageError,
+        source: azure_storage::Error,
     },
     /// Generic Azure error
     #[cfg(feature = "azure")]
@@ -443,7 +456,7 @@ impl From<std::io::Error> for StorageError {
 impl From<AzureHttpError> for StorageError {
     fn from(error: AzureHttpError) -> Self {
         match error {
-            AzureHttpError::ErrorStatusCode { status, body: _ } if status.as_u16() == 404 => {
+            AzureHttpError::StatusCode { status, body: _ } if status.as_u16() == 404 => {
                 StorageError::NotFound
             }
             _ => StorageError::Azure { source: error },
@@ -452,8 +465,8 @@ impl From<AzureHttpError> for StorageError {
 }
 
 #[cfg(feature = "azure")]
-impl From<AzureStorageError> for StorageError {
-    fn from(error: AzureStorageError) -> Self {
+impl From<azure_storage::Error> for StorageError {
+    fn from(error: azure_storage::Error) -> Self {
         StorageError::AzureStorage { source: error }
     }
 }

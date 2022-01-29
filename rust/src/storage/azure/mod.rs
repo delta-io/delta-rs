@@ -1,38 +1,25 @@
-//! The Azure Data Lake Storage Gen2 storage backend. It currently only supports read operations.
+//! The Azure Data Lake Storage Gen2 storage backend.
 //!
 //! This module is gated behind the "azure" feature.
 //!
-//! There are several authentication options available. Either via the environment:
-//! a) `AZURE_STORAGE_CONNECTION_STRING`
-//! b) `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_SAS`
-//! c) `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_KEY`
-//!
-//! Alternatively, the default credential from the azure_identity crate is used,
-//! which iterates through several authentication alternatives.
-//! - EnvironmentCredential: uses `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` and `AZURE_TENANT_ID`
-//!   from the environment to authenticate via an azure client application
-//! - ManagedIdentityCredential: This authentication type works in Azure VMs,
-//!   App Service and Azure Functions applications, as well as the Azure Cloud Shell
-//! - AzureCliCredential: Enables authentication to Azure Active Directory
-//!   using Azure CLI to obtain an access token.
-//!
-//! all alternatives but using a connection string require `AZURE_STORAGE_ACCOUNT` to be set
-//! and will panic if this is not set. This also implies that the backend is
-//! only valid for a single Storage Account.
-
-use azure_core::HttpError as AzureError;
-use azure_storage::blob::prelude::*;
-use azure_storage::ConnectionString;
-use client::{DefaultClientProvider, ProvideClientContainer, StaticClientProvider};
+/// Shared key authentication is used (temporarily).
+///
+/// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
+/// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
+use super::{parse_uri, ObjectMeta, StorageBackend, StorageError, UriError};
+use azure_core::new_http_client;
+use azure_core::prelude::*;
+use azure_storage::core::clients::{AsStorageClient, StorageAccountClient};
+use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
+use azure_storage_blobs::prelude::*;
+use azure_storage_datalake::prelude::*;
 use futures::stream::Stream;
 use log::debug;
+use std::env;
 use std::error::Error;
 use std::fmt::Debug;
-use std::{fmt, pin::Pin};
-mod client;
-use super::{parse_uri, ObjectMeta, StorageBackend, StorageError, UriError};
-use std::env;
 use std::sync::Arc;
+use std::{fmt, pin::Pin};
 
 /// An object on an Azure Data Lake Storage Gen2 account.
 #[derive(Debug, PartialEq)]
@@ -47,127 +34,80 @@ pub struct AdlsGen2Object<'a> {
 
 impl<'a> fmt::Display for AdlsGen2Object<'a> {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        // This URI syntax is documented at
-        // https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri
+        // This URI syntax is an invention of delta-rs.
+        // ABFS URIs should not be used since delta-rs doesn't use the Hadoop ABFS driver.
         write!(
             f,
-            "abfss://{}@{}.dfs.core.windows.net/{}",
-            self.file_system, self.account_name, self.path
+            "adls2://{}/{}/{}",
+            self.account_name, self.file_system, self.path
         )
     }
 }
 
-struct AzureContainerClient {
-    pub account: String,
-    pub container: String,
-    inner: Arc<dyn ProvideClientContainer + Send + Sync>,
-}
-
-impl std::fmt::Debug for AzureContainerClient {
-    fn fmt(&self, fmt: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(fmt, "AzureContainerClient")
-    }
-}
-
-impl AzureContainerClient {
-    pub fn new(container: &str) -> Result<Self, StorageError> {
-        if let Ok(connection_string) = env::var("AZURE_STORAGE_CONNECTION_STRING") {
-            let inner = StaticClientProvider::new_with_connection_string(
-                connection_string.clone(),
-                container.to_string(),
-            )?;
-            let parsed = ConnectionString::new(connection_string.as_str()).unwrap();
-            return Ok(Self {
-                account: parsed.account_name.unwrap().to_string(),
-                container: container.to_string(),
-                inner: Arc::new(inner),
-            });
-        }
-
-        let account = env::var("AZURE_STORAGE_ACCOUNT").map_err(|_| {
-            StorageError::AzureConfig("AZURE_STORAGE_ACCOUNT must be set".to_string())
-        })?;
-
-        if let Ok(sas) = env::var("AZURE_STORAGE_SAS") {
-            let inner =
-                StaticClientProvider::new_with_sas(sas, account.clone(), container.to_string())?;
-            return Ok(Self {
-                account,
-                container: container.to_string(),
-                inner: Arc::new(inner),
-            });
-        }
-
-        if let Ok(key) = env::var("AZURE_STORAGE_KEY") {
-            let inner = StaticClientProvider::new_with_access_key(
-                key,
-                account.clone(),
-                container.to_string(),
-            )?;
-            return Ok(Self {
-                account,
-                container: container.to_string(),
-                inner: Arc::new(inner),
-            });
-        }
-
-        // Other authorization options will panic if applicable. however for the default credential
-        // we do not know if we can get a token until we actually try, an thus fail only when we try to use it.
-        // using it here is not an option (i think) since fetching a token is an async operation.
-        let inner = DefaultClientProvider::new(account.clone(), container.to_string())?;
-        Ok(Self {
-            account,
-            container: container.to_string(),
-            inner: Arc::new(inner),
-        })
-    }
-
-    pub async fn as_container_client(&self) -> Arc<ContainerClient> {
-        self.inner.get_client_container().await.unwrap().client
-    }
-}
-
-/// A storage backend backed by an Azure Data Lake Storage Gen2 account.
+/// A storage backend for use with an Azure Data Lake Storage Gen2 account (HNS=enabled).
 ///
 /// This uses the `dfs.core.windows.net` endpoint.
 #[derive(Debug)]
 pub struct AdlsGen2Backend {
-    container: String,
-    client: AzureContainerClient,
+    storage_account_name: String,
+    file_system_name: String,
+    file_system_client: FileSystemClient, // TODO: use Arc?
+    container_client: Arc<ContainerClient>,
 }
 
 impl AdlsGen2Backend {
     /// Create a new [`AdlsGen2Backend`].
     ///
-    /// There are several authentication options available. Either via the environment:
-    /// a) `AZURE_STORAGE_CONNECTION_STRING`
-    /// b) `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_SAS`
-    /// c) `AZURE_STORAGE_ACCOUNT` and `AZURE_STORAGE_KEY`
+    /// Shared key authentication is used (temporarily).
     ///
-    /// Alternatively, the default credential from the azure_identity crate is used,
-    /// which iterates through several authentication alternatives.
-    /// - EnvironmentCredential: uses `AZURE_CLIENT_ID`, `AZURE_CLIENT_SECRET` and `AZURE_TENANT_ID`
-    ///   from the environment to authenticate via an azure client application
-    /// - ManagedIdentityCredential: This authentication type works in Azure VMs,
-    ///   App Service and Azure Functions applications, as well as the Azure Cloud Shell
-    /// - AzureCliCredential: Enables authentication to Azure Active Directory
-    ///   using Azure CLI to obtain an access token.
-    ///
-    /// all alternatives but using a connection string require `AZURE_STORAGE_ACCOUNT` to be set
-    /// and will panic if this is not set. This also implies that the backend is
-    /// only valid for a single Storage Account.
-    pub fn new(container: &str) -> Result<Self, StorageError> {
+    /// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
+    /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
+    pub fn new(file_system_name: &str) -> Result<Self, StorageError> {
+        let storage_account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").map_err(|_| {
+            StorageError::AzureConfig("AZURE_STORAGE_ACCOUNT_NAME must be set".to_string())
+        })?;
+
+        let storage_account_key = env::var("AZURE_STORAGE_ACCOUNT_KEY").map_err(|_| {
+            StorageError::AzureConfig("AZURE_STORAGE_ACCOUNT_KEY must be set".to_string())
+        })?;
+
+        let data_lake_client = DataLakeClient::new(
+            StorageSharedKeyCredential::new(
+                storage_account_name.to_owned(),
+                storage_account_key.to_owned(),
+            ),
+            None,
+        );
+
+        let file_system_client =
+            data_lake_client.into_file_system_client(file_system_name.to_owned());
+
+        // TODO: The container_client should go away in favor of using DirectoryClient and FileClient
+        // See: https://github.com/Azure/azure-sdk-for-rust/issues/496
+        // See: https://github.com/Azure/azure-sdk-for-rust/pull/610
+        // Missing: get_file_properties, read_file, list_directory
+        let http_client = new_http_client();
+        let storage_account_client = StorageAccountClient::new_access_key(
+            http_client.clone(),
+            storage_account_name.to_owned(),
+            storage_account_key,
+        );
+        let storage_client = storage_account_client.as_storage_client();
+        let container_client = storage_client.as_container_client(file_system_name.to_owned());
+
         Ok(Self {
-            container: container.to_string(),
-            client: AzureContainerClient::new(container)?,
+            storage_account_name,
+            file_system_name: file_system_name.to_owned(),
+            file_system_client,
+            container_client,
         })
     }
 
     fn validate_container<'a>(&self, obj: &AdlsGen2Object<'a>) -> Result<(), StorageError> {
-        if obj.file_system != self.client.container {
+        if obj.file_system != self.file_system_name {
             Err(StorageError::Uri {
                 source: UriError::ContainerMismatch {
-                    expected: self.container.clone(),
+                    expected: self.file_system_name.clone(),
                     got: obj.file_system.to_string(),
                 },
             })
@@ -178,12 +118,16 @@ impl AdlsGen2Backend {
 }
 
 fn to_storage_err(err: Box<dyn Error + Sync + std::marker::Send>) -> StorageError {
-    match err.downcast_ref::<AzureError>() {
-        Some(AzureError::ErrorStatusCode { status, body: _ }) if status.as_u16() == 404 => {
+    match err.downcast_ref::<azure_core::HttpError>() {
+        Some(azure_core::HttpError::StatusCode { status, body: _ }) if status.as_u16() == 404 => {
             StorageError::NotFound
         }
         _ => StorageError::AzureGeneric { source: err },
     }
+}
+
+fn to_storage_err2(err: azure_storage::core::Error) -> StorageError {
+    StorageError::AzureStorage { source: err }
 }
 
 #[async_trait::async_trait]
@@ -193,10 +137,9 @@ impl StorageBackend for AdlsGen2Backend {
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
         self.validate_container(&obj)?;
 
+        // TODO: Use file_system_client once it can get file properties
         let properties = self
-            .client
-            .as_container_client()
-            .await
+            .container_client
             .as_blob_client(obj.path)
             .get_properties()
             .execute()
@@ -214,10 +157,9 @@ impl StorageBackend for AdlsGen2Backend {
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
         self.validate_container(&obj)?;
 
+        // TODO: Use file_system_client once it can read files
         Ok(self
-            .client
-            .as_container_client()
-            .await
+            .container_client
             .as_blob_client(obj.path)
             .get()
             .execute()
@@ -238,10 +180,9 @@ impl StorageBackend for AdlsGen2Backend {
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
         self.validate_container(&obj)?;
 
+        // TODO: Use file_system_client once it can list files
         let objs = self
-            .client
-            .as_container_client()
-            .await
+            .container_client
             .list_blobs()
             .prefix(obj.path)
             .execute()
@@ -252,8 +193,8 @@ impl StorageBackend for AdlsGen2Backend {
             .into_iter()
             .map(|blob| {
                 let object = AdlsGen2Object {
-                    account_name: &self.client.account,
-                    file_system: &self.client.container,
+                    account_name: &self.storage_account_name,
+                    file_system: &self.file_system_name,
                     path: &blob.name,
                 };
                 Ok(ObjectMeta {
@@ -270,16 +211,69 @@ impl StorageBackend for AdlsGen2Backend {
         Ok(Box::pin(output))
     }
 
-    async fn put_obj(&self, _path: &str, _obj_bytes: &[u8]) -> Result<(), StorageError> {
-        unimplemented!("put_obj not implemented for azure");
+    async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
+        let obj = parse_uri(path)?.into_adlsgen2_object()?;
+        self.validate_container(&obj)?;
+
+        let data = bytes::Bytes::from(obj_bytes.to_owned()); // TODO: Review obj_bytes.to_owned()
+        let length = data.len() as i64;
+
+        // TODO: Consider using Blob API again since it's just 1 REST call instead of 3
+        self.file_system_client
+            .create_file(Context::default(), obj.path, FileCreateOptions::default())
+            .await
+            .map_err(to_storage_err2)?;
+
+        self.file_system_client
+            .append_to_file(
+                Context::default(),
+                obj.path,
+                data,
+                0,
+                FileAppendOptions::default(),
+            )
+            .await
+            .map_err(to_storage_err2)?;
+
+        self.file_system_client
+            .flush_file(
+                Context::default(),
+                obj.path,
+                length,
+                true,
+                FileFlushOptions::default(),
+            )
+            .await
+            .map_err(to_storage_err2)?;
+
+        Ok(())
     }
 
-    async fn rename_obj_noreplace(&self, _src: &str, _dst: &str) -> Result<(), StorageError> {
-        unimplemented!("rename_obj_noreplace not implemented for azure");
+    async fn rename_obj_noreplace(&self, src: &str, dst: &str) -> Result<(), StorageError> {
+        let src_obj = parse_uri(src)?.into_adlsgen2_object()?;
+        self.validate_container(&src_obj)?;
+
+        let dst_obj = parse_uri(dst)?.into_adlsgen2_object()?;
+        self.validate_container(&dst_obj)?;
+
+        self.file_system_client
+            .rename_file_if_not_exists(Context::default(), src_obj.path, dst_obj.path)
+            .await
+            .map_err(to_storage_err2)?;
+
+        Ok(())
     }
 
-    async fn delete_obj(&self, _path: &str) -> Result<(), StorageError> {
-        unimplemented!("delete_obj not implemented for azure");
+    async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
+        let obj = parse_uri(path)?.into_adlsgen2_object()?;
+        self.validate_container(&obj)?;
+
+        self.file_system_client
+            .delete_file(Context::default(), obj.path, FileDeleteOptions::default())
+            .await
+            .map_err(to_storage_err2)?;
+
+        Ok(())
     }
 }
 
@@ -289,14 +283,14 @@ mod tests {
 
     #[test]
     fn parse_azure_object_uri() {
-        let uri = parse_uri("abfss://fs@sa.dfs.core.windows.net/foo").unwrap();
-        assert_eq!(uri.path(), "foo");
+        let uri = parse_uri("adls2://my_account_name/my_file_system_name/my_path").unwrap();
+        assert_eq!(uri.path(), "my_path");
         assert_eq!(
             uri.into_adlsgen2_object().unwrap(),
             AdlsGen2Object {
-                account_name: "sa",
-                file_system: "fs",
-                path: "foo",
+                account_name: "my_account_name",
+                file_system: "my_file_system_name",
+                path: "my_path",
             }
         );
     }
