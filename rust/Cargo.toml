@@ -32,9 +32,11 @@ percent-encoding = "2"
 reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "stream"], optional = true}
 
 # Azure
-azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "2f2caff49b3e1ba08f430f82e16994670dddda95" }
-azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "2f2caff49b3e1ba08f430f82e16994670dddda95", features = ["blob", "account"] }
-azure_identity = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "2f2caff49b3e1ba08f430f82e16994670dddda95" }
+azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "c49450747ce96d19a4ff58ae9a00d0a02ab66ca2" }
+azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "c49450747ce96d19a4ff58ae9a00d0a02ab66ca2", features = ["account"] }
+azure_storage_blobs = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "c49450747ce96d19a4ff58ae9a00d0a02ab66ca2" }
+azure_storage_datalake = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "c49450747ce96d19a4ff58ae9a00d0a02ab66ca2" }
+azure_identity = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "c49450747ce96d19a4ff58ae9a00d0a02ab66ca2" }
 
 # S3
 rusoto_core = { version = "0.46", default-features = false, optional = true }
@@ -71,7 +73,8 @@ async-trait = "0.1"
 [features]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion"]
-azure = ["azure_core", "azure_storage", "azure_identity", "reqwest"]
+azure = ["azure_core", "azure_storage", "azure_storage_blobs", "azure_storage_datalake", "azure_identity", "reqwest"]
+
 s3 = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_s3/native-tls", "rusoto_sts/native-tls", "rusoto_dynamodb/native-tls", "maplit", "dynamodb_lock/native-tls"]
 s3-rustls = ["rusoto_core/rustls", "rusoto_credential", "rusoto_s3/rustls", "rusoto_sts/rustls", "rusoto_dynamodb/rustls", "maplit", "dynamodb_lock/rustls"]
 gcs = ["async-stream", "tame-gcs", "tame-oauth", "reqwest"]
