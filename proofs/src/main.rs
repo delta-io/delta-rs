@@ -105,6 +105,15 @@ impl AtomicRenameState {
     }
 
     #[inline]
+    fn blob_store_obj_key_values(&self) -> (HashSet<String>, HashSet<String>) {
+        // TODO: change to return HashSet<&str>
+        self.blob_store_copy
+            .iter()
+            .map(|data| (data.dst.clone(), data.src.clone()))
+            .unzip()
+    }
+
+    #[inline]
     fn writer_versions(&self) -> HashSet<String> {
         self.writer_ctx
             .iter()
@@ -129,6 +138,11 @@ impl AtomicRenameState {
             }
         }
         None
+    }
+
+    #[inline]
+    fn blob_store_exists<'a, 'b>(&'b self, key: &'a str) -> bool {
+        !self.blob_store_get(key).is_none()
     }
 }
 
@@ -300,19 +314,23 @@ impl Model for AtomicRenameSys {
                 }
             }
             Action::RepairObjectCopy(wid) => {
-                let mut writer = &mut state.writer_ctx[wid];
-                state.blob_store_copy.push(writer.lock_data.clone());
-                writer.state = WriterState::RepairObjectCopied;
+                let writer = &state.writer_ctx[wid];
+                let copy_req = writer.lock_data.clone();
+                if !state.blob_store_exists(&copy_req.src) {
+                    let mut writer = &mut state.writer_ctx[wid];
+                    writer.rename_err = Some(RenameErr::NotFound);
+                    writer.state = WriterState::RepairRenameReturned;
+                } else {
+                    state.blob_store_copy.push(copy_req);
+                    let mut writer = &mut state.writer_ctx[wid];
+                    writer.state = WriterState::RepairObjectCopied;
+                }
             }
             Action::RepairObjectDelete(wid) => {
                 let mut writer = &mut state.writer_ctx[wid];
-                // TODO: model delete error, i.e. already deleted by another worker
-                if state.blob_store_delete.contains(&writer.lock_data.src) {
-                    writer.rename_err = Some(RenameErr::NotFound);
-                } else {
-                    state.blob_store_delete.push(writer.lock_data.src.clone());
-                    writer.rename_err = None;
-                }
+                // s3 delete always succeeds even when object does not exist
+                state.blob_store_delete.push(writer.lock_data.src.clone());
+                writer.rename_err = None;
                 writer.state = WriterState::RepairRenameReturned;
             }
             Action::UpdateLockData(wid) => {
@@ -360,13 +378,21 @@ impl Model for AtomicRenameSys {
                 }
             }
             Action::NewVersionObjectCopy(wid) => {
-                let mut writer = &mut state.writer_ctx[wid];
-                state.blob_store_copy.push(writer.lock_data.clone());
-                writer.state = WriterState::NewVersionObjectCopied;
+                let writer = &state.writer_ctx[wid];
+                let copy_req = writer.lock_data.clone();
+                if !state.blob_store_exists(&copy_req.src) {
+                    let mut writer = &mut state.writer_ctx[wid];
+                    writer.rename_err = Some(RenameErr::NotFound);
+                    writer.state = WriterState::RepairRenameReturned;
+                } else {
+                    state.blob_store_copy.push(writer.lock_data.clone());
+                    let mut writer = &mut state.writer_ctx[wid];
+                    writer.state = WriterState::NewVersionObjectCopied;
+                }
             }
             Action::OldVersionObjectDelete(wid) => {
                 let mut writer = &mut state.writer_ctx[wid];
-                // TODO: model delete error, i.e. already deleted by another worker
+                // s3 delete always succeeds even when object does not exist
                 state.blob_store_delete.push(writer.lock_data.src.clone());
                 writer.rename_err = None;
                 writer.state = WriterState::RenameReturned;
@@ -416,12 +442,7 @@ impl Model for AtomicRenameSys {
                             }
                         }
                         RenameErr::NotFound => {
-                            // TODO: not found should be fine? old object already purged by another
-                            // repair
-                            //
-                            // setting to shutdown for now because we expect application to hard
-                            // crash and start from scratch, see:
-                            // https://github.com/delta-io/delta-rs/pull/391
+                            // src object already purged by another repair
                             writer.state = WriterState::Shutdown;
                         }
                     }
@@ -564,9 +585,8 @@ impl Model for AtomicRenameSys {
             }),
             Property::<Self>::eventually("all renames are performed", |sys, state| {
                 let writer_versions = state.writer_versions();
-                let blob_store_obj_keys = state.blob_store_obj_keys();
-
-                // TODO: check for object content
+                let (blob_store_obj_keys, blob_store_obj_values) =
+                    state.blob_store_obj_key_values();
 
                 // object count greater writer count
                 blob_store_obj_keys.len() >= sys.writer_cnt
@@ -574,6 +594,7 @@ impl Model for AtomicRenameSys {
                     && writer_versions.len() >= sys.writer_cnt
                     // all versions have been written into blobl store
                     && blob_store_obj_keys.is_superset(&writer_versions)
+                    && blob_store_obj_values == writer_versions.into_iter().map(|s| format!("writer_{}", s)).collect()
             }),
         ];
 
