@@ -135,7 +135,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
         checkpoints::create_checkpoint_from_table_uri_and_cleanup(
             &table.table_uri,
-            table.version,
+            table.state.version,
             None,
         )
         .await
@@ -178,7 +178,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
         checkpoints::create_checkpoint_from_table_uri_and_cleanup(
             &table.table_uri,
-            table.version,
+            table.state.version,
             None,
         )
         .await

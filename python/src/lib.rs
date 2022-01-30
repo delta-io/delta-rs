@@ -127,7 +127,7 @@ impl RawDeltaTable {
     }
 
     pub fn version(&self) -> PyResult<i64> {
-        Ok(self._table.version)
+        Ok(self._table.state.version)
     }
 
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {

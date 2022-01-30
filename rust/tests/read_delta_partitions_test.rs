@@ -165,5 +165,5 @@ async fn read_null_partitions_from_checkpoint() {
 
     // verify that table loads from checkpoint and handles null partitions
     let table = deltalake::open_table(&table.table_uri).await.unwrap();
-    assert_eq!(table.version, 2);
+    assert_eq!(table.state.version, 2);
 }

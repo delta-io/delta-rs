@@ -32,7 +32,7 @@ mod adls_gen2_table {
             .await
             .unwrap();
 
-        assert_eq!(table.version, 4);
+        assert_eq!(table.state.version, 4);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
         assert_eq!(
@@ -93,7 +93,7 @@ mod adls_gen2_table {
             .unwrap();
 
         // Assert 1
-        assert_eq!(0, dt.version);
+        assert_eq!(0, dt.state.version);
         assert_eq!(1, dt.get_min_reader_version());
         assert_eq!(2, dt.get_min_writer_version());
         assert_eq!(0, dt.get_files().len());
@@ -106,7 +106,7 @@ mod adls_gen2_table {
 
         // Assert 2
         assert_eq!(1, version);
-        assert_eq!(version, dt.version);
+        assert_eq!(version, dt.state.version);
         assert_eq!(2, dt.get_files().len());
 
         // Cleanup

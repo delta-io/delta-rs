@@ -33,7 +33,7 @@ impl TableData {
     }
 
     fn version(&self) -> i64 {
-        self.actual.version
+        self.actual.state.version
     }
 
     fn files(&self) -> Vec<String> {

@@ -40,7 +40,7 @@ mod s3 {
         table.load().await.unwrap();
         println!("{}", table);
 
-        assert_eq!(table.version, 4);
+        assert_eq!(table.state.version, 4);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
         assert_eq!(
@@ -71,7 +71,7 @@ mod s3 {
             .await
             .unwrap();
         println!("{}", table);
-        assert_eq!(table.version, 3);
+        assert_eq!(table.state.version, 3);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
         assert_eq!(
@@ -101,7 +101,7 @@ mod s3 {
         setup();
         let table = deltalake::open_table("s3://deltars/simple/").await.unwrap();
         println!("{}", table);
-        assert_eq!(table.version, 4);
+        assert_eq!(table.state.version, 4);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
     }
@@ -115,7 +115,7 @@ mod s3 {
             .await
             .unwrap();
         println!("{}", table);
-        assert_eq!(table.version, 0);
+        assert_eq!(table.state.version, 0);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
     }

@@ -33,6 +33,8 @@ pub struct DeltaTableState {
     tombstone_retention_millis: DeltaDataTypeLong,
     log_retention_millis: DeltaDataTypeLong,
     enable_expired_log_cleanup: bool,
+    /// The version of the table as of the most recent loaded Delta log entry.
+    pub version: DeltaDataTypeVersion,
 }
 
 impl DeltaTableState {
@@ -272,6 +274,7 @@ mod tests {
             tombstone_retention_millis: 0,
             log_retention_millis: 0,
             enable_expired_log_cleanup: true,
+            version: 0,
         };
 
         let txn_action = action::Action::txn(action::Txn {
