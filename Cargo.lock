@@ -163,8 +163,9 @@ checksum = "cdb031dd78e28731d87d56cc8ffef4a8f36ca26c38fe2de700543e627f8a464a"
 
 [[package]]
 name = "azure_core"
-version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c61455ab776eedabfc7e166dda27c6c6bc2a882c043c35817501f1bd7440158"
 dependencies = [
  "async-trait",
  "base64",
@@ -189,8 +190,9 @@ dependencies = [
 
 [[package]]
 name = "azure_identity"
-version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebda98657980528a8f0f0f7cc85c88c7dabc160e026bf258d06e54b77b698b08"
 dependencies = [
  "async-timer",
  "async-trait",
@@ -209,7 +211,8 @@ dependencies = [
 [[package]]
 name = "azure_storage"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22c413e8459badf86c9e6e0c84f5894609663bcc8fa5eb1e49bfb985273dac58"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -234,7 +237,8 @@ dependencies = [
 [[package]]
 name = "azure_storage_blobs"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a70ec6fab8a2cae5d774098267870c0f3fbef1cb63cac12afab38b8c17cc8d97"
 dependencies = [
  "RustyXML",
  "azure_core",
@@ -258,7 +262,8 @@ dependencies = [
 [[package]]
 name = "azure_storage_datalake"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "43155b6fd58be12aacf66a8d223f12a40e33f9b514d4a8c27b5750ee7cd9890b"
 dependencies = [
  "async-trait",
  "azure_core",

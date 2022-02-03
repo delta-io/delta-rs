@@ -32,11 +32,11 @@ percent-encoding = "2"
 reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "stream"], optional = true}
 
 # Azure
-azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "c49450747ce96d19a4ff58ae9a00d0a02ab66ca2" }
-azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "c49450747ce96d19a4ff58ae9a00d0a02ab66ca2", features = ["account"] }
-azure_storage_blobs = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "c49450747ce96d19a4ff58ae9a00d0a02ab66ca2" }
-azure_storage_datalake = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "c49450747ce96d19a4ff58ae9a00d0a02ab66ca2" }
-azure_identity = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "c49450747ce96d19a4ff58ae9a00d0a02ab66ca2" }
+azure_core = { version = "0.1", optional = true }
+azure_storage = { version = "0.1", optional = true, features = ["account"] } # needed?
+azure_storage_blobs = { version = "0.1", optional = true }
+azure_storage_datalake = { version = "0.1", optional = true }
+azure_identity = { version = "0.1", optional = true }
 
 # S3
 rusoto_core = { version = "0.46", default-features = false, optional = true }
