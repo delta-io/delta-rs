@@ -5,14 +5,13 @@ mod adls_gen2_backend {
     use serial_test::serial;
 
     /*
-     * The storage account to run this test must be provided by the developer and test are executed locally.
-     *
-     * Set the environment variables used for authentication as outlined in rust/src/storage/azure/mod.rs
-     * Also set AZURE_STORAGE_ACCOUNT_NAME for setting up the test.
-     *
-     * remove the ignore statement below and execute...
-     * via 'cargo test --features azure' or
-     * via 'cargo test --features azure -p deltalake --test adls_gen2_backend_test -- --nocapture'
+     * An Azure Data Lake Gen2 Storage Account is required to run these tests and must be provided by
+     * the developer. Because of this requirement, the tests cannot run in CI and are therefore marked
+     * #[ignore]. As a result, the developer must execute these tests on their machine.
+     * In order to execute tests, remove the desired #[ignore] below and execute via:
+     * 'cargo test --features azure --test adls_gen2_backend_test -- --nocapture'
+     * `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
+     * `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
      */
     #[ignore]
     #[tokio::test]
