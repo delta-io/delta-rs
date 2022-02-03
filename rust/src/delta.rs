@@ -1170,7 +1170,7 @@ impl DeltaTable {
     /// If `retention_hours` is not set then the `configuration.deletedFileRetentionDuration` of
     /// delta table is used or if that's missing too, then the default value of 7 days otherwise.
     pub async fn vacuum(
-        &mut self,
+        &self,
         retention_hours: Option<u64>,
         dry_run: bool,
     ) -> Result<Vec<String>, DeltaTableError> {
