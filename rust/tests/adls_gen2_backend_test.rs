@@ -1,4 +1,11 @@
 #[cfg(feature = "azure")]
+/// An Azure Data Lake Gen2 Storage Account is required to run these tests and must be provided by
+/// the developer. Because of this requirement, the tests cannot run in CI and are therefore marked
+/// #[ignore]. As a result, the developer must execute these tests on their machine.
+/// In order to execute tests, remove the desired #[ignore] below and execute via:
+/// 'cargo test --features azure --test adls_gen2_backend_test -- --nocapture'
+/// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
+/// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
 mod adls_gen2_backend {
     use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
     use azure_storage_datalake::clients::{DataLakeClient, FileSystemClient};
@@ -7,15 +14,6 @@ mod adls_gen2_backend {
     use serial_test::serial;
     use std::env;
 
-    /*
-     * An Azure Data Lake Gen2 Storage Account is required to run these tests and must be provided by
-     * the developer. Because of this requirement, the tests cannot run in CI and are therefore marked
-     * #[ignore]. As a result, the developer must execute these tests on their machine.
-     * In order to execute tests, remove the desired #[ignore] below and execute via:
-     * 'cargo test --features azure --test adls_gen2_backend_test -- --nocapture'
-     * `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
-     * `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
-     */
     #[ignore]
     #[tokio::test]
     #[serial]
