@@ -19,12 +19,12 @@ mod adls_gen2_backend {
     #[ignore]
     #[tokio::test]
     #[serial]
-    async fn test_put_and_delete_obj_with_dirs() {
+    async fn test_put_delete_head_with_dir() {
         // Arrange
         let storage_account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
         let storage_account_key = env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
 
-        let file_system_prefix = "test-adls-gen2-backend-put-and-delete-obj-with-dirs";
+        let file_system_prefix = "test-adls-gen2-backend-put-delete-head-with-dirs";
         let file_system_name = format!("{}-{}", file_system_prefix, Utc::now().timestamp());
         let file_system_client = create_file_system_client(
             &storage_account_name,
@@ -37,7 +37,7 @@ mod adls_gen2_backend {
         let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
 
         // Act 1
-        let file_path = &format!("{}dir1/file-{}.txt", table_uri, Utc::now().timestamp());
+        let file_path = &format!("{}dir1/file1-{}.txt", table_uri, Utc::now().timestamp());
         backend.put_obj(file_path, &[12, 13, 14]).await.unwrap();
 
         // Assert 1
