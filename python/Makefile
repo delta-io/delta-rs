@@ -52,7 +52,7 @@ check-python: ## Run check on Python
 	$(info Check Python isort)
 	isort --diff --check-only .
 	$(info Check Python black)
-	black --check
+	black --check .
 	$(info Check Python mypy)
 	mypy
 
