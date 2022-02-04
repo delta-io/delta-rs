@@ -33,7 +33,7 @@ async fn func(event: Value, _: Context) -> Result<(), CheckPointLambdaError> {
 }
 
 async fn process_event(event: &Value) -> Result<(), CheckPointLambdaError> {
-    let (bucket, key) = bucket_and_key_from_event(&event)?;
+    let (bucket, key) = bucket_and_key_from_event(event)?;
     let (path, version) = table_path_and_version_from_key(key.as_str())?;
     let table_uri = table_uri_from_parts(bucket.as_str(), path.as_str())?;
 
