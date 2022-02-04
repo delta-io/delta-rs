@@ -369,7 +369,7 @@ async fn read_delta_8_0_table_partition_with_compare_op() {
 #[tokio::test]
 async fn vacuum_delta_8_0_table() {
     let backend = FileStorageBackend::new("");
-    let mut table = deltalake::open_table(&backend.join_paths(&["tests", "data", "delta-0.8.0"]))
+    let table = deltalake::open_table(&backend.join_paths(&["tests", "data", "delta-0.8.0"]))
         .await
         .unwrap();
 
