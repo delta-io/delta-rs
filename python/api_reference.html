@@ -29,7 +29,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.5.4
+                0.5.6
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -81,13 +81,14 @@
 <span id="deltatable"></span><h2>DeltaTable<a class="headerlink" href="#module-deltalake.table" title="Permalink to this headline"></a></h2>
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.table.</span></span><span class="sig-name descname"><span class="pre">DeltaTable</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.table.</span></span><span class="sig-name descname"><span class="pre">DeltaTable</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">storage_options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable" title="Permalink to this definition"></a></dt>
 <dd><p>Create a DeltaTable instance.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>table_uri</strong> (<em>str</em>) – </p></li>
 <li><p><strong>version</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – </p></li>
+<li><p><strong>storage_options</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>]</em><em>]</em>) – </p></li>
 </ul>
 </dd>
 </dl>
@@ -100,7 +101,7 @@
 <dd class="field-odd"><p>list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable</p>
 </dd>
 <dt class="field-even">Return type</dt>
-<dd class="field-even"><p>List[str]</p>
+<dd class="field-even"><p><em>List</em>[str]</p>
 </dd>
 </dl>
 </dd></dl>
@@ -114,7 +115,7 @@
 <dd class="field-odd"><p>list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable</p>
 </dd>
 <dt class="field-even">Return type</dt>
-<dd class="field-even"><p>List[str]</p>
+<dd class="field-even"><p><em>List</em>[str]</p>
 </dd>
 </dl>
 </dd></dl>
@@ -128,7 +129,7 @@
 <dd class="field-odd"><p>list of the .parquet files referenced for the current version of the DeltaTable</p>
 </dd>
 <dt class="field-even">Return type</dt>
-<dd class="field-even"><p>List[str]</p>
+<dd class="field-even"><p><em>List</em>[str]</p>
 </dd>
 </dl>
 </dd></dl>
@@ -159,7 +160,7 @@ The supported type for value is str. Use empty string <cite>‘’</cite> for Nu
 <dd class="field-even"><p>list of the .parquet files after applying the partition filters referenced for the current version of the DeltaTable.</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p>List[str]</p>
+<dd class="field-odd"><p><em>List</em>[str]</p>
 </dd>
 </dl>
 </dd></dl>
@@ -197,7 +198,7 @@ The operations are returned in reverse chronological order.</p>
 <dd class="field-even"><p>list of the commit infos registered in the transaction log</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p>List[Dict[str, Any]]</p>
+<dd class="field-odd"><p><em>List</em>[<em>Dict</em>[str, <em>Any</em>]]</p>
 </dd>
 </dl>
 </dd></dl>
@@ -366,7 +367,7 @@ newer versions.</p>
 <dd class="field-even"><p>the list of files no longer referenced by the Delta Table and are older than the retention threshold.</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p>List[str]</p>
+<dd class="field-odd"><p><em>List</em>[str]</p>
 </dd>
 </dl>
 </dd></dl>
@@ -739,7 +740,7 @@ Otherwise, it is replaced.</p>
 <dd class="field-even"><p>list of file info objects</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p>List[pyarrow._fs.FileInfo]</p>
+<dd class="field-odd"><p><em>List</em>[pyarrow._fs.FileInfo]</p>
 </dd>
 </dl>
 </dd></dl>
@@ -756,7 +757,7 @@ Otherwise, it is replaced.</p>
 <dd class="field-even"><p>list of file info objects</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p>List[pyarrow._fs.FileInfo]</p>
+<dd class="field-odd"><p><em>List</em>[pyarrow._fs.FileInfo]</p>
 </dd>
 </dl>
 </dd></dl>

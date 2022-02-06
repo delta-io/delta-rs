@@ -30,7 +30,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.5.4
+                0.5.6
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -43,9 +43,23 @@
               <ul class="current">
 <li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Usage</a><ul>
-<li class="toctree-l2"><a class="reference internal" href="#deltatable">DeltaTable</a></li>
-<li class="toctree-l2"><a class="reference internal" href="#deltaschema">DeltaSchema</a></li>
-<li class="toctree-l2"><a class="reference internal" href="#metadata">Metadata</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#loading-a-delta-table">Loading a Delta Table</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#time-travel">Time Travel</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#examining-a-table">Examining a Table</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#metadata">Metadata</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#schema">Schema</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#history">History</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#querying-delta-tables">Querying Delta Tables</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#managing-delta-tables">Managing Delta Tables</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#vacuuming-tables">Vacuuming tables</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#optimizing-tables">Optimizing tables</a></li>
+</ul>
+</li>
+<li class="toctree-l2"><a class="reference internal" href="#writing-delta-tables">Writing Delta Tables</a></li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="api_reference.html">API Reference</a></li>
@@ -77,60 +91,34 @@
              
   <section id="usage">
 <h1>Usage<a class="headerlink" href="#usage" title="Permalink to this headline"></a></h1>
-<section id="deltatable">
-<h2>DeltaTable<a class="headerlink" href="#deltatable" title="Permalink to this headline"></a></h2>
-<p>Resolve partitions for current version of the DeltaTable</p>
+<p>A <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable" title="deltalake.table.DeltaTable"><code class="xref py py-class docutils literal notranslate"><span class="pre">DeltaTable</span></code></a> represents the state of a delta table at a particular
+version. This includes which files are currently part of the table, the schema
+of the table, and other metadata such as creation time.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.2.0&quot;</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">version</span><span class="p">()</span>
 <span class="go">3</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">files</span><span class="p">()</span>
-<span class="go">[&#39;part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet&#39;, &#39;part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet&#39;, &#39;part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet&#39;]</span>
+<span class="go">[&#39;part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet&#39;,</span>
+<span class="go"> &#39;part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet&#39;,</span>
+<span class="go"> &#39;part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet&#39;]</span>
 </pre></div>
 </div>
-<p>Apply filtering on partitions for current version of the partitioned DeltaTable</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.8.0-partitioned&quot;</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">version</span><span class="p">()</span>
-<span class="go">0</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">files</span><span class="p">()</span>
-<span class="go">[&#39;year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet&#39;, &#39;year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet&#39;, &#39;year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet&#39;, &#39;year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet&#39;, &#39;year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet&#39;, &#39;year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet&#39;]</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">partition_filters</span> <span class="o">=</span> <span class="p">[(</span><span class="s2">&quot;day&quot;</span><span class="p">,</span> <span class="s2">&quot;=&quot;</span><span class="p">,</span> <span class="s2">&quot;5&quot;</span><span class="p">)]</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">files_by_partitions</span><span class="p">(</span><span class="n">partition_filters</span><span class="p">)</span>
-<span class="go">[&#39;year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet&#39;, &#39;year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet&#39;]</span>
+<section id="loading-a-delta-table">
+<h2>Loading a Delta Table<a class="headerlink" href="#loading-a-delta-table" title="Permalink to this headline"></a></h2>
+<p>To load the current version, use the constructor:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.2.0&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>Convert DeltaTable into PyArrow Table and Pandas Dataframe</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span>
-<span class="go">   id</span>
-<span class="go">0   5</span>
-<span class="go">1   7</span>
-<span class="go">2   9</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span><span class="p">[</span><span class="n">df</span><span class="p">[</span><span class="s1">&#39;id&#39;</span><span class="p">]</span> <span class="o">&gt;</span> <span class="mi">5</span><span class="p">]</span>
-<span class="go">   id</span>
-<span class="go">1   7</span>
-<span class="go">2   9</span>
+<p>Depending on your storage backend, you could use the <code class="docutils literal notranslate"><span class="pre">storage_options</span></code> parameter to provide some configuration.
+Currently only AWS S3 is supported.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;AWS_ACCESS_KEY_ID&quot;</span><span class="p">:</span> <span class="s2">&quot;THE_AWS_ACCESS_KEY_ID&quot;</span><span class="p">,</span> <span class="s2">&quot;AWS_SECRET_ACCESS_KEY&quot;</span><span class="p">:</span><span class="s2">&quot;THE_AWS_SECRET_ACCESS_KEY&quot;</span><span class="p">}</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.2.0&quot;</span><span class="p">,</span> <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>Time travel</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">load_version</span><span class="p">(</span><span class="mi">2</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_table</span><span class="p">()</span><span class="o">.</span><span class="n">to_pydict</span><span class="p">()</span>
-<span class="go">{&#39;id&#39;: [5, 7, 9, 5, 6, 7, 8, 9]}</span>
-</pre></div>
-</div>
-<p>History</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">history</span><span class="p">()</span>
-<span class="go">[{&#39;timestamp&#39;: 1587968626537, &#39;operation&#39;: &#39;DELETE&#39;, &#39;operationParameters&#39;: {&#39;predicate&#39;: &#39;[&quot;((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))&quot;]&#39;}, &#39;readVersion&#39;: 3, &#39;isBlindAppend&#39;: False}, {&#39;timestamp&#39;: 1587968614187, &#39;operation&#39;: &#39;UPDATE&#39;, &#39;operationParameters&#39;: {&#39;predicate&#39;: &#39;((id#697L % cast(2 as bigint)) = cast(0 as bigint))&#39;}, &#39;readVersion&#39;: 2, &#39;isBlindAppend&#39;: False}, {&#39;timestamp&#39;: 1587968604143, &#39;operation&#39;: &#39;WRITE&#39;, &#39;operationParameters&#39;: {&#39;mode&#39;: &#39;Overwrite&#39;, &#39;partitionBy&#39;: &#39;[]&#39;}, &#39;readVersion&#39;: 1, &#39;isBlindAppend&#39;: False}, {&#39;timestamp&#39;: 1587968596254, &#39;operation&#39;: &#39;MERGE&#39;, &#39;operationParameters&#39;: {&#39;predicate&#39;: &#39;(oldData.`id` = newData.`id`)&#39;}, &#39;readVersion&#39;: 0, &#39;isBlindAppend&#39;: False}, {&#39;timestamp&#39;: 1587968586154, &#39;operation&#39;: &#39;WRITE&#39;, &#39;operationParameters&#39;: {&#39;mode&#39;: &#39;ErrorIfExists&#39;, &#39;partitionBy&#39;: &#39;[]&#39;}, &#39;isBlindAppend&#39;: True}]</span>
-</pre></div>
-</div>
-<p>Create a DeltaTable using a Data Catalog</p>
+<p>Alternatively, if you have a data catalog you can load it by reference to a
+database and table name. Currently only AWS Glue is supported.</p>
+<p>For AWS Glue catalog, use AWS environment variables to authenticate.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DataCatalog</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">database_name</span> <span class="o">=</span> <span class="s2">&quot;simple_database&quot;</span>
@@ -141,32 +129,244 @@
 <span class="go">{&#39;id&#39;: [5, 7, 9, 5, 6, 7, 8, 9]}</span>
 </pre></div>
 </div>
-</section>
-<section id="deltaschema">
-<h2>DeltaSchema<a class="headerlink" href="#deltaschema" title="Permalink to this headline"></a></h2>
-<p>Delta format</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">schema</span><span class="p">()</span>
-<span class="go">Schema(Field(id: DataType(long) nullable(True) metadata({})))</span>
+<p>Besides local filesystems, the following backends are supported:</p>
+<ul class="simple">
+<li><p>AWS S3, detected by the prefix <code class="docutils literal notranslate"><span class="pre">s3://</span></code>. AWS credentials can be specified using
+environment variables in the same way as the CLI.</p></li>
+<li><p>Azure Data Lake Storage Gen 2, detected by the prefix <code class="docutils literal notranslate"><span class="pre">abffs://</span></code>. Note that
+<a class="reference external" href="https://github.com/delta-io/delta-rs/blob/main/docs/ADLSGen2-HOWTO.md">specific instructions</a> must be followed to setup the Azure Storage Account.</p></li>
+<li><p>Google Cloud Storage, detected by the prefix <code class="docutils literal notranslate"><span class="pre">gs://</span></code>.</p></li>
+</ul>
+<section id="time-travel">
+<h3>Time Travel<a class="headerlink" href="#time-travel" title="Permalink to this headline"></a></h3>
+<p>To load previous table states, you can provide the version number you wish to
+load:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
 </pre></div>
 </div>
-<p>PyArrow format</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">pyarrow_schema</span><span class="p">()</span>
-<span class="go">id: int64</span>
+<p>Once you’ve loaded a table, you can also change versions using either a version
+number or datetime string:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">load_version</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">load_with_timestamp</span><span class="p">(</span><span class="s2">&quot;2021-11-04 00:05:23.283+00:00&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>Previous table versions may not exist if they have been vacuumed, in which
+case an exception will be thrown. See <a class="reference internal" href="#vacuuming-tables">Vacuuming tables</a> for more information.</p>
+</div>
 </section>
+</section>
+<section id="examining-a-table">
+<h2>Examining a Table<a class="headerlink" href="#examining-a-table" title="Permalink to this headline"></a></h2>
 <section id="metadata">
-<h2>Metadata<a class="headerlink" href="#metadata" title="Permalink to this headline"></a></h2>
+<h3>Metadata<a class="headerlink" href="#metadata" title="Permalink to this headline"></a></h3>
+<p>The delta log maintains basic metadata about a table, including:</p>
+<ul class="simple">
+<li><p>A unique <code class="docutils literal notranslate"><span class="pre">id</span></code></p></li>
+<li><p>A <code class="docutils literal notranslate"><span class="pre">name</span></code>, if provided</p></li>
+<li><p>A <code class="docutils literal notranslate"><span class="pre">description</span></code>, if provided</p></li>
+<li><p>The list of <code class="docutils literal notranslate"><span class="pre">partitionColumns</span></code>.</p></li>
+<li><p>The <code class="docutils literal notranslate"><span class="pre">created_time</span></code> of the table</p></li>
+<li><p>A map of table <code class="docutils literal notranslate"><span class="pre">configuration</span></code>. This includes fields such as <code class="docutils literal notranslate"><span class="pre">delta.appendOnly</span></code>,
+which if <code class="docutils literal notranslate"><span class="pre">true</span></code> indicates the table is not meant to have data deleted from it.</p></li>
+</ul>
+<p>Get metadata from a table with the <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.metadata" title="deltalake.table.DeltaTable.metadata"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.metadata()</span></code></a> method:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">metadata</span><span class="p">()</span>
 <span class="go">Metadata(id: 5fba94ed-9794-4965-ba6e-6ee3c0d22af9, name: None, description: None, partitionColumns: [], created_time: 1587968585495, configuration={})</span>
 </pre></div>
 </div>
+</section>
+<section id="schema">
+<h3>Schema<a class="headerlink" href="#schema" title="Permalink to this headline"></a></h3>
+<p>The schema for the table is also saved in the transaction log. It can either be
+retrieved in the Delta Lake form as <a class="reference internal" href="api_reference.html#deltalake.schema.Schema" title="deltalake.schema.Schema"><code class="xref py py-class docutils literal notranslate"><span class="pre">deltalake.schema.Schema</span></code></a> or as a PyArrow
+schema. The first allows you to introspect any column-level metadata stored in
+the schema, while the latter represents the schema the table will be loaded into.</p>
+<p>Use <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.schema" title="deltalake.table.DeltaTable.schema"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.schema()</span></code></a> to retrieve the delta lake schema:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">schema</span><span class="p">()</span>
+<span class="go">Schema(Field(id: DataType(long) nullable(True) metadata({})))</span>
+</pre></div>
+</div>
+<p>These schemas have a JSON representation that can be retrieved. To reconstruct
+from json, use <a class="reference internal" href="api_reference.html#deltalake.schema.Schema.from_json" title="deltalake.schema.Schema.from_json"><code class="xref py py-meth docutils literal notranslate"><span class="pre">deltalake.schema.Schema.from_json()</span></code></a>.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">schema</span><span class="p">()</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
+<span class="go">{&#39;type&#39;: &#39;struct&#39;, &#39;fields&#39;: [{&#39;name&#39;: &#39;id&#39;, &#39;type&#39;: &#39;long&#39;, &#39;nullable&#39;: True, &#39;metadata&#39;: {}}]}</span>
+</pre></div>
+</div>
+<p>Use <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.pyarrow_schema" title="deltalake.table.DeltaTable.pyarrow_schema"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.pyarrow_schema()</span></code></a> to retrieve the PyArrow schema:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">pyarrow_schema</span><span class="p">()</span>
+<span class="go">id: int64</span>
+</pre></div>
+</div>
+</section>
+<section id="history">
+<h3>History<a class="headerlink" href="#history" title="Permalink to this headline"></a></h3>
+<p>Depending on what system wrote the table, the delta table may have provenance
+information describing what operations were performed on the table, when, and
+by whom. This information is retained for 30 days by default, unless otherwise
+specified by the table configuration <code class="docutils literal notranslate"><span class="pre">delta.logRetentionDuration</span></code>.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This information is not written by all writers and different writers may use
+different schemas to encode the actions. For Spark’s format, see:
+<a class="reference external" href="https://docs.delta.io/latest/delta-utility.html#history-schema">https://docs.delta.io/latest/delta-utility.html#history-schema</a></p>
+</div>
+<p>To view the available history, use <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.history" title="deltalake.table.DeltaTable.history"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.history()</span></code></a>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">history</span><span class="p">()</span>
+<span class="go">[{&#39;timestamp&#39;: 1587968626537, &#39;operation&#39;: &#39;DELETE&#39;, &#39;operationParameters&#39;: {&#39;predicate&#39;: &#39;[&quot;((`id` % CAST(2 AS BIGINT)) = CAST(0 AS BIGINT))&quot;]&#39;}, &#39;readVersion&#39;: 3, &#39;isBlindAppend&#39;: False},</span>
+<span class="go"> {&#39;timestamp&#39;: 1587968614187, &#39;operation&#39;: &#39;UPDATE&#39;, &#39;operationParameters&#39;: {&#39;predicate&#39;: &#39;((id#697L % cast(2 as bigint)) = cast(0 as bigint))&#39;}, &#39;readVersion&#39;: 2, &#39;isBlindAppend&#39;: False},</span>
+<span class="go"> {&#39;timestamp&#39;: 1587968604143, &#39;operation&#39;: &#39;WRITE&#39;, &#39;operationParameters&#39;: {&#39;mode&#39;: &#39;Overwrite&#39;, &#39;partitionBy&#39;: &#39;[]&#39;}, &#39;readVersion&#39;: 1, &#39;isBlindAppend&#39;: False},</span>
+<span class="go"> {&#39;timestamp&#39;: 1587968596254, &#39;operation&#39;: &#39;MERGE&#39;, &#39;operationParameters&#39;: {&#39;predicate&#39;: &#39;(oldData.`id` = newData.`id`)&#39;}, &#39;readVersion&#39;: 0, &#39;isBlindAppend&#39;: False},</span>
+<span class="go"> {&#39;timestamp&#39;: 1587968586154, &#39;operation&#39;: &#39;WRITE&#39;, &#39;operationParameters&#39;: {&#39;mode&#39;: &#39;ErrorIfExists&#39;, &#39;partitionBy&#39;: &#39;[]&#39;}, &#39;isBlindAppend&#39;: True}]</span>
+</pre></div>
+</div>
+</section>
+</section>
+<section id="querying-delta-tables">
+<h2>Querying Delta Tables<a class="headerlink" href="#querying-delta-tables" title="Permalink to this headline"></a></h2>
+<p>Delta tables can be queried in several ways. By loading as Arrow data or an Arrow
+dataset, they can be used by compatible engines such as Pandas and DuckDB. By
+passing on the list of files, they can be loaded into other engines such as Dask.</p>
+<p>Delta tables are often larger than can fit into memory on a single computer, so
+this module provides ways to read only the parts of the data you need. Partition
+filters allow you to skip reading files that are part of irrelevant partitions.
+Only loading the columns required also saves memory. Finally, some methods allow
+reading tables batch-by-batch, allowing you to process the whole table while only
+having a portion loaded at any given time.</p>
+<p>To load into Pandas or a PyArrow table use the <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.to_pandas" title="deltalake.table.DeltaTable.to_pandas"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.to_pandas()</span></code></a> and
+<a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.to_pyarrow_table" title="deltalake.table.DeltaTable.to_pyarrow_table"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.to_pyarrow_table()</span></code></a> methods, respectively. Both of these
+support filtering partitions and selecting particular columns.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.8.0-partitioned&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">pyarrow_schema</span><span class="p">()</span>
+<span class="go">value: string</span>
+<span class="go">year: string</span>
+<span class="go">month: string</span>
+<span class="go">day: string</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">(</span><span class="n">partitions</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;year&quot;</span><span class="p">,</span> <span class="s2">&quot;=&quot;</span><span class="p">,</span> <span class="s2">&quot;2021&quot;</span><span class="p">)],</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">])</span>
+<span class="go">      value</span>
+<span class="go">0     6</span>
+<span class="go">1     7</span>
+<span class="go">2     5</span>
+<span class="go">3     4</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_table</span><span class="p">(</span><span class="n">partitions</span><span class="o">=</span><span class="p">[(</span><span class="s2">&quot;year&quot;</span><span class="p">,</span> <span class="s2">&quot;=&quot;</span><span class="p">,</span> <span class="s2">&quot;2021&quot;</span><span class="p">)],</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">])</span>
+<span class="go">pyarrow.Table</span>
+<span class="go">value: string</span>
+</pre></div>
+</div>
+<p>Converting to a PyArrow Dataset allows you to filter on columns other than
+partition columns and load the result as a stream of batches rather than a single
+table. Convert to a dataset using <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.to_pyarrow_dataset" title="deltalake.table.DeltaTable.to_pyarrow_dataset"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.to_pyarrow_dataset()</span></code></a>. Filters
+applied to datasets will use the partition values and file statistics from the
+Delta transaction log and push down any other filters to the scanning operation.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow.dataset</span> <span class="kn">as</span> <span class="nn">ds</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dataset</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">()</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">condition</span> <span class="o">=</span> <span class="p">(</span><span class="n">ds</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;year&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;2021&quot;</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">ds</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;value&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="s2">&quot;4&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dataset</span><span class="o">.</span><span class="n">to_table</span><span class="p">(</span><span class="nb">filter</span><span class="o">=</span><span class="n">condition</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="go">  value</span>
+<span class="go">0     6</span>
+<span class="go">1     7</span>
+<span class="go">2     5</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">batch_iter</span> <span class="o">=</span> <span class="n">dataset</span><span class="o">.</span><span class="n">to_batches</span><span class="p">(</span><span class="nb">filter</span><span class="o">=</span><span class="n">condition</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">],</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">batch_iter</span><span class="p">:</span> <span class="k">print</span><span class="p">(</span><span class="n">batch</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">())</span>
+<span class="go">  value</span>
+<span class="go">0     6</span>
+<span class="go">1     7</span>
+<span class="go">  value</span>
+<span class="go">0     5</span>
+</pre></div>
+</div>
+<p>PyArrow datasets may also be passed to compatible query engines, such as <a class="reference external" href="https://duckdb.org/docs/api/python">DuckDB</a>.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">duckdb</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">ex_data</span> <span class="o">=</span> <span class="n">duckdb</span><span class="o">.</span><span class="n">arrow</span><span class="p">(</span><span class="n">dataset</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">ex_data</span><span class="o">.</span><span class="n">filter</span><span class="p">(</span><span class="s2">&quot;year = 2021 and value &gt; 4&quot;</span><span class="p">)</span><span class="o">.</span><span class="n">project</span><span class="p">(</span><span class="s2">&quot;value&quot;</span><span class="p">)</span>
+<span class="go">---------------------</span>
+<span class="go">-- Expression Tree --</span>
+<span class="go">---------------------</span>
+<span class="go">Projection [value]</span>
+<span class="go">  Filter [year=2021 AND value&gt;4]</span>
+<span class="go">    arrow_scan(140409099470144, 4828104688, 1000000)</span>
+
+<span class="go">---------------------</span>
+<span class="go">-- Result Columns  --</span>
+<span class="go">---------------------</span>
+<span class="go">- value (VARCHAR)</span>
+
+<span class="go">---------------------</span>
+<span class="go">-- Result Preview  --</span>
+<span class="go">---------------------</span>
+<span class="go">value</span>
+<span class="go">VARCHAR</span>
+<span class="go">[ Rows: 3]</span>
+<span class="go">6</span>
+<span class="go">7</span>
+<span class="go">5</span>
+</pre></div>
+</div>
+<p>Finally, you can always pass the list of file paths to an engine. For example,
+you can pass them to <code class="docutils literal notranslate"><span class="pre">dask.dataframe.read_parquet</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">dask.dataframe</span> <span class="kn">as</span> <span class="nn">dd</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">dd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">dt</span><span class="o">.</span><span class="n">file_uris</span><span class="p">())</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span>
+<span class="go">Dask DataFrame Structure:</span>
+<span class="go">                value             year            month              day</span>
+<span class="go">npartitions=6</span>
+<span class="go">               object  category[known]  category[known]  category[known]</span>
+<span class="go">                  ...              ...              ...              ...</span>
+<span class="gp">... </span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>
+<span class="go">                  ...              ...              ...              ...</span>
+<span class="go">                  ...              ...              ...              ...</span>
+<span class="go">Dask Name: read-parquet, 6 tasks</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span><span class="o">.</span><span class="n">compute</span><span class="p">()</span>
+<span class="go">  value  year month day</span>
+<span class="go">0     1  2020     1   1</span>
+<span class="go">0     2  2020     2   3</span>
+<span class="go">0     3  2020     2   5</span>
+<span class="go">0     4  2021     4   5</span>
+<span class="go">0     5  2021    12   4</span>
+<span class="go">0     6  2021    12  20</span>
+<span class="go">1     7  2021    12  20</span>
+</pre></div>
+</div>
+</section>
+<section id="managing-delta-tables">
+<h2>Managing Delta Tables<a class="headerlink" href="#managing-delta-tables" title="Permalink to this headline"></a></h2>
+<section id="vacuuming-tables">
+<h3>Vacuuming tables<a class="headerlink" href="#vacuuming-tables" title="Permalink to this headline"></a></h3>
+<p>Vacuuming a table will delete any files that have been marked for deletion. This
+may make some past versions of a table invalid, so this can break time travel.
+However, it will save storage space. Vacuum will retain files in a certain window,
+by default one week, so time travel will still work in shorter ranges.</p>
+<p>Delta tables usually don’t delete old files automatically, so vacuuming regularly
+is considered good practice, unless the table is only appended to.</p>
+<p>Use <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.vacuum" title="deltalake.table.DeltaTable.vacuum"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.vacuum()</span></code></a> to perform the vacuum operation. Note that to
+prevent accidental deletion, the function performs a dry-run by default: it will
+only list the files to be deleted. Pass <code class="docutils literal notranslate"><span class="pre">dry_run=False</span></code> to actually delete files.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">vacuum</span><span class="p">()</span>
+<span class="go">[&#39;../rust/tests/data/simple_table/part-00006-46f2ff20-eb5d-4dda-8498-7bfb2940713b-c000.snappy.parquet&#39;,</span>
+<span class="go"> &#39;../rust/tests/data/simple_table/part-00190-8ac0ae67-fb1d-461d-a3d3-8dc112766ff5-c000.snappy.parquet&#39;,</span>
+<span class="go"> &#39;../rust/tests/data/simple_table/part-00164-bf40481c-4afd-4c02-befa-90f056c2d77a-c000.snappy.parquet&#39;,</span>
+<span class="go"> ...]</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="n">dry_run</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span> <span class="c1"># Don&#39;t run this unless you are sure!</span>
+</pre></div>
+</div>
+</section>
+<section id="optimizing-tables">
+<h3>Optimizing tables<a class="headerlink" href="#optimizing-tables" title="Permalink to this headline"></a></h3>
+<p>Optimizing tables is not currently supported.</p>
+</section>
+</section>
+<section id="writing-delta-tables">
+<h2>Writing Delta Tables<a class="headerlink" href="#writing-delta-tables" title="Permalink to this headline"></a></h2>
+<p>Writing Delta tables is not currently supported.</p>
 </section>
 </section>
 
