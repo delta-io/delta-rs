@@ -14,7 +14,7 @@ mod adls_gen2_backend {
     use serial_test::serial;
     use std::env;
 
-    //#[ignore]
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_put() {
@@ -37,7 +37,7 @@ mod adls_gen2_backend {
         file_system_client.delete().into_future().await.unwrap();
     }
 
-    //#[ignore]
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_put_overwrite() {
@@ -62,7 +62,7 @@ mod adls_gen2_backend {
         file_system_client.delete().into_future().await.unwrap();
     }
 
-    //#[ignore]
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_head_of_missing_file() {
@@ -83,7 +83,7 @@ mod adls_gen2_backend {
         file_system_client.delete().into_future().await.unwrap();
     }
 
-    //#[ignore]
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_head_of_existing_file() {
@@ -106,7 +106,7 @@ mod adls_gen2_backend {
         file_system_client.delete().into_future().await.unwrap();
     }
 
-    //#[ignore]
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_delete_existing_file() {
@@ -130,7 +130,7 @@ mod adls_gen2_backend {
         file_system_client.delete().into_future().await.unwrap();
     }
 
-    // #[ignore]
+    #[ignore]
     #[tokio::test]
     #[serial]
     async fn test_get() {
