@@ -261,9 +261,9 @@ dependencies = [
 
 [[package]]
 name = "azure_storage_datalake"
-version = "0.1.0"
+version = "0.1.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "43155b6fd58be12aacf66a8d223f12a40e33f9b514d4a8c27b5750ee7cd9890b"
+checksum = "2785185a4cde21bf775e71d7fd40e43fb54ab831b8b2758abf0e4b53d6086968"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -686,11 +686,11 @@ dependencies = [
 
 [[package]]
 name = "deltalake-python"
-version = "0.5.5"
+version = "0.5.6"
 dependencies = [
  "chrono",
  "deltalake",
- "env_logger 0.9.0",
+ "env_logger",
  "pyo3",
  "reqwest",
  "serde_json",
@@ -791,20 +791,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44533bbbb3bb3c1fa17d9f2e4e38bbbaf8396ba82193c4cb1b6445d711445d36"
 dependencies = [
  "atty",
- "humantime 1.3.0",
- "log",
- "regex",
- "termcolor",
-]
-
-[[package]]
-name = "env_logger"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b2cf0344971ee6c64c31be0d530793fba457d322dfec2810c453d0ef228f9c3"
-dependencies = [
- "atty",
- "humantime 2.1.0",
+ "humantime",
  "log",
  "regex",
  "termcolor",
@@ -1144,12 +1131,6 @@ checksum = "df004cfca50ef23c36850aaaa59ad52cc70d0e90243c3c7737a4dd32dc7a3c4f"
 dependencies = [
  "quick-error",
 ]
-
-[[package]]
-name = "humantime"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
 name = "hyper"
@@ -1895,7 +1876,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "926d36b9553851b8b0005f1275891b392ee4d2d833852c417ed025477350fb9d"
 dependencies = [
- "env_logger 0.7.1",
+ "env_logger",
  "log",
 ]
 

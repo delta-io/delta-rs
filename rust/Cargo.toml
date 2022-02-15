@@ -32,7 +32,7 @@ reqwest = { version = "0.11", default-features = false, features = ["rustls-tls"
 azure_core = { version = "0.1", optional = true }
 azure_storage = { version = "0.1", optional = true, features = ["account"] } # needed?
 azure_storage_blobs = { version = "0.1", optional = true }
-azure_storage_datalake = { version = "0.1", optional = true }
+azure_storage_datalake = { version = "0.1.1", optional = true }
 azure_identity = { version = "0.1", optional = true }
 
 # S3
