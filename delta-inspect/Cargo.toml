@@ -1,0 +1,20 @@
+[package]
+name = "delta-inspect"
+version = "0.5.0"
+authors = ["Qingping Hou <dave2008713@gmail.com>"]
+homepage = "https://github.com/delta-io/delta.rs"
+license = "Apache-2.0"
+keywords = ["deltalake", "delta", "datalake"]
+description = "Native Delta Lake commandline util"
+edition = "2021"
+
+[dependencies]
+anyhow = "1"
+clap = { version = "3", features = ["color"] }
+tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
+env_logger = "0"
+
+[dependencies.deltalake]
+path = "../rust"
+version = "0"
+features = ["s3", "azure", "glue", "gcs"]
