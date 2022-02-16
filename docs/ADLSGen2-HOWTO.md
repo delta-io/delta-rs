@@ -30,3 +30,18 @@ Docs: [Create a storage account for Azure Data Lake Storage Gen2 | Microsoft Doc
 * [Blob service REST API - Azure Storage | Microsoft Docs](https://docs.microsoft.com/en-us/rest/api/storageservices/blob-service-rest-api)
 * [Azure Data Lake Storage Gen2 REST API reference - Azure Storage | Microsoft Docs](https://docs.microsoft.com/en-us/rest/api/storageservices/data-lake-storage-gen2)
 
+## Example
+
+When you want to connect to a deltatable stored in ADLS Gen2, you need to set two environment variables. 
+* AZURE_STORAGE_ACCOUNT_NAME which holds the name of the storage account 
+* AZURE_STORAGE_ACCOUNT_KEY which contains the root key for the storage account. 
+
+The url for the table should follow a specific format adls2://{accountname}/{filesystem}/{path to table}. 
+
+example:
+```python
+  from deltalake import DeltaTable
+
+  delta = DeltaTable("adls2://<accountname>/<filesystem>/<path to table>")
+  dataFrames = delta.to_pyarrow_table().to_pandas()
+```
