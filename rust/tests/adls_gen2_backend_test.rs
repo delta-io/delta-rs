@@ -171,7 +171,9 @@ mod adls_gen2_backend {
 
         // Assert
         let rename_obj_noreplace_error = result.err().unwrap();
-        assert!(matches!(rename_obj_noreplace_error, StorageError::AlreadyExists(path) if path == *file_path2));
+        assert!(
+            matches!(rename_obj_noreplace_error, StorageError::AlreadyExists(path) if path == *file_path2)
+        );
 
         // Cleanup
         file_system_client.delete().into_future().await.unwrap();
