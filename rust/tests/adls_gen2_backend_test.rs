@@ -151,6 +151,32 @@ mod adls_gen2_backend {
         file_system_client.delete().into_future().await.unwrap();
     }
 
+    #[ignore]
+    #[tokio::test]
+    #[serial]
+    async fn test_rename_noreplace() {
+        // Arrange
+        let file_system_prefix = "test-adls-gen2-backend-rename-noreplace";
+        let file_system_name = format!("{}-{}", file_system_prefix, Utc::now().timestamp());
+        let (file_system_client, table_uri, backend) = setup(&file_system_name).await;
+
+        let file_path1 = &format!("{}dir1/file1-{}.txt", table_uri, Utc::now().timestamp());
+        backend.put_obj(file_path1, &[12, 13, 14]).await.unwrap();
+
+        let file_path2 = &format!("{}dir1/file2-{}.txt", table_uri, Utc::now().timestamp());
+        backend.put_obj(file_path2, &[12, 13, 14]).await.unwrap();
+
+        // Act
+        let result = backend.rename_obj_noreplace(file_path1, file_path2).await;
+
+        // Assert
+        let rename_obj_noreplace_error = result.err().unwrap();
+        assert!(matches!(rename_obj_noreplace_error, StorageError::AlreadyExists(path) if path == *file_path2));
+
+        // Cleanup
+        file_system_client.delete().into_future().await.unwrap();
+    }
+
     async fn setup(
         file_system_name: &String,
     ) -> (FileSystemClient, String, Box<dyn StorageBackend>) {

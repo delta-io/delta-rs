@@ -247,13 +247,27 @@ impl StorageBackend for AdlsGen2Backend {
         self.validate_container(&dst_obj)?;
 
         let file_client = self.file_system_client.get_file_client(src_obj.path);
-        file_client
+        let result = file_client
             .rename_if_not_exists(dst_obj.path)
             .into_future()
-            .await
-            .map_err(to_storage_err2)?;
+            .await;
 
-        Ok(())
+        match result {
+            Err(err) => match err {
+                azure_storage::core::Error::CoreError(azure_core::Error::Policy(
+                    ref policy_error_source,
+                )) => match policy_error_source.downcast_ref::<azure_core::HttpError>() {
+                    Some(azure_core::HttpError::StatusCode { status, body: _ })
+                        if status.as_u16() == 409 =>
+                    {
+                        Err(StorageError::AlreadyExists(dst.to_string()))
+                    }
+                    _ => Err(StorageError::AzureStorage { source: err }),
+                },
+                _ => Err(StorageError::AzureStorage { source: err }),
+            },
+            _ => Ok(()),
+        }
     }
 
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
