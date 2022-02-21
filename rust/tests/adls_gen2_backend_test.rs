@@ -154,9 +154,36 @@ mod adls_gen2_backend {
     #[ignore]
     #[tokio::test]
     #[serial]
-    async fn test_rename_noreplace() {
+    async fn test_rename_noreplace_succeeds() {
         // Arrange
-        let file_system_prefix = "test-adls-gen2-backend-rename-noreplace";
+        let file_system_prefix = "test-adls-gen2-backend-rename-noreplace-succeeds";
+        let file_system_name = format!("{}-{}", file_system_prefix, Utc::now().timestamp());
+        let (file_system_client, table_uri, backend) = setup(&file_system_name).await;
+
+        let file_path1 = &format!("{}dir1/file1-{}.txt", table_uri, Utc::now().timestamp());
+        let file_contents = &[12, 13, 14];
+        backend.put_obj(file_path1, file_contents).await.unwrap();
+
+        let file_path2 = &format!("{}dir1/file2-{}.txt", table_uri, Utc::now().timestamp());
+
+        // Act
+        let result = backend.rename_obj_noreplace(file_path1, file_path2).await;
+
+        // Assert
+        result.unwrap();
+        let downloaded_file_contents = backend.get_obj(file_path2).await.unwrap();
+        assert_eq!(downloaded_file_contents, file_contents.to_vec());
+
+        // Cleanup
+        file_system_client.delete().into_future().await.unwrap();
+    }
+
+    #[ignore]
+    #[tokio::test]
+    #[serial]
+    async fn test_rename_noreplace_fails() {
+        // Arrange
+        let file_system_prefix = "test-adls-gen2-backend-rename-noreplace-fails";
         let file_system_name = format!("{}-{}", file_system_prefix, Utc::now().timestamp());
         let (file_system_client, table_uri, backend) = setup(&file_system_name).await;
 
