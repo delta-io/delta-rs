@@ -31,7 +31,7 @@ use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::object_store::local::LocalFileSystem;
 use datafusion::datasource::{PartitionedFile, TableProvider};
 use datafusion::logical_plan::Expr;
-use datafusion::physical_plan::file_format::PhysicalPlanConfig;
+use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::{ColumnStatistics, Statistics};
 use datafusion::scalar::ScalarValue;
@@ -228,7 +228,6 @@ impl TableProvider for delta::DeltaTable {
     async fn scan(
         &self,
         projection: &Option<Vec<usize>>,
-        batch_size: usize,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
@@ -251,13 +250,12 @@ impl TableProvider for delta::DeltaTable {
         let df_object_store = Arc::new(LocalFileSystem {});
         ParquetFormat::default()
             .create_physical_plan(
-                PhysicalPlanConfig {
+                FileScanConfig {
                     object_store: df_object_store,
                     file_schema: schema,
                     file_groups: partitions,
                     statistics: self.datafusion_table_statistics(),
                     projection: projection.clone(),
-                    batch_size,
                     limit,
                     table_partition_cols: self.get_metadata().unwrap().partition_columns.clone(),
                 },
@@ -328,15 +326,15 @@ fn correct_scalar_value_type(
         }
         ArrowDataType::Timestamp(TimeUnit::Nanosecond, None) => {
             let raw_value = i64::try_from(value).unwrap();
-            Some(ScalarValue::TimestampNanosecond(Some(raw_value)))
+            Some(ScalarValue::TimestampNanosecond(Some(raw_value), None))
         }
         ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
             let raw_value = i64::try_from(value).unwrap();
-            Some(ScalarValue::TimestampMicrosecond(Some(raw_value)))
+            Some(ScalarValue::TimestampMicrosecond(Some(raw_value), None))
         }
         ArrowDataType::Timestamp(TimeUnit::Millisecond, None) => {
             let raw_value = i64::try_from(value).unwrap();
-            Some(ScalarValue::TimestampMillisecond(Some(raw_value)))
+            Some(ScalarValue::TimestampMillisecond(Some(raw_value), None))
         }
         _ => {
             log::error!(
