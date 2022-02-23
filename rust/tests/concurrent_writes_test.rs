@@ -5,9 +5,14 @@ mod s3_common;
 #[allow(dead_code)]
 mod fs_common;
 
-use deltalake::action;
-use deltalake::DeltaTable;
+use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
+use azure_storage_datalake::clients::DataLakeClient;
+use chrono::Utc;
+use deltalake::{
+    action, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
+};
 use std::collections::HashMap;
+use std::env;
 use std::future::Future;
 use std::iter::FromIterator;
 use std::time::Duration;
@@ -22,6 +27,81 @@ async fn concurrent_writes_s3() {
     )
     .await;
     run_test(|name| Worker::new("s3://deltars/concurrent_workers", name)).await;
+}
+
+/// An Azure Data Lake Gen2 Storage Account is required to run this test and must be provided by
+/// the developer. Because of this requirement, the test cannot run in CI and is therefore marked
+/// #[ignore]. As a result, the developer must execute these tests on their machine.
+/// In order to execute tests, remove the #[ignore] below and execute via:
+/// 'cargo test concurrent_writes_azure --features azure --test concurrent_writes_test -- --nocapture --exact'
+/// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
+/// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
+#[ignore]
+#[tokio::test]
+#[cfg(feature = "azure")]
+async fn concurrent_writes_azure() {
+    // Arrange
+    let storage_account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
+    let storage_account_key = env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
+
+    let data_lake_client = DataLakeClient::new(
+        StorageSharedKeyCredential::new(
+            storage_account_name.to_owned(),
+            storage_account_key.to_owned(),
+        ),
+        None,
+    );
+
+    // Create a new file system for test isolation
+    let file_system_name = format!("test-delta-table-{}", Utc::now().timestamp());
+    let file_system_client = data_lake_client.into_file_system_client(file_system_name.to_owned());
+    file_system_client.create().into_future().await.unwrap();
+
+    let table_uri = &format!("adls2://{}/{}/", storage_account_name, file_system_name);
+    let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
+    let mut dt = DeltaTable::new(table_uri, backend, DeltaTableConfig::default()).unwrap();
+    let (metadata, protocol) = table_info();
+
+    dt.create(metadata.clone(), protocol.clone(), None)
+        .await
+        .unwrap();
+
+    assert_eq!(0, dt.version);
+    assert_eq!(1, dt.get_min_reader_version());
+    assert_eq!(2, dt.get_min_writer_version());
+    assert_eq!(0, dt.get_files().len());
+    assert_eq!(table_uri.trim_end_matches('/').to_string(), dt.table_uri);
+
+    // Act/Assert
+    run_test(|name| Worker::new(table_uri, name)).await;
+
+    // Cleanup
+    file_system_client.delete().into_future().await.unwrap();
+}
+
+fn table_info() -> (DeltaTableMetaData, action::Protocol) {
+    let schema = Schema::new(vec![SchemaField::new(
+        "Id".to_string(),
+        SchemaDataType::primitive("integer".to_string()),
+        true,
+        HashMap::new(),
+    )]);
+
+    let metadata = DeltaTableMetaData::new(
+        Some("Azure Test Table".to_string()),
+        None,
+        None,
+        schema,
+        vec![],
+        HashMap::new(),
+    );
+
+    let protocol = action::Protocol {
+        min_reader_version: 1,
+        min_writer_version: 2,
+    };
+
+    (metadata, protocol)
 }
 
 #[tokio::test]
