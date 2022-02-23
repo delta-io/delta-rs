@@ -5,14 +5,8 @@ mod s3_common;
 #[allow(dead_code)]
 mod fs_common;
 
-use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
-use azure_storage_datalake::clients::DataLakeClient;
-use chrono::Utc;
-use deltalake::{
-    action, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
-};
+use deltalake::{action, DeltaTable};
 use std::collections::HashMap;
-use std::env;
 use std::future::Future;
 use std::iter::FromIterator;
 use std::time::Duration;
@@ -40,6 +34,13 @@ async fn concurrent_writes_s3() {
 #[tokio::test]
 #[cfg(feature = "azure")]
 async fn concurrent_writes_azure() {
+    use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
+    use azure_storage_datalake::clients::DataLakeClient;
+    use chrono::Utc;
+    use deltalake::DeltaTableConfig;
+    use deltalake::{DeltaTableMetaData, Schema, SchemaDataType, SchemaField};
+    use std::env;
+
     // Arrange
     let storage_account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
     let storage_account_key = env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
@@ -79,6 +80,7 @@ async fn concurrent_writes_azure() {
     file_system_client.delete().into_future().await.unwrap();
 }
 
+#[cfg(feature = "azure")]
 fn table_info() -> (DeltaTableMetaData, action::Protocol) {
     let schema = Schema::new(vec![SchemaField::new(
         "Id".to_string(),
