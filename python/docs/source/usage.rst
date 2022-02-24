@@ -56,7 +56,7 @@ Besides local filesystems, the following backends are supported:
 
 * AWS S3, detected by the prefix ``s3://``. AWS credentials can be specified using
   environment variables in the same way as the CLI.
-* Azure Data Lake Storage Gen 2, detected by the prefix ``abffs://``. Note that
+* Azure Data Lake Storage Gen 2, detected by the prefix ``adls2://``. Note that
   `specific instructions`_ must be followed to setup the Azure Storage Account.
 * Google Cloud Storage, detected by the prefix ``gs://``.
 
