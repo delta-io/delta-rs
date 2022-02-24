@@ -61,27 +61,7 @@ async fn concurrent_writes_azure() {
     let table_uri = &format!("adls2://{}/{}/", storage_account_name, file_system_name);
     let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
     let mut dt = DeltaTable::new(table_uri, backend, DeltaTableConfig::default()).unwrap();
-    let (metadata, protocol) = table_info();
-
-    dt.create(metadata.clone(), protocol.clone(), None)
-        .await
-        .unwrap();
-
-    assert_eq!(0, dt.version);
-    assert_eq!(1, dt.get_min_reader_version());
-    assert_eq!(2, dt.get_min_writer_version());
-    assert_eq!(0, dt.get_files().len());
-    assert_eq!(table_uri.trim_end_matches('/').to_string(), dt.table_uri);
-
-    // Act/Assert
-    run_test(|name| Worker::new(table_uri, name)).await;
-
-    // Cleanup
-    file_system_client.delete().into_future().await.unwrap();
-}
-
-#[cfg(feature = "azure")]
-fn table_info() -> (DeltaTableMetaData, action::Protocol) {
+    
     let schema = Schema::new(vec![SchemaField::new(
         "Id".to_string(),
         SchemaDataType::primitive("integer".to_string()),
@@ -103,7 +83,21 @@ fn table_info() -> (DeltaTableMetaData, action::Protocol) {
         min_writer_version: 2,
     };
 
-    (metadata, protocol)
+    dt.create(metadata.clone(), protocol.clone(), None)
+        .await
+        .unwrap();
+
+    assert_eq!(0, dt.version);
+    assert_eq!(1, dt.get_min_reader_version());
+    assert_eq!(2, dt.get_min_writer_version());
+    assert_eq!(0, dt.get_files().len());
+    assert_eq!(table_uri.trim_end_matches('/').to_string(), dt.table_uri);
+
+    // Act/Assert
+    run_test(|name| Worker::new(table_uri, name)).await;
+
+    // Cleanup
+    file_system_client.delete().into_future().await.unwrap();
 }
 
 #[tokio::test]
