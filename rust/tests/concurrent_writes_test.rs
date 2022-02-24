@@ -61,7 +61,7 @@ async fn concurrent_writes_azure() {
     let table_uri = &format!("adls2://{}/{}/", storage_account_name, file_system_name);
     let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
     let mut dt = DeltaTable::new(table_uri, backend, DeltaTableConfig::default()).unwrap();
-    
+
     let schema = Schema::new(vec![SchemaField::new(
         "Id".to_string(),
         SchemaDataType::primitive("integer".to_string()),
