@@ -328,4 +328,47 @@ Optimizing tables is not currently supported.
 Writing Delta Tables
 --------------------
 
-Writing Delta tables is not currently supported.
+For overwrites and appends, use :func:`write_deltalake`. If the table does not
+already exist, it will be created. The ``data`` parameter will accept a Pandas
+DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.
+
+.. code-block:: python
+
+    >>> from deltalake.writer import write_deltalake
+    >>> df = pd.DataFrame({'x': [1, 2, 3]})
+    >>> write_deltalake('path/to/table', df)
+
+By default, writes append to the table. To overwrite, pass in ``mode='overwrite'``:
+
+.. code-block:: python
+
+    >>> write_deltalake('path/to/table', df, mode='overwrite')
+
+If you have a :class:`DeltaTable` object, you can also call the :meth:`DeltaTable.write`
+method:
+
+.. code-block:: python
+
+    >>> DeltaTable('path/to/table').write(df, mode='overwrite')
+
+To delete rows based on an expression, use :meth:`DeltaTable.delete`
+
+.. code-block:: python
+
+    >>> from deltalake.writer import delete_deltalake
+    >>> import pyarrow.dataset as ds
+    >>> DeltaTable('path/to/table').delete(ds.field('x') == 2)
+
+To update a subset of rows with new values, use 
+
+.. code-block:: python
+
+    >>> from deltalake.writer import delete_deltalake
+    >>> import pyarrow.dataset as ds
+    >>> # Increment y where x = 2
+    >>> DeltaTable('path/to/table').update(
+            where_expr=ds.field('x') == 2,
+            set_values={
+                'y': ds.field('y') + 1
+            }
+        )
