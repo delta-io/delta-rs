@@ -11,7 +11,7 @@ use deltalake::partitions::PartitionFilter;
 use deltalake::storage;
 use deltalake::{arrow, StorageBackend};
 use pyo3::create_exception;
-use pyo3::exceptions::{PyAssertionError, PyException};
+use pyo3::exceptions::PyException;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple, PyType};
 use std::collections::HashMap;
@@ -310,10 +310,10 @@ fn filestats_to_expression<'py>(
 
     for (column, value) in partitions_values.iter() {
         if let Some(value) = value {
-            // TODO: value is a string, but needs to be parsed into appropriate type
+            // value is a string, but needs to be parsed into appropriate type
             let column_type = schema
                 .field_with_name(column)
-                .map_err(|_| PyAssertionError::new_err("Partition column not found in schema"))?
+                .map_err(|_| PyDeltaTableError::new_err("Partition column not found in schema"))?
                 .data_type()
                 .to_pyarrow(py)?;
             // pa.scalar(value).cast(type)
