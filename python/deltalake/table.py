@@ -281,7 +281,9 @@ class DeltaTable:
                 filesystem=filesystem,
                 partition_expression=part_expression,
             )
-            for file, part_expression in self._table.dataset_partitions(partitions)
+            for file, part_expression in self._table.dataset_partitions(
+                partitions, self.pyarrow_schema()
+            )
         ]
 
         return FileSystemDataset(fragments, self.pyarrow_schema(), format, filesystem)

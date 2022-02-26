@@ -21,6 +21,7 @@ env_logger = "0"
 reqwest = { version = "*", features = ["native-tls-vendored"] }
 serde_json = "1"
 chrono = "0"
+arrow = { version = "9", features = ["pyarrow"] }
 
 [dependencies.pyo3]
 version = "0.15"

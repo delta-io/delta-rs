@@ -2,6 +2,7 @@
 
 extern crate pyo3;
 
+use arrow::pyarrow::PyArrowConvert;
 use chrono::{DateTime, FixedOffset, Utc};
 use deltalake::action::Stats;
 use deltalake::action::{ColumnCountStat, ColumnValueStat};
@@ -10,7 +11,7 @@ use deltalake::partitions::PartitionFilter;
 use deltalake::storage;
 use deltalake::{arrow, StorageBackend};
 use pyo3::create_exception;
-use pyo3::exceptions::PyException;
+use pyo3::exceptions::{PyAssertionError, PyException};
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple, PyType};
 use std::collections::HashMap;
@@ -248,6 +249,7 @@ impl RawDeltaTable {
         &mut self,
         py: Python<'py>,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+        schema: ArrowSchema,
     ) -> PyResult<Vec<(String, Option<&'py PyAny>)>> {
         let path_set = match partition_filters {
             Some(filters) => Some(HashSet::<_>::from_iter(
@@ -266,7 +268,7 @@ impl RawDeltaTable {
             })
             .map(|((path, partition_values), stats)| {
                 let stats = stats.map_err(PyDeltaTableError::from_raw)?;
-                let expression = filestats_to_expression(py, partition_values, stats)?;
+                let expression = filestats_to_expression(py, &schema, partition_values, stats)?;
                 Ok((path, expression))
             })
             .collect()
@@ -297,19 +299,31 @@ fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
 /// skipped during a scan.
 fn filestats_to_expression<'py>(
     py: Python<'py>,
+    schema: &ArrowSchema,
     partitions_values: &HashMap<String, Option<String>>,
     stats: Option<Stats>,
 ) -> PyResult<Option<&'py PyAny>> {
     let ds = PyModule::import(py, "pyarrow.dataset")?;
     let field = ds.getattr("field")?;
+    let pa = PyModule::import(py, "pyarrow")?;
     let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
 
     for (column, value) in partitions_values.iter() {
         if let Some(value) = value {
+            // TODO: value is a string, but needs to be parsed into appropriate type
+            let column_type = schema
+                .field_with_name(column)
+                .map_err(|_| PyAssertionError::new_err("Partition column not found in schema"))?
+                .data_type()
+                .to_pyarrow(py)?;
+            // pa.scalar(value).cast(type)
+            let converted_value = pa
+                .call_method1("scalar", (value,))?
+                .call_method1("cast", (column_type,))?;
             expressions.push(
                 field
                     .call1((column,))?
-                    .call_method1("__eq__", (value.to_object(py),)),
+                    .call_method1("__eq__", (converted_value,)),
             );
         }
     }
