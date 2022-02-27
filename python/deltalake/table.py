@@ -7,7 +7,7 @@ import pyarrow
 import pyarrow.fs as pa_fs
 from pyarrow.dataset import FileSystemDataset, ParquetFileFormat
 
-from python.deltalake.writer import write_deltalake
+from deltalake.writer import write_deltalake
 
 if TYPE_CHECKING:
     import pandas
@@ -87,6 +87,12 @@ class DeltaTable:
         self._table = RawDeltaTable(
             table_uri, version=version, storage_options=storage_options
         )
+        self._metadata = Metadata(self._table)
+
+    @classmethod
+    def _from_raw(cls, raw_table: RawDeltaTable) -> "DeltaTable":
+        self = cls.__new__(cls)
+        self._table = raw_table
         self._metadata = Metadata(self._table)
 
     @classmethod

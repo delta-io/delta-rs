@@ -3,19 +3,28 @@
 extern crate pyo3;
 
 use chrono::{DateTime, FixedOffset, Utc};
-use deltalake::action::Stats;
-use deltalake::action::{ColumnCountStat, ColumnValueStat};
+use deltalake::action;
+use deltalake::action::Action;
+use deltalake::action::{ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats};
 use deltalake::arrow::datatypes::Schema as ArrowSchema;
+use deltalake::get_backend_for_uri;
 use deltalake::partitions::PartitionFilter;
 use deltalake::storage;
+use deltalake::DeltaDataTypeLong;
+use deltalake::DeltaDataTypeTimestamp;
+use deltalake::DeltaTableMetaData;
+use deltalake::DeltaTransactionOptions;
 use deltalake::{arrow, StorageBackend};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple, PyType};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
 
@@ -42,6 +51,10 @@ impl PyDeltaTableError {
 
     fn from_chrono(err: chrono::ParseError) -> pyo3::PyErr {
         PyDeltaTableError::new_err(format!("Parse date and time string failed: {}", err))
+    }
+
+    fn from_serde(err: serde_json::Error) -> pyo3::PyErr {
+        PyDeltaTableError::new_err(err.to_string())
     }
 }
 
@@ -120,6 +133,50 @@ impl RawDeltaTable {
             .map_err(PyDeltaTableError::from_data_catalog)?;
 
         Ok(table_uri)
+    }
+
+    #[classmethod]
+    fn create_empty(
+        _cls: &PyType,
+        table_uri: String,
+        schema: ArrowSchema,
+        partition_columns: Vec<String>,
+        commit: Option<bool>,
+    ) -> PyResult<Self> {
+        let mut table = deltalake::DeltaTable::new(
+            &table_uri,
+            get_backend_for_uri(&table_uri).map_err(PyDeltaTableError::from_storage)?,
+            deltalake::DeltaTableConfig::default(),
+        )
+        .map_err(PyDeltaTableError::from_raw)?;
+
+        let protocol = action::Protocol {
+            min_reader_version: 1,
+            min_writer_version: 1, // TODO: Make sure we comply with protocol
+        };
+
+        let metadata = DeltaTableMetaData::new(
+            None,
+            None,
+            None,
+            (&schema).try_into()?,
+            partition_columns,
+            HashMap::new(),
+        );
+
+        let mut transaction = table.create_transaction(Some(DeltaTransactionOptions::new(3)));
+        transaction.add_action(Action::metaData(
+            metadata.try_into().map_err(PyDeltaTableError::from_serde)?,
+        ));
+        transaction.add_action(Action::protocol(protocol));
+
+        if let Some(true) = commit {
+            rt()?
+                .block_on(transaction.commit(None))
+                .map_err(PyDeltaTableError::from_raw)?;
+        }
+
+        Ok(RawDeltaTable { _table: table })
     }
 
     pub fn table_uri(&self) -> PyResult<&str> {
@@ -272,6 +329,50 @@ impl RawDeltaTable {
             })
             .collect()
     }
+
+    pub fn create_write_transaction(
+        &mut self,
+        add_actions: Vec<PyAddAction>,
+        mode: &str,
+        partition_by: Option<Vec<String>>,
+    ) -> PyResult<()> {
+        let mode = save_mode_from_str(mode)?;
+
+        let mut actions: Vec<Action> = add_actions
+            .iter()
+            .map(|add| Action::add(add.clone().into()))
+            .collect();
+
+        if let SaveMode::Overwrite = mode {
+            // Remove all current files
+            for old_add in self._table.get_state().files().iter() {
+                let remove_action = Action::remove(action::Remove {
+                    path: old_add.path.clone(),
+                    deletion_timestamp: Some(current_timestamp()),
+                    data_change: true,
+                    extended_file_metadata: Some(old_add.tags.is_some()),
+                    partition_values: Some(old_add.partition_values.clone()),
+                    size: Some(old_add.size),
+                    tags: old_add.tags.clone(),
+                });
+                actions.push(remove_action);
+            }
+        }
+
+        let mut transaction = self
+            ._table
+            .create_transaction(Some(DeltaTransactionOptions::new(3)));
+        transaction.add_actions(actions);
+        rt()?
+            .block_on(transaction.commit(Some(DeltaOperation::Write {
+                mode,
+                partitionBy: partition_by,
+                predicate: None,
+            })))
+            .map_err(PyDeltaTableError::from_raw)?;
+
+        Ok(())
+    }
 }
 
 fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
@@ -407,6 +508,50 @@ impl DeltaStorageFsBackend {
 #[pyfunction]
 fn rust_core_version() -> &'static str {
     deltalake::crate_version()
+}
+
+fn save_mode_from_str(value: &str) -> PyResult<SaveMode> {
+    match value {
+        "append" => Ok(SaveMode::Append),
+        "overwrite" => Ok(SaveMode::Overwrite),
+        "error" => Ok(SaveMode::ErrorIfExists),
+        "ignore" => Ok(SaveMode::Ignore),
+        _ => Err(PyValueError::new_err("Invalid save mode")),
+    }
+}
+
+fn current_timestamp() -> DeltaDataTypeTimestamp {
+    let start = SystemTime::now();
+    let since_the_epoch = start
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards");
+    since_the_epoch.as_millis().try_into().unwrap()
+}
+
+#[derive(FromPyObject)]
+pub struct PyAddAction {
+    path: String,
+    size: DeltaDataTypeLong,
+    partition_values: HashMap<String, Option<String>>,
+    modification_time: DeltaDataTypeTimestamp,
+    data_change: bool,
+    stats: Option<String>,
+}
+
+impl From<&PyAddAction> for action::Add {
+    fn from(action: &PyAddAction) -> Self {
+        action::Add {
+            path: action.path.clone(),
+            size: action.size,
+            partition_values: action.partition_values.clone(),
+            partition_values_parsed: None,
+            modification_time: action.modification_time,
+            data_change: action.data_change,
+            stats: action.stats.clone(),
+            stats_parsed: None,
+            tags: None,
+        }
+    }
 }
 
 #[pymodule]
