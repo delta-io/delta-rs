@@ -3,8 +3,8 @@ from datetime import datetime
 import json
 from typing import Dict, Iterable, List, Literal, Optional, Union, overload
 import uuid
-from deltalake import DeltaTable
-from .deltalake import _create_empty_table
+from deltalake import DeltaTable, PyDeltaTableError
+from .deltalake import RawDeltaTable, create_write_transaction as _create_write_transaction
 import pyarrow as pa
 import pyarrow.dataset as ds
 
@@ -20,7 +20,7 @@ class AddAction:
 
 
 def create_empty_table(uri: str, schema: pa.Schema, partition_columns: List[str]) -> DeltaTable:
-    return DeltaTable._from_raw(_create_empty_table(uri, schema, partition_columns))
+    return DeltaTable._from_raw(RawDeltaTable.create_empty(uri, schema, partition_columns))
 
 
 @overload
@@ -36,14 +36,14 @@ def write_deltalake(
 @overload
 def write_deltalake(
     table_or_uri: Union[str, DeltaTable],
-    data: Union[pa.Table, pa.RecordBatch, pa.RecordBatchReader],
+    data: Union[pa.Table, pa.RecordBatch], # TODO: there a type for a RecordBatchReader?
     schema: Optional[pa.Schema],
     partition_by: Optional[Iterable[str]],
     mode: Literal['error', 'append', 'overwrite', 'ignore'] = 'error'
 ): ...
 
 
-def write_deltalake(table_or_uri, data, schema, partition_by=None, mode='error'):
+def write_deltalake(table_or_uri, data, schema=None, partition_by=None, mode='error'):
     """Write to a Delta Lake table
 
     If the table does not already exist, it will be created.
@@ -62,21 +62,27 @@ def write_deltalake(table_or_uri, data, schema, partition_by=None, mode='error')
         schema = data.schema
 
     if isinstance(table_or_uri, str):
+        table_uri = table_or_uri
         try:
             table = DeltaTable(table_or_uri)
-        except KeyError:  # TODO update to error we should get if doesn't exist
-            # Create it
+            current_version = table.version
+        except PyDeltaTableError as err:
+            # branch to handle if not a delta table
+            if "Not a Delta table" not in str(err):
+                raise
+            table = None
+            current_version = -1
+        else:
             if mode == 'error':
                 raise AssertionError("DeltaTable already exists.")
-
-            table = create_empty_table(
-                table_or_uri, schema, partition_by or [])
-        else:
-            if mode == 'ignore':
+            elif mode == 'ignore':
                 # table already exists
                 return
+            current_version = table.version()
     else:
         table = table_or_uri
+        table_uri = table._table.table_uri()
+        current_version = table.version
 
     if partition_by:
         partitioning = ds.partitioning(field_names=partition_by, flavor="hive")
@@ -104,8 +110,8 @@ def write_deltalake(table_or_uri, data, schema, partition_by=None, mode='error')
     # TODO: Pass through filesystem? Do we need to transform the URI as well?
     ds.write_dataset(
         data,
-        base_dir=table._table.table_uri(),
-        basename_template=f"{table.version}-{uuid.uuid4()}-{{i}}.parquet",
+        base_dir=table_uri,
+        basename_template=f"{current_version + 1}-{uuid.uuid4()}-{{i}}.parquet",
         format="parquet",
         partitioning=partitioning,
         schema=schema,
@@ -113,8 +119,12 @@ def write_deltalake(table_or_uri, data, schema, partition_by=None, mode='error')
         existing_data_behavior='overwrite_or_ignore',
     )
 
-    table._table.create_write_transaction(
+    _create_write_transaction(
+        #table._table if table is not None else None,
+        table is None,
+        table_uri,
+        schema,
         add_actions,
         mode,
-        partition_by
+        partition_by or [],
     )

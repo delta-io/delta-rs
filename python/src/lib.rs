@@ -135,50 +135,6 @@ impl RawDeltaTable {
         Ok(table_uri)
     }
 
-    #[classmethod]
-    fn create_empty(
-        _cls: &PyType,
-        table_uri: String,
-        schema: ArrowSchema,
-        partition_columns: Vec<String>,
-        commit: Option<bool>,
-    ) -> PyResult<Self> {
-        let mut table = deltalake::DeltaTable::new(
-            &table_uri,
-            get_backend_for_uri(&table_uri).map_err(PyDeltaTableError::from_storage)?,
-            deltalake::DeltaTableConfig::default(),
-        )
-        .map_err(PyDeltaTableError::from_raw)?;
-
-        let protocol = action::Protocol {
-            min_reader_version: 1,
-            min_writer_version: 1, // TODO: Make sure we comply with protocol
-        };
-
-        let metadata = DeltaTableMetaData::new(
-            None,
-            None,
-            None,
-            (&schema).try_into()?,
-            partition_columns,
-            HashMap::new(),
-        );
-
-        let mut transaction = table.create_transaction(Some(DeltaTransactionOptions::new(3)));
-        transaction.add_action(Action::metaData(
-            metadata.try_into().map_err(PyDeltaTableError::from_serde)?,
-        ));
-        transaction.add_action(Action::protocol(protocol));
-
-        if let Some(true) = commit {
-            rt()?
-                .block_on(transaction.commit(None))
-                .map_err(PyDeltaTableError::from_raw)?;
-        }
-
-        Ok(RawDeltaTable { _table: table })
-    }
-
     pub fn table_uri(&self) -> PyResult<&str> {
         Ok(&self._table.table_uri)
     }
@@ -328,50 +284,6 @@ impl RawDeltaTable {
                 Ok((path, expression))
             })
             .collect()
-    }
-
-    pub fn create_write_transaction(
-        &mut self,
-        add_actions: Vec<PyAddAction>,
-        mode: &str,
-        partition_by: Option<Vec<String>>,
-    ) -> PyResult<()> {
-        let mode = save_mode_from_str(mode)?;
-
-        let mut actions: Vec<Action> = add_actions
-            .iter()
-            .map(|add| Action::add(add.clone().into()))
-            .collect();
-
-        if let SaveMode::Overwrite = mode {
-            // Remove all current files
-            for old_add in self._table.get_state().files().iter() {
-                let remove_action = Action::remove(action::Remove {
-                    path: old_add.path.clone(),
-                    deletion_timestamp: Some(current_timestamp()),
-                    data_change: true,
-                    extended_file_metadata: Some(old_add.tags.is_some()),
-                    partition_values: Some(old_add.partition_values.clone()),
-                    size: Some(old_add.size),
-                    tags: old_add.tags.clone(),
-                });
-                actions.push(remove_action);
-            }
-        }
-
-        let mut transaction = self
-            ._table
-            .create_transaction(Some(DeltaTransactionOptions::new(3)));
-        transaction.add_actions(actions);
-        rt()?
-            .block_on(transaction.commit(Some(DeltaOperation::Write {
-                mode,
-                partitionBy: partition_by,
-                predicate: None,
-            })))
-            .map_err(PyDeltaTableError::from_raw)?;
-
-        Ok(())
     }
 }
 
@@ -538,8 +450,8 @@ pub struct PyAddAction {
     stats: Option<String>,
 }
 
-impl From<&PyAddAction> for action::Add {
-    fn from(action: &PyAddAction) -> Self {
+impl From<PyAddAction> for action::Add {
+    fn from(action: PyAddAction) -> Self {
         action::Add {
             path: action.path.clone(),
             size: action.size,
@@ -554,12 +466,95 @@ impl From<&PyAddAction> for action::Add {
     }
 }
 
+#[pyfunction]
+fn create_write_transaction(
+    create_new: bool,
+    table_uri: String,
+    schema: ArrowSchema,
+    add_actions: Vec<PyAddAction>,
+    mode: &str,
+    partition_by: Vec<String>,
+) -> PyResult<()> {
+    let mut actions: Vec<action::Action> = Vec::new();
+    let mut table: deltalake::DeltaTable = match create_new {
+        false => {
+            // TODO: Can we avoid this reparsing of the log?
+            rt()?.block_on(
+                deltalake::DeltaTableBuilder::from_uri(&table_uri)
+                    .map_err(PyDeltaTableError::from_raw)?
+                    .load(),
+            ).map_err(PyDeltaTableError::from_raw)?
+        }
+        true => {
+            let table = deltalake::DeltaTable::new(
+                &table_uri,
+                get_backend_for_uri(&table_uri).map_err(PyDeltaTableError::from_storage)?,
+                deltalake::DeltaTableConfig::default(),
+            )
+            .map_err(PyDeltaTableError::from_raw)?;
+            actions.push(action::Action::protocol(action::Protocol {
+                min_reader_version: 1,
+                min_writer_version: 1, // TODO: Make sure we comply with protocol
+            }));
+            let metadata = DeltaTableMetaData::new(
+                None,
+                None,
+                None,
+                (&schema).try_into()?,
+                partition_by.clone(),
+                HashMap::new(),
+            );
+
+            actions.push(action::Action::metaData(
+                metadata.try_into().map_err(PyDeltaTableError::from_serde)?,
+            ));
+
+            table
+        }
+    };
+
+    let mode = save_mode_from_str(mode)?;
+
+    for add_action in add_actions {
+        actions.push(Action::add(add_action.into()));
+    }
+
+    if let SaveMode::Overwrite = mode {
+        // Remove all current files
+        for old_add in table.get_state().files().iter() {
+            let remove_action = Action::remove(action::Remove {
+                path: old_add.path.clone(),
+                deletion_timestamp: Some(current_timestamp()),
+                data_change: true,
+                extended_file_metadata: Some(old_add.tags.is_some()),
+                partition_values: Some(old_add.partition_values.clone()),
+                size: Some(old_add.size),
+                tags: old_add.tags.clone(),
+            });
+            actions.push(remove_action);
+        }
+    }
+
+    let mut transaction = table.create_transaction(Some(DeltaTransactionOptions::new(3)));
+    transaction.add_actions(actions);
+    rt()?
+        .block_on(transaction.commit(Some(DeltaOperation::Write {
+            mode,
+            partitionBy: Some(partition_by),
+            predicate: None,
+        })))
+        .map_err(PyDeltaTableError::from_raw)?;
+
+    Ok(())
+}
+
 #[pymodule]
 // module name need to match project name
 fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(create_write_transaction, m)?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<DeltaStorageFsBackend>()?;

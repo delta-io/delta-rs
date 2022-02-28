@@ -7,8 +7,6 @@ import pyarrow
 import pyarrow.fs as pa_fs
 from pyarrow.dataset import FileSystemDataset, ParquetFileFormat
 
-from deltalake.writer import write_deltalake
-
 if TYPE_CHECKING:
     import pandas
 
@@ -338,14 +336,3 @@ class DeltaTable:
         newer versions.
         """
         self._table.update_incremental()
-
-    def write(self, data, mode: Literal['append', 'overwrite'] = 'append', backend: str = 'pyarrow'):
-        write_deltalake(self, data, mode, backend)
-
-    def delete_where(self, where_expr, backend: str = 'pyarrow'):
-        '''Delete rows matching the expression'''
-        pass
-
-    def update(self, where_expr, set_values: Dict[str, Any], backend: str = 'pyarrow'):
-        '''Modify values in rows matching the expression'''
-        pass
