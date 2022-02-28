@@ -2,7 +2,6 @@
 
 extern crate pyo3;
 
-use arrow::pyarrow::PyArrowConvert;
 use chrono::{DateTime, FixedOffset, Utc};
 use deltalake::action::Stats;
 use deltalake::action::{ColumnCountStat, ColumnValueStat};
@@ -315,7 +314,8 @@ fn filestats_to_expression<'py>(
                 .field_with_name(column)
                 .map_err(|_| PyDeltaTableError::new_err("Partition column not found in schema"))?
                 .data_type()
-                .to_pyarrow(py)?;
+                .clone()
+                .into_py(py);
             // pa.scalar(value).cast(type)
             let converted_value = pa
                 .call_method1("scalar", (value,))?

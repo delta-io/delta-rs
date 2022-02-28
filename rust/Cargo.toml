@@ -76,6 +76,7 @@ s3 = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_s3/native-tls", "ru
 s3-rustls = ["rusoto_core/rustls", "rusoto_credential", "rusoto_s3/rustls", "rusoto_sts/rustls", "rusoto_dynamodb/rustls", "maplit", "dynamodb_lock/rustls"]
 gcs = ["async-stream", "tame-gcs", "tame-oauth", "reqwest"]
 glue = ["s3", "rusoto_glue"]
+python = ["arrow/pyarrow"]
 
 [build-dependencies]
 glibc_version = "0"
