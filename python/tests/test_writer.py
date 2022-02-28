@@ -38,10 +38,10 @@ def test_handle_existing(tmp_path: pathlib.Path, sample_data: pa.Table):
     p = tmp_path / "hello.txt"
     p.write_text("hello")
 
-    with pytest.raises(IOError) as exception:
+    with pytest.raises(OSError) as exception:
         write_deltalake(str(tmp_path), sample_data, mode='overwrite')
 
-    assert "directory is not empty" in exception.message
+    assert "directory is not empty" in str(exception)
 
 
 # round trip, no partitioning

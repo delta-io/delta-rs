@@ -4,7 +4,7 @@ import json
 from typing import Dict, Iterable, List, Literal, Optional, Union, overload
 import uuid
 from deltalake import DeltaTable, PyDeltaTableError
-from .deltalake import RawDeltaTable, create_write_transaction as _create_write_transaction
+from .deltalake import RawDeltaTable, write_new_deltalake as _write_new_deltalake
 import pyarrow as pa
 import pyarrow.dataset as ds
 
@@ -119,12 +119,17 @@ def write_deltalake(table_or_uri, data, schema=None, partition_by=None, mode='er
         existing_data_behavior='overwrite_or_ignore',
     )
 
-    _create_write_transaction(
-        #table._table if table is not None else None,
-        table is None,
-        table_uri,
-        schema,
-        add_actions,
-        mode,
-        partition_by or [],
-    )
+    if table is None:
+        _write_new_deltalake(
+            table_uri,
+            schema,
+            add_actions,
+            mode,
+            partition_by or []
+        )
+    else:
+        table._table.write(
+            add_actions,
+            mode,
+            partition_by or [],
+        )

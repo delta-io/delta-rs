@@ -1293,6 +1293,7 @@ impl DeltaTable {
         metadata: DeltaTableMetaData,
         protocol: action::Protocol,
         commit_info: Option<Map<String, Value>>,
+        add_actions: Option<Vec<action::Add>>,
     ) -> Result<(), DeltaTableError> {
         let meta = action::MetaData::try_from(metadata)?;
 
@@ -1307,11 +1308,16 @@ impl DeltaTable {
             Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
         );
 
-        let actions = vec![
+        let mut actions = vec![
             Action::commitInfo(enriched_commit_info),
             Action::protocol(protocol),
             Action::metaData(meta),
         ];
+        if let Some(add_actions) = add_actions {
+            for add_action in add_actions {
+                actions.push(Action::add(add_action));
+            }
+        };
 
         let mut transaction = self.create_transaction(None);
         transaction.add_actions(actions.clone());
