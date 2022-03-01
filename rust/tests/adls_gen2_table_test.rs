@@ -3,7 +3,7 @@
 /// the developer. Because of this requirement, the tests cannot run in CI and are therefore marked
 /// #[ignore]. As a result, the developer must execute these tests on their machine.
 /// In order to execute tests, remove the desired #[ignore] below and execute via:
-/// 'cargo test --features azure -p deltalake --test adls_gen2_table_test -- --nocapture'
+/// 'cargo test --features azure --test adls_gen2_table_test -- --nocapture'
 /// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
 /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
 mod adls_gen2_table {

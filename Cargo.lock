@@ -164,8 +164,9 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
 name = "azure_core"
-version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "6c61455ab776eedabfc7e166dda27c6c6bc2a882c043c35817501f1bd7440158"
 dependencies = [
  "async-trait",
  "base64",
@@ -190,8 +191,9 @@ dependencies = [
 
 [[package]]
 name = "azure_identity"
-version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ebda98657980528a8f0f0f7cc85c88c7dabc160e026bf258d06e54b77b698b08"
 dependencies = [
  "async-timer",
  "async-trait",
@@ -210,7 +212,8 @@ dependencies = [
 [[package]]
 name = "azure_storage"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "22c413e8459badf86c9e6e0c84f5894609663bcc8fa5eb1e49bfb985273dac58"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -235,7 +238,8 @@ dependencies = [
 [[package]]
 name = "azure_storage_blobs"
 version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a70ec6fab8a2cae5d774098267870c0f3fbef1cb63cac12afab38b8c17cc8d97"
 dependencies = [
  "RustyXML",
  "azure_core",
@@ -258,8 +262,9 @@ dependencies = [
 
 [[package]]
 name = "azure_storage_datalake"
-version = "0.1.0"
-source = "git+https://github.com/Azure/azure-sdk-for-rust?rev=c49450747ce96d19a4ff58ae9a00d0a02ab66ca2#c49450747ce96d19a4ff58ae9a00d0a02ab66ca2"
+version = "0.1.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2785185a4cde21bf775e71d7fd40e43fb54ab831b8b2758abf0e4b53d6086968"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -721,7 +726,7 @@ version = "0.5.6"
 dependencies = [
  "chrono",
  "deltalake",
- "env_logger 0.9.0",
+ "env_logger",
  "pyo3",
  "reqwest",
  "serde_json",
@@ -833,20 +838,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "44533bbbb3bb3c1fa17d9f2e4e38bbbaf8396ba82193c4cb1b6445d711445d36"
 dependencies = [
  "atty",
- "humantime 1.3.0",
- "log",
- "regex",
- "termcolor",
-]
-
-[[package]]
-name = "env_logger"
-version = "0.9.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "0b2cf0344971ee6c64c31be0d530793fba457d322dfec2810c453d0ef228f9c3"
-dependencies = [
- "atty",
- "humantime 2.1.0",
+ "humantime",
  "log",
  "regex",
  "termcolor",
@@ -1196,12 +1188,6 @@ checksum = "df004cfca50ef23c36850aaaa59ad52cc70d0e90243c3c7737a4dd32dc7a3c4f"
 dependencies = [
  "quick-error",
 ]
-
-[[package]]
-name = "humantime"
-version = "2.1.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "9a3a5bfb195931eeb336b2a7b4d761daec841b97f947d34394601737a7bba5e4"
 
 [[package]]
 name = "hyper"
@@ -1988,7 +1974,7 @@ version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "926d36b9553851b8b0005f1275891b392ee4d2d833852c417ed025477350fb9d"
 dependencies = [
- "env_logger 0.7.1",
+ "env_logger",
  "log",
 ]
 
