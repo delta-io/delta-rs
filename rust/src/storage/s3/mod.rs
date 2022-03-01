@@ -722,7 +722,7 @@ impl StorageBackend for S3StorageBackend {
                             .next_continuation_token
                             .map(|t| ContinuationToken::Value(Some(t)))
                             .unwrap_or(ContinuationToken::End);
-                        ctx.obj_iter = result.contents.unwrap_or_else(Vec::new).into_iter();
+                        ctx.obj_iter = result.contents.unwrap_or_default().into_iter();
                         ctx.obj_iter
                             .next()
                             .map(|obj| (try_object_meta_from(&ctx.bucket, obj), ctx))

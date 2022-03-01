@@ -52,11 +52,11 @@ tame-oauth = { version = "0.4.0", features = ["gcp"], optional = true }
 async-stream = { version = "0.3.2", default-features = true, optional = true }
 
 # High-level writer
-parquet-format = "~2.6.1"
+parquet-format = "~4.0.0"
 
-arrow = "6"
-parquet = "6"
-datafusion = { version = "6", optional = true }
+arrow = "9"
+parquet = "9"
+datafusion = { version = "7", optional = true }
 
 crossbeam = { version = "0", optional = true }
 
