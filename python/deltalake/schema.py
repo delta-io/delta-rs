@@ -205,7 +205,7 @@ def pyarrow_datatype_from_dict(json_dict: Dict[str, Any]) -> pyarrow.DataType:
                 key,
                 pyarrow.list_(
                     pyarrow.field(
-                        "element", pyarrow.struct([pyarrow_field_from_dict(value_type)])
+                        "entries", pyarrow.struct([pyarrow_field_from_dict(value_type)])
                     )
                 ),
             )
@@ -218,7 +218,7 @@ def pyarrow_datatype_from_dict(json_dict: Dict[str, Any]) -> pyarrow.DataType:
     elif type_class == "list":
         field = json_dict["children"][0]
         element_type = pyarrow_datatype_from_dict(field)
-        return pyarrow.list_(pyarrow.field("element", element_type))
+        return pyarrow.list_(pyarrow.field("item", element_type))
     elif type_class == "struct":
         fields = [pyarrow_field_from_dict(field) for field in json_dict["children"]]
         return pyarrow.struct(fields)

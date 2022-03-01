@@ -1,5 +1,5 @@
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 import json
 from typing import Dict, Iterable, List, Literal, Optional, Union, overload
 import uuid
@@ -97,14 +97,47 @@ def write_deltalake(table_or_uri, data, schema=None, partition_by=None, mode='er
         # TODO: Record column statistics
         # NOTE: will need to aggregate over row groups. Access with
         # written_file.metadata.row_group(i).column(j).statistics
-        stats = {"numRecords": written_file.metadata.num_rows}
+        stats = {
+            "numRecords": written_file.metadata.num_rows,
+            "minValues": {},
+            "maxValues": {},
+            "nullCount": {},
+        }
+
+        def iter_groups(metadata):
+            for i in range(metadata.num_row_groups):
+                yield metadata.row_group(i)
+
+        # TODO: What do nested columns look like?
+        for column_idx in range(written_file.metadata.num_columns):
+            name = written_file.metadata.schema.names[column_idx]
+            # If stats missing, then we can't know aggregate stats
+            if all(group.column(column_idx).is_stats_set 
+                       for group in iter_groups(written_file.metadata)):
+                stats["nullCount"][name] = sum(
+                    group.column(column_idx).statistics.null_count
+                    for group in iter_groups(written_file.metadata)
+                )
+                
+                # I assume for now this is based on data type, and thus is
+                # consistent between groups
+                if written_file.metadata.row_group(0).column(column_idx).statistics.has_min_max:
+                    stats["minValues"][name] = min(
+                        group.column(column_idx).statistics.min
+                        for group in iter_groups(written_file.metadata)
+                    )
+                    stats["maxValues"][name] = max(
+                        group.column(column_idx).statistics.max
+                        for group in iter_groups(written_file.metadata)
+                    )
+
         add_actions.append(AddAction(
             written_file.path,
             written_file.metadata.serialized_size,
             partition_values,
             int(datetime.now().timestamp()),
             True,
-            json.dumps(stats)
+            json.dumps(stats, cls=DeltaJSONEncoder)
         ))
 
     # TODO: Pass through filesystem? Do we need to transform the URI as well?
@@ -133,3 +166,15 @@ def write_deltalake(table_or_uri, data, schema=None, partition_by=None, mode='er
             mode,
             partition_by or [],
         )
+
+
+class DeltaJSONEncoder(json.JSONEncoder):
+    def default(self, obj):
+        if isinstance(obj, bytes):
+            return obj.decode("unicode_escape")
+        elif isinstance(obj, date):
+            return obj.isoformat()
+        elif isinstance(obj, datetime):
+            return obj.isoformat()
+        # Let the base class default method raise the TypeError
+        return json.JSONEncoder.default(self, obj)

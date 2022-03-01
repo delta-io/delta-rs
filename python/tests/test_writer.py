@@ -51,8 +51,10 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data):
 
     assert ("0" * 20 + ".json") in os.listdir(tmp_path / "_delta_log")
 
-    table = DeltaTable(str(tmp_path)).to_pyarrow_table()
+    delta_table = DeltaTable(str(tmp_path))
+    assert delta_table.pyarrow_schema() == sample_data.schema
 
+    table = delta_table.to_pyarrow_table()
     assert table == sample_data
 
 
