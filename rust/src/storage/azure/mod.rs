@@ -8,7 +8,6 @@
 /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError, UriError};
 use azure_core::new_http_client;
-use azure_core::prelude::*;
 use azure_storage::core::clients::{AsStorageClient, StorageAccountClient};
 use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
 use azure_storage_blobs::prelude::*;
@@ -219,30 +218,21 @@ impl StorageBackend for AdlsGen2Backend {
         let length = data.len() as i64;
 
         // TODO: Consider using Blob API again since it's just 1 REST call instead of 3
-        self.file_system_client
-            .create_file(Context::default(), obj.path, FileCreateOptions::default())
+        let file_client = self.file_system_client.get_file_client(obj.path);
+        file_client
+            .create()
+            .into_future()
             .await
             .map_err(to_storage_err2)?;
-
-        self.file_system_client
-            .append_to_file(
-                Context::default(),
-                obj.path,
-                data,
-                0,
-                FileAppendOptions::default(),
-            )
+        file_client
+            .append(0, data)
+            .into_future()
             .await
             .map_err(to_storage_err2)?;
-
-        self.file_system_client
-            .flush_file(
-                Context::default(),
-                obj.path,
-                length,
-                true,
-                FileFlushOptions::default(),
-            )
+        file_client
+            .flush(length)
+            .close(true)
+            .into_future()
             .await
             .map_err(to_storage_err2)?;
 
@@ -256,20 +246,38 @@ impl StorageBackend for AdlsGen2Backend {
         let dst_obj = parse_uri(dst)?.into_adlsgen2_object()?;
         self.validate_container(&dst_obj)?;
 
-        self.file_system_client
-            .rename_file_if_not_exists(Context::default(), src_obj.path, dst_obj.path)
-            .await
-            .map_err(to_storage_err2)?;
+        let file_client = self.file_system_client.get_file_client(src_obj.path);
+        let result = file_client
+            .rename_if_not_exists(dst_obj.path)
+            .into_future()
+            .await;
 
-        Ok(())
+        match result {
+            Err(err) => match err {
+                azure_storage::core::Error::CoreError(azure_core::Error::Policy(
+                    ref policy_error_source,
+                )) => match policy_error_source.downcast_ref::<azure_core::HttpError>() {
+                    Some(azure_core::HttpError::StatusCode { status, body: _ })
+                        if status.as_u16() == 409 =>
+                    {
+                        Err(StorageError::AlreadyExists(dst.to_string()))
+                    }
+                    _ => Err(StorageError::AzureStorage { source: err }),
+                },
+                _ => Err(StorageError::AzureStorage { source: err }),
+            },
+            _ => Ok(()),
+        }
     }
 
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
         self.validate_container(&obj)?;
 
-        self.file_system_client
-            .delete_file(Context::default(), obj.path, FileDeleteOptions::default())
+        let file_client = self.file_system_client.get_file_client(obj.path);
+        file_client
+            .delete()
+            .into_future()
             .await
             .map_err(to_storage_err2)?;
 
