@@ -9,7 +9,6 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 
 from deltalake import DeltaTable, PyDeltaTableError
-from deltalake.fs import DeltaStorageHandler
 
 from .deltalake import RawDeltaTable
 from .deltalake import write_new_deltalake as _write_new_deltalake
@@ -93,15 +92,15 @@ def write_deltalake(
         # assert len(filesystem.get_file_info(pa_fs.FileSelector(table_uri, allow_not_found=True))) == 0
 
     if partition_by:
-        partitioning = ds.partitioning(field_names=partition_by, flavor="hive")
+        partition_schema = pa.schema([schema.field(name) for name in partition_by])
+        partitioning = ds.partitioning(partition_schema, flavor="hive")
     else:
         partitioning = None
 
     add_actions: List[AddAction] = []
 
     def visitor(written_file):
-        # TODO: Get partition values from path
-        partition_values = {}
+        partition_values = get_partitions_from_path(table_uri, written_file.path)
         stats = get_file_stats_from_metadata(written_file.metadata)
 
         add_actions.append(
@@ -155,6 +154,19 @@ def try_get_deltatable(table_uri: str) -> Optional[DeltaTable]:
         if "Not a Delta table" not in str(err):
             raise
         return None
+
+
+def get_partitions_from_path(base_path: str, path: str) -> Dict[str, Optional[str]]:
+    path = path.split(base_path, maxsplit=1)[1]
+    parts = path.split("/")
+    parts.pop()  # remove filename
+    out = {}
+    for part in parts:
+        if part == "":
+            continue
+        key, value = part.split("=", maxsplit=1)
+        out[key] = value
+    return out
 
 
 def get_file_stats_from_metadata(metadata):

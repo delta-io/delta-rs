@@ -1,10 +1,10 @@
 import os
 import pathlib
-from asyncore import write
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
 import pyarrow as pa
+import pyarrow.compute as pc
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
@@ -52,7 +52,7 @@ def test_handle_existing(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert "directory is not empty" in str(exception)
 
 
-def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data):
+def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
     write_deltalake(str(tmp_path), sample_data)
 
     assert ("0" * 20 + ".json") in os.listdir(tmp_path / "_delta_log")
@@ -64,9 +64,45 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data):
     assert table == sample_data
 
 
-# round trip, one partitioning, parameterized part column
+@pytest.mark.parametrize(
+    "column",
+    [
+        "utf8",
+        "int64",
+        "int32",
+        "int16",
+        "int8",
+        "float32",
+        "float64",
+        "bool",
+        "binary",
+        # TODO: Add decimal and date32 once #565 is merged
+        # "decimal",
+        # "date32",
+    ],
+)
+def test_roundtrip_partitioned(
+    tmp_path: pathlib.Path, sample_data: pa.Table, column: str
+):
+    write_deltalake(str(tmp_path), sample_data, partition_by=[column])
 
-# round trip, nested partitioning
+    delta_table = DeltaTable(str(tmp_path))
+    assert delta_table.pyarrow_schema() == sample_data.schema
+
+    table = delta_table.to_pyarrow_table()
+    table = table.take(pc.sort_indices(table["int64"]))
+    assert table == sample_data
+
+
+def test_roundtrip_multi_partitioned(tmp_path: pathlib.Path, sample_data: pa.Table):
+    write_deltalake(str(tmp_path), sample_data, partition_by=["int32", "bool"])
+
+    delta_table = DeltaTable(str(tmp_path))
+    assert delta_table.pyarrow_schema() == sample_data.schema
+
+    table = delta_table.to_pyarrow_table()
+    table = table.take(pc.sort_indices(table["int64"]))
+    assert table == sample_data
 
 
 # test behaviors
