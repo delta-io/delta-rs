@@ -290,7 +290,10 @@ impl RawDeltaTable {
     ) -> PyResult<()> {
         let mode = save_mode_from_str(mode)?;
 
-        let mut actions: Vec<action::Action> = add_actions.iter().map(|add| Action::add(add.into())).collect();
+        let mut actions: Vec<action::Action> = add_actions
+            .iter()
+            .map(|add| Action::add(add.into()))
+            .collect();
 
         if let SaveMode::Overwrite = mode {
             // Remove all current files
@@ -308,7 +311,9 @@ impl RawDeltaTable {
             }
         }
 
-        let mut transaction = self._table.create_transaction(Some(DeltaTransactionOptions::new(3)));
+        let mut transaction = self
+            ._table
+            .create_transaction(Some(DeltaTransactionOptions::new(3)));
         transaction.add_actions(actions);
         rt()?
             .block_on(transaction.commit(Some(DeltaOperation::Write {

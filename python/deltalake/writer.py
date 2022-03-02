@@ -1,12 +1,18 @@
+import json
+import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
-import json
-from typing import Dict, Iterable, List, Literal, Optional, Union, overload
-import uuid
-from deltalake import DeltaTable, PyDeltaTableError
-from .deltalake import RawDeltaTable, write_new_deltalake as _write_new_deltalake
+from typing import Dict, Iterable, List, Literal, Optional, Union
+
 import pyarrow as pa
 import pyarrow.dataset as ds
+import pyarrow.fs as pa_fs
+
+from deltalake import DeltaTable, PyDeltaTableError
+from deltalake.fs import DeltaStorageHandler
+
+from .deltalake import RawDeltaTable
+from .deltalake import write_new_deltalake as _write_new_deltalake
 
 
 @dataclass
@@ -19,39 +25,36 @@ class AddAction:
     stats: str
 
 
-def create_empty_table(uri: str, schema: pa.Schema, partition_columns: List[str]) -> DeltaTable:
-    return DeltaTable._from_raw(RawDeltaTable.create_empty(uri, schema, partition_columns))
+def create_empty_table(
+    uri: str, schema: pa.Schema, partition_columns: List[str]
+) -> DeltaTable:
+    return DeltaTable._from_raw(
+        RawDeltaTable.create_empty(uri, schema, partition_columns)
+    )
 
 
-@overload
 def write_deltalake(
     table_or_uri: Union[str, DeltaTable],
-    data: Iterable[pa.RecordBatch],
-    schema: pa.Schema,
-    partition_by: Optional[Iterable[str]],
-    mode: Literal['error', 'append', 'overwrite', 'ignore'] = 'error'
-): ...
-
-
-@overload
-def write_deltalake(
-    table_or_uri: Union[str, DeltaTable],
-    data: Union[pa.Table, pa.RecordBatch], # TODO: there a type for a RecordBatchReader?
-    schema: Optional[pa.Schema],
-    partition_by: Optional[Iterable[str]],
-    mode: Literal['error', 'append', 'overwrite', 'ignore'] = 'error'
-): ...
-
-
-def write_deltalake(table_or_uri, data, schema=None, partition_by=None, mode='error'):
+    data: Union[
+        pa.Table, pa.RecordBatch, Iterable[pa.RecordBatch]
+    ],  # TODO: there a type for a RecordBatchReader?
+    schema: Optional[pa.Schema] = None,
+    partition_by: Optional[Iterable[str]] = None,
+    filesystem: Optional[pa_fs.FileSystem] = None,
+    mode: Literal["error", "append", "overwrite", "ignore"] = "error",
+):
     """Write to a Delta Lake table
 
     If the table does not already exist, it will be created.
 
     :param table: URI of a table or a DeltaTable object.
     :param data: Data to write. If passing iterable, the schema must also be given.
-    :param schema: Optional schema to write. 
-    :param mode: How to handle existing data. Default is to error if table 
+    :param schema: Optional schema to write.
+    :param partition_by: List of columns to partition the table by. Only required
+        when creating a new table.
+    :param filesystem: Optional filesystem to pass to PyArrow. If not provided will
+        be inferred from uri.
+    :param mode: How to handle existing data. Default is to error if table
         already exists. If 'append', will add new data. If 'overwrite', will
         replace table with new data. If 'ignore', will not write anything if
         table already exists.
@@ -62,27 +65,32 @@ def write_deltalake(table_or_uri, data, schema=None, partition_by=None, mode='er
         schema = data.schema
 
     if isinstance(table_or_uri, str):
+        table = try_get_deltatable(table_or_uri)
         table_uri = table_or_uri
-        try:
-            table = DeltaTable(table_or_uri)
-            current_version = table.version
-        except PyDeltaTableError as err:
-            # branch to handle if not a delta table
-            if "Not a Delta table" not in str(err):
-                raise
-            table = None
-            current_version = -1
-        else:
-            if mode == 'error':
-                raise AssertionError("DeltaTable already exists.")
-            elif mode == 'ignore':
-                # table already exists
-                return
-            current_version = table.version()
     else:
         table = table_or_uri
-        table_uri = table._table.table_uri()
-        current_version = table.version
+        table_uri = table_uri = table._table.table_uri()
+
+    # TODO: Pass through filesystem once it is complete
+    # if filesystem is None:
+    #    filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri))
+
+    if table:  # already exists
+        if mode == "error":
+            raise AssertionError("DeltaTable already exists.")
+        elif mode == "ignore":
+            return
+
+        current_version = table.version()
+
+        if partition_by:
+            assert partition_by == table.metadata.partition_columns
+    else:  # creating a new table
+        current_version = -1
+
+        # TODO: Don't allow writing to non-empty directory
+        # Blocked on: Finish filesystem implementation in fs.py
+        # assert len(filesystem.get_file_info(pa_fs.FileSelector(table_uri, allow_not_found=True))) == 0
 
     if partition_by:
         partitioning = ds.partitioning(field_names=partition_by, flavor="hive")
@@ -94,53 +102,19 @@ def write_deltalake(table_or_uri, data, schema=None, partition_by=None, mode='er
     def visitor(written_file):
         # TODO: Get partition values from path
         partition_values = {}
-        # TODO: Record column statistics
-        # NOTE: will need to aggregate over row groups. Access with
-        # written_file.metadata.row_group(i).column(j).statistics
-        stats = {
-            "numRecords": written_file.metadata.num_rows,
-            "minValues": {},
-            "maxValues": {},
-            "nullCount": {},
-        }
+        stats = get_file_stats_from_metadata(written_file.metadata)
 
-        def iter_groups(metadata):
-            for i in range(metadata.num_row_groups):
-                yield metadata.row_group(i)
+        add_actions.append(
+            AddAction(
+                written_file.path,
+                written_file.metadata.serialized_size,
+                partition_values,
+                int(datetime.now().timestamp()),
+                True,
+                json.dumps(stats, cls=DeltaJSONEncoder),
+            )
+        )
 
-        # TODO: What do nested columns look like?
-        for column_idx in range(written_file.metadata.num_columns):
-            name = written_file.metadata.schema.names[column_idx]
-            # If stats missing, then we can't know aggregate stats
-            if all(group.column(column_idx).is_stats_set 
-                       for group in iter_groups(written_file.metadata)):
-                stats["nullCount"][name] = sum(
-                    group.column(column_idx).statistics.null_count
-                    for group in iter_groups(written_file.metadata)
-                )
-                
-                # I assume for now this is based on data type, and thus is
-                # consistent between groups
-                if written_file.metadata.row_group(0).column(column_idx).statistics.has_min_max:
-                    stats["minValues"][name] = min(
-                        group.column(column_idx).statistics.min
-                        for group in iter_groups(written_file.metadata)
-                    )
-                    stats["maxValues"][name] = max(
-                        group.column(column_idx).statistics.max
-                        for group in iter_groups(written_file.metadata)
-                    )
-
-        add_actions.append(AddAction(
-            written_file.path,
-            written_file.metadata.serialized_size,
-            partition_values,
-            int(datetime.now().timestamp()),
-            True,
-            json.dumps(stats, cls=DeltaJSONEncoder)
-        ))
-
-    # TODO: Pass through filesystem? Do we need to transform the URI as well?
     ds.write_dataset(
         data,
         base_dir=table_uri,
@@ -149,17 +123,11 @@ def write_deltalake(table_or_uri, data, schema=None, partition_by=None, mode='er
         partitioning=partitioning,
         schema=schema,
         file_visitor=visitor,
-        existing_data_behavior='overwrite_or_ignore',
+        existing_data_behavior="overwrite_or_ignore",
     )
 
     if table is None:
-        _write_new_deltalake(
-            table_uri,
-            schema,
-            add_actions,
-            mode,
-            partition_by or []
-        )
+        _write_new_deltalake(table_uri, schema, add_actions, mode, partition_by or [])
     else:
         table._table.write(
             add_actions,
@@ -178,3 +146,50 @@ class DeltaJSONEncoder(json.JSONEncoder):
             return obj.isoformat()
         # Let the base class default method raise the TypeError
         return json.JSONEncoder.default(self, obj)
+
+
+def try_get_deltatable(table_uri: str) -> Optional[DeltaTable]:
+    try:
+        return DeltaTable(table_uri)
+    except PyDeltaTableError as err:
+        if "Not a Delta table" not in str(err):
+            raise
+        return None
+
+
+def get_file_stats_from_metadata(metadata):
+    stats = {
+        "numRecords": metadata.num_rows,
+        "minValues": {},
+        "maxValues": {},
+        "nullCount": {},
+    }
+
+    def iter_groups(metadata):
+        for i in range(metadata.num_row_groups):
+            yield metadata.row_group(i)
+
+    # TODO: What do nested columns look like?
+    for column_idx in range(metadata.num_columns):
+        name = metadata.schema.names[column_idx]
+        # If stats missing, then we can't know aggregate stats
+        if all(
+            group.column(column_idx).is_stats_set for group in iter_groups(metadata)
+        ):
+            stats["nullCount"][name] = sum(
+                group.column(column_idx).statistics.null_count
+                for group in iter_groups(metadata)
+            )
+
+            # I assume for now this is based on data type, and thus is
+            # consistent between groups
+            if metadata.row_group(0).column(column_idx).statistics.has_min_max:
+                stats["minValues"][name] = min(
+                    group.column(column_idx).statistics.min
+                    for group in iter_groups(metadata)
+                )
+                stats["maxValues"][name] = max(
+                    group.column(column_idx).statistics.max
+                    for group in iter_groups(metadata)
+                )
+    return stats

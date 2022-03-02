@@ -232,9 +232,7 @@ def test_schema_pyarrow_types():
         }
     )
     assert pyarrow_field.name == field_name
-    assert pyarrow_field.type == pyarrow.list_(
-        pyarrow.field("item", pyarrow.int32())
-    )
+    assert pyarrow_field.type == pyarrow.list_(pyarrow.field("item", pyarrow.int32()))
     assert pyarrow_field.metadata == metadata
     assert pyarrow_field.nullable is False
 
