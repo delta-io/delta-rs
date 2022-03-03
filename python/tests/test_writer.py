@@ -105,4 +105,21 @@ def test_roundtrip_multi_partitioned(tmp_path: pathlib.Path, sample_data: pa.Tab
     assert table == sample_data
 
 
-# test behaviors
+def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
+    path = str(tmp_path)
+
+    write_deltalake(path, sample_data)
+    assert DeltaTable(path).to_pyarrow_table() == sample_data
+
+    with pytest.raises(AssertionError):
+        write_deltalake(path, sample_data, mode="error")
+
+    write_deltalake(path, sample_data, mode="ignore")
+    assert ("0" * 19 + "1.json") not in os.listdir(tmp_path / "_delta_log")
+
+    write_deltalake(path, sample_data, mode="append")
+    expected = pa.concat_tables([sample_data, sample_data])
+    assert DeltaTable(path).to_pyarrow_table() == expected
+
+    write_deltalake(path, sample_data, mode="overwrite")
+    assert DeltaTable(path).to_pyarrow_table() == sample_data

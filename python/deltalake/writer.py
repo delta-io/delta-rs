@@ -128,7 +128,7 @@ def write_deltalake(
     if table is None:
         _write_new_deltalake(table_uri, schema, add_actions, mode, partition_by or [])
     else:
-        table._table.write(
+        table._table.create_write_transaction(
             add_actions,
             mode,
             partition_by or [],
