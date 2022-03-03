@@ -88,12 +88,6 @@ class DeltaTable:
         self._metadata = Metadata(self._table)
 
     @classmethod
-    def _from_raw(cls, raw_table: RawDeltaTable) -> "DeltaTable":
-        self = cls.__new__(cls)
-        self._table = raw_table
-        self._metadata = Metadata(self._table)
-
-    @classmethod
     def from_data_catalog(
         cls,
         data_catalog: DataCatalog,

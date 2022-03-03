@@ -2,15 +2,15 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
-from typing import Dict, Iterable, List, Literal, Optional, Union
+from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Union
 
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
+from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, PyDeltaTableError
 
-from .deltalake import RawDeltaTable
 from .deltalake import write_new_deltalake as _write_new_deltalake
 
 
@@ -26,14 +26,12 @@ class AddAction:
 
 def write_deltalake(
     table_or_uri: Union[str, DeltaTable],
-    data: Union[
-        pa.Table, pa.RecordBatch, Iterable[pa.RecordBatch]
-    ],  # TODO: there a type for a RecordBatchReader?
+    data: Union[pa.Table, pa.RecordBatch, Iterable[pa.RecordBatch], RecordBatchReader],
     schema: Optional[pa.Schema] = None,
     partition_by: Optional[Iterable[str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
-):
+) -> None:
     """Write to a Delta Lake table
 
     If the table does not already exist, it will be created.
@@ -50,10 +48,13 @@ def write_deltalake(
         replace table with new data. If 'ignore', will not write anything if
         table already exists.
     """
-    if isinstance(data, Iterable) and schema is None:
-        return ValueError("You must provide schema if data is Iterable")
-    elif not isinstance(data, Iterable):
-        schema = data.schema
+    if schema is None:
+        if isinstance(data, RecordBatchReader):
+            schema = data.schema
+        elif isinstance(data, Iterable):
+            raise ValueError("You must provide schema if data is Iterable")
+        else:
+            schema = data.schema
 
     if isinstance(table_or_uri, str):
         table = try_get_deltatable(table_or_uri)
@@ -91,7 +92,7 @@ def write_deltalake(
 
     add_actions: List[AddAction] = []
 
-    def visitor(written_file):
+    def visitor(written_file: Any) -> None:
         partition_values = get_partitions_from_path(table_uri, written_file.path)
         stats = get_file_stats_from_metadata(written_file.metadata)
 
@@ -112,7 +113,8 @@ def write_deltalake(
         basename_template=f"{current_version + 1}-{uuid.uuid4()}-{{i}}.parquet",
         format="parquet",
         partitioning=partitioning,
-        schema=schema,
+        # It will not accept a schema if using a RBR
+        schema=schema if not isinstance(data, RecordBatchReader) else None,
         file_visitor=visitor,
         existing_data_behavior="overwrite_or_ignore",
     )
@@ -128,7 +130,7 @@ def write_deltalake(
 
 
 class DeltaJSONEncoder(json.JSONEncoder):
-    def default(self, obj):
+    def default(self, obj: Any) -> Any:
         if isinstance(obj, bytes):
             return obj.decode("unicode_escape")
         elif isinstance(obj, date):
@@ -148,7 +150,7 @@ def try_get_deltatable(table_uri: str) -> Optional[DeltaTable]:
         return None
 
 
-def get_partitions_from_path(base_path: str, path: str) -> Dict[str, Optional[str]]:
+def get_partitions_from_path(base_path: str, path: str) -> Dict[str, str]:
     path = path.split(base_path, maxsplit=1)[1]
     parts = path.split("/")
     parts.pop()  # remove filename
@@ -161,7 +163,9 @@ def get_partitions_from_path(base_path: str, path: str) -> Dict[str, Optional[st
     return out
 
 
-def get_file_stats_from_metadata(metadata):
+def get_file_stats_from_metadata(
+    metadata: Any,
+) -> Dict[str, Union[int, Dict[str, Any]]]:
     stats = {
         "numRecords": metadata.num_rows,
         "minValues": {},
@@ -169,7 +173,7 @@ def get_file_stats_from_metadata(metadata):
         "nullCount": {},
     }
 
-    def iter_groups(metadata):
+    def iter_groups(metadata: Any) -> Iterator[Any]:
         for i in range(metadata.num_row_groups):
             yield metadata.row_group(i)
 

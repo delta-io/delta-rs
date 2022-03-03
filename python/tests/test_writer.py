@@ -6,6 +6,7 @@ from decimal import Decimal
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
+from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, write_deltalake
 
@@ -140,10 +141,27 @@ def test_writer_with_table(existing_table: DeltaTable, sample_data: pa.Table):
 
 def test_fails_wrong_partitioning(existing_table: DeltaTable, sample_data: pa.Table):
     with pytest.raises(AssertionError):
-        write_deltalake(existing_table, sample_data, mode="append", partition_by="int32")
+        write_deltalake(
+            existing_table, sample_data, mode="append", partition_by="int32"
+        )
 
 
-def test_write_iterator(tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table):
+def test_write_iterator(
+    tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
+):
     batches = existing_table.to_pyarrow_dataset().to_batches()
-    write_deltalake(str(tmp_path), batches)
+    with pytest.raises(ValueError):
+        write_deltalake(str(tmp_path), batches, mode="overwrite")
+
+    write_deltalake(str(tmp_path), batches, schema=sample_data.schema, mode="overwrite")
+    assert DeltaTable(str(tmp_path)).to_pyarrow_table() == sample_data
+
+
+def test_write_recordbatchreader(
+    tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table
+):
+    batches = existing_table.to_pyarrow_dataset().to_batches()
+    reader = RecordBatchReader.from_batches(sample_data.schema, batches)
+
+    write_deltalake(str(tmp_path), reader, mode="overwrite")
     assert DeltaTable(str(tmp_path)).to_pyarrow_table() == sample_data
