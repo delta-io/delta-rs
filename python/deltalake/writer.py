@@ -24,14 +24,6 @@ class AddAction:
     stats: str
 
 
-def create_empty_table(
-    uri: str, schema: pa.Schema, partition_columns: List[str]
-) -> DeltaTable:
-    return DeltaTable._from_raw(
-        RawDeltaTable.create_empty(uri, schema, partition_columns)
-    )
-
-
 def write_deltalake(
     table_or_uri: Union[str, DeltaTable],
     data: Union[
@@ -83,7 +75,7 @@ def write_deltalake(
         current_version = table.version()
 
         if partition_by:
-            assert partition_by == table.metadata.partition_columns
+            assert partition_by == table.metadata().partition_columns
     else:  # creating a new table
         current_version = -1
 

@@ -39,6 +39,13 @@ def sample_data():
     )
 
 
+@pytest.fixture()
+def existing_table(tmp_path: pathlib.Path, sample_data: pa.Table):
+    path = str(tmp_path)
+    write_deltalake(path, sample_data)
+    return DeltaTable(path)
+
+
 @pytest.mark.skip(reason="Waiting on #570")
 def test_handle_existing(tmp_path: pathlib.Path, sample_data: pa.Table):
     # if uri points to a non-empty directory that isn't a delta table, error
@@ -123,3 +130,20 @@ def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
 
     write_deltalake(path, sample_data, mode="overwrite")
     assert DeltaTable(path).to_pyarrow_table() == sample_data
+
+
+def test_writer_with_table(existing_table: DeltaTable, sample_data: pa.Table):
+    write_deltalake(existing_table, sample_data, mode="overwrite")
+    existing_table.update_incremental()
+    assert existing_table.to_pyarrow_table() == sample_data
+
+
+def test_fails_wrong_partitioning(existing_table: DeltaTable, sample_data: pa.Table):
+    with pytest.raises(AssertionError):
+        write_deltalake(existing_table, sample_data, mode="append", partition_by="int32")
+
+
+def test_write_iterator(tmp_path: pathlib.Path, existing_table: DeltaTable, sample_data: pa.Table):
+    batches = existing_table.to_pyarrow_dataset().to_batches()
+    write_deltalake(str(tmp_path), batches)
+    assert DeltaTable(str(tmp_path)).to_pyarrow_table() == sample_data
