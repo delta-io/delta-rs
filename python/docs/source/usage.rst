@@ -328,7 +328,13 @@ Optimizing tables is not currently supported.
 Writing Delta Tables
 --------------------
 
-For overwrites and appends, use :func:`write_deltalake`. If the table does not
+.. py:currentmodule:: deltalake
+
+.. warning::
+    The writer is currently *experimental*. Please use on test data first, not
+    on production data. Report any issues at https://github.com/delta-io/delta-rs/issues.
+
+For overwrites and appends, use :py:func:`write_deltalake`. If the table does not
 already exist, it will be created. The ``data`` parameter will accept a Pandas
 DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.
 
@@ -338,37 +344,16 @@ DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.
     >>> df = pd.DataFrame({'x': [1, 2, 3]})
     >>> write_deltalake('path/to/table', df)
 
-By default, writes append to the table. To overwrite, pass in ``mode='overwrite'``:
+.. note::
+    :py:func:`write_deltalake` accepts a Pandas DataFrame, but will convert it to 
+    a Arrow table before writing. See caveats in :doc:`pyarrow:python/pandas`. 
+
+By default, writes create a new table and error if it already exists. This is 
+controlled by the ``mode`` parameter, which mirrors the behavior of Spark's 
+:py:meth:`pyspark.sql.DataFrameWriter.saveAsTable` DataFrame method. To overwrite pass in ``mode='overwrite'`` and
+to append pass in ``mode='append'``:
 
 .. code-block:: python
 
     >>> write_deltalake('path/to/table', df, mode='overwrite')
-
-If you have a :class:`DeltaTable` object, you can also call the :meth:`DeltaTable.write`
-method:
-
-.. code-block:: python
-
-    >>> DeltaTable('path/to/table').write(df, mode='overwrite')
-
-To delete rows based on an expression, use :meth:`DeltaTable.delete`
-
-.. code-block:: python
-
-    >>> from deltalake.writer import delete_deltalake
-    >>> import pyarrow.dataset as ds
-    >>> DeltaTable('path/to/table').delete(ds.field('x') == 2)
-
-To update a subset of rows with new values, use 
-
-.. code-block:: python
-
-    >>> from deltalake.writer import delete_deltalake
-    >>> import pyarrow.dataset as ds
-    >>> # Increment y where x = 2
-    >>> DeltaTable('path/to/table').update(
-            where_expr=ds.field('x') == 2,
-            set_values={
-                'y': ds.field('y') + 1
-            }
-        )
+    >>> write_deltalake('path/to/table', df, mode='append')

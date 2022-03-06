@@ -7,6 +7,8 @@ DeltaTable
 .. automodule:: deltalake.table
     :members:
 
+.. autofunction:: deltalake.write_deltalake
+
 DeltaSchema
 -----------
 

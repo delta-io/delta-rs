@@ -42,7 +42,12 @@ version = get_release_version()
 # Add any Sphinx extension module names here, as strings. They can be
 # extensions coming with Sphinx (named 'sphinx.ext.*') or your custom
 # ones.
-extensions = ["sphinx_rtd_theme", "sphinx.ext.autodoc", "edit_on_github"]
+extensions = [
+    "sphinx_rtd_theme",
+    "sphinx.ext.autodoc",
+    "sphinx.ext.intersphinx",
+    "edit_on_github",
+]
 autodoc_typehints = "description"
 nitpicky = True
 nitpick_ignore = [
@@ -84,3 +89,9 @@ html_static_path = ["_static"]
 edit_on_github_project = "delta-io/delta-rs"
 edit_on_github_branch = "main"
 page_source_prefix = "python/docs/source"
+
+
+intersphinx_mapping = {
+    "pyarrow": ("https://arrow.apache.org/docs/", None),
+    "pyspark": ("https://spark.apache.org/docs/latest/api/python/", None),
+}
