@@ -4,6 +4,7 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Union
 
+import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
@@ -26,7 +27,13 @@ class AddAction:
 
 def write_deltalake(
     table_or_uri: Union[str, DeltaTable],
-    data: Union[pa.Table, pa.RecordBatch, Iterable[pa.RecordBatch], RecordBatchReader],
+    data: Union[
+        pd.DataFrame,
+        pa.Table,
+        pa.RecordBatch,
+        Iterable[pa.RecordBatch],
+        RecordBatchReader,
+    ],
     schema: Optional[pa.Schema] = None,
     partition_by: Optional[Iterable[str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
@@ -48,6 +55,9 @@ def write_deltalake(
         replace table with new data. If 'ignore', will not write anything if
         table already exists.
     """
+    if isinstance(data, pd.DataFrame):
+        data = pa.Table.from_pandas(data)
+
     if schema is None:
         if isinstance(data, RecordBatchReader):
             schema = data.schema
