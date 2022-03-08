@@ -316,7 +316,6 @@ fn filestats_to_expression<'py>(
                 .data_type()
                 .clone()
                 .into_py(py);
-            // pa.scalar(value).cast(type)
             let converted_value = pa
                 .call_method1("scalar", (value,))?
                 .call_method1("cast", (column_type,))?;
