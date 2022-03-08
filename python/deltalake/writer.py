@@ -35,7 +35,7 @@ def write_deltalake(
         RecordBatchReader,
     ],
     schema: Optional[pa.Schema] = None,
-    partition_by: Optional[Iterable[str]] = None,
+    partition_by: Optional[List[str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
 ) -> None:
@@ -187,9 +187,8 @@ def get_file_stats_from_metadata(
         for i in range(metadata.num_row_groups):
             yield metadata.row_group(i)
 
-    # TODO: What do nested columns look like?
     for column_idx in range(metadata.num_columns):
-        name = metadata.schema.names[column_idx]
+        name = metadata.row_group(0).column(column_idx).path_in_schema
         # If stats missing, then we can't know aggregate stats
         if all(
             group.column(column_idx).is_stats_set for group in iter_groups(metadata)

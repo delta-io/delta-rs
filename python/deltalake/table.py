@@ -1,7 +1,7 @@
 import json
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
 
 import pyarrow
 import pyarrow.fs as pa_fs

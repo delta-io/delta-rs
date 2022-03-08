@@ -1,7 +1,10 @@
+from ast import Assert
+import json
 import os
 import pathlib
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from attr import validate
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -177,3 +180,65 @@ def test_write_recordbatchreader(
 
     write_deltalake(str(tmp_path), reader, mode="overwrite")
     assert DeltaTable(str(tmp_path)).to_pyarrow_table() == sample_data
+
+
+def test_writer_partitioning(tmp_path: pathlib.Path):
+    test_strings = [
+        "a=b",
+        "hello world",
+        "hello%20world"
+    ]
+    data = pa.table({
+        "p": pa.array(test_strings),
+        "x": pa.array(range(len(test_strings)))
+    })
+    
+    write_deltalake(str(tmp_path), data)
+
+    assert DeltaTable(str(tmp_path)).to_pyarrow_table() == data
+
+
+# TODO: We should have sample data with nulls
+def validate_writer_stats(table: DeltaTable, data: pa.Table):
+    log_path = table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
+
+    # Should only have single add entry
+    for line in open(log_path, 'r').readlines():
+        data = json.loads(line)
+
+        if 'add' in data:
+            stats = json.loads(data['add']['stats']) 
+            break
+    else:
+        raise AssertionError("No add action found!")
+    
+    def get_original_array(col_name):
+        if col_name.startswith("struct."):
+            field = col_name.split('.', maxsplit=1)[1]
+            assert field in [f.name for f in data['struct'].type]
+            field_idx = data['struct'].type.get_field_index(field)
+            return data['struct'].chunk(0).field(field_idx)
+        elif col_name.startswith("list."):
+            list_name = col_name.split(".", maxsplit=1)[0]
+            assert list_name in data.column_names
+            return data[list_name].chunk(0).flatten()
+        else:
+            assert col_name in data.column_names
+            return data[col_name]
+
+    for col, null_count in stats['nullCount'].items():
+        assert null_count == get_original_array(col).null_count
+
+    for col, col_min in stats['minValues'].items():
+        assert col_min == min(get_original_array(col))
+
+    for col, col_max in stats['maxValues'].items():
+        assert col_max == max(get_original_array(col))
+
+
+def test_writer_stats(table: DeltaTable, data: pa.Table):
+    validate_writer_stats(table, data)
+
+
+def test_writer_null_stats(tmp_path: pathlib.Path):
+    pass
