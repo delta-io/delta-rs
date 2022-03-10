@@ -94,6 +94,7 @@ dependencies = [
  "lexical-core",
  "multiversion",
  "num",
+ "pyo3",
  "rand 0.8.5",
  "regex",
  "serde",
