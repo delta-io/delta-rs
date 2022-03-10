@@ -29,4 +29,4 @@ features = ["extension-module", "abi3", "abi3-py36"]
 [dependencies.deltalake]
 path = "../rust"
 version = "0"
-features = ["s3", "azure", "glue", "gcs"]
+features = ["s3", "azure", "glue", "gcs", "python"]
