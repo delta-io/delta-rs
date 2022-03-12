@@ -49,9 +49,9 @@ def write_deltalake(
 
     If the table does not already exist, it will be created.
 
-    This function only supports protocol version 2 currently. If an attempting
+    This function only supports protocol version 1 currently. If an attempting
     to write to an existing table with a higher min_writer_version, this
-    function will throw an error.
+    function will throw DeltaTableProtocolError.
 
     :param table_or_uri: URI of a table or a DeltaTable object.
     :param data: Data to write. If passing iterable, the schema must also be given.
