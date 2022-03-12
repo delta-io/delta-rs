@@ -1,10 +1,9 @@
-from ast import Assert
 import json
 import os
 import pathlib
+from ast import Assert
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from attr import validate
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -37,7 +36,7 @@ def sample_data():
                 [datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)]
             ),
             "struct": pa.array([{"x": x, "y": str(x)} for x in range(nrows)]),
-            "list": pa.array([list(range(x)) for x in range(nrows)]),
+            "list": pa.array([list(range(x + 1)) for x in range(nrows)]),
             # NOTE: https://github.com/apache/arrow-rs/issues/477
             #'map': pa.array([[(str(y), y) for y in range(x)] for x in range(nrows)], pa.map_(pa.string(), pa.int64())),
         }
@@ -183,62 +182,89 @@ def test_write_recordbatchreader(
 
 
 def test_writer_partitioning(tmp_path: pathlib.Path):
-    test_strings = [
-        "a=b",
-        "hello world",
-        "hello%20world"
-    ]
-    data = pa.table({
-        "p": pa.array(test_strings),
-        "x": pa.array(range(len(test_strings)))
-    })
-    
+    test_strings = ["a=b", "hello world", "hello%20world"]
+    data = pa.table(
+        {"p": pa.array(test_strings), "x": pa.array(range(len(test_strings)))}
+    )
+
     write_deltalake(str(tmp_path), data)
 
     assert DeltaTable(str(tmp_path)).to_pyarrow_table() == data
 
 
-# TODO: We should have sample data with nulls
-def validate_writer_stats(table: DeltaTable, data: pa.Table):
+def get_stats(table: DeltaTable):
     log_path = table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
 
     # Should only have single add entry
-    for line in open(log_path, 'r').readlines():
-        data = json.loads(line)
+    for line in open(log_path, "r").readlines():
+        log_entry = json.loads(line)
 
-        if 'add' in data:
-            stats = json.loads(data['add']['stats']) 
-            break
+        if "add" in log_entry:
+            return json.loads(log_entry["add"]["stats"])
     else:
         raise AssertionError("No add action found!")
-    
-    def get_original_array(col_name):
-        if col_name.startswith("struct."):
-            field = col_name.split('.', maxsplit=1)[1]
-            assert field in [f.name for f in data['struct'].type]
-            field_idx = data['struct'].type.get_field_index(field)
-            return data['struct'].chunk(0).field(field_idx)
-        elif col_name.startswith("list."):
-            list_name = col_name.split(".", maxsplit=1)[0]
-            assert list_name in data.column_names
-            return data[list_name].chunk(0).flatten()
-        else:
-            assert col_name in data.column_names
-            return data[col_name]
-
-    for col, null_count in stats['nullCount'].items():
-        assert null_count == get_original_array(col).null_count
-
-    for col, col_min in stats['minValues'].items():
-        assert col_min == min(get_original_array(col))
-
-    for col, col_max in stats['maxValues'].items():
-        assert col_max == max(get_original_array(col))
 
 
-def test_writer_stats(table: DeltaTable, data: pa.Table):
-    validate_writer_stats(table, data)
+def test_writer_stats(existing_table: DeltaTable, sample_data: pa.Table):
+    stats = get_stats(existing_table)
+
+    assert stats["numRecords"] == sample_data.num_rows
+
+    assert all(null_count == 0 for null_count in stats["nullCount"].values())
+
+    expected_mins = {
+        "utf8": "0",
+        "int64": 0,
+        "int32": 0,
+        "int16": 0,
+        "int8": 0,
+        "float32": 0.0,
+        "float64": 0.0,
+        "bool": False,
+        "binary": "0",
+        # TODO: Writer needs special decoding for decimal and date32.
+        #'decimal': '10.000',
+        # "date32": '2022-01-01',
+        "timestamp": "2022-01-01T00:00:00",
+        "struct.x": 0,
+        "struct.y": "0",
+        "list.list.item": 0,
+    }
+    assert stats["minValues"] == expected_mins
+
+    expected_maxs = {
+        "utf8": "4",
+        "int64": 4,
+        "int32": 4,
+        "int16": 4,
+        "int8": 4,
+        "float32": 4.0,
+        "float64": 4.0,
+        "bool": True,
+        "binary": "4",
+        #'decimal': '40.000',
+        # "date32": '2022-01-04',
+        "timestamp": "2022-01-01T04:00:00",
+        "struct.x": 4,
+        "struct.y": "4",
+        "list.list.item": 4,
+    }
+    assert stats["maxValues"] == expected_maxs
 
 
 def test_writer_null_stats(tmp_path: pathlib.Path):
-    pass
+    data = pa.table(
+        {
+            "int32": pa.array([1, None, 2, None], pa.int32()),
+            "float64": pa.array([1.0, None, None, None], pa.float64()),
+            "str": pa.array([None] * 4, pa.string()),
+        }
+    )
+    path = str(tmp_path)
+    write_deltalake(path, data)
+
+    table = DeltaTable(path)
+    stats = get_stats(table)
+
+    expected_nulls = {"int32": 2, "float64": 3, "str": 4}
+    assert stats["nullCount"] == expected_nulls

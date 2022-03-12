@@ -2,6 +2,7 @@ import json
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
+from decimal import Decimal
 from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Union
 
 import pandas as pd
@@ -147,6 +148,8 @@ class DeltaJSONEncoder(json.JSONEncoder):
             return obj.isoformat()
         elif isinstance(obj, datetime):
             return obj.isoformat()
+        elif isinstance(obj, Decimal):
+            return str(obj)
         # Let the base class default method raise the TypeError
         return json.JSONEncoder.default(self, obj)
 
@@ -201,6 +204,18 @@ def get_file_stats_from_metadata(
             # I assume for now this is based on data type, and thus is
             # consistent between groups
             if metadata.row_group(0).column(column_idx).statistics.has_min_max:
+                # Min and Max are recorded in physical type, not logical type
+                # https://stackoverflow.com/questions/66753485/decoding-parquet-min-max-statistics-for-decimal-type
+                # TODO: Add logic to decode physical type for DATE, DECIMAL
+                logical_type = (
+                    metadata.row_group(0)
+                    .column(column_idx)
+                    .statistics.logical_type.type
+                )
+                #
+                if logical_type not in ["STRING", "INT", "TIMESTAMP", "NONE"]:
+                    continue
+                # import pdb; pdb.set_trace()
                 stats["minValues"][name] = min(
                     group.column(column_idx).statistics.min
                     for group in iter_groups(metadata)
