@@ -87,9 +87,7 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
         "float64",
         "bool",
         "binary",
-        # TODO: Add decimal and date32 once #565 is merged
-        # "decimal",
-        # "date32",
+        "date32",
     ],
 )
 def test_roundtrip_partitioned(

@@ -95,20 +95,6 @@ def test_read_partitioned_table_to_dict():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == expected
 
 
-@pytest.mark.parametrize(
-    "name,partition_type", [("date", pa.date32()), ("timestamp", pa.timestamp("us"))]
-)
-def test_read_date_partitioned_table(name, partition_type):
-    table_path = f"tests/data/{name}_partitioned_df"
-    dt = DeltaTable(table_path)
-    table = dt.to_pyarrow_table()
-    assert table["date"].type == partition_type
-    date_expected = pa.array([date(2021, 1, 1)] * 5).cast(partition_type)
-    assert table["date"] == pa.chunked_array([date_expected])
-    id_expected = pa.array(range(5))
-    assert table["id"] == pa.chunked_array([id_expected])
-
-
 def test_read_partitioned_table_with_partitions_filters_to_dict():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
