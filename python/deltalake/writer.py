@@ -45,7 +45,7 @@ def write_deltalake(
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
 ) -> None:
-    """Write to a Delta Lake table
+    """Write to a Delta Lake table (Experimental)
 
     If the table does not already exist, it will be created.
 
