@@ -154,6 +154,13 @@ impl RawDeltaTable {
         })
     }
 
+    pub fn protocol_versions(&self) -> PyResult<(i32, i32)> {
+        Ok((
+            self._table.get_min_reader_version(),
+            self._table.get_min_writer_version(),
+        ))
+    }
+
     pub fn load_version(&mut self, version: deltalake::DeltaDataTypeVersion) -> PyResult<()> {
         rt()?
             .block_on(self._table.load_version(version))

@@ -1,9 +1,9 @@
 import json
 import os
 import pathlib
-from ast import Assert
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from unittest.mock import Mock
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -12,6 +12,8 @@ from pandas.testing import assert_frame_equal
 from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, write_deltalake
+from deltalake.table import ProtocolVersions
+from deltalake.writer import DeltaTableProtocolError
 
 
 @pytest.fixture()
@@ -266,3 +268,9 @@ def test_writer_null_stats(tmp_path: pathlib.Path):
 
     expected_nulls = {"int32": 2, "float64": 3, "str": 4}
     assert stats["nullCount"] == expected_nulls
+
+
+def test_writer_fails_on_protocol(existing_table: DeltaTable, sample_data: pa.Table):
+    existing_table.protocol = Mock(return_value=ProtocolVersions(1, 2))
+    with pytest.raises(DeltaTableProtocolError):
+        write_deltalake(existing_table, sample_data, mode="overwrite")

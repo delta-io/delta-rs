@@ -13,7 +13,12 @@ from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, PyDeltaTableError
 
+from .deltalake import PyDeltaTableError
 from .deltalake import write_new_deltalake as _write_new_deltalake
+
+
+class DeltaTableProtocolError(PyDeltaTableError):
+    pass
 
 
 @dataclass
@@ -44,7 +49,11 @@ def write_deltalake(
 
     If the table does not already exist, it will be created.
 
-    :param table: URI of a table or a DeltaTable object.
+    This function only supports protocol version 2 currently. If an attempting
+    to write to an existing table with a higher min_writer_version, this
+    function will throw an error.
+
+    :param table_or_uri: URI of a table or a DeltaTable object.
     :param data: Data to write. If passing iterable, the schema must also be given.
     :param schema: Optional schema to write.
     :param partition_by: List of columns to partition the table by. Only required
@@ -88,6 +97,13 @@ def write_deltalake(
 
         if partition_by:
             assert partition_by == table.metadata().partition_columns
+
+        if table.protocol().min_writer_version > 1:
+            raise DeltaTableProtocolError(
+                "This table's min_writer_version is "
+                f"{table.protocol().min_writer_version}, "
+                "but this method only supports version 1."
+            )
     else:  # creating a new table
         current_version = -1
 

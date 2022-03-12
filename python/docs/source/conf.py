@@ -94,4 +94,5 @@ page_source_prefix = "python/docs/source"
 intersphinx_mapping = {
     "pyarrow": ("https://arrow.apache.org/docs/", None),
     "pyspark": ("https://spark.apache.org/docs/latest/api/python/", None),
+    "pandas": ("https://pandas.pydata.org/docs/", None),
 }

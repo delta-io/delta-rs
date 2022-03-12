@@ -1,7 +1,7 @@
 import json
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import pyarrow
 import pyarrow.fs as pa_fs
@@ -61,6 +61,11 @@ class Metadata:
             f"description: {self._metadata.description}, partition_columns: {self._metadata.partition_columns}, "
             f"created_time: {self.created_time}, configuration: {self._metadata.configuration})"
         )
+
+
+class ProtocolVersions(NamedTuple):
+    min_reader_version: int
+    min_writer_version: int
 
 
 @dataclass(init=False)
@@ -218,6 +223,9 @@ class DeltaTable:
         :return: the current Metadata registered in the transaction log
         """
         return self._metadata
+
+    def protocol(self) -> ProtocolVersions:
+        return ProtocolVersions(*self._table.protocol_versions())
 
     def history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """

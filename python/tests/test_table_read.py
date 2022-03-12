@@ -213,6 +213,14 @@ def test_read_partitioned_table_metadata():
     assert metadata.configuration == {}
 
 
+def test_read_partitioned_table_protocol():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    protocol = dt.protocol()
+    assert protocol.min_reader_version == 1
+    assert protocol.min_writer_version == 2
+
+
 def test_history_partitioned_table_metadata():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
