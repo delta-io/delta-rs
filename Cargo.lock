@@ -714,6 +714,7 @@ dependencies = [
  "tame-gcs",
  "tame-oauth",
  "tempdir",
+ "tempfile",
  "thiserror",
  "tokio",
  "tokio-stream",

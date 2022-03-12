@@ -98,6 +98,7 @@ pub mod schema;
 pub mod storage;
 mod table_state;
 pub mod writer;
+pub mod write;
 
 #[cfg(feature = "datafusion-ext")]
 pub mod delta_datafusion;
