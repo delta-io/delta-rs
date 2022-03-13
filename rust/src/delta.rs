@@ -1818,7 +1818,7 @@ mod tests {
             serde_json::Value::String("test user".to_string()),
         );
         // Action
-        dt.create(delta_md.clone(), protocol.clone(), Some(commit_info))
+        dt.create(delta_md.clone(), protocol.clone(), Some(commit_info), None)
             .await
             .unwrap();
 

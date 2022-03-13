@@ -183,7 +183,7 @@ impl TryFrom<&ArrowField> for schema::SchemaField {
             arrow_field.data_type().try_into()?,
             arrow_field.is_nullable(),
             arrow_field.metadata().as_ref().map_or_else(
-                || HashMap::new(),
+                HashMap::new,
                 |m| {
                     m.iter()
                         .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))

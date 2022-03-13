@@ -53,7 +53,7 @@ pub async fn create_test_table(
         min_reader_version: 1,
         min_writer_version: 2,
     };
-    table.create(md, protocol, None).await.unwrap();
+    table.create(md, protocol, None, None).await.unwrap();
     table
 }
 
