@@ -3,18 +3,18 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, Iterable, Iterator, List, Literal, Optional, Union
+from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Union
 
 import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.lib import RecordBatchReader
-
-from deltalake import DeltaTable, PyDeltaTableError
+from typing_extensions import Literal
 
 from .deltalake import PyDeltaTableError
 from .deltalake import write_new_deltalake as _write_new_deltalake
+from .table import DeltaTable
 
 
 class DeltaTableProtocolError(PyDeltaTableError):
@@ -25,7 +25,7 @@ class DeltaTableProtocolError(PyDeltaTableError):
 class AddAction:
     path: str
     size: int
-    partition_values: Dict[str, Optional[str]]
+    partition_values: Mapping[str, Optional[str]]
     modification_time: int
     data_change: bool
     stats: str
