@@ -533,7 +533,7 @@ fn write_new_deltalake(
         None,
         None,
         (&schema).try_into()?,
-        partition_by.clone(),
+        partition_by,
         HashMap::new(),
     );
 
