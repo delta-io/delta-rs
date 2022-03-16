@@ -36,7 +36,8 @@ devel = [
     "sphinx",
     "sphinx-rtd-theme",
     "toml",
-    "pandas"
+    "pandas",
+    "typing-extensions"
 ]
 
 [project.urls]
