@@ -68,7 +68,7 @@ jobs:
       env:
         PY_VER: ${{ matrix.config.python_version }}
       run: |
-        if (( ${PYARROW_VER} > 37 )); then
+        if (( $PY_VER > 37 )); then
           VERSION_STRING=cp${PY_VER}-cp${PY_VER}
         else
           # "m" is for pymalloc, which doesn't seem to be used after 3.7
