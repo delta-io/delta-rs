@@ -84,7 +84,7 @@ jobs:
         virtualenv venv
         source venv/bin/activate
         make setup
-        if ${PYARROW_VER} = "latest"; then
+        if [ "${PYARROW_VER}" = "latest" ]; then
           pip install pyarrow
         else
           pip install pyarrow==${PYARROW_VER}
