@@ -32,18 +32,11 @@ jobs:
     - name: Check Rust
       run: make check-rust
 
-  test:
-    name: Python Build (Python ${{ matrix.config.python_version }} PyArrow ${{ matrix.config.pyarrow_version }})
+  test-minimal:
+    name: Python Build (Python 3.6 PyArrow 4.0.0)
     runs-on: ubuntu-latest
     # use the same environment we have for python release
     container: quay.io/pypa/manylinux2010_x86_64:2022-03-14-b2cd80b
-    strategy:
-      fail-fast: false
-      matrix:
-        config:
-          # test on oldest supported Python + PyArrow versions
-          - { python_version: "36", pyarrow_version: "4.0.0" }
-          - { python_version: "310", pyarrow_version: "latest" }
     steps:
     # actions/checkout@v2 is a node action, which runs on a fairly new
     # version of node. however, manylinux environment's glibc is too old for
@@ -65,30 +58,16 @@ jobs:
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
     - name: Enable manylinux Python targets
-      env:
-        PY_VER: ${{ matrix.config.python_version }}
-      run: |
-        if (( $PY_VER > 37 )); then
-          VERSION_STRING=cp${PY_VER}-cp${PY_VER}
-        else
-          # "m" is for pymalloc, which doesn't seem to be used after 3.7
-          VERSION_STRING=cp${PY_VER}-cp${PY_VER}m
-        fi
-        echo "/opt/python/${VERSION_STRING}/bin" >> $GITHUB_PATH
+      run: echo "/opt/python/cp36-cp36m/bin" >> $GITHUB_PATH
 
     - name: Build and install deltalake
-      env:
-        PYARROW_VER: ${{ matrix.config.pyarrow_version }}
       run: |
         pip install virtualenv
         virtualenv venv
         source venv/bin/activate
         make setup
-        if [ "${PYARROW_VER}" = "latest" ]; then
-          pip install pyarrow
-        else
-          pip install pyarrow==${PYARROW_VER}
-        fi
+        # Install minimum PyArrow version
+        pip install pyarrow==4.0.0
         make develop
 
     - name: Run tests
@@ -100,9 +79,45 @@ jobs:
     #   run: |
     #     py.test --cov tests -m integration
 
+
+  test:
+    name: Python Build (Python 3.10 PyArrow latest)
+    runs-on: ubuntu-latest
+    steps:
+    # actions/checkout@v2 is a node action, which runs on a fairly new
+    # version of node. however, manylinux environment's glibc is too old for
+    # that version of the node. so we will have to use v1 instead, which is a
+    # docker based action.
+    - uses: actions/checkout@v1
+
+    # Require for building openssl-sys
+    - name: Install perl-IPC/Cmd
+      run: yum install -y perl-IPC-Cmd
+
+    - name: Install latest nightly
+      uses: actions-rs/toolchain@v1
+      with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+
+    - uses: actions/setup-python@v3
+      with:
+        python-version: '3.10' 
+
+    - name: Build and install deltalake
+      run: |
+        pip install virtualenv
+        virtualenv venv
+        source venv/bin/activate
+        make develop
+
+    - name: Run tests
+      run: |
+        source venv/bin/activate
+        make unit-test
+
     - name: Build Sphinx documentation
-      # Sphinx support for typehints before 3.8 aren't great.
-      if: matrix.config.python_version >= 38
       run: |
         source venv/bin/activate
         make build-documentation
