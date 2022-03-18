@@ -67,7 +67,7 @@ jobs:
     - name: Enable manylinux Python targets
       env:
         PY_VER: ${{ matrix.config.python_version }}
-      run:
+      run: |
         if (( ${PYARROW_VER} > 37 )); then
           VERSION_STRING=cp${PY_VER}-cp${PY_VER}
         else
