@@ -90,10 +90,6 @@ jobs:
     # docker based action.
     - uses: actions/checkout@v1
 
-    # Require for building openssl-sys
-    - name: Install perl-IPC/Cmd
-      run: yum install -y perl-IPC-Cmd
-
     - name: Install latest nightly
       uses: actions-rs/toolchain@v1
       with:
