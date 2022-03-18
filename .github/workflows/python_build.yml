@@ -84,11 +84,7 @@ jobs:
     name: Python Build (Python 3.10 PyArrow latest)
     runs-on: ubuntu-latest
     steps:
-    # actions/checkout@v2 is a node action, which runs on a fairly new
-    # version of node. however, manylinux environment's glibc is too old for
-    # that version of the node. so we will have to use v1 instead, which is a
-    # docker based action.
-    - uses: actions/checkout@v1
+    - uses: actions/checkout@v2
 
     - name: Install latest nightly
       uses: actions-rs/toolchain@v1
