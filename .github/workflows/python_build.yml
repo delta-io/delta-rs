@@ -36,7 +36,7 @@ jobs:
     name: Python Build (Python ${{ matrix.config.python_version }} PyArrow ${{ matrix.config.pyarrow_version }})
     runs-on: ubuntu-latest
     # use the same environment we have for python release
-    container: quay.io/pypa/manylinux2010_x86_64:2020-12-31-4928808
+    container: quay.io/pypa/manylinux2010_x86_64:2022-03-14-b2cd80b
     strategy:
       fail-fast: false
       matrix:
