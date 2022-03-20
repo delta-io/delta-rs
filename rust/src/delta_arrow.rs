@@ -7,6 +7,7 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 
 impl TryFrom<&schema::Schema> for ArrowSchema {
@@ -158,6 +159,99 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                 )),
                 false,
             )),
+        }
+    }
+}
+
+impl TryFrom<&ArrowSchema> for schema::Schema {
+    type Error = ArrowError;
+    fn try_from(arrow_schema: &ArrowSchema) -> Result<Self, ArrowError> {
+        let new_fields: Result<Vec<schema::SchemaField>, _> = arrow_schema
+            .fields()
+            .iter()
+            .map(|field| field.try_into())
+            .collect();
+        Ok(schema::Schema::new(new_fields?))
+    }
+}
+
+impl TryFrom<&ArrowField> for schema::SchemaField {
+    type Error = ArrowError;
+    fn try_from(arrow_field: &ArrowField) -> Result<Self, ArrowError> {
+        Ok(schema::SchemaField::new(
+            arrow_field.name().clone(),
+            arrow_field.data_type().try_into()?,
+            arrow_field.is_nullable(),
+            arrow_field
+                .metadata()
+                .as_ref()
+                .map_or_else(HashMap::new, |m| {
+                    m.iter()
+                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                        .collect()
+                }),
+        ))
+    }
+}
+
+impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
+    type Error = ArrowError;
+    fn try_from(arrow_datatype: &ArrowDataType) -> Result<Self, ArrowError> {
+        match arrow_datatype {
+            ArrowDataType::Utf8 => Ok(schema::SchemaDataType::primitive("string".to_string())),
+            ArrowDataType::Int64 => Ok(schema::SchemaDataType::primitive("long".to_string())), // undocumented type
+            ArrowDataType::Int32 => Ok(schema::SchemaDataType::primitive("integer".to_string())),
+            ArrowDataType::Int16 => Ok(schema::SchemaDataType::primitive("short".to_string())),
+            ArrowDataType::Int8 => Ok(schema::SchemaDataType::primitive("byte".to_string())),
+            ArrowDataType::Float32 => Ok(schema::SchemaDataType::primitive("float".to_string())),
+            ArrowDataType::Float64 => Ok(schema::SchemaDataType::primitive("double".to_string())),
+            ArrowDataType::Boolean => Ok(schema::SchemaDataType::primitive("boolean".to_string())),
+            ArrowDataType::Binary => Ok(schema::SchemaDataType::primitive("binary".to_string())),
+            ArrowDataType::Decimal(p, s) => Ok(schema::SchemaDataType::primitive(format!(
+                "decimal({},{})",
+                p, s
+            ))),
+            ArrowDataType::Date32 => Ok(schema::SchemaDataType::primitive("date".to_string())),
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
+                Ok(schema::SchemaDataType::primitive("timestamp".to_string()))
+            }
+            ArrowDataType::Struct(fields) => {
+                let converted_fields: Result<Vec<schema::SchemaField>, _> =
+                    fields.iter().map(|field| field.try_into()).collect();
+                Ok(schema::SchemaDataType::r#struct(
+                    schema::SchemaTypeStruct::new(converted_fields?),
+                ))
+            }
+            ArrowDataType::List(field) => {
+                Ok(schema::SchemaDataType::array(schema::SchemaTypeArray::new(
+                    Box::new((*field).data_type().try_into()?),
+                    (*field).is_nullable(),
+                )))
+            }
+            ArrowDataType::FixedSizeList(field, _) => {
+                Ok(schema::SchemaDataType::array(schema::SchemaTypeArray::new(
+                    Box::new((*field).data_type().try_into()?),
+                    (*field).is_nullable(),
+                )))
+            }
+            ArrowDataType::Map(field, _) => {
+                if let ArrowDataType::Struct(struct_fields) = field.data_type() {
+                    let key_type = struct_fields[0].data_type().try_into()?;
+                    let value_type = struct_fields[1].data_type().try_into()?;
+                    let value_type_nullable = struct_fields[1].is_nullable();
+                    Ok(schema::SchemaDataType::map(schema::SchemaTypeMap::new(
+                        Box::new(key_type),
+                        Box::new(value_type),
+                        value_type_nullable,
+                    )))
+                } else {
+                    panic!("DataType::Map should contain a struct field child");
+                }
+            }
+            s => Err(ArrowError::SchemaError(format!(
+                "Invalid data type for Delta Lake: {}",
+                s
+            ))),
         }
     }
 }
