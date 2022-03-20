@@ -328,4 +328,32 @@ Optimizing tables is not currently supported.
 Writing Delta Tables
 --------------------
 
-Writing Delta tables is not currently supported.
+.. py:currentmodule:: deltalake
+
+.. warning::
+    The writer is currently *experimental*. Please use on test data first, not
+    on production data. Report any issues at https://github.com/delta-io/delta-rs/issues.
+
+For overwrites and appends, use :py:func:`write_deltalake`. If the table does not
+already exist, it will be created. The ``data`` parameter will accept a Pandas
+DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.
+
+.. code-block:: python
+
+    >>> from deltalake.writer import write_deltalake
+    >>> df = pd.DataFrame({'x': [1, 2, 3]})
+    >>> write_deltalake('path/to/table', df)
+
+.. note::
+    :py:func:`write_deltalake` accepts a Pandas DataFrame, but will convert it to 
+    a Arrow table before writing. See caveats in :doc:`pyarrow:python/pandas`. 
+
+By default, writes create a new table and error if it already exists. This is 
+controlled by the ``mode`` parameter, which mirrors the behavior of Spark's 
+:py:meth:`pyspark.sql.DataFrameWriter.saveAsTable` DataFrame method. To overwrite pass in ``mode='overwrite'`` and
+to append pass in ``mode='append'``:
+
+.. code-block:: python
+
+    >>> write_deltalake('path/to/table', df, mode='overwrite')
+    >>> write_deltalake('path/to/table', df, mode='append')

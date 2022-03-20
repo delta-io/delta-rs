@@ -3,19 +3,28 @@
 extern crate pyo3;
 
 use chrono::{DateTime, FixedOffset, Utc};
-use deltalake::action::Stats;
-use deltalake::action::{ColumnCountStat, ColumnValueStat};
+use deltalake::action;
+use deltalake::action::Action;
+use deltalake::action::{ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats};
 use deltalake::arrow::datatypes::Schema as ArrowSchema;
+use deltalake::get_backend_for_uri;
 use deltalake::partitions::PartitionFilter;
 use deltalake::storage;
+use deltalake::DeltaDataTypeLong;
+use deltalake::DeltaDataTypeTimestamp;
+use deltalake::DeltaTableMetaData;
+use deltalake::DeltaTransactionOptions;
 use deltalake::{arrow, StorageBackend};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
+use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple, PyType};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
 
@@ -145,6 +154,13 @@ impl RawDeltaTable {
         })
     }
 
+    pub fn protocol_versions(&self) -> PyResult<(i32, i32)> {
+        Ok((
+            self._table.get_min_reader_version(),
+            self._table.get_min_writer_version(),
+        ))
+    }
+
     pub fn load_version(&mut self, version: deltalake::DeltaDataTypeVersion) -> PyResult<()> {
         rt()?
             .block_on(self._table.load_version(version))
@@ -271,6 +287,50 @@ impl RawDeltaTable {
                 Ok((path, expression))
             })
             .collect()
+    }
+
+    fn create_write_transaction(
+        &mut self,
+        add_actions: Vec<PyAddAction>,
+        mode: &str,
+        partition_by: Vec<String>,
+    ) -> PyResult<()> {
+        let mode = save_mode_from_str(mode)?;
+
+        let mut actions: Vec<action::Action> = add_actions
+            .iter()
+            .map(|add| Action::add(add.into()))
+            .collect();
+
+        if let SaveMode::Overwrite = mode {
+            // Remove all current files
+            for old_add in self._table.get_state().files().iter() {
+                let remove_action = Action::remove(action::Remove {
+                    path: old_add.path.clone(),
+                    deletion_timestamp: Some(current_timestamp()),
+                    data_change: true,
+                    extended_file_metadata: Some(old_add.tags.is_some()),
+                    partition_values: Some(old_add.partition_values.clone()),
+                    size: Some(old_add.size),
+                    tags: old_add.tags.clone(),
+                });
+                actions.push(remove_action);
+            }
+        }
+
+        let mut transaction = self
+            ._table
+            .create_transaction(Some(DeltaTransactionOptions::new(3)));
+        transaction.add_actions(actions);
+        rt()?
+            .block_on(transaction.commit(Some(DeltaOperation::Write {
+                mode,
+                partitionBy: Some(partition_by),
+                predicate: None,
+            })))
+            .map_err(PyDeltaTableError::from_raw)?;
+
+        Ok(())
     }
 }
 
@@ -409,12 +469,96 @@ fn rust_core_version() -> &'static str {
     deltalake::crate_version()
 }
 
+fn save_mode_from_str(value: &str) -> PyResult<SaveMode> {
+    match value {
+        "append" => Ok(SaveMode::Append),
+        "overwrite" => Ok(SaveMode::Overwrite),
+        "error" => Ok(SaveMode::ErrorIfExists),
+        "ignore" => Ok(SaveMode::Ignore),
+        _ => Err(PyValueError::new_err("Invalid save mode")),
+    }
+}
+
+fn current_timestamp() -> DeltaDataTypeTimestamp {
+    let start = SystemTime::now();
+    let since_the_epoch = start
+        .duration_since(UNIX_EPOCH)
+        .expect("Time went backwards");
+    since_the_epoch.as_millis().try_into().unwrap()
+}
+
+#[derive(FromPyObject)]
+pub struct PyAddAction {
+    path: String,
+    size: DeltaDataTypeLong,
+    partition_values: HashMap<String, Option<String>>,
+    modification_time: DeltaDataTypeTimestamp,
+    data_change: bool,
+    stats: Option<String>,
+}
+
+impl From<&PyAddAction> for action::Add {
+    fn from(action: &PyAddAction) -> Self {
+        action::Add {
+            path: action.path.clone(),
+            size: action.size,
+            partition_values: action.partition_values.clone(),
+            partition_values_parsed: None,
+            modification_time: action.modification_time,
+            data_change: action.data_change,
+            stats: action.stats.clone(),
+            stats_parsed: None,
+            tags: None,
+        }
+    }
+}
+
+#[pyfunction]
+fn write_new_deltalake(
+    table_uri: String,
+    schema: ArrowSchema,
+    add_actions: Vec<PyAddAction>,
+    _mode: &str,
+    partition_by: Vec<String>,
+) -> PyResult<()> {
+    let mut table = deltalake::DeltaTable::new(
+        &table_uri,
+        get_backend_for_uri(&table_uri).map_err(PyDeltaTableError::from_storage)?,
+        deltalake::DeltaTableConfig::default(),
+    )
+    .map_err(PyDeltaTableError::from_raw)?;
+
+    let metadata = DeltaTableMetaData::new(
+        None,
+        None,
+        None,
+        (&schema).try_into()?,
+        partition_by,
+        HashMap::new(),
+    );
+
+    let fut = table.create(
+        metadata,
+        action::Protocol {
+            min_reader_version: 1,
+            min_writer_version: 1, // TODO: Make sure we comply with protocol
+        },
+        None, // TODO
+        Some(add_actions.iter().map(|add| add.into()).collect()),
+    );
+
+    rt()?.block_on(fut).map_err(PyDeltaTableError::from_raw)?;
+
+    Ok(())
+}
+
 #[pymodule]
 // module name need to match project name
 fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(write_new_deltalake, m)?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<DeltaStorageFsBackend>()?;

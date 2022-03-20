@@ -88,7 +88,7 @@ mod adls_gen2_table {
         let (metadata, protocol) = table_info();
 
         // Act 1
-        dt.create(metadata.clone(), protocol.clone(), None)
+        dt.create(metadata.clone(), protocol.clone(), None, None)
             .await
             .unwrap();
 

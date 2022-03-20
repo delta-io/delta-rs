@@ -83,7 +83,7 @@ async fn concurrent_writes_azure() {
         min_writer_version: 2,
     };
 
-    dt.create(metadata.clone(), protocol.clone(), None)
+    dt.create(metadata.clone(), protocol.clone(), None, None)
         .await
         .unwrap();
 
