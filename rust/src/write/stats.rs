@@ -328,30 +328,22 @@ fn min_and_max_from_parquet_statistics(
         DataType::Float32 => {
             let min_array = as_primitive_array::<arrow::datatypes::Float32Type>(&min_array);
             let min = arrow::compute::min(min_array);
-            let min = min
-                .map(|f| Number::from_f64(f as f64).map(Value::Number))
-                .flatten();
+            let min = min.and_then(|f| Number::from_f64(f as f64).map(Value::Number));
 
             let max_array = as_primitive_array::<arrow::datatypes::Float32Type>(&max_array);
             let max = arrow::compute::max(max_array);
-            let max = max
-                .map(|f| Number::from_f64(f as f64).map(Value::Number))
-                .flatten();
+            let max = max.and_then(|f| Number::from_f64(f as f64).map(Value::Number));
 
             Ok((min, max))
         }
         DataType::Float64 => {
             let min_array = as_primitive_array::<arrow::datatypes::Float64Type>(&min_array);
             let min = arrow::compute::min(min_array);
-            let min = min
-                .map(|f| Number::from_f64(f).map(Value::Number))
-                .flatten();
+            let min = min.and_then(|f| Number::from_f64(f).map(Value::Number));
 
             let max_array = as_primitive_array::<arrow::datatypes::Float64Type>(&max_array);
             let max = arrow::compute::max(max_array);
-            let max = max
-                .map(|f| Number::from_f64(f).map(Value::Number))
-                .flatten();
+            let max = max.and_then(|f| Number::from_f64(f).map(Value::Number));
 
             Ok((min, max))
         }

@@ -202,7 +202,7 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
     );
 
     table
-        .create(metadata, protocol, Some(commit_info))
+        .create(metadata, protocol, Some(commit_info), None)
         .await
         .unwrap();
 
