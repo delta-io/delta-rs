@@ -9,7 +9,7 @@ use crate::{
 };
 use arrow::{
     datatypes::*,
-    datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef},
+    datatypes::{Field as ArrowField, Schema as ArrowSchema, SchemaRef},
     error::ArrowError,
     record_batch::*,
 };
@@ -42,46 +42,9 @@ impl TryFrom<Arc<ArrowSchema>> for Schema {
             .fields()
             .iter()
             .map(<schema::SchemaField as TryFrom<&ArrowField>>::try_from)
-            .collect::<Result<Vec<schema::SchemaField>, DeltaTableError>>()?;
+            .collect::<Result<Vec<schema::SchemaField>, _>>()?;
 
         Ok(Schema::new(fields))
-    }
-}
-
-impl TryFrom<&ArrowField> for schema::SchemaField {
-    type Error = DeltaTableError;
-
-    fn try_from(f: &ArrowField) -> Result<Self, DeltaTableError> {
-        let field = schema::SchemaField::new(
-            f.name().to_string(),
-            schema::SchemaDataType::try_from(f.data_type())?,
-            f.is_nullable(),
-            HashMap::new(),
-        );
-        Ok(field)
-    }
-}
-
-impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
-    type Error = DeltaTableError;
-
-    fn try_from(t: &ArrowDataType) -> Result<Self, DeltaTableError> {
-        match t {
-            ArrowDataType::Utf8 => Ok(schema::SchemaDataType::primitive("string".to_string())),
-            ArrowDataType::Int64 => Ok(schema::SchemaDataType::primitive("long".to_string())),
-            ArrowDataType::Int32 => Ok(schema::SchemaDataType::primitive("integer".to_string())),
-            ArrowDataType::Int16 => Ok(schema::SchemaDataType::primitive("short".to_string())),
-            ArrowDataType::Int8 => Ok(schema::SchemaDataType::primitive("byte".to_string())),
-            ArrowDataType::Float32 => Ok(schema::SchemaDataType::primitive("float".to_string())),
-            ArrowDataType::Float64 => Ok(schema::SchemaDataType::primitive("double".to_string())),
-            ArrowDataType::Boolean => Ok(schema::SchemaDataType::primitive("boolean".to_string())),
-            ArrowDataType::Binary => Ok(schema::SchemaDataType::primitive("binary".to_string())),
-            ArrowDataType::Date32 => Ok(schema::SchemaDataType::primitive("date".to_string())),
-            // TODO handle missing datatypes, especially struct, array, map
-            _ => Err(DeltaTableError::Generic(
-                "Error converting Arrow datatype.".to_string(),
-            )),
-        }
     }
 }
 
