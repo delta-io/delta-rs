@@ -26,7 +26,7 @@ class DeltaStorageHandler(FileSystemHandler):
 
         :return: The filesystem’s type name.
         """
-        return NotImplemented
+        return "delta-rs-" + self._storage.get_type_name()
 
     def normalize_path(self, path: str) -> str:
         """
@@ -57,7 +57,7 @@ class DeltaStorageHandler(FileSystemHandler):
         :param selector: FileSelector object
         :return: list of file info objects
         """
-        raise NotImplementedError
+        raise get_file_info_selector(selector)
 
     def create_dir(self, path: str, *, recursive: bool = True) -> None:
         """

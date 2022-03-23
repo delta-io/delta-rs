@@ -728,6 +728,7 @@ dependencies = [
  "chrono",
  "deltalake",
  "env_logger",
+ "futures",
  "pyo3",
  "reqwest",
  "serde_json",

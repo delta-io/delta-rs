@@ -9,7 +9,7 @@ use deltalake::action::{ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMo
 use deltalake::arrow::datatypes::Schema as ArrowSchema;
 use deltalake::get_backend_for_uri;
 use deltalake::partitions::PartitionFilter;
-use deltalake::storage;
+use deltalake::storage::{self, ObjectMeta};
 use deltalake::DeltaDataTypeLong;
 use deltalake::DeltaDataTypeTimestamp;
 use deltalake::DeltaTableMetaData;
@@ -25,6 +25,7 @@ use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+use futures::StreamExt;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
 
@@ -446,6 +447,10 @@ impl DeltaStorageFsBackend {
         Ok(self._storage.trim_path(path))
     }
 
+    fn get_type_name(&self) -> PyResult<String> {
+        Ok("TODO".to_string())
+    }
+
     fn head_obj<'py>(&mut self, py: Python<'py>, path: &str) -> PyResult<&'py PyTuple> {
         let obj = rt()?
             .block_on(self._storage.head_obj(path))
@@ -461,6 +466,40 @@ impl DeltaStorageFsBackend {
             .block_on(self._storage.get_obj(path))
             .map_err(PyDeltaTableError::from_storage)?;
         Ok(PyBytes::new(py, &obj))
+    }
+
+    fn get_file_info_selector<'py>(&self, py: Python<'py>, selector: PyObject) -> PyResult<PyObject> {
+        let base_dir: String = selector.getattr(py, "base_dir")?.extract(py)?;
+        let allow_not_found: bool = selector.getattr(py, "allow_not_found")?.extract(py)?;
+        let do_recursive: bool = selector.getattr(py, "recursive")?.extract(py)?;
+
+        let mut metas: Vec<ObjectMeta> = Vec::new();
+
+        let mut stream = self._storage.list_objs(base_dir.as_ref());
+        rt()?.block_on(async {
+            while let Some(obj_meta) = stream.next().await {
+                obj_meta = obj_meta?;
+                if !do_recursive {
+                    // ignore nested parts
+                    if obj_meta.path.starts_with(base_dir) {
+                        continue;
+                    }
+                }
+                metas.push_back(obj_meta);
+            }
+        });
+        
+
+        if !allow_not_found && metas.is_empty() {
+            Err() // What does PyArrow throw?
+        } else {
+            let fs = PyModule::import(py, "pyarrow.fs")?;
+            let file_info = ds.getattr("FileInfo")?;
+            metas.map(|meta| {
+                // Create python objects
+                file_info.call1()
+            })
+        }
     }
 }
 

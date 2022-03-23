@@ -1,4 +1,4 @@
-from typing import Any, Callable, List
+from typing import Any, Callable, List, Tuple
 
 import pyarrow as pa
 
@@ -6,8 +6,21 @@ from deltalake.writer import AddAction
 
 RawDeltaTable: Any
 rust_core_version: Callable[[], str]
-DeltaStorageFsBackend: Any
 
-write_new_deltalake: Callable[[str, pa.Schema, List[AddAction], str, List[str]], None]
+class DeltaStorageFsBackend:
+    def __new__(cls, table_uri: str) -> DeltaStorageFsBackend: ...
+    def get_type_name(self) -> str: ...
+    def normalize_path(self, path: str) -> str: ...
+    def head_obj(self, path: str) -> Tuple[str, str]: ...
+    def get_obj(self, path: str) -> bytes: ...
+    def get_file_info_selector(self, selector: FileSelector) -> List[FileInfo]: ...
+
+def write_new_deltalake(
+    table_uri: str,
+    schema: pa.Schema,
+    add_actinos: List[AddAction],
+    _mode: str,
+    partition_by: List[str],
+) -> None: ...
 
 class PyDeltaTableError(BaseException): ...
