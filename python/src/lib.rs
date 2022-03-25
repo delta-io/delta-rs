@@ -14,9 +14,7 @@ use deltalake::DeltaDataTypeLong;
 use deltalake::DeltaDataTypeTimestamp;
 use deltalake::DeltaTableMetaData;
 use deltalake::DeltaTransactionOptions;
-use deltalake::{arrow, StorageBackend};
-use pyo3::create_exception;
-use pyo3::exceptions::PyException;
+use deltalake::StorageBackend;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
 use pyo3::types::{PyBytes, PyTuple, PyType};
@@ -25,35 +23,10 @@ use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use futures::StreamExt;
+use crate::exception::PyDeltaTableError;
 
-create_exception!(deltalake, PyDeltaTableError, PyException);
-
-impl PyDeltaTableError {
-    fn from_arrow(err: arrow::error::ArrowError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(err.to_string())
-    }
-
-    fn from_data_catalog(err: deltalake::DataCatalogError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(err.to_string())
-    }
-
-    fn from_raw(err: deltalake::DeltaTableError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(err.to_string())
-    }
-
-    fn from_storage(err: deltalake::StorageError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(err.to_string())
-    }
-
-    fn from_tokio(err: tokio::io::Error) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(err.to_string())
-    }
-
-    fn from_chrono(err: chrono::ParseError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(format!("Parse date and time string failed: {}", err))
-    }
-}
+mod fs;
+mod exception;
 
 #[inline]
 fn rt() -> PyResult<tokio::runtime::Runtime> {
@@ -467,40 +440,6 @@ impl DeltaStorageFsBackend {
             .map_err(PyDeltaTableError::from_storage)?;
         Ok(PyBytes::new(py, &obj))
     }
-
-    fn get_file_info_selector<'py>(&self, py: Python<'py>, selector: PyObject) -> PyResult<PyObject> {
-        let base_dir: String = selector.getattr(py, "base_dir")?.extract(py)?;
-        let allow_not_found: bool = selector.getattr(py, "allow_not_found")?.extract(py)?;
-        let do_recursive: bool = selector.getattr(py, "recursive")?.extract(py)?;
-
-        let mut metas: Vec<ObjectMeta> = Vec::new();
-
-        let mut stream = self._storage.list_objs(base_dir.as_ref());
-        rt()?.block_on(async {
-            while let Some(obj_meta) = stream.next().await {
-                obj_meta = obj_meta?;
-                if !do_recursive {
-                    // ignore nested parts
-                    if obj_meta.path.starts_with(base_dir) {
-                        continue;
-                    }
-                }
-                metas.push_back(obj_meta);
-            }
-        });
-        
-
-        if !allow_not_found && metas.is_empty() {
-            Err() // What does PyArrow throw?
-        } else {
-            let fs = PyModule::import(py, "pyarrow.fs")?;
-            let file_info = ds.getattr("FileInfo")?;
-            metas.map(|meta| {
-                // Create python objects
-                file_info.call1()
-            })
-        }
-    }
 }
 
 #[pyfunction]
@@ -601,6 +540,7 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<DeltaStorageFsBackend>()?;
+    m.add_class::<fs::FileSystem>()?;
     m.add("PyDeltaTableError", py.get_type::<PyDeltaTableError>())?;
     Ok(())
 }

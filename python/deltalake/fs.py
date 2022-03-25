@@ -57,7 +57,7 @@ class DeltaStorageHandler(FileSystemHandler):
         :param selector: FileSelector object
         :return: list of file info objects
         """
-        raise get_file_info_selector(selector)
+        raise NotImplementedError
 
     def create_dir(self, path: str, *, recursive: bool = True) -> None:
         """
