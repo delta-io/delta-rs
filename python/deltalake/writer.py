@@ -44,6 +44,10 @@ def write_deltalake(
     partition_by: Optional[List[str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
+    file_options: Optional[ds.FileWriteOptions] = None,
+    max_rows_per_file: Optional[int] = None,
+    min_rows_per_group: Optional[int] = None,
+    max_rows_per_group: Optional[int] = None
 ) -> None:
     """Write to a Delta Lake table (Experimental)
 
@@ -64,6 +68,18 @@ def write_deltalake(
         already exists. If 'append', will add new data. If 'overwrite', will
         replace table with new data. If 'ignore', will not write anything if
         table already exists.
+    :param file_options: Optional write options for the target data format.
+        Can be provided via make_write_options method for the target file format
+    :param max_rows_per_file: Maximum number of rows per file.
+        If greater than 0 then this will limit how many rows are placed in any single file.
+        Otherwise there will be no limit and one file will be created in each output directory
+        unless files need to be closed to respect max_open_files
+    :param min_rows_per_group: Minimum number of rows per group. When the value is set,
+        the dataset writer will batch incoming data and only write the row groups to the disk
+        when sufficient rows have accumulated.
+    :param max_rows_per_group: Maximum number of rows per group.
+        If the value is set, then the dataset writer may split up large incoming batches into multiple row groups.
+        If this value is set, then min_rows_per_group should also be set.
     """
     if isinstance(data, pd.DataFrame):
         data = pa.Table.from_pandas(data)
@@ -144,6 +160,10 @@ def write_deltalake(
         schema=schema if not isinstance(data, RecordBatchReader) else None,
         file_visitor=visitor,
         existing_data_behavior="overwrite_or_ignore",
+        file_options=file_options,
+        max_rows_per_file=max_rows_per_file or 0,
+        min_rows_per_group=min_rows_per_group or 0,
+        max_rows_per_group=max_rows_per_group or 0
     )
 
     if table is None:
