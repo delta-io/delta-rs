@@ -1,5 +1,5 @@
 //! Handle JSON messages when writing to delta tables
-use crate::write::DeltaWriterError;
+use crate::writer::DeltaWriterError;
 use arrow::{datatypes::Schema as ArrowSchema, json::reader::Decoder, record_batch::*};
 use serde_json::Value;
 use std::collections::HashMap;

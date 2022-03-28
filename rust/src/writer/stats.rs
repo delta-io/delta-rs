@@ -1,7 +1,7 @@
 use super::*;
 use crate::{
     action::{Add, ColumnValueStat, Stats},
-    writer::time_utils::timestamp_to_delta_stats_string,
+    time_utils::timestamp_to_delta_stats_string,
     DeltaDataTypeLong,
 };
 use arrow::{
@@ -397,7 +397,7 @@ fn arrow_array_from_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::{json::record_batch_from_message, test_utils::get_record_batch};
+    use super::{utils::record_batch_from_message, test_utils::get_record_batch};
     use crate::{
         action::{ColumnCountStat, ColumnValueStat},
         DeltaTable, DeltaTableError,
@@ -431,7 +431,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut writer = DeltaWriter::for_table(&table, HashMap::new()).unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table, HashMap::new()).unwrap();
 
         let arrow_schema = writer.arrow_schema();
         let batch = record_batch_from_message(arrow_schema, JSON_ROWS.clone().as_ref()).unwrap();

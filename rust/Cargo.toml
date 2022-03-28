@@ -71,6 +71,7 @@ async-trait = "0.1"
 # rust-dataframe = {version = "0.*", optional = true }
 
 [features]
+# default = ["datafusion-ext"]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion"]
 azure = ["azure_core", "azure_storage", "azure_storage_blobs", "azure_storage_datalake", "azure_identity", "reqwest"]

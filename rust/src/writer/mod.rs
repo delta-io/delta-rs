@@ -2,6 +2,12 @@
 // TODO
 // - consider file size when writing parquet files
 // - handle writer version
+pub mod json;
+mod stats;
+#[cfg(test)]
+pub mod test_utils;
+pub mod utils;
+pub mod record_batch;
 
 use crate::{
     action::{ColumnCountStat, ColumnValueStat, Stats},
@@ -18,13 +24,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
-pub use writer::*;
-
-pub mod json;
-mod stats;
-#[cfg(test)]
-pub mod test_utils;
-pub mod writer;
+pub use record_batch::*;
 
 const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 
