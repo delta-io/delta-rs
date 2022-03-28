@@ -94,70 +94,6 @@ impl RecordBatchWriter {
         })
     }
 
-    /// Divides a single record batch into into multiple according to table partitioning.
-    /// Values are written to arrow buffers, to collect data until it should be written to disk.
-    pub fn write(&mut self, values: &RecordBatch) -> Result<(), DeltaWriterError> {
-        let arrow_schema = self.partition_arrow_schema();
-        for result in self.divide_by_partition_values(values)? {
-            let partition_key =
-                get_partition_key(&self.partition_columns, &result.partition_values)?;
-            match self.arrow_writers.get_mut(&partition_key) {
-                Some(writer) => {
-                    writer.write(&result.record_batch)?;
-                }
-                None => {
-                    let mut writer = PartitionWriter::new(
-                        arrow_schema.clone(),
-                        result.partition_values,
-                        self.writer_properties.clone(),
-                    )?;
-                    writer.write(&result.record_batch)?;
-                    let _ = self.arrow_writers.insert(partition_key, writer);
-                }
-            }
-        }
-
-        Ok(())
-    }
-
-    /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
-    pub async fn flush(&mut self) -> Result<Vec<Add>, DeltaWriterError> {
-        let writers = std::mem::take(&mut self.arrow_writers);
-        let mut actions = Vec::new();
-
-        for (_, mut writer) in writers {
-            let metadata = writer.arrow_writer.close()?;
-
-            let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
-
-            let obj_bytes = writer.cursor.data();
-            let file_size = obj_bytes.len() as i64;
-            let storage_path = self
-                .storage
-                .join_path(self.table_uri.as_str(), path.as_str());
-
-            //
-            // TODO: Wrap in retry loop to handle temporary network errors
-            //
-
-            self.storage
-                .put_obj(&storage_path, obj_bytes.as_slice())
-                .await?;
-
-            // Replace self null_counts with an empty map. Use the other for stats.
-            let null_counts = std::mem::take(&mut writer.null_counts);
-
-            actions.push(create_add(
-                &writer.partition_values,
-                null_counts,
-                path,
-                file_size,
-                &metadata,
-            )?);
-        }
-        Ok(actions)
-    }
-
     /// Retrieves the latest schema from table, compares to the current and updates if changed.
     /// When schema is updated then `true` is returned which signals the caller that parquet
     /// created file or arrow batch should be revisited.
@@ -228,6 +164,77 @@ impl RecordBatchWriter {
                 .map(|f| f.to_owned())
                 .collect::<Vec<_>>(),
         ))
+    }
+}
+
+#[async_trait]
+impl DeltaWriter<&RecordBatch> for RecordBatchWriter {
+    /// Divides a single record batch into into multiple according to table partitioning.
+    /// Values are written to arrow buffers, to collect data until it should be written to disk.
+    fn write(&mut self, values: &RecordBatch) -> Result<(), DeltaWriterError> {
+        let arrow_schema = self.partition_arrow_schema();
+        for result in self.divide_by_partition_values(values)? {
+            let partition_key =
+                get_partition_key(&self.partition_columns, &result.partition_values)?;
+            match self.arrow_writers.get_mut(&partition_key) {
+                Some(writer) => {
+                    writer.write(&result.record_batch)?;
+                }
+                None => {
+                    let mut writer = PartitionWriter::new(
+                        arrow_schema.clone(),
+                        result.partition_values,
+                        self.writer_properties.clone(),
+                    )?;
+                    writer.write(&result.record_batch)?;
+                    let _ = self.arrow_writers.insert(partition_key, writer);
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
+    async fn flush(&mut self) -> Result<Vec<Add>, DeltaWriterError> {
+        let writers = std::mem::take(&mut self.arrow_writers);
+        let mut actions = Vec::new();
+
+        for (_, mut writer) in writers {
+            let metadata = writer.arrow_writer.close()?;
+
+            let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
+
+            let obj_bytes = writer.cursor.data();
+            let file_size = obj_bytes.len() as i64;
+            let storage_path = self
+                .storage
+                .join_path(self.table_uri.as_str(), path.as_str());
+
+            //
+            // TODO: Wrap in retry loop to handle temporary network errors
+            //
+
+            self.storage
+                .put_obj(&storage_path, obj_bytes.as_slice())
+                .await?;
+
+            // Replace self null_counts with an empty map. Use the other for stats.
+            let null_counts = std::mem::take(&mut writer.null_counts);
+
+            actions.push(create_add(
+                &writer.partition_values,
+                null_counts,
+                path,
+                file_size,
+                &metadata,
+            )?);
+        }
+        Ok(actions)
+    }
+
+    async fn flush_and_commit(&mut self) -> Result<(), DeltaWriterError> {
+        todo!()
     }
 }
 

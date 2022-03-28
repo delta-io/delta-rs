@@ -10,7 +10,7 @@ pub mod test_utils;
 pub mod utils;
 
 use crate::{
-    action::{ColumnCountStat, Stats},
+    action::{ColumnCountStat, Stats, Add},
     schema, DeltaTableError, Schema, StorageError, UriError,
 };
 use arrow::{
@@ -24,6 +24,7 @@ pub use record_batch::*;
 use serde_json::Value;
 use std::convert::TryFrom;
 use std::sync::Arc;
+use async_trait::async_trait;
 
 impl TryFrom<Arc<ArrowSchema>> for Schema {
     type Error = DeltaTableError;
@@ -119,6 +120,15 @@ pub enum DeltaWriterError {
         #[from]
         source: std::io::Error,
     },
+}
+
+#[async_trait]
+trait DeltaWriter<T> {
+    fn write(&mut self, values: T) -> Result<(), DeltaWriterError>;
+
+    async fn flush(&mut self) -> Result<Vec<Add>, DeltaWriterError>;
+
+    async fn flush_and_commit(&mut self) -> Result<(), DeltaWriterError>;
 }
 
 #[cfg(test)]
