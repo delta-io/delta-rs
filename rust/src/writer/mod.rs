@@ -10,7 +10,7 @@ pub mod test_utils;
 pub mod utils;
 
 use crate::{
-    action::{ColumnCountStat, Stats, Add},
+    action::{Add, ColumnCountStat, Stats},
     schema, DeltaTableError, Schema, StorageError, UriError,
 };
 use arrow::{
@@ -19,12 +19,12 @@ use arrow::{
     error::ArrowError,
     record_batch::*,
 };
+use async_trait::async_trait;
 use parquet::{basic::LogicalType, errors::ParquetError};
 pub use record_batch::*;
 use serde_json::Value;
 use std::convert::TryFrom;
 use std::sync::Arc;
-use async_trait::async_trait;
 
 impl TryFrom<Arc<ArrowSchema>> for Schema {
     type Error = DeltaTableError;
