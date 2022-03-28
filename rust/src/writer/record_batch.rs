@@ -2,6 +2,7 @@
 use super::DeltaWriterError;
 use super::{
     stats::{create_add, NullCounts},
+    utils::{get_partition_key, next_data_path},
     *,
 };
 use crate::writer::stats::apply_null_counts;
@@ -20,9 +21,6 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::io::Write;
 use std::sync::Arc;
-use uuid::Uuid;
-
-const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -101,10 +99,8 @@ impl RecordBatchWriter {
     pub fn write(&mut self, values: &RecordBatch) -> Result<(), DeltaWriterError> {
         let arrow_schema = self.partition_arrow_schema();
         for result in self.divide_by_partition_values(values)? {
-            let partition_key = RecordBatchWriter::get_partition_key(
-                &self.partition_columns,
-                &result.partition_values,
-            )?;
+            let partition_key =
+                get_partition_key(&self.partition_columns, &result.partition_values)?;
             match self.arrow_writers.get_mut(&partition_key) {
                 Some(writer) => {
                     writer.write(&result.record_batch)?;
@@ -132,7 +128,7 @@ impl RecordBatchWriter {
         for (_, mut writer) in writers {
             let metadata = writer.arrow_writer.close()?;
 
-            let path = self.next_data_path(&writer.partition_values, None)?;
+            let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
 
             let obj_bytes = writer.cursor.data();
             let file_size = obj_bytes.len() as i64;
@@ -195,60 +191,6 @@ impl RecordBatchWriter {
             self.partition_columns.clone(),
             values,
         )
-    }
-
-    // TODO: parquet files have a 5 digit zero-padded prefix and a "c\d{3}" suffix that
-    // I have not been able to find documentation for yet.
-    fn next_data_path(
-        &self,
-        partition_values: &HashMap<String, Option<String>>,
-        part: Option<i32>,
-    ) -> Result<String, DeltaWriterError> {
-        // TODO: what does 00000 mean?
-        // TODO (roeap): my understanding is, that the values are used as a counter - i.e. if a single batch of
-        // data written to one partition needs to be split due to desired file size constraints.
-        let first_part = match part {
-            Some(count) => format!("{:0>5}", count),
-            _ => "00000".to_string(),
-        };
-        let uuid_part = Uuid::new_v4();
-        // TODO: what does c000 mean?
-        let last_part = "c000";
-
-        // NOTE: If we add a non-snappy option, file name must change
-        let file_name = format!(
-            "part-{}-{}-{}.snappy.parquet",
-            first_part, uuid_part, last_part
-        );
-
-        if self.partition_columns.is_empty() {
-            return Ok(file_name);
-        }
-
-        let partition_key =
-            RecordBatchWriter::get_partition_key(&self.partition_columns, partition_values)?;
-        Ok(format!("{}/{}", partition_key, file_name))
-    }
-
-    pub(crate) fn get_partition_key(
-        partition_columns: &[String],
-        partition_values: &HashMap<String, Option<String>>,
-    ) -> Result<String, DeltaWriterError> {
-        let mut path_parts = vec![];
-        for k in partition_columns.iter() {
-            let partition_value = partition_values
-                .get(k)
-                .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
-
-            let partition_value = partition_value
-                .as_deref()
-                .unwrap_or(NULL_PARTITION_VALUE_DATA_PATH);
-            let part = format!("{}={}", k, partition_value);
-
-            path_parts.push(part);
-        }
-
-        Ok(path_parts.join("/"))
     }
 
     /// Returns the current byte length of the in memory buffer.
@@ -505,7 +447,10 @@ fn stringified_partition_value(arr: &Arc<dyn Array>) -> Result<Option<String>, D
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::writer::test_utils::{create_initialized_table, get_record_batch};
+    use crate::writer::{
+        test_utils::{create_initialized_table, get_record_batch},
+        utils::get_partition_key,
+    };
     use std::collections::HashMap;
     use std::path::Path;
 
@@ -600,8 +545,7 @@ mod tests {
         assert_eq!(partitions.len(), expected_keys.len());
         for result in partitions {
             let partition_key =
-                RecordBatchWriter::get_partition_key(partition_cols, &result.partition_values)
-                    .unwrap();
+                get_partition_key(partition_cols, &result.partition_values).unwrap();
             assert!(expected_keys.contains(&partition_key));
             let ref_batch = get_record_batch(Some(partition_key.clone()), false);
             assert_eq!(ref_batch, result.record_batch);
