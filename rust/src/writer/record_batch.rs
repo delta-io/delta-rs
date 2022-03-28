@@ -1,5 +1,10 @@
 //! Main writer API to write record batches to delta table
-use super::{stats::create_add, *};
+use super::DeltaWriterError;
+use super::{
+    stats::{create_add, NullCounts},
+    *,
+};
+use crate::writer::stats::apply_null_counts;
 use crate::{
     action::Add, get_backend_for_uri_with_options, DeltaTable, DeltaTableMetaData, Schema,
     StorageBackend,
@@ -9,19 +14,15 @@ use arrow::{
     compute::{lexicographical_partition_ranges, lexsort_to_indices, take, SortColumn},
     datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
 };
+use parquet::{arrow::ArrowWriter, errors::ParquetError, file::writer::InMemoryWriteableCursor};
 use parquet::{basic::Compression, file::properties::WriterProperties};
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
 
-use super::DeltaWriterError;
-use crate::{action::ColumnCountStat, writer::stats::apply_null_counts};
-use parquet::{arrow::ArrowWriter, errors::ParquetError, file::writer::InMemoryWriteableCursor};
-
-use std::io::Write;
-
-type NullCounts = HashMap<String, ColumnCountStat>;
+const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -100,8 +101,10 @@ impl RecordBatchWriter {
     pub fn write(&mut self, values: &RecordBatch) -> Result<(), DeltaWriterError> {
         let arrow_schema = self.partition_arrow_schema();
         for result in self.divide_by_partition_values(values)? {
-            let partition_key =
-                RecordBatchWriter::get_partition_key(&self.partition_columns, &result.partition_values)?;
+            let partition_key = RecordBatchWriter::get_partition_key(
+                &self.partition_columns,
+                &result.partition_values,
+            )?;
             match self.arrow_writers.get_mut(&partition_key) {
                 Some(writer) => {
                     writer.write(&result.record_batch)?;
@@ -597,7 +600,8 @@ mod tests {
         assert_eq!(partitions.len(), expected_keys.len());
         for result in partitions {
             let partition_key =
-                RecordBatchWriter::get_partition_key(partition_cols, &result.partition_values).unwrap();
+                RecordBatchWriter::get_partition_key(partition_cols, &result.partition_values)
+                    .unwrap();
             assert!(expected_keys.contains(&partition_key));
             let ref_batch = get_record_batch(Some(partition_key.clone()), false);
             assert_eq!(ref_batch, result.record_batch);

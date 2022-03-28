@@ -3,14 +3,14 @@
 // - consider file size when writing parquet files
 // - handle writer version
 pub mod json;
+pub mod record_batch;
 mod stats;
 #[cfg(test)]
 pub mod test_utils;
 pub mod utils;
-pub mod record_batch;
 
 use crate::{
-    action::{ColumnCountStat, ColumnValueStat, Stats},
+    action::{ColumnCountStat, Stats},
     schema, DeltaTableError, Schema, StorageError, UriError,
 };
 use arrow::{
@@ -20,19 +20,10 @@ use arrow::{
     record_batch::*,
 };
 use parquet::{basic::LogicalType, errors::ParquetError};
+pub use record_batch::*;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
-pub use record_batch::*;
-
-const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
-
-type NullCounts = HashMap<String, ColumnCountStat>;
-type MinAndMaxValues = (
-    HashMap<String, ColumnValueStat>,
-    HashMap<String, ColumnValueStat>,
-);
 
 impl TryFrom<Arc<ArrowSchema>> for Schema {
     type Error = DeltaTableError;

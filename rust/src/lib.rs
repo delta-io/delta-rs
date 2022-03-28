@@ -97,8 +97,8 @@ pub mod partitions;
 pub mod schema;
 pub mod storage;
 mod table_state;
-pub mod writer;
 mod time_utils;
+pub mod writer;
 
 #[cfg(feature = "datafusion-ext")]
 pub mod delta_datafusion;

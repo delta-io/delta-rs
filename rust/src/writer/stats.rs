@@ -23,6 +23,12 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+pub type NullCounts = HashMap<String, ColumnCountStat>;
+pub type MinAndMaxValues = (
+    HashMap<String, ColumnValueStat>,
+    HashMap<String, ColumnValueStat>,
+);
+
 pub(crate) fn apply_null_counts(
     array: &StructArray,
     null_counts: &mut HashMap<String, ColumnCountStat>,
@@ -397,7 +403,7 @@ fn arrow_array_from_bytes(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use super::{utils::record_batch_from_message, test_utils::get_record_batch};
+    use super::{test_utils::get_record_batch, utils::record_batch_from_message};
     use crate::{
         action::{ColumnCountStat, ColumnValueStat},
         DeltaTable, DeltaTableError,

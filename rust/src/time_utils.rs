@@ -18,7 +18,6 @@ pub fn timestamp_to_delta_stats_string(n: i64, time_unit: &TimeUnit) -> String {
     format!("{}", dt.format("%Y-%m-%dT%H:%M:%S%.3fZ"))
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -26,10 +25,8 @@ mod tests {
 
     #[test]
     fn test_timestamp_to_delta_stats_string() {
-        let s = timestamp_to_delta_stats_string(
-            1628685199541,
-            &TimeUnit::MILLIS(MilliSeconds::new()),
-        );
+        let s =
+            timestamp_to_delta_stats_string(1628685199541, &TimeUnit::MILLIS(MilliSeconds::new()));
         assert_eq!("2021-08-11T12:33:19.541Z".to_string(), s);
         let s = timestamp_to_delta_stats_string(
             1628685199541000,
