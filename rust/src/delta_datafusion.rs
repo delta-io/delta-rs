@@ -28,8 +28,9 @@ use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUni
 use async_trait::async_trait;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
-use datafusion::datasource::object_store::local::LocalFileSystem;
-use datafusion::datasource::{PartitionedFile, TableProvider};
+use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
+use datafusion::datasource::TableProvider;
+use datafusion::datasource::listing::PartitionedFile;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::ExecutionPlan;
