@@ -26,11 +26,11 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
 use async_trait::async_trait;
+use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
-use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
-use datafusion::datasource::TableProvider;
 use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::TableProvider;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::ExecutionPlan;

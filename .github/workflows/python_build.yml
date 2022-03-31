@@ -18,7 +18,7 @@ jobs:
     - name: Setup Python
       uses: actions/setup-python@v2
       with:
-        python-version: 3.6
+        python-version: 3.7
     - name: Check Python
       run: |
         pip install black isort mypy types-dataclasses
@@ -33,7 +33,7 @@ jobs:
       run: make check-rust
 
   test-minimal:
-    name: Python Build (Python 3.6 PyArrow 4.0.0)
+    name: Python Build (Python 3.7 PyArrow 4.0.0)
     runs-on: ubuntu-latest
     # use the same environment we have for python release
     container: quay.io/pypa/manylinux2010_x86_64:2022-03-14-b2cd80b

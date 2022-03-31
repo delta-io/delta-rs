@@ -53,7 +53,7 @@ jobs:
 
       - uses: actions/setup-python@v2
         with:
-          python-version: 3.6
+          python-version: 3.7
 
       - name: Setup
         run: make setup
