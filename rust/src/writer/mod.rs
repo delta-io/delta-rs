@@ -17,11 +17,11 @@ use arrow::{
     datatypes::*,
     datatypes::{Field as ArrowField, Schema as ArrowSchema, SchemaRef},
     error::ArrowError,
-    record_batch::*,
 };
 use async_trait::async_trait;
+pub use json::JsonWriter;
 use parquet::{basic::LogicalType, errors::ParquetError};
-pub use record_batch::*;
+pub use record_batch::RecordBatchWriter;
 use serde_json::Value;
 use std::convert::TryFrom;
 use std::sync::Arc;
@@ -124,10 +124,15 @@ pub enum DeltaWriterError {
 
 #[async_trait]
 trait DeltaWriter<T> {
-    fn write(&mut self, values: T) -> Result<(), DeltaWriterError>;
+    /// write a chunk of values into the internal write buffers.
+    async fn write(&mut self, values: T) -> Result<(), DeltaWriterError>;
 
+    /// Flush the internal write buffers to files in the delta table folder structure.
+    /// The corresponding delta [`Add`] actions are returned and should be committed via a transaction.
     async fn flush(&mut self) -> Result<Vec<Add>, DeltaWriterError>;
 
+    /// Flush the internal write buffers to files in the delta table folder structure.
+    /// and commit the changes to the Delta log, creating a new table version.
     async fn flush_and_commit(&mut self) -> Result<(), DeltaWriterError>;
 }
 

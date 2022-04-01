@@ -1,17 +1,17 @@
 //! Main writer API to write record batches to delta table
-use super::DeltaWriterError;
 use super::{
     stats::{create_add, NullCounts},
-    utils::{get_partition_key, next_data_path},
-    *,
+    utils::{cursor_from_bytes, get_partition_key, next_data_path, stringified_partition_value},
+    DeltaWriter, DeltaWriterError,
 };
 use crate::writer::stats::apply_null_counts;
 use crate::{
     action::Add, get_backend_for_uri_with_options, DeltaTable, DeltaTableMetaData, Schema,
     StorageBackend,
 };
+use arrow::record_batch::RecordBatch;
 use arrow::{
-    array::{as_primitive_array, Array, UInt32Array},
+    array::{Array, UInt32Array},
     compute::{lexicographical_partition_ranges, lexsort_to_indices, take, SortColumn},
     datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
 };
@@ -19,7 +19,6 @@ use parquet::{arrow::ArrowWriter, errors::ParquetError, file::writer::InMemoryWr
 use parquet::{basic::Compression, file::properties::WriterProperties};
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::io::Write;
 use std::sync::Arc;
 
 /// Writes messages to a delta lake table.
@@ -73,6 +72,7 @@ impl RecordBatchWriter {
         let storage = get_backend_for_uri_with_options(&table.table_uri, options)?;
 
         // Initialize an arrow schema ref from the delta table schema
+        // TODO remove panic
         let metadata = table.get_metadata().unwrap();
         let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema.clone())?;
         let arrow_schema_ref = Arc::new(arrow_schema);
@@ -167,13 +167,13 @@ impl RecordBatchWriter {
     }
 }
 
-#[async_trait]
-impl DeltaWriter<&RecordBatch> for RecordBatchWriter {
+#[async_trait::async_trait]
+impl DeltaWriter<RecordBatch> for RecordBatchWriter {
     /// Divides a single record batch into into multiple according to table partitioning.
     /// Values are written to arrow buffers, to collect data until it should be written to disk.
-    fn write(&mut self, values: &RecordBatch) -> Result<(), DeltaWriterError> {
+    async fn write(&mut self, values: RecordBatch) -> Result<(), DeltaWriterError> {
         let arrow_schema = self.partition_arrow_schema();
-        for result in self.divide_by_partition_values(values)? {
+        for result in self.divide_by_partition_values(&values)? {
             let partition_key =
                 get_partition_key(&self.partition_columns, &result.partition_values)?;
             match self.arrow_writers.get_mut(&partition_key) {
@@ -263,10 +263,10 @@ impl PartitionWriter {
         writer_properties: WriterProperties,
     ) -> Result<Self, ParquetError> {
         let cursor = InMemoryWriteableCursor::default();
-        let arrow_writer = new_underlying_writer(
+        let arrow_writer = ArrowWriter::try_new(
             cursor.clone(),
             arrow_schema.clone(),
-            writer_properties.clone(),
+            Some(writer_properties.clone()),
         )?;
 
         let null_counts = NullCounts::new();
@@ -306,10 +306,10 @@ impl PartitionWriter {
             Err(e) => {
                 let new_cursor = cursor_from_bytes(current_cursor_bytes.as_slice())?;
                 let _ = std::mem::replace(&mut self.cursor, new_cursor.clone());
-                let arrow_writer = new_underlying_writer(
+                let arrow_writer = ArrowWriter::try_new(
                     new_cursor,
                     self.arrow_schema.clone(),
-                    self.writer_properties.clone(),
+                    Some(self.writer_properties.clone()),
                 )?;
                 let _ = std::mem::replace(&mut self.arrow_writer, arrow_writer);
                 // TODO we used to clear partition values here, but since we pre-partition the
@@ -399,58 +399,6 @@ pub fn divide_by_partition_values(
     Ok(partitions)
 }
 
-fn cursor_from_bytes(bytes: &[u8]) -> Result<InMemoryWriteableCursor, std::io::Error> {
-    let mut cursor = InMemoryWriteableCursor::default();
-    cursor.write_all(bytes)?;
-    Ok(cursor)
-}
-
-fn new_underlying_writer(
-    cursor: InMemoryWriteableCursor,
-    arrow_schema: Arc<ArrowSchema>,
-    writer_properties: WriterProperties,
-) -> Result<ArrowWriter<InMemoryWriteableCursor>, ParquetError> {
-    ArrowWriter::try_new(cursor, arrow_schema, Some(writer_properties))
-}
-
-// very naive implementation for plucking the partition value from the first element of a column array.
-// ideally, we would do some validation to ensure the record batch containing the passed partition column contains only distinct values.
-// if we calculate stats _first_, we can avoid the extra iteration by ensuring max and min match for the column.
-// however, stats are optional and can be added later with `dataChange` false log entries, and it may be more appropriate to add stats _later_ to speed up the initial write.
-// a happy middle-road might be to compute stats for partition columns only on the initial write since we should validate partition values anyway, and compute additional stats later (at checkpoint time perhaps?).
-// also this does not currently support nested partition columns and many other data types.
-// TODO is this comment still valid, since we should be sure now, that the arrays where this
-// gets aplied have a single unique value
-fn stringified_partition_value(arr: &Arc<dyn Array>) -> Result<Option<String>, DeltaWriterError> {
-    let data_type = arr.data_type();
-
-    if arr.is_null(0) {
-        return Ok(None);
-    }
-
-    let s = match data_type {
-        DataType::Int8 => as_primitive_array::<Int8Type>(arr).value(0).to_string(),
-        DataType::Int16 => as_primitive_array::<Int16Type>(arr).value(0).to_string(),
-        DataType::Int32 => as_primitive_array::<Int32Type>(arr).value(0).to_string(),
-        DataType::Int64 => as_primitive_array::<Int64Type>(arr).value(0).to_string(),
-        DataType::UInt8 => as_primitive_array::<UInt8Type>(arr).value(0).to_string(),
-        DataType::UInt16 => as_primitive_array::<UInt16Type>(arr).value(0).to_string(),
-        DataType::UInt32 => as_primitive_array::<UInt32Type>(arr).value(0).to_string(),
-        DataType::UInt64 => as_primitive_array::<UInt64Type>(arr).value(0).to_string(),
-        DataType::Utf8 => {
-            let data = arrow::array::as_string_array(arr);
-
-            data.value(0).to_string()
-        }
-        // TODO: handle more types
-        _ => {
-            unimplemented!("Unimplemented data type: {:?}", data_type);
-        }
-    };
-
-    Ok(Some(s))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -515,7 +463,7 @@ mod tests {
         let table = create_initialized_table(&partition_cols).await;
         let mut writer = RecordBatchWriter::for_table(&table, HashMap::new()).unwrap();
 
-        writer.write(&batch).unwrap();
+        writer.write(batch).await.unwrap();
         let adds = writer.flush().await.unwrap();
         assert_eq!(adds.len(), 1);
     }
@@ -527,7 +475,7 @@ mod tests {
         let table = create_initialized_table(&partition_cols).await;
         let mut writer = RecordBatchWriter::for_table(&table, HashMap::new()).unwrap();
 
-        writer.write(&batch).unwrap();
+        writer.write(batch).await.unwrap();
         let adds = writer.flush().await.unwrap();
         assert_eq!(adds.len(), 4);
 

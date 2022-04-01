@@ -3,6 +3,7 @@ use super::*;
 use crate::{
     action::Protocol, DeltaTable, DeltaTableConfig, DeltaTableMetaData, SchemaDataType, SchemaField,
 };
+use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{Int32Array, StringArray, UInt32Array},
     compute::take,

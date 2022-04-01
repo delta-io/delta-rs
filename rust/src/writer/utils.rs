@@ -1,8 +1,18 @@
 //! Handle JSON messages when writing to delta tables
 use crate::writer::DeltaWriterError;
-use arrow::{datatypes::Schema as ArrowSchema, json::reader::Decoder, record_batch::*};
+use arrow::{
+    array::{as_primitive_array, Array},
+    datatypes::{
+        DataType, Int16Type, Int32Type, Int64Type, Int8Type, Schema as ArrowSchema, UInt16Type,
+        UInt32Type, UInt64Type, UInt8Type,
+    },
+    json::reader::Decoder,
+    record_batch::*,
+};
+use parquet::file::writer::InMemoryWriteableCursor;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -61,6 +71,13 @@ pub(crate) fn next_data_path(
     Ok(format!("{}/{}", partition_key, file_name))
 }
 
+/// Create a new cursor from existing bytes
+pub(crate) fn cursor_from_bytes(bytes: &[u8]) -> Result<InMemoryWriteableCursor, std::io::Error> {
+    let mut cursor = InMemoryWriteableCursor::default();
+    cursor.write_all(bytes)?;
+    Ok(cursor)
+}
+
 /// partition json values
 pub fn divide_by_partition_values(
     partition_columns: &[String],
@@ -107,4 +124,44 @@ pub fn record_batch_from_message(
     decoder
         .next_batch(&mut value_iter)?
         .ok_or(DeltaWriterError::EmptyRecordBatch)
+}
+
+// very naive implementation for plucking the partition value from the first element of a column array.
+// ideally, we would do some validation to ensure the record batch containing the passed partition column contains only distinct values.
+// if we calculate stats _first_, we can avoid the extra iteration by ensuring max and min match for the column.
+// however, stats are optional and can be added later with `dataChange` false log entries, and it may be more appropriate to add stats _later_ to speed up the initial write.
+// a happy middle-road might be to compute stats for partition columns only on the initial write since we should validate partition values anyway, and compute additional stats later (at checkpoint time perhaps?).
+// also this does not currently support nested partition columns and many other data types.
+// TODO is this comment still valid, since we should be sure now, that the arrays where this
+// gets aplied have a single unique value
+pub(crate) fn stringified_partition_value(
+    arr: &Arc<dyn Array>,
+) -> Result<Option<String>, DeltaWriterError> {
+    let data_type = arr.data_type();
+
+    if arr.is_null(0) {
+        return Ok(None);
+    }
+
+    let s = match data_type {
+        DataType::Int8 => as_primitive_array::<Int8Type>(arr).value(0).to_string(),
+        DataType::Int16 => as_primitive_array::<Int16Type>(arr).value(0).to_string(),
+        DataType::Int32 => as_primitive_array::<Int32Type>(arr).value(0).to_string(),
+        DataType::Int64 => as_primitive_array::<Int64Type>(arr).value(0).to_string(),
+        DataType::UInt8 => as_primitive_array::<UInt8Type>(arr).value(0).to_string(),
+        DataType::UInt16 => as_primitive_array::<UInt16Type>(arr).value(0).to_string(),
+        DataType::UInt32 => as_primitive_array::<UInt32Type>(arr).value(0).to_string(),
+        DataType::UInt64 => as_primitive_array::<UInt64Type>(arr).value(0).to_string(),
+        DataType::Utf8 => {
+            let data = arrow::array::as_string_array(arr);
+
+            data.value(0).to_string()
+        }
+        // TODO: handle more types
+        _ => {
+            unimplemented!("Unimplemented data type: {:?}", data_type);
+        }
+    };
+
+    Ok(Some(s))
 }
