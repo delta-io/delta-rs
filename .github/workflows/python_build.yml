@@ -58,7 +58,7 @@ jobs:
         echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
     - name: Enable manylinux Python targets
-      run: echo "/opt/python/cp36-cp36m/bin" >> $GITHUB_PATH
+      run: echo "/opt/python/cp37-cp37m/bin" >> $GITHUB_PATH
 
     - name: Build and install deltalake
       run: |
