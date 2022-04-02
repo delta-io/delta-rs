@@ -1,4 +1,31 @@
-//! Main writer API to write record batches to delta table
+//! Main writer API to write record batches to Delta Table
+//!
+//! Writes Arrow record batches to a Delta Table, handling partitioning and file statistics.
+//! Each Parquet file is buffered in-memory and only written once `flush()` is called on
+//! the writer. Once written, add actions are returned by the writer. It's the users responsibility
+//! to create the transaction using those actions.
+//!
+//! # Examples
+//! 
+//! Write to an existing Delta Lake table:
+//! ```rust
+//! let table = DeltaTable::try_from_uri("../path/to/table")
+//! let batch: RecordBatch = ...
+//! let mut writer = RecordBatchWriter::for_table(table, /*storage_options=*/ HashMap::new())
+//! writer.write(batch)?;
+//! let actions: Vec<action::Action> = writer.flush()?.iter()
+//!     .map(|add| Action::add(add.into()))
+//!     .collect();
+//! let mut transaction = table.create_transaction(Some(DeltaTransactionOptions::new(/*max_retry_attempts=*/3)));
+//! transaction.add_actions(actions);
+//! async {
+//!     transaction.commit(Some(DeltaOperation::Write {
+//!         SaveMode::Append,
+//!         partitionBy: Some(table.get_metadata().partition_columns),
+//!         predicate: None,
+//!     }))
+//! }
+//! ```
 use super::{
     stats::{create_add, NullCounts},
     utils::{cursor_from_bytes, get_partition_key, next_data_path, stringified_partition_value},
