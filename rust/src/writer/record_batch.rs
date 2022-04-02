@@ -72,8 +72,7 @@ impl RecordBatchWriter {
         let storage = get_backend_for_uri_with_options(&table.table_uri, options)?;
 
         // Initialize an arrow schema ref from the delta table schema
-        // TODO remove panic
-        let metadata = table.get_metadata().unwrap();
+        let metadata = table.get_metadata()?;
         let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema.clone())?;
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns.clone();
@@ -232,10 +231,6 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         }
         Ok(actions)
     }
-
-    async fn flush_and_commit(&mut self) -> Result<(), DeltaWriterError> {
-        todo!()
-    }
 }
 
 /// Helper container for partitioned record batches
@@ -333,6 +328,7 @@ pub fn divide_by_partition_values(
     partition_columns: Vec<String>,
     values: &RecordBatch,
 ) -> Result<Vec<PartitionResult>, DeltaWriterError> {
+    // TODO remove panics within closures
     let mut partitions = Vec::new();
 
     if partition_columns.is_empty() {
@@ -355,7 +351,7 @@ pub fn divide_by_partition_values(
         })
         .collect::<Vec<_>>();
 
-    let indices = lexsort_to_indices(sort_columns.as_slice(), None).unwrap();
+    let indices = lexsort_to_indices(sort_columns.as_slice(), None)?;
     let sorted_partition_columns = sort_columns
         .iter()
         .map(|c| SortColumn {
@@ -392,7 +388,7 @@ pub fn divide_by_partition_values(
 
         partitions.push(PartitionResult {
             partition_values,
-            record_batch: RecordBatch::try_new(arrow_schema.clone(), batch_data).unwrap(),
+            record_batch: RecordBatch::try_new(arrow_schema.clone(), batch_data)?,
         });
     }
 

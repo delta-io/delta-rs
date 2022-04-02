@@ -10,8 +10,9 @@ pub mod test_utils;
 pub mod utils;
 
 use crate::{
-    action::{Add, ColumnCountStat, Stats},
-    schema, DeltaTableError, Schema, StorageError, UriError,
+    action::{Action, Add, ColumnCountStat, Stats},
+    delta::DeltaTable,
+    schema, DeltaDataTypeVersion, DeltaTableError, Schema, StorageError, UriError,
 };
 use arrow::{
     datatypes::*,
@@ -120,6 +121,10 @@ pub enum DeltaWriterError {
         #[from]
         source: std::io::Error,
     },
+
+    /// Error returned
+    #[error(transparent)]
+    DeltaTable(#[from] DeltaTableError),
 }
 
 #[async_trait]
@@ -133,7 +138,16 @@ trait DeltaWriter<T> {
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// and commit the changes to the Delta log, creating a new table version.
-    async fn flush_and_commit(&mut self) -> Result<(), DeltaWriterError>;
+    async fn flush_and_commit(
+        &mut self,
+        table: &mut DeltaTable,
+    ) -> Result<DeltaDataTypeVersion, DeltaWriterError> {
+        let mut adds = self.flush().await?;
+        let mut tx = table.create_transaction(None);
+        tx.add_actions(adds.drain(..).map(Action::add).collect());
+        let version = tx.commit(None).await?;
+        Ok(version)
+    }
 }
 
 #[cfg(test)]

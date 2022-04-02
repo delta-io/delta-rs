@@ -212,8 +212,7 @@ impl JsonWriter {
         let storage = get_backend_for_uri_with_options(&table.table_uri, options)?;
 
         // Initialize an arrow schema ref from the delta table schema
-        // TODO remove panic
-        let metadata = table.get_metadata().unwrap();
+        let metadata = table.get_metadata()?;
         let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns.clone();
@@ -313,22 +312,6 @@ impl JsonWriter {
 
         Err(DeltaWriterError::InvalidRecord(value.to_string()))
     }
-
-    // Inserts the given values immediately into the delta table.
-    // TODO: Re-using existing methods for now, but this method is batch oriented. We may be able to create a more streamlined implementation for batch writes.
-    // pub async fn insert_all(
-    //     &mut self,
-    //     table: &mut DeltaTable,
-    //     values: Vec<Value>,
-    // ) -> Result<DeltaDataTypeVersion, DeltaWriterError> {
-    //     self.write(values).await?;
-    //     let mut adds = self.write_parquet_files(&table.table_uri).await?;
-    //     let mut tx = table.create_transaction(None);
-    //     tx.add_actions(adds.drain(..).map(Action::add).collect());
-    //     let version = tx.commit(None).await?;
-    //
-    //     Ok(version)
-    // }
 }
 
 #[async_trait::async_trait]
@@ -412,10 +395,6 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
             )?);
         }
         Ok(actions)
-    }
-
-    async fn flush_and_commit(&mut self) -> Result<(), DeltaWriterError> {
-        todo!()
     }
 }
 
