@@ -41,6 +41,7 @@ use arrow::{
     array::{Array, UInt32Array},
     compute::{lexicographical_partition_ranges, lexsort_to_indices, take, SortColumn},
     datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
+    error::ArrowError,
 };
 use parquet::{arrow::ArrowWriter, errors::ParquetError, file::writer::InMemoryWriteableCursor};
 use parquet::{basic::Compression, file::properties::WriterProperties};
@@ -352,7 +353,6 @@ pub fn divide_by_partition_values(
     partition_columns: Vec<String>,
     values: &RecordBatch,
 ) -> Result<Vec<PartitionResult>, DeltaWriterError> {
-    // TODO remove panics within closures
     let mut partitions = Vec::new();
 
     if partition_columns.is_empty() {
@@ -369,20 +369,24 @@ pub fn divide_by_partition_values(
     let sort_columns = partition_columns
         .clone()
         .into_iter()
-        .map(|col| SortColumn {
-            values: values.column(schema.index_of(&col).unwrap()).clone(),
-            options: None,
+        .map(|col| {
+            Ok(SortColumn {
+                values: values.column(schema.index_of(&col)?).clone(),
+                options: None,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, DeltaWriterError>>()?;
 
     let indices = lexsort_to_indices(sort_columns.as_slice(), None)?;
     let sorted_partition_columns = sort_columns
         .iter()
-        .map(|c| SortColumn {
-            values: take(c.values.as_ref(), &indices, None).unwrap(),
-            options: None,
+        .map(|c| {
+            Ok(SortColumn {
+                values: take(c.values.as_ref(), &indices, None)?,
+                options: None,
+            })
         })
-        .collect::<Vec<_>>();
+        .collect::<Result<Vec<_>, DeltaWriterError>>()?;
 
     let partition_ranges = lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
 
@@ -395,20 +399,19 @@ pub fn divide_by_partition_values(
 
         let partition_key_iter = sorted_partition_columns.iter().map(|c| {
             stringified_partition_value(&c.values.slice(range.start, range.end - range.start))
-                .unwrap()
         });
 
         let mut partition_values = HashMap::new();
         for (key, value) in partition_columns.clone().iter().zip(partition_key_iter) {
-            partition_values.insert(key.clone(), value);
+            partition_values.insert(key.clone(), value?);
         }
 
         let batch_data = arrow_schema
             .fields()
             .iter()
-            .map(|f| values.column(schema.index_of(f.name()).unwrap()).clone())
-            .map(move |col| take(col.as_ref(), &idx, None).unwrap())
-            .collect::<Vec<_>>();
+            .map(|f| Ok(values.column(schema.index_of(f.name())?).clone()))
+            .map(move |col: Result<Arc<dyn Array>, ArrowError>| take(col?.as_ref(), &idx, None))
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
         partitions.push(PartitionResult {
             partition_values,

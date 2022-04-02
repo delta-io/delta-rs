@@ -120,7 +120,7 @@ pub(crate) fn create_add(
 fn min_max_values_from_file_metadata(
     partition_values: &HashMap<String, Option<String>>,
     file_metadata: &FileMetaData,
-) -> Result<MinAndMaxValues, ParquetError> {
+) -> Result<MinAndMaxValues, DeltaWriterError> {
     let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
     let schema_descriptor = type_ptr.map(|type_| Arc::new(SchemaDescriptor::new(type_)))?;
 
@@ -176,7 +176,7 @@ fn apply_min_max_for_column(
     column_path_parts: &[String],
     min_values: &mut HashMap<String, ColumnValueStat>,
     max_values: &mut HashMap<String, ColumnValueStat>,
-) -> Result<(), ParquetError> {
+) -> Result<(), DeltaWriterError> {
     match (column_path_parts.len(), column_path_parts.first()) {
         // Base case - we are at the leaf struct level in the path
         (1, _) => {
@@ -241,7 +241,7 @@ fn is_utf8(opt: Option<LogicalType>) -> bool {
 fn min_and_max_from_parquet_statistics(
     statistics: &[&Statistics],
     column_descr: Arc<ColumnDescriptor>,
-) -> Result<(Option<Value>, Option<Value>), ParquetError> {
+) -> Result<(Option<Value>, Option<Value>), DeltaWriterError> {
     let stats_with_min_max: Vec<&Statistics> = statistics
         .iter()
         .filter(|s| s.has_min_max_set())
@@ -281,13 +281,13 @@ fn min_and_max_from_parquet_statistics(
         data_type.clone(),
         arrow_buffer_capacity,
         stats_with_min_max.iter().map(|s| s.min_bytes()).collect(),
-    );
+    )?;
 
     let max_array = arrow_array_from_bytes(
         data_type.clone(),
         arrow_buffer_capacity,
         stats_with_min_max.iter().map(|s| s.max_bytes()).collect(),
-    );
+    )?;
 
     match data_type {
         DataType::Boolean => {
@@ -383,7 +383,7 @@ fn arrow_array_from_bytes(
     data_type: DataType,
     capacity: usize,
     byte_arrays: Vec<&[u8]>,
-) -> Arc<dyn Array> {
+) -> Result<Arc<dyn Array>, DeltaWriterError> {
     let mut buffer = MutableBuffer::new(capacity);
 
     for arr in byte_arrays.iter() {
@@ -394,10 +394,9 @@ fn arrow_array_from_bytes(
         .len(byte_arrays.len())
         .add_buffer(buffer.into());
 
-    // TODO remove panic
-    let data = builder.build().unwrap();
+    let data = builder.build()?;
 
-    make_array(data)
+    Ok(make_array(data))
 }
 
 #[cfg(test)]
