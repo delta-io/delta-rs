@@ -57,9 +57,9 @@ async-stream = { version = "0.3.2", default-features = true, optional = true }
 # High-level writer
 parquet-format = "~4.0.0"
 
-arrow = "9"
-parquet = "9"
-datafusion = { version = "7", optional = true }
+arrow = "11"
+parquet = "11.0.0"
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "f619d43494e182e260423f8333eed9ea789f0cb8", version = "7.0.0", optional = true }
 
 crossbeam = { version = "0", optional = true }
 
