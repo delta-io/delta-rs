@@ -6,9 +6,9 @@
 //! to create the transaction using those actions.
 //!
 //! # Examples
-//! 
+//!
 //! Write to an existing Delta Lake table:
-//! ```rust
+//! ```rust ignore
 //! let table = DeltaTable::try_from_uri("../path/to/table")
 //! let batch: RecordBatch = ...
 //! let mut writer = RecordBatchWriter::for_table(table, /*storage_options=*/ HashMap::new())
@@ -60,12 +60,12 @@ pub struct RecordBatchWriter {
 
 impl std::fmt::Debug for RecordBatchWriter {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DeltaWriter")
+        write!(f, "RecordBatchWriter")
     }
 }
 
 impl RecordBatchWriter {
-    /// Create a new DeltaWriter instance
+    /// Create a new RecordBatchWriter instance
     pub fn try_new(
         table_uri: String,
         schema: ArrowSchemaRef,
@@ -91,12 +91,12 @@ impl RecordBatchWriter {
         })
     }
 
-    /// Creates a DeltaWriter to write to the given table
+    /// Creates a RecordBatchWriter to write data to provided Delta Table
     pub fn for_table(
         table: &DeltaTable,
-        options: HashMap<String, String>,
+        storage_options: HashMap<String, String>,
     ) -> Result<RecordBatchWriter, DeltaWriterError> {
-        let storage = get_backend_for_uri_with_options(&table.table_uri, options)?;
+        let storage = get_backend_for_uri_with_options(&table.table_uri, storage_options)?;
 
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.get_metadata()?;
@@ -334,9 +334,6 @@ impl PartitionWriter {
                     Some(self.writer_properties.clone()),
                 )?;
                 let _ = std::mem::replace(&mut self.arrow_writer, arrow_writer);
-                // TODO we used to clear partition values here, but since we pre-partition the
-                // record batches, we should never try with mismatching partition values.
-
                 Err(e.into())
             }
         }

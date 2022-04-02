@@ -178,7 +178,7 @@ impl DataArrowWriter {
 }
 
 impl JsonWriter {
-    /// Create a new DeltaWriter instance
+    /// Create a new JsonWriter instance
     pub fn try_new(
         table_uri: String,
         schema: ArrowSchemaRef,
@@ -207,9 +207,9 @@ impl JsonWriter {
     /// Creates a JsonWriter to write to the given table
     pub fn for_table(
         table: &DeltaTable,
-        options: HashMap<String, String>,
+        storage_options: HashMap<String, String>,
     ) -> Result<JsonWriter, DeltaWriterError> {
-        let storage = get_backend_for_uri_with_options(&table.table_uri, options)?;
+        let storage = get_backend_for_uri_with_options(&table.table_uri, storage_options)?;
 
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.get_metadata()?;

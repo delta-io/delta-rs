@@ -1,12 +1,14 @@
 //! Utilities for writing unit tests
 use super::*;
 use crate::{
-    action::Protocol, DeltaTable, DeltaTableConfig, DeltaTableMetaData, SchemaDataType, SchemaField,
+    action::Protocol, schema::Schema, DeltaTable, DeltaTableConfig, DeltaTableMetaData,
+    SchemaDataType, SchemaField,
 };
 use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{Int32Array, StringArray, UInt32Array},
     compute::take,
+    datatypes::Schema as ArrowSchema,
 };
 use std::collections::HashMap;
 use std::sync::Arc;

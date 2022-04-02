@@ -12,34 +12,15 @@ pub mod utils;
 use crate::{
     action::{Action, Add, ColumnCountStat, Stats},
     delta::DeltaTable,
-    schema, DeltaDataTypeVersion, DeltaTableError, Schema, StorageError, UriError,
+    DeltaDataTypeVersion, DeltaTableError, StorageError, UriError,
 };
-use arrow::{
-    datatypes::*,
-    datatypes::{Field as ArrowField, Schema as ArrowSchema, SchemaRef},
-    error::ArrowError,
-};
+use arrow::{datatypes::SchemaRef, datatypes::*, error::ArrowError};
 use async_trait::async_trait;
 pub use json::JsonWriter;
 use parquet::{basic::LogicalType, errors::ParquetError};
 pub use record_batch::RecordBatchWriter;
 use serde_json::Value;
-use std::convert::TryFrom;
 use std::sync::Arc;
-
-impl TryFrom<Arc<ArrowSchema>> for Schema {
-    type Error = DeltaTableError;
-
-    fn try_from(s: Arc<ArrowSchema>) -> Result<Self, DeltaTableError> {
-        let fields = s
-            .fields()
-            .iter()
-            .map(<schema::SchemaField as TryFrom<&ArrowField>>::try_from)
-            .collect::<Result<Vec<schema::SchemaField>, _>>()?;
-
-        Ok(Schema::new(fields))
-    }
-}
 
 /// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]
@@ -147,48 +128,5 @@ trait DeltaWriter<T> {
         tx.add_actions(adds.drain(..).map(Action::add).collect());
         let version = tx.commit(None).await?;
         Ok(version)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::{SchemaDataType, SchemaField};
-    use std::collections::HashMap;
-    use std::sync::Arc;
-
-    #[test]
-    fn convert_schema_arrow_to_delta() {
-        let arrow_schema = ArrowSchema::new(vec![
-            Field::new("id", DataType::Utf8, true),
-            Field::new("value", DataType::Int32, true),
-            Field::new("modified", DataType::Utf8, true),
-        ]);
-        let ref_schema = get_delta_schema();
-        let schema = Schema::try_from(Arc::new(arrow_schema)).unwrap();
-        assert_eq!(schema, ref_schema);
-    }
-
-    fn get_delta_schema() -> Schema {
-        Schema::new(vec![
-            SchemaField::new(
-                "id".to_string(),
-                SchemaDataType::primitive("string".to_string()),
-                true,
-                HashMap::new(),
-            ),
-            SchemaField::new(
-                "value".to_string(),
-                SchemaDataType::primitive("integer".to_string()),
-                true,
-                HashMap::new(),
-            ),
-            SchemaField::new(
-                "modified".to_string(),
-                SchemaDataType::primitive("string".to_string()),
-                true,
-                HashMap::new(),
-            ),
-        ])
     }
 }

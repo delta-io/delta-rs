@@ -2,7 +2,8 @@
 
 use crate::schema;
 use arrow::datatypes::{
-    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef, TimeUnit,
+    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
+    SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use arrow::error::ArrowError;
 use lazy_static::lazy_static;
@@ -175,6 +176,14 @@ impl TryFrom<&ArrowSchema> for schema::Schema {
     }
 }
 
+impl TryFrom<ArrowSchemaRef> for schema::Schema {
+    type Error = ArrowError;
+
+    fn try_from(arrow_schema: ArrowSchemaRef) -> Result<Self, ArrowError> {
+        arrow_schema.as_ref().try_into()
+    }
+}
+
 impl TryFrom<&ArrowField> for schema::SchemaField {
     type Error = ArrowError;
     fn try_from(arrow_field: &ArrowField) -> Result<Self, ArrowError> {
@@ -268,7 +277,7 @@ pub(crate) fn delta_log_schema_for_table(
     table_schema: ArrowSchema,
     partition_columns: &[String],
     use_extended_remove_schema: bool,
-) -> SchemaRef {
+) -> ArrowSchemaRef {
     lazy_static! {
         static ref SCHEMA_FIELDS: Vec<ArrowField> = vec![
             ArrowField::new(
