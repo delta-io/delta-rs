@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 use uuid::Uuid;
 
@@ -551,7 +550,7 @@ impl DeltaTableBuilder {
 ///
 #[derive(Debug)]
 pub enum PeekCommit {
-    /// The next commit version and assoicated actions
+    /// The next commit version and associated actions
     New(DeltaDataTypeVersion, Vec<Action>),
     /// Provided DeltaVersion is up to date
     UpToDate,
@@ -1468,79 +1467,6 @@ impl<'a> DeltaTransaction<'a> {
         }
     }
 
-    /// Create a new add action and write the given bytes to the storage backend as a fully formed
-    /// Parquet file
-    ///
-    /// add_file accepts two optional parameters:
-    ///
-    /// partitions: an ordered vec of WritablePartitionValues for the file to be added
-    /// actions: an ordered list of Actions to be inserted into the log file _ahead_ of the Add
-    ///     action for the file added. This should typically be used for txn type actions
-    pub async fn add_file(
-        &mut self,
-        bytes: &[u8],
-        partitions: Option<Vec<(String, String)>>,
-    ) -> Result<(), DeltaTableError> {
-        let mut partition_values = HashMap::new();
-        if let Some(partitions) = &partitions {
-            for (key, value) in partitions {
-                partition_values.insert(key.clone(), Some(value.clone()));
-            }
-        }
-
-        let path = self.generate_parquet_filename(partitions);
-        let parquet_uri = self
-            .delta_table
-            .storage
-            .join_path(&self.delta_table.table_uri, &path);
-
-        debug!("Writing a parquet file to {}", &parquet_uri);
-        self.delta_table
-            .storage
-            .put_obj(&parquet_uri, bytes)
-            .await?;
-
-        // Determine the modification timestamp to include in the add action - milliseconds since epoch
-        // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
-        let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        let modification_time = modification_time.as_millis() as i64;
-
-        self.actions.push(Action::add(action::Add {
-            path,
-            partition_values,
-            modification_time,
-            size: bytes.len() as i64,
-            partition_values_parsed: None,
-            data_change: true,
-            stats: None,
-            stats_parsed: None,
-            tags: None,
-        }));
-
-        Ok(())
-    }
-
-    fn generate_parquet_filename(&self, partitions: Option<Vec<(String, String)>>) -> String {
-        /*
-         * The specific file naming for parquet is not well documented including the preceding five
-         * zeros and the trailing c000 string
-         *
-         */
-        let mut path_parts = vec![];
-
-        if let Some(partitions) = partitions {
-            for partition in partitions {
-                path_parts.push(format!("{}={}", partition.0, partition.1));
-            }
-        }
-
-        path_parts.push(format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4()));
-
-        self.delta_table
-            .storage
-            .join_paths(&path_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
-    }
-
     /// Commits the given actions to the delta log.
     /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
     pub async fn commit(
@@ -1742,28 +1668,6 @@ mod tests {
             ),
             Ok("abc.json"),
         ));
-    }
-
-    #[tokio::test]
-    async fn parquet_filename() {
-        let mut table = open_table("./tests/data/simple_table").await.unwrap();
-
-        let txn = DeltaTransaction {
-            delta_table: &mut table,
-            actions: vec![],
-            options: DeltaTransactionOptions::default(),
-        };
-
-        let partitions = vec![
-            (String::from("col1"), String::from("a")),
-            (String::from("col2"), String::from("b")),
-        ];
-        let parquet_filename = txn.generate_parquet_filename(Some(partitions));
-        if cfg!(windows) {
-            assert!(parquet_filename.contains("col1=a\\col2=b\\part-00000-"));
-        } else {
-            assert!(parquet_filename.contains("col1=a/col2=b/part-00000-"));
-        }
     }
 
     #[tokio::test]
