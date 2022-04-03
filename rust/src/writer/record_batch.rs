@@ -410,8 +410,8 @@ pub fn divide_by_partition_values(
             .fields()
             .iter()
             .map(|f| Ok(values.column(schema.index_of(f.name())?).clone()))
-            .map(move |col: Result<Arc<dyn Array>, ArrowError>| take(col?.as_ref(), &idx, None))
-            .collect::<Result<Vec<_>, ArrowError>>()?;
+            .map(move |col: Result<_, ArrowError>| take(col?.as_ref(), &idx, None))
+            .collect::<Result<Vec<_>, _>>()?;
 
         partitions.push(PartitionResult {
             partition_values,
