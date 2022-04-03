@@ -95,5 +95,6 @@ utime = "0.3"
 serial_test = "0"
 pretty_assertions = "0"
 tempdir = "0"
+tempfile = "3"
 maplit = { version = "1" }
 anyhow = "1"
