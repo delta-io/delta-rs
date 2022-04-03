@@ -13,13 +13,14 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::time::{SystemTime, UNIX_EPOCH};
 use std::convert::TryFrom;
 use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 use uuid::Uuid;
 
-use crate::action::Stats;
+use crate::action::{Add, Stats};
 
 use super::action;
 use super::action::{Action, DeltaOperation};
@@ -589,7 +590,7 @@ pub struct DeltaTable {
     /// the load options used during load
     pub config: DeltaTableConfig,
 
-    state: DeltaTableState,
+    pub(crate) state: DeltaTableState,
 
     // metadata
     // application_transactions
@@ -983,12 +984,11 @@ impl DeltaTable {
         }
     }
 
-    /// Returns the file list tracked in current table state filtered by provided
-    /// `PartitionFilter`s.
-    pub fn get_files_by_partitions(
-        &self,
-        filters: &[PartitionFilter<&str>],
-    ) -> Result<Vec<String>, DeltaTableError> {
+    ///Obtain Add actions for files that match the filter
+    pub fn get_active_add_actions_by_partitions<'a>(
+        &'a self,
+        filters: &'a [PartitionFilter<'a, &'a str>],
+    ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
         let current_metadata = self
             .state
             .current_metadata()
@@ -1007,20 +1007,28 @@ impl DeltaTable {
             .into_iter()
             .collect();
 
+        let actions = self.state.files().iter().filter(move |add| {
+            let partitions = add
+                .partition_values
+                .iter()
+                .map(|p| DeltaTablePartition::from_partition_value(p, ""))
+                .collect::<Vec<DeltaTablePartition>>();
+            filters
+                .iter()
+                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
+        });
+        println!("{:?}", actions);
+        Ok(actions)
+    }
+
+    /// Returns the file list tracked in current table state filtered by provided
+    /// `PartitionFilter`s.
+    pub fn get_files_by_partitions(
+        &self,
+        filters: &[PartitionFilter<&str>],
+    ) -> Result<Vec<String>, DeltaTableError> {
         let files = self
-            .state
-            .files()
-            .iter()
-            .filter(|add| {
-                let partitions = add
-                    .partition_values
-                    .iter()
-                    .map(|p| DeltaTablePartition::from_partition_value(p, ""))
-                    .collect::<Vec<DeltaTablePartition>>();
-                filters
-                    .iter()
-                    .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
-            })
+            .get_active_add_actions_by_partitions(filters)?
             .map(|add| add.path.clone())
             .collect();
 
@@ -1456,6 +1464,31 @@ impl Default for DeltaTransactionOptions {
     }
 }
 
+///Utility for to generate parquet filename
+pub fn generate_parquet_filename(
+    table: &DeltaTable,
+    partitions: Option<Vec<(String, String)>>,
+) -> String {
+    /*
+     * The specific file naming for parquet is not well documented including the preceding five
+     * zeros and the trailing c000 string
+     *
+     */
+    let mut path_parts = vec![];
+
+    if let Some(partitions) = partitions {
+        for partition in partitions {
+            path_parts.push(format!("{}={}", partition.0, partition.1));
+        }
+    }
+
+    path_parts.push(format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4()));
+
+    table
+        .storage
+        .join_paths(&path_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
+}
+
 /// Object representing a delta transaction.
 /// Clients that do not need to mutate action content in case a transaction conflict is encountered
 /// may use the `commit` method and rely on optimistic concurrency to determine the
@@ -1496,6 +1529,58 @@ impl<'a> DeltaTransaction<'a> {
         for action in actions.into_iter() {
             self.actions.push(action);
         }
+    }
+
+    /// Create a new add action and write the given bytes to the storage backend as a fully formed
+    /// Parquet file
+    ///
+    /// add_file accepts two optional parameters:
+    ///
+    /// partitions: an ordered vec of WritablePartitionValues for the file to be added
+    /// actions: an ordered list of Actions to be inserted into the log file _ahead_ of the Add
+    ///     action for the file added. This should typically be used for txn type actions
+    pub async fn add_file(
+        &mut self,
+        bytes: &[u8],
+        partitions: Option<Vec<(String, String)>>,
+    ) -> Result<(), DeltaTableError> {
+        let mut partition_values = HashMap::new();
+        if let Some(partitions) = &partitions {
+            for (key, value) in partitions {
+                partition_values.insert(key.clone(), Some(value.clone()));
+            }
+        }
+
+        let path = generate_parquet_filename(self.delta_table, partitions);
+        let parquet_uri = self
+            .delta_table
+            .storage
+            .join_path(&self.delta_table.table_uri, &path);
+
+        debug!("Writing a parquet file to {}", &parquet_uri);
+        self.delta_table
+            .storage
+            .put_obj(&parquet_uri, bytes)
+            .await?;
+
+        // Determine the modification timestamp to include in the add action - milliseconds since epoch
+        // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
+        let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
+        let modification_time = modification_time.as_millis() as i64;
+
+        self.actions.push(Action::add(action::Add {
+            path,
+            partition_values,
+            modification_time,
+            size: bytes.len() as i64,
+            partition_values_parsed: None,
+            data_change: true,
+            stats: None,
+            stats_parsed: None,
+            tags: None,
+        }));
+
+        Ok(())
     }
 
     /// Commits the given actions to the delta log.
@@ -1726,6 +1811,22 @@ mod tests {
             ),
             Ok("abc.json"),
         ));
+    }
+
+    #[tokio::test]
+    async fn parquet_filename() {
+        let table = open_table("./tests/data/simple_table").await.unwrap();
+
+        let partitions = vec![
+            (String::from("col1"), String::from("a")),
+            (String::from("col2"), String::from("b")),
+        ];
+        let parquet_filename = generate_parquet_filename(&table, Some(partitions));
+        if cfg!(windows) {
+            assert!(parquet_filename.contains("col1=a\\col2=b\\part-00000-"));
+        } else {
+            assert!(parquet_filename.contains("col1=a/col2=b/part-00000-"));
+        }
     }
 
     #[tokio::test]
