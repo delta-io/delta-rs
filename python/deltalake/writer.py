@@ -163,7 +163,7 @@ def write_deltalake(
         file_options=file_options,
         max_rows_per_file=max_rows_per_file or 0,
         min_rows_per_group=min_rows_per_group or 0,
-        max_rows_per_group=max_rows_per_group or 0
+        max_rows_per_group=max_rows_per_group or 1024 * 1024 # pyarrow default
     )
 
     if table is None:
