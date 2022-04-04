@@ -19,9 +19,8 @@ def test_read_table_with_edge_timestamps():
         parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit='ms')
     ).to_table().to_pydict() == {
                "BIG_DATE": [datetime(9999, 12, 31, 0, 0, 0), datetime(9999, 12, 30, 0, 0, 0)],
-               "SMALL_DATE": [datetime(1, 1, 1, 0, 0, 0), datetime(1, 1, 2, 0, 0, 0)],
                "NORMAL_DATE": [datetime(2022, 1, 1, 0, 0, 0), datetime(2022, 2, 1, 0, 0, 0)],
-               "VALUE": [1, 2]
+               "SOME_VALUE": [1, 2]
            }
 
 
