@@ -325,7 +325,7 @@ impl RawDeltaTable {
         rt()?
             .block_on(transaction.commit(Some(DeltaOperation::Write {
                 mode,
-                partitionBy: Some(partition_by),
+                partition_by: Some(partition_by),
                 predicate: None,
             })))
             .map_err(PyDeltaTableError::from_raw)?;
