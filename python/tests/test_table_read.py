@@ -6,8 +6,8 @@ import pandas as pd
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
-from pyarrow.fs import LocalFileSystem
 from pyarrow.dataset import ParquetReadOptions
+from pyarrow.fs import LocalFileSystem
 
 from deltalake import DeltaTable
 
