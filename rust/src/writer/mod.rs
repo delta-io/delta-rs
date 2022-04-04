@@ -109,7 +109,8 @@ pub enum DeltaWriterError {
 }
 
 #[async_trait]
-trait DeltaWriter<T> {
+/// Trait for writing data to Delta tables
+pub trait DeltaWriter<T> {
     /// write a chunk of values into the internal write buffers.
     async fn write(&mut self, values: T) -> Result<(), DeltaWriterError>;
 

@@ -4,10 +4,10 @@
 //!
 //! ```rust
 //! use std::sync::Arc;
-//! use datafusion::execution::context::ExecutionContext;
+//! use datafusion::execution::context::SessionContext;
 //!
 //! async {
-//!   let mut ctx = ExecutionContext::new();
+//!   let mut ctx = SessionContext::new();
 //!   let table = deltalake::open_table("./tests/data/simple_table")
 //!       .await
 //!       .unwrap();

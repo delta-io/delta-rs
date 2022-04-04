@@ -197,7 +197,7 @@ pub enum DeltaTableError {
 }
 
 /// Delta table metadata
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DeltaTableMetaData {
     /// Unique identifier for this table
     pub id: Guid,
@@ -894,7 +894,7 @@ impl DeltaTable {
         Ok(())
     }
 
-    async fn get_version_timestamp(
+    pub(crate) async fn get_version_timestamp(
         &mut self,
         version: DeltaDataTypeVersion,
     ) -> Result<i64, DeltaTableError> {
@@ -1275,7 +1275,7 @@ impl DeltaTable {
         let table_uri = storage_backend.trim_path(table_uri);
         let log_uri_normalized = storage_backend.join_path(&table_uri, "_delta_log");
         Ok(Self {
-            version: 0,
+            version: -1,
             state: DeltaTableState::default(),
             storage: storage_backend,
             table_uri,
@@ -1499,6 +1499,20 @@ impl<'a> DeltaTransaction<'a> {
         Ok(version)
     }
 
+     /// Commit transaction with additional app metadata
+     pub async fn commit_with_info(
+        &mut self,
+        operation: Option<DeltaOperation>,
+        app_metadata: Option<Map<String, Value>>,
+    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
+        // TODO check operation and decide whether the commit is safe to retry in a loop?
+        let prepared_commit = self
+            .prepare_commit_with_info(operation, app_metadata)
+            .await?;
+        let version = self.try_commit_loop(&prepared_commit).await?;
+        Ok(version)
+    }
+
     /// Low-level transaction API. Creates a temporary commit file. Once created,
     /// the transaction object could be dropped and the actual commit could be executed
     /// with `DeltaTable.try_commit_transaction`.
@@ -1524,6 +1538,36 @@ impl<'a> DeltaTransaction<'a> {
             .await?;
 
         Ok(PreparedCommit { uri })
+    }
+
+    /// Prepare a commit with commit info added
+    pub async fn prepare_commit_with_info(
+        &mut self,
+        operation: Option<DeltaOperation>,
+        app_metadata: Option<Map<String, Value>>,
+    ) -> Result<PreparedCommit, DeltaTableError> {
+        let mut commit_info = Map::<String, Value>::new();
+
+        // TODO should this be a "formalized" struct
+        commit_info.insert(
+            "timestamp".to_string(),
+            Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
+        );
+        commit_info.insert(
+            "clientVersion".to_string(),
+            Value::String(format!("delta-rs.{}", crate_version())),
+        );
+
+        if let Some(op) = &operation {
+            commit_info.append(&mut op.get_commit_info())
+        }
+        if let Some(mut meta) = app_metadata {
+            commit_info.append(&mut meta)
+        }
+
+        self.add_action(action::Action::commitInfo(commit_info));
+
+        self.prepare_commit(operation).await
     }
 
     async fn try_commit_loop(
