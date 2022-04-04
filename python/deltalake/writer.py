@@ -44,7 +44,7 @@ def write_deltalake(
     partition_by: Optional[List[str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
-    file_options: Optional[ds.FileWriteOptions] = None,
+    file_options: Optional[ds.ParquetFileWriteOptions] = None,
     max_rows_per_file: Optional[int] = None,
     min_rows_per_group: Optional[int] = None,
     max_rows_per_group: Optional[int] = None
@@ -163,7 +163,7 @@ def write_deltalake(
         file_options=file_options,
         max_rows_per_file=max_rows_per_file or 0,
         min_rows_per_group=min_rows_per_group or 0,
-        max_rows_per_group=max_rows_per_group or 1024 * 1024 # pyarrow default
+        max_rows_per_group=max_rows_per_group or 1024 * 1024  # pyarrow default
     )
 
     if table is None:

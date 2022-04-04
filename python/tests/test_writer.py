@@ -1,9 +1,11 @@
 import json
 import os
 import pathlib
+import random
 import sys
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from typing import Iterable, Dict
 from unittest.mock import Mock
 
 import pyarrow as pa
@@ -15,6 +17,8 @@ from pyarrow.lib import RecordBatchReader
 from deltalake import DeltaTable, write_deltalake
 from deltalake.table import ProtocolVersions
 from deltalake.writer import DeltaTableProtocolError
+
+from pyarrow.dataset import ParquetFileFormat
 
 
 def _is_old_glibc_version():
@@ -210,8 +214,15 @@ def test_writer_partitioning(tmp_path: pathlib.Path):
     assert DeltaTable(str(tmp_path)).to_pyarrow_table() == data
 
 
+def get_log_path(table: DeltaTable) -> str:
+    """
+      Returns _delta_log path for this delta table.
+    """
+    return table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
+
+
 def get_stats(table: DeltaTable):
-    log_path = table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
+    log_path = get_log_path(table)
 
     # Should only have single add entry
     for line in open(log_path, "r").readlines():
@@ -292,3 +303,29 @@ def test_writer_fails_on_protocol(existing_table: DeltaTable, sample_data: pa.Ta
     existing_table.protocol = Mock(return_value=ProtocolVersions(1, 2))
     with pytest.raises(DeltaTableProtocolError):
         write_deltalake(existing_table, sample_data, mode="overwrite")
+
+
+def test_writer_with_options(tmp_path: pathlib.Path):
+    def get_multifile_stats(table: DeltaTable) -> Iterable[Dict]:
+        log_path = get_log_path(table)
+
+        # Should only have single add entry
+        for line in open(log_path, "r").readlines():
+            log_entry = json.loads(line)
+
+            if "add" in log_entry:
+                yield json.loads(log_entry["add"]["stats"])
+
+    data = pa.table(
+        {
+            "colA": pa.array(range(0, 1000), pa.int32()),
+            "colB": pa.array([i * random.random() for i in range(0, 1000)], pa.float64())
+        }
+    )
+    path = str(tmp_path)
+    write_deltalake(path, data, file_options=ParquetFileFormat().make_write_options(), max_rows_per_file=100, max_rows_per_group=100)
+
+    table = DeltaTable(path)
+    stats = get_multifile_stats(table)
+
+    assert sum([stat_entry['numRecords'] for stat_entry in stats]) == 1000
