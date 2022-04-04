@@ -1499,8 +1499,8 @@ impl<'a> DeltaTransaction<'a> {
         Ok(version)
     }
 
-     /// Commit transaction with additional app metadata
-     pub async fn commit_with_info(
+    /// Commit transaction with additional app metadata
+    pub async fn commit_with_info(
         &mut self,
         operation: Option<DeltaOperation>,
         app_metadata: Option<Map<String, Value>>,
