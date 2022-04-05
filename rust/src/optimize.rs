@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::debug;
+use log::error;
 use parquet::arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader};
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
@@ -71,26 +72,26 @@ impl Default for MetricDetails {
 }
 
 ///TODO: Optimize
-#[derive(Default)]
 pub struct Optimize<'a> {
-    filters: Option<&'a [PartitionFilter<'a, &'a str>]>,
+    filters: &'a [PartitionFilter<'a, &'a str>],
+}
+
+impl<'a> Default for Optimize<'a> {
+    fn default() -> Self {
+        Optimize { filters: &[] }
+    }
 }
 
 impl<'a> Optimize<'a> {
-    ///Only optimize files that belong to the specified filter
-    pub fn _where(mut self, filters: &'a [PartitionFilter<'a, &'a str>]) -> Self {
-        self.filters = Some(filters);
+    ///Only optimize files that return true for the specified partition filter
+    pub fn filter(mut self, filters: &'a [PartitionFilter<'a, &'a str>]) -> Self {
+        self.filters = filters;
         return self;
     }
 
     ///Perform the optimization
     pub async fn execute(self, table: &mut DeltaTable) -> Result<Metrics, DeltaTableError> {
-        let filters = Vec::new();
-        let plan = if self.filters.is_none() {
-            create_merge_plan(table, &filters)?
-        } else {
-            create_merge_plan(table, self.filters.as_ref().unwrap())?
-        };
+        let plan = create_merge_plan(table, self.filters)?;
         println!("Merge Plan: \n {:?}", plan);
         let metrics = plan.execute(table).await?;
         return Ok(metrics);
@@ -273,7 +274,8 @@ impl MergePlan {
         let schema = table.get_metadata()?.clone().schema.clone();
 
         let columns = &table.state.current_metadata().unwrap().partition_columns;
-        let partition_column_set: HashSet<String> = columns.into_iter().map(|s| s.to_owned()).collect();
+        let partition_column_set: HashSet<String> =
+            columns.into_iter().map(|s| s.to_owned()).collect();
 
         //Remove partitions from the schema since they don't need to written to the parquet file
         let fields = schema
@@ -333,7 +335,8 @@ impl MergePlan {
                     //let reader_schema = arrow_reader.get_schema_by_columns(reader_indicies, false);
                     println!("Reader Schema");
                     println!("{:?}", arrow_reader.get_schema());
-                    let batch_reader = arrow_reader.get_record_reader_by_columns(reader_indicies, 2048)?;
+                    let batch_reader =
+                        arrow_reader.get_record_reader_by_columns(reader_indicies, 2048)?;
                     for batch in batch_reader {
                         let batch = batch?;
                         _writer.write(&batch)?;
@@ -390,12 +393,41 @@ impl MergePlan {
     }
 }
 
+fn get_target_file_size(table: &DeltaTable) -> i64 {
+    let config = table.get_configurations();
+    let mut target_size = 256000000;
+    if config.is_ok() {
+        let config_str = config
+            .expect("configuration is ok")
+            .get("delta.targetFileSize");
+        if config_str.is_some() {
+            let s = config_str.unwrap();
+            if s.is_some() {
+                let s  = s.as_ref().unwrap();
+                let r = s.parse::<i64>();
+                if r.is_err() {
+                    error!("Unable to parse value of 'delta.targetFileSize'. Using default value");
+                } else {
+                    target_size = r.unwrap();
+                }
+            } else {
+                error!("Check your configuration of 'delta.targetFileSize'. Using default value");
+            }
+        }
+    }
+    return target_size;
+}
+
 fn create_merge_plan<'a>(
     table: &mut DeltaTable,
     filters: &[PartitionFilter<'a, &str>],
 ) -> Result<MergePlan, DeltaTableError> {
+    let target_size =  get_target_file_size(table);
     let mut candidates = HashMap::new();
+    let mut operations: HashMap<Partitions, Merge> = HashMap::new();
+    let mut metrics = Metrics::default();
 
+    //Place each add action into a bucket determined by the file's partition
     for add in table.get_active_add_actions_by_partitions(filters)? {
         let partitions = add
             .partition_values
@@ -408,11 +440,6 @@ fn create_merge_plan<'a>(
         v.push(add);
     }
 
-    //Naively try to fit as many files as possible
-    let mut operations: HashMap<Partitions, Merge> = HashMap::new();
-    let mut metrics = Metrics::default();
-    //TODO: Get this from table config
-    let max_size: i64 = 1024 * 1024 * 200;
 
     for candidate in candidates {
         let mut current = Vec::new();
@@ -421,14 +448,13 @@ fn create_merge_plan<'a>(
 
         let partition = candidate.0;
         let files = candidate.1;
-        metrics.total_considered_files = files.len();
+        metrics.total_considered_files += files.len();
 
         for f in files {
-            if f.size < max_size {
-                if f.size < (max_size - current_size) {
+            if f.size < target_size {
+                if f.size < (target_size - current_size) {
                     current.push(f.path.clone());
                     current_size += f.size;
-                    //Add the file
                 } else {
                     //create a new bin. Discard old bin if it contains only one member
                     if current.len() > 1 {

@@ -2,7 +2,7 @@
 mod optiize {
     extern crate deltalake;
 
-    use arrow::array::{Int64Array, Int32Array};
+    use arrow::array::{Int32Array, Int64Array};
     use datafusion::prelude::ExecutionContext;
     use deltalake::{open_table, optimize::Optimize, PartitionFilter};
     use fs_extra::dir;
@@ -61,7 +61,7 @@ mod optiize {
         filter.push(PartitionFilter::try_from(("event_year", "=", "2022"))?);
         filter.push(PartitionFilter::try_from(("event_month", "=", "04"))?);
 
-        let optimize = Optimize::default()._where(&filter);
+        let optimize = Optimize::default().filter(&filter);
         let metrics = optimize.execute(&mut dt).await?;
 
         println!("{:?}", metrics);
