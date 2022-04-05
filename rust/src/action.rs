@@ -1,6 +1,6 @@
 //! Actions included in Delta table transaction logs
 
-#![allow(non_snake_case, non_camel_case_types)]
+#![allow(non_camel_case_types)]
 
 use crate::{schema::*, DeltaTableMetaData};
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
@@ -214,12 +214,12 @@ impl Add {
                         .map_err(|_| gen_action_type_error("add", "dataChange", "bool"))?;
                 }
                 "partitionValues" => {
-                    let parquetMap = record
+                    let parquet_map = record
                         .get_map(i)
                         .map_err(|_| gen_action_type_error("add", "partitionValues", "map"))?;
                     populate_hashmap_with_option_from_parquet_map(
                         &mut re.partition_values,
-                        parquetMap,
+                        parquet_map,
                     )
                     .map_err(|estr| {
                         ActionError::InvalidField(format!(
@@ -620,13 +620,13 @@ impl Remove {
                 }
                 "partitionValues" => match record.get_map(i) {
                     Ok(_) => {
-                        let parquetMap = record.get_map(i).map_err(|_| {
+                        let parquet_map = record.get_map(i).map_err(|_| {
                             gen_action_type_error("remove", "partitionValues", "map")
                         })?;
-                        let mut partitionValues = HashMap::new();
+                        let mut partition_values = HashMap::new();
                         populate_hashmap_with_option_from_parquet_map(
-                            &mut partitionValues,
-                            parquetMap,
+                            &mut partition_values,
+                            parquet_map,
                         )
                         .map_err(|estr| {
                             ActionError::InvalidField(format!(
@@ -634,7 +634,7 @@ impl Remove {
                                 estr,
                             ))
                         })?;
-                        re.partition_values = Some(partitionValues);
+                        re.partition_values = Some(partition_values);
                     }
                     _ => re.partition_values = None,
                 },
