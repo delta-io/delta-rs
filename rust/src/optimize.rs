@@ -72,29 +72,23 @@ impl Default for MetricDetails {
 }
 
 ///TODO: Optimize
+#[derive(Default)]
 pub struct Optimize<'a> {
     filters: &'a [PartitionFilter<'a, &'a str>],
-}
-
-impl<'a> Default for Optimize<'a> {
-    fn default() -> Self {
-        Optimize { filters: &[] }
-    }
 }
 
 impl<'a> Optimize<'a> {
     ///Only optimize files that return true for the specified partition filter
     pub fn filter(mut self, filters: &'a [PartitionFilter<'a, &'a str>]) -> Self {
         self.filters = filters;
-        return self;
+        self
     }
 
     ///Perform the optimization
     pub async fn execute(self, table: &mut DeltaTable) -> Result<Metrics, DeltaTableError> {
         let plan = create_merge_plan(table, self.filters)?;
-        println!("Merge Plan: \n {:?}", plan);
         let metrics = plan.execute(table).await?;
-        return Ok(metrics);
+        Ok(metrics)
     }
 }
 
@@ -190,7 +184,7 @@ impl MergePlan {
         &self,
         partitions: &Partitions,
     ) -> Option<Vec<(String, String)>> {
-        if partitions.0.len() > 0 {
+        if !partitions.0.is_empty() {
             let mut p = vec![];
             for i in &partitions.0 {
                 p.push((i.key.clone(), i.value.clone()));
@@ -225,7 +219,7 @@ impl MergePlan {
             deletion_timestamp: Some(deletion_time),
             data_change: false,
             extended_file_metadata: None,
-            partition_values: partition_values,
+            partition_values,
             size: Some(size),
             tags: None,
         }))
@@ -273,9 +267,8 @@ impl MergePlan {
         //Read files into memory and write into memory. Once a file is complete write to underlying storage.
         let schema = table.get_metadata()?.clone().schema.clone();
 
-        let columns = &table.state.current_metadata().unwrap().partition_columns;
-        let partition_column_set: HashSet<String> =
-            columns.into_iter().map(|s| s.to_owned()).collect();
+        let columns = &table.get_metadata()?.partition_columns;
+        let partition_column_set: HashSet<String> = columns.iter().map(|s| s.to_owned()).collect();
 
         //Remove partitions from the schema since they don't need to written to the parquet file
         let fields = schema
@@ -295,8 +288,6 @@ impl MergePlan {
             debug!("{:?}", merges);
             debug!("{:?}", _partitions);
             for merge in merges {
-                //Open some buffer
-                //Extra: track statistics for the file
                 let writer_properties = WriterProperties::builder()
                     .set_compression(Compression::SNAPPY)
                     .build();
@@ -306,14 +297,10 @@ impl MergePlan {
                     schema.clone(),
                     Some(writer_properties),
                 )?;
-                println!("Writer Schema");
-                println!("{:?}", schema);
 
                 for path in merge {
                     //load the file into memory and append it to the buffer
-
-                    let parquet_uri = table.storage.join_path(&table.table_uri, &path);
-                    println!("Open {:?}", parquet_uri);
+                    let parquet_uri = table.storage.join_path(&table.table_uri, path);
                     let data = table.storage.get_obj(&parquet_uri).await?;
                     let size = data.len();
                     let data = SliceableCursor::new(data);
@@ -323,18 +310,12 @@ impl MergePlan {
                     let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
 
                     let mut reader_indicies = vec![];
-                    let mut i: usize = 0;
-                    for f in arrow_reader.get_schema()?.fields() {
+                    for (i, f) in arrow_reader.get_schema()?.fields().iter().enumerate() {
                         if !partition_column_set.contains(f.name()) {
                             reader_indicies.push(i);
                         }
-                        i += 1;
                     }
 
-                    //arrow_reader.get_schema_by_columns(, false);
-                    //let reader_schema = arrow_reader.get_schema_by_columns(reader_indicies, false);
-                    println!("Reader Schema");
-                    println!("{:?}", arrow_reader.get_schema());
                     let batch_reader =
                         arrow_reader.get_record_reader_by_columns(reader_indicies, 2048)?;
                     for batch in batch_reader {
@@ -342,7 +323,7 @@ impl MergePlan {
                         _writer.write(&batch)?;
                     }
                     actions.push(self.create_remove(
-                        &path,
+                        path,
                         self.to_internal_partition_format(_partitions),
                         size.try_into().unwrap(),
                     )?);
@@ -396,33 +377,30 @@ impl MergePlan {
 fn get_target_file_size(table: &DeltaTable) -> i64 {
     let config = table.get_configurations();
     let mut target_size = 256000000;
-    if config.is_ok() {
-        let config_str = config
-            .expect("configuration is ok")
-            .get("delta.targetFileSize");
-        if config_str.is_some() {
-            let s = config_str.unwrap();
-            if s.is_some() {
-                let s  = s.as_ref().unwrap();
+    if let Ok(config) = config {
+        let config_str = config.get("delta.targetFileSize");
+        if let Some(s) = config_str {
+            if let Some(s) = s {
                 let r = s.parse::<i64>();
-                if r.is_err() {
-                    error!("Unable to parse value of 'delta.targetFileSize'. Using default value");
+                if let Ok(size) = r {
+                    target_size = size;
                 } else {
-                    target_size = r.unwrap();
+                    error!("Unable to parse value of 'delta.targetFileSize'. Using default value");
                 }
             } else {
                 error!("Check your configuration of 'delta.targetFileSize'. Using default value");
             }
         }
     }
-    return target_size;
+
+    target_size
 }
 
 fn create_merge_plan<'a>(
     table: &mut DeltaTable,
     filters: &[PartitionFilter<'a, &str>],
 ) -> Result<MergePlan, DeltaTableError> {
-    let target_size =  get_target_file_size(table);
+    let target_size = get_target_file_size(table);
     let mut candidates = HashMap::new();
     let mut operations: HashMap<Partitions, Merge> = HashMap::new();
     let mut metrics = Metrics::default();
@@ -436,10 +414,9 @@ fn create_merge_plan<'a>(
             .collect::<Vec<DeltaTablePartition>>();
 
         let partitions = PartitionValuesWrapper(partitions);
-        let v = candidates.entry(partitions).or_insert_with(|| Vec::new());
+        let v = candidates.entry(partitions).or_insert_with(Vec::new);
         v.push(add);
     }
-
 
     for candidate in candidates {
         let mut current = Vec::new();

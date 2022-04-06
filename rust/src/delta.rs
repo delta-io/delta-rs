@@ -590,7 +590,7 @@ pub struct DeltaTable {
     /// the load options used during load
     pub config: DeltaTableConfig,
 
-    pub(crate) state: DeltaTableState,
+    state: DeltaTableState,
 
     // metadata
     // application_transactions
