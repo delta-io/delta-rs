@@ -34,7 +34,7 @@ pub enum DeltaCommandError {
     #[error("Received empty data partition {0}")]
     EmptyPartition(String),
 
-    /// Error returned when the table to be created already exists
+    /// Error returned when the provided command is not supported
     #[error("Command not available {0}")]
     UnsupportedCommand(String),
 
@@ -51,7 +51,7 @@ pub enum DeltaCommandError {
     },
 
     /// Errors occurring inside the DeltaWriter modules
-    #[error("Error in underlying storage backend")]
+    #[error("Error in underlying DeltaWriter")]
     DeltaWriterError {
         /// Raw internal StorageError
         #[from]
@@ -66,16 +66,16 @@ pub enum DeltaCommandError {
         source: StorageError,
     },
 
-    /// Error returned when errors occur in underlying storage instance
+    /// Error returned when errors occur in Arrow
     #[error("Error handling arrow data")]
     ArrowError {
-        /// Raw internal StorageError
+        /// Raw internal ArrowError
         #[from]
         source: ArrowError,
     },
 
     /// Error returned for errors internal to Datafusion
-    #[error("Error handling arrow data")]
+    #[error("Error in Datafusion execution engine")]
     DataFusionError {
         /// Raw internal DataFusionError
         #[from]

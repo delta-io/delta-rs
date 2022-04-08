@@ -891,25 +891,12 @@ impl DeltaOperation {
     pub fn get_commit_info(&self) -> Map<String, Value> {
         let mut commit_info = Map::<String, Value>::new();
         // TODO add operation parameter to commit info
-        match &self {
-            DeltaOperation::Create { .. } => {
-                commit_info.insert(
-                    "operation".to_string(),
-                    serde_json::Value::String("delta-rs.Create".to_string()),
-                );
-            }
-            DeltaOperation::Write { .. } => {
-                commit_info.insert(
-                    "operation".to_string(),
-                    serde_json::Value::String("delta-rs.Write".to_string()),
-                );
-            }
-            DeltaOperation::StreamingUpdate { .. } => {
-                commit_info.insert(
-                    "operation".to_string(),
-                    serde_json::Value::String("delta-rs.StreamingUpdate".to_string()),
-                );
-            }
+        let operation = match &self {
+            DeltaOperation::Create { .. } => "delta-rs.Create",
+            DeltaOperation::Write { .. } => "delta-rs.Write",
+            DeltaOperation::StreamingUpdate { .. } => "delta-rs.StreamingUpdate",
+        }
+        commit_info.insert("operation".to_string(), serde_json::Value::String(operation);
         };
 
         if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(self) {

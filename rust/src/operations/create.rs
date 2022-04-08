@@ -24,7 +24,7 @@ use datafusion::{
 };
 use std::sync::Arc;
 
-/// Command for creating ne delta table
+/// Command for creating new delta table
 pub struct CreateCommand {
     table_uri: String,
     mode: SaveMode,
