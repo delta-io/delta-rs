@@ -131,10 +131,10 @@ impl DeltaCommands {
     pub async fn create(
         &mut self,
         metadata: DeltaTableMetaData,
-        mode: Option<SaveMode>,
+        mode: SaveMode,
     ) -> DeltaCommandResult<()> {
         let operation = DeltaOperation::Create {
-            mode: mode.clone().unwrap_or(SaveMode::Ignore),
+            mode,
             metadata: metadata.clone(),
             location: self.table.table_uri.clone(),
             // TODO get the protocol from somewhere central
@@ -155,7 +155,7 @@ impl DeltaCommands {
     pub async fn write(
         &mut self,
         data: Vec<RecordBatch>,
-        mode: Option<SaveMode>,
+        mode: SaveMode,
         partition_columns: Option<Vec<String>>,
     ) -> DeltaCommandResult<()> {
         if data.is_empty() {
@@ -199,7 +199,7 @@ impl DeltaCommands {
         };
 
         let operation = DeltaOperation::Write {
-            mode: mode.clone().unwrap_or(SaveMode::Append),
+            mode,
             partition_by: current_part.clone(),
             predicate: None,
         };
@@ -243,7 +243,7 @@ mod tests {
             DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
 
         let _ = commands
-            .create(metadata.clone(), Some(SaveMode::Ignore))
+            .create(metadata.clone(), SaveMode::Ignore)
             .await
             .unwrap();
 
@@ -251,7 +251,7 @@ mod tests {
         assert_eq!(table.version, 0);
 
         let res = commands
-            .create(metadata, Some(SaveMode::ErrorIfExists))
+            .create(metadata, SaveMode::ErrorIfExists)
             .await;
         assert!(res.is_err())
     }
@@ -270,7 +270,7 @@ mod tests {
         commands
             .write(
                 vec![batch],
-                Some(SaveMode::Append),
+                SaveMode::Append,
                 Some(vec!["modified".to_string()]),
             )
             .await
