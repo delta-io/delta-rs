@@ -890,14 +890,15 @@ impl DeltaOperation {
     /// Retrieve basic commit information to be added to Delta commits
     pub fn get_commit_info(&self) -> Map<String, Value> {
         let mut commit_info = Map::<String, Value>::new();
-        // TODO add operation parameter to commit info
         let operation = match &self {
             DeltaOperation::Create { .. } => "delta-rs.Create",
             DeltaOperation::Write { .. } => "delta-rs.Write",
             DeltaOperation::StreamingUpdate { .. } => "delta-rs.StreamingUpdate",
-        }
-        commit_info.insert("operation".to_string(), serde_json::Value::String(operation);
         };
+        commit_info.insert(
+            "operation".to_string(),
+            serde_json::Value::String(operation.into()),
+        );
 
         if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(self) {
             commit_info.insert(

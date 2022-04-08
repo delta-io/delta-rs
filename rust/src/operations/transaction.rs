@@ -122,8 +122,8 @@ impl ExecutionPlan for DeltaTransactionPlan {
         let data = collect(self.input.clone(), context.clone()).await?;
         // TODO we assume that all children send a single column record batch with serialized actions
         let actions = data
-            .into_iter()
-            .flat_map(|batch| deserialize_actions(&batch).unwrap())
+            .iter()
+            .flat_map(|batch| deserialize_actions(batch).unwrap())
             .collect::<Vec<_>>();
 
         if actions.is_empty() {
