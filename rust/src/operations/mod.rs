@@ -250,9 +250,7 @@ mod tests {
         let table = open_table(&table_uri).await.unwrap();
         assert_eq!(table.version, 0);
 
-        let res = commands
-            .create(metadata, SaveMode::ErrorIfExists)
-            .await;
+        let res = commands.create(metadata, SaveMode::ErrorIfExists).await;
         assert!(res.is_err())
     }
 
