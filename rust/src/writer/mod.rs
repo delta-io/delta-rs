@@ -127,7 +127,7 @@ pub trait DeltaWriter<T> {
         let mut adds = self.flush().await?;
         let mut tx = table.create_transaction(None);
         tx.add_actions(adds.drain(..).map(Action::add).collect());
-        let version = tx.commit(None).await?;
+        let version = tx.commit(None, None).await?;
         Ok(version)
     }
 }

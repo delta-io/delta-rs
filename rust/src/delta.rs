@@ -1024,7 +1024,7 @@ impl DeltaTable {
             .collect())
     }
 
-    /// Return a refernece to all active "add" actions present in the loaded state
+    /// Return a reference to all active "add" actions present in the loaded state
     pub fn get_active_add_actions(&self) -> &Vec<action::Add> {
         self.state.files()
     }
@@ -1321,7 +1321,7 @@ impl DeltaTable {
         let mut transaction = self.create_transaction(None);
         transaction.add_actions(actions.clone());
 
-        let prepared_commit = transaction.prepare_commit(None).await?;
+        let prepared_commit = transaction.prepare_commit(None, None).await?;
         let committed_version = self.try_commit_transaction(&prepared_commit, 0).await?;
 
         let new_state = DeltaTableState::from_commit(self, committed_version).await?;
@@ -1471,10 +1471,12 @@ impl<'a> DeltaTransaction<'a> {
     /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
     pub async fn commit(
         &mut self,
-        _operation: Option<DeltaOperation>,
+        operation: Option<DeltaOperation>,
+        app_metadata: Option<Map<String, Value>>,
     ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
-        // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action), but leaving it unused for now.
-        // `CommitInfo` is a fairly dynamic data structure so we should work out the data structure approach separately.
+        // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action),
+        // but leaving it unused for now. `CommitInfo` is a fairly dynamic data structure so we should work
+        // out the data structure approach separately.
 
         // TODO: calculate isolation level to use when checking for conflicts.
         // Leaving conflict checking unimplemented for now to get the "single writer" implementation off the ground.
@@ -1491,7 +1493,7 @@ impl<'a> DeltaTransaction<'a> {
         //     IsolationLevel::Serializable
         // };
 
-        let prepared_commit = self.prepare_commit(_operation).await?;
+        let prepared_commit = self.prepare_commit(operation, app_metadata).await?;
 
         // try to commit in a loop in case other writers write the next version first
         let version = self.try_commit_loop(&prepared_commit).await?;
@@ -1499,33 +1501,44 @@ impl<'a> DeltaTransaction<'a> {
         Ok(version)
     }
 
-    /// Commit transaction with additional app metadata
-    pub async fn commit_with_info(
-        &mut self,
-        operation: Option<DeltaOperation>,
-        app_metadata: Option<Map<String, Value>>,
-    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
-        // TODO check operation and decide whether the commit is safe to retry in a loop?
-        let prepared_commit = self
-            .prepare_commit_with_info(operation, app_metadata)
-            .await?;
-        let version = self.try_commit_loop(&prepared_commit).await?;
-        Ok(version)
-    }
-
     /// Low-level transaction API. Creates a temporary commit file. Once created,
     /// the transaction object could be dropped and the actual commit could be executed
     /// with `DeltaTable.try_commit_transaction`.
     pub async fn prepare_commit(
-        &self,
-        _operation: Option<DeltaOperation>,
+        &mut self,
+        operation: Option<DeltaOperation>,
+        app_metadata: Option<Map<String, Value>>,
     ) -> Result<PreparedCommit, DeltaTableError> {
-        let token = Uuid::new_v4().to_string();
+        if !self
+            .actions
+            .iter()
+            .any(|a| matches!(a, action::Action::commitInfo(..)))
+        {
+            let mut commit_info = Map::<String, Value>::new();
+            commit_info.insert(
+                "timestamp".to_string(),
+                Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
+            );
+            commit_info.insert(
+                "clientVersion".to_string(),
+                Value::String(format!("delta-rs.{}", crate_version())),
+            );
 
-        // TODO: create a CommitInfo action and prepend it to actions.
+            if let Some(op) = &operation {
+                commit_info.append(&mut op.get_commit_info())
+            }
+            if let Some(mut meta) = app_metadata {
+                commit_info.append(&mut meta)
+            }
+            self.add_action(action::Action::commitInfo(commit_info));
+        }
+
         // Serialize all actions that are part of this log entry.
         let log_entry = log_entry_from_actions(&self.actions)?;
 
+        // Write delta log entry as temporary file to storage. For the actual commit,
+        // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
+        let token = Uuid::new_v4().to_string();
         let file_name = format!("_commit_{}.json.tmp", token);
         let uri = self
             .delta_table
@@ -1538,36 +1551,6 @@ impl<'a> DeltaTransaction<'a> {
             .await?;
 
         Ok(PreparedCommit { uri })
-    }
-
-    /// Prepare a commit with commit info added
-    pub async fn prepare_commit_with_info(
-        &mut self,
-        operation: Option<DeltaOperation>,
-        app_metadata: Option<Map<String, Value>>,
-    ) -> Result<PreparedCommit, DeltaTableError> {
-        let mut commit_info = Map::<String, Value>::new();
-
-        // TODO should this be a "formalized" struct
-        commit_info.insert(
-            "timestamp".to_string(),
-            Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
-        );
-        commit_info.insert(
-            "clientVersion".to_string(),
-            Value::String(format!("delta-rs.{}", crate_version())),
-        );
-
-        if let Some(op) = &operation {
-            commit_info.append(&mut op.get_commit_info())
-        }
-        if let Some(mut meta) = app_metadata {
-            commit_info.append(&mut meta)
-        }
-
-        self.add_action(action::Action::commitInfo(commit_info));
-
-        self.prepare_commit(operation).await
     }
 
     async fn try_commit_loop(

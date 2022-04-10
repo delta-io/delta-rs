@@ -136,10 +136,7 @@ impl ExecutionPlan for DeltaTransactionPlan {
                 let mut txn = table.create_transaction(None);
                 txn.add_actions(actions);
                 let prepared_commit = txn
-                    .prepare_commit_with_info(
-                        Some(self.operation.clone()),
-                        self.app_metadata.clone(),
-                    )
+                    .prepare_commit(Some(self.operation.clone()), self.app_metadata.clone())
                     .await
                     .map_err(to_datafusion_err)?;
                 let committed_version = table
@@ -152,7 +149,7 @@ impl ExecutionPlan for DeltaTransactionPlan {
                 let mut txn = table.create_transaction(None);
                 txn.add_actions(actions);
                 let committed_version = txn
-                    .commit_with_info(Some(self.operation.clone()), self.app_metadata.clone())
+                    .commit(Some(self.operation.clone()), self.app_metadata.clone())
                     .await
                     .map_err(to_datafusion_err)?;
                 committed_version
