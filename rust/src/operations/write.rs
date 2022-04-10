@@ -16,7 +16,11 @@
 //! replace data that matches a predicate.
 
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/WriteIntoDelta.scala
-use super::{create::CreateCommand, transaction::serialize_actions, *};
+use super::{
+    create::CreateCommand,
+    transaction::{serialize_actions, OPERATION_SCHEMA},
+    *,
+};
 use crate::{
     action::{Action, Add, Remove, SaveMode},
     writer::{DeltaWriter, RecordBatchWriter},
@@ -25,9 +29,7 @@ use crate::{
 use async_trait::async_trait;
 use core::any::Any;
 use datafusion::{
-    arrow::datatypes::{
-        DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
-    },
+    arrow::datatypes::SchemaRef as ArrowSchemaRef,
     error::{DataFusionError, Result as DataFusionResult},
     execution::context::TaskContext,
     physical_plan::{
@@ -105,11 +107,7 @@ impl ExecutionPlan for WriteCommand {
     }
 
     fn schema(&self) -> ArrowSchemaRef {
-        Arc::new(ArrowSchema::new(vec![ArrowField::new(
-            "serialized",
-            DataType::Utf8,
-            true,
-        )]))
+        Arc::new(OPERATION_SCHEMA.clone())
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
@@ -255,11 +253,9 @@ impl ExecutionPlan for WriteCommand {
 /// and forwards the add actions as record batches
 struct WritePartitionCommand {
     table_uri: String,
-    // The save mode used in operation
-    // mode: SaveMode,
     /// Column names for table partitioning
     partition_columns: Option<Vec<String>>,
-    // When using `Overwrite` mode, replace data that matches a predicate
+    // TODO When using `Overwrite` mode, replace data that matches a predicate
     // predicate: Option<String>,
     /// The input plan
     input: Arc<dyn ExecutionPlan>,
@@ -268,7 +264,6 @@ struct WritePartitionCommand {
 impl WritePartitionCommand {
     pub fn new<T>(
         table_uri: T,
-        // mode: SaveMode,
         partition_columns: Option<Vec<String>>,
         // predicate: Option<String>,
         input: Arc<dyn ExecutionPlan>,
@@ -278,7 +273,6 @@ impl WritePartitionCommand {
     {
         Self {
             table_uri: table_uri.into(),
-            // mode,
             partition_columns,
             // predicate,
             input,
@@ -293,11 +287,7 @@ impl ExecutionPlan for WritePartitionCommand {
     }
 
     fn schema(&self) -> ArrowSchemaRef {
-        Arc::new(ArrowSchema::new(vec![ArrowField::new(
-            "serialized",
-            DataType::Utf8,
-            true,
-        )]))
+        Arc::new(OPERATION_SCHEMA.clone())
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

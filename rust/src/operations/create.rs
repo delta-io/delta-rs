@@ -1,14 +1,14 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
 use super::{
-    get_table_from_uri_without_update, to_datafusion_err, transaction::serialize_actions,
+    get_table_from_uri_without_update, to_datafusion_err,
+    transaction::{serialize_actions, OPERATION_SCHEMA},
     DeltaCommandError,
 };
 use crate::{
     action::{Action, DeltaOperation, MetaData, Protocol, SaveMode},
-    DeltaTableMetaData, Schema,
+    DeltaTableMetaData,
 };
-use arrow::datatypes::Schema as ArrowSchema;
 use async_trait::async_trait;
 use core::any::Any;
 use datafusion::{
@@ -71,10 +71,7 @@ impl ExecutionPlan for CreateCommand {
     }
 
     fn schema(&self) -> SchemaRef {
-        Arc::new(
-            <ArrowSchema as TryFrom<&Schema>>::try_from(&self.metadata.schema.clone())
-                .expect("SChema must be valid"),
-        )
+        Arc::new(OPERATION_SCHEMA.clone())
     }
 
     fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {

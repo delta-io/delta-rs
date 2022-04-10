@@ -25,7 +25,7 @@ use std::sync::Arc;
 lazy_static! {
     /// Schema expected form plans wrapped by transaction
     pub static ref OPERATION_SCHEMA: ArrowSchema =
-        ArrowSchema::new(vec![ArrowField::new("serialized", DataType::Utf8, true,)]);
+        ArrowSchema::new(vec![ArrowField::new("serialized", DataType::Utf8, false,)]);
 }
 
 pub(crate) fn serialize_actions(actions: Vec<Action>) -> DataFusionResult<RecordBatch> {
