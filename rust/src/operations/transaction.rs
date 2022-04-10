@@ -1,12 +1,11 @@
 //! Wrapper Execution plan to handle distributed operations
 use super::*;
 use crate::action::Action;
-// use crate::commands::create::CreateCommand;
 use async_trait::async_trait;
 use core::any::Any;
 use datafusion::{
     arrow::{
-        array::{Array, StringArray},
+        array::StringArray,
         datatypes::{
             DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
         },
@@ -168,9 +167,9 @@ impl ExecutionPlan for DeltaTransactionPlan {
 
 fn deserialize_actions(data: &RecordBatch) -> DataFusionResult<Vec<Action>> {
     let serialized_actions = arrow::array::as_string_array(data.column(0));
-    (0..serialized_actions.len())
-        .map(|idx| serde_json::from_str::<Action>(serialized_actions.value(idx)))
-        .into_iter()
+    serialized_actions
+        .iter()
+        .map(|val| serde_json::from_str::<Action>(val.unwrap_or("")))
         .collect::<Result<Vec<_>, _>>()
         .map_err(to_datafusion_err)
 }
