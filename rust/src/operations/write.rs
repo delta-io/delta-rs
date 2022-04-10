@@ -42,6 +42,7 @@ use datafusion::{
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+const MAX_SUPPORTED_WRITER_VERSION: i32 = 1;
 
 /// Command for writing data into Delta table
 #[derive(Debug)]
@@ -163,7 +164,7 @@ impl ExecutionPlan for WriteCommand {
                     // TODO get the protocol from somewhere central
                     protocol: Protocol {
                         min_reader_version: 1,
-                        min_writer_version: 2,
+                        min_writer_version: 1,
                     },
                 };
                 let plan = Arc::new(
@@ -175,19 +176,27 @@ impl ExecutionPlan for WriteCommand {
 
                 Ok(create_actions)
             }
-            Ok(_) => match self.mode {
-                SaveMode::ErrorIfExists => Err(DeltaCommandError::TableAlreadyExists(
-                    self.table_uri.clone(),
-                )),
-                SaveMode::Ignore => {
-                    return Ok(Box::pin(SizedRecordBatchStream::new(
-                        self.schema(),
-                        vec![],
-                        tracking_metrics,
-                    )))
+            Ok(_) => {
+                if table.get_min_writer_version() > MAX_SUPPORTED_WRITER_VERSION {
+                    Err(DeltaCommandError::UnsupportedWriterVersion(
+                        table.get_min_writer_version(),
+                    ))
+                } else {
+                    match self.mode {
+                        SaveMode::ErrorIfExists => Err(DeltaCommandError::TableAlreadyExists(
+                            self.table_uri.clone(),
+                        )),
+                        SaveMode::Ignore => {
+                            return Ok(Box::pin(SizedRecordBatchStream::new(
+                                self.schema(),
+                                vec![],
+                                tracking_metrics,
+                            )))
+                        }
+                        _ => Ok(vec![]),
+                    }
                 }
-                _ => Ok(vec![]),
-            },
+            }
         }
         .map_err(to_datafusion_err)?;
 

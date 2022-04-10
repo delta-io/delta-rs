@@ -38,6 +38,10 @@ pub enum DeltaCommandError {
     #[error("Command not available {0}")]
     UnsupportedCommand(String),
 
+    /// Error returned when the table requires an unsupported writer version
+    #[error("Delta-rs does not support writer version {0}")]
+    UnsupportedWriterVersion(i32),
+
     /// Error returned when the table to be created already exists
     #[error("Table: '{0}' already exists")]
     TableAlreadyExists(String),
@@ -52,7 +56,7 @@ pub enum DeltaCommandError {
 
     /// Errors occurring inside the DeltaWriter modules
     #[error("Error in underlying DeltaWriter")]
-    DeltaWriterError {
+    DeltaWriter {
         /// Raw internal DeltaWriterError
         #[from]
         source: DeltaWriterError,
@@ -60,7 +64,7 @@ pub enum DeltaCommandError {
 
     /// Error returned when errors occur in underlying storage instance
     #[error("Error in underlying storage backend")]
-    StorageError {
+    Storage {
         /// Raw internal StorageError
         #[from]
         source: StorageError,
@@ -68,7 +72,7 @@ pub enum DeltaCommandError {
 
     /// Error returned when errors occur in Arrow
     #[error("Error handling arrow data")]
-    ArrowError {
+    Arrow {
         /// Raw internal ArrowError
         #[from]
         source: ArrowError,
@@ -76,7 +80,7 @@ pub enum DeltaCommandError {
 
     /// Error returned for errors internal to Datafusion
     #[error("Error in Datafusion execution engine")]
-    DataFusionError {
+    DataFusion {
         /// Raw internal DataFusionError
         #[from]
         source: DataFusionError,
