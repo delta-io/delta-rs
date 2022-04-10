@@ -30,7 +30,7 @@ type DeltaCommandResult<T> = Result<T, DeltaCommandError>;
 /// Enum representing an error when calling [`DeltaCommandExec`].
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaCommandError {
-    /// Error returned when the table to be created already exists
+    /// Error returned when some data is expected but only an empty dataset is provided.
     #[error("Received empty data partition {0}")]
     EmptyPartition(String),
 
@@ -53,7 +53,7 @@ pub enum DeltaCommandError {
     /// Errors occurring inside the DeltaWriter modules
     #[error("Error in underlying DeltaWriter")]
     DeltaWriterError {
-        /// Raw internal StorageError
+        /// Raw internal DeltaWriterError
         #[from]
         source: DeltaWriterError,
     },
