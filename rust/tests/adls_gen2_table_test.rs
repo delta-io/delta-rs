@@ -102,7 +102,7 @@ mod adls_gen2_table {
         // Act 2
         let mut tx = dt.create_transaction(None);
         tx.add_actions(tx_actions());
-        let version = tx.commit(None).await.unwrap();
+        let version = tx.commit(None, None).await.unwrap();
 
         // Assert 2
         assert_eq!(1, version);
