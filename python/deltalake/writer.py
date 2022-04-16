@@ -3,6 +3,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from optparse import Option
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Union
 
 import pandas as pd
@@ -44,6 +45,9 @@ def write_deltalake(
     partition_by: Optional[List[str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    configuration: Optional[Mapping[str, Optional[str]]] = None,
 ) -> None:
     """Write to a Delta Lake table (Experimental)
 
@@ -147,7 +151,16 @@ def write_deltalake(
     )
 
     if table is None:
-        _write_new_deltalake(table_uri, schema, add_actions, mode, partition_by or [])
+        _write_new_deltalake(
+            table_uri,
+            schema,
+            add_actions,
+            mode,
+            partition_by or [],
+            name,
+            description,
+            configuration,
+        )
     else:
         table._table.create_write_transaction(
             add_actions,

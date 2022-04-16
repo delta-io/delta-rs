@@ -95,6 +95,24 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert table == sample_data
 
 
+def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
+    write_deltalake(
+        str(tmp_path),
+        sample_data,
+        name="test_name",
+        description="test_desc",
+        configuration={"configTest": "foobar"},
+    )
+
+    delta_table = DeltaTable(str(tmp_path))
+
+    metadata = delta_table.metadata()
+
+    assert metadata.name == "test_name"
+    assert metadata.description == "test_desc"
+    assert metadata.configuration == {"configTest": "foobar"}
+
+
 @pytest.mark.parametrize(
     "column",
     [
