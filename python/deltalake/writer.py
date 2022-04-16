@@ -150,7 +150,7 @@ def write_deltalake(
     )
 
     if table is None:
-        _write_new_deltalake(
+        _write_new_deltalake(  # type: ignore[call-arg]
             table_uri,
             schema,
             add_actions,
