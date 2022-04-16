@@ -514,6 +514,7 @@ impl From<&PyAddAction> for action::Add {
 }
 
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 fn write_new_deltalake(
     table_uri: String,
     schema: ArrowSchema,
@@ -532,12 +533,12 @@ fn write_new_deltalake(
     .map_err(PyDeltaTableError::from_raw)?;
 
     let metadata = DeltaTableMetaData::new(
-        name,                                            // User-provided identifer (NAME)
-        description,                                     // DESC,
-        None,                                            // Format?
-        (&schema).try_into()?,                           // SCHEMA
-        partition_by,                                    // PARTITION_COLUMNS
-        configuration.unwrap_or_else(|| HashMap::new()), //HashMap::new(), //CONFIGURATION HASHMAP
+        name,
+        description,
+        None, // Format
+        (&schema).try_into()?,
+        partition_by,
+        configuration.unwrap_or_default(),
     );
 
     let fut = table.create(

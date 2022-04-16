@@ -3,7 +3,6 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from optparse import Option
 from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Union
 
 import pandas as pd
