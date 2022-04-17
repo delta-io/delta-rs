@@ -56,6 +56,8 @@ def write_deltalake(
     to write to an existing table with a higher min_writer_version, this
     function will throw DeltaTableProtocolError.
 
+    Note that this function does NOT register this table in a data catalog.
+
     :param table_or_uri: URI of a table or a DeltaTable object.
     :param data: Data to write. If passing iterable, the schema must also be given.
     :param schema: Optional schema to write.
@@ -67,6 +69,9 @@ def write_deltalake(
         already exists. If 'append', will add new data. If 'overwrite', will
         replace table with new data. If 'ignore', will not write anything if
         table already exists.
+    :param name: User-provided identifier for this table.
+    :param description: User-provided description for this table.
+    :param configuration: A map containing configuration options for the metadata action.
     """
     if isinstance(data, pd.DataFrame):
         data = pa.Table.from_pandas(data)
