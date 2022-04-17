@@ -44,6 +44,9 @@ def write_deltalake(
     partition_by: Optional[List[str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
+    name: Optional[str] = None,
+    description: Optional[str] = None,
+    configuration: Optional[Mapping[str, Optional[str]]] = None,
 ) -> None:
     """Write to a Delta Lake table (Experimental)
 
@@ -52,6 +55,8 @@ def write_deltalake(
     This function only supports protocol version 1 currently. If an attempting
     to write to an existing table with a higher min_writer_version, this
     function will throw DeltaTableProtocolError.
+
+    Note that this function does NOT register this table in a data catalog.
 
     :param table_or_uri: URI of a table or a DeltaTable object.
     :param data: Data to write. If passing iterable, the schema must also be given.
@@ -64,6 +69,9 @@ def write_deltalake(
         already exists. If 'append', will add new data. If 'overwrite', will
         replace table with new data. If 'ignore', will not write anything if
         table already exists.
+    :param name: User-provided identifier for this table.
+    :param description: User-provided description for this table.
+    :param configuration: A map containing configuration options for the metadata action.
     """
     if isinstance(data, pd.DataFrame):
         data = pa.Table.from_pandas(data)
@@ -147,7 +155,16 @@ def write_deltalake(
     )
 
     if table is None:
-        _write_new_deltalake(table_uri, schema, add_actions, mode, partition_by or [])
+        _write_new_deltalake(  # type: ignore[call-arg]
+            table_uri,
+            schema,
+            add_actions,
+            mode,
+            partition_by or [],
+            name,
+            description,
+            configuration,
+        )
     else:
         table._table.create_write_transaction(
             add_actions,
