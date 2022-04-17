@@ -3,7 +3,8 @@ import os
 import pathlib
 import random
 import sys
-from datetime import date, datetime, timedelta
+import time
+from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Dict, Iterable
 from unittest.mock import Mock
@@ -11,7 +12,9 @@ from unittest.mock import Mock
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
+import pytz
 from pandas.testing import assert_frame_equal
+from pyarrow._dataset_parquet import ParquetReadOptions
 from pyarrow.dataset import ParquetFileFormat
 from pyarrow.lib import RecordBatchReader
 
@@ -304,7 +307,7 @@ def test_writer_fails_on_protocol(existing_table: DeltaTable, sample_data: pa.Ta
         write_deltalake(existing_table, sample_data, mode="overwrite")
 
 
-def test_writer_with_options(tmp_path: pathlib.Path):
+def test_writer_with_max_rows(tmp_path: pathlib.Path):
     def get_multifile_stats(table: DeltaTable) -> Iterable[Dict]:
         log_path = get_log_path(table)
 
@@ -328,3 +331,25 @@ def test_writer_with_options(tmp_path: pathlib.Path):
     stats = get_multifile_stats(table)
 
     assert sum([stat_entry['numRecords'] for stat_entry in stats]) == 1000
+
+
+def test_writer_with_options(tmp_path: pathlib.Path):
+    expected_column_values = [int(datetime(year_, 1, 1, 0, 0, 0).timestamp() * 1e6) for year_ in range(9000, 9010)]
+    data = pa.table(
+        {
+            "colA": pa.array(expected_column_values, pa.timestamp('us'))
+        }
+    )
+    path = str(tmp_path)
+    opts = ParquetFileFormat().make_write_options().update(
+        compression='GZIP',
+        coerce_timestamps='us'
+    )
+    write_deltalake(path, data, file_options=opts)
+
+    table = DeltaTable(path).to_pyarrow_dataset(parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit='us')).to_table().to_pydict()['colA']
+
+    # since either session (Spark) or system timezone is used when reading timestamps back into python
+    # a conversion is required for this synthetic case. Should not be an issue with a real table, as long as a system/Spark session timestamp matches the one used when data was written
+
+    assert [int(d.timestamp() * 1e6 - time.timezone * 1e6) for d in table] == expected_column_values
