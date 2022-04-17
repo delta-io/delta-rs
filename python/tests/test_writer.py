@@ -4,7 +4,7 @@ import pathlib
 import random
 import sys
 import time
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Dict, Iterable
 from unittest.mock import Mock
@@ -12,7 +12,6 @@ from unittest.mock import Mock
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
-import pytz
 from pandas.testing import assert_frame_equal
 from pyarrow._dataset_parquet import ParquetReadOptions
 from pyarrow.dataset import ParquetFileFormat
