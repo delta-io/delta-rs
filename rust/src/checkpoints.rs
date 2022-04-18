@@ -26,7 +26,7 @@ use super::open_table_with_version;
 use super::schema::*;
 use super::storage::{ObjectMeta, StorageBackend, StorageError};
 use super::table_state::DeltaTableState;
-use super::writer::time_utils;
+use super::time_utils;
 use super::{CheckPoint, DeltaTableError};
 use crate::DeltaTable;
 

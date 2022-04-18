@@ -91,6 +91,7 @@ impl DataCatalog for GlueDataCatalog {
                 metadata: "Storage Descriptor".to_string(),
             })?
             .location
+            .map(|l| l.replace("s3a", "s3"))
             .ok_or(DataCatalogError::MissingMetadata {
                 metadata: "Location".to_string(),
             });
