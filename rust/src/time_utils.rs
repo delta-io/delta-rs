@@ -1,3 +1,5 @@
+//! Utility functions for converting time formats.
+
 use arrow::temporal_conversions;
 use parquet_format::TimeUnit;
 
