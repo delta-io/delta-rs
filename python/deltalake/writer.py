@@ -66,13 +66,17 @@ def write_deltalake(
     :param filesystem: Optional filesystem to pass to PyArrow. If not provided will
         be inferred from uri.
     :param mode: How to handle existing data. Default is to error if table
-        already exists. If 'append', will add new data. If 'overwrite', will
-        replace table with new data. If 'ignore', will not write anything if
-        table already exists.
+        already exists. 
+        If 'append', will add new data.
+        If 'overwrite', will replace table with new data. 
+        If 'ignore', will not write anything if table already exists.
     :param name: User-provided identifier for this table.
     :param description: User-provided description for this table.
     :param configuration: A map containing configuration options for the metadata action.
     """
+    if configuration["delta.appendOnly"] == "true" and mode != "append":
+        raise ValueError("If configuration has delta.appendOnly = 'true', mode must be 'append'")
+
     if isinstance(data, pd.DataFrame):
         data = pa.Table.from_pandas(data)
 

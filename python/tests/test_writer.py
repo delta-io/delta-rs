@@ -95,24 +95,6 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert table == sample_data
 
 
-def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
-    write_deltalake(
-        str(tmp_path),
-        sample_data,
-        name="test_name",
-        description="test_desc",
-        configuration={"configTest": "foobar"},
-    )
-
-    delta_table = DeltaTable(str(tmp_path))
-
-    metadata = delta_table.metadata()
-
-    assert metadata.name == "test_name"
-    assert metadata.description == "test_desc"
-    assert metadata.configuration == {"configTest": "foobar"}
-
-
 @pytest.mark.parametrize(
     "column",
     [
@@ -170,6 +152,25 @@ def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
 
     write_deltalake(path, sample_data, mode="overwrite")
     assert DeltaTable(path).to_pyarrow_table() == sample_data
+
+
+def test_append_only(tmp_path: pathlib.Path, sample_data: pa.Table):
+    path = str(tmp_path)
+
+    config = {"delta.appendOnly": "true"}
+    write_deltalake(path, sample_data, mode="append", configuration=config)
+    
+    with pytest.raises(ValueError):
+        write_deltalake(path, sample_data, configuration=config)
+    
+    with pytest.raises(ValueError):
+        write_deltalake(path, sample_data, configuration=config, mode="overwrite")
+
+    with pytest.raises(ValueError):
+        write_deltalake(path, sample_data, configuration=config, mode="ignore")
+
+    expected = pa.concat_tables([sample_data])
+    assert DeltaTable(path).to_pyarrow_table() == expected
 
 
 def test_writer_with_table(existing_table: DeltaTable, sample_data: pa.Table):
