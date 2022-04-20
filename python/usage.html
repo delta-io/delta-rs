@@ -30,7 +30,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.5.6
+                0.5.7
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -133,7 +133,7 @@ database and table name. Currently only AWS Glue is supported.</p>
 <ul class="simple">
 <li><p>AWS S3, detected by the prefix <code class="docutils literal notranslate"><span class="pre">s3://</span></code>. AWS credentials can be specified using
 environment variables in the same way as the CLI.</p></li>
-<li><p>Azure Data Lake Storage Gen 2, detected by the prefix <code class="docutils literal notranslate"><span class="pre">abffs://</span></code>. Note that
+<li><p>Azure Data Lake Storage Gen 2, detected by the prefix <code class="docutils literal notranslate"><span class="pre">adls2://</span></code>. Note that
 <a class="reference external" href="https://github.com/delta-io/delta-rs/blob/main/docs/ADLSGen2-HOWTO.md">specific instructions</a> must be followed to setup the Azure Storage Account.</p></li>
 <li><p>Google Cloud Storage, detected by the prefix <code class="docutils literal notranslate"><span class="pre">gs://</span></code>.</p></li>
 </ul>
@@ -366,7 +366,32 @@ only list the files to be deleted. Pass <code class="docutils literal notranslat
 </section>
 <section id="writing-delta-tables">
 <h2>Writing Delta Tables<a class="headerlink" href="#writing-delta-tables" title="Permalink to this headline"></a></h2>
-<p>Writing Delta tables is not currently supported.</p>
+<div class="admonition warning">
+<p class="admonition-title">Warning</p>
+<p>The writer is currently <em>experimental</em>. Please use on test data first, not
+on production data. Report any issues at <a class="reference external" href="https://github.com/delta-io/delta-rs/issues">https://github.com/delta-io/delta-rs/issues</a>.</p>
+</div>
+<p>For overwrites and appends, use <a class="reference internal" href="api_reference.html#deltalake.write_deltalake" title="deltalake.write_deltalake"><code class="xref py py-func docutils literal notranslate"><span class="pre">write_deltalake()</span></code></a>. If the table does not
+already exist, it will be created. The <code class="docutils literal notranslate"><span class="pre">data</span></code> parameter will accept a Pandas
+DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake.writer</span> <span class="kn">import</span> <span class="n">write_deltalake</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;x&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">,</span> <span class="n">df</span><span class="p">)</span>
+</pre></div>
+</div>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p><a class="reference internal" href="api_reference.html#deltalake.write_deltalake" title="deltalake.write_deltalake"><code class="xref py py-func docutils literal notranslate"><span class="pre">write_deltalake()</span></code></a> accepts a Pandas DataFrame, but will convert it to
+a Arrow table before writing. See caveats in <a class="reference external" href="https://arrow.apache.org/docs/python/pandas.html" title="(in Apache Arrow v7.0.0)"><span>Pandas Integration</span></a>.</p>
+</div>
+<p>By default, writes create a new table and error if it already exists. This is
+controlled by the <code class="docutils literal notranslate"><span class="pre">mode</span></code> parameter, which mirrors the behavior of Spark’s
+<a class="reference external" href="https://spark.apache.org/docs/latest/api/python/reference/api/pyspark.sql.DataFrameWriter.saveAsTable.html#pyspark.sql.DataFrameWriter.saveAsTable" title="(in PySpark vmaster)"><code class="xref py py-meth docutils literal notranslate"><span class="pre">pyspark.sql.DataFrameWriter.saveAsTable()</span></code></a> DataFrame method. To overwrite pass in <code class="docutils literal notranslate"><span class="pre">mode='overwrite'</span></code> and
+to append pass in <code class="docutils literal notranslate"><span class="pre">mode='append'</span></code>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;overwrite&#39;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;append&#39;</span><span class="p">)</span>
+</pre></div>
+</div>
 </section>
 </section>
 
