@@ -375,7 +375,7 @@ mod tests {
         let mut table = create_initialized_table(&partition_cols).await;
         assert_eq!(table.version, 0);
 
-        let transaction = get_transaction(table.table_uri.clone(), SaveMode::Append);
+        let transaction = get_transaction(table.table_uri.clone(), 0, SaveMode::Append);
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
 
@@ -386,6 +386,7 @@ mod tests {
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
         assert_eq!(table.version, 1);
 
+        let transaction = get_transaction(table.table_uri.clone(), 1, SaveMode::Append);
         let _ = collect(transaction.clone(), task_ctx).await.unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 4);
@@ -398,7 +399,7 @@ mod tests {
         let mut table = create_initialized_table(&partition_cols).await;
         assert_eq!(table.version, 0);
 
-        let transaction = get_transaction(table.table_uri.clone(), SaveMode::Overwrite);
+        let transaction = get_transaction(table.table_uri.clone(), 0, SaveMode::Overwrite);
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
 
@@ -409,6 +410,7 @@ mod tests {
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
         assert_eq!(table.version, 1);
 
+        let transaction = get_transaction(table.table_uri.clone(), 1, SaveMode::Overwrite);
         let _ = collect(transaction.clone(), task_ctx).await.unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
@@ -422,6 +424,7 @@ mod tests {
 
         let transaction = get_transaction(
             table_path.to_str().unwrap().to_string(),
+            -1,
             SaveMode::Overwrite,
         );
         let session_ctx = SessionContext::new();
@@ -431,12 +434,17 @@ mod tests {
             .await
             .unwrap();
 
+        // THe table should be created on write and thus have version 0
         let table = open_table(table_path.to_str().unwrap()).await.unwrap();
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
         assert_eq!(table.version, 0);
     }
 
-    fn get_transaction(table_uri: String, mode: SaveMode) -> Arc<DeltaTransactionPlan> {
+    fn get_transaction(
+        table_uri: String,
+        table_version: i64,
+        mode: SaveMode,
+    ) -> Arc<DeltaTransactionPlan> {
         let batch = get_record_batch(None, false);
         let schema = batch.schema();
         let data_plan = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
@@ -445,10 +453,12 @@ mod tests {
             mode,
             predicate: None,
         };
-        let command = WriteCommand::try_new(&table_uri, op.clone(), data_plan).unwrap();
+        let command =
+            WriteCommand::try_new(&table_uri, op.clone(), data_plan).unwrap();
 
         Arc::new(DeltaTransactionPlan::new(
             table_uri,
+            table_version,
             Arc::new(command),
             op,
             None,

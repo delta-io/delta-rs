@@ -2,6 +2,7 @@
 // TODO
 // - rename to delta operations
 use crate::{
+    open_table,
     action::{DeltaOperation, Protocol, SaveMode},
     get_backend_for_uri_with_options,
     operations::{create::CreateCommand, transaction::DeltaTransactionPlan, write::WriteCommand},
@@ -102,7 +103,12 @@ impl DeltaCommands {
     where
         T: Into<String>,
     {
-        let table = get_table_from_uri_without_update(uri.into())?;
+        let table_uri: String = uri.into();
+        let table = if let Ok(tbl) = open_table(&table_uri).await {
+            Ok(tbl)
+         } else {
+            get_table_from_uri_without_update(table_uri)
+         }?;
         Ok(Self { table })
     }
 
@@ -118,6 +124,7 @@ impl DeltaCommands {
     ) -> DeltaCommandResult<()> {
         let transaction = Arc::new(DeltaTransactionPlan::new(
             self.table.table_uri.clone(),
+            self.table.version,
             plan,
             operation,
             None,
@@ -144,7 +151,7 @@ impl DeltaCommands {
             // TODO get the protocol from somewhere central
             protocol: Protocol {
                 min_reader_version: 1,
-                min_writer_version: 2,
+                min_writer_version: 1,
             },
         };
         let plan = Arc::new(CreateCommand::try_new(
@@ -166,20 +173,13 @@ impl DeltaCommands {
             return Ok(());
         }
         let schema = data[0].schema();
-        let current_part = match self.table.update().await {
-            Ok(_) => {
-                let metadata = self.table.get_metadata()?;
-                if let Some(cols) = partition_columns {
-                    if cols != metadata.partition_columns {
-                        todo!("Schema updates not yet implemented")
-                    }
-                };
-                Some(metadata.partition_columns.clone())
+        let metadata = self.table.get_metadata()?;
+        if let Some(cols) = partition_columns.as_ref() {
+            if cols != &metadata.partition_columns {
+                todo!("Schema updates not yet implemented")
             }
-            _ => partition_columns,
         };
-
-        let data = if let Some(ref cols) = current_part {
+        let data = if let Some(cols) = partition_columns.as_ref() {
             // TODO partitioning should probably happen in its own plan ...
             let mut partitions: HashMap<String, Vec<RecordBatch>> = HashMap::new();
             for batch in data {
@@ -204,7 +204,7 @@ impl DeltaCommands {
 
         let operation = DeltaOperation::Write {
             mode,
-            partition_by: current_part.clone(),
+            partition_by: partition_columns.clone(),
             predicate: None,
         };
         let data_plan = Arc::new(MemoryExec::try_new(&data, schema, None)?);

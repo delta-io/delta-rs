@@ -167,7 +167,7 @@ mod tests {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
 
-        let transaction = get_transaction(table_uri.clone(), metadata.clone(), SaveMode::Ignore);
+        let transaction = get_transaction(table_uri.clone(), -1, metadata.clone(), SaveMode::Ignore);
         let _ = collect(transaction.clone(), task_ctx.clone())
             .await
             .unwrap();
@@ -190,13 +190,14 @@ mod tests {
         assert_eq!(ts1, ts2);
 
         // Check error for ErrorIfExists mode
-        let transaction = get_transaction(table_uri, metadata, SaveMode::ErrorIfExists);
+        let transaction = get_transaction(table_uri, 0, metadata, SaveMode::ErrorIfExists);
         let result = collect(transaction.clone(), task_ctx).await;
         assert!(result.is_err())
     }
 
     fn get_transaction(
         table_uri: String,
+        table_version: i64,
         metadata: DeltaTableMetaData,
         mode: SaveMode,
     ) -> Arc<DeltaTransactionPlan> {
@@ -206,12 +207,13 @@ mod tests {
             mode: mode.clone(),
             protocol: Protocol {
                 min_reader_version: 1,
-                min_writer_version: 2,
+                min_writer_version: 1,
             },
         };
 
         let transaction = Arc::new(DeltaTransactionPlan::new(
             table_uri.clone(),
+            table_version,
             Arc::new(CreateCommand::try_new(table_uri.clone(), op.clone()).unwrap()),
             op,
             None,

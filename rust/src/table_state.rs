@@ -267,7 +267,7 @@ mod tests {
             tombstones: HashSet::new(),
             current_metadata: None,
             min_reader_version: 1,
-            min_writer_version: 2,
+            min_writer_version: 1,
             app_transaction_version,
             tombstone_retention_millis: 0,
             log_retention_millis: 0,

@@ -1726,7 +1726,7 @@ mod tests {
 
         let protocol = action::Protocol {
             min_reader_version: 1,
-            min_writer_version: 2,
+            min_writer_version: 1,
         };
 
         let tmp_dir = tempdir::TempDir::new("create_table_test").unwrap();

@@ -1,6 +1,7 @@
 //! Wrapper Execution plan to handle distributed operations
 use super::*;
 use crate::action::Action;
+use crate::schema::DeltaDataTypeVersion;
 use async_trait::async_trait;
 use core::any::Any;
 use datafusion::{
@@ -46,6 +47,7 @@ pub(crate) fn serialize_actions(actions: Vec<Action>) -> DataFusionResult<Record
 #[derive(Debug)]
 pub struct DeltaTransactionPlan {
     table_uri: String,
+    table_version: DeltaDataTypeVersion,
     input: Arc<dyn ExecutionPlan>,
     operation: DeltaOperation,
     app_metadata: Option<serde_json::Map<String, serde_json::Value>>,
@@ -55,6 +57,7 @@ impl DeltaTransactionPlan {
     /// Wrap partitioned delta operations in a DeltaTransaction
     pub fn new<T>(
         table_uri: T,
+        table_version: DeltaDataTypeVersion,
         input: Arc<dyn ExecutionPlan>,
         operation: DeltaOperation,
         app_metadata: Option<serde_json::Map<String, serde_json::Value>>,
@@ -64,6 +67,7 @@ impl DeltaTransactionPlan {
     {
         Self {
             table_uri: table_uri.into(),
+            table_version,
             input: Arc::new(CoalescePartitionsExec::new(input)),
             operation,
             app_metadata,
@@ -130,30 +134,41 @@ impl ExecutionPlan for DeltaTransactionPlan {
             return empty_plan.execute(0, context).await;
         }
 
-        let _new_version = match table.update().await {
-            Err(_) => {
-                let mut txn = table.create_transaction(None);
-                txn.add_actions(actions);
-                let prepared_commit = txn
-                    .prepare_commit(Some(self.operation.clone()), self.app_metadata.clone())
-                    .await
-                    .map_err(to_datafusion_err)?;
-                let committed_version = table
-                    .try_commit_transaction(&prepared_commit, 0)
-                    .await
-                    .map_err(to_datafusion_err)?;
-                committed_version
-            }
-            _ => {
-                let mut txn = table.create_transaction(None);
-                txn.add_actions(actions);
-                let committed_version = txn
-                    .commit(Some(self.operation.clone()), self.app_metadata.clone())
-                    .await
-                    .map_err(to_datafusion_err)?;
-                committed_version
-            }
-        };
+        let mut txn = table.create_transaction(None);
+        txn.add_actions(actions);
+        let prepared_commit = txn
+            .prepare_commit(Some(self.operation.clone()), self.app_metadata.clone())
+            .await
+            .map_err(to_datafusion_err)?;
+        let _committed_version = table
+            .try_commit_transaction(&prepared_commit, self.table_version + 1)
+            .await
+            .map_err(to_datafusion_err)?;
+
+        // let _new_version = match table.update().await {
+        //     Err(_) => {
+        //         let mut txn = table.create_transaction(None);
+        //         txn.add_actions(actions);
+        //         let prepared_commit = txn
+        //             .prepare_commit(Some(self.operation.clone()), self.app_metadata.clone())
+        //             .await
+        //             .map_err(to_datafusion_err)?;
+        //         let committed_version = table
+        //             .try_commit_transaction(&prepared_commit, self.table_version)
+        //             .await
+        //             .map_err(to_datafusion_err)?;
+        //         committed_version
+        //     }
+        //     _ => {
+        //         let mut txn = table.create_transaction(None);
+        //         txn.add_actions(actions);
+        //         let committed_version = txn
+        //             .commit(Some(self.operation.clone()), self.app_metadata.clone())
+        //             .await
+        //             .map_err(to_datafusion_err)?;
+        //         committed_version
+        //     }
+        // };
 
         // TODO report some helpful data - at least current version
         let empty_plan = EmptyExec::new(false, self.schema());
