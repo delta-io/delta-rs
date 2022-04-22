@@ -2,9 +2,8 @@
 // TODO
 // - rename to delta operations
 use crate::{
-    open_table,
     action::{DeltaOperation, Protocol, SaveMode},
-    get_backend_for_uri_with_options,
+    get_backend_for_uri_with_options, open_table,
     operations::{create::CreateCommand, transaction::DeltaTransactionPlan, write::WriteCommand},
     storage::StorageError,
     writer::{
@@ -106,9 +105,9 @@ impl DeltaCommands {
         let table_uri: String = uri.into();
         let table = if let Ok(tbl) = open_table(&table_uri).await {
             Ok(tbl)
-         } else {
+        } else {
             get_table_from_uri_without_update(table_uri)
-         }?;
+        }?;
         Ok(Self { table })
     }
 

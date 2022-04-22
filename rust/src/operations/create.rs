@@ -167,7 +167,8 @@ mod tests {
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
 
-        let transaction = get_transaction(table_uri.clone(), -1, metadata.clone(), SaveMode::Ignore);
+        let transaction =
+            get_transaction(table_uri.clone(), -1, metadata.clone(), SaveMode::Ignore);
         let _ = collect(transaction.clone(), task_ctx.clone())
             .await
             .unwrap();

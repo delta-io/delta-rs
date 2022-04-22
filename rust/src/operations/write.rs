@@ -453,8 +453,7 @@ mod tests {
             mode,
             predicate: None,
         };
-        let command =
-            WriteCommand::try_new(&table_uri, op.clone(), data_plan).unwrap();
+        let command = WriteCommand::try_new(&table_uri, op.clone(), data_plan).unwrap();
 
         Arc::new(DeltaTransactionPlan::new(
             table_uri,
