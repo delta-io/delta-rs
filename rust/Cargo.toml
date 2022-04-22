@@ -21,7 +21,7 @@ bytes = "1"
 log = "0"
 regex = "1"
 chrono = "0"
-uuid = { version = "0.8", features = ["serde", "v4"] }
+uuid = { version = "1", features = ["serde", "v4"] }
 lazy_static = "1"
 percent-encoding = "2"
 
@@ -57,9 +57,9 @@ async-stream = { version = "0.3.2", default-features = true, optional = true }
 # High-level writer
 parquet-format = "~4.0.0"
 
-arrow = "11"
-parquet = "11.0.0"
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "d54ba4e648bdbe6f7d19f6bd66e5048a796690fc", version = "7.0.0", optional = true }
+arrow = "12"
+parquet = "12"
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "886735304f0fa83a24ddc3b3e356aeff4aab78f2", version = "7.0.0", optional = true }
 
 crossbeam = { version = "0", optional = true }
 

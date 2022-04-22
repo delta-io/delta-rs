@@ -6,7 +6,7 @@ use arrow::{
         DataType, Int16Type, Int32Type, Int64Type, Int8Type, Schema as ArrowSchema, UInt16Type,
         UInt32Type, UInt64Type, UInt8Type,
     },
-    json::reader::Decoder,
+    json::reader::{Decoder, DecoderOptions},
     record_batch::*,
 };
 use parquet::file::writer::InMemoryWriteableCursor;
@@ -118,9 +118,9 @@ pub fn record_batch_from_message(
     arrow_schema: Arc<ArrowSchema>,
     message_buffer: &[Value],
 ) -> Result<RecordBatch, DeltaWriterError> {
-    let row_count = message_buffer.len();
     let mut value_iter = message_buffer.iter().map(|j| Ok(j.to_owned()));
-    let decoder = Decoder::new(arrow_schema, row_count, None);
+    let options = DecoderOptions::new().with_batch_size(message_buffer.len());
+    let decoder = Decoder::new(arrow_schema, options);
     decoder
         .next_batch(&mut value_iter)?
         .ok_or(DeltaWriterError::EmptyRecordBatch)
