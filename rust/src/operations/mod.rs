@@ -172,11 +172,12 @@ impl DeltaCommands {
             return Ok(());
         }
         let schema = data[0].schema();
-        let metadata = self.table.get_metadata()?;
-        if let Some(cols) = partition_columns.as_ref() {
-            if cols != &metadata.partition_columns {
-                todo!("Schema updates not yet implemented")
-            }
+        if let Ok(meta) = self.table.get_metadata() {
+            if let Some(cols) = partition_columns.as_ref() {
+                if cols != &meta.partition_columns {
+                    todo!("Schema updates not yet implemented")
+                }
+            };
         };
         let data = if let Some(cols) = partition_columns.as_ref() {
             // TODO partitioning should probably happen in its own plan ...
@@ -279,6 +280,31 @@ mod tests {
 
         table.update().await.unwrap();
         assert_eq!(table.version, 1);
+
+        let files = table.get_file_uris();
+        assert_eq!(files.collect::<Vec<_>>().len(), 2)
+    }
+
+    #[tokio::test]
+    async fn test_create_and_write_command() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path();
+        let table_uri = table_path.to_str().unwrap().to_string();
+
+        let mut commands = DeltaCommands::try_from_uri(&table_uri).await.unwrap();
+
+        let batch = get_record_batch(None, false);
+        commands
+            .write(
+                vec![batch],
+                SaveMode::Append,
+                Some(vec!["modified".to_string()]),
+            )
+            .await
+            .unwrap();
+
+        let table = open_table(&table_uri).await.unwrap();
+        assert_eq!(table.version, 0);
 
         let files = table.get_file_uris();
         assert_eq!(files.collect::<Vec<_>>().len(), 2)
