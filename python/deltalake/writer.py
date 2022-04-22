@@ -74,7 +74,7 @@ def write_deltalake(
     :param description: User-provided description for this table.
     :param configuration: A map containing configuration options for the metadata action.
     """
-    config_delta_append_only = configuration and "delta.appendOnly" in configuration and configuration["delta.appendOnly"] == "true"
+    config_delta_append_only = configuration and configuration.get("delta.appendOnly", "false") == "true"
     if config_delta_append_only and mode != "append":
         raise ValueError("If configuration has delta.appendOnly = 'true', mode must be 'append'")
 
