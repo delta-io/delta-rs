@@ -517,12 +517,16 @@ impl From<&PyAddAction> for action::Add {
 }
 
 #[pyfunction]
+#[allow(clippy::too_many_arguments)]
 fn write_new_deltalake(
     table_uri: String,
     schema: ArrowSchema,
     add_actions: Vec<PyAddAction>,
     _mode: &str,
     partition_by: Vec<String>,
+    name: Option<String>,
+    description: Option<String>,
+    configuration: Option<HashMap<String, Option<String>>>,
 ) -> PyResult<()> {
     let mut table = deltalake::DeltaTable::new(
         &table_uri,
@@ -532,12 +536,12 @@ fn write_new_deltalake(
     .map_err(PyDeltaTableError::from_raw)?;
 
     let metadata = DeltaTableMetaData::new(
-        None,
-        None,
-        None,
+        name,
+        description,
+        None, // Format
         (&schema).try_into()?,
         partition_by,
-        HashMap::new(),
+        configuration.unwrap_or_default(),
     );
 
     let fut = table.create(
