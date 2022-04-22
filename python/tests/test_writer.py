@@ -187,8 +187,7 @@ def test_append_only(tmp_path: pathlib.Path, sample_data: pa.Table):
     with pytest.raises(ValueError):
         write_deltalake(path, sample_data, configuration=config, mode="ignore")
 
-    expected = pa.concat_tables([sample_data])
-    assert DeltaTable(path).to_pyarrow_table() == expected
+    assert DeltaTable(path).to_pyarrow_table() == sample_data
 
 
 def test_writer_with_table(existing_table: DeltaTable, sample_data: pa.Table):
