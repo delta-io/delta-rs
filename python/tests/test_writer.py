@@ -3,7 +3,6 @@ import os
 import pathlib
 import random
 import sys
-import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Dict, Iterable
@@ -324,7 +323,15 @@ def test_writer_fails_on_protocol(existing_table: DeltaTable, sample_data: pa.Ta
         write_deltalake(existing_table, sample_data, mode="overwrite")
 
 
-def test_writer_with_max_rows(tmp_path: pathlib.Path):
+@pytest.mark.parametrize(
+    "row_count,rows_per_file,expected_files",
+    [
+        (1000, 100, 10),  # even distribution
+        (100, 1, 100),    # single row per file
+        (1000, 3, 334)    # uneven distribution, num files = rows/rows_per_file + 1
+    ]
+)
+def test_writer_with_max_rows(tmp_path: pathlib.Path, row_count: int, rows_per_file: int, expected_files: int):
     def get_multifile_stats(table: DeltaTable) -> Iterable[Dict]:
         log_path = get_log_path(table)
 
@@ -337,24 +344,25 @@ def test_writer_with_max_rows(tmp_path: pathlib.Path):
 
     data = pa.table(
         {
-            "colA": pa.array(range(0, 1000), pa.int32()),
-            "colB": pa.array([i * random.random() for i in range(0, 1000)], pa.float64())
+            "colA": pa.array(range(0, row_count), pa.int32()),
+            "colB": pa.array([i * random.random() for i in range(0, row_count)], pa.float64())
         }
     )
     path = str(tmp_path)
-    write_deltalake(path, data, file_options=ParquetFileFormat().make_write_options(), max_rows_per_file=100, max_rows_per_group=100)
+    write_deltalake(path, data, file_options=ParquetFileFormat().make_write_options(), max_rows_per_file=rows_per_file, max_rows_per_group=rows_per_file)
 
     table = DeltaTable(path)
     stats = get_multifile_stats(table)
+    files_written = [f for f in os.listdir(path) if f != "_delta_log"]
 
-    assert sum([stat_entry['numRecords'] for stat_entry in stats]) == 1000
+    assert sum([stat_entry['numRecords'] for stat_entry in stats]) == row_count and len(files_written) == expected_files
 
 
 def test_writer_with_options(tmp_path: pathlib.Path):
-    expected_column_values = [int(datetime(year_, 1, 1, 0, 0, 0).timestamp() * 1e6) for year_ in range(9000, 9010)]
+    column_values = [datetime(year_, 1, 1, 0, 0, 0) for year_ in range(9000, 9010)]
     data = pa.table(
         {
-            "colA": pa.array(expected_column_values, pa.timestamp('us'))
+            "colA": pa.array(column_values, pa.timestamp('us'))
         }
     )
     path = str(tmp_path)
@@ -364,9 +372,6 @@ def test_writer_with_options(tmp_path: pathlib.Path):
     )
     write_deltalake(path, data, file_options=opts)
 
-    table = DeltaTable(path).to_pyarrow_dataset(parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit='us')).to_table().to_pydict()['colA']
+    table = DeltaTable(path).to_pyarrow_dataset(parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit='us')).to_table()
 
-    # since either session (Spark) or system timezone is used when reading timestamps back into python
-    # a conversion is required for this synthetic case. Should not be an issue with a real table, as long as a system/Spark session timestamp matches the one used when data was written
-
-    assert [int(d.timestamp() * 1e6 - time.timezone * 1e6) for d in table] == expected_column_values
+    assert table == data

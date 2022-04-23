@@ -45,6 +45,7 @@ def write_deltalake(
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
     file_options: Optional[ds.ParquetFileWriteOptions] = None,
+    max_open_files: Optional[int] = None,
     max_rows_per_file: Optional[int] = None,
     min_rows_per_group: Optional[int] = None,
     max_rows_per_group: Optional[int] = None,
@@ -73,8 +74,15 @@ def write_deltalake(
         already exists. If 'append', will add new data. If 'overwrite', will
         replace table with new data. If 'ignore', will not write anything if
         table already exists.
-    :param file_options: Optional write options for the target data format.
-        Can be provided via make_write_options method for the target file format
+    :param file_options: Optional write options for Parquet (ParquetFileWriteOptions).
+        Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
+        Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
+        for the list of available options
+    :param max_open_files: Limits the maximum number of
+        files that can be left open while writing. If an attempt is made to open
+        too many files then the least recently used file will be closed.
+        If this setting is set too low you may end up fragmenting your
+        data into many small files.
     :param max_rows_per_file: Maximum number of rows per file.
         If greater than 0 then this will limit how many rows are placed in any single file.
         Otherwise there will be no limit and one file will be created in each output directory
@@ -169,6 +177,7 @@ def write_deltalake(
         file_visitor=visitor,
         existing_data_behavior="overwrite_or_ignore",
         file_options=file_options,
+        max_open_files=max_open_files or 1024,
         max_rows_per_file=max_rows_per_file or 0,
         min_rows_per_group=min_rows_per_group or 0,
         max_rows_per_group=max_rows_per_group or 1024 * 1024  # pyarrow default
