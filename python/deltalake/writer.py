@@ -180,7 +180,7 @@ def write_deltalake(
         max_open_files=max_open_files or 1024,
         max_rows_per_file=max_rows_per_file or 0,
         min_rows_per_group=min_rows_per_group or 0,
-        max_rows_per_group=max_rows_per_group or 1024 * 1024  # pyarrow default
+        max_rows_per_group=max_rows_per_group or 1024 * 1024,  # pyarrow default
     )
 
     if table is None:
