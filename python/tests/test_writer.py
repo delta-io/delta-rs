@@ -234,7 +234,7 @@ def test_writer_partitioning(tmp_path: pathlib.Path):
 
 def get_log_path(table: DeltaTable) -> str:
     """
-      Returns _delta_log path for this delta table.
+    Returns _delta_log path for this delta table.
     """
     return table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
 
@@ -327,11 +327,13 @@ def test_writer_fails_on_protocol(existing_table: DeltaTable, sample_data: pa.Ta
     "row_count,rows_per_file,expected_files",
     [
         (1000, 100, 10),  # even distribution
-        (100, 1, 100),    # single row per file
-        (1000, 3, 334)    # uneven distribution, num files = rows/rows_per_file + 1
-    ]
+        (100, 1, 100),  # single row per file
+        (1000, 3, 334),  # uneven distribution, num files = rows/rows_per_file + 1
+    ],
 )
-def test_writer_with_max_rows(tmp_path: pathlib.Path, row_count: int, rows_per_file: int, expected_files: int):
+def test_writer_with_max_rows(
+    tmp_path: pathlib.Path, row_count: int, rows_per_file: int, expected_files: int
+):
     def get_multifile_stats(table: DeltaTable) -> Iterable[Dict]:
         log_path = get_log_path(table)
 
@@ -345,33 +347,47 @@ def test_writer_with_max_rows(tmp_path: pathlib.Path, row_count: int, rows_per_f
     data = pa.table(
         {
             "colA": pa.array(range(0, row_count), pa.int32()),
-            "colB": pa.array([i * random.random() for i in range(0, row_count)], pa.float64())
+            "colB": pa.array(
+                [i * random.random() for i in range(0, row_count)], pa.float64()
+            ),
         }
     )
     path = str(tmp_path)
-    write_deltalake(path, data, file_options=ParquetFileFormat().make_write_options(), max_rows_per_file=rows_per_file, max_rows_per_group=rows_per_file)
+    write_deltalake(
+        path,
+        data,
+        file_options=ParquetFileFormat().make_write_options(),
+        max_rows_per_file=rows_per_file,
+        max_rows_per_group=rows_per_file,
+    )
 
     table = DeltaTable(path)
     stats = get_multifile_stats(table)
     files_written = [f for f in os.listdir(path) if f != "_delta_log"]
 
-    assert sum([stat_entry['numRecords'] for stat_entry in stats]) == row_count and len(files_written) == expected_files
+    assert (
+        sum([stat_entry["numRecords"] for stat_entry in stats]) == row_count
+        and len(files_written) == expected_files
+    )
 
 
 def test_writer_with_options(tmp_path: pathlib.Path):
     column_values = [datetime(year_, 1, 1, 0, 0, 0) for year_ in range(9000, 9010)]
-    data = pa.table(
-        {
-            "colA": pa.array(column_values, pa.timestamp('us'))
-        }
-    )
+    data = pa.table({"colA": pa.array(column_values, pa.timestamp("us"))})
     path = str(tmp_path)
-    opts = ParquetFileFormat().make_write_options().update(
-        compression='GZIP',
-        coerce_timestamps='us'
+    opts = (
+        ParquetFileFormat()
+        .make_write_options()
+        .update(compression="GZIP", coerce_timestamps="us")
     )
     write_deltalake(path, data, file_options=opts)
 
-    table = DeltaTable(path).to_pyarrow_dataset(parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit='us')).to_table()
+    table = (
+        DeltaTable(path)
+        .to_pyarrow_dataset(
+            parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit="us")
+        )
+        .to_table()
+    )
 
     assert table == data
