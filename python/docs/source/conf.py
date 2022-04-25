@@ -64,6 +64,7 @@ nitpick_ignore = [
     ("py:class", "pyarrow._fs.FileSystemHandler"),
     ("py:class", "RawDeltaTable"),
     ("py:class", "pandas.DataFrame"),
+    ("py:class", "pyarrow._dataset_parquet.ParquetFileWriteOptions"),
 ]
 
 # Add any paths that contain templates here, relative to this directory.
