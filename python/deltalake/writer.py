@@ -45,10 +45,10 @@ def write_deltalake(
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
     file_options: Optional[ds.ParquetFileWriteOptions] = None,
-    max_open_files: Optional[int] = None,
-    max_rows_per_file: Optional[int] = None,
-    min_rows_per_group: Optional[int] = None,
-    max_rows_per_group: Optional[int] = None,
+    max_open_files: int = 1024,
+    max_rows_per_file: int = 0,
+    min_rows_per_group: int = 0,
+    max_rows_per_group: int = 1048576,
     name: Optional[str] = None,
     description: Optional[str] = None,
     configuration: Optional[Mapping[str, Optional[str]]] = None,
@@ -177,10 +177,10 @@ def write_deltalake(
         file_visitor=visitor,
         existing_data_behavior="overwrite_or_ignore",
         file_options=file_options,
-        max_open_files=max_open_files or 1024,
-        max_rows_per_file=max_rows_per_file or 0,
-        min_rows_per_group=min_rows_per_group or 0,
-        max_rows_per_group=max_rows_per_group or 1024 * 1024,  # pyarrow default
+        max_open_files=max_open_files,
+        max_rows_per_file=max_rows_per_file,
+        min_rows_per_group=min_rows_per_group,
+        max_rows_per_group=max_rows_per_group,
     )
 
     if table is None:

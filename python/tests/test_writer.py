@@ -365,10 +365,8 @@ def test_writer_with_max_rows(
     stats = get_multifile_stats(table)
     files_written = [f for f in os.listdir(path) if f != "_delta_log"]
 
-    assert (
-        sum([stat_entry["numRecords"] for stat_entry in stats]) == row_count
-        and len(files_written) == expected_files
-    )
+    assert sum([stat_entry["numRecords"] for stat_entry in stats]) == row_count
+    assert len(files_written) == expected_files
 
 
 def test_writer_with_options(tmp_path: pathlib.Path):
