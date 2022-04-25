@@ -44,6 +44,11 @@ def write_deltalake(
     partition_by: Optional[List[str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
+    file_options: Optional[ds.ParquetFileWriteOptions] = None,
+    max_open_files: int = 1024,
+    max_rows_per_file: int = 0,
+    min_rows_per_group: int = 0,
+    max_rows_per_group: int = 1048576,
     name: Optional[str] = None,
     description: Optional[str] = None,
     configuration: Optional[Mapping[str, Optional[str]]] = None,
@@ -69,6 +74,25 @@ def write_deltalake(
         already exists. If 'append', will add new data. If 'overwrite', will
         replace table with new data. If 'ignore', will not write anything if
         table already exists.
+    :param file_options: Optional write options for Parquet (ParquetFileWriteOptions).
+        Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
+        Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
+        for the list of available options
+    :param max_open_files: Limits the maximum number of
+        files that can be left open while writing. If an attempt is made to open
+        too many files then the least recently used file will be closed.
+        If this setting is set too low you may end up fragmenting your
+        data into many small files.
+    :param max_rows_per_file: Maximum number of rows per file.
+        If greater than 0 then this will limit how many rows are placed in any single file.
+        Otherwise there will be no limit and one file will be created in each output directory
+        unless files need to be closed to respect max_open_files
+    :param min_rows_per_group: Minimum number of rows per group. When the value is set,
+        the dataset writer will batch incoming data and only write the row groups to the disk
+        when sufficient rows have accumulated.
+    :param max_rows_per_group: Maximum number of rows per group.
+        If the value is set, then the dataset writer may split up large incoming batches into multiple row groups.
+        If this value is set, then min_rows_per_group should also be set.
     :param name: User-provided identifier for this table.
     :param description: User-provided description for this table.
     :param configuration: A map containing configuration options for the metadata action.
@@ -152,6 +176,11 @@ def write_deltalake(
         schema=schema if not isinstance(data, RecordBatchReader) else None,
         file_visitor=visitor,
         existing_data_behavior="overwrite_or_ignore",
+        file_options=file_options,
+        max_open_files=max_open_files,
+        max_rows_per_file=max_rows_per_file,
+        min_rows_per_group=min_rows_per_group,
+        max_rows_per_group=max_rows_per_group,
     )
 
     if table is None:
