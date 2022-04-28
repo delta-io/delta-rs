@@ -18,9 +18,9 @@ use datafusion::{
     prelude::SessionContext,
 };
 use std::collections::HashMap;
+use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::convert::TryFrom;
 
 pub mod create;
 pub mod transaction;

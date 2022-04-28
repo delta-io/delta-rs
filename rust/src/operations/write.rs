@@ -30,7 +30,7 @@ use async_trait::async_trait;
 use core::any::Any;
 use datafusion::{
     arrow::datatypes::SchemaRef as ArrowSchemaRef,
-    error::{DataFusionError, Result as DataFusionResult},
+    error::Result as DataFusionResult,
     execution::context::TaskContext,
     physical_plan::{
         common::{
@@ -38,7 +38,8 @@ use datafusion::{
         },
         expressions::PhysicalSortExpr,
         metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics},
-        Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+        Distribution, EmptyRecordBatchStream, ExecutionPlan, Partitioning,
+        SendableRecordBatchStream, Statistics,
     },
 };
 use std::collections::HashMap;
@@ -320,9 +321,8 @@ impl ExecutionPlan for WritePartitionCommand {
     ) -> DataFusionResult<SendableRecordBatchStream> {
         let data = collect_batch(self.input.execute(partition, context).await?).await?;
         if data.is_empty() {
-            return Err(DataFusionError::Plan(
-                DeltaCommandError::EmptyPartition("no data".to_string()).to_string(),
-            ));
+            let stream = EmptyRecordBatchStream::new(Arc::new(OPERATION_SCHEMA.clone()));
+            return Ok(Box::pin(stream));
         }
         let mut writer = RecordBatchWriter::try_new(
             self.table_uri.clone(),

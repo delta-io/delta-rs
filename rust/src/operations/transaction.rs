@@ -126,8 +126,11 @@ impl ExecutionPlan for DeltaTransactionPlan {
         // TODO we assume that all children send a single column record batch with serialized actions
         let actions = data
             .iter()
-            .flat_map(|batch| deserialize_actions(batch).unwrap())
-            .collect::<Vec<_>>();
+            .flat_map(|batch| match deserialize_actions(batch) {
+                Ok(vec) => vec.into_iter().map(Ok).collect(),
+                Err(er) => vec![Err(er)],
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
         if actions.is_empty() {
             let empty_plan = EmptyExec::new(false, self.schema());
