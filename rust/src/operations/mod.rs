@@ -11,7 +11,7 @@ use crate::{
     },
     DeltaTable, DeltaTableConfig, DeltaTableError, DeltaTableMetaData,
 };
-use arrow::{error::ArrowError, record_batch::RecordBatch};
+use arrow::{datatypes::SchemaRef as ArrowSchemaRef, error::ArrowError, record_batch::RecordBatch};
 use datafusion::{
     error::DataFusionError,
     physical_plan::{collect, memory::MemoryExec, ExecutionPlan},
@@ -20,6 +20,7 @@ use datafusion::{
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
+use std::convert::TryFrom;
 
 pub mod create;
 pub mod transaction;
@@ -173,9 +174,17 @@ impl DeltaCommands {
         }
         let schema = data[0].schema();
         if let Ok(meta) = self.table.get_metadata() {
+            let curr_schema: ArrowSchemaRef = Arc::new((&meta.schema).try_into()?);
+            if schema != curr_schema {
+                return Err(DeltaCommandError::UnsupportedCommand(
+                    "Updating table schema not yet implemented".to_string(),
+                ));
+            }
             if let Some(cols) = partition_columns.as_ref() {
                 if cols != &meta.partition_columns {
-                    todo!("Schema updates not yet implemented")
+                    return Err(DeltaCommandError::UnsupportedCommand(
+                        "Updating table partitions not yet implemented".to_string(),
+                    ));
                 }
             };
         };
