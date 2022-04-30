@@ -172,22 +172,25 @@ def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert DeltaTable(path).to_pyarrow_table() == sample_data
 
 
-def test_append_only(tmp_path: pathlib.Path, sample_data: pa.Table):
+def test_append_only_should_append_only_with_the_overwrite_mode(tmp_path: pathlib.Path, sample_data: pa.Table):
     path = str(tmp_path)
 
     config = {"delta.appendOnly": "true"}
+
     write_deltalake(path, sample_data, mode="append", configuration=config)
-    
-    with pytest.raises(ValueError):
-        write_deltalake(path, sample_data, configuration=config)
-    
-    with pytest.raises(ValueError):
-        write_deltalake(path, sample_data, configuration=config, mode="overwrite")
 
-    with pytest.raises(ValueError):
-        write_deltalake(path, sample_data, configuration=config, mode="ignore")
+    table = DeltaTable(path)
+    write_deltalake(table, sample_data, mode="append")
 
-    assert DeltaTable(path).to_pyarrow_table() == sample_data
+    fail_modes = ["overwrite", "ignore", "error"]
+    
+    for mode in fail_modes:
+        with pytest.raises(ValueError):
+            write_deltalake(path, sample_data, configuration=config, mode=mode)
+            write_deltalake(table, sample_data, configuration=config, mode=mode)
+
+    expected = pa.concat_tables([sample_data, sample_data])
+    assert table.to_pyarrow_table() == expected
 
 
 def test_writer_with_table(existing_table: DeltaTable, sample_data: pa.Table):

@@ -74,10 +74,6 @@ def write_deltalake(
     :param description: User-provided description for this table.
     :param configuration: A map containing configuration options for the metadata action.
     """
-    config_delta_append_only = configuration and configuration.get("delta.appendOnly", "false") == "true"
-    if config_delta_append_only and mode != "append":
-        raise ValueError("If configuration has delta.appendOnly = 'true', mode must be 'append'")
-
     if isinstance(data, pd.DataFrame):
         data = pa.Table.from_pandas(data)
 
@@ -95,6 +91,8 @@ def write_deltalake(
     else:
         table = table_or_uri
         table_uri = table_uri = table._table.table_uri()
+
+    __throw_error_if_delta_append_only_and_mode_not_append(table=table, configuration=configuration, mode=mode)
 
     # TODO: Pass through filesystem once it is complete
     # if filesystem is None:
@@ -176,6 +174,13 @@ def write_deltalake(
             mode,
             partition_by or [],
         )
+
+def __throw_error_if_delta_append_only_and_mode_not_append(table: DeltaTable, configuration: Optional[Mapping[str, Optional[str]]], mode: str):
+    if table:
+        configuration = table.metadata().configuration
+    config_delta_append_only = configuration and configuration.get("delta.appendOnly", "false") == "true"
+    if config_delta_append_only and mode != "append":
+        raise ValueError("If configuration has delta.appendOnly = 'true', mode must be 'append'")
 
 
 class DeltaJSONEncoder(json.JSONEncoder):
