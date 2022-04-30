@@ -70,9 +70,9 @@ def write_deltalake(
         when creating a new table.
     :param filesystem: Optional filesystem to pass to PyArrow. If not provided will
         be inferred from uri.
-    :param mode: How to handle existing data. Default is to error if table already exists. 
+    :param mode: How to handle existing data. Default is to error if table already exists.
         If 'append', will add new data.
-        If 'overwrite', will replace table with new data. 
+        If 'overwrite', will replace table with new data.
         If 'ignore', will not write anything if table already exists.
     :param file_options: Optional write options for Parquet (ParquetFileWriteOptions).
         Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
@@ -115,7 +115,9 @@ def write_deltalake(
         table = table_or_uri
         table_uri = table_uri = table._table.table_uri()
 
-    __throw_error_if_delta_append_only_and_mode_not_append(table=table, configuration=configuration, mode=mode)
+    __throw_error_if_delta_append_only_and_mode_not_append(
+        table=table, configuration=configuration, mode=mode
+    )
 
     # TODO: Pass through filesystem once it is complete
     # if filesystem is None:
@@ -203,12 +205,19 @@ def write_deltalake(
             partition_by or [],
         )
 
-def __throw_error_if_delta_append_only_and_mode_not_append(table: DeltaTable, configuration: Optional[Mapping[str, Optional[str]]], mode: str):
+
+def __throw_error_if_delta_append_only_and_mode_not_append(
+    table: DeltaTable, configuration: Optional[Mapping[str, Optional[str]]], mode: str
+):
     if table:
         configuration = table.metadata().configuration
-    config_delta_append_only = configuration and configuration.get("delta.appendOnly", "false") == "true"
+    config_delta_append_only = (
+        configuration and configuration.get("delta.appendOnly", "false") == "true"
+    )
     if config_delta_append_only and mode != "append":
-        raise ValueError("If configuration has delta.appendOnly = 'true', mode must be 'append'")
+        raise ValueError(
+            "If configuration has delta.appendOnly = 'true', mode must be 'append'"
+        )
 
 
 class DeltaJSONEncoder(json.JSONEncoder):
