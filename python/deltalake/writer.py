@@ -207,8 +207,10 @@ def write_deltalake(
 
 
 def __throw_error_if_delta_append_only_and_mode_not_append(
-    table: DeltaTable, configuration: Optional[Mapping[str, Optional[str]]], mode: str
-):
+    table: Optional[DeltaTable],
+    configuration: Optional[Mapping[str, Optional[str]]],
+    mode: str,
+) -> None:
     if table:
         configuration = table.metadata().configuration
     config_delta_append_only = (
