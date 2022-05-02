@@ -126,10 +126,8 @@ impl ExecutionPlan for DeltaTransactionPlan {
         // TODO we assume that all children send a single column record batch with serialized actions
         let actions = data
             .iter()
-            .flat_map(|batch| match deserialize_actions(batch) {
-                Ok(vec) => vec.into_iter().map(Ok).collect(),
-                Err(er) => vec![Err(er)],
-            })
+            .map(deserialize_actions)
+            .flatten()
             .collect::<Result<Vec<_>, _>>()?;
 
         if actions.is_empty() {

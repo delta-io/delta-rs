@@ -8,8 +8,8 @@
 //!  - The save mode will control how existing data is handled (i.e. overwrite, append, etc)
 //!  - The schema of the RecordBatch will be checked and if there are new columns present
 //!    they will be added to the tables schema. Conflicting columns (i.e. a INT, and a STRING)
-//!    will result in an exception
-//!  - The partition columns, if present are validated against the existing metadata. If not
+//!    will result in an exception.
+//!  - The partition columns, if present, are validated against the existing metadata. If not
 //!    present, then the partitioning of the table is respected.
 //!
 //! In combination with `Overwrite`, a `replaceWhere` option can be used to transactionally
