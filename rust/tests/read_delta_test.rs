@@ -78,6 +78,48 @@ async fn read_delta_table_ignoring_tombstones() {
 }
 
 #[tokio::test]
+async fn read_delta_table_ignoring_files() {
+    let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+        .unwrap()
+        .without_files()
+        .load()
+        .await
+        .unwrap();
+
+    assert!(table.get_files().is_empty(), "files should be empty");
+    assert!(
+        table.get_tombstones().next().is_none(),
+        "tombstones should be empty"
+    );
+}
+
+#[tokio::test]
+async fn read_delta_table_with_ignoring_files_on_apply_log() {
+    let mut table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+        .unwrap()
+        .with_version(0)
+        .without_files()
+        .load()
+        .await
+        .unwrap();
+
+    assert_eq!(table.version, 0);
+    assert!(table.get_files().is_empty(), "files should be empty");
+    assert!(
+        table.get_tombstones().next().is_none(),
+        "tombstones should be empty"
+    );
+
+    table.update().await.unwrap();
+    assert_eq!(table.version, 1);
+    assert!(table.get_files().is_empty(), "files should be empty");
+    assert!(
+        table.get_tombstones().next().is_none(),
+        "tombstones should be empty"
+    );
+}
+
+#[tokio::test]
 async fn read_delta_2_0_table_with_version() {
     let mut table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 0)
         .await
