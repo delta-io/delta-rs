@@ -193,13 +193,14 @@ def test_append_only_should_append_only_with_the_overwrite_mode(
     for mode in fail_modes:
         with pytest.raises(
             ValueError,
-            match="If configuration has delta.appendOnly = 'true', mode must be 'append'",
+            match=f"If configuration has delta.appendOnly = 'true', mode must be 'append'. Mode is currently {mode}",
         ):
             write_deltalake(path, sample_data, mode=mode)
             write_deltalake(table, sample_data, mode=mode)
 
     expected = pa.concat_tables([sample_data, sample_data])
     assert table.to_pyarrow_table() == expected
+    assert table.version() == 1
 
 
 def test_writer_with_table(existing_table: DeltaTable, sample_data: pa.Table):

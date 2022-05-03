@@ -209,7 +209,7 @@ def __enforce_append_only(
     configuration: Optional[Mapping[str, Optional[str]]],
     mode: str,
 ) -> None:
-    """Throw error if table configuration contains delta.appendOnly and mode is not append"""
+    """Throw ValueError if table configuration contains delta.appendOnly and mode is not append"""
     if table:
         configuration = table.metadata().configuration
     config_delta_append_only = (
@@ -217,7 +217,7 @@ def __enforce_append_only(
     )
     if config_delta_append_only and mode != "append":
         raise ValueError(
-            "If configuration has delta.appendOnly = 'true', mode must be 'append'"
+            f"If configuration has delta.appendOnly = 'true', mode must be 'append'. Mode is currently {mode}"
         )
 
 
