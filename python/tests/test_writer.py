@@ -7,6 +7,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Dict, Iterable
 from unittest.mock import Mock
+import itertools
 
 import pyarrow as pa
 import pyarrow.compute as pc
@@ -188,15 +189,15 @@ def test_append_only_should_append_only_with_the_overwrite_mode(
     table = DeltaTable(path)
     write_deltalake(table, sample_data, mode="append")
 
+    data_store_types = [path, table]
     fail_modes = ["overwrite", "ignore", "error"]
 
-    for mode in fail_modes:
+    for data_store_type, mode in itertools.product(data_store_types, fail_modes):
         with pytest.raises(
             ValueError,
             match=f"If configuration has delta.appendOnly = 'true', mode must be 'append'. Mode is currently {mode}",
         ):
-            write_deltalake(path, sample_data, mode=mode)
-            write_deltalake(table, sample_data, mode=mode)
+            write_deltalake(data_store_type, sample_data, mode=mode)
 
     expected = pa.concat_tables([sample_data, sample_data])
     assert table.to_pyarrow_table() == expected
