@@ -115,9 +115,7 @@ def write_deltalake(
         table = table_or_uri
         table_uri = table_uri = table._table.table_uri()
 
-    __throw_error_if_delta_append_only_and_mode_not_append(
-        table=table, configuration=configuration, mode=mode
-    )
+    __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
     # TODO: Pass through filesystem once it is complete
     # if filesystem is None:
@@ -206,11 +204,12 @@ def write_deltalake(
         )
 
 
-def __throw_error_if_delta_append_only_and_mode_not_append(
+def __enforce_append_only(
     table: Optional[DeltaTable],
     configuration: Optional[Mapping[str, Optional[str]]],
     mode: str,
 ) -> None:
+    """Throw error if table configuration contains delta.appendOnly and mode is not append"""
     if table:
         configuration = table.metadata().configuration
     config_delta_append_only = (
