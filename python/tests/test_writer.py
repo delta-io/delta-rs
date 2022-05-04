@@ -1,3 +1,4 @@
+import itertools
 import json
 import os
 import pathlib
@@ -174,6 +175,33 @@ def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
 
     write_deltalake(path, sample_data, mode="overwrite")
     assert DeltaTable(path).to_pyarrow_table() == sample_data
+
+
+def test_append_only_should_append_only_with_the_overwrite_mode(
+    tmp_path: pathlib.Path, sample_data: pa.Table
+):
+    path = str(tmp_path)
+
+    config = {"delta.appendOnly": "true"}
+
+    write_deltalake(path, sample_data, mode="append", configuration=config)
+
+    table = DeltaTable(path)
+    write_deltalake(table, sample_data, mode="append")
+
+    data_store_types = [path, table]
+    fail_modes = ["overwrite", "ignore", "error"]
+
+    for data_store_type, mode in itertools.product(data_store_types, fail_modes):
+        with pytest.raises(
+            ValueError,
+            match=f"If configuration has delta.appendOnly = 'true', mode must be 'append'. Mode is currently {mode}",
+        ):
+            write_deltalake(data_store_type, sample_data, mode=mode)
+
+    expected = pa.concat_tables([sample_data, sample_data])
+    assert table.to_pyarrow_table() == expected
+    assert table.version() == 1
 
 
 def test_writer_with_table(existing_table: DeltaTable, sample_data: pa.Table):

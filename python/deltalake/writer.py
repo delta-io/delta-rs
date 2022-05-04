@@ -70,10 +70,10 @@ def write_deltalake(
         when creating a new table.
     :param filesystem: Optional filesystem to pass to PyArrow. If not provided will
         be inferred from uri.
-    :param mode: How to handle existing data. Default is to error if table
-        already exists. If 'append', will add new data. If 'overwrite', will
-        replace table with new data. If 'ignore', will not write anything if
-        table already exists.
+    :param mode: How to handle existing data. Default is to error if table already exists.
+        If 'append', will add new data.
+        If 'overwrite', will replace table with new data.
+        If 'ignore', will not write anything if table already exists.
     :param file_options: Optional write options for Parquet (ParquetFileWriteOptions).
         Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
         Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
@@ -114,6 +114,8 @@ def write_deltalake(
     else:
         table = table_or_uri
         table_uri = table_uri = table._table.table_uri()
+
+    __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
     # TODO: Pass through filesystem once it is complete
     # if filesystem is None:
@@ -199,6 +201,23 @@ def write_deltalake(
             add_actions,
             mode,
             partition_by or [],
+        )
+
+
+def __enforce_append_only(
+    table: Optional[DeltaTable],
+    configuration: Optional[Mapping[str, Optional[str]]],
+    mode: str,
+) -> None:
+    """Throw ValueError if table configuration contains delta.appendOnly and mode is not append"""
+    if table:
+        configuration = table.metadata().configuration
+    config_delta_append_only = (
+        configuration and configuration.get("delta.appendOnly", "false") == "true"
+    )
+    if config_delta_append_only and mode != "append":
+        raise ValueError(
+            f"If configuration has delta.appendOnly = 'true', mode must be 'append'. Mode is currently {mode}"
         )
 
 
