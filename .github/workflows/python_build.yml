@@ -44,16 +44,6 @@ jobs:
     # docker based action.
     - uses: actions/checkout@v1
 
-    - uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: python-test-minimal-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
-
     # Require for building openssl-sys
     - name: Install perl-IPC/Cmd
       run: yum install -y perl-IPC-Cmd
