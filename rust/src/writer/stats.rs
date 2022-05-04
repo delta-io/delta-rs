@@ -542,13 +542,7 @@ mod tests {
         options: HashMap<String, String>,
     ) -> Result<DeltaTable, DeltaTableError> {
         let backend = crate::get_backend_for_uri_with_options(table_uri, options)?;
-        let mut table = DeltaTable::new(
-            table_uri,
-            backend,
-            crate::DeltaTableConfig {
-                require_tombstones: true,
-            },
-        )?;
+        let mut table = DeltaTable::new(table_uri, backend, crate::DeltaTableConfig::default())?;
         table.load().await?;
         Ok(table)
     }
