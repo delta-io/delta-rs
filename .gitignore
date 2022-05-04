@@ -13,3 +13,4 @@ tlaplus/*.toolbox/*/[0-9]*-[0-9]*-[0-9]*-[0-9]*-[0-9]*-[0-9]*/
 .env
 **/.DS_Store
 **/.python-version
+.coverage

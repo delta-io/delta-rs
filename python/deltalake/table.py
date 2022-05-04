@@ -51,7 +51,7 @@ class Metadata:
         return self._metadata.created_time
 
     @property
-    def configuration(self) -> List[str]:
+    def configuration(self) -> Dict[str, str]:
         """Return the DeltaTable properties."""
         return self._metadata.configuration
 
