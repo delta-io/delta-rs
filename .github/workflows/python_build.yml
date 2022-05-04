@@ -67,7 +67,9 @@ jobs:
         source venv/bin/activate
         make setup
         # Install minimum PyArrow version
-        pip install pyarrow==4.0.0
+        # pandas and numpy versions are most recent with Python 3.7 wheels.
+        # Otherwise, we have to build those from source.
+        pip install pyarrow==4.0.0 pandas==1.3.5 numpy==1.21.6
         make develop
 
     - name: Run tests
