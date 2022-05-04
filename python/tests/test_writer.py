@@ -1,3 +1,4 @@
+import itertools
 import json
 import os
 import pathlib
@@ -7,7 +8,6 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Dict, Iterable
 from unittest.mock import Mock
-import itertools
 
 import pyarrow as pa
 import pyarrow.compute as pc
