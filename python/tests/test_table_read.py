@@ -1,8 +1,14 @@
 import os
-from datetime import date, datetime
+from datetime import datetime
 from threading import Barrier, Thread
 
-import pandas as pd
+try:
+    import pandas as pd
+except ModuleNotFoundError:
+    _has_pandas = False
+else:
+    _has_pandas = True
+
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
@@ -322,12 +328,14 @@ def test_get_files_partitioned_table():
     )
 
 
+@pytest.mark.pandas
 def test_delta_table_to_pandas():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
     assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 
+@pytest.mark.pandas
 def test_delta_table_with_filesystem():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)

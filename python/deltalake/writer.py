@@ -3,9 +3,21 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Union,
+)
 
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
+
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
@@ -15,6 +27,13 @@ from typing_extensions import Literal
 from .deltalake import PyDeltaTableError
 from .deltalake import write_new_deltalake as _write_new_deltalake
 from .table import DeltaTable
+
+try:
+    import pandas as pd
+except ModuleNotFoundError:
+    _has_pandas = False
+else:
+    _has_pandas = True
 
 
 class DeltaTableProtocolError(PyDeltaTableError):
@@ -34,7 +53,7 @@ class AddAction:
 def write_deltalake(
     table_or_uri: Union[str, DeltaTable],
     data: Union[
-        pd.DataFrame,
+        "pd.DataFrame",
         pa.Table,
         pa.RecordBatch,
         Iterable[pa.RecordBatch],
@@ -97,7 +116,7 @@ def write_deltalake(
     :param description: User-provided description for this table.
     :param configuration: A map containing configuration options for the metadata action.
     """
-    if isinstance(data, pd.DataFrame):
+    if _has_pandas and isinstance(data, pd.DataFrame):
         data = pa.Table.from_pandas(data)
 
     if schema is None:
