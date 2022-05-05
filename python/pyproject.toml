@@ -36,7 +36,6 @@ devel = [
     "sphinx",
     "sphinx-rtd-theme",
     "toml",
-    "pandas",
     "typing-extensions"
 ]
 
@@ -78,4 +77,5 @@ testpaths = [
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "s3: marks tests as integration tests with S3 (deselect with '-m \"not s3\"')",
+    "pandas: marks tests that require pandas",
 ]
