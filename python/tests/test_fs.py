@@ -1,4 +1,3 @@
-import pandas as pd
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -37,4 +36,4 @@ def test_read_files(s3_localstack):
 def test_read_simple_table_from_remote(s3_localstack):
     table_path = "s3://deltars/simple"
     dt = DeltaTable(table_path)
-    assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
+    assert dt.to_pyarrow_table().equals(pa.table({"id": [5, 7, 9]}))
