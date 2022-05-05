@@ -124,7 +124,7 @@ jobs:
     - name: Test without pandas
       run: |
         source venv/bin/activate
-        pip uninstall pandas
+        pip uninstall --yes pandas
         python -m pytest -m "not pandas and not integration"
 
     - name: Build Sphinx documentation
