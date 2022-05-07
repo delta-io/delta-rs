@@ -14,11 +14,17 @@ use azure_storage_blobs::prelude::*;
 use azure_storage_datalake::prelude::*;
 use futures::stream::Stream;
 use log::debug;
+use std::collections::HashMap;
 use std::env;
 use std::error::Error;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::{fmt, pin::Pin};
+
+///The ADLS Gen2 Access Key
+pub const AZURE_STORAGE_ACCOUNT_KEY: &str = "AZURE_STORAGE_ACCOUNT_KEY";
+///The name of storage account
+pub const AZURE_STORAGE_ACCOUNT_NAME: &str = "AZURE_STORAGE_ACCOUNT_NAME";
 
 /// An object on an Azure Data Lake Storage Gen2 account.
 #[derive(Debug, PartialEq)]
@@ -62,11 +68,37 @@ impl AdlsGen2Backend {
     /// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
     /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
     pub fn new(file_system_name: &str) -> Result<Self, StorageError> {
-        let storage_account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").map_err(|_| {
+        let mut map: HashMap<String, String> = HashMap::new();
+
+        let storage_account_name = env::var(AZURE_STORAGE_ACCOUNT_NAME).map_err(|_| {
             StorageError::AzureConfig("AZURE_STORAGE_ACCOUNT_NAME must be set".to_string())
         })?;
 
-        let storage_account_key = env::var("AZURE_STORAGE_ACCOUNT_KEY").map_err(|_| {
+        let storage_account_key = env::var(AZURE_STORAGE_ACCOUNT_KEY).map_err(|_| {
+            StorageError::AzureConfig("AZURE_STORAGE_ACCOUNT_KEY must be set".to_string())
+        })?;
+
+        map.insert(AZURE_STORAGE_ACCOUNT_NAME.to_string(), storage_account_name);
+        map.insert(AZURE_STORAGE_ACCOUNT_KEY.to_string(), storage_account_key);
+
+        Self::from_map(file_system_name, map)
+    }
+
+    /// Create a new [`AdlsGen2Backend`].
+    ///
+    /// Shared key authentication is used (temporarily).
+    ///
+    /// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the map.
+    /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the map.
+    pub fn from_map(
+        file_system_name: &str,
+        map: HashMap<String, String>,
+    ) -> Result<Self, StorageError> {
+        let storage_account_name = map.get(AZURE_STORAGE_ACCOUNT_NAME).ok_or_else(|| {
+            StorageError::AzureConfig("AZURE_STORAGE_ACCOUNT_NAME must be set".to_string())
+        })?;
+
+        let storage_account_key = map.get(AZURE_STORAGE_ACCOUNT_KEY).ok_or_else(|| {
             StorageError::AzureConfig("AZURE_STORAGE_ACCOUNT_KEY must be set".to_string())
         })?;
 
@@ -95,7 +127,7 @@ impl AdlsGen2Backend {
         let container_client = storage_client.as_container_client(file_system_name.to_owned());
 
         Ok(Self {
-            storage_account_name,
+            storage_account_name: storage_account_name.to_owned(),
             file_system_name: file_system_name.to_owned(),
             file_system_client,
             container_client,

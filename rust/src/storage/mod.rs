@@ -612,6 +612,11 @@ pub fn get_backend_for_uri_with_options(
         Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new_from_options(
             S3StorageOptions::from_map(_options),
         )?)),
+        #[cfg(feature = "azure")]
+        Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::from_map(
+            obj.file_system,
+            _options,
+        )?)),
         _ => get_backend_for_uri(uri),
     }
 }
