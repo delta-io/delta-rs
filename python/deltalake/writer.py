@@ -3,9 +3,21 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
-from typing import Any, Dict, Iterable, Iterator, List, Mapping, Optional, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    Iterable,
+    Iterator,
+    List,
+    Mapping,
+    Optional,
+    Union,
+)
 
-import pandas as pd
+if TYPE_CHECKING:
+    import pandas as pd
+
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
@@ -15,6 +27,13 @@ from typing_extensions import Literal
 from .deltalake import PyDeltaTableError
 from .deltalake import write_new_deltalake as _write_new_deltalake
 from .table import DeltaTable
+
+try:
+    import pandas as pd
+except ModuleNotFoundError:
+    _has_pandas = False
+else:
+    _has_pandas = True
 
 
 class DeltaTableProtocolError(PyDeltaTableError):
@@ -34,7 +53,7 @@ class AddAction:
 def write_deltalake(
     table_or_uri: Union[str, DeltaTable],
     data: Union[
-        pd.DataFrame,
+        "pd.DataFrame",
         pa.Table,
         pa.RecordBatch,
         Iterable[pa.RecordBatch],
@@ -44,6 +63,11 @@ def write_deltalake(
     partition_by: Optional[List[str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
+    file_options: Optional[ds.ParquetFileWriteOptions] = None,
+    max_open_files: int = 1024,
+    max_rows_per_file: int = 0,
+    min_rows_per_group: int = 0,
+    max_rows_per_group: int = 1048576,
     name: Optional[str] = None,
     description: Optional[str] = None,
     configuration: Optional[Mapping[str, Optional[str]]] = None,
@@ -65,15 +89,34 @@ def write_deltalake(
         when creating a new table.
     :param filesystem: Optional filesystem to pass to PyArrow. If not provided will
         be inferred from uri.
-    :param mode: How to handle existing data. Default is to error if table
-        already exists. If 'append', will add new data. If 'overwrite', will
-        replace table with new data. If 'ignore', will not write anything if
-        table already exists.
+    :param mode: How to handle existing data. Default is to error if table already exists.
+        If 'append', will add new data.
+        If 'overwrite', will replace table with new data.
+        If 'ignore', will not write anything if table already exists.
+    :param file_options: Optional write options for Parquet (ParquetFileWriteOptions).
+        Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
+        Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
+        for the list of available options
+    :param max_open_files: Limits the maximum number of
+        files that can be left open while writing. If an attempt is made to open
+        too many files then the least recently used file will be closed.
+        If this setting is set too low you may end up fragmenting your
+        data into many small files.
+    :param max_rows_per_file: Maximum number of rows per file.
+        If greater than 0 then this will limit how many rows are placed in any single file.
+        Otherwise there will be no limit and one file will be created in each output directory
+        unless files need to be closed to respect max_open_files
+    :param min_rows_per_group: Minimum number of rows per group. When the value is set,
+        the dataset writer will batch incoming data and only write the row groups to the disk
+        when sufficient rows have accumulated.
+    :param max_rows_per_group: Maximum number of rows per group.
+        If the value is set, then the dataset writer may split up large incoming batches into multiple row groups.
+        If this value is set, then min_rows_per_group should also be set.
     :param name: User-provided identifier for this table.
     :param description: User-provided description for this table.
     :param configuration: A map containing configuration options for the metadata action.
     """
-    if isinstance(data, pd.DataFrame):
+    if _has_pandas and isinstance(data, pd.DataFrame):
         data = pa.Table.from_pandas(data)
 
     if schema is None:
@@ -90,6 +133,8 @@ def write_deltalake(
     else:
         table = table_or_uri
         table_uri = table_uri = table._table.table_uri()
+
+    __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
     # TODO: Pass through filesystem once it is complete
     # if filesystem is None:
@@ -152,6 +197,11 @@ def write_deltalake(
         schema=schema if not isinstance(data, RecordBatchReader) else None,
         file_visitor=visitor,
         existing_data_behavior="overwrite_or_ignore",
+        file_options=file_options,
+        max_open_files=max_open_files,
+        max_rows_per_file=max_rows_per_file,
+        min_rows_per_group=min_rows_per_group,
+        max_rows_per_group=max_rows_per_group,
     )
 
     if table is None:
@@ -170,6 +220,23 @@ def write_deltalake(
             add_actions,
             mode,
             partition_by or [],
+        )
+
+
+def __enforce_append_only(
+    table: Optional[DeltaTable],
+    configuration: Optional[Mapping[str, Optional[str]]],
+    mode: str,
+) -> None:
+    """Throw ValueError if table configuration contains delta.appendOnly and mode is not append"""
+    if table:
+        configuration = table.metadata().configuration
+    config_delta_append_only = (
+        configuration and configuration.get("delta.appendOnly", "false") == "true"
+    )
+    if config_delta_append_only and mode != "append":
+        raise ValueError(
+            f"If configuration has delta.appendOnly = 'true', mode must be 'append'. Mode is currently {mode}"
         )
 
 

@@ -1,14 +1,33 @@
 import os
-from datetime import date
+from datetime import datetime
 from threading import Barrier, Thread
 
-import pandas as pd
+try:
+    import pandas as pd
+except ModuleNotFoundError:
+    _has_pandas = False
+else:
+    _has_pandas = True
+
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
+from pyarrow.dataset import ParquetReadOptions
 from pyarrow.fs import LocalFileSystem
 
 from deltalake import DeltaTable
+
+
+def test_read_table_with_edge_timestamps():
+    table_path = "../rust/tests/data/table_with_edge_timestamps"
+    dt = DeltaTable(table_path)
+    assert dt.to_pyarrow_dataset(
+        parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit="ms")
+    ).to_table().to_pydict() == {
+        "BIG_DATE": [datetime(9999, 12, 31, 0, 0, 0), datetime(9999, 12, 30, 0, 0, 0)],
+        "NORMAL_DATE": [datetime(2022, 1, 1, 0, 0, 0), datetime(2022, 2, 1, 0, 0, 0)],
+        "SOME_VALUE": [1, 2],
+    }
 
 
 def test_read_simple_table_to_dict():
@@ -309,12 +328,14 @@ def test_get_files_partitioned_table():
     )
 
 
+@pytest.mark.pandas
 def test_delta_table_to_pandas():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
     assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 
+@pytest.mark.pandas
 def test_delta_table_with_filesystem():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)

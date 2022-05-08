@@ -596,6 +596,12 @@ impl Model for AtomicRenameSys {
                     && blob_store_obj_keys.is_superset(&writer_versions)
                     && blob_store_obj_values == writer_versions.into_iter().map(|s| format!("writer_{}", s)).collect()
             }),
+            Property::<Self>::sometimes("lock expires", |_, state| {
+                state
+                    .writer_ctx
+                    .iter()
+                    .any(|ctx| ctx.acquired_expired_lock || ctx.released_expired_lock)
+            }),
         ];
 
         if self.writer_cnt > 1 {

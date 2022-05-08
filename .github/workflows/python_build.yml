@@ -67,7 +67,9 @@ jobs:
         source venv/bin/activate
         make setup
         # Install minimum PyArrow version
-        pip install pyarrow==4.0.0
+        # pandas and numpy versions are most recent with Python 3.7 wheels.
+        # Otherwise, we have to build those from source.
+        pip install pyarrow==4.0.0 pandas==1.2.5 numpy==1.20.3
         make develop
 
     - name: Run tests
@@ -85,6 +87,16 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - uses: actions/checkout@v2
+
+    - uses: actions/cache@v2
+      with:
+        path: |
+          ~/.cargo/bin/
+          ~/.cargo/registry/index/
+          ~/.cargo/registry/cache/
+          ~/.cargo/git/db/
+          target/
+        key: python-test-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
 
     - name: Install latest nightly
       uses: actions-rs/toolchain@v1
@@ -108,6 +120,13 @@ jobs:
       run: |
         source venv/bin/activate
         make unit-test
+    
+    - name: Test without pandas
+      run: |
+        source venv/bin/activate
+        pip uninstall --yes pandas
+        python -m pytest -m "not pandas and not integration"
+        pip install pandas
 
     - name: Build Sphinx documentation
       run: |

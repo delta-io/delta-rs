@@ -1,20 +1,31 @@
+import itertools
 import json
 import os
 import pathlib
+import random
 import sys
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from typing import Dict, Iterable
 from unittest.mock import Mock
 
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
-from pandas.testing import assert_frame_equal
+from pyarrow._dataset_parquet import ParquetReadOptions
+from pyarrow.dataset import ParquetFileFormat
 from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, write_deltalake
 from deltalake.table import ProtocolVersions
 from deltalake.writer import DeltaTableProtocolError
+
+try:
+    from pandas.testing import assert_frame_equal
+except ModuleNotFoundError:
+    _has_pandas = False
+else:
+    _has_pandas = True
 
 
 def _is_old_glibc_version():
@@ -172,6 +183,33 @@ def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert DeltaTable(path).to_pyarrow_table() == sample_data
 
 
+def test_append_only_should_append_only_with_the_overwrite_mode(
+    tmp_path: pathlib.Path, sample_data: pa.Table
+):
+    path = str(tmp_path)
+
+    config = {"delta.appendOnly": "true"}
+
+    write_deltalake(path, sample_data, mode="append", configuration=config)
+
+    table = DeltaTable(path)
+    write_deltalake(table, sample_data, mode="append")
+
+    data_store_types = [path, table]
+    fail_modes = ["overwrite", "ignore", "error"]
+
+    for data_store_type, mode in itertools.product(data_store_types, fail_modes):
+        with pytest.raises(
+            ValueError,
+            match=f"If configuration has delta.appendOnly = 'true', mode must be 'append'. Mode is currently {mode}",
+        ):
+            write_deltalake(data_store_type, sample_data, mode=mode)
+
+    expected = pa.concat_tables([sample_data, sample_data])
+    assert table.to_pyarrow_table() == expected
+    assert table.version() == 1
+
+
 def test_writer_with_table(existing_table: DeltaTable, sample_data: pa.Table):
     write_deltalake(existing_table, sample_data, mode="overwrite")
     existing_table.update_incremental()
@@ -185,6 +223,7 @@ def test_fails_wrong_partitioning(existing_table: DeltaTable, sample_data: pa.Ta
         )
 
 
+@pytest.mark.pandas
 def test_write_pandas(tmp_path: pathlib.Path, sample_data: pa.Table):
     # When timestamp is converted to Pandas, it gets casted to ns resolution,
     # but Delta Lake schemas only support us resolution.
@@ -228,8 +267,15 @@ def test_writer_partitioning(tmp_path: pathlib.Path):
     assert DeltaTable(str(tmp_path)).to_pyarrow_table() == data
 
 
+def get_log_path(table: DeltaTable) -> str:
+    """
+    Returns _delta_log path for this delta table.
+    """
+    return table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
+
+
 def get_stats(table: DeltaTable):
-    log_path = table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
+    log_path = get_log_path(table)
 
     # Should only have single add entry
     for line in open(log_path, "r").readlines():
@@ -310,3 +356,71 @@ def test_writer_fails_on_protocol(existing_table: DeltaTable, sample_data: pa.Ta
     existing_table.protocol = Mock(return_value=ProtocolVersions(1, 2))
     with pytest.raises(DeltaTableProtocolError):
         write_deltalake(existing_table, sample_data, mode="overwrite")
+
+
+@pytest.mark.parametrize(
+    "row_count,rows_per_file,expected_files",
+    [
+        (1000, 100, 10),  # even distribution
+        (100, 1, 100),  # single row per file
+        (1000, 3, 334),  # uneven distribution, num files = rows/rows_per_file + 1
+    ],
+)
+def test_writer_with_max_rows(
+    tmp_path: pathlib.Path, row_count: int, rows_per_file: int, expected_files: int
+):
+    def get_multifile_stats(table: DeltaTable) -> Iterable[Dict]:
+        log_path = get_log_path(table)
+
+        # Should only have single add entry
+        for line in open(log_path, "r").readlines():
+            log_entry = json.loads(line)
+
+            if "add" in log_entry:
+                yield json.loads(log_entry["add"]["stats"])
+
+    data = pa.table(
+        {
+            "colA": pa.array(range(0, row_count), pa.int32()),
+            "colB": pa.array(
+                [i * random.random() for i in range(0, row_count)], pa.float64()
+            ),
+        }
+    )
+    path = str(tmp_path)
+    write_deltalake(
+        path,
+        data,
+        file_options=ParquetFileFormat().make_write_options(),
+        max_rows_per_file=rows_per_file,
+        max_rows_per_group=rows_per_file,
+    )
+
+    table = DeltaTable(path)
+    stats = get_multifile_stats(table)
+    files_written = [f for f in os.listdir(path) if f != "_delta_log"]
+
+    assert sum([stat_entry["numRecords"] for stat_entry in stats]) == row_count
+    assert len(files_written) == expected_files
+
+
+def test_writer_with_options(tmp_path: pathlib.Path):
+    column_values = [datetime(year_, 1, 1, 0, 0, 0) for year_ in range(9000, 9010)]
+    data = pa.table({"colA": pa.array(column_values, pa.timestamp("us"))})
+    path = str(tmp_path)
+    opts = (
+        ParquetFileFormat()
+        .make_write_options()
+        .update(compression="GZIP", coerce_timestamps="us")
+    )
+    write_deltalake(path, data, file_options=opts)
+
+    table = (
+        DeltaTable(path)
+        .to_pyarrow_dataset(
+            parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit="us")
+        )
+        .to_table()
+    )
+
+    assert table == data

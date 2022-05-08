@@ -5,7 +5,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, 
 
 import pyarrow
 import pyarrow.fs as pa_fs
-from pyarrow.dataset import FileSystemDataset, ParquetFileFormat
+from pyarrow.dataset import FileSystemDataset, ParquetFileFormat, ParquetReadOptions
 
 if TYPE_CHECKING:
     import pandas
@@ -51,7 +51,7 @@ class Metadata:
         return self._metadata.created_time
 
     @property
-    def configuration(self) -> List[str]:
+    def configuration(self) -> Dict[str, str]:
         """Return the DeltaTable properties."""
         return self._metadata.configuration
 
@@ -268,12 +268,15 @@ class DeltaTable:
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
+        parquet_read_options: Optional[ParquetReadOptions] = None,
     ) -> pyarrow.dataset.Dataset:
         """
         Build a PyArrow Dataset using data from the DeltaTable.
 
         :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
         :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
+        :param parquet_read_options: Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
+         More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html
         :return: the PyArrow dataset in PyArrow
         """
         if not filesystem:
@@ -281,7 +284,7 @@ class DeltaTable:
                 DeltaStorageHandler(self._table.table_uri())
             )
 
-        format = ParquetFileFormat()
+        format = ParquetFileFormat(read_options=parquet_read_options)
 
         fragments = [
             format.make_fragment(

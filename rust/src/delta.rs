@@ -429,21 +429,30 @@ impl Default for DeltaVersion {
     }
 }
 
-/// configuration options for delta table
+/// Configuration options for delta table
 #[derive(Debug)]
 pub struct DeltaTableConfig {
-    /// indicates whether our use case requires tracking tombstones.
-    /// read-only applications never require tombstones. Tombstones
+    /// Indicates whether our use case requires tracking tombstones.
+    /// This defaults to `true`
+    ///
+    /// Read-only applications never require tombstones. Tombstones
     /// are only required when writing checkpoints, so even many writers
     /// may want to skip them.
-    /// defaults to true as a safe default.
     pub require_tombstones: bool,
+
+    /// Indicates whether DeltaTable should track files.
+    /// This defaults to `true`
+    ///
+    /// Some append-only applications might have no need of tracking any files.
+    /// Hence, DeltaTable will be loaded with significant memory reduction.
+    pub require_files: bool,
 }
 
 impl Default for DeltaTableConfig {
     fn default() -> Self {
         Self {
             require_tombstones: true,
+            require_files: true,
         }
     }
 }
@@ -455,15 +464,22 @@ pub struct DeltaTableLoadOptions {
     pub table_uri: String,
     /// backend to access storage system
     pub storage_backend: Box<dyn StorageBackend>,
-    /// indicates whether our use case requires tracking tombstones.
-    /// read-only applications never require tombstones. Tombstones
-    /// are only required when writing checkpoints, so even many writers
-    /// may want to skip them.
-    /// defaults to true as a safe default.
-    pub require_tombstones: bool,
     /// specify the version we are going to load: a time stamp, a version, or just the newest
     /// available version
     pub version: DeltaVersion,
+    /// Indicates whether our use case requires tracking tombstones.
+    /// This defaults to `true`
+    ///
+    /// Read-only applications never require tombstones. Tombstones
+    /// are only required when writing checkpoints, so even many writers
+    /// may want to skip them.
+    pub require_tombstones: bool,
+    /// Indicates whether DeltaTable should track files.
+    /// This defaults to `true`
+    ///
+    /// Some append-only applications might have no need of tracking any files.
+    /// Hence, DeltaTable will be loaded with significant memory reduction.
+    pub require_files: bool,
 }
 
 impl DeltaTableLoadOptions {
@@ -473,6 +489,7 @@ impl DeltaTableLoadOptions {
             table_uri: table_uri.to_string(),
             storage_backend: storage::get_backend_for_uri(table_uri)?,
             require_tombstones: true,
+            require_files: true,
             version: DeltaVersion::default(),
         })
     }
@@ -485,20 +502,26 @@ pub struct DeltaTableBuilder {
 }
 
 impl DeltaTableBuilder {
-    /// TODO
+    /// Creates `DeltaTableBuilder` from table uri
     pub fn from_uri(table_uri: &str) -> Result<Self, DeltaTableError> {
         Ok(DeltaTableBuilder {
             options: DeltaTableLoadOptions::new(table_uri)?,
         })
     }
 
-    /// TODO
+    /// Sets `require_tombstones=false` to the builder
     pub fn without_tombstones(mut self) -> Self {
         self.options.require_tombstones = false;
         self
     }
 
-    /// TODO
+    /// Sets `require_files=false` to the builder
+    pub fn without_files(mut self) -> Self {
+        self.options.require_files = false;
+        self
+    }
+
+    /// Sets `version` to the builder
     pub fn with_version(mut self, version: DeltaDataTypeVersion) -> Self {
         self.options.version = DeltaVersion::Version(version);
         self
@@ -527,6 +550,7 @@ impl DeltaTableBuilder {
     pub async fn load(self) -> Result<DeltaTable, DeltaTableError> {
         let config = DeltaTableConfig {
             require_tombstones: self.options.require_tombstones,
+            require_files: self.options.require_files,
         };
 
         let mut table = DeltaTable::new(
@@ -708,15 +732,17 @@ impl DeltaTable {
 
     async fn apply_log(&mut self, version: DeltaDataTypeVersion) -> Result<(), ApplyLogError> {
         let new_state = DeltaTableState::from_commit(self, version).await?;
-        self.state.merge(new_state, self.config.require_tombstones);
+        self.state.merge(
+            new_state,
+            self.config.require_tombstones,
+            self.config.require_files,
+        );
 
         Ok(())
     }
 
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
-        self.state =
-            DeltaTableState::from_checkpoint(self, &check_point, self.config.require_tombstones)
-                .await?;
+        self.state = DeltaTableState::from_checkpoint(self, &check_point).await?;
 
         Ok(())
     }
@@ -810,7 +836,8 @@ impl DeltaTable {
         }
 
         let s = DeltaTableState::from_actions(actions)?;
-        self.state.merge(s, self.config.require_tombstones);
+        self.state
+            .merge(s, self.config.require_tombstones, self.config.require_files);
         self.version = new_version;
 
         Ok(())
@@ -1325,7 +1352,11 @@ impl DeltaTable {
         let committed_version = self.try_commit_transaction(&prepared_commit, 0).await?;
 
         let new_state = DeltaTableState::from_commit(self, committed_version).await?;
-        self.state.merge(new_state, self.config.require_tombstones);
+        self.state.merge(
+            new_state,
+            self.config.require_tombstones,
+            self.config.require_files,
+        );
 
         Ok(())
     }

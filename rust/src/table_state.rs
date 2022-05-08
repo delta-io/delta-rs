@@ -48,7 +48,11 @@ impl DeltaTableState {
         let mut new_state = DeltaTableState::default();
         for line in reader.lines() {
             let action: action::Action = serde_json::from_str(line?.as_str())?;
-            new_state.process_action(action, true)?;
+            new_state.process_action(
+                action,
+                table.config.require_tombstones,
+                table.config.require_files,
+            )?;
         }
 
         Ok(new_state)
@@ -58,7 +62,7 @@ impl DeltaTableState {
     pub fn from_actions(actions: Vec<Action>) -> Result<Self, ApplyLogError> {
         let mut new_state = DeltaTableState::default();
         for action in actions {
-            new_state.process_action(action, true)?;
+            new_state.process_action(action, true, true)?;
         }
         Ok(new_state)
     }
@@ -67,7 +71,6 @@ impl DeltaTableState {
     pub async fn from_checkpoint(
         table: &DeltaTable,
         check_point: &CheckPoint,
-        require_tombstones: bool,
     ) -> Result<Self, DeltaTableError> {
         let checkpoint_data_paths = table.get_checkpoint_data_paths(check_point);
         // process actions from checkpoint
@@ -85,7 +88,8 @@ impl DeltaTableState {
             for record in preader.get_row_iter(None)? {
                 new_state.process_action(
                     action::Action::from_parquet_record(schema, &record)?,
-                    require_tombstones,
+                    table.config.require_tombstones,
+                    table.config.require_files,
                 )?;
             }
         }
@@ -154,14 +158,19 @@ impl DeltaTableState {
         self.current_metadata.as_ref()
     }
 
-    /// merges new state information into our state
-    pub fn merge(&mut self, mut new_state: DeltaTableState, require_tombstones: bool) {
+    /// Merges new state information into our state
+    pub fn merge(
+        &mut self,
+        mut new_state: DeltaTableState,
+        require_tombstones: bool,
+        require_files: bool,
+    ) {
         if !new_state.tombstones.is_empty() {
             self.files
                 .retain(|a| !new_state.tombstones.contains(a.path.as_str()));
         }
 
-        if require_tombstones {
+        if require_tombstones && require_files {
             new_state.tombstones.into_iter().for_each(|r| {
                 self.tombstones.insert(r);
             });
@@ -173,7 +182,9 @@ impl DeltaTableState {
             }
         }
 
-        self.files.append(&mut new_state.files);
+        if require_files {
+            self.files.append(&mut new_state.files);
+        }
 
         if new_state.min_reader_version > 0 {
             self.min_reader_version = new_state.min_reader_version;
@@ -206,14 +217,17 @@ impl DeltaTableState {
     fn process_action(
         &mut self,
         action: action::Action,
-        handle_tombstones: bool,
+        require_tombstones: bool,
+        require_files: bool,
     ) -> Result<(), ApplyLogError> {
         match action {
             action::Action::add(v) => {
-                self.files.push(v.path_decoded()?);
+                if require_files {
+                    self.files.push(v.path_decoded()?);
+                }
             }
             action::Action::remove(v) => {
-                if handle_tombstones {
+                if require_tombstones && require_files {
                     let v = v.path_decoded()?;
                     self.tombstones.insert(v);
                 }
@@ -280,7 +294,7 @@ mod tests {
             last_updated: Some(0),
         });
 
-        let _ = state.process_action(txn_action, false).unwrap();
+        let _ = state.process_action(txn_action, false, true).unwrap();
 
         assert_eq!(2, *state.app_transaction_version().get("abc").unwrap());
         assert_eq!(1, *state.app_transaction_version().get("xyz").unwrap());
