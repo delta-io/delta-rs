@@ -78,9 +78,9 @@ checksum = "8da52d66c7071e2e3fa2a1e5c6d088fec47b593032b254f5e980de8ea54454d6"
 
 [[package]]
 name = "arrow"
-version = "12.0.0"
+version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e94e2d315bc11f3d43f38344141453282591788381061fabc06c95e37d0dbc7d"
+checksum = "5c6bee230122beb516ead31935a61f683715f987c6f003eff44ad6986624105a"
 dependencies = [
  "bitflags",
  "chrono",
@@ -614,7 +614,7 @@ dependencies = [
 [[package]]
 name = "datafusion"
 version = "7.0.0"
-source = "git+https://github.com/apache/arrow-datafusion.git?rev=886735304f0fa83a24ddc3b3e356aeff4aab78f2#886735304f0fa83a24ddc3b3e356aeff4aab78f2"
+source = "git+https://github.com/apache/arrow-datafusion.git?rev=6786203ea8c9c4cfe604f74a5cece8e829fb56c8#6786203ea8c9c4cfe604f74a5cece8e829fb56c8"
 dependencies = [
  "ahash",
  "arrow",
@@ -624,12 +624,13 @@ dependencies = [
  "datafusion-data-access",
  "datafusion-expr",
  "datafusion-physical-expr",
+ "datafusion-row",
  "futures",
  "hashbrown 0.12.0",
  "lazy_static",
  "log",
  "num_cpus",
- "ordered-float 2.10.0",
+ "ordered-float 3.0.0",
  "parking_lot 0.12.0",
  "parquet",
  "paste",
@@ -646,10 +647,10 @@ dependencies = [
 [[package]]
 name = "datafusion-common"
 version = "7.0.0"
-source = "git+https://github.com/apache/arrow-datafusion.git?rev=886735304f0fa83a24ddc3b3e356aeff4aab78f2#886735304f0fa83a24ddc3b3e356aeff4aab78f2"
+source = "git+https://github.com/apache/arrow-datafusion.git?rev=6786203ea8c9c4cfe604f74a5cece8e829fb56c8#6786203ea8c9c4cfe604f74a5cece8e829fb56c8"
 dependencies = [
  "arrow",
- "ordered-float 2.10.0",
+ "ordered-float 3.0.0",
  "parquet",
  "sqlparser",
 ]
@@ -657,11 +658,12 @@ dependencies = [
 [[package]]
 name = "datafusion-data-access"
 version = "1.0.0"
-source = "git+https://github.com/apache/arrow-datafusion.git?rev=886735304f0fa83a24ddc3b3e356aeff4aab78f2#886735304f0fa83a24ddc3b3e356aeff4aab78f2"
+source = "git+https://github.com/apache/arrow-datafusion.git?rev=6786203ea8c9c4cfe604f74a5cece8e829fb56c8#6786203ea8c9c4cfe604f74a5cece8e829fb56c8"
 dependencies = [
  "async-trait",
  "chrono",
  "futures",
+ "glob",
  "parking_lot 0.12.0",
  "tempfile",
  "tokio",
@@ -670,7 +672,7 @@ dependencies = [
 [[package]]
 name = "datafusion-expr"
 version = "7.0.0"
-source = "git+https://github.com/apache/arrow-datafusion.git?rev=886735304f0fa83a24ddc3b3e356aeff4aab78f2#886735304f0fa83a24ddc3b3e356aeff4aab78f2"
+source = "git+https://github.com/apache/arrow-datafusion.git?rev=6786203ea8c9c4cfe604f74a5cece8e829fb56c8#6786203ea8c9c4cfe604f74a5cece8e829fb56c8"
 dependencies = [
  "ahash",
  "arrow",
@@ -681,7 +683,7 @@ dependencies = [
 [[package]]
 name = "datafusion-physical-expr"
 version = "7.0.0"
-source = "git+https://github.com/apache/arrow-datafusion.git?rev=886735304f0fa83a24ddc3b3e356aeff4aab78f2#886735304f0fa83a24ddc3b3e356aeff4aab78f2"
+source = "git+https://github.com/apache/arrow-datafusion.git?rev=6786203ea8c9c4cfe604f74a5cece8e829fb56c8#6786203ea8c9c4cfe604f74a5cece8e829fb56c8"
 dependencies = [
  "ahash",
  "arrow",
@@ -690,15 +692,27 @@ dependencies = [
  "chrono",
  "datafusion-common",
  "datafusion-expr",
+ "datafusion-row",
  "hashbrown 0.12.0",
  "lazy_static",
  "md-5",
- "ordered-float 2.10.0",
+ "ordered-float 3.0.0",
  "paste",
  "rand 0.8.5",
  "regex",
  "sha2 0.10.2",
  "unicode-segmentation",
+]
+
+[[package]]
+name = "datafusion-row"
+version = "7.0.0"
+source = "git+https://github.com/apache/arrow-datafusion.git?rev=6786203ea8c9c4cfe604f74a5cece8e829fb56c8#6786203ea8c9c4cfe604f74a5cece8e829fb56c8"
+dependencies = [
+ "arrow",
+ "datafusion-common",
+ "paste",
+ "rand 0.8.5",
 ]
 
 [[package]]
@@ -932,9 +946,9 @@ dependencies = [
 
 [[package]]
 name = "flatbuffers"
-version = "2.1.1"
+version = "2.1.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6ea97b4fe4b84e2f2765449bcea21cbdb3ee28cecb88afbf38a0c2e1639f5eb5"
+checksum = "86b428b715fdbdd1c364b84573b5fdc0f84f8e423661b9f398735278bc7f2b6a"
 dependencies = [
  "bitflags",
  "smallvec",
@@ -1117,6 +1131,12 @@ checksum = "803ff7635f1ab4e2c064b68a0c60da917d3d18dc8d086130f689d62ce4f1c33e"
 dependencies = [
  "regex",
 ]
+
+[[package]]
+name = "glob"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9b919933a397b79c37e33b77bb2aa3dc8eb6e165ad809e58ff75bc7db2e34574"
 
 [[package]]
 name = "h2"
@@ -1845,9 +1865,9 @@ dependencies = [
 
 [[package]]
 name = "ordered-float"
-version = "2.10.0"
+version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7940cf2ca942593318d07fcf2596cdca60a85c9e7fab408a5e21a4f9dcd40d87"
+checksum = "96bcbab4bfea7a59c2c0fe47211a1ac4e3e96bea6eb446d704f310bc5c732ae2"
 dependencies = [
  "num-traits",
 ]
@@ -1911,9 +1931,9 @@ dependencies = [
 
 [[package]]
 name = "parquet"
-version = "12.0.0"
+version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "13c5df78854c7d56aed3aba69fb1b342dda41c384963f4ddfa962b690572b42a"
+checksum = "6c6d737baed48775e87a69aa262f1fa2f1d6bd074dedbe9cac244b9aabf2a0b4"
 dependencies = [
  "arrow",
  "base64",

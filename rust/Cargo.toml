@@ -57,9 +57,9 @@ async-stream = { version = "0.3.2", default-features = true, optional = true }
 # High-level writer
 parquet-format = "~4.0.0"
 
-arrow = "12"
-parquet = "12"
-datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "886735304f0fa83a24ddc3b3e356aeff4aab78f2", version = "7.0.0", optional = true }
+arrow = "13"
+parquet = "13"
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "6786203ea8c9c4cfe604f74a5cece8e829fb56c8", version = "7.0.0", optional = true }
 
 crossbeam = { version = "0", optional = true }
 
@@ -73,10 +73,33 @@ async-trait = "0.1"
 [features]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion"]
-azure = ["azure_core", "azure_storage", "azure_storage_blobs", "azure_storage_datalake", "azure_identity", "reqwest"]
+azure = [
+    "azure_core",
+    "azure_storage",
+    "azure_storage_blobs",
+    "azure_storage_datalake",
+    "azure_identity",
+    "reqwest",
+]
 
-s3 = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_s3/native-tls", "rusoto_sts/native-tls", "rusoto_dynamodb/native-tls", "maplit", "dynamodb_lock/native-tls"]
-s3-rustls = ["rusoto_core/rustls", "rusoto_credential", "rusoto_s3/rustls", "rusoto_sts/rustls", "rusoto_dynamodb/rustls", "maplit", "dynamodb_lock/rustls"]
+s3 = [
+    "rusoto_core/native-tls",
+    "rusoto_credential",
+    "rusoto_s3/native-tls",
+    "rusoto_sts/native-tls",
+    "rusoto_dynamodb/native-tls",
+    "maplit",
+    "dynamodb_lock/native-tls",
+]
+s3-rustls = [
+    "rusoto_core/rustls",
+    "rusoto_credential",
+    "rusoto_s3/rustls",
+    "rusoto_sts/rustls",
+    "rusoto_dynamodb/rustls",
+    "maplit",
+    "dynamodb_lock/rustls",
+]
 gcs = ["async-stream", "tame-gcs", "tame-oauth", "reqwest"]
 glue = ["s3", "rusoto_glue"]
 python = ["arrow/pyarrow"]
