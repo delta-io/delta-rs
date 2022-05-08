@@ -2,7 +2,6 @@
 use super::*;
 use crate::action::Action;
 use crate::schema::DeltaDataTypeVersion;
-use async_trait::async_trait;
 use core::any::Any;
 use datafusion::{
     arrow::{
@@ -15,11 +14,13 @@ use datafusion::{
     error::Result as DataFusionResult,
     execution::context::TaskContext,
     physical_plan::{
-        coalesce_partitions::CoalescePartitionsExec, common::compute_record_batch_statistics,
-        empty::EmptyExec, expressions::PhysicalSortExpr, Distribution, ExecutionPlan, Partitioning,
+        coalesce_partitions::CoalescePartitionsExec, common::collect as collect_batch,
+        common::compute_record_batch_statistics, empty::EmptyExec, expressions::PhysicalSortExpr,
+        stream::RecordBatchStreamAdapter, Distribution, ExecutionPlan, Partitioning,
         SendableRecordBatchStream, Statistics,
     },
 };
+use futures::{TryFutureExt, TryStreamExt};
 use lazy_static::lazy_static;
 use std::sync::Arc;
 
@@ -80,7 +81,6 @@ impl DeltaTransactionPlan {
     }
 }
 
-#[async_trait]
 impl ExecutionPlan for DeltaTransactionPlan {
     /// Return a reference to Any that can be used for downcasting
     fn as_any(&self) -> &dyn Any {
@@ -114,73 +114,76 @@ impl ExecutionPlan for DeltaTransactionPlan {
         todo!()
     }
 
-    async fn execute(
+    fn execute(
         &self,
-        _partition: usize,
+        partition: usize,
         context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
-        let mut table =
-            get_table_from_uri_without_update(self.table_uri.clone()).map_err(to_datafusion_err)?;
+        let input = self.input.execute(partition, context.clone())?;
 
-        let data = collect(self.input.clone(), context.clone()).await?;
-        // TODO we assume that all children send a single column record batch with serialized actions
-        let actions = data
-            .iter()
-            .flat_map(|batch| match deserialize_actions(batch) {
-                Ok(vec) => vec.into_iter().map(Ok).collect(),
-                Err(er) => vec![Err(er)],
-            })
-            .collect::<Result<Vec<_>, _>>()?;
-
-        if actions.is_empty() {
-            let empty_plan = EmptyExec::new(false, self.schema());
-            return empty_plan.execute(0, context).await;
-        }
-
-        let mut txn = table.create_transaction(None);
-        txn.add_actions(actions);
-        let prepared_commit = txn
-            .prepare_commit(Some(self.operation.clone()), self.app_metadata.clone())
-            .await
-            .map_err(to_datafusion_err)?;
-        let _committed_version = table
-            .try_commit_transaction(&prepared_commit, self.table_version + 1)
-            .await
-            .map_err(to_datafusion_err)?;
-
-        // let _new_version = match table.update().await {
-        //     Err(_) => {
-        //         let mut txn = table.create_transaction(None);
-        //         txn.add_actions(actions);
-        //         let prepared_commit = txn
-        //             .prepare_commit(Some(self.operation.clone()), self.app_metadata.clone())
-        //             .await
-        //             .map_err(to_datafusion_err)?;
-        //         let committed_version = table
-        //             .try_commit_transaction(&prepared_commit, self.table_version)
-        //             .await
-        //             .map_err(to_datafusion_err)?;
-        //         committed_version
-        //     }
-        //     _ => {
-        //         let mut txn = table.create_transaction(None);
-        //         txn.add_actions(actions);
-        //         let committed_version = txn
-        //             .commit(Some(self.operation.clone()), self.app_metadata.clone())
-        //             .await
-        //             .map_err(to_datafusion_err)?;
-        //         committed_version
-        //     }
-        // };
-
-        // TODO report some helpful data - at least current version
-        let empty_plan = EmptyExec::new(false, self.schema());
-        empty_plan.execute(0, context).await
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            futures::stream::once(
+                do_transaction(
+                    input,
+                    self.table_uri.clone(),
+                    self.table_version,
+                    self.operation.clone(),
+                    self.app_metadata.clone(),
+                    context,
+                )
+                .map_err(|e| ArrowError::ExternalError(Box::new(e))),
+            )
+            .try_flatten(),
+        )))
     }
 
     fn statistics(&self) -> Statistics {
         compute_record_batch_statistics(&[], &self.schema(), None)
     }
+}
+
+async fn do_transaction(
+    input: SendableRecordBatchStream,
+    table_uri: String,
+    table_version: i64,
+    operation: DeltaOperation,
+    app_metadata: Option<serde_json::Map<String, serde_json::Value>>,
+    context: Arc<TaskContext>,
+) -> DataFusionResult<SendableRecordBatchStream> {
+    let mut table =
+        get_table_from_uri_without_update(table_uri.clone()).map_err(to_datafusion_err)?;
+    let schema = input.schema().clone();
+
+    let data = collect_batch(input).await?;
+    // TODO we assume that all children send a single column record batch with serialized actions
+    let actions = data
+        .iter()
+        .flat_map(|batch| match deserialize_actions(batch) {
+            Ok(vec) => vec.into_iter().map(Ok).collect(),
+            Err(er) => vec![Err(er)],
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+
+    if actions.is_empty() {
+        let empty_plan = EmptyExec::new(false, schema);
+        return empty_plan.execute(0, context);
+    }
+
+    let mut txn = table.create_transaction(None);
+    txn.add_actions(actions);
+    let prepared_commit = txn
+        .prepare_commit(Some(operation.clone()), app_metadata.clone())
+        .await
+        .map_err(to_datafusion_err)?;
+    let _committed_version = table
+        .try_commit_transaction(&prepared_commit, table_version + 1)
+        .await
+        .map_err(to_datafusion_err)?;
+
+    // TODO report some helpful data - at least current version
+    let empty_plan = EmptyExec::new(false, schema);
+    empty_plan.execute(0, context)
 }
 
 fn deserialize_actions(data: &RecordBatch) -> DataFusionResult<Vec<Action>> {

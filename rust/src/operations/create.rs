@@ -3,7 +3,7 @@
 use super::{
     get_table_from_uri_without_update, to_datafusion_err,
     transaction::{serialize_actions, OPERATION_SCHEMA},
-    DeltaCommandError,
+    DeltaCommandError, *,
 };
 use crate::{
     action::{Action, DeltaOperation, MetaData, Protocol, SaveMode},
@@ -19,9 +19,11 @@ use datafusion::{
         common::{compute_record_batch_statistics, SizedRecordBatchStream},
         expressions::PhysicalSortExpr,
         metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics},
+        stream::RecordBatchStreamAdapter,
         Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
     },
 };
+use futures::{TryFutureExt, TryStreamExt};
 use std::sync::Arc;
 
 /// Command for creating new delta table
@@ -101,44 +103,67 @@ impl ExecutionPlan for CreateCommand {
         ))
     }
 
-    async fn execute(
+    fn execute(
         &self,
         partition: usize,
         _context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
-        let mut table =
-            get_table_from_uri_without_update(self.table_uri.clone()).map_err(to_datafusion_err)?;
-
-        let actions = match table.load_version(0).await {
-            Err(_) => Ok(vec![
-                Action::protocol(self.protocol.clone()),
-                Action::metaData(MetaData::try_from(self.metadata.clone()).unwrap()),
-            ]),
-            Ok(_) => match self.mode {
-                SaveMode::Ignore => Ok(Vec::new()),
-                SaveMode::ErrorIfExists => Err(DeltaCommandError::TableAlreadyExists(
+        Ok(Box::pin(RecordBatchStreamAdapter::new(
+            self.schema(),
+            futures::stream::once(
+                do_create(
                     self.table_uri.clone(),
-                )),
-                _ => todo!("Write mode not implemented {:?}", self.mode),
-            },
-        }
-        .map_err(to_datafusion_err)?;
-
-        let serialized_batch = serialize_actions(actions)?;
-        let metrics = ExecutionPlanMetricsSet::new();
-        let tracking_metrics = MemTrackingMetrics::new(&metrics, partition);
-        let stream = SizedRecordBatchStream::new(
-            serialized_batch.schema(),
-            vec![Arc::new(serialized_batch)],
-            tracking_metrics,
-        );
-
-        Ok(Box::pin(stream))
+                    partition,
+                    self.mode.clone(),
+                    self.metadata.clone(),
+                    self.protocol.clone(),
+                )
+                .map_err(|e| ArrowError::ExternalError(Box::new(e))),
+            )
+            .try_flatten(),
+        )))
     }
 
     fn statistics(&self) -> Statistics {
         compute_record_batch_statistics(&[], &self.schema(), None)
     }
+}
+
+async fn do_create(
+    table_uri: String,
+    partition_id: usize,
+    mode: SaveMode,
+    metadata: DeltaTableMetaData,
+    protocol: Protocol,
+) -> DataFusionResult<SendableRecordBatchStream> {
+    let mut table =
+        get_table_from_uri_without_update(table_uri.clone()).map_err(to_datafusion_err)?;
+
+    let actions = match table.load_version(0).await {
+        Err(_) => Ok(vec![
+            Action::protocol(protocol.clone()),
+            Action::metaData(MetaData::try_from(metadata.clone()).unwrap()),
+        ]),
+        Ok(_) => match mode {
+            SaveMode::Ignore => Ok(Vec::new()),
+            SaveMode::ErrorIfExists => {
+                Err(DeltaCommandError::TableAlreadyExists(table_uri.clone()))
+            }
+            _ => todo!("Write mode not implemented {:?}", mode),
+        },
+    }
+    .map_err(to_datafusion_err)?;
+
+    let serialized_batch = serialize_actions(actions)?;
+    let metrics = ExecutionPlanMetricsSet::new();
+    let tracking_metrics = MemTrackingMetrics::new(&metrics, partition_id);
+    let stream = SizedRecordBatchStream::new(
+        serialized_batch.schema(),
+        vec![Arc::new(serialized_batch)],
+        tracking_metrics,
+    );
+
+    Ok(Box::pin(stream))
 }
 
 #[cfg(test)]
