@@ -117,7 +117,7 @@ impl ExecutionPlan for WriteCommand {
     }
 
     fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
+        self.input.output_partitioning()
     }
 
     fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {

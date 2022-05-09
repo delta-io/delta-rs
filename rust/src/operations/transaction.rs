@@ -14,10 +14,9 @@ use datafusion::{
     error::Result as DataFusionResult,
     execution::context::TaskContext,
     physical_plan::{
-        coalesce_partitions::CoalescePartitionsExec, common::collect as collect_batch,
-        common::compute_record_batch_statistics, empty::EmptyExec, expressions::PhysicalSortExpr,
-        stream::RecordBatchStreamAdapter, Distribution, ExecutionPlan, Partitioning,
-        SendableRecordBatchStream, Statistics,
+        coalesce_partitions::CoalescePartitionsExec, common::compute_record_batch_statistics,
+        empty::EmptyExec, expressions::PhysicalSortExpr, stream::RecordBatchStreamAdapter,
+        Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
     },
 };
 use futures::{TryFutureExt, TryStreamExt};
@@ -116,16 +115,14 @@ impl ExecutionPlan for DeltaTransactionPlan {
 
     fn execute(
         &self,
-        partition: usize,
+        _partition: usize,
         context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, context.clone())?;
-
         Ok(Box::pin(RecordBatchStreamAdapter::new(
             self.schema(),
             futures::stream::once(
                 do_transaction(
-                    input,
+                    self.input.clone(),
                     self.table_uri.clone(),
                     self.table_version,
                     self.operation.clone(),
@@ -144,7 +141,7 @@ impl ExecutionPlan for DeltaTransactionPlan {
 }
 
 async fn do_transaction(
-    input: SendableRecordBatchStream,
+    input: Arc<dyn ExecutionPlan>,
     table_uri: String,
     table_version: i64,
     operation: DeltaOperation,
@@ -155,7 +152,7 @@ async fn do_transaction(
         get_table_from_uri_without_update(table_uri.clone()).map_err(to_datafusion_err)?;
     let schema = input.schema().clone();
 
-    let data = collect_batch(input).await?;
+    let data = collect(input, context.clone()).await?;
     // TODO we assume that all children send a single column record batch with serialized actions
     let actions = data
         .iter()
