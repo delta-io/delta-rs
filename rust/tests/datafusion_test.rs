@@ -4,12 +4,12 @@ mod datafusion {
 
     use arrow::array::*;
     use datafusion::error::Result;
-    use datafusion::execution::context::ExecutionContext;
+    use datafusion::execution::context::SessionContext;
     use datafusion::scalar::ScalarValue;
 
     #[tokio::test]
     async fn test_datafusion_simple_query() -> Result<()> {
-        let mut ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         let table = deltalake::open_table("./tests/data/simple_table")
             .await
             .unwrap();
@@ -34,14 +34,14 @@ mod datafusion {
 
     #[tokio::test]
     async fn test_datafusion_date_column() -> Result<()> {
-        let mut ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         let table = deltalake::open_table("./tests/data/delta-0.8.0-date")
             .await
             .unwrap();
         ctx.register_table("dates", Arc::new(table))?;
 
         let batches = ctx
-            .sql("SELECT date from dates WHERE dayOfYear = 2")
+            .sql("SELECT date from dates WHERE \"dayOfYear\" = 2")
             .await?
             .collect()
             .await?;
@@ -76,7 +76,7 @@ mod datafusion {
             vec![Some(0)],
         );
 
-        let mut ctx = ExecutionContext::new();
+        let ctx = SessionContext::new();
         ctx.register_table("test_table", Arc::new(table))?;
 
         let batches = ctx

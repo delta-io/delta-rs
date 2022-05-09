@@ -187,7 +187,7 @@ impl Worker {
             stats_parsed: None,
             tags: None,
         }));
-        tx.commit(None).await.unwrap()
+        tx.commit(None, None).await.unwrap()
     }
 }
 

@@ -1,7 +1,8 @@
 //! Actions included in Delta table transaction logs
 
-#![allow(non_snake_case, non_camel_case_types)]
+#![allow(non_camel_case_types)]
 
+use crate::{schema::*, DeltaTableMetaData};
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
@@ -9,8 +10,6 @@ use serde_json::{Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-
-use super::schema::*;
 
 /// Error returned when an invalid Delta log action is encountered.
 #[derive(thiserror::Error, Debug)]
@@ -215,12 +214,12 @@ impl Add {
                         .map_err(|_| gen_action_type_error("add", "dataChange", "bool"))?;
                 }
                 "partitionValues" => {
-                    let parquetMap = record
+                    let parquet_map = record
                         .get_map(i)
                         .map_err(|_| gen_action_type_error("add", "partitionValues", "map"))?;
                     populate_hashmap_with_option_from_parquet_map(
                         &mut re.partition_values,
-                        parquetMap,
+                        parquet_map,
                     )
                     .map_err(|estr| {
                         ActionError::InvalidField(format!(
@@ -621,13 +620,13 @@ impl Remove {
                 }
                 "partitionValues" => match record.get_map(i) {
                     Ok(_) => {
-                        let parquetMap = record.get_map(i).map_err(|_| {
+                        let parquet_map = record.get_map(i).map_err(|_| {
                             gen_action_type_error("remove", "partitionValues", "map")
                         })?;
-                        let mut partitionValues = HashMap::new();
+                        let mut partition_values = HashMap::new();
                         populate_hashmap_with_option_from_parquet_map(
-                            &mut partitionValues,
-                            parquetMap,
+                            &mut partition_values,
+                            parquet_map,
                         )
                         .map_err(|estr| {
                             ActionError::InvalidField(format!(
@@ -635,7 +634,7 @@ impl Remove {
                                 estr,
                             ))
                         })?;
-                        re.partition_values = Some(partitionValues);
+                        re.partition_values = Some(partition_values);
                     }
                     _ => re.partition_values = None,
                 },
@@ -845,32 +844,75 @@ impl Action {
 
 /// Operation performed when creating a new log entry with one or more actions.
 /// This is a key element of the `CommitInfo` action.
-#[derive(Serialize, Deserialize, Debug)]
+#[allow(clippy::large_enum_variant)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
+    /// Represents a Delta `Create` operation.
+    /// Would usually only create the table, if also data is written,
+    /// a `Write` operations is more appropriate
+    Create {
+        /// The save mode used during the create.
+        mode: SaveMode,
+        /// The storage location of the new table
+        location: String,
+        /// The min reader and writer protocol versions of the table
+        protocol: Protocol,
+        /// Metadata associated with the new table
+        metadata: DeltaTableMetaData,
+    },
+
     /// Represents a Delta `Write` operation.
     /// Write operations will typically only include `Add` actions.
+    #[serde(rename_all = "camelCase")]
     Write {
         /// The save mode used during the write.
         mode: SaveMode,
         /// The columns the write is partitioned by.
-        partitionBy: Option<Vec<String>>,
+        partition_by: Option<Vec<String>>,
         /// The predicate used during the write.
         predicate: Option<String>,
     },
     /// Represents a Delta `StreamingUpdate` operation.
+    #[serde(rename_all = "camelCase")]
     StreamingUpdate {
         /// The output mode the streaming writer is using.
-        outputMode: OutputMode,
+        output_mode: OutputMode,
         /// The query id of the streaming writer.
-        queryId: String,
+        query_id: String,
         /// The epoch id of the written micro-batch.
-        epochId: i64,
+        epoch_id: i64,
     },
     // TODO: Add more operations
 }
 
+impl DeltaOperation {
+    /// Retrieve basic commit information to be added to Delta commits
+    pub fn get_commit_info(&self) -> Map<String, Value> {
+        let mut commit_info = Map::<String, Value>::new();
+        let operation = match &self {
+            DeltaOperation::Create { .. } => "delta-rs.Create",
+            DeltaOperation::Write { .. } => "delta-rs.Write",
+            DeltaOperation::StreamingUpdate { .. } => "delta-rs.StreamingUpdate",
+        };
+        commit_info.insert(
+            "operation".to_string(),
+            serde_json::Value::String(operation.into()),
+        );
+
+        if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(self) {
+            commit_info.insert(
+                "operationParameters".to_string(),
+                map.values().next().unwrap().clone(),
+            );
+        };
+
+        commit_info
+    }
+}
+
 /// The SaveMode used when performing a DeltaOperation
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum SaveMode {
     /// Files will be appended to the target location.
     Append,
@@ -883,7 +925,7 @@ pub enum SaveMode {
 }
 
 /// The OutputMode used in streaming operations.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum OutputMode {
     /// Only new rows will be written when new data is available.
     Append,

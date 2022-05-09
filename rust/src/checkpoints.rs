@@ -2,7 +2,7 @@
 
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
-use arrow::json::reader::Decoder;
+use arrow::json::reader::{Decoder, DecoderOptions};
 use chrono::Datelike;
 use chrono::Duration;
 use chrono::Utc;
@@ -402,7 +402,8 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     // Write the Checkpoint parquet file.
     let writeable_cursor = InMemoryWriteableCursor::default();
     let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
-    let decoder = Decoder::new(arrow_schema, CHECKPOINT_RECORD_BATCH_SIZE, None);
+    let options = DecoderOptions::new().with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE);
+    let decoder = Decoder::new(arrow_schema, options);
     while let Some(batch) = decoder.next_batch(&mut jsons)? {
         writer.write(&batch)?;
     }

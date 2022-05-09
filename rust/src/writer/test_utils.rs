@@ -192,7 +192,7 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
 
     let protocol = Protocol {
         min_reader_version: 1,
-        min_writer_version: 2,
+        min_writer_version: 1,
     };
 
     let metadata = DeltaTableMetaData::new(

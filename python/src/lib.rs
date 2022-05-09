@@ -323,11 +323,14 @@ impl RawDeltaTable {
             .create_transaction(Some(DeltaTransactionOptions::new(3)));
         transaction.add_actions(actions);
         rt()?
-            .block_on(transaction.commit(Some(DeltaOperation::Write {
-                mode,
-                partitionBy: Some(partition_by),
-                predicate: None,
-            })))
+            .block_on(transaction.commit(
+                Some(DeltaOperation::Write {
+                    mode,
+                    partition_by: Some(partition_by),
+                    predicate: None,
+                }),
+                None,
+            ))
             .map_err(PyDeltaTableError::from_raw)?;
 
         Ok(())
