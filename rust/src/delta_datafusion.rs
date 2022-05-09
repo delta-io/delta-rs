@@ -396,7 +396,7 @@ fn left_larger_than_right(
         }
         ScalarValue::Boolean(Some(v)) => {
             let b_right = bool::try_from(right).ok()?;
-            Some(v > b_right)
+            Some(v & !b_right)
         }
         ScalarValue::Utf8(Some(v)) => match right {
             ScalarValue::Utf8(Some(s_right)) => Some(v > s_right),
