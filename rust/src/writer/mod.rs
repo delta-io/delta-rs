@@ -109,7 +109,8 @@ pub enum DeltaWriterError {
 }
 
 #[async_trait]
-trait DeltaWriter<T> {
+/// Trait for writing data to Delta tables
+pub trait DeltaWriter<T> {
     /// write a chunk of values into the internal write buffers.
     async fn write(&mut self, values: T) -> Result<(), DeltaWriterError>;
 
@@ -126,7 +127,7 @@ trait DeltaWriter<T> {
         let mut adds = self.flush().await?;
         let mut tx = table.create_transaction(None);
         tx.add_actions(adds.drain(..).map(Action::add).collect());
-        let version = tx.commit(None).await?;
+        let version = tx.commit(None, None).await?;
         Ok(version)
     }
 }

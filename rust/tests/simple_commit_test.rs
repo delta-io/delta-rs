@@ -83,7 +83,7 @@ mod simple_commit_fs {
 
         let mut tx1 = table.create_transaction(None);
         tx1.add_actions(tx1_actions());
-        let commit = tx1.prepare_commit(None).await.unwrap();
+        let commit = tx1.prepare_commit(None, None).await.unwrap();
         let result = table.try_commit_transaction(&commit, 1).await.unwrap();
 
         assert_eq!(1, result);
@@ -104,13 +104,13 @@ mod simple_commit_fs {
 
         let mut tx1 = table.create_transaction(None);
         tx1.add_actions(tx1_actions());
-        let commit = tx1.prepare_commit(None).await.unwrap();
+        let commit = tx1.prepare_commit(None, None).await.unwrap();
         let _ = table.try_commit_transaction(&commit, 1).await.unwrap();
 
         let mut tx2 = table.create_transaction(None);
         tx2.add_actions(tx2_actions());
         // we already committed version 1 - this should fail and return error for caller to handle.
-        let commit = tx2.prepare_commit(None).await.unwrap();
+        let commit = tx2.prepare_commit(None, None).await.unwrap();
         let result = table.try_commit_transaction(&commit, 1).await;
 
         match result {
@@ -144,7 +144,7 @@ mod simple_commit_fs {
         let prepared_commit = {
             let mut tx = table.create_transaction(None);
             tx.add_actions(tx1_actions());
-            tx.prepare_commit(None).await.unwrap()
+            tx.prepare_commit(None, None).await.unwrap()
         };
 
         loop {
@@ -188,7 +188,7 @@ async fn test_two_commits(table_path: &str) -> Result<(), DeltaTableError> {
 
     let mut tx1 = table.create_transaction(None);
     tx1.add_actions(tx1_actions());
-    let version = tx1.commit(None).await?;
+    let version = tx1.commit(None, None).await?;
 
     assert_eq!(1, version);
     assert_eq!(version, table.version);
@@ -196,7 +196,7 @@ async fn test_two_commits(table_path: &str) -> Result<(), DeltaTableError> {
 
     let mut tx2 = table.create_transaction(None);
     tx2.add_actions(tx2_actions());
-    let version = tx2.commit(None).await.unwrap();
+    let version = tx2.commit(None, None).await.unwrap();
 
     assert_eq!(2, version);
     assert_eq!(version, table.version);

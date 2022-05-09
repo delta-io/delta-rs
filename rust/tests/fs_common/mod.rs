@@ -116,5 +116,5 @@ pub async fn commit_removes(table: &mut DeltaTable, removes: Vec<&Remove>) -> i6
 pub async fn commit_actions(table: &mut DeltaTable, actions: Vec<Action>) -> i64 {
     let mut tx = table.create_transaction(None);
     tx.add_actions(actions);
-    tx.commit(None).await.unwrap()
+    tx.commit(None, None).await.unwrap()
 }
