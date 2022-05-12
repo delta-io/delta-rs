@@ -251,12 +251,7 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
                             return Err(UriError::MissingObjectFileSystem);
                         }
                     };
-                    let path = match path_parts.next() {
-                        Some(x) => x,
-                        None => {
-                            return Err(UriError::MissingObjectPath);
-                        }
-                    };
+                    let path = path_parts.next().unwrap_or("/");
 
                     Ok(Uri::AdlsGen2Object(azure::AdlsGen2Object { account_name, file_system, path }))
                 } else {
