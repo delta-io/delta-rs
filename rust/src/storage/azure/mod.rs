@@ -2,16 +2,11 @@
 //!
 //! This module is gated behind the "azure" feature.
 //!
-/// Shared key authentication is used (temporarily).
-///
-/// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
-/// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
 use super::{parse_uri, ObjectMeta, StorageBackend, StorageError, UriError};
 use azure_core::auth::TokenCredential;
 use azure_core::ClientOptions;
 use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
 use azure_storage_datalake::prelude::*;
-//use azure_storage_datalake::file_system::Path;
 use futures::stream::Stream;
 use futures::StreamExt;
 use log::debug;
@@ -67,10 +62,13 @@ pub struct AdlsGen2Backend {
 impl AdlsGen2Backend {
     /// Create a new [`AdlsGen2Backend`].
     ///
-    /// Shared key authentication is used (temporarily).
+    /// Shared key authentication is the default and requires the following environment variables
     ///
-    /// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
-    /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
+    /// `AZURE_STORAGE_ACCOUNT_NAME`
+    /// `AZURE_STORAGE_ACCOUNT_KEY`
+    ///
+    /// See `new_with_token_credential` for alternative authentication methods.
+    ///
     pub fn new(file_system_name: &str) -> Result<Self, StorageError> {
         let mut map: HashMap<String, String> = HashMap::new();
 
@@ -88,7 +86,8 @@ impl AdlsGen2Backend {
         Self::from_map(file_system_name, map)
     }
 
-    ///TODO
+    /// Create a new [`AdlsGen2Backend`] using a [`TokenCredential`]
+    /// See [`azure_identity::token_credentials`] for various implementations
     pub fn new_with_token_credential(
         storage_account_name: &str,
         file_system_name: &str,
@@ -112,7 +111,7 @@ impl AdlsGen2Backend {
         })
     }
 
-    ///TODO
+    /// Create a new [`AdlsGen2Backend`] using shared key authentication
     pub fn new_with_shared_key(
         storage_account_name: &str,
         file_system_name: &str,
@@ -137,12 +136,15 @@ impl AdlsGen2Backend {
         })
     }
 
-    /// Create a new [`AdlsGen2Backend`].
+    /// Create a new [`AdlsGen2Backend`] from a map
     ///
-    /// Shared key authentication is used (temporarily).
+    /// Currently only shared shared authentication works with this method.
+    /// For each authentication method, the following keys are required
     ///
-    /// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the map.
-    /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the map.
+    /// ## Shared Key Authentication
+    /// `AZURE_STORAGE_ACCOUNT_NAME`
+    /// `AZURE_STORAGE_ACCOUNT_KEY`
+    ///
     pub fn from_map(
         file_system_name: &str,
         map: HashMap<String, String>,
@@ -198,6 +200,8 @@ fn to_storage_err2(err: azure_storage::core::Error) -> StorageError {
     StorageError::AzureStorage { source: err }
 }
 
+// TODO: This implementation exists since Azure's Pageable is !Send.
+// When this is resolved in the Azure crates, fix this up too
 async fn list_obj_future(
     client: FileSystemClient,
     path: String,
