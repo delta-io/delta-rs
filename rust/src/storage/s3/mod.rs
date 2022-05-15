@@ -17,7 +17,9 @@ use rusoto_s3::{
 use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient, WebIdentityProvider};
 use tokio::io::AsyncReadExt;
 
-use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
+use super::{
+    parse_uri, str_option, str_or_default, u64_or_default, ObjectMeta, StorageBackend, StorageError,
+};
 use rusoto_core::credential::{
     AwsCredentials, CredentialsError, DefaultCredentialsProvider, ProvideAwsCredentials,
 };
@@ -234,10 +236,10 @@ impl S3StorageOptions {
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect();
 
-        let endpoint_url = Self::str_option(&options, s3_storage_options::AWS_ENDPOINT_URL);
+        let endpoint_url = str_option(&options, s3_storage_options::AWS_ENDPOINT_URL);
         let region = if let Some(endpoint_url) = endpoint_url.as_ref() {
             Region::Custom {
-                name: Self::str_or_default(
+                name: str_or_default(
                     &options,
                     s3_storage_options::AWS_REGION,
                     "custom".to_string(),
@@ -257,18 +259,18 @@ impl S3StorageOptions {
         Self::ensure_env_var(&options, s3_storage_options::AWS_ROLE_ARN);
         Self::ensure_env_var(&options, s3_storage_options::AWS_ROLE_SESSION_NAME);
 
-        let s3_pool_idle_timeout = Self::u64_or_default(
+        let s3_pool_idle_timeout = u64_or_default(
             &options,
             s3_storage_options::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS,
             15,
         );
-        let sts_pool_idle_timeout = Self::u64_or_default(
+        let sts_pool_idle_timeout = u64_or_default(
             &options,
             s3_storage_options::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS,
             10,
         );
 
-        let s3_get_internal_server_error_retries = Self::u64_or_default(
+        let s3_get_internal_server_error_retries = u64_or_default(
             &options,
             s3_storage_options::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES,
             10,
@@ -277,18 +279,12 @@ impl S3StorageOptions {
         Self {
             _endpoint_url: endpoint_url,
             region,
-            aws_access_key_id: Self::str_option(&options, s3_storage_options::AWS_ACCESS_KEY_ID),
-            aws_secret_access_key: Self::str_option(
-                &options,
-                s3_storage_options::AWS_SECRET_ACCESS_KEY,
-            ),
-            aws_session_token: Self::str_option(&options, s3_storage_options::AWS_SESSION_TOKEN),
-            locking_provider: Self::str_option(
-                &options,
-                s3_storage_options::AWS_S3_LOCKING_PROVIDER,
-            ),
-            assume_role_arn: Self::str_option(&options, s3_storage_options::AWS_S3_ASSUME_ROLE_ARN),
-            assume_role_session_name: Self::str_option(
+            aws_access_key_id: str_option(&options, s3_storage_options::AWS_ACCESS_KEY_ID),
+            aws_secret_access_key: str_option(&options, s3_storage_options::AWS_SECRET_ACCESS_KEY),
+            aws_session_token: str_option(&options, s3_storage_options::AWS_SESSION_TOKEN),
+            locking_provider: str_option(&options, s3_storage_options::AWS_S3_LOCKING_PROVIDER),
+            assume_role_arn: str_option(&options, s3_storage_options::AWS_S3_ASSUME_ROLE_ARN),
+            assume_role_session_name: str_option(
                 &options,
                 s3_storage_options::AWS_S3_ROLE_SESSION_NAME,
             ),
@@ -299,23 +295,6 @@ impl S3StorageOptions {
             s3_get_internal_server_error_retries,
             extra_opts,
         }
-    }
-
-    fn str_or_default(map: &HashMap<String, String>, key: &str, default: String) -> String {
-        map.get(key)
-            .map(|v| v.to_owned())
-            .unwrap_or_else(|| std::env::var(key).unwrap_or(default))
-    }
-
-    fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
-        map.get(key)
-            .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
-    }
-
-    fn u64_or_default(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {
-        Self::str_option(map, key)
-            .and_then(|v| v.parse().ok())
-            .unwrap_or(default)
     }
 
     fn ensure_env_var(map: &HashMap<String, String>, key: &str) {
