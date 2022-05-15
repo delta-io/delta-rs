@@ -298,7 +298,7 @@ impl S3StorageOptions {
     }
 
     fn ensure_env_var(map: &HashMap<String, String>, key: &str) {
-        if let Some(val) = Self::str_option(map, key) {
+        if let Some(val) = str_option(map, key) {
             std::env::set_var(key, val);
         }
     }
