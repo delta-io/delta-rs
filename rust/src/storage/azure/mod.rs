@@ -22,7 +22,8 @@ use tokio::sync::mpsc::{self, Sender};
 use tokio_stream::wrappers::ReceiverStream;
 use tokio_util::task::LocalPoolHandle;
 
-/// Options for configuring Azure storage backend
+/// Storage option keys to use when creating [crate::storage::azure::AzureStorageOptions].
+/// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
 pub mod azure_storage_options {
     ///The ADLS Gen2 Access Key
     pub const AZURE_STORAGE_ACCOUNT_KEY: &str = "AZURE_STORAGE_ACCOUNT_KEY";
@@ -63,7 +64,7 @@ impl AzureStorageOptions {
         }
     }
 
-    /// Creates an instance of AzureStorageOptions from the given HashMap.
+    /// Creates an instance of AzureStorageOptions from the given HashMap and environment variables.
     pub fn from_map(options: HashMap<String, String>) -> Self {
         Self {
             account_key: str_option(&options, azure_storage_options::AZURE_STORAGE_ACCOUNT_KEY),
@@ -196,13 +197,23 @@ pub struct AdlsGen2Backend {
 impl AdlsGen2Backend {
     /// Create a new [`AdlsGen2Backend`].
     ///
-    /// Shared key authentication is the default and requires the following environment variables
+    /// This will try to parse configuration options from the environment.
     ///
-    /// `AZURE_STORAGE_ACCOUNT_NAME`
-    /// `AZURE_STORAGE_ACCOUNT_KEY`
+    /// The variable `AZURE_STORAGE_ACCOUNT_NAME` always has to be set.
     ///
-    /// See `new_with_token_credential` for alternative authentication methods.
+    /// To use shared key authorization, also set:
+    /// * `AZURE_STORAGE_ACCOUNT_KEY`
     ///
+    /// To use a service principal, set:
+    /// * `AZURE_CLIENT_ID`
+    /// * `AZURE_CLIENT_SECRET`
+    /// * `AZURE_TENANT_ID`
+    ///
+    /// If both are configured in the environment, shared key authorization will take precedence.
+    ///
+    /// See `new_with_token_credential` to pass your own [azure_core::auth::TokenCredential]
+    ///
+    /// See `new_from_options` for more fine grained control using [AzureStorageOptions]
     pub fn new(file_system_name: impl Into<String> + Clone) -> Result<Self, StorageError> {
         Self::new_from_options(file_system_name, AzureStorageOptions::default())
     }
@@ -246,7 +257,7 @@ impl AdlsGen2Backend {
         Self::new_from_options(file_system_name, options.clone())
     }
 
-    /// Create a new [`AdlsGen2Backend`] using shared key authentication
+    /// Create a new [`AdlsGen2Backend`] using a service principal
     pub fn new_with_client(
         storage_account_name: impl Into<String>,
         file_system_name: impl Into<String> + Clone,
@@ -266,13 +277,17 @@ impl AdlsGen2Backend {
 
     /// Create a new [`AdlsGen2Backend`] from AzureStorageOptions
     ///
-    /// Currently only shared shared authentication works with this method.
-    /// For each authentication method, the following keys are required
+    /// see [azure_storage_options] for the available configuration keys.
     ///
-    /// ## Shared Key Authentication
-    /// `AZURE_STORAGE_ACCOUNT_NAME`
-    /// `AZURE_STORAGE_ACCOUNT_KEY`
+    /// ```rust,ignore
+    /// let mut options = AzureStorageOptions::new();
     ///
+    /// let options = options
+    ///     .with_account_name("<storage_account_name>")
+    ///     .with_account_key("<storage_account_key>");
+    ///
+    /// let backend = AdlsGen2Backend::new_from_options("<file_system>", options.clone());
+    /// ```
     pub fn new_from_options(
         file_system_name: impl Into<String> + Clone,
         options: AzureStorageOptions,
