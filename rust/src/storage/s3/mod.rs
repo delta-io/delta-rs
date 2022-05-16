@@ -17,9 +17,7 @@ use rusoto_s3::{
 use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient, WebIdentityProvider};
 use tokio::io::AsyncReadExt;
 
-use super::{
-    parse_uri, str_option, str_or_default, u64_or_default, ObjectMeta, StorageBackend, StorageError,
-};
+use super::{parse_uri, str_option, ObjectMeta, StorageBackend, StorageError};
 use rusoto_core::credential::{
     AwsCredentials, CredentialsError, DefaultCredentialsProvider, ProvideAwsCredentials,
 };
@@ -239,7 +237,7 @@ impl S3StorageOptions {
         let endpoint_url = str_option(&options, s3_storage_options::AWS_ENDPOINT_URL);
         let region = if let Some(endpoint_url) = endpoint_url.as_ref() {
             Region::Custom {
-                name: str_or_default(
+                name: Self::str_or_default(
                     &options,
                     s3_storage_options::AWS_REGION,
                     "custom".to_string(),
@@ -259,18 +257,18 @@ impl S3StorageOptions {
         Self::ensure_env_var(&options, s3_storage_options::AWS_ROLE_ARN);
         Self::ensure_env_var(&options, s3_storage_options::AWS_ROLE_SESSION_NAME);
 
-        let s3_pool_idle_timeout = u64_or_default(
+        let s3_pool_idle_timeout = Self::u64_or_default(
             &options,
             s3_storage_options::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS,
             15,
         );
-        let sts_pool_idle_timeout = u64_or_default(
+        let sts_pool_idle_timeout = Self::u64_or_default(
             &options,
             s3_storage_options::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS,
             10,
         );
 
-        let s3_get_internal_server_error_retries = u64_or_default(
+        let s3_get_internal_server_error_retries = Self::u64_or_default(
             &options,
             s3_storage_options::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES,
             10,
@@ -295,6 +293,18 @@ impl S3StorageOptions {
             s3_get_internal_server_error_retries,
             extra_opts,
         }
+    }
+
+    fn str_or_default(map: &HashMap<String, String>, key: &str, default: String) -> String {
+        map.get(key)
+            .map(|v| v.to_owned())
+            .unwrap_or_else(|| std::env::var(key).unwrap_or(default))
+    }
+
+    fn u64_or_default(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {
+        str_option(map, key)
+            .and_then(|v| v.parse().ok())
+            .unwrap_or(default)
     }
 
     fn ensure_env_var(map: &HashMap<String, String>, key: &str) {

@@ -615,22 +615,8 @@ pub fn get_backend_for_uri_with_options(
     }
 }
 
-#[allow(unused)]
-pub(crate) fn str_or_default(map: &HashMap<String, String>, key: &str, default: String) -> String {
-    map.get(key)
-        .map(|v| v.to_owned())
-        .unwrap_or_else(|| std::env::var(key).unwrap_or(default))
-}
-
-#[allow(unused)]
+#[cfg(any(feature = "s3", feature = "s3-rustls", feature = "azure"))]
 pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
     map.get(key)
         .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
-}
-
-#[allow(unused)]
-pub(crate) fn u64_or_default(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {
-    str_option(map, key)
-        .and_then(|v| v.parse().ok())
-        .unwrap_or(default)
 }
