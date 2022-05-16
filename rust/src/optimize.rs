@@ -362,7 +362,7 @@ impl MergePlan {
         //Need to check for conflicts
         let mut dtx = table.create_transaction(None);
         dtx.add_actions(actions);
-        dtx.commit(None).await?;
+        dtx.commit(None, None).await?;
 
         self.metrics.files_added.avg = (self.metrics.files_added.total_size as f64)
             / (self.metrics.files_added.total_files as f64);
