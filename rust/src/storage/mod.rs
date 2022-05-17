@@ -5,14 +5,12 @@ use std::pin::Pin;
 
 use chrono::{DateTime, Utc};
 use futures::Stream;
+use std::collections::HashMap;
 
 #[cfg(feature = "azure")]
 use azure_core::{Error as AzureError, HttpError as AzureHttpError};
 #[cfg(feature = "azure")]
 use std::error::Error;
-
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
-use self::s3::S3StorageOptions;
 
 #[cfg(feature = "azure")]
 pub mod azure;
@@ -592,26 +590,33 @@ pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, Storage
 /// Returns a StorageBackend appropriate for the protocol and configured with the given options
 /// Options must be passed as a hashmap. Hashmap keys correspond to env variables that are used if options are not set.
 ///
-/// Currently, S3 is the only backend that accepts options.
+/// Currently, S3 and Azure are the only backends that accept options.
 /// Options may be passed in the HashMap or set as environment variables.
 ///
 /// [S3StorageOptions] describes the available options for the S3 backend.
 /// [s3::dynamodb_lock::DynamoDbLockClient] describes additional options for the atomic rename client.
+///
+/// [AzureStorageOptions] describes the available options for the Azure backend.
 pub fn get_backend_for_uri_with_options(
     uri: &str,
-    // NOTE: prefixing options with "_" to avoid deny warnings error since usage is conditional on s3 and the only usage is with s3 so far
-    _options: std::collections::HashMap<String, String>,
+    #[allow(unused)] options: HashMap<String, String>,
 ) -> Result<Box<dyn StorageBackend>, StorageError> {
     match parse_uri(uri)? {
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
         Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new_from_options(
-            S3StorageOptions::from_map(_options),
+            s3::S3StorageOptions::from_map(options),
         )?)),
         #[cfg(feature = "azure")]
-        Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::from_map(
+        Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::new_from_options(
             obj.file_system,
-            _options,
+            azure::AzureStorageOptions::from_map(options),
         )?)),
         _ => get_backend_for_uri(uri),
     }
+}
+
+#[cfg(any(feature = "s3", feature = "s3-rustls", feature = "azure"))]
+pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
+    map.get(key)
+        .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
 }

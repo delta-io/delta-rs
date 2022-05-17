@@ -17,7 +17,7 @@ use rusoto_s3::{
 use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient, WebIdentityProvider};
 use tokio::io::AsyncReadExt;
 
-use super::{parse_uri, ObjectMeta, StorageBackend, StorageError};
+use super::{parse_uri, str_option, ObjectMeta, StorageBackend, StorageError};
 use rusoto_core::credential::{
     AwsCredentials, CredentialsError, DefaultCredentialsProvider, ProvideAwsCredentials,
 };
@@ -234,7 +234,7 @@ impl S3StorageOptions {
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect();
 
-        let endpoint_url = Self::str_option(&options, s3_storage_options::AWS_ENDPOINT_URL);
+        let endpoint_url = str_option(&options, s3_storage_options::AWS_ENDPOINT_URL);
         let region = if let Some(endpoint_url) = endpoint_url.as_ref() {
             Region::Custom {
                 name: Self::str_or_default(
@@ -277,18 +277,12 @@ impl S3StorageOptions {
         Self {
             _endpoint_url: endpoint_url,
             region,
-            aws_access_key_id: Self::str_option(&options, s3_storage_options::AWS_ACCESS_KEY_ID),
-            aws_secret_access_key: Self::str_option(
-                &options,
-                s3_storage_options::AWS_SECRET_ACCESS_KEY,
-            ),
-            aws_session_token: Self::str_option(&options, s3_storage_options::AWS_SESSION_TOKEN),
-            locking_provider: Self::str_option(
-                &options,
-                s3_storage_options::AWS_S3_LOCKING_PROVIDER,
-            ),
-            assume_role_arn: Self::str_option(&options, s3_storage_options::AWS_S3_ASSUME_ROLE_ARN),
-            assume_role_session_name: Self::str_option(
+            aws_access_key_id: str_option(&options, s3_storage_options::AWS_ACCESS_KEY_ID),
+            aws_secret_access_key: str_option(&options, s3_storage_options::AWS_SECRET_ACCESS_KEY),
+            aws_session_token: str_option(&options, s3_storage_options::AWS_SESSION_TOKEN),
+            locking_provider: str_option(&options, s3_storage_options::AWS_S3_LOCKING_PROVIDER),
+            assume_role_arn: str_option(&options, s3_storage_options::AWS_S3_ASSUME_ROLE_ARN),
+            assume_role_session_name: str_option(
                 &options,
                 s3_storage_options::AWS_S3_ROLE_SESSION_NAME,
             ),
@@ -307,19 +301,14 @@ impl S3StorageOptions {
             .unwrap_or_else(|| std::env::var(key).unwrap_or(default))
     }
 
-    fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
-        map.get(key)
-            .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
-    }
-
     fn u64_or_default(map: &HashMap<String, String>, key: &str, default: u64) -> u64 {
-        Self::str_option(map, key)
+        str_option(map, key)
             .and_then(|v| v.parse().ok())
             .unwrap_or(default)
     }
 
     fn ensure_env_var(map: &HashMap<String, String>, key: &str) {
-        if let Some(val) = Self::str_option(map, key) {
+        if let Some(val) = str_option(map, key) {
             std::env::set_var(key, val);
         }
     }
