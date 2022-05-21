@@ -1,10 +1,10 @@
 //! Handle JSON messages when writing to delta tables
 use crate::writer::DeltaWriterError;
 use arrow::{
-    array::{as_primitive_array, Array},
+    array::{as_primitive_array, Array, ArrayRef, StructArray},
     datatypes::{
-        DataType, Int16Type, Int32Type, Int64Type, Int8Type, Schema as ArrowSchema, UInt16Type,
-        UInt32Type, UInt64Type, UInt8Type,
+        DataType, Field, Int16Type, Int32Type, Int64Type, Int8Type, Schema as ArrowSchema,
+        UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
     json::reader::{Decoder, DecoderOptions},
     record_batch::*,
@@ -164,4 +164,265 @@ pub(crate) fn stringified_partition_value(
     };
 
     Ok(Some(s))
+}
+
+fn backfill_field(
+    array: ArrayRef,
+    target_field: &Field,
+    num_rows: usize,
+) -> Result<ArrayRef, DeltaWriterError> {
+    use arrow::datatypes::DataType::*;
+    let source_type = array.data_type();
+
+    match target_field.data_type() {
+        Boolean | UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32| Int64 | Float32 | Float64 | Utf8 => Ok(array),
+        Struct(target_fields) => {
+            if let DataType::Struct(source_fields) = source_type {
+                let struct_array = array.as_any().downcast_ref::<StructArray>().unwrap();
+                let mut actual_source_fields = 0;
+                let mut new_fields = Vec::new();
+
+                for target_field in target_fields {
+                    let mut new_field = true;
+                    for (i, source_field) in source_fields.iter().enumerate() {
+                        if target_field.name() == source_field.name() {
+                            let f = backfill_field(
+                                struct_array.column(i).to_owned(),
+                                target_field,
+                                num_rows,
+                            )?;
+                            new_fields.push((target_field.clone(), f));
+                            actual_source_fields += 1;
+                            new_field = false;
+                            break;
+                        }
+                    }
+
+                    if new_field {
+                        if !target_field.is_nullable() {
+                            //TODO: New Error Type
+                            return Err(DeltaWriterError::InvalidRecord(
+                                "New column is not nullable".to_string(),
+                            ));
+                        }
+                        new_fields.push((
+                            target_field.clone(),
+                            arrow::array::new_null_array(target_field.data_type(), num_rows),
+                        ));
+                    }
+                }
+
+                if actual_source_fields != source_fields.len() {
+                    return Err(DeltaWriterError::InvalidRecord(
+                        "Source has columns that do not exist in target".to_string(),
+                    ));
+                }
+                Ok(Arc::new(StructArray::from(new_fields)))
+            } else {
+                return Err(DeltaWriterError::InvalidRecord(
+                    "Schema Mismatch".to_owned(),
+                ));
+            }
+        },
+        //TODO: New Error type
+        data_type => Err(DeltaWriterError::InvalidRecord(format!("Datatype {:?} not handled", data_type)))
+
+    }
+}
+
+/// Columns that are defined in the target schema but are missing from the batch are back filled
+/// TODO: Check if schema evolution for structs is supported. Currently on handles the first level of columns.
+pub(crate) fn backfill_record_batch(
+    batch: &RecordBatch,
+    target: arrow::datatypes::SchemaRef,
+) -> Result<RecordBatch, DeltaWriterError> {
+    let mut columns = Vec::new();
+    let mut columns_from_source = 0;
+    let source = batch.schema();
+    let num_rows = batch.num_rows();
+
+    let source_owned = (*source).to_owned();
+    let target_owned = (*batch.schema()).to_owned();
+    ArrowSchema::try_merge([source_owned, target_owned])?;
+
+    for target_field in target.fields() {
+        let mut new_field = true;
+
+        for (i, source_field) in source.fields().iter().enumerate() {
+            if target_field.name() == source_field.name() {
+                let f = backfill_field(batch.column(i).to_owned(), target_field, num_rows)?;
+                columns.push(f);
+                columns_from_source += 1;
+                new_field = false;
+                break;
+            }
+        }
+
+        if new_field {
+            if !target_field.is_nullable() {
+                //TODO: New Error Type
+                return Err(DeltaWriterError::InvalidRecord(
+                    "New column is not nullable".to_string(),
+                ));
+            }
+            columns.push(arrow::array::new_null_array(
+                target_field.data_type(),
+                num_rows,
+            ));
+        }
+    }
+
+    if columns_from_source != batch.columns().len() {
+        //TODO: New Error Type
+        return Err(DeltaWriterError::InvalidRecord(
+            "Source has columns that do not exist in target".to_string(),
+        ));
+    }
+
+    Ok(RecordBatch::try_new(target, columns)?)
+}
+
+/// Upcasts columns from a record batch
+/// Valid upcasts are ByteType -> ShortType -> IntegerType
+/// NullType -> any other type
+/*
+pub(crate) fn promote_record_batch(
+    _batch: &RecordBatch
+) -> Result<(), DeltaWriterError> {
+    Ok(())
+}
+*/
+
+mod tests {
+    use super::backfill_record_batch;
+    use arrow::array::*;
+    use arrow::datatypes::*;
+    use arrow::record_batch::*;
+    use std::sync::Arc;
+
+    #[test]
+    fn test_backfill_new_column() {
+        let target = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]));
+
+        let source = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]);
+
+        let id_arr = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let a_arr = Arc::new(Int32Array::from(vec![10, 11, 12, 13]));
+
+        let batch = RecordBatch::try_new(Arc::new(source), vec![id_arr, a_arr]).unwrap();
+
+        let backfilled = backfill_record_batch(&batch, target.clone()).unwrap();
+
+        assert_eq!(backfilled.columns().len(), 3);
+        assert_eq!(backfilled.schema(), target);
+        //TODO Check the arrays are in proper order
+    }
+
+    #[test]
+    /// Cannot have any additonal columns that are not present in the target table's schema
+    fn test_backfill_fail_extra_source_column() {
+        let source = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, true),
+        ]);
+
+        let target = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+
+        let id_arr = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let a_arr = Arc::new(Int32Array::from(vec![10, 11, 12, 13]));
+
+        let batch =
+            RecordBatch::try_new(Arc::new(source), vec![id_arr, a_arr.clone(), a_arr.clone()])
+                .unwrap();
+
+        let backfilled = backfill_record_batch(&batch, target.clone());
+        assert!(backfilled.is_err())
+    }
+
+    #[test]
+    fn test_backfill_fail_not_nullable_column() {
+        let target = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+
+        let source = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]);
+
+        let id_arr = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let a_arr = Arc::new(Int32Array::from(vec![10, 11, 12, 13]));
+
+        let batch = RecordBatch::try_new(Arc::new(source), vec![id_arr, a_arr]).unwrap();
+
+        let backfilled = backfill_record_batch(&batch, target.clone());
+        assert!(backfilled.is_err())
+    }
+
+    #[test]
+    /// Cannot have column data types that differ from the column datatypes in the target table
+    fn test_backfill_fail_different_types() {
+        let target = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("a", DataType::Int32, false),
+        ]));
+
+        let source = Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("a", DataType::Float32, false),
+        ]);
+
+        let id_arr = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let a_arr = Arc::new(Float32Array::from(vec![10.0, 11.3, 12.12, 13.44]));
+
+        let batch = RecordBatch::try_new(Arc::new(source), vec![id_arr, a_arr]).unwrap();
+
+        let backfilled = backfill_record_batch(&batch, target.clone());
+        assert!(backfilled.is_err())
+    }
+
+    #[test]
+    ///Fields can also be added to nested structs
+    fn test_backfill_nested() {
+        let f = vec![
+            Field::new("x", DataType::Float32, false),
+            Field::new("y", DataType::Float32, true),
+        ];
+
+        let g = vec![Field::new("x", DataType::Float32, false)];
+
+        let x_arr = Arc::new(Float32Array::from(vec![10.0, 11.3, 12.12, 13.44]));
+
+        let target = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("pos", DataType::Struct(f), false),
+        ]));
+
+        let source = Arc::new(Schema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("pos", DataType::Struct(g), false),
+        ]));
+
+        let id_arr = Arc::new(Int32Array::from(vec![1, 2, 3, 4]));
+        let pos_arr = Arc::new(StructArray::from(vec![(
+            Field::new("x", DataType::Float32, false),
+            x_arr.clone() as ArrayRef,
+        )]));
+
+        let batch = RecordBatch::try_new(source, vec![id_arr, pos_arr]).unwrap();
+        let _backfilled = backfill_record_batch(&batch, target.clone()).unwrap();
+    }
 }
