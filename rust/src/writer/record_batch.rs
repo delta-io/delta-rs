@@ -28,7 +28,7 @@
 //! ```
 use super::{
     stats::{create_add, NullCounts},
-    utils::{cursor_from_bytes, get_partition_key, next_data_path, stringified_partition_value},
+    utils::{cursor_from_bytes, next_data_path, stringified_partition_value, PartitionPath},
     DeltaWriter, DeltaWriterError,
 };
 use crate::writer::stats::apply_null_counts;
@@ -202,7 +202,8 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         let arrow_schema = self.partition_arrow_schema();
         for result in self.divide_by_partition_values(&values)? {
             let partition_key =
-                get_partition_key(&self.partition_columns, &result.partition_values)?;
+                PartitionPath::from_hashmap(&self.partition_columns, &result.partition_values)?
+                    .into();
             match self.arrow_writers.get_mut(&partition_key) {
                 Some(writer) => {
                     writer.write(&result.record_batch)?;
@@ -427,7 +428,7 @@ mod tests {
     use super::*;
     use crate::writer::{
         test_utils::{create_initialized_table, get_record_batch},
-        utils::get_partition_key,
+        utils::PartitionPath,
     };
     use std::collections::HashMap;
     use std::path::Path;
@@ -523,7 +524,7 @@ mod tests {
         assert_eq!(partitions.len(), expected_keys.len());
         for result in partitions {
             let partition_key =
-                get_partition_key(partition_cols, &result.partition_values).unwrap();
+                PartitionPath::from_hashmap(partition_cols, &result.partition_values).unwrap();
             assert!(expected_keys.contains(&partition_key));
             let ref_batch = get_record_batch(Some(partition_key.clone()), false);
             assert_eq!(ref_batch, result.record_batch);

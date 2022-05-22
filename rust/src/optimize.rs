@@ -2,7 +2,6 @@
 
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::hash::{Hash, Hasher};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -15,10 +14,9 @@ use parquet::file::serialized_reader::{SerializedFileReader, SliceableCursor};
 use parquet::file::writer::InMemoryWriteableCursor;
 
 use crate::action::{self, Action};
-use crate::{
-    generate_parquet_filename, DeltaDataTypeLong, DeltaTable, DeltaTableError, DeltaTablePartition,
-    PartitionFilter, SchemaTypeStruct,
-};
+use crate::writer::utils::next_data_path;
+use crate::writer::utils::PartitionPath;
+use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter, SchemaTypeStruct};
 
 #[derive(Default, Debug)]
 ///Metrics from Optimize
@@ -75,6 +73,7 @@ impl Default for MetricDetails {
 #[derive(Default)]
 pub struct Optimize<'a> {
     filters: &'a [PartitionFilter<'a, &'a str>],
+    target_size: Option<i64>,
 }
 
 impl<'a> Optimize<'a> {
@@ -84,133 +83,68 @@ impl<'a> Optimize<'a> {
         self
     }
 
+    ///Set the target file size
+    pub fn target_size(mut self, target: DeltaDataTypeLong) -> Self {
+        self.target_size = Some(target);
+        self
+    }
+
     ///Perform the optimization
     pub async fn execute(self, table: &mut DeltaTable) -> Result<Metrics, DeltaTableError> {
-        let plan = create_merge_plan(table, self.filters)?;
+        let plan = create_merge_plan(table, self.filters, self.target_size)?;
         let metrics = plan.execute(table).await?;
         Ok(metrics)
     }
 }
 
-#[derive(std::cmp::Eq, Debug)]
-struct PartitionValuesWrapper<'a>(Vec<DeltaTablePartition<'a>>);
+//A collections of bins for a particular partition
+#[derive(Debug)]
+struct MergeBin {
+    files: Vec<String>,
+    size: DeltaDataTypeLong,
+}
 
-impl<'a> From<&DeltaTablePartition<'a>> for Partition {
-    fn from(p: &DeltaTablePartition<'a>) -> Self {
-        Partition {
-            key: p.key.to_owned(),
-            value: p.value.to_owned(),
+#[derive(Debug)]
+struct PartitionMergePlan {
+    partition_values: HashMap<String, Option<String>>,
+    bins: Vec<MergeBin>,
+}
+
+impl MergeBin {
+    pub fn new() -> Self {
+        MergeBin {
+            files: Vec::new(),
+            size: 0,
         }
+    }
+
+    fn get_total_file_size(&self) -> i64 {
+        self.size
+    }
+
+    fn get_num_files(&self) -> usize {
+        self.files.len()
+    }
+
+    fn add(&mut self, file_path: String, size: i64) {
+        self.files.push(file_path);
+        self.size += size;
     }
 }
 
-#[derive(Clone, Debug, PartialEq, Eq)]
-struct Partition {
-    pub key: String,
-    pub value: String,
-}
-
-#[derive(std::cmp::Eq, Debug)]
-struct Partitions(Vec<Partition>);
-
-impl<'a> From<&PartitionValuesWrapper<'a>> for Partitions {
-    fn from(p: &PartitionValuesWrapper<'a>) -> Self {
-        let mut vec = Vec::new();
-        for v in &p.0 {
-            vec.push(Partition::from(v));
-        }
-
-        Partitions(vec)
-    }
-}
-
-impl Hash for Partitions {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        //Hashmap does not maintain order and partition values of {a=123, b=234} must match the hash of {b=234, a=123}
-        let mut v = Vec::new();
-        for p in &self.0 {
-            v.push(p);
-        }
-        v.sort_by(|a, b| a.key.partial_cmp(&b.key).unwrap());
-
-        for p in v {
-            p.key.hash(state);
-            "=".hash(state);
-            p.value.hash(state);
-            "/".hash(state);
-        }
-    }
-}
-
-impl<'a> Hash for PartitionValuesWrapper<'a> {
-    fn hash<H: Hasher>(&self, state: &mut H) {
-        //Hashmap does not maintain order and partition values of {a=123, b=234} must match the hash of {b=234, a=123}
-        let mut v = Vec::new();
-        for p in &self.0 {
-            v.push(p);
-        }
-        v.sort_by(|a, b| a.key.partial_cmp(b.key).unwrap());
-
-        for p in v {
-            p.key.hash(state);
-            "=".hash(state);
-            p.value.hash(state);
-            "/".hash(state);
-        }
-    }
-}
-
-impl<'a> PartialEq for PartitionValuesWrapper<'a> {
-    fn eq(&self, rhs: &Self) -> bool {
-        self.0.eq(&rhs.0)
-    }
-}
-
-impl PartialEq for Partitions {
-    fn eq(&self, rhs: &Self) -> bool {
-        self.0.eq(&rhs.0)
-    }
-}
-
-type Merge = Vec<Vec<String>>;
 #[derive(Debug)]
 struct MergePlan {
-    operations: HashMap<Partitions, Merge>,
+    operations: HashMap<PartitionPath, PartitionMergePlan>,
     metrics: Metrics,
 }
 
 impl MergePlan {
-    fn to_internal_partition_format(
-        &self,
-        partitions: &Partitions,
-    ) -> Option<Vec<(String, String)>> {
-        if !partitions.0.is_empty() {
-            let mut p = vec![];
-            for i in &partitions.0 {
-                p.push((i.key.clone(), i.value.clone()));
-            }
-            Some(p)
-        } else {
-            None
-        }
-    }
-
     fn create_remove(
         &self,
         path: &str,
-        partitions: Option<Vec<(String, String)>>,
+        partitions: &HashMap<String, Option<String>>,
         size: DeltaDataTypeLong,
     ) -> Result<Action, DeltaTableError> {
-        let partition_values = if let Some(partitions) = &partitions {
-            let mut partition_values = HashMap::new();
-            for (key, value) in partitions {
-                partition_values.insert(key.clone(), Some(value.clone()));
-            }
-            Some(partition_values)
-        } else {
-            None
-        };
-
         let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
         let deletion_time = deletion_time.as_millis() as i64;
 
@@ -219,7 +153,7 @@ impl MergePlan {
             deletion_timestamp: Some(deletion_time),
             data_change: false,
             extended_file_metadata: None,
-            partition_values,
+            partition_values: Some(partitions.to_owned()),
             size: Some(size),
             tags: None,
         }))
@@ -229,17 +163,11 @@ impl MergePlan {
         &self,
         table: &DeltaTable,
         bytes: &[u8],
-        partitions: Option<Vec<(String, String)>>,
+        partitions: &HashMap<String, Option<String>>,
     ) -> Result<Action, DeltaTableError> {
-        let mut partition_values = HashMap::new();
-        if let Some(partitions) = &partitions {
-            for (key, value) in partitions {
-                partition_values.insert(key.clone(), Some(value.clone()));
-            }
-        }
-
-        let path = generate_parquet_filename(table, partitions);
-        let parquet_uri = table.storage.join_path(&table.table_uri, &path);
+        let file =
+            next_data_path(&table.get_metadata()?.partition_columns, partitions, None).unwrap();
+        let parquet_uri = table.storage.join_path(&table.table_uri, &file);
 
         debug!("Writing a parquet file to {}", &parquet_uri);
 
@@ -251,8 +179,8 @@ impl MergePlan {
         let modification_time = modification_time.as_millis() as i64;
 
         Ok(Action::add(action::Add {
-            path,
-            partition_values,
+            path: file,
+            partition_values: partitions.to_owned(),
             modification_time,
             size: bytes.len() as i64,
             partition_values_parsed: None,
@@ -284,10 +212,20 @@ impl MergePlan {
         let schema = Arc::new(arrow_schema);
         let mut actions = vec![];
 
-        for (_partitions, merges) in self.operations.iter() {
-            debug!("{:?}", merges);
-            debug!("{:?}", _partitions);
-            for merge in merges {
+        for (_partition_path, merge_partition) in self.operations.iter() {
+            let partition = &merge_partition.partition_values;
+            let bins = &merge_partition.bins;
+            debug!("{:?}", bins);
+            debug!("{:?}", _partition_path);
+
+            for bin in bins {
+                let num_files = bin.get_num_files();
+                if num_files <= 1 {
+                    self.metrics.total_files_skipped += num_files;
+                    continue;
+                }
+
+                //Replace this with a high level writer...
                 let writer_properties = WriterProperties::builder()
                     .set_compression(Compression::SNAPPY)
                     .build();
@@ -298,9 +236,9 @@ impl MergePlan {
                     Some(writer_properties),
                 )?;
 
-                for path in merge {
+                for path in &bin.files {
                     //load the file into memory and append it to the buffer
-                    let parquet_uri = table.storage.join_path(&table.table_uri, path);
+                    let parquet_uri = table.storage.join_path(&table.table_uri, &path);
                     let data = table.storage.get_obj(&parquet_uri).await?;
                     let size = data.len();
                     let data = SliceableCursor::new(data);
@@ -322,11 +260,7 @@ impl MergePlan {
                         let batch = batch?;
                         _writer.write(&batch)?;
                     }
-                    actions.push(self.create_remove(
-                        path,
-                        self.to_internal_partition_format(_partitions),
-                        size.try_into().unwrap(),
-                    )?);
+                    actions.push(self.create_remove(&path, partition, size.try_into().unwrap())?);
 
                     self.metrics.num_files_removed += 1;
                     self.metrics.files_removed.total_files += 1;
@@ -340,12 +274,8 @@ impl MergePlan {
                 _writer.close()?;
                 let size = writeable_cursor.data().len();
                 actions.push(
-                    self.create_add(
-                        table,
-                        &writeable_cursor.data(),
-                        self.to_internal_partition_format(_partitions),
-                    )
-                    .await?,
+                    self.create_add(table, &writeable_cursor.data(), partition)
+                        .await?,
                 );
 
                 self.metrics.num_files_added += 1;
@@ -374,7 +304,7 @@ impl MergePlan {
     }
 }
 
-fn get_target_file_size(table: &DeltaTable) -> i64 {
+fn get_target_file_size(table: &DeltaTable) -> DeltaDataTypeLong {
     let config = table.get_configurations();
     let mut target_size = 256000000;
     if let Ok(config) = config {
@@ -399,62 +329,61 @@ fn get_target_file_size(table: &DeltaTable) -> i64 {
 fn create_merge_plan<'a>(
     table: &mut DeltaTable,
     filters: &[PartitionFilter<'a, &str>],
+    target_size: Option<DeltaDataTypeLong>,
 ) -> Result<MergePlan, DeltaTableError> {
-    let target_size = get_target_file_size(table);
+    let target_size = target_size.unwrap_or_else(|| get_target_file_size(table));
     let mut candidates = HashMap::new();
-    let mut operations: HashMap<Partitions, Merge> = HashMap::new();
+    let mut operations: HashMap<PartitionPath, PartitionMergePlan> = HashMap::new();
     let mut metrics = Metrics::default();
+    let partitions_keys = &table.get_metadata()?.partition_columns;
 
     //Place each add action into a bucket determined by the file's partition
     for add in table.get_active_add_actions_by_partitions(filters)? {
-        let partitions = add
-            .partition_values
-            .iter()
-            .map(|p| DeltaTablePartition::from_partition_value(p, ""))
-            .collect::<Vec<DeltaTablePartition>>();
+        let path = PartitionPath::from_hashmap(&partitions_keys, &add.partition_values).unwrap();
+        let v = candidates
+            .entry(path)
+            .or_insert_with(|| (add.partition_values.to_owned(), Vec::new()));
 
-        let partitions = PartitionValuesWrapper(partitions);
-        let v = candidates.entry(partitions).or_insert_with(Vec::new);
-        v.push(add);
+        v.1.push(add);
     }
 
-    for candidate in candidates {
-        let mut current = Vec::new();
-        let mut current_size = 0;
-        let mut opt = Vec::new();
+    for mut candidate in candidates {
+        let mut bins: Vec<MergeBin> = Vec::new();
+        let partition_path = candidate.0;
+        let partition_values = &candidate.1 .0;
+        let files = &mut candidate.1 .1;
 
-        let partition = candidate.0;
-        let files = candidate.1;
+        files.sort_by(|a, b| b.size.cmp(&a.size));
         metrics.total_considered_files += files.len();
 
-        for f in files {
-            if f.size < target_size {
-                if f.size < (target_size - current_size) {
-                    current.push(f.path.clone());
-                    current_size += f.size;
-                } else {
-                    //create a new bin. Discard old bin if it contains only one member
-                    if current.len() > 1 {
-                        opt.push(current);
-                    } else {
-                        metrics.total_files_skipped += 1;
-                    }
-                    current = Vec::new();
-                    current_size = 0;
-                    current.push(f.path.clone());
-                }
-            } else {
+        for file in files {
+            let mut added = false;
+            if file.size > target_size {
                 metrics.total_files_skipped += 1;
+                continue;
+            }
+
+            for bin in &mut bins {
+                if file.size < (target_size - bin.get_total_file_size()) {
+                    bin.add(file.path.clone(), file.size);
+                    added = true;
+                    break;
+                }
+            }
+
+            if !added {
+                let mut b = MergeBin::new();
+                b.add(file.path.clone(), file.size);
+                bins.push(b)
             }
         }
-
-        if current.len() > 1 {
-            opt.push(current);
-        } else {
-            metrics.total_files_skipped += 1;
-        }
-
-        operations.insert(Partitions::from(&partition), opt);
+        operations.insert(
+            partition_path.to_owned(),
+            PartitionMergePlan {
+                bins: bins,
+                partition_values: partition_values.to_owned(),
+            },
+        );
     }
 
     Ok(MergePlan {

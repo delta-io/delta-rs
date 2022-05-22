@@ -13,7 +13,6 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
-use std::time::{SystemTime, UNIX_EPOCH};
 use std::convert::TryFrom;
 use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
@@ -1464,31 +1463,6 @@ impl Default for DeltaTransactionOptions {
     }
 }
 
-///Utility for to generate parquet filename
-pub fn generate_parquet_filename(
-    table: &DeltaTable,
-    partitions: Option<Vec<(String, String)>>,
-) -> String {
-    /*
-     * The specific file naming for parquet is not well documented including the preceding five
-     * zeros and the trailing c000 string
-     *
-     */
-    let mut path_parts = vec![];
-
-    if let Some(partitions) = partitions {
-        for partition in partitions {
-            path_parts.push(format!("{}={}", partition.0, partition.1));
-        }
-    }
-
-    path_parts.push(format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4()));
-
-    table
-        .storage
-        .join_paths(&path_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
-}
-
 /// Object representing a delta transaction.
 /// Clients that do not need to mutate action content in case a transaction conflict is encountered
 /// may use the `commit` method and rely on optimistic concurrency to determine the
@@ -1529,58 +1503,6 @@ impl<'a> DeltaTransaction<'a> {
         for action in actions.into_iter() {
             self.actions.push(action);
         }
-    }
-
-    /// Create a new add action and write the given bytes to the storage backend as a fully formed
-    /// Parquet file
-    ///
-    /// add_file accepts two optional parameters:
-    ///
-    /// partitions: an ordered vec of WritablePartitionValues for the file to be added
-    /// actions: an ordered list of Actions to be inserted into the log file _ahead_ of the Add
-    ///     action for the file added. This should typically be used for txn type actions
-    pub async fn add_file(
-        &mut self,
-        bytes: &[u8],
-        partitions: Option<Vec<(String, String)>>,
-    ) -> Result<(), DeltaTableError> {
-        let mut partition_values = HashMap::new();
-        if let Some(partitions) = &partitions {
-            for (key, value) in partitions {
-                partition_values.insert(key.clone(), Some(value.clone()));
-            }
-        }
-
-        let path = generate_parquet_filename(self.delta_table, partitions);
-        let parquet_uri = self
-            .delta_table
-            .storage
-            .join_path(&self.delta_table.table_uri, &path);
-
-        debug!("Writing a parquet file to {}", &parquet_uri);
-        self.delta_table
-            .storage
-            .put_obj(&parquet_uri, bytes)
-            .await?;
-
-        // Determine the modification timestamp to include in the add action - milliseconds since epoch
-        // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
-        let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        let modification_time = modification_time.as_millis() as i64;
-
-        self.actions.push(Action::add(action::Add {
-            path,
-            partition_values,
-            modification_time,
-            size: bytes.len() as i64,
-            partition_values_parsed: None,
-            data_change: true,
-            stats: None,
-            stats_parsed: None,
-            tags: None,
-        }));
-
-        Ok(())
     }
 
     /// Commits the given actions to the delta log.

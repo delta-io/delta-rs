@@ -12,31 +12,59 @@ use arrow::{
 use parquet::file::writer::InMemoryWriteableCursor;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
 
 const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 
-pub(crate) fn get_partition_key(
-    partition_columns: &[String],
-    partition_values: &HashMap<String, Option<String>>,
-) -> Result<String, DeltaWriterError> {
-    let mut path_parts = vec![];
-    for k in partition_columns.iter() {
-        let partition_value = partition_values
-            .get(k)
-            .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub(crate) struct PartitionPath {
+    path: String,
+}
 
-        let partition_value = partition_value
-            .as_deref()
-            .unwrap_or(NULL_PARTITION_VALUE_DATA_PATH);
-        let part = format!("{}={}", k, partition_value);
+impl PartitionPath {
+    pub fn from_hashmap(
+        partition_columns: &[String],
+        partition_values: &HashMap<String, Option<String>>,
+    ) -> Result<Self, DeltaWriterError> {
+        let mut path_parts = vec![];
+        for k in partition_columns.iter() {
+            let partition_value = partition_values
+                .get(k)
+                .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
 
-        path_parts.push(part);
+            let partition_value = partition_value
+                .as_deref()
+                .unwrap_or(NULL_PARTITION_VALUE_DATA_PATH);
+            let part = format!("{}={}", k, partition_value);
+
+            path_parts.push(part);
+        }
+
+        Ok(PartitionPath {
+            path: path_parts.join("/"),
+        })
     }
+}
 
-    Ok(path_parts.join("/"))
+impl Into<String> for PartitionPath {
+    fn into(self) -> String {
+        self.path
+    }
+}
+
+impl AsRef<str> for PartitionPath {
+    fn as_ref(&self) -> &str {
+        &self.path
+    }
+}
+
+impl Display for PartitionPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        self.path.fmt(f)
+    }
 }
 
 // TODO: parquet files have a 5 digit zero-padded prefix and a "c\d{3}" suffix that
@@ -67,7 +95,7 @@ pub(crate) fn next_data_path(
         return Ok(file_name);
     }
 
-    let partition_key = get_partition_key(partition_columns, partition_values)?;
+    let partition_key = PartitionPath::from_hashmap(partition_columns, partition_values)?;
     Ok(format!("{}/{}", partition_key, file_name))
 }
 
@@ -175,7 +203,8 @@ fn backfill_field(
     let source_type = array.data_type();
 
     match target_field.data_type() {
-        Boolean | UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32| Int64 | Float32 | Float64 | Utf8 => Ok(array),
+        Boolean | UInt8 | UInt16 | UInt32 | UInt64 | Int8 | Int16 | Int32 | Int64 | Float32
+        | Float64 | Utf8 => Ok(array),
         Struct(target_fields) => {
             if let DataType::Struct(source_fields) = source_type {
                 let struct_array = array.as_any().downcast_ref::<StructArray>().unwrap();
@@ -223,15 +252,18 @@ fn backfill_field(
                     "Schema Mismatch".to_owned(),
                 ));
             }
-        },
+        }
         //TODO: New Error type
-        data_type => Err(DeltaWriterError::InvalidRecord(format!("Datatype {:?} not handled", data_type)))
-
+        data_type => Err(DeltaWriterError::InvalidRecord(format!(
+            "Datatype {:?} not handled",
+            data_type
+        ))),
     }
 }
 
 /// Columns that are defined in the target schema but are missing from the batch are back filled
 /// TODO: Check if schema evolution for structs is supported. Currently on handles the first level of columns.
+#[allow(dead_code)]
 pub(crate) fn backfill_record_batch(
     batch: &RecordBatch,
     target: arrow::datatypes::SchemaRef,
@@ -282,17 +314,7 @@ pub(crate) fn backfill_record_batch(
     Ok(RecordBatch::try_new(target, columns)?)
 }
 
-/// Upcasts columns from a record batch
-/// Valid upcasts are ByteType -> ShortType -> IntegerType
-/// NullType -> any other type
-/*
-pub(crate) fn promote_record_batch(
-    _batch: &RecordBatch
-) -> Result<(), DeltaWriterError> {
-    Ok(())
-}
-*/
-
+#[cfg(test)]
 mod tests {
     use super::backfill_record_batch;
     use arrow::array::*;
