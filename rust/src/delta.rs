@@ -1735,22 +1735,6 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn parquet_filename() {
-        let table = open_table("./tests/data/simple_table").await.unwrap();
-
-        let partitions = vec![
-            (String::from("col1"), String::from("a")),
-            (String::from("col2"), String::from("b")),
-        ];
-        let parquet_filename = generate_parquet_filename(&table, Some(partitions));
-        if cfg!(windows) {
-            assert!(parquet_filename.contains("col1=a\\col2=b\\part-00000-"));
-        } else {
-            assert!(parquet_filename.contains("col1=a/col2=b/part-00000-"));
-        }
-    }
-
-    #[tokio::test]
     async fn test_create_delta_table() {
         // Setup
         let test_schema = Schema::new(vec![

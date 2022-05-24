@@ -3,7 +3,7 @@ mod optimize {
 
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::{
-        array::{Int32Array, Int64Array, StringArray},
+        array::{Int32Array, StringArray},
         datatypes::{DataType, Field},
         record_batch::RecordBatch,
     };

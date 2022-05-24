@@ -537,7 +537,9 @@ mod tests {
         assert_eq!(partitions.len(), expected_keys.len());
         for result in partitions {
             let partition_key =
-                PartitionPath::from_hashmap(partition_cols, &result.partition_values).unwrap();
+                PartitionPath::from_hashmap(partition_cols, &result.partition_values)
+                    .unwrap()
+                    .into();
             assert!(expected_keys.contains(&partition_key));
             let ref_batch = get_record_batch(Some(partition_key.clone()), false);
             assert_eq!(ref_batch, result.record_batch);
