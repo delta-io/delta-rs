@@ -49,9 +49,9 @@ impl PartitionPath {
     }
 }
 
-impl Into<String> for PartitionPath {
-    fn into(self) -> String {
-        self.path
+impl From<PartitionPath> for String {
+    fn from(path: PartitionPath) -> String {
+        path.path
     }
 }
 
@@ -248,9 +248,9 @@ fn backfill_field(
                 }
                 Ok(Arc::new(StructArray::from(new_fields)))
             } else {
-                return Err(DeltaWriterError::InvalidRecord(
+                Err(DeltaWriterError::InvalidRecord(
                     "Schema Mismatch".to_owned(),
-                ));
+                ))
             }
         }
         //TODO: New Error type

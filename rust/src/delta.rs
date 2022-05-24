@@ -1016,7 +1016,6 @@ impl DeltaTable {
                 .iter()
                 .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
         });
-        println!("{:?}", actions);
         Ok(actions)
     }
 

@@ -1,22 +1,21 @@
 //! TODO: Optimize
 
 use std::collections::HashMap;
-use std::collections::HashSet;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use log::debug;
 use log::error;
-use parquet::arrow::{ArrowReader, ArrowWriter, ParquetFileArrowReader};
-use parquet::basic::Compression;
-use parquet::file::properties::WriterProperties;
+use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
 use parquet::file::serialized_reader::{SerializedFileReader, SliceableCursor};
-use parquet::file::writer::InMemoryWriteableCursor;
 
 use crate::action::{self, Action};
-use crate::writer::utils::next_data_path;
+use crate::parquet::file::reader::FileReader;
 use crate::writer::utils::PartitionPath;
-use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter, SchemaTypeStruct};
+use crate::writer::DeltaWriter;
+use crate::writer::DeltaWriterError;
+use crate::writer::RecordBatchWriter;
+use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter};
 
 #[derive(Default, Debug)]
 ///Metrics from Optimize
@@ -37,7 +36,7 @@ pub struct Metrics {
     pub total_considered_files: usize,
     ///How many files were considered for optimization but were skipped
     pub total_files_skipped: usize,
-    ///TODO
+    ///The order of records from source files is preserved
     pub preserve_insertion_order: bool,
 }
 
@@ -46,21 +45,21 @@ pub struct Metrics {
 /// Operation can be remove or add
 pub struct MetricDetails {
     ///Maximum file size of a operation
-    pub min: usize,
+    pub min: DeltaDataTypeLong,
     ///Minimum file size of a operation
-    pub max: usize,
+    pub max: DeltaDataTypeLong,
     ///Average file size of a operation
     pub avg: f64,
     ///Number of files encountered during operation
     pub total_files: usize,
     ///Sum of file sizes of a operation
-    pub total_size: usize,
+    pub total_size: DeltaDataTypeLong,
 }
 
 impl Default for MetricDetails {
     fn default() -> Self {
         MetricDetails {
-            min: usize::MAX,
+            min: DeltaDataTypeLong::MAX,
             max: 0,
             avg: 0.0,
             total_files: 0,
@@ -90,8 +89,8 @@ impl<'a> Optimize<'a> {
     }
 
     ///Perform the optimization
-    pub async fn execute(self, table: &mut DeltaTable) -> Result<Metrics, DeltaTableError> {
-        let plan = create_merge_plan(table, self.filters, self.target_size)?;
+    pub async fn execute(&self, table: &mut DeltaTable) -> Result<Metrics, DeltaWriterError> {
+        let plan = create_merge_plan(table, self.filters, (&self.target_size).to_owned())?;
         let metrics = plan.execute(table).await?;
         Ok(metrics)
     }
@@ -159,61 +158,12 @@ impl MergePlan {
         }))
     }
 
-    async fn create_add(
-        &self,
-        table: &DeltaTable,
-        bytes: &[u8],
-        partitions: &HashMap<String, Option<String>>,
-    ) -> Result<Action, DeltaTableError> {
-        let file =
-            next_data_path(&table.get_metadata()?.partition_columns, partitions, None).unwrap();
-        let parquet_uri = table.storage.join_path(&table.table_uri, &file);
-
-        debug!("Writing a parquet file to {}", &parquet_uri);
-
-        table.storage.put_obj(&parquet_uri, bytes).await?;
-
-        // Determine the modification timestamp to include in the add action - milliseconds since epoch
-        // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
-        let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        let modification_time = modification_time.as_millis() as i64;
-
-        Ok(Action::add(action::Add {
-            path: file,
-            partition_values: partitions.to_owned(),
-            modification_time,
-            size: bytes.len() as i64,
-            partition_values_parsed: None,
-            data_change: false,
-            stats: None,
-            stats_parsed: None,
-            tags: None,
-        }))
-    }
-
-    pub async fn execute(mut self, table: &mut DeltaTable) -> Result<Metrics, DeltaTableError> {
+    pub async fn execute(mut self, table: &mut DeltaTable) -> Result<Metrics, DeltaWriterError> {
         //Read files into memory and write into memory. Once a file is complete write to underlying storage.
-        let schema = table.get_metadata()?.clone().schema.clone();
-
-        let columns = &table.get_metadata()?.partition_columns;
-        let partition_column_set: HashSet<String> = columns.iter().map(|s| s.to_owned()).collect();
-
-        //Remove partitions from the schema since they don't need to written to the parquet file
-        let fields = schema
-            .get_fields()
-            .iter()
-            .filter(|field| !partition_column_set.contains(field.get_name()))
-            .map(|e| e.to_owned())
-            .collect();
-        let schema = SchemaTypeStruct::new(fields);
-
-        let arrow_schema =
-            <arrow::datatypes::Schema as TryFrom<&crate::Schema>>::try_from(&schema).unwrap();
-        let schema = Arc::new(arrow_schema);
         let mut actions = vec![];
 
         for (_partition_path, merge_partition) in self.operations.iter() {
-            let partition = &merge_partition.partition_values;
+            let partition_values = &merge_partition.partition_values;
             let bins = &merge_partition.bins;
             debug!("{:?}", bins);
             debug!("{:?}", _partition_path);
@@ -225,42 +175,28 @@ impl MergePlan {
                     continue;
                 }
 
-                //Replace this with a high level writer...
-                let writer_properties = WriterProperties::builder()
-                    .set_compression(Compression::SNAPPY)
-                    .build();
-                let writeable_cursor = InMemoryWriteableCursor::default();
-                let mut _writer = ArrowWriter::try_new(
-                    writeable_cursor.clone(),
-                    schema.clone(),
-                    Some(writer_properties),
-                )?;
+                let mut writer = RecordBatchWriter::for_table(table, HashMap::new())?;
 
                 for path in &bin.files {
-                    //load the file into memory and append it to the buffer
-                    let parquet_uri = table.storage.join_path(&table.table_uri, &path);
+                    //Read the file into memory and append it to the writer.
+
+                    let parquet_uri = table.storage.join_path(&table.table_uri, path);
                     let data = table.storage.get_obj(&parquet_uri).await?;
-                    let size = data.len();
+                    let size: DeltaDataTypeLong = data.len().try_into().unwrap();
                     let data = SliceableCursor::new(data);
                     let reader = SerializedFileReader::new(data)?;
+                    let records = reader.metadata().file_metadata().num_rows();
 
-                    //TODO: Can this handle schema changes?
                     let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
 
-                    let mut reader_indicies = vec![];
-                    for (i, f) in arrow_reader.get_schema()?.fields().iter().enumerate() {
-                        if !partition_column_set.contains(f.name()) {
-                            reader_indicies.push(i);
-                        }
-                    }
-
                     let batch_reader =
-                        arrow_reader.get_record_reader_by_columns(reader_indicies, 2048)?;
+                        arrow_reader.get_record_reader(records.try_into().unwrap())?;
                     for batch in batch_reader {
                         let batch = batch?;
-                        _writer.write(&batch)?;
+                        writer.write_partition(batch, partition_values).await?;
                     }
-                    actions.push(self.create_remove(&path, partition, size.try_into().unwrap())?);
+
+                    actions.push(self.create_remove(path, partition_values, size)?);
 
                     self.metrics.num_files_removed += 1;
                     self.metrics.files_removed.total_files += 1;
@@ -270,19 +206,22 @@ impl MergePlan {
                     self.metrics.files_removed.min =
                         std::cmp::min(self.metrics.files_removed.min, size);
                 }
-                //Save the file to storage and create corresponding add and delete actions. Do not commit yet.
-                _writer.close()?;
-                let size = writeable_cursor.data().len();
-                actions.push(
-                    self.create_add(table, &writeable_cursor.data(), partition)
-                        .await?,
-                );
 
-                self.metrics.num_files_added += 1;
-                self.metrics.files_added.total_files += 1;
-                self.metrics.files_added.total_size += size;
-                self.metrics.files_added.max = std::cmp::max(self.metrics.files_added.max, size);
-                self.metrics.files_added.min = std::cmp::min(self.metrics.files_added.min, size);
+                //Save the file to storage and create corresponding add and delete actions. Do not commit yet.
+                let add_actions = writer.flush().await?;
+                for mut add in add_actions {
+                    add.data_change = false;
+                    let size = add.size;
+
+                    self.metrics.num_files_added += 1;
+                    self.metrics.files_added.total_files += 1;
+                    self.metrics.files_added.total_size += size;
+                    self.metrics.files_added.max =
+                        std::cmp::max(self.metrics.files_added.max, size);
+                    self.metrics.files_added.min =
+                        std::cmp::min(self.metrics.files_added.min, size);
+                    actions.push(action::Action::add(add));
+                }
             }
             //Currently a table without any partitions has a count of one partition. Check if that is acceptable
             self.metrics.partitions_optimized += 1;
@@ -294,11 +233,20 @@ impl MergePlan {
         dtx.add_actions(actions);
         dtx.commit(None, None).await?;
 
-        self.metrics.files_added.avg = (self.metrics.files_added.total_size as f64)
-            / (self.metrics.files_added.total_files as f64);
-        self.metrics.files_removed.avg = (self.metrics.files_removed.total_size as f64)
-            / (self.metrics.files_removed.total_files as f64);
-        self.metrics.num_batches = 1;
+        if self.metrics.num_files_added == 0 {
+            self.metrics.files_added.min = 0;
+            self.metrics.files_added.avg = 0.0;
+
+            self.metrics.files_removed.min = 0;
+            self.metrics.files_removed.avg = 0.0;
+        } else {
+            self.metrics.files_added.avg = (self.metrics.files_added.total_size as f64)
+                / (self.metrics.files_added.total_files as f64);
+            self.metrics.files_removed.avg = (self.metrics.files_removed.total_size as f64)
+                / (self.metrics.files_removed.total_files as f64);
+            self.metrics.num_batches = 1;
+        }
+        self.metrics.preserve_insertion_order = true;
 
         Ok(self.metrics)
     }
@@ -339,7 +287,7 @@ fn create_merge_plan<'a>(
 
     //Place each add action into a bucket determined by the file's partition
     for add in table.get_active_add_actions_by_partitions(filters)? {
-        let path = PartitionPath::from_hashmap(&partitions_keys, &add.partition_values).unwrap();
+        let path = PartitionPath::from_hashmap(partitions_keys, &add.partition_values).unwrap();
         let v = candidates
             .entry(path)
             .or_insert_with(|| (add.partition_values.to_owned(), Vec::new()));
@@ -380,7 +328,7 @@ fn create_merge_plan<'a>(
         operations.insert(
             partition_path.to_owned(),
             PartitionMergePlan {
-                bins: bins,
+                bins,
                 partition_values: partition_values.to_owned(),
             },
         );

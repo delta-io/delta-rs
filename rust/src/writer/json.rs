@@ -360,6 +360,14 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
         Ok(())
     }
 
+    async fn write_partition(
+        &mut self,
+        _values: Vec<Value>,
+        _partition_values: &HashMap<String, Option<String>>,
+    ) -> Result<(), DeltaWriterError> {
+        unimplemented!("Use write for json")
+    }
+
     /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
     async fn flush(&mut self) -> Result<Vec<Add>, DeltaWriterError> {
         let writers = std::mem::take(&mut self.arrow_writers);
