@@ -28,7 +28,10 @@
 //! ```
 use super::{
     stats::{create_add, NullCounts},
-    utils::{cursor_from_bytes, next_data_path, stringified_partition_value, PartitionPath},
+    utils::{
+        cursor_from_bytes, next_data_path, record_batch_backfill, record_batch_without_partitions,
+        schema_without_partitions, stringified_partition_value, PartitionPath,
+    },
     DeltaWriter, DeltaWriterError,
 };
 use crate::writer::stats::apply_null_counts;
@@ -183,40 +186,21 @@ impl RecordBatchWriter {
 
     /// Returns the arrow schema representation of the partitioned files written to table
     pub fn partition_arrow_schema(&self) -> ArrowSchemaRef {
-        Arc::new(ArrowSchema::new(
-            self.arrow_schema_ref
-                .fields()
-                .iter()
-                .filter(|f| !self.partition_columns.contains(f.name()))
-                .map(|f| f.to_owned())
-                .collect::<Vec<_>>(),
-        ))
-    }
-}
-
-#[async_trait::async_trait]
-impl DeltaWriter<RecordBatch> for RecordBatchWriter {
-    /// Divides a single record batch into into multiple according to table partitioning.
-    /// Values are written to arrow buffers, to collect data until it should be written to disk.
-    async fn write(&mut self, values: RecordBatch) -> Result<(), DeltaWriterError> {
-        for result in self.divide_by_partition_values(&values)? {
-            self.write_partition(result.record_batch, &result.partition_values)
-                .await?;
-        }
-        Ok(())
+        schema_without_partitions(&self.arrow_schema_ref, &self.partition_columns)
     }
 
     ///Write a batch to the specified partition
-    async fn write_partition(
+    pub async fn write_partition(
         &mut self,
         record_batch: RecordBatch,
         partition_values: &HashMap<String, Option<String>>,
     ) -> Result<(), DeltaWriterError> {
-        //TODO: Drop partition related columns.
-        //TODO: backfill the batch to match the schema of the table
         let arrow_schema = self.partition_arrow_schema();
         let partition_key =
             PartitionPath::from_hashmap(&self.partition_columns, partition_values)?.into();
+
+        let record_batch = record_batch_without_partitions(&record_batch, &self.partition_columns)?;
+        let record_batch = record_batch_backfill(&record_batch, &arrow_schema)?;
 
         match self.arrow_writers.get_mut(&partition_key) {
             Some(writer) => {
@@ -233,6 +217,19 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
             }
         }
 
+        Ok(())
+    }
+}
+
+#[async_trait::async_trait]
+impl DeltaWriter<RecordBatch> for RecordBatchWriter {
+    /// Divides a single record batch into into multiple according to table partitioning.
+    /// Values are written to arrow buffers, to collect data until it should be written to disk.
+    async fn write(&mut self, values: RecordBatch) -> Result<(), DeltaWriterError> {
+        for result in self.divide_by_partition_values(&values)? {
+            self.write_partition(result.record_batch, &result.partition_values)
+                .await?;
+        }
         Ok(())
     }
 

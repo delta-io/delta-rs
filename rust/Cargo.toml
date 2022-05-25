@@ -122,5 +122,4 @@ tempdir = "0"
 tempfile = "3"
 maplit = { version = "1" }
 anyhow = "1"
-fs_extra = "1.2.0"
 rand = "0.8"

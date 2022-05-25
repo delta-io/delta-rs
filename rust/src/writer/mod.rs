@@ -20,7 +20,6 @@ pub use json::JsonWriter;
 use parquet::{basic::LogicalType, errors::ParquetError};
 pub use record_batch::RecordBatchWriter;
 use serde_json::Value;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Enum representing an error when calling [`DeltaWriter`].
@@ -114,13 +113,6 @@ pub enum DeltaWriterError {
 pub trait DeltaWriter<T> {
     /// write a chunk of values into the internal write buffers.
     async fn write(&mut self, values: T) -> Result<(), DeltaWriterError>;
-
-    /// Write the provided values for the specified partition
-    async fn write_partition(
-        &mut self,
-        values: T,
-        partition_values: &HashMap<String, Option<String>>,
-    ) -> Result<(), DeltaWriterError>;
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// The corresponding delta [`Add`] actions are returned and should be committed via a transaction.

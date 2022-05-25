@@ -1,4 +1,8 @@
-//! TODO: Optimize
+//! Optimize a Delta Table
+//!
+//! Bin-packing is performed which merges smaller files into a larger file. This
+//! reduces the number of api calls required to read data and allows for the
+//! optimized files to cleaned up by vacuum.
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -17,7 +21,7 @@ use crate::writer::DeltaWriterError;
 use crate::writer::RecordBatchWriter;
 use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter};
 
-#[derive(Default, Debug)]
+#[derive(Default, Debug, PartialEq)]
 ///Metrics from Optimize
 pub struct Metrics {
     ///Number of optimized files added
@@ -40,7 +44,7 @@ pub struct Metrics {
     pub preserve_insertion_order: bool,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq, Clone)]
 ///Statistics on files for a particular operation
 /// Operation can be remove or add
 pub struct MetricDetails {

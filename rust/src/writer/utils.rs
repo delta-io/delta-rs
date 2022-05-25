@@ -194,7 +194,40 @@ pub(crate) fn stringified_partition_value(
     Ok(Some(s))
 }
 
-fn backfill_field(
+/// Remove any partition related fields from the schema
+pub(crate) fn schema_without_partitions(
+    arrow_schema_ref: &Arc<ArrowSchema>,
+    partition_columns: &[String],
+) -> Arc<ArrowSchema> {
+    Arc::new(ArrowSchema::new(
+        arrow_schema_ref
+            .fields()
+            .iter()
+            .filter(|f| !partition_columns.contains(f.name()))
+            .map(|f| f.to_owned())
+            .collect::<Vec<_>>(),
+    ))
+}
+
+/// Remove any partition related columns from the record batch
+pub(crate) fn record_batch_without_partitions(
+    record_batch: &RecordBatch,
+    partition_columns: &[String],
+) -> Result<RecordBatch, DeltaWriterError> {
+    let new_arrow_schema = schema_without_partitions(&record_batch.schema(), partition_columns);
+    let mut columns = Vec::new();
+    for field in new_arrow_schema.fields().iter() {
+        for (i, batch_field) in record_batch.schema().fields().iter().enumerate() {
+            if batch_field.name() == field.name() {
+                columns.push(record_batch.column(i).clone());
+            }
+        }
+    }
+
+    Ok(RecordBatch::try_new(new_arrow_schema, columns)?)
+}
+
+fn field_backfill(
     array: ArrayRef,
     target_field: &Field,
     num_rows: usize,
@@ -215,7 +248,7 @@ fn backfill_field(
                     let mut new_field = true;
                     for (i, source_field) in source_fields.iter().enumerate() {
                         if target_field.name() == source_field.name() {
-                            let f = backfill_field(
+                            let f = field_backfill(
                                 struct_array.column(i).to_owned(),
                                 target_field,
                                 num_rows,
@@ -262,27 +295,22 @@ fn backfill_field(
 }
 
 /// Columns that are defined in the target schema but are missing from the batch are back filled
-/// TODO: Check if schema evolution for structs is supported. Currently on handles the first level of columns.
-#[allow(dead_code)]
-pub(crate) fn backfill_record_batch(
+/// TODO: Add additional types
+pub(crate) fn record_batch_backfill(
     batch: &RecordBatch,
-    target: arrow::datatypes::SchemaRef,
+    target: &arrow::datatypes::SchemaRef,
 ) -> Result<RecordBatch, DeltaWriterError> {
     let mut columns = Vec::new();
     let mut columns_from_source = 0;
     let source = batch.schema();
     let num_rows = batch.num_rows();
 
-    let source_owned = (*source).to_owned();
-    let target_owned = (*batch.schema()).to_owned();
-    ArrowSchema::try_merge([source_owned, target_owned])?;
-
     for target_field in target.fields() {
         let mut new_field = true;
 
         for (i, source_field) in source.fields().iter().enumerate() {
             if target_field.name() == source_field.name() {
-                let f = backfill_field(batch.column(i).to_owned(), target_field, num_rows)?;
+                let f = field_backfill(batch.column(i).to_owned(), target_field, num_rows)?;
                 columns.push(f);
                 columns_from_source += 1;
                 new_field = false;
@@ -311,12 +339,12 @@ pub(crate) fn backfill_record_batch(
         ));
     }
 
-    Ok(RecordBatch::try_new(target, columns)?)
+    Ok(RecordBatch::try_new(target.clone(), columns)?)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::backfill_record_batch;
+    use super::record_batch_backfill;
     use arrow::array::*;
     use arrow::datatypes::*;
     use arrow::record_batch::*;
@@ -340,7 +368,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(Arc::new(source), vec![id_arr, a_arr]).unwrap();
 
-        let backfilled = backfill_record_batch(&batch, target.clone()).unwrap();
+        let backfilled = record_batch_backfill(&batch, &target).unwrap();
 
         assert_eq!(backfilled.columns().len(), 3);
         assert_eq!(backfilled.schema(), target);
@@ -368,7 +396,7 @@ mod tests {
             RecordBatch::try_new(Arc::new(source), vec![id_arr, a_arr.clone(), a_arr.clone()])
                 .unwrap();
 
-        let backfilled = backfill_record_batch(&batch, target.clone());
+        let backfilled = record_batch_backfill(&batch, &target);
         assert!(backfilled.is_err())
     }
 
@@ -390,7 +418,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(Arc::new(source), vec![id_arr, a_arr]).unwrap();
 
-        let backfilled = backfill_record_batch(&batch, target.clone());
+        let backfilled = record_batch_backfill(&batch, &target);
         assert!(backfilled.is_err())
     }
 
@@ -412,7 +440,7 @@ mod tests {
 
         let batch = RecordBatch::try_new(Arc::new(source), vec![id_arr, a_arr]).unwrap();
 
-        let backfilled = backfill_record_batch(&batch, target.clone());
+        let backfilled = record_batch_backfill(&batch, &target);
         assert!(backfilled.is_err())
     }
 
@@ -445,6 +473,6 @@ mod tests {
         )]));
 
         let batch = RecordBatch::try_new(source, vec![id_arr, pos_arr]).unwrap();
-        let _backfilled = backfill_record_batch(&batch, target.clone()).unwrap();
+        let _backfilled = record_batch_backfill(&batch, &target).unwrap();
     }
 }
