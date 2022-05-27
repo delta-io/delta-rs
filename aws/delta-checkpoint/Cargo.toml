@@ -26,9 +26,9 @@ version = "0"
 features = ["s3"]
 
 [dev-dependencies]
-rusoto_core = "0.46"
-rusoto_credential = "0.46"
-rusoto_s3 = "0.46"
+rusoto_core = "0.48"
+rusoto_credential = "0.48"
+rusoto_s3 = "0.48"
 
 [[bin]]
 name = "bootstrap"

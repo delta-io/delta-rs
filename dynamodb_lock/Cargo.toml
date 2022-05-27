@@ -14,8 +14,8 @@ thiserror = "1"
 log = "0"
 uuid = { version = "0.8", features = ["serde", "v4"] }
 
-rusoto_core = { version = "0.46", default-features = false }
-rusoto_dynamodb = { version = "0.46", default-features = false }
+rusoto_core = { version = "0.48", default-features = false }
+rusoto_dynamodb = { version = "0.48", default-features = false }
 maplit = "1"
 tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
 
