@@ -3,6 +3,13 @@
 //! Bin-packing is performed which merges smaller files into a larger file. This
 //! reduces the number of api calls required to read data and allows for the
 //! optimized files to cleaned up by vacuum.
+//! See [`Optimize`]
+//!
+//! # Example
+//! ```rust ignore
+//! let table = DeltaTable::try_from_uri("../path/to/table")?
+//! let metrics = Optimize::default().execute(table).await?
+//! ````
 
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -34,7 +41,7 @@ pub struct Metrics {
     pub files_removed: MetricDetails,
     ///Number of partitions that had at least one file optimized
     pub partitions_optimized: u64,
-    ///TODO
+    ///TODO: The number of batches written
     pub num_batches: u64,
     ///How many files were considered during optimization. Not every file considered is optimized
     pub total_considered_files: usize,
@@ -72,7 +79,10 @@ impl Default for MetricDetails {
     }
 }
 
-///TODO: Optimize
+///Optimize a Delta table with given options
+///
+/// If a target file size is not provided then `delta.targetFileSize` from the
+/// table's configuration is read. Otherwise a default value is used
 #[derive(Default)]
 pub struct Optimize<'a> {
     filters: &'a [PartitionFilter<'a, &'a str>],
@@ -92,7 +102,7 @@ impl<'a> Optimize<'a> {
         self
     }
 
-    ///Perform the optimization
+    ///Perform the optimization. On completion, a summary of how many files were added and deleted is returned
     pub async fn execute(&self, table: &mut DeltaTable) -> Result<Metrics, DeltaWriterError> {
         let plan = create_merge_plan(table, self.filters, (&self.target_size).to_owned())?;
         let metrics = plan.execute(table).await?;
@@ -173,12 +183,6 @@ impl MergePlan {
             debug!("{:?}", _partition_path);
 
             for bin in bins {
-                let num_files = bin.get_num_files();
-                if num_files <= 1 {
-                    self.metrics.total_files_skipped += num_files;
-                    continue;
-                }
-
                 let mut writer = RecordBatchWriter::for_table(table, HashMap::new())?;
 
                 for path in &bin.files {
@@ -232,7 +236,7 @@ impl MergePlan {
         }
 
         //try to commit actions to the delta log.
-        //Need to check for conflicts
+        //Check for remove actions on the optimized partitions
         let mut dtx = table.create_transaction(None);
         dtx.add_actions(actions);
         dtx.commit(None, None).await?;
@@ -258,7 +262,7 @@ impl MergePlan {
 
 fn get_target_file_size(table: &DeltaTable) -> DeltaDataTypeLong {
     let config = table.get_configurations();
-    let mut target_size = 256000000;
+    let mut target_size = 268_435_456;
     if let Ok(config) = config {
         let config_str = config.get("delta.targetFileSize");
         if let Some(s) = config_str {
@@ -282,7 +286,7 @@ fn create_merge_plan<'a>(
     table: &mut DeltaTable,
     filters: &[PartitionFilter<'a, &str>],
     target_size: Option<DeltaDataTypeLong>,
-) -> Result<MergePlan, DeltaTableError> {
+) -> Result<MergePlan, DeltaWriterError> {
     let target_size = target_size.unwrap_or_else(|| get_target_file_size(table));
     let mut candidates = HashMap::new();
     let mut operations: HashMap<PartitionPath, PartitionMergePlan> = HashMap::new();
@@ -291,7 +295,7 @@ fn create_merge_plan<'a>(
 
     //Place each add action into a bucket determined by the file's partition
     for add in table.get_active_add_actions_by_partitions(filters)? {
-        let path = PartitionPath::from_hashmap(partitions_keys, &add.partition_values).unwrap();
+        let path = PartitionPath::from_hashmap(partitions_keys, &add.partition_values)?;
         let v = candidates
             .entry(path)
             .or_insert_with(|| (add.partition_values.to_owned(), Vec::new()));
@@ -304,38 +308,45 @@ fn create_merge_plan<'a>(
         let partition_path = candidate.0;
         let partition_values = &candidate.1 .0;
         let files = &mut candidate.1 .1;
+        let mut curr_bin = MergeBin::new();
 
         files.sort_by(|a, b| b.size.cmp(&a.size));
         metrics.total_considered_files += files.len();
 
         for file in files {
-            let mut added = false;
             if file.size > target_size {
                 metrics.total_files_skipped += 1;
                 continue;
             }
 
-            for bin in &mut bins {
-                if file.size < (target_size - bin.get_total_file_size()) {
-                    bin.add(file.path.clone(), file.size);
-                    added = true;
-                    break;
+            if file.size + curr_bin.get_total_file_size() < target_size {
+                curr_bin.add(file.path.clone(), file.size);
+            } else {
+                if curr_bin.get_num_files() > 1 {
+                    bins.push(curr_bin);
+                } else {
+                    metrics.total_files_skipped += curr_bin.get_num_files();
                 }
-            }
-
-            if !added {
-                let mut b = MergeBin::new();
-                b.add(file.path.clone(), file.size);
-                bins.push(b)
+                curr_bin = MergeBin::new();
+                curr_bin.add(file.path.clone(), file.size);
             }
         }
-        operations.insert(
-            partition_path.to_owned(),
-            PartitionMergePlan {
-                bins,
-                partition_values: partition_values.to_owned(),
-            },
-        );
+
+        if curr_bin.get_num_files() > 1 {
+            bins.push(curr_bin);
+        } else {
+            metrics.total_files_skipped += curr_bin.get_num_files();
+        }
+
+        if !bins.is_empty() {
+            operations.insert(
+                partition_path.to_owned(),
+                PartitionMergePlan {
+                    bins,
+                    partition_values: partition_values.to_owned(),
+                },
+            );
+        }
     }
 
     Ok(MergePlan {

@@ -29,7 +29,7 @@
 use super::{
     stats::{create_add, NullCounts},
     utils::{
-        cursor_from_bytes, next_data_path, record_batch_backfill, record_batch_without_partitions,
+        cursor_from_bytes, next_data_path, record_batch_without_partitions,
         schema_without_partitions, stringified_partition_value, PartitionPath,
     },
     DeltaWriter, DeltaWriterError,
@@ -200,7 +200,6 @@ impl RecordBatchWriter {
             PartitionPath::from_hashmap(&self.partition_columns, partition_values)?.into();
 
         let record_batch = record_batch_without_partitions(&record_batch, &self.partition_columns)?;
-        let record_batch = record_batch_backfill(&record_batch, &arrow_schema)?;
 
         match self.arrow_writers.get_mut(&partition_key) {
             Some(writer) => {
