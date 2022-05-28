@@ -30,7 +30,7 @@ use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::TableProvider;
+use datafusion::datasource::{TableProvider, TableType};
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::ExecutionPlan;
@@ -224,6 +224,10 @@ impl TableProvider for delta::DeltaTable {
             )
             .unwrap(),
         )
+    }
+
+    fn table_type(&self) -> TableType {
+        TableType::Base
     }
 
     async fn scan(
