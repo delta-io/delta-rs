@@ -29,7 +29,7 @@ use crate::writer::RecordBatchWriter;
 use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter};
 
 #[derive(Default, Debug, PartialEq)]
-///Metrics from Optimize
+/// Metrics from Optimize
 pub struct Metrics {
     ///Number of optimized files added
     pub num_files_added: u64,
