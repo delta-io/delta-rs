@@ -55,9 +55,9 @@ pub struct Metrics {
 ///Statistics on files for a particular operation
 /// Operation can be remove or add
 pub struct MetricDetails {
-    ///Maximum file size of a operation
+    /// Minimum file size of a operation
     pub min: DeltaDataTypeLong,
-    ///Minimum file size of a operation
+    /// Maximum file size of a operation
     pub max: DeltaDataTypeLong,
     ///Average file size of a operation
     pub avg: f64,
