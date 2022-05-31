@@ -1,7 +1,7 @@
 //! Optimize a Delta Table
 //!
 //! Bin-packing is performed which merges smaller files into a larger file. This
-//! reduces the number of api calls required to read data and allows for the
+//! reduces the number of API calls required to read data and allows for the
 //! optimized files to cleaned up by vacuum.
 //! See [`Optimize`]
 //!
