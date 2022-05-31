@@ -110,7 +110,7 @@ impl<'a> Optimize<'a> {
     }
 }
 
-//A collections of bins for a particular partition
+/// A collections of bins for a particular partition
 #[derive(Debug)]
 struct MergeBin {
     files: Vec<String>,
