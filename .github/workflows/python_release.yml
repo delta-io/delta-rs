@@ -66,8 +66,20 @@ jobs:
   release-pypi-manylinux:
     needs: validate-release-tag
     name: PyPI release manylinux
-    runs-on: ubuntu-20.04
-    container: quay.io/pypa/manylinux2010_x86_64:2022-03-14-b2cd80b
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-20.04
+        include:
+          - target: x86_64-unknown-linux-gnu
+            os: ubuntu-20.04
+            container: quay.io/pypa/manylinux2010_x86_64:2022-03-14-b2cd80b
+          - target: aarch64-unknown-linux-gnu
+            os: ubuntu-20.04
+            container: quay.io/pypa/manylinux2014_aarch64:2022-03-14-b2cd80b
+    runs-on: ${{ matrix.os }}
+    container: ${{ matrix.container }}
     steps:
       # actions/checkout@v2 is a node action, which runs on a fairly new
       # version of node. however, manylinux environment's glibc is too old for
@@ -99,7 +111,7 @@ jobs:
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         # linux build uploads sdist to update projection description on PyPI
-        run: make publish TARGET="x86_64-unknown-linux-gnu" EXTRA_ARGS=""
+        run: make publish TARGET="${{ matrix.os }}" EXTRA_ARGS=""
 
   release-docs:
     needs: [validate-release-tag, release-pypi-manylinux, release-pypi-mac-windows]
