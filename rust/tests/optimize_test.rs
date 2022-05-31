@@ -304,7 +304,7 @@ mod optimize {
     }
 
     #[tokio::test]
-    ///Validate Metrics when no files are optimzied
+    /// Validate Metrics when no files are optimized
     async fn test_idempotent_metrics() -> Result<(), Box<dyn Error>> {
         let context = setup_test(true).await?;
         let mut dt = context.table;
