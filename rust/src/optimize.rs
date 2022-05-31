@@ -7,8 +7,8 @@
 //!
 //! # Example
 //! ```rust ignore
-//! let table = DeltaTable::try_from_uri("../path/to/table")?
-//! let metrics = Optimize::default().execute(table).await?
+//! let table = DeltaTable::try_from_uri("../path/to/table")?;
+//! let metrics = Optimize::default().execute(table).await?;
 //! ````
 
 use std::collections::HashMap;
