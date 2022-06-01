@@ -5,7 +5,7 @@
 //! operations. 
 //!
 //! *WARNING:* Currently Optimize only supports append-only workflows. Use with 
-//! otherworks may corrupt your table state.
+//! other workflows may corrupt your table state.
 //! 
 //! Optimize increments the table's version and creates remove actions for
 //! optimized files. Optimize does not delete files from storage. To delete
@@ -227,6 +227,9 @@ impl MergePlan {
 
                 //Save the file to storage and create corresponding add and remove actions. Do not commit yet.
                 let add_actions = writer.flush().await?;
+                if add_actions.len() != 1 {
+                    return Err(DeltaTableError::Generic("Expected writer to return only one add action".to_owned()).into())
+                }
                 for mut add in add_actions {
                     add.data_change = false;
                     let size = add.size;

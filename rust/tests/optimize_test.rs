@@ -84,7 +84,7 @@ mod optimize {
             serde_json::Value::String("CREATE TABLE".to_string()),
         );
         let _res = dt
-            .create(table_meta.clone(), protocol.clone(), commit_info, None)
+            .create(table_meta.clone(), protocol.clone(), Some(commit_info), None)
             .await?;
 
         Ok(Context { tmp_dir, table: dt })
@@ -364,6 +364,7 @@ mod optimize {
     }
 
     #[tokio::test]
+    #[ignore]
     /// Validate that bin packing is idempotent.
     async fn test_idempotent() -> Result<(), Box<dyn Error>> {
         //TODO: Compression makes it hard to get the target file size...
