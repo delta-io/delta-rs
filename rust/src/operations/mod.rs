@@ -193,7 +193,7 @@ impl DeltaCommands {
                 let divided =
                     divide_by_partition_values(schema.clone(), cols.clone(), &batch).unwrap();
                 for part in divided {
-                    let key = PartitionPath::from_hashmap(&cols, &part.partition_values)?.into();
+                    let key = PartitionPath::from_hashmap(cols, &part.partition_values)?.into();
                     match partitions.get_mut(&key) {
                         Some(batches) => {
                             batches.push(part.record_batch);
