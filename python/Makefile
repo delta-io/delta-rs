@@ -66,11 +66,6 @@ build-documentation: ## Build documentation with Sphinx
 	$(info --- Run build of the Sphinx documentation ---)
 	sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
 
-.PHONY: publish
-publish: ## Publish Python binding version in Pypi
-	$(info --- Run publish of the Python binding ---)
-	maturin publish -b pyo3 --target $(TARGET) $(EXTRA_ARGS)
-
 .PHONY: clean
 clean: ## Run clean
 	$(warning --- Clean virtualenv and target directory ---)
