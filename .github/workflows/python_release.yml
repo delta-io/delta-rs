@@ -42,76 +42,41 @@ jobs:
             os: windows-2019
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v2
-
-      - uses: actions-rs/toolchain@v1
-        with:
-          profile: minimal
-          toolchain: stable
-          override: true
-          target: ${{ matrix.target }}
-
-      - uses: actions/setup-python@v2
-        with:
-          python-version: 3.7
-
-      - name: Setup
-        run: make setup
+      - uses: actions/checkout@v3
 
       - name: Publish to pypi (without sdist)
+        uses: messense/maturin-action@main
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        run: make publish TARGET="${{ matrix.target }}" EXTRA_ARGS="--no-sdist"
+        with:
+          target: ${{ matrix.target }}
+          command: publish
+          args: -m python/Cargo.toml --no-sdist
 
   release-pypi-manylinux:
     needs: validate-release-tag
     name: PyPI release manylinux
-    strategy:
-      fail-fast: false
-      matrix:
-        os:
-          - ubuntu-20.04
-        include:
-          - target: x86_64-unknown-linux-gnu
-            os: ubuntu-20.04
-            container: quay.io/pypa/manylinux2010_x86_64:2022-03-14-b2cd80b
-          - target: aarch64-unknown-linux-gnu
-            os: ubuntu-20.04
-            container: quay.io/pypa/manylinux2014_aarch64:2022-03-14-b2cd80b
-    runs-on: ${{ matrix.os }}
-    container: ${{ matrix.container }}
+    runs-on: ubuntu-latest
     steps:
-      # actions/checkout@v2 is a node action, which runs on a fairly new
-      # version of node. however, manylinux environment's glibc is too old for
-      # that version of the node. so we will have to use v1 instead, which is a
-      # docker based action.
-      - uses: actions/checkout@v1
+        - uses: actions/checkout@v3
 
-      # Require for building openssl-sys
-      - name: Install perl-IPC/Cmd
-        run: yum install -y perl-IPC-Cmd
+        - name: Publish manylinux to pypi x86_64 (with sdist)
+          uses: messense/maturin-action@main
+          env:
+            MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          with:
+            target: x86_64-unknown-linux-gnu
+            command: publish
+            args: -m python/Cargo.toml
 
-      # actions-rs/toolchain@v1 is a node action, which runs on a fairly new
-      # version of node. however, manylinux environment's glibc is too old for
-      # that version of the node. so we will have to install rust manually here.
-      - name: Install Rust
-        run: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y
-          $HOME/.cargo/bin/rustup default stable
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
-
-      - name: Enable manylinux Python targets
-        run: |
-            echo "/opt/python/cp36-cp36m/bin" >> $GITHUB_PATH
-
-      - name: Setup
-        run: make setup
-
-      - name: Publish manylinux to pypi (without sdist)
-        env:
-          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-        # linux build uploads sdist to update projection description on PyPI
-        run: make publish TARGET="${{ matrix.os }}" EXTRA_ARGS=""
+        - name: Publish manylinux to pypi aarch64 (without sdist)
+          uses: messense/maturin-action@main
+          env:
+            MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          with:
+            target: aarch64-unknown-linux-gnu
+            command: publish
+            args: -m python/Cargo.toml --no-sdist
 
   release-docs:
     needs: [validate-release-tag, release-pypi-manylinux, release-pypi-mac-windows]
