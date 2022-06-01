@@ -10,16 +10,21 @@ mod optimize {
     use deltalake::optimize::{MetricDetails, Metrics};
     use deltalake::writer::DeltaWriterError;
     use deltalake::{
-        action, get_backend_for_uri_with_options,
-        optimize::Optimize,
+        action,
+        action::Remove,
+        get_backend_for_uri_with_options,
+        optimize::{create_merge_plan, Optimize},
         writer::{DeltaWriter, RecordBatchWriter},
         DeltaTableConfig, DeltaTableMetaData, PartitionFilter,
     };
     use deltalake::{DeltaTable, Schema, SchemaDataType, SchemaField};
     use rand::prelude::*;
     use serde_json::{Map, Value};
+    use std::time::SystemTime;
+    use std::time::UNIX_EPOCH;
     use std::{collections::HashMap, error::Error, sync::Arc};
     use tempdir::TempDir;
+
     struct Context {
         pub tmp_dir: TempDir,
         pub table: DeltaTable,
@@ -79,7 +84,7 @@ mod optimize {
             serde_json::Value::String("CREATE TABLE".to_string()),
         );
         let _res = dt
-            .create(table_meta.clone(), protocol.clone(), None, None)
+            .create(table_meta.clone(), protocol.clone(), commit_info, None)
             .await?;
 
         Ok(Context { tmp_dir, table: dt })
@@ -260,7 +265,106 @@ mod optimize {
 
     #[tokio::test]
     #[ignore]
-    ///Validate that bin packing is idempotent.
+    /// Validate that optimize fails when a remove action occurs
+    async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
+        let context = setup_test(true).await?;
+        let mut dt = context.table;
+        let mut writer = RecordBatchWriter::for_table(&dt, HashMap::new())?;
+
+        write(
+            &mut writer,
+            &mut dt,
+            tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], "2022-05-22")?,
+        )
+        .await?;
+
+        write(
+            &mut writer,
+            &mut dt,
+            tuples_to_batch(vec![(2, 2), (2, 3), (2, 4)], "2022-05-22")?,
+        )
+        .await?;
+
+        let version = dt.version;
+
+        //create the merge plan, remove a file, and execute the plan.
+        let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+        let plan = create_merge_plan(&mut dt, &filter, None)?;
+
+        let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
+        let mut other_dt = deltalake::open_table(uri).await?;
+        let add = &other_dt.get_active_add_actions()[0];
+        let remove = Remove {
+            path: add.path.clone(),
+            deletion_timestamp: Some(
+                SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64,
+            ),
+            data_change: true,
+            extended_file_metadata: None,
+            size: Some(add.size),
+            partition_values: Some(add.partition_values.clone()),
+            tags: Some(HashMap::new()),
+        };
+
+        let mut transaction = other_dt.create_transaction(None);
+        transaction.add_action(action::Action::remove(remove));
+        transaction.commit(None, None).await?;
+
+        let maybe_metrics = plan.execute(&mut dt).await;
+        assert!(maybe_metrics.is_err());
+        assert_eq!(dt.version, version + 1);
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Validate that optimize succeeds when only add actions occur for a optimized partition
+    async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
+        let context = setup_test(true).await?;
+        let mut dt = context.table;
+        let mut writer = RecordBatchWriter::for_table(&dt, HashMap::new())?;
+
+        write(
+            &mut writer,
+            &mut dt,
+            tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], "2022-05-22")?,
+        )
+        .await?;
+
+        write(
+            &mut writer,
+            &mut dt,
+            tuples_to_batch(vec![(2, 2), (2, 3), (2, 4)], "2022-05-22")?,
+        )
+        .await?;
+
+        let version = dt.version;
+
+        //create the merge plan, remove a file, and execute the plan.
+        let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+        let plan = create_merge_plan(&mut dt, &filter, None)?;
+
+        let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
+        let mut other_dt = deltalake::open_table(uri).await?;
+        let mut writer = RecordBatchWriter::for_table(&other_dt, HashMap::new())?;
+        write(
+            &mut writer,
+            &mut other_dt,
+            tuples_to_batch(vec![(3, 2), (3, 3), (3, 4)], "2022-05-22")?,
+        )
+        .await?;
+
+        let metrics = plan.execute(&mut dt).await?;
+        assert_eq!(metrics.num_files_added, 1);
+        assert_eq!(metrics.num_files_removed, 2);
+        assert_eq!(dt.version, version + 2);
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Validate that bin packing is idempotent.
     async fn test_idempotent() -> Result<(), Box<dyn Error>> {
         //TODO: Compression makes it hard to get the target file size...
         //Maybe just commit files with a known size
@@ -287,6 +391,8 @@ mod optimize {
         )
         .await?;
 
+        let version = dt.version;
+
         let mut filter = vec![];
         filter.push(PartitionFilter::try_from(("date", "=", "2022-05-22"))?);
 
@@ -294,11 +400,13 @@ mod optimize {
         let metrics = optimize.execute(&mut dt).await?;
         assert_eq!(metrics.num_files_added, 1);
         assert_eq!(metrics.num_files_removed, 2);
+        assert_eq!(dt.version, version + 1);
 
         let metrics = optimize.execute(&mut dt).await?;
 
         assert_eq!(metrics.num_files_added, 0);
         assert_eq!(metrics.num_files_removed, 0);
+        assert_eq!(dt.version, version + 1);
 
         Ok(())
     }
@@ -317,6 +425,7 @@ mod optimize {
         )
         .await?;
 
+        let version = dt.version;
         let optimize = Optimize::default().target_size(10_000_000);
         let metrics = optimize.execute(&mut dt).await?;
 
@@ -339,6 +448,7 @@ mod optimize {
         expected.files_removed = expected_metric_details.clone();
 
         assert_eq!(expected, metrics);
+        assert_eq!(version, dt.version);
         Ok(())
     }
 }

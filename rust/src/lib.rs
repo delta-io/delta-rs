@@ -93,6 +93,8 @@ pub mod data_catalog;
 mod delta;
 pub mod delta_arrow;
 pub mod delta_config;
+#[cfg(feature = "datafusion-ext")]
+pub mod operations;
 pub mod optimize;
 pub mod partitions;
 pub mod schema;

@@ -6,9 +6,7 @@ use crate::{
     get_backend_for_uri_with_options, open_table,
     operations::{create::CreateCommand, transaction::DeltaTransactionPlan, write::WriteCommand},
     storage::StorageError,
-    writer::{
-        record_batch::divide_by_partition_values, utils::get_partition_key, DeltaWriterError,
-    },
+    writer::{record_batch::divide_by_partition_values, utils::PartitionPath, DeltaWriterError},
     DeltaTable, DeltaTableConfig, DeltaTableError, DeltaTableMetaData,
 };
 use arrow::{datatypes::SchemaRef as ArrowSchemaRef, error::ArrowError, record_batch::RecordBatch};
@@ -195,7 +193,7 @@ impl DeltaCommands {
                 let divided =
                     divide_by_partition_values(schema.clone(), cols.clone(), &batch).unwrap();
                 for part in divided {
-                    let key = get_partition_key(cols, &part.partition_values)?;
+                    let key = PartitionPath::from_hashmap(&cols, &part.partition_values)?.into();
                     match partitions.get_mut(&key) {
                         Some(batches) => {
                             batches.push(part.record_batch);

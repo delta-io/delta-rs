@@ -983,7 +983,7 @@ impl DeltaTable {
         }
     }
 
-    ///Obtain Add actions for files that match the filter
+    /// Obtain Add actions for files that match the filter
     pub fn get_active_add_actions_by_partitions<'a>(
         &'a self,
         filters: &'a [PartitionFilter<'a, &'a str>],

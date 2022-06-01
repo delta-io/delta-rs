@@ -1,13 +1,21 @@
 //! Optimize a Delta Table
 //!
-//! Bin-packing is performed which merges smaller files into a larger file. This
-//! reduces the number of API calls required to read data and allows for the
-//! optimized files to cleaned up by vacuum.
-//! See [`Optimize`]
+//! Perform bin-packing on a Delta Table which merges small files into a large
+//! file. Bin-packing reduces the number of API calls required for read
+//! operations. 
 //!
+//! *WARNING:* Currently Optimize only supports append-only workflows. Use with 
+//! otherworks may corrupt your table state.
+//! 
+//! Optimize increments the table's version and creates remove actions for
+//! optimized files. Optimize does not delete files from storage. To delete
+//! files that were removed, call `vacuum` on [`DeltaTable`].
+//! 
+//! See [`Optimize`] for configuration.
+//! 
 //! # Example
 //! ```rust ignore
-//! let table = DeltaTable::try_from_uri("../path/to/table")?;
+//! let table = open_table("../path/to/table")?;
 //! let metrics = Optimize::default().execute(table).await?;
 //! ````
 
@@ -31,39 +39,39 @@ use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter};
 #[derive(Default, Debug, PartialEq)]
 /// Metrics from Optimize
 pub struct Metrics {
-    ///Number of optimized files added
+    /// Number of optimized files added
     pub num_files_added: u64,
-    ///Number of unoptimized files removed
+    /// Number of unoptimized files removed
     pub num_files_removed: u64,
-    ///Detailed metrics for the add operation
+    /// Detailed metrics for the add operation
     pub files_added: MetricDetails,
-    ///Detailed metrics for the remove operation
+    /// Detailed metrics for the remove operation
     pub files_removed: MetricDetails,
-    ///Number of partitions that had at least one file optimized
+    /// Number of partitions that had at least one file optimized
     pub partitions_optimized: u64,
-    ///TODO: The number of batches written
+    /// TODO: The number of batches written
     pub num_batches: u64,
-    ///How many files were considered during optimization. Not every file considered is optimized
+    /// How many files were considered during optimization. Not every file considered is optimized
     pub total_considered_files: usize,
-    ///How many files were considered for optimization but were skipped
+    /// How many files were considered for optimization but were skipped
     pub total_files_skipped: usize,
-    ///The order of records from source files is preserved
+    /// The order of records from source files is preserved
     pub preserve_insertion_order: bool,
 }
 
 #[derive(Debug, PartialEq, Clone)]
-///Statistics on files for a particular operation
+/// Statistics on files for a particular operation
 /// Operation can be remove or add
 pub struct MetricDetails {
     /// Minimum file size of a operation
     pub min: DeltaDataTypeLong,
     /// Maximum file size of a operation
     pub max: DeltaDataTypeLong,
-    ///Average file size of a operation
+    /// Average file size of a operation
     pub avg: f64,
-    ///Number of files encountered during operation
+    /// Number of files encountered during operation
     pub total_files: usize,
-    ///Sum of file sizes of a operation
+    /// Sum of file sizes of a operation
     pub total_size: DeltaDataTypeLong,
 }
 
@@ -79,10 +87,10 @@ impl Default for MetricDetails {
     }
 }
 
-///Optimize a Delta table with given options
+/// Optimize a Delta table with given options
 ///
 /// If a target file size is not provided then `delta.targetFileSize` from the
-/// table's configuration is read. Otherwise a default value is used
+/// table's configuration is read. Otherwise a default value is used.
 #[derive(Default)]
 pub struct Optimize<'a> {
     filters: &'a [PartitionFilter<'a, &'a str>],
@@ -90,13 +98,13 @@ pub struct Optimize<'a> {
 }
 
 impl<'a> Optimize<'a> {
-    ///Only optimize files that return true for the specified partition filter
+    /// Only optimize files that return true for the specified partition filter
     pub fn filter(mut self, filters: &'a [PartitionFilter<'a, &'a str>]) -> Self {
         self.filters = filters;
         self
     }
 
-    ///Set the target file size
+    /// Set the target file size
     pub fn target_size(mut self, target: DeltaDataTypeLong) -> Self {
         self.target_size = Some(target);
         self
@@ -110,11 +118,11 @@ impl<'a> Optimize<'a> {
     }
 }
 
-/// A collections of bins for a particular partition
+/// A collection of bins for a particular partition
 #[derive(Debug)]
 struct MergeBin {
     files: Vec<String>,
-    size: DeltaDataTypeLong,
+    size_bytes: DeltaDataTypeLong,
 }
 
 #[derive(Debug)]
@@ -127,12 +135,12 @@ impl MergeBin {
     pub fn new() -> Self {
         MergeBin {
             files: Vec::new(),
-            size: 0,
+            size_bytes: 0,
         }
     }
 
     fn get_total_file_size(&self) -> i64 {
-        self.size
+        self.size_bytes
     }
 
     fn get_num_files(&self) -> usize {
@@ -141,12 +149,13 @@ impl MergeBin {
 
     fn add(&mut self, file_path: String, size: i64) {
         self.files.push(file_path);
-        self.size += size;
+        self.size_bytes += size;
     }
 }
 
 #[derive(Debug)]
-struct MergePlan {
+/// Encapsulates the operations required to optimize a Delta Table
+pub struct MergePlan {
     operations: HashMap<PartitionPath, PartitionMergePlan>,
     metrics: Metrics,
 }
@@ -172,8 +181,9 @@ impl MergePlan {
         }))
     }
 
+    /// Peform the operations outlined in the plan.
     pub async fn execute(mut self, table: &mut DeltaTable) -> Result<Metrics, DeltaWriterError> {
-        //Read files into memory and write into memory. Once a file is complete write to underlying storage.
+        // Read files into memory and write into memory. Once a file is complete write to underlying storage.
         let mut actions = vec![];
 
         for (_partition_path, merge_partition) in self.operations.iter() {
@@ -215,7 +225,7 @@ impl MergePlan {
                         std::cmp::min(self.metrics.files_removed.min, size);
                 }
 
-                //Save the file to storage and create corresponding add and delete actions. Do not commit yet.
+                //Save the file to storage and create corresponding add and remove actions. Do not commit yet.
                 let add_actions = writer.flush().await?;
                 for mut add in add_actions {
                     add.data_change = false;
@@ -231,15 +241,16 @@ impl MergePlan {
                     actions.push(action::Action::add(add));
                 }
             }
-            //Currently a table without any partitions has a count of one partition. Check if that is acceptable
             self.metrics.partitions_optimized += 1;
         }
 
-        //try to commit actions to the delta log.
-        //Check for remove actions on the optimized partitions
-        let mut dtx = table.create_transaction(None);
-        dtx.add_actions(actions);
-        dtx.commit(None, None).await?;
+        // TODO: Check for remove actions on optimized partitions. If a
+        // optimized partition was updated then abort the commit. Requires (#593).
+        if !actions.is_empty() {
+            let mut dtx = table.create_transaction(None);
+            dtx.add_actions(actions);
+            dtx.commit(None, None).await?;
+        }
 
         if self.metrics.num_files_added == 0 {
             self.metrics.files_added.min = 0;
@@ -282,7 +293,8 @@ fn get_target_file_size(table: &DeltaTable) -> DeltaDataTypeLong {
     target_size
 }
 
-fn create_merge_plan<'a>(
+/// Build a Plan on which files to merge together. See [`Optimize`]
+pub fn create_merge_plan<'a>(
     table: &mut DeltaTable,
     filters: &[PartitionFilter<'a, &str>],
     target_size: Option<DeltaDataTypeLong>,
