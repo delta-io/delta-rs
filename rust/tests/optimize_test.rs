@@ -7,6 +7,7 @@ mod optimize {
         datatypes::{DataType, Field},
         record_batch::RecordBatch,
     };
+    use deltalake::action::DeltaOperation;
     use deltalake::optimize::{MetricDetails, Metrics};
     use deltalake::writer::DeltaWriterError;
     use deltalake::{
@@ -19,7 +20,7 @@ mod optimize {
     };
     use deltalake::{DeltaTable, Schema, SchemaDataType, SchemaField};
     use rand::prelude::*;
-    use serde_json::{Map, Value};
+    use serde_json::{json, Map, Value};
     use std::time::SystemTime;
     use std::time::UNIX_EPOCH;
     use std::{collections::HashMap, error::Error, sync::Arc};
@@ -84,7 +85,12 @@ mod optimize {
             serde_json::Value::String("CREATE TABLE".to_string()),
         );
         let _res = dt
-            .create(table_meta.clone(), protocol.clone(), Some(commit_info), None)
+            .create(
+                table_meta.clone(),
+                protocol.clone(),
+                Some(commit_info),
+                None,
+            )
             .await?;
 
         Ok(Context { tmp_dir, table: dt })
@@ -194,7 +200,7 @@ mod optimize {
         let version = dt.version;
         assert_eq!(dt.get_active_add_actions().len(), 5);
 
-        let optimize = Optimize::default().target_size(2_000_00);
+        let optimize = Optimize::default().target_size(2_000_000);
         let metrics = optimize.execute(&mut dt).await?;
 
         assert_eq!(version + 1, dt.version);
@@ -450,6 +456,51 @@ mod optimize {
 
         assert_eq!(expected, metrics);
         assert_eq!(version, dt.version);
+        Ok(())
+    }
+
+    #[tokio::test]
+    /// Validate operation data and metadata was written
+    async fn test_commit_info() -> Result<(), Box<dyn Error>> {
+        let context = setup_test(true).await?;
+        let mut dt = context.table;
+        let mut writer = RecordBatchWriter::for_table(&dt, HashMap::new())?;
+
+        write(
+            &mut writer,
+            &mut dt,
+            tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], "2022-05-22")?,
+        )
+        .await?;
+
+        write(
+            &mut writer,
+            &mut dt,
+            tuples_to_batch(vec![(2, 2), (2, 3), (2, 4)], "2022-05-22")?,
+        )
+        .await?;
+
+        let version = dt.version;
+
+        let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+
+        let optimize = Optimize::default().target_size(2_000_000).filter(&filter);
+        let metrics = optimize.execute(&mut dt).await?;
+
+        let commit_info = dt.history(None).await?;
+        let last_commit = &commit_info[commit_info.len() - 1];
+
+        let commit_metrics = last_commit.get("operationMetrics").unwrap();
+        let commit_metrics = serde_json::from_value::<Metrics>(commit_metrics.to_owned())?;
+
+        assert_eq!(commit_metrics, metrics);
+        assert_eq!(last_commit["readVersion"], json!(version));
+        assert_eq!(
+            last_commit["operationParameters"]["targetSize"],
+            json!(2_000_000)
+        );
+        assert_eq!(last_commit["operationParameters"]["predicate"], Value::Null);
+
         Ok(())
     }
 }

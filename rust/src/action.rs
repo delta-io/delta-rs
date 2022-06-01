@@ -883,7 +883,16 @@ pub enum DeltaOperation {
         /// The epoch id of the written micro-batch.
         epoch_id: i64,
     },
-    // TODO: Add more operations
+
+    #[serde(rename_all = "camelCase")]
+    /// Represents a `Optimize` operation
+    Optimize {
+        // TODO: Create a string representation of the filter passed to optimize
+        /// The filter used to determine which partitions to filter
+        predicate: Option<String>,
+        /// Target optimize size
+        target_size: DeltaDataTypeLong,
+    }, // TODO: Add more operations
 }
 
 impl DeltaOperation {
@@ -894,6 +903,7 @@ impl DeltaOperation {
             DeltaOperation::Create { .. } => "delta-rs.Create",
             DeltaOperation::Write { .. } => "delta-rs.Write",
             DeltaOperation::StreamingUpdate { .. } => "delta-rs.StreamingUpdate",
+            DeltaOperation::Optimize { .. } => "delta-rs.Optimize",
         };
         commit_info.insert(
             "operation".to_string(),
