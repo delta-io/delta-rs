@@ -125,3 +125,4 @@ tempdir = "0"
 tempfile = "3"
 maplit = { version = "1" }
 anyhow = "1"
+rand = "0.8"

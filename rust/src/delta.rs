@@ -19,7 +19,7 @@ use std::io::{BufRead, BufReader, Cursor};
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 use uuid::Uuid;
 
-use crate::action::Stats;
+use crate::action::{Add, Stats};
 
 use super::action;
 use super::action::{Action, DeltaOperation};
@@ -983,12 +983,11 @@ impl DeltaTable {
         }
     }
 
-    /// Returns the file list tracked in current table state filtered by provided
-    /// `PartitionFilter`s.
-    pub fn get_files_by_partitions(
-        &self,
-        filters: &[PartitionFilter<&str>],
-    ) -> Result<Vec<String>, DeltaTableError> {
+    /// Obtain Add actions for files that match the filter
+    pub fn get_active_add_actions_by_partitions<'a>(
+        &'a self,
+        filters: &'a [PartitionFilter<'a, &'a str>],
+    ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
         let current_metadata = self
             .state
             .current_metadata()
@@ -1007,20 +1006,27 @@ impl DeltaTable {
             .into_iter()
             .collect();
 
+        let actions = self.state.files().iter().filter(move |add| {
+            let partitions = add
+                .partition_values
+                .iter()
+                .map(|p| DeltaTablePartition::from_partition_value(p, ""))
+                .collect::<Vec<DeltaTablePartition>>();
+            filters
+                .iter()
+                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
+        });
+        Ok(actions)
+    }
+
+    /// Returns the file list tracked in current table state filtered by provided
+    /// `PartitionFilter`s.
+    pub fn get_files_by_partitions(
+        &self,
+        filters: &[PartitionFilter<&str>],
+    ) -> Result<Vec<String>, DeltaTableError> {
         let files = self
-            .state
-            .files()
-            .iter()
-            .filter(|add| {
-                let partitions = add
-                    .partition_values
-                    .iter()
-                    .map(|p| DeltaTablePartition::from_partition_value(p, ""))
-                    .collect::<Vec<DeltaTablePartition>>();
-                filters
-                    .iter()
-                    .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
-            })
+            .get_active_add_actions_by_partitions(filters)?
             .map(|add| add.path.clone())
             .collect();
 
