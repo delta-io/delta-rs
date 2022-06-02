@@ -12,6 +12,7 @@ from typing import (
     List,
     Mapping,
     Optional,
+    Tuple,
     Union,
 )
 
@@ -173,12 +174,12 @@ def write_deltalake(
     add_actions: List[AddAction] = []
 
     def visitor(written_file: Any) -> None:
-        partition_values = get_partitions_from_path(table_uri, written_file.path)
+        path, partition_values = get_partitions_from_path(table_uri, written_file.path)
         stats = get_file_stats_from_metadata(written_file.metadata)
 
         add_actions.append(
             AddAction(
-                written_file.path,
+                path,
                 written_file.metadata.serialized_size,
                 partition_values,
                 int(datetime.now().timestamp()),
@@ -263,8 +264,10 @@ def try_get_deltatable(table_uri: str) -> Optional[DeltaTable]:
         return None
 
 
-def get_partitions_from_path(base_path: str, path: str) -> Dict[str, str]:
+def get_partitions_from_path(base_path: str, path: str) -> Tuple[str, Dict[str, str]]:
     path = path.split(base_path, maxsplit=1)[1]
+    if path[0] == "/":
+        path = path[1:]
     parts = path.split("/")
     parts.pop()  # remove filename
     out = {}
@@ -273,7 +276,7 @@ def get_partitions_from_path(base_path: str, path: str) -> Dict[str, str]:
             continue
         key, value = part.split("=", maxsplit=1)
         out[key] = value
-    return out
+    return path, out
 
 
 def get_file_stats_from_metadata(

@@ -6,7 +6,7 @@ import random
 import sys
 from datetime import date, datetime, timedelta
 from decimal import Decimal
-from typing import Dict, Iterable
+from typing import Dict, Iterable, List
 from unittest.mock import Mock
 
 import pyarrow as pa
@@ -105,6 +105,22 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
     table = delta_table.to_pyarrow_table()
     assert table == sample_data
 
+    for add_path in get_add_paths(delta_table):
+        # Paths should be relative, and with no partitioning have no directories
+        assert "/" not in add_path
+
+
+def test_local_path(tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch):
+    monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
+
+    local_path = "./path/to/table"
+    write_deltalake(local_path, sample_data)
+    delta_table = DeltaTable(local_path)
+    assert delta_table.pyarrow_schema() == sample_data.schema
+
+    table = delta_table.to_pyarrow_table()
+    assert table == sample_data
+
 
 def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     write_deltalake(
@@ -151,6 +167,10 @@ def test_roundtrip_partitioned(
     table = table.take(pc.sort_indices(table["int64"]))
     assert table == sample_data
 
+    for add_path in get_add_paths(delta_table):
+        # Paths should be relative
+        assert add_path.count("/") == 1
+
 
 def test_roundtrip_multi_partitioned(tmp_path: pathlib.Path, sample_data: pa.Table):
     write_deltalake(str(tmp_path), sample_data, partition_by=["int32", "bool"])
@@ -161,6 +181,10 @@ def test_roundtrip_multi_partitioned(tmp_path: pathlib.Path, sample_data: pa.Tab
     table = delta_table.to_pyarrow_table()
     table = table.take(pc.sort_indices(table["int64"]))
     assert table == sample_data
+
+    for add_path in get_add_paths(delta_table):
+        # Paths should be relative
+        assert add_path.count("/") == 2
 
 
 def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
@@ -285,6 +309,20 @@ def get_stats(table: DeltaTable):
             return json.loads(log_entry["add"]["stats"])
     else:
         raise AssertionError("No add action found!")
+
+
+def get_add_paths(table: DeltaTable) -> List[str]:
+    log_path = get_log_path(table)
+
+    paths = []
+
+    for line in open(log_path, "r").readlines():
+        log_entry = json.loads(line)
+
+        if "add" in log_entry:
+            paths.append(log_entry["add"]["path"])
+
+    return paths
 
 
 def test_writer_stats(existing_table: DeltaTable, sample_data: pa.Table):
