@@ -490,8 +490,8 @@ mod optimize {
         let commit_info = dt.history(None).await?;
         let last_commit = &commit_info[commit_info.len() - 1];
 
-        let commit_metrics = last_commit.get("operationMetrics").unwrap();
-        let commit_metrics = serde_json::from_value::<Metrics>(commit_metrics.to_owned())?;
+        let commit_metrics =
+            serde_json::from_value::<Metrics>(last_commit["operationMetrics"].clone())?;
 
         assert_eq!(commit_metrics, metrics);
         assert_eq!(last_commit["readVersion"], json!(version));
