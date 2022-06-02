@@ -12,31 +12,59 @@ use arrow::{
 use parquet::file::writer::InMemoryWriteableCursor;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::fmt::Display;
 use std::io::Write;
 use std::sync::Arc;
 use uuid::Uuid;
 
 const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 
-pub(crate) fn get_partition_key(
-    partition_columns: &[String],
-    partition_values: &HashMap<String, Option<String>>,
-) -> Result<String, DeltaWriterError> {
-    let mut path_parts = vec![];
-    for k in partition_columns.iter() {
-        let partition_value = partition_values
-            .get(k)
-            .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
+#[derive(Debug, Clone, Hash, PartialEq, Eq)]
+pub(crate) struct PartitionPath {
+    path: String,
+}
 
-        let partition_value = partition_value
-            .as_deref()
-            .unwrap_or(NULL_PARTITION_VALUE_DATA_PATH);
-        let part = format!("{}={}", k, partition_value);
+impl PartitionPath {
+    pub fn from_hashmap(
+        partition_columns: &[String],
+        partition_values: &HashMap<String, Option<String>>,
+    ) -> Result<Self, DeltaWriterError> {
+        let mut path_parts = vec![];
+        for k in partition_columns.iter() {
+            let partition_value = partition_values
+                .get(k)
+                .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
 
-        path_parts.push(part);
+            let partition_value = partition_value
+                .as_deref()
+                .unwrap_or(NULL_PARTITION_VALUE_DATA_PATH);
+            let part = format!("{}={}", k, partition_value);
+
+            path_parts.push(part);
+        }
+
+        Ok(PartitionPath {
+            path: path_parts.join("/"),
+        })
     }
+}
 
-    Ok(path_parts.join("/"))
+impl From<PartitionPath> for String {
+    fn from(path: PartitionPath) -> String {
+        path.path
+    }
+}
+
+impl AsRef<str> for PartitionPath {
+    fn as_ref(&self) -> &str {
+        &self.path
+    }
+}
+
+impl Display for PartitionPath {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
+        self.path.fmt(f)
+    }
 }
 
 // TODO: parquet files have a 5 digit zero-padded prefix and a "c\d{3}" suffix that
@@ -67,7 +95,7 @@ pub(crate) fn next_data_path(
         return Ok(file_name);
     }
 
-    let partition_key = get_partition_key(partition_columns, partition_values)?;
+    let partition_key = PartitionPath::from_hashmap(partition_columns, partition_values)?;
     Ok(format!("{}/{}", partition_key, file_name))
 }
 
@@ -164,4 +192,19 @@ pub(crate) fn stringified_partition_value(
     };
 
     Ok(Some(s))
+}
+
+/// Remove any partition related columns from the record batch
+pub(crate) fn record_batch_without_partitions(
+    record_batch: &RecordBatch,
+    partition_columns: &[String],
+) -> Result<RecordBatch, DeltaWriterError> {
+    let mut non_partition_columns = Vec::new();
+    for (i, field) in record_batch.schema().fields().iter().enumerate() {
+        if !partition_columns.contains(field.name()) {
+            non_partition_columns.push(i);
+        }
+    }
+
+    Ok(record_batch.project(&non_partition_columns)?)
 }
