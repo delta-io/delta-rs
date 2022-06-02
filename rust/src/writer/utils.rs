@@ -214,15 +214,12 @@ pub(crate) fn record_batch_without_partitions(
     record_batch: &RecordBatch,
     partition_columns: &[String],
 ) -> Result<RecordBatch, DeltaWriterError> {
-    let new_arrow_schema = schema_without_partitions(&record_batch.schema(), partition_columns);
-    let mut columns = Vec::new();
-    for field in new_arrow_schema.fields().iter() {
-        for (i, batch_field) in record_batch.schema().fields().iter().enumerate() {
-            if batch_field.name() == field.name() {
-                columns.push(record_batch.column(i).clone());
-            }
+    let mut non_partition_columns = Vec::new();
+    for (i, field) in record_batch.schema().fields().iter().enumerate() {
+        if !partition_columns.contains(field.name()) {
+            non_partition_columns.push(i);
         }
     }
 
-    Ok(RecordBatch::try_new(new_arrow_schema, columns)?)
+    Ok(record_batch.project(&non_partition_columns)?)
 }
