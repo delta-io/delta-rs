@@ -194,21 +194,6 @@ pub(crate) fn stringified_partition_value(
     Ok(Some(s))
 }
 
-/// Remove any partition related fields from the schema
-pub(crate) fn schema_without_partitions(
-    arrow_schema_ref: &Arc<ArrowSchema>,
-    partition_columns: &[String],
-) -> Arc<ArrowSchema> {
-    Arc::new(ArrowSchema::new(
-        arrow_schema_ref
-            .fields()
-            .iter()
-            .filter(|f| !partition_columns.contains(f.name()))
-            .map(|f| f.to_owned())
-            .collect::<Vec<_>>(),
-    ))
-}
-
 /// Remove any partition related columns from the record batch
 pub(crate) fn record_batch_without_partitions(
     record_batch: &RecordBatch,

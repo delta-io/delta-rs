@@ -30,7 +30,7 @@ use super::{
     stats::{create_add, NullCounts},
     utils::{
         cursor_from_bytes, next_data_path, record_batch_without_partitions,
-        schema_without_partitions, stringified_partition_value, PartitionPath,
+        stringified_partition_value, PartitionPath,
     },
     DeltaWriter, DeltaWriterError,
 };
@@ -186,7 +186,14 @@ impl RecordBatchWriter {
 
     /// Returns the arrow schema representation of the partitioned files written to table
     pub fn partition_arrow_schema(&self) -> ArrowSchemaRef {
-        schema_without_partitions(&self.arrow_schema_ref, &self.partition_columns)
+        Arc::new(ArrowSchema::new(
+            self.arrow_schema_ref
+                .fields()
+                .iter()
+                .filter(|f| !self.partition_columns.contains(f.name()))
+                .map(|f| f.to_owned())
+                .collect::<Vec<_>>(),
+        ))
     }
 
     ///Write a batch to the specified partition

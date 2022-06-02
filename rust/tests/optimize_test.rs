@@ -7,7 +7,6 @@ mod optimize {
         datatypes::{DataType, Field},
         record_batch::RecordBatch,
     };
-    use deltalake::action::DeltaOperation;
     use deltalake::optimize::{MetricDetails, Metrics};
     use deltalake::writer::DeltaWriterError;
     use deltalake::{
@@ -499,6 +498,7 @@ mod optimize {
             last_commit["operationParameters"]["targetSize"],
             json!(2_000_000)
         );
+        // TODO: Requires a string representation for PartitionFilter
         assert_eq!(last_commit["operationParameters"]["predicate"], Value::Null);
 
         Ok(())
