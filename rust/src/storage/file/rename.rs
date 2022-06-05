@@ -117,7 +117,7 @@ mod tests {
 
         // unsuccessful move not_exists to C, not_exists is missing
         match rename_noreplace("not_exists", c.to_str().unwrap()).await {
-            Err(StorageError::NotFound) => {},
+            Err(StorageError::NotFound) => {}
             Err(StorageError::Io { source: e }) => {
                 cfg_if::cfg_if! {
                     if #[cfg(target_os = "windows")] {
