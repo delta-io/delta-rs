@@ -28,6 +28,23 @@ else:
     _has_pandas = True
 
 
+def _is_old_glibc_version():
+    if "CS_GNU_LIBC_VERSION" in os.confstr_names:
+        version = os.confstr("CS_GNU_LIBC_VERSION").split(" ")[1]
+        return version < "2.28"
+    else:
+        return False
+
+
+if sys.platform == "win32":
+    pytest.skip("Writer isn't yet supported on Windows", allow_module_level=True)
+
+if _is_old_glibc_version():
+    pytest.skip(
+        "Writer isn't yet supported on Linux with glibc < 2.28", allow_module_level=True
+    )
+
+
 @pytest.fixture()
 def sample_data():
     nrows = 5

@@ -9,6 +9,7 @@ description = "Native Delta Lake implementation in Rust"
 edition = "2021"
 
 [dependencies]
+libc = ">=0.2.90,<1"
 errno = "0.2"
 thiserror = "1"
 serde = { version = "1", features = ["derive"] }
@@ -106,6 +107,9 @@ s3-rustls = [
 gcs = ["async-stream", "tame-gcs", "tame-oauth", "reqwest"]
 glue = ["s3", "rusoto_glue"]
 python = ["arrow/pyarrow"]
+
+[build-dependencies]
+glibc_version = "0"
 
 [dependencies.dynamodb_lock]
 path = "../dynamodb_lock"

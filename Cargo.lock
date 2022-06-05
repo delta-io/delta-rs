@@ -734,14 +734,15 @@ dependencies = [
  "dynamodb_lock",
  "errno",
  "futures",
+ "glibc_version 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
  "lazy_static",
+ "libc",
  "log",
  "maplit",
  "parquet",
  "parquet-format",
  "percent-encoding",
  "pretty_assertions",
- "rand 0.8.5",
  "regex",
  "reqwest",
  "rusoto_core",
@@ -1111,6 +1112,15 @@ dependencies = [
 [[package]]
 name = "glibc_version"
 version = "0.1.2"
+dependencies = [
+ "regex",
+]
+
+[[package]]
+name = "glibc_version"
+version = "0.1.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "803ff7635f1ab4e2c064b68a0c60da917d3d18dc8d086130f689d62ce4f1c33e"
 dependencies = [
  "regex",
 ]
