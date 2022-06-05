@@ -1,52 +1,42 @@
 use crate::StorageError;
 
-#[cfg(windows)]
+// Generic implementation (Requires 2 system calls)
+#[cfg(not(any(
+    all(target_os = "linux", target_env = "gnu", glibc_renameat2),
+    target_os = "macos"
+)))]
 mod imp {
     use super::*;
     use lazy_static::lazy_static;
     use std::sync::Arc;
     use std::sync::Mutex;
 
-    // async rename under Windows is flaky due to no native rename if not exists support.
-    // Use a shared lock to prevent threads renaming at the same time.
-    lazy_static! {
-        static ref SHARED_LOCK: Arc<Mutex<i32>> = Arc::new(Mutex::new(0));
-    }
-
     pub async fn rename_noreplace(from: &str, to: &str) -> Result<(), StorageError> {
         let from_path = String::from(from);
         let to_path = String::from(to);
 
-        // rename in Windows already set the MOVEFILE_REPLACE_EXISTING flag
-        // it should always succeed no matter destination filconcurrent_writes_teste exists or not
-        tokio::task::spawn_blocking(move || {
-            let lock = Arc::clone(&SHARED_LOCK);
-            let mut data = lock.lock().unwrap();
-            *data += 1;
-
-            // doing best effort in windows since there is no native rename if not exists support
-            let to_exists = std::fs::metadata(&to_path).is_ok();
-            if to_exists {
-                return Err(StorageError::AlreadyExists(to_path));
-            }
-            std::fs::rename(&from_path, &to_path).map_err(|e| {
-                let to_exists = std::fs::metadata(&to_path).is_ok();
-                if to_exists {
-                    return StorageError::AlreadyExists(to_path);
+        Ok(tokio::task::spawn_blocking(move || {
+            std::fs::hard_link(&from_path, &to_path).map_err(|err| {
+                if err.kind() == std::io::ErrorKind::AlreadyExists {
+                    StorageError::AlreadyExists(to_path)
+                } else {
+                    err.into()
                 }
+            })?;
 
-                StorageError::other_std_io_err(format!(
-                    "failed to rename {} to {}: {}",
-                    from_path, to_path, e
-                ))
-            })
+            std::fs::remove_file(from_path)?;
+
+            Ok(())
         })
-        .await
-        .unwrap()
+        .await?)
     }
 }
 
-#[cfg(unix)]
+// Optimized implementations (Only 1 system call)
+#[cfg(any(
+    all(target_os = "linux", target_env = "gnu", glibc_renameat2),
+    target_os = "macos"
+))]
 mod imp {
     use super::*;
     use std::ffi::CString;
@@ -96,18 +86,11 @@ mod imp {
     unsafe fn platform_specific_rename(from: *const libc::c_char, to: *const libc::c_char) -> i32 {
         cfg_if::cfg_if! {
             if #[cfg(all(target_os = "linux", target_env = "gnu"))] {
-                cfg_if::cfg_if! {
-                    if #[cfg(glibc_renameat2)] {
-                        libc::renameat2(libc::AT_FDCWD, from, libc::AT_FDCWD, to, libc::RENAME_NOREPLACE)
-                    } else {
-                        // target has old glibc (< 2.28), we would need to invoke syscall manually
-                        unimplemented!()
-                    }
-                }
+                    libc::renameat2(libc::AT_FDCWD, from, libc::AT_FDCWD, to, libc::RENAME_NOREPLACE)
             } else if #[cfg(target_os = "macos")] {
                 libc::renamex_np(from, to, libc::RENAME_EXCL)
             } else {
-                unimplemented!()
+                unreachable!()
             }
         }
     }
