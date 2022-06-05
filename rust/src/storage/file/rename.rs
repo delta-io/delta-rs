@@ -7,15 +7,12 @@ use crate::StorageError;
 )))]
 mod imp {
     use super::*;
-    use lazy_static::lazy_static;
-    use std::sync::Arc;
-    use std::sync::Mutex;
 
     pub async fn rename_noreplace(from: &str, to: &str) -> Result<(), StorageError> {
         let from_path = String::from(from);
         let to_path = String::from(to);
 
-        Ok(tokio::task::spawn_blocking(move || {
+        tokio::task::spawn_blocking(move || {
             std::fs::hard_link(&from_path, &to_path).map_err(|err| {
                 if err.kind() == std::io::ErrorKind::AlreadyExists {
                     StorageError::AlreadyExists(to_path)
@@ -28,7 +25,8 @@ mod imp {
 
             Ok(())
         })
-        .await?)
+        .await
+        .unwrap()
     }
 }
 
@@ -119,6 +117,7 @@ mod tests {
 
         // unsuccessful move not_exists to C, not_exists is missing
         match rename_noreplace("not_exists", c.to_str().unwrap()).await {
+            Err(StorageError::NotFound) => {},
             Err(StorageError::Io { source: e }) => {
                 cfg_if::cfg_if! {
                     if #[cfg(target_os = "windows")] {
