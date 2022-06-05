@@ -110,6 +110,18 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
         assert "/" not in add_path
 
 
+@pytest.mark.parametrize("mode", ["append", "overwrite"])
+def test_enforce_schema(existing_table: DeltaTable, mode: str):
+    bad_data = pa.table({"x": pa.array([1, 2, 3])})
+
+    with pytest.raises(ValueError):
+        write_deltalake(existing_table, bad_data, mode=mode)
+
+    table_uri = existing_table._table.table_uri()
+    with pytest.raises(ValueError):
+        write_deltalake(table_uri, bad_data, mode=mode)
+
+
 def test_local_path(tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch):
     monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
 

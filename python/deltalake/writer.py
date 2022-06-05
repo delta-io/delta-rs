@@ -142,6 +142,12 @@ def write_deltalake(
     #    filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri))
 
     if table:  # already exists
+        if schema != table.pyarrow_schema():
+            raise ValueError(
+                "Schema of data does not match table schema\n"
+                f"Table schema:\n  {schema}\nData Schema:\n  {table.pyarrow_schema()}"
+            )
+
         if mode == "error":
             raise AssertionError("DeltaTable already exists.")
         elif mode == "ignore":
