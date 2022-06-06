@@ -14,6 +14,7 @@ use deltalake::DeltaDataTypeLong;
 use deltalake::DeltaDataTypeTimestamp;
 use deltalake::DeltaTableMetaData;
 use deltalake::DeltaTransactionOptions;
+use deltalake::Schema;
 use deltalake::{arrow, StorageBackend};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
@@ -294,27 +295,55 @@ impl RawDeltaTable {
         add_actions: Vec<PyAddAction>,
         mode: &str,
         partition_by: Vec<String>,
+        schema: ArrowSchema,
     ) -> PyResult<()> {
         let mode = save_mode_from_str(mode)?;
+        let schema: Schema = (&schema).try_into()?;
+
+        let existing_schema = self
+            ._table
+            .get_schema()
+            .map_err(PyDeltaTableError::from_raw)?;
 
         let mut actions: Vec<action::Action> = add_actions
             .iter()
             .map(|add| Action::add(add.into()))
             .collect();
 
-        if let SaveMode::Overwrite = mode {
-            // Remove all current files
-            for old_add in self._table.get_state().files().iter() {
-                let remove_action = Action::remove(action::Remove {
-                    path: old_add.path.clone(),
-                    deletion_timestamp: Some(current_timestamp()),
-                    data_change: true,
-                    extended_file_metadata: Some(old_add.tags.is_some()),
-                    partition_values: Some(old_add.partition_values.clone()),
-                    size: Some(old_add.size),
-                    tags: old_add.tags.clone(),
-                });
-                actions.push(remove_action);
+        match mode {
+            SaveMode::Overwrite => {
+                // Remove all current files
+                for old_add in self._table.get_state().files().iter() {
+                    let remove_action = Action::remove(action::Remove {
+                        path: old_add.path.clone(),
+                        deletion_timestamp: Some(current_timestamp()),
+                        data_change: true,
+                        extended_file_metadata: Some(old_add.tags.is_some()),
+                        partition_values: Some(old_add.partition_values.clone()),
+                        size: Some(old_add.size),
+                        tags: old_add.tags.clone(),
+                    });
+                    actions.push(remove_action);
+                }
+
+                // Update metadata with new schema
+                if &schema != existing_schema {
+                    let mut metadata = self
+                        ._table
+                        .get_metadata()
+                        .map_err(PyDeltaTableError::from_raw)?
+                        .clone();
+                    metadata.schema = schema;
+                    let metadata_action = action::MetaData::try_from(metadata)
+                        .map_err(|_| PyDeltaTableError::new_err("Failed to reparse metadata"))?;
+                    actions.push(Action::metaData(metadata_action));
+                }
+            }
+            _ => {
+                // This should be unreachable from Python
+                if &schema != existing_schema {
+                    PyDeltaTableError::new_err("Cannot change schema except in overwrite.");
+                }
             }
         }
 

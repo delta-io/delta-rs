@@ -60,6 +60,7 @@ def write_deltalake(
         Iterable[pa.RecordBatch],
         RecordBatchReader,
     ],
+    *,
     schema: Optional[pa.Schema] = None,
     partition_by: Optional[List[str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
@@ -72,6 +73,7 @@ def write_deltalake(
     name: Optional[str] = None,
     description: Optional[str] = None,
     configuration: Optional[Mapping[str, Optional[str]]] = None,
+    overwrite_schema: bool = False,
 ) -> None:
     """Write to a Delta Lake table (Experimental)
 
@@ -116,6 +118,7 @@ def write_deltalake(
     :param name: User-provided identifier for this table.
     :param description: User-provided description for this table.
     :param configuration: A map containing configuration options for the metadata action.
+    :param overwrite_schema: If True, allows updating the schema of the table.
     """
     if _has_pandas and isinstance(data, pd.DataFrame):
         data = pa.Table.from_pandas(data)
@@ -142,6 +145,14 @@ def write_deltalake(
     #    filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri))
 
     if table:  # already exists
+        if schema != table.pyarrow_schema() and not (
+            mode == "overwrite" and overwrite_schema
+        ):
+            raise ValueError(
+                "Schema of data does not match table schema\n"
+                f"Table schema:\n{schema}\nData Schema:\n{table.pyarrow_schema()}"
+            )
+
         if mode == "error":
             raise AssertionError("DeltaTable already exists.")
         elif mode == "ignore":
@@ -221,6 +232,7 @@ def write_deltalake(
             add_actions,
             mode,
             partition_by or [],
+            schema,
         )
 
 
