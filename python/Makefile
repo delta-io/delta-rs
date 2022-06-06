@@ -33,7 +33,7 @@ install: build ## Install Python binding of delta-rs
 	pip install $(TARGET_WHEEL)[devel,pandas]
 
 .PHONY: develop-pyspark
-install-pyspark: build
+develop-pyspark: setup
 	$(info --- Develop with Python binding ---)
 	maturin develop --extras=devel,pandas,pyspark $(MATURIN_EXTRA_ARGS)
 
