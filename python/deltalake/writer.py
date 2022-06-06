@@ -191,7 +191,7 @@ def write_deltalake(
         add_actions.append(
             AddAction(
                 path,
-                written_file.metadata.serialized_size,
+                written_file.metadata.serialized_size, # TODO: find accurate source of file sizes
                 partition_values,
                 int(datetime.now().timestamp()),
                 True,

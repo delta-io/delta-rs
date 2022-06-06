@@ -54,6 +54,11 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
     for add_path in get_add_paths(delta_table):
         # Paths should be relative, and with no partitioning have no directories
         assert "/" not in add_path
+    
+    for action in get_add_actions(delta_table):
+        path = os.path.join(tmp_path, action["path"])
+        actual_size = os.path.getsize(path)
+        assert actual_size == action["size"]
 
 
 @pytest.mark.parametrize("mode", ["append", "overwrite"])
@@ -271,31 +276,31 @@ def get_log_path(table: DeltaTable) -> str:
     return table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
 
 
-def get_stats(table: DeltaTable):
+def get_add_actions(table: DeltaTable) -> List[str]:
     log_path = get_log_path(table)
 
-    # Should only have single add entry
+    actions = []
+
     for line in open(log_path, "r").readlines():
         log_entry = json.loads(line)
 
         if "add" in log_entry:
-            return json.loads(log_entry["add"]["stats"])
+            actions.append(log_entry["add"])
+
+    return actions
+
+
+def get_stats(table: DeltaTable):
+    actions = get_add_actions(table)
+    # Should only have single add entry
+    if len(actions) == 1:
+        return json.loads(actions[0]["stats"])
     else:
-        raise AssertionError("No add action found!")
+        raise AssertionError("No add action found!")        
 
 
 def get_add_paths(table: DeltaTable) -> List[str]:
-    log_path = get_log_path(table)
-
-    paths = []
-
-    for line in open(log_path, "r").readlines():
-        log_entry = json.loads(line)
-
-        if "add" in log_entry:
-            paths.append(log_entry["add"]["path"])
-
-    return paths
+    return [action["path"] for action in get_add_actions(table)]
 
 
 def test_writer_stats(existing_table: DeltaTable, sample_data: pa.Table):
