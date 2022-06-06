@@ -26,10 +26,12 @@ def get_spark():
     )
     return delta.configure_spark_with_delta_pip(builder).getOrCreate()
 
+
 try:
-    import pyspark
     import delta
-    from delta.tables import DeltaTable as SparkDeltaTable
+    import delta.tables
+    import pyspark
+
     spark = get_spark()
 except ModuleNotFoundError:
     pass
@@ -38,13 +40,18 @@ except ModuleNotFoundError:
 @pytest.mark.pyspark
 @pytest.mark.integration
 def test_basic_read(sample_data: pa.Table, existing_table: DeltaTable):
-    uri = existing_table._table.table_uri()
+    uri = existing_table._table.table_uri() + "/"
 
-    df = spark.read.format("delta").load(uri)
-    # breakpoint()
-    assert_frame_equal(df.toPandas(), existing_table.to_pandas()) 
+    # Spark and pyarrow don't convert these types the same
+    incompatible_types = ["timestamp", "struct"]
 
-    dt = SparkDeltaTable(spark, uri)
+    df = spark.read.format("delta").load(uri).orderBy("int32")
+    assert_frame_equal(
+        df.toPandas().drop(incompatible_types, axis="columns"),
+        existing_table.to_pandas().drop(incompatible_types, axis="columns"),
+    )
+
+    dt = delta.tables.DeltaTable(spark, uri)
     history = dt.history().collect()
     assert len(history) == 1
     assert history[0].version == 0
