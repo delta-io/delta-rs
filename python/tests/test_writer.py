@@ -60,7 +60,7 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
         actual_size = os.path.getsize(path)
         assert action["size"] > 0
         # TODO: fix this
-        # assert actual_size == action["size"]
+        assert actual_size == action["size"]
 
 
 @pytest.mark.parametrize("mode", ["append", "overwrite"])

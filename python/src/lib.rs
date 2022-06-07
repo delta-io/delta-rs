@@ -484,7 +484,11 @@ impl DeltaStorageFsBackend {
             .map_err(PyDeltaTableError::from_storage)?;
         Ok(PyTuple::new(
             py,
-            &[obj.path, obj.modified.timestamp().to_string()],
+            &[
+                obj.path.into_py(py),
+                obj.modified.timestamp().to_string().into_py(py),
+                obj.size.into_py(py),
+            ],
         ))
     }
 

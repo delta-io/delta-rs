@@ -1,4 +1,5 @@
 import json
+import os.path
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -15,6 +16,8 @@ from typing import (
     Tuple,
     Union,
 )
+
+from deltalake.fs import DeltaStorageHandler
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -143,6 +146,7 @@ def write_deltalake(
     # TODO: Pass through filesystem once it is complete
     # if filesystem is None:
     #    filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri))
+    fs = DeltaStorageHandler(table_uri)
 
     if table:  # already exists
         if schema != table.pyarrow_schema() and not (
@@ -188,10 +192,12 @@ def write_deltalake(
         path, partition_values = get_partitions_from_path(table_uri, written_file.path)
         stats = get_file_stats_from_metadata(written_file.metadata)
 
+        size = fs.get_file_info([os.path.join(table_uri, path)])[0].size
+
         add_actions.append(
             AddAction(
                 path,
-                1024,  # TODO: find accurate source of file sizes
+                size,
                 partition_values,
                 int(datetime.now().timestamp()),
                 True,

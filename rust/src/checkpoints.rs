@@ -250,6 +250,7 @@ async fn cleanup_expired_logs_for(
         ObjectMeta {
             path: String::new(),
             modified: MIN_DATETIME,
+            size: None,
         },
     );
     let file_needs_time_adjustment =
@@ -293,6 +294,7 @@ async fn cleanup_expired_logs_for(
                 ObjectMeta {
                     path: current_file.1.path.clone(),
                     modified: last_file.1.modified.add(Duration::seconds(1)),
+                    size: None,
                 },
             );
             maybe_delete_files.push(updated);
