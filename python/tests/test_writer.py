@@ -152,6 +152,20 @@ def test_roundtrip_partitioned(
         assert add_path.count("/") == 1
 
 
+def test_roundtrip_null_partition(tmp_path: pathlib.Path, sample_data: pa.Table):
+    sample_data = sample_data.add_column(
+        0, "utf8_with_nulls", pa.array(["a"] * 4 + [None])
+    )
+    write_deltalake(str(tmp_path), sample_data, partition_by=["utf8_with_nulls"])
+
+    delta_table = DeltaTable(str(tmp_path))
+    assert delta_table.pyarrow_schema() == sample_data.schema
+
+    table = delta_table.to_pyarrow_table()
+    table = table.take(pc.sort_indices(table["int64"]))
+    assert table == sample_data
+
+
 def test_roundtrip_multi_partitioned(tmp_path: pathlib.Path, sample_data: pa.Table):
     write_deltalake(str(tmp_path), sample_data, partition_by=["int32", "bool"])
 

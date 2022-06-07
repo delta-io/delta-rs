@@ -276,18 +276,23 @@ def try_get_deltatable(table_uri: str) -> Optional[DeltaTable]:
         return None
 
 
-def get_partitions_from_path(base_path: str, path: str) -> Tuple[str, Dict[str, str]]:
+def get_partitions_from_path(
+    base_path: str, path: str
+) -> Tuple[str, Dict[str, Optional[str]]]:
     path = path.split(base_path, maxsplit=1)[1]
     if path[0] == "/":
         path = path[1:]
     parts = path.split("/")
     parts.pop()  # remove filename
-    out = {}
+    out: Dict[str, Optional[str]] = {}
     for part in parts:
         if part == "":
             continue
         key, value = part.split("=", maxsplit=1)
-        out[key] = value
+        if value == "__HIVE_DEFAULT_PARTITION__":
+            out[key] = None
+        else:
+            out[key] = value
     return path, out
 
 
