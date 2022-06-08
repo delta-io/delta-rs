@@ -3,7 +3,6 @@ import json
 import os
 import pathlib
 import random
-import sys
 from datetime import datetime
 from typing import Dict, Iterable, List
 from unittest.mock import Mock

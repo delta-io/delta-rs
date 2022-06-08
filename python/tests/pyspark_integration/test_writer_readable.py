@@ -3,7 +3,6 @@ import pathlib
 from typing import List
 
 import pyarrow as pa
-import pyspark
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
