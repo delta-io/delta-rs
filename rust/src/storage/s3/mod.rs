@@ -234,6 +234,16 @@ impl S3StorageOptions {
             .map(|(k, v)| (k.to_owned(), v.to_owned()))
             .collect();
 
+        // Copy web identity values provided in options but not the environment into the environment
+        // to get picked up by the `from_k8s_env` call in `get_web_identity_provider`.
+        Self::ensure_env_var(&options, s3_storage_options::AWS_REGION);
+        Self::ensure_env_var(&options, s3_storage_options::AWS_ACCESS_KEY_ID);
+        Self::ensure_env_var(&options, s3_storage_options::AWS_SECRET_ACCESS_KEY);
+        Self::ensure_env_var(&options, s3_storage_options::AWS_SESSION_TOKEN);
+        Self::ensure_env_var(&options, s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE);
+        Self::ensure_env_var(&options, s3_storage_options::AWS_ROLE_ARN);
+        Self::ensure_env_var(&options, s3_storage_options::AWS_ROLE_SESSION_NAME);
+
         let endpoint_url = str_option(&options, s3_storage_options::AWS_ENDPOINT_URL);
         let region = if let Some(endpoint_url) = endpoint_url.as_ref() {
             Region::Custom {
@@ -247,15 +257,6 @@ impl S3StorageOptions {
         } else {
             Region::default()
         };
-
-        // Copy web identity values provided in options but not the environment into the environment
-        // to get picked up by the `from_k8s_env` call in `get_web_identity_provider`.
-        Self::ensure_env_var(&options, s3_storage_options::AWS_ACCESS_KEY_ID);
-        Self::ensure_env_var(&options, s3_storage_options::AWS_SECRET_ACCESS_KEY);
-        Self::ensure_env_var(&options, s3_storage_options::AWS_SESSION_TOKEN);
-        Self::ensure_env_var(&options, s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE);
-        Self::ensure_env_var(&options, s3_storage_options::AWS_ROLE_ARN);
-        Self::ensure_env_var(&options, s3_storage_options::AWS_ROLE_SESSION_NAME);
 
         let s3_pool_idle_timeout = Self::u64_or_default(
             &options,
@@ -958,6 +959,28 @@ mod tests {
 
     #[test]
     #[serial]
+    fn storage_options_with_only_region_and_credentials() {
+        std::env::remove_var(s3_storage_options::AWS_ENDPOINT_URL);
+        let options = S3StorageOptions::from_map(hashmap! {
+            s3_storage_options::AWS_REGION.to_string() => "eu-west-1".to_string(),
+            s3_storage_options::AWS_ACCESS_KEY_ID.to_string() => "test".to_string(),
+            s3_storage_options::AWS_SECRET_ACCESS_KEY.to_string() => "test".to_string(),
+        });
+
+        assert_eq!(
+            S3StorageOptions {
+                _endpoint_url: None,
+                region: Region::default(),
+                aws_access_key_id: Some("test".to_string()),
+                aws_secret_access_key: Some("test".to_string()),
+                ..Default::default()
+            },
+            options
+        );
+    }
+
+    #[test]
+    #[serial]
     fn storage_options_from_map_test() {
         let options = S3StorageOptions::from_map(hashmap! {
             s3_storage_options::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
@@ -1016,7 +1039,6 @@ mod tests {
             s3_storage_options::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES,
             "3",
         );
-
         let options = S3StorageOptions::from_map(hashmap! {
             s3_storage_options::AWS_REGION.to_string() => "us-west-2".to_string(),
             "DYNAMO_LOCK_PARTITION_KEY_VALUE".to_string() => "my_lock".to_string(),
@@ -1051,10 +1073,16 @@ mod tests {
     #[serial]
     fn storage_options_web_identity_test() {
         let _options = S3StorageOptions::from_map(hashmap! {
+            s3_storage_options::AWS_REGION.to_string() => "eu-west-1".to_string(),
             s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "web_identity_token_file".to_string(),
             s3_storage_options::AWS_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/web_identity_role".to_string(),
             s3_storage_options::AWS_ROLE_SESSION_NAME.to_string() => "web_identity_session_name".to_string(),
         });
+
+        assert_eq!(
+            "eu-west-1",
+            std::env::var(s3_storage_options::AWS_REGION).unwrap()
+        );
 
         assert_eq!(
             "web_identity_token_file",
