@@ -94,6 +94,30 @@ dependencies = [
  "lexical-core",
  "multiversion",
  "num",
+ "rand 0.8.5",
+ "regex",
+ "serde",
+ "serde_derive",
+ "serde_json",
+]
+
+[[package]]
+name = "arrow"
+version = "14.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "0612b6a634de6c3f5e63fdaa6932f7bc598f92de0462ac6e69b0aebd77e093aa"
+dependencies = [
+ "bitflags",
+ "chrono",
+ "csv",
+ "flatbuffers",
+ "half",
+ "hex",
+ "indexmap",
+ "lazy_static",
+ "lexical-core",
+ "multiversion",
+ "num",
  "pyo3",
  "rand 0.8.5",
  "regex",
@@ -610,7 +634,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8174c458d0266ba442038160fad2c98f02924e6179d6d46175f600b69abb5bb7"
 dependencies = [
  "ahash",
- "arrow",
+ "arrow 13.0.0",
  "async-trait",
  "chrono",
  "datafusion-common",
@@ -625,7 +649,7 @@ dependencies = [
  "num_cpus",
  "ordered-float 3.0.0",
  "parking_lot 0.12.0",
- "parquet",
+ "parquet 13.0.0",
  "paste",
  "pin-project-lite",
  "rand 0.8.5",
@@ -643,9 +667,9 @@ version = "8.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8c687e12a58d1499b19ee899fa467d122c8cc9223570af6f3eb3c4d9d9be929b"
 dependencies = [
- "arrow",
+ "arrow 13.0.0",
  "ordered-float 3.0.0",
- "parquet",
+ "parquet 13.0.0",
  "sqlparser",
 ]
 
@@ -671,7 +695,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d20909d70931b88605b6f121c0ed820cec1d5b802cb51b7b5759f0421be3add8"
 dependencies = [
  "ahash",
- "arrow",
+ "arrow 13.0.0",
  "datafusion-common",
  "sqlparser",
 ]
@@ -683,7 +707,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad9083cb20b57216430d5b8e52341782d9520ce77e65c60803e330fd09bdfa6e"
 dependencies = [
  "ahash",
- "arrow",
+ "arrow 13.0.0",
  "blake2",
  "blake3",
  "chrono",
@@ -707,7 +731,7 @@ version = "8.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0f649a2021eefef44e0bef6782d053148b2fef74db7592fecfe87e042d52947a"
 dependencies = [
- "arrow",
+ "arrow 13.0.0",
  "datafusion-common",
  "paste",
  "rand 0.8.5",
@@ -718,7 +742,7 @@ name = "deltalake"
 version = "0.4.1"
 dependencies = [
  "anyhow",
- "arrow",
+ "arrow 14.0.0",
  "async-stream",
  "async-trait",
  "azure_core",
@@ -739,10 +763,11 @@ dependencies = [
  "libc",
  "log",
  "maplit",
- "parquet",
+ "parquet 14.0.0",
  "parquet-format",
  "percent-encoding",
  "pretty_assertions",
+ "rand 0.8.5",
  "regex",
  "reqwest",
  "rusoto_core",
@@ -1933,10 +1958,33 @@ version = "13.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "6c6d737baed48775e87a69aa262f1fa2f1d6bd074dedbe9cac244b9aabf2a0b4"
 dependencies = [
- "arrow",
+ "arrow 13.0.0",
  "base64",
  "brotli",
  "byteorder",
+ "chrono",
+ "flate2",
+ "lz4",
+ "num",
+ "num-bigint",
+ "parquet-format",
+ "rand 0.8.5",
+ "snap",
+ "thrift",
+ "zstd",
+]
+
+[[package]]
+name = "parquet"
+version = "14.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "ba1185ee1da5091e40b86519265a44d2704e3916ff867059c915141cab14d413"
+dependencies = [
+ "arrow 14.0.0",
+ "base64",
+ "brotli",
+ "byteorder",
+ "bytes",
  "chrono",
  "flate2",
  "lz4",
