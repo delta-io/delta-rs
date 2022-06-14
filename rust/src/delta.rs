@@ -463,7 +463,7 @@ pub struct DeltaTableLoadOptions {
     /// table root uri
     pub table_uri: String,
     /// backend to access storage system
-    pub storage_backend: Box<dyn StorageBackend>,
+    pub storage_backend: Option<Box<dyn StorageBackend>>,
     /// specify the version we are going to load: a time stamp, a version, or just the newest
     /// available version
     pub version: DeltaVersion,
@@ -487,7 +487,7 @@ impl DeltaTableLoadOptions {
     pub fn new(table_uri: &str) -> Result<Self, DeltaTableError> {
         Ok(Self {
             table_uri: table_uri.to_string(),
-            storage_backend: storage::get_backend_for_uri(table_uri)?,
+            storage_backend: None,
             require_tombstones: true,
             require_files: true,
             version: DeltaVersion::default(),
@@ -542,22 +542,23 @@ impl DeltaTableBuilder {
 
     /// explicitely set a backend (override backend derived from `table_uri`)
     pub fn with_storage_backend(mut self, storage: Box<dyn StorageBackend>) -> Self {
-        self.options.storage_backend = storage;
+        self.options.storage_backend = Some(storage);
         self
     }
 
     /// finally load the table
     pub async fn load(self) -> Result<DeltaTable, DeltaTableError> {
+        let storage = match self.options.storage_backend {
+            Some(storage) => storage,
+            None => storage::get_backend_for_uri(&self.options.table_uri)?,
+        };
+
         let config = DeltaTableConfig {
             require_tombstones: self.options.require_tombstones,
             require_files: self.options.require_files,
         };
 
-        let mut table = DeltaTable::new(
-            &self.options.table_uri,
-            self.options.storage_backend,
-            config,
-        )?;
+        let mut table = DeltaTable::new(&self.options.table_uri, storage, config)?;
 
         match self.options.version {
             DeltaVersion::Newest => table.load().await?,
