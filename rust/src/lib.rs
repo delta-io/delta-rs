@@ -71,7 +71,7 @@
 //! datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "07bc2c754805f536fe1cd873dbe6adfc0a21cbb3" }
 //! ```
 
-#![deny(warnings)]
+//#![deny(warnings)]
 #![deny(missing_docs)]
 
 extern crate log;

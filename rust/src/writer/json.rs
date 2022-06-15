@@ -19,11 +19,12 @@ use parquet::{
     arrow::ArrowWriter,
     basic::Compression,
     errors::ParquetError,
-    file::{properties::WriterProperties, writer::InMemoryWriteableCursor},
+    file::{properties::WriterProperties},
 };
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::io::Cursor;
 use std::sync::Arc;
 
 type BadValue = (Value, ParquetError);
@@ -42,8 +43,8 @@ pub struct JsonWriter {
 pub(crate) struct DataArrowWriter {
     arrow_schema: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
-    cursor: InMemoryWriteableCursor,
-    arrow_writer: ArrowWriter<InMemoryWriteableCursor>,
+    cursor: Cursor<Vec<u8>>,
+    arrow_writer: ArrowWriter<Cursor<Vec<u8>>>,
     partition_values: HashMap<String, Option<String>>,
     null_counts: NullCounts,
     buffered_record_batch_count: usize,
@@ -115,7 +116,7 @@ impl DataArrowWriter {
         }
 
         // Copy current cursor bytes so we can recover from failures
-        let current_cursor_bytes = self.cursor.data();
+        let current_cursor_bytes = self.cursor.clone().into_inner();
 
         let result = self.arrow_writer.write(&record_batch);
 
@@ -146,7 +147,7 @@ impl DataArrowWriter {
         arrow_schema: Arc<ArrowSchema>,
         writer_properties: WriterProperties,
     ) -> Result<Self, ParquetError> {
-        let cursor = InMemoryWriteableCursor::default();
+        let cursor = Cursor::new(vec![]);
         let arrow_writer = Self::new_underlying_writer(
             cursor.clone(),
             arrow_schema.clone(),
@@ -169,10 +170,10 @@ impl DataArrowWriter {
     }
 
     fn new_underlying_writer(
-        cursor: InMemoryWriteableCursor,
+        cursor: Cursor<Vec<u8>>,
         arrow_schema: Arc<ArrowSchema>,
         writer_properties: WriterProperties,
-    ) -> Result<ArrowWriter<InMemoryWriteableCursor>, ParquetError> {
+    ) -> Result<ArrowWriter<Cursor<Vec<u8>>>, ParquetError> {
         ArrowWriter::try_new(cursor, arrow_schema, Some(writer_properties))
     }
 }
@@ -259,7 +260,9 @@ impl JsonWriter {
     /// Returns the current byte length of the in memory buffer.
     /// This may be used by the caller to decide when to finalize the file write.
     pub fn buffer_len(&self) -> usize {
-        self.arrow_writers.values().map(|w| w.cursor.len()).sum()
+        self.arrow_writers.values().map(|w| {
+            w.cursor.get_ref().len()
+        }).sum()
     }
 
     /// Returns the number of records held in the current buffer.
@@ -370,7 +373,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
 
             let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
 
-            let obj_bytes = writer.cursor.data();
+            let obj_bytes = writer.cursor.into_inner();
             let file_size = obj_bytes.len() as i64;
 
             let storage_path = self.storage.join_path(&self.table_uri, path.as_str());
@@ -420,8 +423,7 @@ fn quarantine_failed_parquet_rows(
 
     for value in values {
         let record_batch = record_batch_from_message(arrow_schema.clone(), &[value.clone()])?;
-
-        let cursor = InMemoryWriteableCursor::default();
+        let cursor = Cursor::new(vec![]);
         let mut writer = ArrowWriter::try_new(cursor.clone(), arrow_schema.clone(), None)?;
 
         match writer.write(&record_batch) {

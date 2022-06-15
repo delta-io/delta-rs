@@ -9,11 +9,10 @@ use arrow::{
     json::reader::{Decoder, DecoderOptions},
     record_batch::*,
 };
-use parquet::file::writer::InMemoryWriteableCursor;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
-use std::io::Write;
+use std::io::Cursor;
 use std::sync::Arc;
 use uuid::Uuid;
 
@@ -100,10 +99,8 @@ pub(crate) fn next_data_path(
 }
 
 /// Create a new cursor from existing bytes
-pub(crate) fn cursor_from_bytes(bytes: &[u8]) -> Result<InMemoryWriteableCursor, std::io::Error> {
-    let mut cursor = InMemoryWriteableCursor::default();
-    cursor.write_all(bytes)?;
-    Ok(cursor)
+pub(crate) fn cursor_from_bytes(bytes: &[u8]) -> Result<Cursor<Vec<u8>>, std::io::Error> {
+    Ok(Cursor::new(Vec::from(bytes)))
 }
 
 /// partition json values

@@ -46,10 +46,11 @@ use arrow::{
     datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
     error::ArrowError,
 };
-use parquet::{arrow::ArrowWriter, errors::ParquetError, file::writer::InMemoryWriteableCursor};
+use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::io::Cursor;
 use std::sync::Arc;
 
 /// Writes messages to a delta lake table.
@@ -249,7 +250,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 
             let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
 
-            let obj_bytes = writer.cursor.data();
+            let obj_bytes = writer.cursor.into_inner();
             let file_size = obj_bytes.len() as i64;
             let storage_path = self
                 .storage
@@ -289,8 +290,8 @@ pub struct PartitionResult {
 pub(crate) struct PartitionWriter {
     arrow_schema: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
-    pub(super) cursor: InMemoryWriteableCursor,
-    pub(super) arrow_writer: ArrowWriter<InMemoryWriteableCursor>,
+    pub(super) cursor: Cursor<Vec<u8>>,
+    pub(super) arrow_writer: ArrowWriter<Cursor<Vec<u8>>>,
     pub(super) partition_values: HashMap<String, Option<String>>,
     pub(super) null_counts: NullCounts,
     pub(super) buffered_record_batch_count: usize,
@@ -302,7 +303,7 @@ impl PartitionWriter {
         partition_values: HashMap<String, Option<String>>,
         writer_properties: WriterProperties,
     ) -> Result<Self, ParquetError> {
-        let cursor = InMemoryWriteableCursor::default();
+        let cursor = Cursor::new(vec![]);
         let arrow_writer = ArrowWriter::try_new(
             cursor.clone(),
             arrow_schema.clone(),
@@ -335,7 +336,7 @@ impl PartitionWriter {
         }
 
         // Copy current cursor bytes so we can recover from failures
-        let current_cursor_bytes = self.cursor.data();
+        let current_cursor_bytes = self.cursor.get_ref();
         match self.arrow_writer.write(record_batch) {
             Ok(_) => {
                 self.buffered_record_batch_count += 1;
@@ -360,7 +361,7 @@ impl PartitionWriter {
     /// Returns the current byte length of the in memory buffer.
     /// This may be used by the caller to decide when to finalize the file write.
     pub fn buffer_len(&self) -> usize {
-        self.cursor.len()
+        self.cursor.get_ref().len()
     }
 }
 
