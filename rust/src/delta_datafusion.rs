@@ -29,8 +29,8 @@ use async_trait::async_trait;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::{TableProvider, TableType};
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use datafusion::datasource::{TableProvider, TableType};
 use datafusion::execution::context::SessionState;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::file_format::FileScanConfig;
@@ -254,8 +254,8 @@ impl TableProvider for delta::DeltaTable {
             })
             .collect::<datafusion::error::Result<_>>()?;
 
-        let dt_object_store_url = ObjectStoreUrl::parse(&self.table_uri)
-            .unwrap_or(ObjectStoreUrl::local_filesystem());
+        let dt_object_store_url =
+            ObjectStoreUrl::parse(&self.table_uri).unwrap_or(ObjectStoreUrl::local_filesystem());
 
         ParquetFormat::default()
             .create_physical_plan(

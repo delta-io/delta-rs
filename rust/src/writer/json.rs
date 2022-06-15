@@ -16,10 +16,8 @@ use arrow::{
 };
 use log::{info, warn};
 use parquet::{
-    arrow::ArrowWriter,
-    basic::Compression,
-    errors::ParquetError,
-    file::{properties::WriterProperties},
+    arrow::ArrowWriter, basic::Compression, errors::ParquetError,
+    file::properties::WriterProperties,
 };
 use serde_json::Value;
 use std::collections::HashMap;
@@ -260,9 +258,10 @@ impl JsonWriter {
     /// Returns the current byte length of the in memory buffer.
     /// This may be used by the caller to decide when to finalize the file write.
     pub fn buffer_len(&self) -> usize {
-        self.arrow_writers.values().map(|w| {
-            w.cursor.get_ref().len()
-        }).sum()
+        self.arrow_writers
+            .values()
+            .map(|w| w.cursor.get_ref().len())
+            .sum()
     }
 
     /// Returns the number of records held in the current buffer.
