@@ -548,3 +548,32 @@ async fn test_poll_table_commits() {
     };
     assert!(is_up_to_date);
 }
+
+#[tokio::test]
+async fn test_read_vacuumed_log() {
+    let path = "./tests/data/checkpoints_vacuumed";
+    let table = deltalake::open_table(path).await.unwrap();
+    assert_eq!(table.version, 12);
+}
+
+#[tokio::test]
+async fn test_read_vacuumed_log_history() {
+    let path = "./tests/data/checkpoints_vacuumed";
+    let mut table = deltalake::open_table(path).await.unwrap();
+
+    // load history for table version with available log file
+    let history = table
+        .history(Some(5))
+        .await
+        .expect("Cannot get table history");
+
+    assert_eq!(history.len(), 5);
+
+    // load history for table version without log file
+    let history = table
+        .history(Some(10))
+        .await
+        .expect("Cannot get table history");
+
+    assert_eq!(history.len(), 8);
+}
