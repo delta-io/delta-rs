@@ -991,9 +991,9 @@ impl DeltaTable {
                                 version -= 1;
                                 if version == -1 {
                                     let err = format!(
-                                    "No snapshot or version 0 found, perhaps {} is an empty dir?",
-                                    self.table_uri
-                                );
+                                        "No snapshot or version 0 found, perhaps {} is an empty dir?",
+                                        self.table_uri
+                                    );
                                     return Err(DeltaTableError::NotATable(err));
                                 }
                             }
