@@ -233,7 +233,7 @@ impl TableProvider for delta::DeltaTable {
 
     async fn scan(
         &self,
-        ctx: &SessionState,
+        _: &SessionState,
         projection: &Option<Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -254,10 +254,12 @@ impl TableProvider for delta::DeltaTable {
             })
             .collect::<datafusion::error::Result<_>>()?;
 
+        let dt_object_store_url = ObjectStoreUrl::parse(&self.table_uri)?;
+
         ParquetFormat::default()
             .create_physical_plan(
                 FileScanConfig {
-                    object_store_url: ObjectStoreUrl::local_filesystem(),
+                    object_store_url: dt_object_store_url,
                     file_schema: schema,
                     file_groups: partitions,
                     statistics: self.datafusion_table_statistics(),
