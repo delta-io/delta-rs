@@ -336,7 +336,7 @@ impl PartitionWriter {
         }
 
         // Copy current cursor bytes so we can recover from failures
-        let current_cursor_bytes = self.cursor.get_ref();
+        let current_cursor_bytes = self.cursor.get_ref().clone();
         match self.arrow_writer.write(record_batch) {
             Ok(_) => {
                 self.buffered_record_batch_count += 1;
