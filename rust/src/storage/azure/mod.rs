@@ -10,8 +10,8 @@ use azure_identity::{
 };
 use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
 use azure_storage_datalake::prelude::*;
-use futures::stream::Stream;
-use futures::StreamExt;
+use futures::stream::{self, Stream};
+use futures::{future::Either, StreamExt};
 use log::debug;
 use std::collections::HashMap;
 use std::fmt::Debug;
@@ -361,17 +361,15 @@ impl StorageBackend for AdlsGen2Backend {
             .directory(path)
             .into_stream()
             .flat_map(|it| match it {
-                Ok(paths) => futures::future::Either::Left(futures::stream::iter(
-                    paths.into_iter().map(|p| {
-                        Ok(ObjectMeta {
-                            path: path.to_string(),
-                            modified: p.last_modified,
-                        })
-                    }),
-                )),
-                Err(err) => futures::future::Either::Right(futures::stream::iter(vec![Err(
-                    StorageError::Azure { source: err },
-                )])),
+                Ok(paths) => Either::Left(stream::iter(paths.into_iter().map(|p| {
+                    Ok(ObjectMeta {
+                        path: path.to_string(),
+                        modified: p.last_modified,
+                    })
+                }))),
+                Err(err) => Either::Right(stream::once(async {
+                    Err(StorageError::Azure { source: err })
+                })),
             })
             .boxed())
     }
