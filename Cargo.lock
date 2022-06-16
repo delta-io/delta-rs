@@ -174,9 +174,9 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 
 [[package]]
 name = "azure_core"
-version = "0.2.2"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ca4393afee90ad13c987a2cbfeb5bbb0b9fb3c86585e42ed3ed151babaa93da1"
+checksum = "c0e2c7582699a3af9cc8a7bc81259519d8afb8eded1090d4fcd86de3db0eace1"
 dependencies = [
  "async-trait",
  "base64",
@@ -195,16 +195,15 @@ dependencies = [
  "serde",
  "serde_derive",
  "serde_json",
- "thiserror",
  "url",
  "uuid 1.0.0",
 ]
 
 [[package]]
 name = "azure_identity"
-version = "0.2.0"
+version = "0.4.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "f9a931af53bade449760620b429cad695a72bf07e7864d0e39e11fa442ee0458"
+checksum = "a80434580cb2e2a1915b57fbd3655b513c4acf149cfbb85747f91649d48833ae"
 dependencies = [
  "async-lock",
  "async-timer",
@@ -212,22 +211,22 @@ dependencies = [
  "azure_core",
  "base64",
  "chrono",
+ "fix-hidden-lifetime-bug",
  "futures",
+ "http",
  "log",
  "oauth2",
- "reqwest",
  "serde",
  "serde_json",
- "thiserror",
  "url",
  "uuid 1.0.0",
 ]
 
 [[package]]
 name = "azure_storage"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7a9f2aee687da9817f7b332e1e01dda51cd9f7a0a68a5abcfec7c4c494a65546"
+checksum = "d21c9efa0126aefcdf620395b262143e86aa95002df3c3030a471ed9f5c4dad4"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -245,16 +244,15 @@ dependencies = [
  "serde_derive",
  "serde_json",
  "sha2 0.10.2",
- "thiserror",
  "url",
  "uuid 1.0.0",
 ]
 
 [[package]]
 name = "azure_storage_blobs"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "d17982127c4a34736a60656ddbd05b1714420686b6e6304145ee3b4501395e75"
+checksum = "47f61c2e25e51058f4ff5a9298620e4b8534326a9f2d2936b6aca5c0ac76aaca"
 dependencies = [
  "RustyXML",
  "azure_core",
@@ -270,16 +268,15 @@ dependencies = [
  "serde-xml-rs",
  "serde_derive",
  "serde_json",
- "thiserror",
  "url",
  "uuid 1.0.0",
 ]
 
 [[package]]
 name = "azure_storage_datalake"
-version = "0.2.0"
+version = "0.3.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a78936621558980aa1e5d861690999f8cdc89a6203e21d04ae45c36e9e454930"
+checksum = "1d891ba3035da009368372dabf3f23706c81e91db871a0de37ab712e292a10d7"
 dependencies = [
  "async-trait",
  "azure_core",
@@ -743,6 +740,7 @@ dependencies = [
  "parquet-format",
  "percent-encoding",
  "pretty_assertions",
+ "rand 0.8.5",
  "regex",
  "reqwest",
  "rusoto_core",
@@ -935,6 +933,26 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c3fcf0cee53519c866c09b5de1f6c56ff9d647101f81c1964fa632e148896cdf"
 dependencies = [
  "instant",
+]
+
+[[package]]
+name = "fix-hidden-lifetime-bug"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "b4b7e739f1d47bbc5185391f0b280ef0bd953fa2327d0bf0c619183502923938"
+dependencies = [
+ "fix-hidden-lifetime-bug-proc_macros",
+]
+
+[[package]]
+name = "fix-hidden-lifetime-bug-proc_macros"
+version = "0.2.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "eb97774845ef67bfa186b3a39ed2dec87ed70b4932f076ca75392e9c58a6bda1"
+dependencies = [
+ "proc-macro2",
+ "quote",
+ "syn",
 ]
 
 [[package]]
