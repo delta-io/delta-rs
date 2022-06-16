@@ -540,7 +540,7 @@ impl DeltaTableBuilder {
         self
     }
 
-    /// explicitely set a backend (override backend derived from `table_uri`)
+    /// Set the storage backend. If a backend is not provided then it is derived from `table_uri` when `load` is called.
     pub fn with_storage_backend(mut self, storage: Box<dyn StorageBackend>) -> Self {
         self.options.storage_backend = Some(storage);
         self
