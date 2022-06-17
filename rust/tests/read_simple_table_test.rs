@@ -52,7 +52,7 @@ async fn read_simple_table() {
     {
         let mut paths: Vec<String> = table.get_file_uris().collect();
         paths.sort();
-        let mut expected_paths: Vec<String> = vec![
+        let expected_paths: Vec<String> = vec![
                 "./tests/data/simple_table\\part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet".to_string(),
                 "./tests/data/simple_table\\part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet".to_string(),
                 "./tests/data/simple_table\\part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet".to_string(),
