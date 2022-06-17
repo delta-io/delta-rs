@@ -734,7 +734,6 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-stream",
- "tokio-util 0.7.1",
  "utime",
  "uuid 1.0.0",
 ]
@@ -3025,7 +3024,6 @@ dependencies = [
  "bytes",
  "futures-core",
  "futures-sink",
- "futures-util",
  "pin-project-lite",
  "tokio",
  "tracing",
