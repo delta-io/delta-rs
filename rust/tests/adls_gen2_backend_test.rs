@@ -11,6 +11,7 @@ mod adls_gen2_backend {
     use azure_storage_datalake::clients::{DataLakeClient, FileSystemClient};
     use chrono::Utc;
     use deltalake::{StorageBackend, StorageError};
+    use futures::TryStreamExt;
     use serial_test::serial;
     use std::env;
 
@@ -201,6 +202,38 @@ mod adls_gen2_backend {
         assert!(
             matches!(rename_obj_noreplace_error, StorageError::AlreadyExists(path) if path == *file_path2)
         );
+
+        // Cleanup
+        file_system_client.delete().into_future().await.unwrap();
+    }
+
+    #[ignore]
+    #[tokio::test]
+    #[serial]
+    async fn test_list_objs() {
+        // Arrange
+        let file_system_prefix = "test-adls-gen2-backend-list-objs";
+        let file_system_name = format!("{}-{}", file_system_prefix, Utc::now().timestamp());
+        let (file_system_client, table_uri, backend) = setup(&file_system_name).await;
+
+        let file_path = &format!("{}dir1/file1-1.txt", table_uri);
+        let file_contents = &[12, 13, 14];
+        backend.put_obj(file_path, file_contents).await.unwrap();
+
+        let file_path = &format!("{}dir1/file1-2.txt", table_uri);
+        let file_contents = &[12, 13, 14];
+        backend.put_obj(file_path, file_contents).await.unwrap();
+
+        // Act
+        let dir_path = &format!("{}dir1/", table_uri);
+        let files = backend
+            .list_objs(dir_path)
+            .await
+            .unwrap()
+            .try_collect::<Vec<_>>()
+            .await
+            .unwrap();
+        assert_eq!(files.len(), 2);
 
         // Cleanup
         file_system_client.delete().into_future().await.unwrap();

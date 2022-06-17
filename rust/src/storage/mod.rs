@@ -3,14 +3,11 @@
 use std::fmt::Debug;
 use std::pin::Pin;
 
+#[cfg(feature = "azure")]
+use azure_core::error::{Error as AzureError, ErrorKind as AzureErrorKind};
 use chrono::{DateTime, Utc};
 use futures::Stream;
 use std::collections::HashMap;
-
-#[cfg(feature = "azure")]
-use azure_core::{Error as AzureError, HttpError as AzureHttpError};
-#[cfg(feature = "azure")]
-use std::error::Error;
 
 #[cfg(feature = "azure")]
 pub mod azure;
@@ -375,21 +372,7 @@ pub enum StorageError {
     #[error("Error interacting with Azure: {source}")]
     Azure {
         /// Azure error reason
-        source: AzureHttpError,
-    },
-    /// Azure Storage error
-    #[cfg(feature = "azure")]
-    #[error("Error interacting with AzureStorage: {source}")]
-    AzureStorage {
-        /// Azure error reason
-        source: azure_storage::Error,
-    },
-    /// Generic Azure error
-    #[cfg(feature = "azure")]
-    #[error("Generic error: {source}")]
-    AzureGeneric {
-        /// Generic Azure error reason
-        source: Box<dyn Error + Sync + std::marker::Send>,
+        source: AzureError,
     },
     /// Azure config error
     #[cfg(feature = "azure")]
@@ -446,28 +429,15 @@ impl From<std::io::Error> for StorageError {
 }
 
 #[cfg(feature = "azure")]
-impl From<AzureHttpError> for StorageError {
-    fn from(error: AzureHttpError) -> Self {
-        match error {
-            AzureHttpError::StatusCode { status, body: _ } if status.as_u16() == 404 => {
-                StorageError::NotFound
+impl From<AzureError> for StorageError {
+    fn from(error: AzureError) -> Self {
+        match error.kind() {
+            AzureErrorKind::HttpResponse { status, .. } if *status == 404 => StorageError::NotFound,
+            AzureErrorKind::HttpResponse { status, .. } if *status == 401 || *status == 403 => {
+                StorageError::AzureCredentials { source: error }
             }
             _ => StorageError::Azure { source: error },
         }
-    }
-}
-
-#[cfg(feature = "azure")]
-impl From<azure_storage::Error> for StorageError {
-    fn from(error: azure_storage::Error) -> Self {
-        StorageError::AzureStorage { source: error }
-    }
-}
-
-#[cfg(feature = "azure")]
-impl From<AzureError> for StorageError {
-    fn from(error: AzureError) -> Self {
-        StorageError::AzureCredentials { source: error }
     }
 }
 
