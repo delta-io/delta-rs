@@ -175,7 +175,8 @@ checksum = "d468802bab17cbc0cc575e9b053f41e72aa36bfa6b7f55e3529ffa43161b97fa"
 [[package]]
 name = "azure_core"
 version = "0.3.0"
-source = "git+https://github.com/roeap/azure-sdk-for-rust/?branch=head-datalake#8f9c0e6fdf9a01f6b0438464ed3204f2f33ce743"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c0e2c7582699a3af9cc8a7bc81259519d8afb8eded1090d4fcd86de3db0eace1"
 dependencies = [
  "async-trait",
  "base64",
@@ -201,7 +202,8 @@ dependencies = [
 [[package]]
 name = "azure_identity"
 version = "0.4.0"
-source = "git+https://github.com/roeap/azure-sdk-for-rust/?branch=head-datalake#8f9c0e6fdf9a01f6b0438464ed3204f2f33ce743"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a80434580cb2e2a1915b57fbd3655b513c4acf149cfbb85747f91649d48833ae"
 dependencies = [
  "async-lock",
  "async-timer",
@@ -222,8 +224,9 @@ dependencies = [
 
 [[package]]
 name = "azure_storage"
-version = "0.3.0"
-source = "git+https://github.com/roeap/azure-sdk-for-rust/?branch=head-datalake#8f9c0e6fdf9a01f6b0438464ed3204f2f33ce743"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d1a5bc29e999268e618c202f157291930d749f1e4de55e01ecfda3990dd37dc7"
 dependencies = [
  "RustyXML",
  "async-trait",
@@ -247,8 +250,9 @@ dependencies = [
 
 [[package]]
 name = "azure_storage_datalake"
-version = "0.3.0"
-source = "git+https://github.com/roeap/azure-sdk-for-rust/?branch=head-datalake#8f9c0e6fdf9a01f6b0438464ed3204f2f33ce743"
+version = "0.4.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "41971cdf60cf59647979ef373b02ecc156fa126e99730e1674b8595f46797462"
 dependencies = [
  "async-trait",
  "azure_core",
