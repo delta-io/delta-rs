@@ -401,8 +401,8 @@ impl StorageBackend for AdlsGen2Backend {
         let dst_obj = parse_uri(dst)?.into_adlsgen2_object()?;
         self.validate_container(&dst_obj)?;
 
-        let file_client = self.file_system_client.get_file_client(src_obj.path);
-        file_client
+        self.file_system_client
+            .get_file_client(src_obj.path)
             .rename_if_not_exists(dst_obj.path)
             .into_future()
             .await
