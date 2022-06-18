@@ -401,7 +401,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     debug!("Writing to checkpoint parquet buffer...");
     // Write the Checkpoint parquet file.
     let writeable_cursor = Cursor::new(vec![]);
-    let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
+    let mut writer = ArrowWriter::try_new(&mut writeable_cursor, arrow_schema.clone(), None)?;
     let options = DecoderOptions::new().with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE);
     let decoder = Decoder::new(arrow_schema, options);
     while let Some(batch) = decoder.next_batch(&mut jsons)? {
