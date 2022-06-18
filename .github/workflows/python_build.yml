@@ -88,15 +88,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: python-test-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+    - uses: Swatinem/rust-cache@v1
 
     - name: Install latest nightly
       uses: actions-rs/toolchain@v1
@@ -139,15 +131,7 @@ jobs:
     steps:
     - uses: actions/checkout@v2
 
-    - uses: actions/cache@v2
-      with:
-        path: |
-          ~/.cargo/bin/
-          ~/.cargo/registry/index/
-          ~/.cargo/registry/cache/
-          ~/.cargo/git/db/
-          target/
-        key: python-pyspark-test-${{ hashFiles('**/Cargo.lock', '**/Cargo.toml') }}
+    - uses: Swatinem/rust-cache@v1
 
     - name: Install latest nightly
       uses: actions-rs/toolchain@v1
