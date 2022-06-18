@@ -57,8 +57,6 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
     for action in get_add_actions(delta_table):
         path = os.path.join(tmp_path, action["path"])
         actual_size = os.path.getsize(path)
-        assert action["size"] > 0
-        # TODO: fix this
         assert actual_size == action["size"]
 
 
