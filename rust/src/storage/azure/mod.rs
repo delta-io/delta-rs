@@ -325,6 +325,7 @@ impl StorageBackend for AdlsGen2Backend {
         Ok(ObjectMeta {
             path: path.to_string(),
             modified,
+            size: properties.content_length,
         })
     }
 
@@ -369,6 +370,7 @@ impl StorageBackend for AdlsGen2Backend {
                     Ok(ObjectMeta {
                         path: path.to_string(),
                         modified: p.last_modified,
+                        size: Some(p.content_length),
                     })
                 }))),
                 Err(err) => Either::Right(stream::once(async {

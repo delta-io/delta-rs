@@ -102,6 +102,7 @@ mod adls_gen2_backend {
         // Assert
         let file_meta_data = result.unwrap();
         assert_eq!(file_meta_data.path, *file_path);
+        assert_eq!(file_meta_data.size, Some(3));
 
         // Cleanup
         file_system_client.delete().into_future().await.unwrap();
