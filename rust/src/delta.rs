@@ -670,14 +670,12 @@ impl DeltaTable {
         match self.storage.get_obj(&last_checkpoint_path).await {
             Ok(data) => Ok(serde_json::from_slice(&data)?),
             Err(StorageError::NotFound) => {
-                if let Some(cp) = self
+                match self
                     .find_latest_check_point_for_version(DeltaDataTypeVersion::MAX)
                     .await
-                    .map_err(|_| LoadCheckpointError::NotFound)?
                 {
-                    Ok(cp)
-                } else {
-                    Err(LoadCheckpointError::NotFound)
+                    Ok(Some(cp)) => Ok(cp),
+                    _ => Err(LoadCheckpointError::NotFound),
                 }
             }
             Err(err) => Err(LoadCheckpointError::Storage { source: err }),

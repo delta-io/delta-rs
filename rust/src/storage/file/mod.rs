@@ -93,11 +93,16 @@ impl StorageBackend for FileStorageBackend {
         let readdir = ReadDirStream::new(fs::read_dir(path).await?);
 
         Ok(Box::pin(readdir.err_into().and_then(|entry| async move {
-            Ok(ObjectMeta {
-                path: String::from(entry.path().to_str().unwrap()),
-                modified: DateTime::from(entry.metadata().await.unwrap().modified().unwrap()),
-                size: Some(entry.metadata().await.unwrap().len().try_into().unwrap()),
-            })
+            let path = String::from(entry.path().to_str().unwrap());
+            // We check if the file is a temporary file created to prepare a commit.
+            // Getting meta data is another system call on some platforms and the file
+            // may have been removed in the meantime ...
+            let modified = if path.contains("_commit_") {
+                chrono::Utc::now()
+            } else {
+                DateTime::from(entry.metadata().await.unwrap().modified().unwrap())
+            };
+            Ok(ObjectMeta { path, modified })
         })))
     }
 
