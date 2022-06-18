@@ -490,6 +490,7 @@ fn try_object_meta_from(bucket: &str, obj: rusoto_s3::Object) -> Result<ObjectMe
     Ok(ObjectMeta {
         path: format!("s3://{}/{}", bucket, key),
         modified: parse_obj_last_modified_time(&obj.last_modified)?,
+        size: obj.size,
     })
 }
 
@@ -621,6 +622,7 @@ impl StorageBackend for S3StorageBackend {
         Ok(ObjectMeta {
             path: path.to_string(),
             modified: parse_head_obj_last_modified_time(&result.last_modified)?,
+            size: result.content_length,
         })
     }
 

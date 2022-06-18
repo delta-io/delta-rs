@@ -130,6 +130,14 @@ mod s3 {
         let err = backend.head_obj(key).await.err().unwrap();
 
         assert!(matches!(err, StorageError::NotFound));
+
+        let key = "s3://deltars/head_test";
+        let data: &[u8] = b"Hello world!";
+        backend.put_obj(key, data).await.unwrap();
+        let head_data = backend.head_obj(key).await.unwrap();
+        assert_eq!(head_data.size, Some(data.len().try_into().unwrap()));
+        assert_eq!(head_data.path, key);
+        assert!(head_data.modified > (chrono::offset::Utc::now() - chrono::Duration::seconds(30)));
     }
 
     #[tokio::test]

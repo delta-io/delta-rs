@@ -456,6 +456,8 @@ pub struct ObjectMeta {
     // The timestamp of a commit comes from the remote storage `lastModifiedTime`, and can be
     // adjusted for clock skew.
     pub modified: DateTime<Utc>,
+    /// Size of the object in bytes
+    pub size: Option<i64>,
 }
 
 impl Clone for ObjectMeta {
@@ -463,6 +465,7 @@ impl Clone for ObjectMeta {
         Self {
             path: self.path.clone(),
             modified: self.modified,
+            size: self.size,
         }
     }
 }

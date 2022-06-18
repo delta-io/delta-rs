@@ -75,6 +75,7 @@ impl StorageBackend for FileStorageBackend {
         Ok(ObjectMeta {
             path: path.to_string(),
             modified: DateTime::from(attr.modified().unwrap()),
+            size: Some(attr.len().try_into().unwrap()),
         })
     }
 
@@ -95,6 +96,7 @@ impl StorageBackend for FileStorageBackend {
             Ok(ObjectMeta {
                 path: String::from(entry.path().to_str().unwrap()),
                 modified: DateTime::from(entry.metadata().await.unwrap().modified().unwrap()),
+                size: Some(entry.metadata().await.unwrap().len().try_into().unwrap()),
             })
         })))
     }
