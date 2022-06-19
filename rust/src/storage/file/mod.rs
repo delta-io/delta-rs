@@ -101,10 +101,15 @@ impl StorageBackend for FileStorageBackend {
                     .ok_or(StorageError::Generic("invalid path".to_string()))?,
             );
             match entry.metadata().await {
-                Ok(meta) => Ok(ObjectMeta {
-                    path,
-                    modified: meta.modified()?.into(),
-                }),
+                Ok(meta) => {
+                    Ok(ObjectMeta {
+                        path,
+                        modified: meta.modified()?.into(),
+                        size: Some(meta.len().try_into().map_err(|_| {
+                            StorageError::Generic("cannot convert to i64".to_string())
+                        })?),
+                    })
+                }
                 Err(err) if err.kind() == io::ErrorKind::NotFound => Err(StorageError::NotFound),
                 Err(err) => Err(StorageError::Io { source: err }),
             }
