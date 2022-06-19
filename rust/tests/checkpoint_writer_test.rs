@@ -302,6 +302,7 @@ mod checkpoints_with_tombstones {
                 partition_values: None,
                 size: None,
                 tags: None,
+                num_records: None,
             })
             .collect();
 
@@ -353,7 +354,7 @@ mod checkpoints_with_tombstones {
         (HashSet::from_iter(fields), actions)
     }
 
-    // The tags and partition values could be missing, but the size has to present
+    // The num_records, tags and partition values could be missing, but the size has to present
     fn remove_metadata_true() -> Remove {
         Remove {
             path: Uuid::new_v4().to_string(),
@@ -363,6 +364,7 @@ mod checkpoints_with_tombstones {
             partition_values: None,
             size: Some(100),
             tags: None,
+            num_records: None,
         }
     }
 
