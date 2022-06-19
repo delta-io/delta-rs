@@ -2,6 +2,7 @@
 //!
 //! The local file storage backend is multi-writer safe.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
@@ -93,16 +94,20 @@ impl StorageBackend for FileStorageBackend {
         let readdir = ReadDirStream::new(fs::read_dir(path).await?);
 
         Ok(Box::pin(readdir.err_into().and_then(|entry| async move {
-            let path = String::from(entry.path().to_str().unwrap());
-            // We check if the file is a temporary file created to prepare a commit.
-            // Getting meta data is another system call on some platforms and the file
-            // may have been removed in the meantime ...
-            let modified = if path.contains("_commit_") {
-                chrono::Utc::now()
-            } else {
-                DateTime::from(entry.metadata().await.unwrap().modified().unwrap())
-            };
-            Ok(ObjectMeta { path, modified })
+            let path = String::from(
+                entry
+                    .path()
+                    .to_str()
+                    .ok_or(StorageError::Generic("invalid path".to_string()))?,
+            );
+            match entry.metadata().await {
+                Ok(meta) => Ok(ObjectMeta {
+                    path,
+                    modified: meta.modified()?.into(),
+                }),
+                Err(err) if err.kind() == io::ErrorKind::NotFound => Err(StorageError::NotFound),
+                Err(err) => Err(StorageError::Io { source: err }),
+            }
         })))
     }
 
