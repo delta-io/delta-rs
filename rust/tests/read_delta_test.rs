@@ -420,16 +420,34 @@ async fn vacuum_delta_8_0_table() {
 
     assert!(matches!(
         table
-            .vacuum(Some(retention_hours), dry_run)
+            .vacuum(Some(retention_hours), dry_run, None)
             .await
             .unwrap_err(),
-        deltalake::DeltaTableError::InvalidVacuumRetentionPeriod,
+        deltalake::DeltaTableError::InvalidVacuumRetentionPeriod {
+            provided,
+            min,
+        } if provided == retention_hours as i64
+            && min == table.get_state().tombstone_retention_millis() / 3600000,
     ));
+
+    // do not enforce retention duration check with 0 hour will purge all files
+    assert_eq!(
+        table.vacuum(Some(0), dry_run, Some(false)).await.unwrap(),
+        vec![backend.join_paths(&[
+            "tests",
+            "data",
+            "delta-0.8.0",
+            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet",
+        ])]
+    );
 
     let retention_hours = 169;
 
     assert_eq!(
-        table.vacuum(Some(retention_hours), dry_run).await.unwrap(),
+        table
+            .vacuum(Some(retention_hours), dry_run, None)
+            .await
+            .unwrap(),
         vec![backend.join_paths(&[
             "tests",
             "data",
@@ -446,7 +464,10 @@ async fn vacuum_delta_8_0_table() {
     let empty: Vec<String> = Vec::new();
 
     assert_eq!(
-        table.vacuum(Some(retention_hours), dry_run).await.unwrap(),
+        table
+            .vacuum(Some(retention_hours), dry_run, None)
+            .await
+            .unwrap(),
         empty
     );
 }
