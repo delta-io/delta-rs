@@ -11,7 +11,7 @@ async fn read_simple_table() {
     let table = deltalake::open_table("./tests/data/simple_table")
         .await
         .unwrap();
-    assert_eq!(table.version, 4);
+    assert_eq!(table.version(), 4);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
     let mut files = table.get_files();
@@ -68,7 +68,7 @@ async fn read_simple_table_with_version() {
     let table = deltalake::open_table_with_version("./tests/data/simple_table", 0)
         .await
         .unwrap();
-    assert_eq!(table.version, 0);
+    assert_eq!(table.version(), 0);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
     let mut files = table.get_files();
@@ -88,7 +88,7 @@ async fn read_simple_table_with_version() {
     let table = deltalake::open_table_with_version("./tests/data/simple_table", 2)
         .await
         .unwrap();
-    assert_eq!(table.version, 2);
+    assert_eq!(table.version(), 2);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
     let mut files = table.get_files();
@@ -108,7 +108,7 @@ async fn read_simple_table_with_version() {
     let table = deltalake::open_table_with_version("./tests/data/simple_table", 3)
         .await
         .unwrap();
-    assert_eq!(table.version, 3);
+    assert_eq!(table.version(), 3);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
     let mut files = table.get_files();
@@ -151,40 +151,40 @@ async fn time_travel_by_ds() {
         deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-01T00:47:31-07:00")
             .await
             .unwrap();
-    assert_eq!(table.version, 0);
+    assert_eq!(table.version(), 0);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-02T22:47:31-07:00")
         .await
         .unwrap();
-    assert_eq!(table.version, 1);
+    assert_eq!(table.version(), 1);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-02T23:47:31-07:00")
         .await
         .unwrap();
-    assert_eq!(table.version, 1);
+    assert_eq!(table.version(), 1);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-03T22:47:31-07:00")
         .await
         .unwrap();
-    assert_eq!(table.version, 2);
+    assert_eq!(table.version(), 2);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-04T22:47:31-07:00")
         .await
         .unwrap();
-    assert_eq!(table.version, 3);
+    assert_eq!(table.version(), 3);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-05T21:47:31-07:00")
         .await
         .unwrap();
-    assert_eq!(table.version, 3);
+    assert_eq!(table.version(), 3);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-05T22:47:31-07:00")
         .await
         .unwrap();
-    assert_eq!(table.version, 4);
+    assert_eq!(table.version(), 4);
 
     table = deltalake::open_table_with_ds("./tests/data/simple_table", "2020-05-25T22:47:31-07:00")
         .await
         .unwrap();
-    assert_eq!(table.version, 4);
+    assert_eq!(table.version(), 4);
 }

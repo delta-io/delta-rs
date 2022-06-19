@@ -86,10 +86,10 @@ impl From<CheckpointError> for ArrowError {
     }
 }
 
-/// Creates checkpoint at `table.version` for given `table`.
+/// Creates checkpoint at current table version
 pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), CheckpointError> {
     create_checkpoint_for(
-        table.version,
+        table.version(),
         table.get_state(),
         table.storage.as_ref(),
         &table.table_uri,
@@ -105,7 +105,7 @@ pub async fn cleanup_metadata(table: &DeltaTable) -> Result<i32, DeltaTableError
     let log_retention_timestamp =
         Utc::now().timestamp_millis() - table.get_state().log_retention_millis();
     cleanup_expired_logs_for(
-        table.version + 1,
+        table.version() + 1,
         table.storage.as_ref(),
         log_retention_timestamp,
         &table.table_uri,
@@ -133,7 +133,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     let enable_expired_log_cleanup =
         cleanup.unwrap_or_else(|| table.get_state().enable_expired_log_cleanup());
 
-    if table.version >= 0 && enable_expired_log_cleanup {
+    if table.version() >= 0 && enable_expired_log_cleanup {
         let deleted_log_num = cleanup_metadata(&table).await?;
         debug!("Deleted {:?} log files.", deleted_log_num);
     }
