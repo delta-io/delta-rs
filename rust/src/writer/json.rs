@@ -1,11 +1,10 @@
 //! Main writer API to write json messages to delta table
 use super::{
     stats::{apply_null_counts, create_add, NullCounts},
-    utils::{
-        cursor_from_bytes, next_data_path, record_batch_from_message, stringified_partition_value,
-    },
+    utils::{next_data_path, record_batch_from_message, stringified_partition_value},
     DeltaWriter, DeltaWriterError,
 };
+use crate::writer::utils::ShareableBuffer;
 use crate::{
     action::Add, get_backend_for_uri_with_options, DeltaTable, DeltaTableMetaData, Schema,
     StorageBackend,
@@ -22,7 +21,6 @@ use parquet::{
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::io::Cursor;
 use std::sync::Arc;
 
 type BadValue = (Value, ParquetError);
@@ -41,8 +39,8 @@ pub struct JsonWriter {
 pub(crate) struct DataArrowWriter {
     arrow_schema: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
-    cursor: Cursor<Vec<u8>>,
-    arrow_writer: ArrowWriter<Cursor<Vec<u8>>>,
+    buffer: ShareableBuffer,
+    arrow_writer: ArrowWriter<ShareableBuffer>,
     partition_values: HashMap<String, Option<String>>,
     null_counts: NullCounts,
     buffered_record_batch_count: usize,
@@ -113,8 +111,8 @@ impl DataArrowWriter {
             self.partition_values = partition_values;
         }
 
-        // Copy current cursor bytes so we can recover from failures
-        let current_cursor_bytes = self.cursor.clone().into_inner();
+        // Copy current buffered bytes so we can recover from failures
+        let buffer_bytes = self.buffer.to_vec();
 
         let result = self.arrow_writer.write(&record_batch);
 
@@ -126,10 +124,10 @@ impl DataArrowWriter {
             }
             // If a write fails we need to reset the state of the DeltaArrowWriter
             Err(e) => {
-                let new_cursor = cursor_from_bytes(current_cursor_bytes.as_slice())?;
-                let _ = std::mem::replace(&mut self.cursor, new_cursor.clone());
+                let new_buffer = ShareableBuffer::from_bytes(buffer_bytes.as_slice());
+                let _ = std::mem::replace(&mut self.buffer, new_buffer.clone());
                 let arrow_writer = Self::new_underlying_writer(
-                    new_cursor,
+                    new_buffer,
                     self.arrow_schema.clone(),
                     self.writer_properties.clone(),
                 )?;
@@ -145,9 +143,9 @@ impl DataArrowWriter {
         arrow_schema: Arc<ArrowSchema>,
         writer_properties: WriterProperties,
     ) -> Result<Self, ParquetError> {
-        let cursor = Cursor::new(vec![]);
+        let buffer = ShareableBuffer::default();
         let arrow_writer = Self::new_underlying_writer(
-            cursor.clone(),
+            buffer.clone(),
             arrow_schema.clone(),
             writer_properties.clone(),
         )?;
@@ -159,7 +157,7 @@ impl DataArrowWriter {
         Ok(Self {
             arrow_schema,
             writer_properties,
-            cursor,
+            buffer,
             arrow_writer,
             partition_values,
             null_counts,
@@ -168,11 +166,11 @@ impl DataArrowWriter {
     }
 
     fn new_underlying_writer(
-        cursor: Cursor<Vec<u8>>,
+        buffer: ShareableBuffer,
         arrow_schema: Arc<ArrowSchema>,
         writer_properties: WriterProperties,
-    ) -> Result<ArrowWriter<Cursor<Vec<u8>>>, ParquetError> {
-        ArrowWriter::try_new(cursor, arrow_schema, Some(writer_properties))
+    ) -> Result<ArrowWriter<ShareableBuffer>, ParquetError> {
+        ArrowWriter::try_new(buffer, arrow_schema, Some(writer_properties))
     }
 }
 
@@ -258,10 +256,7 @@ impl JsonWriter {
     /// Returns the current byte length of the in memory buffer.
     /// This may be used by the caller to decide when to finalize the file write.
     pub fn buffer_len(&self) -> usize {
-        self.arrow_writers
-            .values()
-            .map(|w| w.cursor.get_ref().len())
-            .sum()
+        self.arrow_writers.values().map(|w| w.buffer.len()).sum()
     }
 
     /// Returns the number of records held in the current buffer.
@@ -372,7 +367,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
 
             let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
 
-            let obj_bytes = writer.cursor.into_inner();
+            let obj_bytes = writer.buffer.to_vec();
             let file_size = obj_bytes.len() as i64;
 
             let storage_path = self.storage.join_path(&self.table_uri, path.as_str());
@@ -422,8 +417,8 @@ fn quarantine_failed_parquet_rows(
 
     for value in values {
         let record_batch = record_batch_from_message(arrow_schema.clone(), &[value.clone()])?;
-        let cursor = Cursor::new(vec![]);
-        let mut writer = ArrowWriter::try_new(cursor.clone(), arrow_schema.clone(), None)?;
+        let buffer = ShareableBuffer::default();
+        let mut writer = ArrowWriter::try_new(buffer.clone(), arrow_schema.clone(), None)?;
 
         match writer.write(&record_batch) {
             Ok(_) => good.push(value),
