@@ -229,7 +229,6 @@ impl DeltaTableState {
             self.commit_infos.append(&mut new_state.commit_infos);
         }
 
-        // TODO should we make sure versions are consistent (i.e. +1) or just update to highest?
         if self.version < new_state.version {
             self.version = new_state.version
         }
