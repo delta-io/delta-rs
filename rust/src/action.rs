@@ -660,9 +660,7 @@ impl Remove {
                     re.size = record.get_long(i).map(Some).unwrap_or(None);
                 }
                 "numRecords" => {
-                    re.num_records = Some(record.get_long(i).map_err(|_| {
-                        gen_action_type_error("remove", "numRecords", "long")
-                    })?);
+                    re.num_records = record.get_long(i).map(Some).unwrap_or(None);
                 }
                 _ => {
                     log::warn!(
