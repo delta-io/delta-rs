@@ -98,7 +98,7 @@ impl StorageBackend for FileStorageBackend {
                 entry
                     .path()
                     .to_str()
-                    .ok_or(StorageError::Generic("invalid path".to_string()))?,
+                    .ok_or_else(|| StorageError::Generic("invalid path".to_string()))?,
             );
             match entry.metadata().await {
                 Ok(meta) => {
