@@ -150,7 +150,7 @@ def test_read_table_with_column_subset():
 
 
 def test_read_table_with_filter():
-    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    table_path = "../rust/tests/data/stats_problem"
     dt = DeltaTable(table_path)
     expected = {
         "value": ["6", "7", "5"],
