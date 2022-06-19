@@ -34,7 +34,7 @@ use crate::delta_config::DeltaConfigError;
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
 pub struct CheckPoint {
     /// Delta table version
-    version: DeltaDataTypeVersion, // 20 digits decimals
+    pub(crate) version: DeltaDataTypeVersion, // 20 digits decimals
     size: DeltaDataTypeLong,
     parts: Option<u32>, // 10 digits decimals
 }
@@ -583,15 +583,12 @@ pub enum PeekCommit {
 
 /// In memory representation of a Delta Table
 pub struct DeltaTable {
-    /// The version of the table as of the most recent loaded Delta log entry.
-    pub version: DeltaDataTypeVersion,
+    /// The state of the table as of the most recent loaded Delta log entry.
+    pub state: DeltaTableState,
     /// The URI the DeltaTable was loaded from.
     pub table_uri: String,
     /// the load options used during load
     pub config: DeltaTableConfig,
-
-    state: DeltaTableState,
-
     // metadata
     // application_transactions
     pub(crate) storage: Box<dyn StorageBackend>,
@@ -795,11 +792,15 @@ impl DeltaTable {
         Ok(version)
     }
 
+    /// Currently loaded evrsion of the table
+    pub fn version(&self) -> DeltaDataTypeVersion {
+        self.state.version
+    }
+
     /// Load DeltaTable with data from latest checkpoint
     pub async fn load(&mut self) -> Result<(), DeltaTableError> {
         self.last_check_point = None;
-        self.version = -1;
-        self.state = DeltaTableState::default();
+        self.state = DeltaTableState::with_version(-1);
         self.update().await
     }
 
@@ -832,14 +833,16 @@ impl DeltaTable {
         new_version: DeltaDataTypeVersion,
         actions: Vec<Action>,
     ) -> Result<(), DeltaTableError> {
-        if self.version + 1 != new_version {
-            return Err(DeltaTableError::VersionMismatch(new_version, self.version));
+        if self.version() + 1 != new_version {
+            return Err(DeltaTableError::VersionMismatch(
+                new_version,
+                self.version(),
+            ));
         }
 
-        let s = DeltaTableState::from_actions(actions)?;
+        let s = DeltaTableState::from_actions(actions, new_version)?;
         self.state
             .merge(s, self.config.require_tombstones, self.config.require_files);
-        self.version = new_version;
 
         Ok(())
     }
@@ -854,7 +857,7 @@ impl DeltaTable {
                 } else {
                     self.last_check_point = Some(last_check_point);
                     self.restore_checkpoint(last_check_point).await?;
-                    self.version = last_check_point.version;
+                    self.state.version = last_check_point.version;
                     self.update_incremental().await
                 }
             }
@@ -866,11 +869,11 @@ impl DeltaTable {
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
     pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
-        while let PeekCommit::New(version, actions) = self.peek_next_commit(self.version).await? {
+        while let PeekCommit::New(version, actions) = self.peek_next_commit(self.version()).await? {
             self.apply_actions(version, actions)?;
         }
 
-        if self.version == -1 {
+        if self.version() == -1 {
             let err = format!(
                 "No snapshot or version 0 found, perhaps {} is an empty dir?",
                 self.table_uri
@@ -897,7 +900,6 @@ impl DeltaTable {
                 return Err(DeltaTableError::from(e));
             }
         }
-        self.version = version;
 
         let mut next_version;
         // 1. find latest checkpoint below version
@@ -908,13 +910,13 @@ impl DeltaTable {
             }
             None => {
                 // no checkpoint found, clear table state and start from the beginning
-                self.state = DeltaTableState::default();
+                self.state = DeltaTableState::with_version(0);
                 next_version = 0;
             }
         }
 
         // 2. apply all logs starting from checkpoint
-        while next_version <= self.version {
+        while next_version <= version {
             self.apply_log(next_version).await?;
             next_version += 1;
         }
@@ -951,7 +953,7 @@ impl DeltaTable {
         limit: Option<usize>,
     ) -> Result<Vec<Map<String, Value>>, DeltaTableError> {
         let mut version = match limit {
-            Some(l) => max(self.version - l as i64 + 1, 0),
+            Some(l) => max(self.version() - l as i64 + 1, 0),
             None => self.get_earliest_delta_log_version().await?,
         };
         let mut commit_infos_list = vec![];
@@ -1309,8 +1311,7 @@ impl DeltaTable {
         let table_uri = storage_backend.trim_path(table_uri);
         let log_uri_normalized = storage_backend.join_path(&table_uri, "_delta_log");
         Ok(Self {
-            version: -1,
-            state: DeltaTableState::default(),
+            state: DeltaTableState::with_version(-1),
             storage: storage_backend,
             table_uri,
             config,
@@ -1412,7 +1413,7 @@ impl DeltaTable {
 impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "DeltaTable({})", self.table_uri)?;
-        writeln!(f, "\tversion: {}", self.version)?;
+        writeln!(f, "\tversion: {}", self.version())?;
         match self.state.current_metadata() {
             Some(metadata) => {
                 writeln!(f, "\tmetadata: {}", metadata)?;
@@ -1599,7 +1600,7 @@ impl<'a> DeltaTransaction<'a> {
         loop {
             self.delta_table.update().await?;
 
-            let version = self.delta_table.version + 1;
+            let version = self.delta_table.version() + 1;
 
             match self
                 .delta_table
@@ -1793,7 +1794,7 @@ mod tests {
 
         // Validation
         // assert DeltaTable version is now 0 and no data files have been added
-        assert_eq!(dt.version, 0);
+        assert_eq!(dt.version(), 0);
         assert_eq!(dt.state.files().len(), 0);
 
         // assert new _delta_log file created in tempDir

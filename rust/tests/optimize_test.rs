@@ -196,13 +196,13 @@ mod optimize {
         )
         .await?;
 
-        let version = dt.version;
+        let version = dt.version();
         assert_eq!(dt.get_active_add_actions().len(), 5);
 
         let optimize = Optimize::default().target_size(2_000_000);
         let metrics = optimize.execute(&mut dt).await?;
 
-        assert_eq!(version + 1, dt.version);
+        assert_eq!(version + 1, dt.version());
         assert_eq!(metrics.num_files_added, 1);
         assert_eq!(metrics.num_files_removed, 4);
         assert_eq!(metrics.total_considered_files, 5);
@@ -253,14 +253,14 @@ mod optimize {
         )
         .await?;
 
-        let version = dt.version;
+        let version = dt.version();
         let mut filter = vec![];
         filter.push(PartitionFilter::try_from(("date", "=", "2022-05-22"))?);
 
         let optimize = Optimize::default().filter(&filter);
         let metrics = optimize.execute(&mut dt).await?;
 
-        assert_eq!(version + 1, dt.version);
+        assert_eq!(version + 1, dt.version());
         assert_eq!(metrics.num_files_added, 1);
         assert_eq!(metrics.num_files_removed, 2);
         assert_eq!(dt.get_active_add_actions().len(), 3);
@@ -290,7 +290,7 @@ mod optimize {
         )
         .await?;
 
-        let version = dt.version;
+        let version = dt.version();
 
         //create the merge plan, remove a file, and execute the plan.
         let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
@@ -320,7 +320,7 @@ mod optimize {
 
         let maybe_metrics = plan.execute(&mut dt).await;
         assert!(maybe_metrics.is_err());
-        assert_eq!(dt.version, version + 1);
+        assert_eq!(dt.version(), version + 1);
         Ok(())
     }
 
@@ -345,7 +345,7 @@ mod optimize {
         )
         .await?;
 
-        let version = dt.version;
+        let version = dt.version();
 
         //create the merge plan, remove a file, and execute the plan.
         let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
@@ -364,7 +364,7 @@ mod optimize {
         let metrics = plan.execute(&mut dt).await?;
         assert_eq!(metrics.num_files_added, 1);
         assert_eq!(metrics.num_files_removed, 2);
-        assert_eq!(dt.version, version + 2);
+        assert_eq!(dt.version(), version + 2);
         Ok(())
     }
 
@@ -397,7 +397,7 @@ mod optimize {
         )
         .await?;
 
-        let version = dt.version;
+        let version = dt.version();
 
         let mut filter = vec![];
         filter.push(PartitionFilter::try_from(("date", "=", "2022-05-22"))?);
@@ -406,13 +406,13 @@ mod optimize {
         let metrics = optimize.execute(&mut dt).await?;
         assert_eq!(metrics.num_files_added, 1);
         assert_eq!(metrics.num_files_removed, 2);
-        assert_eq!(dt.version, version + 1);
+        assert_eq!(dt.version(), version + 1);
 
         let metrics = optimize.execute(&mut dt).await?;
 
         assert_eq!(metrics.num_files_added, 0);
         assert_eq!(metrics.num_files_removed, 0);
-        assert_eq!(dt.version, version + 1);
+        assert_eq!(dt.version(), version + 1);
 
         Ok(())
     }
@@ -431,7 +431,7 @@ mod optimize {
         )
         .await?;
 
-        let version = dt.version;
+        let version = dt.version();
         let optimize = Optimize::default().target_size(10_000_000);
         let metrics = optimize.execute(&mut dt).await?;
 
@@ -454,7 +454,7 @@ mod optimize {
         expected.files_removed = expected_metric_details.clone();
 
         assert_eq!(expected, metrics);
-        assert_eq!(version, dt.version);
+        assert_eq!(version, dt.version());
         Ok(())
     }
 
@@ -479,7 +479,7 @@ mod optimize {
         )
         .await?;
 
-        let version = dt.version;
+        let version = dt.version();
 
         let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
 
