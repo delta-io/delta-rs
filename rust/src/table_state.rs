@@ -165,11 +165,17 @@ impl DeltaTableState {
 
     /// The most recent metadata of the table.
     pub fn current_metadata(&self) -> Option<&DeltaTableMetaData> {
-        println!("current metadata");
         self.current_metadata.as_ref()
     }
 
     /// Merges new state information into our state
+    ///
+    /// The DeltaTableState also carries the version information for the given state,
+    /// as there is a one-to-one match between a table state and a version. In merge/update
+    /// scenarios we cannot infer the intended / correct version number. By default this
+    /// function will update the tracked version if the version on `new_state` is larger then the
+    /// currently set version however it is up to the caller to update the `version` field according
+    /// to the version the merged state represents.
     pub fn merge(
         &mut self,
         mut new_state: DeltaTableState,
