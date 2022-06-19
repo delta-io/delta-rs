@@ -17,7 +17,7 @@ async fn read_delta_2_0_table_without_version() {
     let table = deltalake::open_table("./tests/data/delta-0.2.0")
         .await
         .unwrap();
-    assert_eq!(table.version, 3);
+    assert_eq!(table.version(), 3);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
@@ -103,7 +103,7 @@ async fn read_delta_table_with_ignoring_files_on_apply_log() {
         .await
         .unwrap();
 
-    assert_eq!(table.version, 0);
+    assert_eq!(table.version(), 0);
     assert!(table.get_files().is_empty(), "files should be empty");
     assert!(
         table.get_tombstones().next().is_none(),
@@ -111,7 +111,7 @@ async fn read_delta_table_with_ignoring_files_on_apply_log() {
     );
 
     table.update().await.unwrap();
-    assert_eq!(table.version, 1);
+    assert_eq!(table.version(), 1);
     assert!(table.get_files().is_empty(), "files should be empty");
     assert!(
         table.get_tombstones().next().is_none(),
@@ -124,7 +124,7 @@ async fn read_delta_2_0_table_with_version() {
     let mut table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 0)
         .await
         .unwrap();
-    assert_eq!(table.version, 0);
+    assert_eq!(table.version(), 0);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
@@ -138,7 +138,7 @@ async fn read_delta_2_0_table_with_version() {
     table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 2)
         .await
         .unwrap();
-    assert_eq!(table.version, 2);
+    assert_eq!(table.version(), 2);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
@@ -152,7 +152,7 @@ async fn read_delta_2_0_table_with_version() {
     table = deltalake::open_table_with_version("./tests/data/delta-0.2.0", 3)
         .await
         .unwrap();
-    assert_eq!(table.version, 3);
+    assert_eq!(table.version(), 3);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
@@ -170,7 +170,7 @@ async fn read_delta_8_0_table_without_version() {
     let table = deltalake::open_table("./tests/data/delta-0.8.0")
         .await
         .unwrap();
-    assert_eq!(table.version, 1);
+    assert_eq!(table.version(), 1);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
@@ -215,7 +215,7 @@ async fn read_delta_8_0_table_with_load_version() {
     let mut table = deltalake::open_table("./tests/data/delta-0.8.0")
         .await
         .unwrap();
-    assert_eq!(table.version, 1);
+    assert_eq!(table.version(), 1);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
@@ -226,7 +226,7 @@ async fn read_delta_8_0_table_with_load_version() {
         ]
     );
     table.load_version(0).await.unwrap();
-    assert_eq!(table.version, 0);
+    assert_eq!(table.version(), 0);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
     assert_eq!(
@@ -517,10 +517,10 @@ async fn test_table_history() {
 async fn test_poll_table_commits() {
     let path = "./tests/data/simple_table_with_checkpoint";
     let mut table = deltalake::open_table_with_version(path, 9).await.unwrap();
-    let peek = table.peek_next_commit(table.version).await.unwrap();
+    let peek = table.peek_next_commit(table.version()).await.unwrap();
 
     let is_new = if let PeekCommit::New(version, actions) = peek {
-        assert_eq!(table.version, 9);
+        assert_eq!(table.version(), 9);
         assert!(!table
             .get_files_iter()
             .any(|f| f == "part-00000-f0e955c5-a1e3-4eec-834e-dcc098fc9005-c000.snappy.parquet"));
@@ -530,7 +530,7 @@ async fn test_poll_table_commits() {
 
         table.apply_actions(version, actions).unwrap();
 
-        assert_eq!(table.version, 10);
+        assert_eq!(table.version(), 10);
         assert!(table
             .get_files_iter()
             .any(|f| f == "part-00000-f0e955c5-a1e3-4eec-834e-dcc098fc9005-c000.snappy.parquet"));
@@ -541,7 +541,7 @@ async fn test_poll_table_commits() {
     };
     assert!(is_new);
 
-    let peek = table.peek_next_commit(table.version).await.unwrap();
+    let peek = table.peek_next_commit(table.version()).await.unwrap();
     let is_up_to_date = match peek {
         PeekCommit::UpToDate => true,
         _ => false,

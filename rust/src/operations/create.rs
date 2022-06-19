@@ -203,7 +203,7 @@ mod tests {
         assert!(log_path.exists());
 
         let mut table = open_table(&table_uri).await.unwrap();
-        assert_eq!(table.version, 0);
+        assert_eq!(table.version(), 0);
 
         // Check we can create an existing table with ignore
         let ts1 = table.get_version_timestamp(0).await.unwrap();
@@ -211,7 +211,7 @@ mod tests {
         let _result = child.wait().unwrap();
         let _ = collect(transaction, task_ctx.clone()).await.unwrap();
         let mut table = open_table(&table_uri).await.unwrap();
-        assert_eq!(table.version, 0);
+        assert_eq!(table.version(), 0);
         let ts2 = table.get_version_timestamp(0).await.unwrap();
         assert_eq!(ts1, ts2);
 

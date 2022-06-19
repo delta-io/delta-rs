@@ -78,7 +78,7 @@ mod simple_commit_fs {
         let table_path = "./tests/data/simple_commit";
         let mut table = deltalake::open_table(table_path).await.unwrap();
 
-        assert_eq!(0, table.version);
+        assert_eq!(0, table.version());
         assert_eq!(0, table.get_files().len());
 
         let mut tx1 = table.create_transaction(None);
@@ -87,7 +87,7 @@ mod simple_commit_fs {
         let result = table.try_commit_transaction(&commit, 1).await.unwrap();
 
         assert_eq!(1, result);
-        assert_eq!(1, table.version);
+        assert_eq!(1, table.version());
         assert_eq!(2, table.get_files().len());
     }
 
@@ -99,7 +99,7 @@ mod simple_commit_fs {
         let table_path = "./tests/data/simple_commit";
         let mut table = deltalake::open_table(table_path).await.unwrap();
 
-        assert_eq!(0, table.version);
+        assert_eq!(0, table.version());
         assert_eq!(0, table.get_files().len());
 
         let mut tx1 = table.create_transaction(None);
@@ -123,7 +123,7 @@ mod simple_commit_fs {
         }
 
         assert!(result.is_err());
-        assert_eq!(1, table.version);
+        assert_eq!(1, table.version());
         assert_eq!(2, table.get_files().len());
     }
 
@@ -137,7 +137,7 @@ mod simple_commit_fs {
         let table_path = "./tests/data/simple_commit";
         let mut table = deltalake::open_table(table_path).await.unwrap();
 
-        assert_eq!(0, table.version);
+        assert_eq!(0, table.version());
         assert_eq!(0, table.get_files().len());
 
         let mut attempt = 0;
@@ -150,7 +150,7 @@ mod simple_commit_fs {
         loop {
             table.update().await.unwrap();
 
-            let version = table.version + 1;
+            let version = table.version() + 1;
             match table
                 .try_commit_transaction(&prepared_commit, version)
                 .await
@@ -168,7 +168,7 @@ mod simple_commit_fs {
         }
 
         assert_eq!(0, attempt);
-        assert_eq!(1, table.version);
+        assert_eq!(1, table.version());
         assert_eq!(2, table.get_files().len());
     }
 
@@ -183,7 +183,7 @@ mod simple_commit_fs {
 async fn test_two_commits(table_path: &str) -> Result<(), DeltaTableError> {
     let mut table = deltalake::open_table(table_path).await?;
 
-    assert_eq!(0, table.version);
+    assert_eq!(0, table.version());
     assert_eq!(0, table.get_files().len());
 
     let mut tx1 = table.create_transaction(None);
@@ -191,7 +191,7 @@ async fn test_two_commits(table_path: &str) -> Result<(), DeltaTableError> {
     let version = tx1.commit(None, None).await?;
 
     assert_eq!(1, version);
-    assert_eq!(version, table.version);
+    assert_eq!(version, table.version());
     assert_eq!(2, table.get_files().len());
 
     let mut tx2 = table.create_transaction(None);
@@ -199,7 +199,7 @@ async fn test_two_commits(table_path: &str) -> Result<(), DeltaTableError> {
     let version = tx2.commit(None, None).await.unwrap();
 
     assert_eq!(2, version);
-    assert_eq!(version, table.version);
+    assert_eq!(version, table.version());
     assert_eq!(4, table.get_files().len());
     Ok(())
 }
