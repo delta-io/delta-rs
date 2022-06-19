@@ -470,6 +470,7 @@ async fn test_action_reconciliation() {
         partition_values: None,
         size: None,
         tags: None,
+        num_records: None,
     };
 
     assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);

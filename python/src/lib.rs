@@ -322,6 +322,7 @@ impl RawDeltaTable {
                         partition_values: Some(old_add.partition_values.clone()),
                         size: Some(old_add.size),
                         tags: old_add.tags.clone(),
+                        num_records: None,
                     });
                     actions.push(remove_action);
                 }

@@ -561,6 +561,8 @@ pub struct Remove {
     pub size: Option<DeltaDataTypeLong>,
     /// Map containing metadata about this file
     pub tags: Option<HashMap<String, Option<String>>>,
+    /// Number of records in the file associated with the log action.
+    pub num_records: Option<DeltaDataTypeLong>,
 }
 
 impl Hash for Remove {
@@ -656,6 +658,11 @@ impl Remove {
                 },
                 "size" => {
                     re.size = record.get_long(i).map(Some).unwrap_or(None);
+                }
+                "numRecords" => {
+                    re.num_records = Some(record.get_long(i).map_err(|_| {
+                        gen_action_type_error("remove", "numRecords", "long")
+                    })?);
                 }
                 _ => {
                     log::warn!(

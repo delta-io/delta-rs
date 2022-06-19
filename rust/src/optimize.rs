@@ -186,6 +186,7 @@ fn create_remove(
         partition_values: Some(partitions.to_owned()),
         size: Some(size),
         tags: None,
+        num_records: None,
     }))
 }
 
