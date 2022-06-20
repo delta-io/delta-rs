@@ -567,6 +567,8 @@ impl DeltaTableBuilder {
 
         let mut table = DeltaTable::new(&self.options.table_uri, storage, config)?;
 
+        println!("load method = {:?}", self.options.version);
+
         match self.options.version {
             DeltaVersion::Newest => table.load().await?,
             DeltaVersion::Version(v) => table.load_version(v).await?,
@@ -831,6 +833,7 @@ impl DeltaTable {
             let action: action::Action = serde_json::from_str(line?.as_str())?;
             actions.push(action);
         }
+        println!("peek_commit: next_version={next_version:?} actions={actions:?}");
         Ok(PeekCommit::New(next_version, actions))
     }
 
@@ -857,8 +860,10 @@ impl DeltaTable {
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
+        println!("update: self={self:?}");
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
+                println!("update: last_check_point={:?}", Some(last_check_point));
                 if Some(last_check_point) == self.last_check_point {
                     self.update_incremental().await
                 } else {
@@ -876,6 +881,7 @@ impl DeltaTable {
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
     pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
+        println!("update_incremental");
         while let PeekCommit::New(version, actions) = self.peek_next_commit(self.version()).await? {
             self.apply_actions(version, actions)?;
         }
@@ -1086,11 +1092,13 @@ impl DeltaTable {
 
     /// Returns file names present in the loaded state in HashSet
     pub fn get_file_set(&self) -> HashSet<&str> {
-        self.state
+        let x = self.state
             .files()
             .iter()
             .map(|add| add.path.as_str())
-            .collect()
+            .collect();
+        println!("file_set={x:?}");
+        return x;
     }
 
     /// Returns a URIs for all active files present in the current table version.
@@ -1112,10 +1120,11 @@ impl DeltaTable {
 
     /// Returns statistics for files, in order
     pub fn get_stats(&self) -> impl Iterator<Item = Result<Option<Stats>, DeltaTableError>> + '_ {
-        self.state
+        let stats = self.state
             .files()
             .iter()
-            .map(|add| add.get_stats().map_err(DeltaTableError::from))
+            .map(|add| add.get_stats().map_err(DeltaTableError::from));
+        return stats;
     }
 
     /// Returns partition values for files, in order

@@ -291,9 +291,11 @@ impl Add {
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        self.stats
+        println!("add: file={:?} stats = {:?}", self.path, self.stats);
+        let add_stats = self.stats
             .as_ref()
-            .map_or(Ok(None), |s| serde_json::from_str(s))
+            .map_or(Ok(None), |s| serde_json::from_str(s));
+        return add_stats;
     }
 
     /// Returns the composite HashMap representation of stats contained in the action if present.

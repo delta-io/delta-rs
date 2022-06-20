@@ -408,8 +408,6 @@ fn filestats_to_expression<'py>(
     let pa = PyModule::import(py, "pyarrow")?;
     let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
 
-    println!("file_stats_to_expression: stats = {stats:?}");
-
     for (column, value) in partitions_values.iter() {
         if let Some(value) = value {
             // value is a string, but needs to be parsed into appropriate type

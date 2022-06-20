@@ -82,6 +82,8 @@ impl DeltaTableState {
         table: &DeltaTable,
         check_point: &CheckPoint,
     ) -> Result<Self, DeltaTableError> {
+        println!("from_checkpoint: checkpoint={check_point:?} table={table:?}");
+
         let checkpoint_data_paths = table.get_checkpoint_data_paths(check_point);
         // process actions from checkpoint
         let mut new_state = DeltaTableState::with_version(check_point.version);
