@@ -16,7 +16,6 @@ use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::io::Cursor;
 use std::iter::Iterator;
 use std::ops::Add;
 
@@ -400,8 +399,8 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
 
     debug!("Writing to checkpoint parquet buffer...");
     // Write the Checkpoint parquet file.
-    let mut writeable_cursor = Cursor::new(vec![]);
-    let mut writer = ArrowWriter::try_new(&mut writeable_cursor, arrow_schema.clone(), None)?;
+    let mut bytes = vec![];
+    let mut writer = ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), None)?;
     let options = DecoderOptions::new().with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE);
     let decoder = Decoder::new(arrow_schema, options);
     while let Some(batch) = decoder.next_batch(&mut jsons)? {
@@ -410,7 +409,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     let _ = writer.close()?;
     debug!("Finished writing checkpoint parquet buffer.");
 
-    Ok(writeable_cursor.into_inner())
+    Ok(bytes)
 }
 
 fn checkpoint_add_from_state(
