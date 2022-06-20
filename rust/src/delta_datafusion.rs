@@ -254,8 +254,8 @@ impl TableProvider for delta::DeltaTable {
             })
             .collect::<datafusion::error::Result<_>>()?;
 
-        let dt_object_store_url =
-            ObjectStoreUrl::parse(&self.table_uri).unwrap_or_else(|_| ObjectStoreUrl::local_filesystem());
+        let dt_object_store_url = ObjectStoreUrl::parse(&self.table_uri)
+            .unwrap_or_else(|_| ObjectStoreUrl::local_filesystem());
 
         ParquetFormat::default()
             .create_physical_plan(
