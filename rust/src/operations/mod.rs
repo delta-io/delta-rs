@@ -122,7 +122,7 @@ impl DeltaCommands {
     ) -> DeltaCommandResult<()> {
         let transaction = Arc::new(DeltaTransactionPlan::new(
             self.table.table_uri.clone(),
-            self.table.version,
+            self.table.version(),
             plan,
             operation,
             None,
@@ -259,7 +259,7 @@ mod tests {
             .unwrap();
 
         let table = open_table(&table_uri).await.unwrap();
-        assert_eq!(table.version, 0);
+        assert_eq!(table.version(), 0);
 
         let res = commands.create(metadata, SaveMode::ErrorIfExists).await;
         assert!(res.is_err())
@@ -270,7 +270,7 @@ mod tests {
         let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string()];
         let mut table = create_initialized_table(&partition_cols).await;
-        assert_eq!(table.version, 0);
+        assert_eq!(table.version(), 0);
 
         let mut commands = DeltaCommands::try_from_uri(table.table_uri.to_string())
             .await
@@ -286,7 +286,7 @@ mod tests {
             .unwrap();
 
         table.update().await.unwrap();
-        assert_eq!(table.version, 1);
+        assert_eq!(table.version(), 1);
 
         let files = table.get_file_uris();
         assert_eq!(files.collect::<Vec<_>>().len(), 2)
@@ -311,7 +311,7 @@ mod tests {
             .unwrap();
 
         let table = open_table(&table_uri).await.unwrap();
-        assert_eq!(table.version, 0);
+        assert_eq!(table.version(), 0);
 
         let files = table.get_file_uris();
         assert_eq!(files.collect::<Vec<_>>().len(), 2)
