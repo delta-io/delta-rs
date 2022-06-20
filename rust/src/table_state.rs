@@ -21,6 +21,7 @@ use crate::delta_config;
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Default, Debug, Clone)]
 pub struct DeltaTableState {
+    pub version: DeltaDataTypeVersion,
     // A remove action should remain in the state of the table as a tombstone until it has expired.
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: HashSet<action::Remove>,
@@ -36,6 +37,12 @@ pub struct DeltaTableState {
 }
 
 impl DeltaTableState {
+    pub fn with_version(version: DeltaDataTypeVersion) -> Self {
+        Self {
+            version,
+            ..Self::default()
+        }
+    }
     /// Construct a delta table state object from commit version.
     pub async fn from_commit(
         table: &DeltaTable,
@@ -45,7 +52,7 @@ impl DeltaTableState {
         let commit_log_bytes = table.storage.get_obj(&commit_uri).await?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
-        let mut new_state = DeltaTableState::default();
+        let mut new_state = DeltaTableState::with_version(version);
         for line in reader.lines() {
             let action: action::Action = serde_json::from_str(line?.as_str())?;
             new_state.process_action(
@@ -59,8 +66,11 @@ impl DeltaTableState {
     }
 
     /// Construct a delta table state object from a list of actions
-    pub fn from_actions(actions: Vec<Action>) -> Result<Self, ApplyLogError> {
-        let mut new_state = DeltaTableState::default();
+    pub fn from_actions(
+        actions: Vec<Action>,
+        version: DeltaDataTypeVersion,
+    ) -> Result<Self, ApplyLogError> {
+        let mut new_state = DeltaTableState::with_version(version);
         for action in actions {
             new_state.process_action(action, true, true)?;
         }
@@ -74,7 +84,7 @@ impl DeltaTableState {
     ) -> Result<Self, DeltaTableError> {
         let checkpoint_data_paths = table.get_checkpoint_data_paths(check_point);
         // process actions from checkpoint
-        let mut new_state = DeltaTableState::default();
+        let mut new_state = DeltaTableState::with_version(check_point.version);
 
         for f in &checkpoint_data_paths {
             let obj = table.storage.get_obj(f).await?;
@@ -159,6 +169,13 @@ impl DeltaTableState {
     }
 
     /// Merges new state information into our state
+    ///
+    /// The DeltaTableState also carries the version information for the given state,
+    /// as there is a one-to-one match between a table state and a version. In merge/update
+    /// scenarios we cannot infer the intended / correct version number. By default this
+    /// function will update the tracked version if the version on `new_state` is larger then the
+    /// currently set version however it is up to the caller to update the `version` field according
+    /// to the version the merged state represents.
     pub fn merge(
         &mut self,
         mut new_state: DeltaTableState,
@@ -210,6 +227,10 @@ impl DeltaTableState {
 
         if !new_state.commit_infos.is_empty() {
             self.commit_infos.append(&mut new_state.commit_infos);
+        }
+
+        if self.version < new_state.version {
+            self.version = new_state.version
         }
     }
 
@@ -276,6 +297,7 @@ mod tests {
         app_transaction_version.insert("xyz".to_string(), 1);
 
         let mut state = DeltaTableState {
+            version: -1,
             files: vec![],
             commit_infos: vec![],
             tombstones: HashSet::new(),

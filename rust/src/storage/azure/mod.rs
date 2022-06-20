@@ -4,23 +4,19 @@
 //!
 use super::{parse_uri, str_option, ObjectMeta, StorageBackend, StorageError, UriError};
 use azure_core::auth::TokenCredential;
-use azure_core::ClientOptions;
-use azure_identity::token_credentials::{
+use azure_core::{error::ErrorKind as AzureErrorKind, ClientOptions};
+use azure_identity::{
     AutoRefreshingTokenCredential, ClientSecretCredential, TokenCredentialOptions,
 };
 use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
 use azure_storage_datalake::prelude::*;
-use futures::stream::Stream;
-use futures::StreamExt;
+use futures::stream::{self, Stream};
+use futures::{future::Either, StreamExt};
 use log::debug;
 use std::collections::HashMap;
-use std::error::Error;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::{fmt, pin::Pin};
-use tokio::sync::mpsc::{self, Sender};
-use tokio_stream::wrappers::ReceiverStream;
-use tokio_util::task::LocalPoolHandle;
 
 /// Storage option keys to use when creating [crate::storage::azure::AzureStorageOptions].
 /// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
@@ -188,10 +184,8 @@ impl<'a> fmt::Display for AdlsGen2Object<'a> {
 /// This uses the `dfs.core.windows.net` endpoint.
 #[derive(Debug)]
 pub struct AdlsGen2Backend {
-    storage_account_name: String,
     file_system_name: String,
     file_system_client: FileSystemClient,
-    local_pool_handle: LocalPoolHandle,
 }
 
 impl AdlsGen2Backend {
@@ -228,7 +222,7 @@ impl AdlsGen2Backend {
         let storage_account_name: String = storage_account_name.into();
         let data_lake_client = DataLakeClient::new_with_token_credential(
             token_credential,
-            storage_account_name.clone(),
+            storage_account_name,
             None,
             ClientOptions::default(),
         );
@@ -236,10 +230,8 @@ impl AdlsGen2Backend {
         let file_system_client = data_lake_client.into_file_system_client(file_system_name.clone());
 
         Ok(AdlsGen2Backend {
-            storage_account_name,
             file_system_name: file_system_name.into(),
             file_system_client,
-            local_pool_handle: LocalPoolHandle::new(1),
         })
     }
 
@@ -292,18 +284,12 @@ impl AdlsGen2Backend {
         file_system_name: impl Into<String> + Clone,
         options: AzureStorageOptions,
     ) -> Result<Self, StorageError> {
-        let storage_account_name = options.account_name.clone().ok_or_else(|| {
-            StorageError::AzureConfig("account name must be provided".to_string())
-        })?;
-
         let data_lake_client: DataLakeClient = options.try_into()?;
         let file_system_client = data_lake_client.into_file_system_client(file_system_name.clone());
 
         Ok(AdlsGen2Backend {
-            storage_account_name,
             file_system_name: file_system_name.into(),
             file_system_client,
-            local_pool_handle: LocalPoolHandle::new(1),
         })
     }
 
@@ -321,71 +307,6 @@ impl AdlsGen2Backend {
     }
 }
 
-fn to_storage_err(err: Box<dyn Error + Sync + std::marker::Send>) -> StorageError {
-    match err.downcast_ref::<azure_core::HttpError>() {
-        Some(azure_core::HttpError::StatusCode { status, body: _ }) if status.as_u16() == 404 => {
-            StorageError::NotFound
-        }
-        _ => StorageError::AzureGeneric { source: err },
-    }
-}
-
-fn to_storage_err2(err: azure_storage::core::Error) -> StorageError {
-    if let azure_storage::core::Error::CoreError(azure_core::Error::Other(ref other_err)) = err {
-        match other_err.downcast_ref::<azure_core::error::Error>() {
-            Some(other_err) => match other_err.downcast_ref::<azure_core::error::HttpError>() {
-                Some(e) => {
-                    if e.status() == 404 {
-                        return StorageError::NotFound;
-                    }
-                }
-                None => {}
-            },
-            None => {}
-        }
-    }
-    StorageError::AzureStorage { source: err }
-}
-
-// TODO: This implementation exists since Azure's Pageable is !Send.
-// When this is resolved in the Azure crates, fix this up too
-async fn list_obj_future(
-    client: FileSystemClient,
-    path: String,
-    storage_account_name: String,
-    file_system_name: String,
-    tx: Sender<Result<ObjectMeta, StorageError>>,
-) {
-    let mut stream = client.list_paths().directory(path).into_stream();
-
-    while let Some(path_response_res) = stream.next().await {
-        match path_response_res {
-            Ok(path_response) => {
-                for path in path_response.paths {
-                    let object = AdlsGen2Object {
-                        account_name: &storage_account_name,
-                        file_system: &file_system_name,
-                        path: &path.name,
-                    };
-                    let object_meta = Ok(ObjectMeta {
-                        path: object.to_string(),
-                        modified: path.last_modified,
-                    });
-                    let res = tx.send(object_meta).await;
-
-                    if let Err(_e) = res {
-                        return;
-                    }
-                }
-            }
-            Err(err) => {
-                let _res = tx.send(Err(to_storage_err(Box::new(err)))).await;
-                return;
-            }
-        }
-    }
-}
-
 #[async_trait::async_trait]
 impl StorageBackend for AdlsGen2Backend {
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
@@ -398,13 +319,13 @@ impl StorageBackend for AdlsGen2Backend {
             .get_file_client(obj.path)
             .get_properties()
             .into_future()
-            .await
-            .map_err(to_storage_err2)?;
+            .await?;
 
         let modified = properties.last_modified;
         Ok(ObjectMeta {
             path: path.to_string(),
             modified,
+            size: properties.content_length,
         })
     }
 
@@ -418,8 +339,7 @@ impl StorageBackend for AdlsGen2Backend {
             .get_file_client(obj.path)
             .read()
             .into_future()
-            .await
-            .map_err(to_storage_err2)?
+            .await?
             .data
             .to_vec();
         Ok(data)
@@ -436,24 +356,28 @@ impl StorageBackend for AdlsGen2Backend {
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
         self.validate_container(&obj)?;
 
-        let client = self.file_system_client.clone();
-        let storage_account_name = self.storage_account_name.to_owned();
-        let file_system_name = self.file_system_name.to_owned();
-        let prefix_path = path.to_owned();
-        let (tx, rx) = mpsc::channel(1024);
-
-        let handle = self.local_pool_handle.spawn_pinned(|| {
-            list_obj_future(
-                client,
-                prefix_path,
-                storage_account_name,
-                file_system_name,
-                tx,
-            )
-        });
-
-        tokio::spawn(handle);
-        Ok(Box::pin(ReceiverStream::new(rx)))
+        Ok(self
+            .file_system_client
+            .list_paths()
+            // TODO this assumes we are always only interested in listing contents in one directory.
+            // to make list requests cheaper. As far as I can tell this should work in this case,
+            // although this behavior might be different in other object store implementations.
+            .recursive(false)
+            .directory(obj.path)
+            .into_stream()
+            .flat_map(|it| match it {
+                Ok(paths) => Either::Left(stream::iter(paths.into_iter().map(|p| {
+                    Ok(ObjectMeta {
+                        path: path.to_string(),
+                        modified: p.last_modified,
+                        size: Some(p.content_length),
+                    })
+                }))),
+                Err(err) => Either::Right(stream::once(async {
+                    Err(StorageError::Azure { source: err })
+                })),
+            })
+            .boxed())
     }
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
@@ -465,22 +389,9 @@ impl StorageBackend for AdlsGen2Backend {
 
         // TODO: Consider using Blob API again since it's just 1 REST call instead of 3
         let file_client = self.file_system_client.get_file_client(obj.path);
-        file_client
-            .create()
-            .into_future()
-            .await
-            .map_err(to_storage_err2)?;
-        file_client
-            .append(0, data)
-            .into_future()
-            .await
-            .map_err(to_storage_err2)?;
-        file_client
-            .flush(length)
-            .close(true)
-            .into_future()
-            .await
-            .map_err(to_storage_err2)?;
+        file_client.create().into_future().await?;
+        file_client.append(0, data).into_future().await?;
+        file_client.flush(length).close(true).into_future().await?;
 
         Ok(())
     }
@@ -492,32 +403,18 @@ impl StorageBackend for AdlsGen2Backend {
         let dst_obj = parse_uri(dst)?.into_adlsgen2_object()?;
         self.validate_container(&dst_obj)?;
 
-        let file_client = self.file_system_client.get_file_client(src_obj.path);
-        let result = file_client
+        self.file_system_client
+            .get_file_client(src_obj.path)
             .rename_if_not_exists(dst_obj.path)
             .into_future()
-            .await;
-
-        if let Err(err) = result {
-            if let azure_storage::core::Error::CoreError(azure_core::Error::Other(ref other_err)) =
-                err
-            {
-                match other_err.downcast_ref::<azure_core::error::Error>() {
-                    Some(other_err) => {
-                        match other_err.downcast_ref::<azure_core::error::HttpError>() {
-                            Some(e) => {
-                                if e.status() == 409 {
-                                    return Err(StorageError::AlreadyExists(dst.to_string()));
-                                }
-                            }
-                            None => {}
-                        }
-                    }
-                    None => {}
+            .await
+            .map_err(|err| match err.kind() {
+                AzureErrorKind::HttpResponse { status, .. } if *status == 409 => {
+                    StorageError::AlreadyExists(dst.to_string())
                 }
-            }
-            return Err(StorageError::AzureStorage { source: err });
-        }
+                _ => err.into(),
+            })?;
+
         Ok(())
     }
 
@@ -526,12 +423,7 @@ impl StorageBackend for AdlsGen2Backend {
         self.validate_container(&obj)?;
 
         let file_client = self.file_system_client.get_file_client(obj.path);
-        file_client
-            .delete()
-            .into_future()
-            .await
-            .map_err(to_storage_err2)?;
-
+        file_client.delete().into_future().await?;
         Ok(())
     }
 }

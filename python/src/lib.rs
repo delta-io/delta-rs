@@ -137,7 +137,7 @@ impl RawDeltaTable {
     }
 
     pub fn version(&self) -> PyResult<i64> {
-        Ok(self._table.version)
+        Ok(self._table.version())
     }
 
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
@@ -225,9 +225,18 @@ impl RawDeltaTable {
     }
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
-    pub fn vacuum(&mut self, dry_run: bool, retention_hours: Option<u64>) -> PyResult<Vec<String>> {
+    pub fn vacuum(
+        &mut self,
+        dry_run: bool,
+        retention_hours: Option<u64>,
+        enforce_retention_duration: bool,
+    ) -> PyResult<Vec<String>> {
         rt()?
-            .block_on(self._table.vacuum(retention_hours, dry_run))
+            .block_on(self._table.vacuum(
+                retention_hours,
+                dry_run,
+                Some(enforce_retention_duration),
+            ))
             .map_err(PyDeltaTableError::from_raw)
     }
 
@@ -484,7 +493,11 @@ impl DeltaStorageFsBackend {
             .map_err(PyDeltaTableError::from_storage)?;
         Ok(PyTuple::new(
             py,
-            &[obj.path, obj.modified.timestamp().to_string()],
+            &[
+                obj.path.into_py(py),
+                obj.modified.timestamp().to_string().into_py(py),
+                obj.size.into_py(py),
+            ],
         ))
     }
 

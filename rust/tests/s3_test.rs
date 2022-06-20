@@ -40,7 +40,7 @@ mod s3 {
         table.load().await.unwrap();
         println!("{}", table);
 
-        assert_eq!(table.version, 4);
+        assert_eq!(table.version(), 4);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
         assert_eq!(
@@ -71,7 +71,7 @@ mod s3 {
             .await
             .unwrap();
         println!("{}", table);
-        assert_eq!(table.version, 3);
+        assert_eq!(table.version(), 3);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
         assert_eq!(
@@ -101,7 +101,7 @@ mod s3 {
         setup();
         let table = deltalake::open_table("s3://deltars/simple/").await.unwrap();
         println!("{}", table);
-        assert_eq!(table.version, 4);
+        assert_eq!(table.version(), 4);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
     }
@@ -115,7 +115,7 @@ mod s3 {
             .await
             .unwrap();
         println!("{}", table);
-        assert_eq!(table.version, 0);
+        assert_eq!(table.version(), 0);
         assert_eq!(table.get_min_writer_version(), 2);
         assert_eq!(table.get_min_reader_version(), 1);
     }
@@ -130,6 +130,14 @@ mod s3 {
         let err = backend.head_obj(key).await.err().unwrap();
 
         assert!(matches!(err, StorageError::NotFound));
+
+        let key = "s3://deltars/head_test";
+        let data: &[u8] = b"Hello world!";
+        backend.put_obj(key, data).await.unwrap();
+        let head_data = backend.head_obj(key).await.unwrap();
+        assert_eq!(head_data.size, Some(data.len().try_into().unwrap()));
+        assert_eq!(head_data.path, key);
+        assert!(head_data.modified > (chrono::offset::Utc::now() - chrono::Duration::seconds(30)));
     }
 
     #[tokio::test]

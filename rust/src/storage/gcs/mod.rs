@@ -41,6 +41,7 @@ impl From<tame_gcs::objects::Metadata> for ObjectMeta {
         ObjectMeta {
             path: metadata.name.unwrap(),
             modified: metadata.updated.unwrap(),
+            size: metadata.size.map(|s| s.try_into().unwrap()),
         }
     }
 }

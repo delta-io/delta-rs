@@ -657,6 +657,7 @@ impl Remove {
                 "size" => {
                     re.size = record.get_long(i).map(Some).unwrap_or(None);
                 }
+                "numRecords" => {}
                 _ => {
                     log::warn!(
                         "Unexpected field name `{}` for remove action: {:?}",
