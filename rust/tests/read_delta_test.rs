@@ -574,7 +574,7 @@ async fn test_poll_table_commits() {
 async fn test_read_vacuumed_log() {
     let path = "./tests/data/checkpoints_vacuumed";
     let table = deltalake::open_table(path).await.unwrap();
-    assert_eq!(table.version, 12);
+    assert_eq!(table.version(), 12);
 }
 
 #[tokio::test]

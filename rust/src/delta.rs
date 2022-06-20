@@ -704,7 +704,14 @@ impl DeltaTable {
 
         while let Some(obj_meta) = stream.next().await {
             // Exit early if any objects can't be listed.
-            let obj_meta = obj_meta?;
+            // We exclude the special case of a not found error on some of the list entities.
+            // This error mainly occurs for local stores when a temporary file has been deleted by
+            // concurrent writers or if the table is vacuumed by another client.
+            let obj_meta = match obj_meta {
+                Ok(meta) => Ok(meta),
+                Err(StorageError::NotFound) => continue,
+                Err(err) => Err(err),
+            }?;
             if let Some(captures) = CHECKPOINT_REGEX.captures(&obj_meta.path) {
                 let curr_ver_str = captures.get(1).unwrap().as_str();
                 let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
