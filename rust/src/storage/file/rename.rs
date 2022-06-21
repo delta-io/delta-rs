@@ -84,7 +84,7 @@ mod imp {
     unsafe fn platform_specific_rename(from: *const libc::c_char, to: *const libc::c_char) -> i32 {
         cfg_if::cfg_if! {
             if #[cfg(all(target_os = "linux", target_env = "gnu"))] {
-                    libc::renameat2(libc::AT_FDCWD, from, libc::AT_FDCWD, to, libc::RENAME_NOREPLACE)
+                libc::renameat2(libc::AT_FDCWD, from, libc::AT_FDCWD, to, libc::RENAME_NOREPLACE)
             } else if #[cfg(target_os = "macos")] {
                 libc::renamex_np(from, to, libc::RENAME_EXCL)
             } else {

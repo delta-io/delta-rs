@@ -671,9 +671,19 @@ impl DeltaTable {
 
     async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
         let last_checkpoint_path = self.storage.join_path(&self.log_uri, "_last_checkpoint");
-        let data = self.storage.get_obj(&last_checkpoint_path).await?;
-
-        Ok(serde_json::from_slice(&data)?)
+        match self.storage.get_obj(&last_checkpoint_path).await {
+            Ok(data) => Ok(serde_json::from_slice(&data)?),
+            Err(StorageError::NotFound) => {
+                match self
+                    .find_latest_check_point_for_version(DeltaDataTypeVersion::MAX)
+                    .await
+                {
+                    Ok(Some(cp)) => Ok(cp),
+                    _ => Err(LoadCheckpointError::NotFound),
+                }
+            }
+            Err(err) => Err(LoadCheckpointError::Storage { source: err }),
+        }
     }
 
     async fn find_latest_check_point_for_version(
@@ -694,7 +704,14 @@ impl DeltaTable {
 
         while let Some(obj_meta) = stream.next().await {
             // Exit early if any objects can't be listed.
-            let obj_meta = obj_meta?;
+            // We exclude the special case of a not found error on some of the list entities.
+            // This error mainly occurs for local stores when a temporary file has been deleted by
+            // concurrent writers or if the table is vacuumed by another client.
+            let obj_meta = match obj_meta {
+                Ok(meta) => Ok(meta),
+                Err(StorageError::NotFound) => continue,
+                Err(err) => Err(err),
+            }?;
             if let Some(captures) = CHECKPOINT_REGEX.captures(&obj_meta.path) {
                 let curr_ver_str = captures.get(1).unwrap().as_str();
                 let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
@@ -834,7 +851,7 @@ impl DeltaTable {
         Ok(PeekCommit::New(next_version, actions))
     }
 
-    ///Apply any actions assoicated with the PeekCommit to the DeltaTable
+    ///Apply any actions associated with the PeekCommit to the DeltaTable
     pub fn apply_actions(
         &mut self,
         new_version: DeltaDataTypeVersion,
@@ -964,6 +981,7 @@ impl DeltaTable {
             None => self.get_earliest_delta_log_version().await?,
         };
         let mut commit_infos_list = vec![];
+        let mut earliest_commit: Option<DeltaDataTypeVersion> = None;
 
         loop {
             match DeltaTableState::from_commit(self, version).await {
@@ -974,13 +992,24 @@ impl DeltaTable {
                 Err(e) => {
                     match e {
                         ApplyLogError::EndOfLog => {
-                            version -= 1;
-                            if version == -1 {
-                                let err = format!(
-                                    "No snapshot or version 0 found, perhaps {} is an empty dir?",
-                                    self.table_uri
-                                );
-                                return Err(DeltaTableError::NotATable(err));
+                            if earliest_commit.is_none() {
+                                earliest_commit =
+                                    Some(self.get_earliest_delta_log_version().await?);
+                            };
+                            if let Some(earliest) = earliest_commit {
+                                if version < earliest {
+                                    version = earliest;
+                                    continue;
+                                }
+                            } else {
+                                version -= 1;
+                                if version == -1 {
+                                    let err = format!(
+                                        "No snapshot or version 0 found, perhaps {} is an empty dir?",
+                                        self.table_uri
+                                    );
+                                    return Err(DeltaTableError::NotATable(err));
+                                }
                             }
                         }
                         _ => {
