@@ -12,7 +12,6 @@ use lazy_static::lazy_static;
 use log::*;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
-use parquet::file::writer::InMemoryWriteableCursor;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -402,8 +401,8 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
 
     debug!("Writing to checkpoint parquet buffer...");
     // Write the Checkpoint parquet file.
-    let writeable_cursor = InMemoryWriteableCursor::default();
-    let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
+    let mut bytes = vec![];
+    let mut writer = ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), None)?;
     let options = DecoderOptions::new().with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE);
     let decoder = Decoder::new(arrow_schema, options);
     while let Some(batch) = decoder.next_batch(&mut jsons)? {
@@ -412,7 +411,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     let _ = writer.close()?;
     debug!("Finished writing checkpoint parquet buffer.");
 
-    Ok(writeable_cursor.data())
+    Ok(bytes)
 }
 
 fn checkpoint_add_from_state(
