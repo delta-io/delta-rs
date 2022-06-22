@@ -3,10 +3,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::{schema::*, DeltaTableMetaData};
-use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
+use parquet::record::{ListAccessor, MapAccessor, RowAccessor, Field};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{Map, Value, Number};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -300,9 +300,9 @@ impl Add {
 
     /// Returns the composite HashMap representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    pub fn get_stats_parsed(&self) -> Result<Option<StatsParsed>, parquet::errors::ParquetError> {
+    pub fn get_stats_parsed(&self) -> Result<Option<Stats>, parquet::errors::ParquetError> {
         self.stats_parsed.as_ref().map_or(Ok(None), |record| {
-            let mut stats = StatsParsed::default();
+            let mut stats = Stats::default();
 
             for (i, (name, _)) in record.get_column_iter().enumerate() {
                 match name.as_str() {
@@ -317,7 +317,7 @@ impl Add {
                     "minValues" => match record.get_group(i) {
                         Ok(row) => {
                             for (name, field) in row.get_column_iter() {
-                                stats.min_values.insert(name.clone(), field.clone());
+                                stats.min_values.insert(name.clone(), ColumnValueStat::Value(parquet_field_to_json(field.clone())));
                             }
                         }
                         _ => {
@@ -327,7 +327,7 @@ impl Add {
                     "maxValues" => match record.get_group(i) {
                         Ok(row) => {
                             for (name, field) in row.get_column_iter() {
-                                stats.max_values.insert(name.clone(), field.clone());
+                                stats.max_values.insert(name.clone(), ColumnValueStat::Value(parquet_field_to_json(field.clone())));
                             }
                         }
                         _ => {
@@ -339,7 +339,7 @@ impl Add {
                             for (i, (name, _)) in row.get_column_iter().enumerate() {
                                 match row.get_long(i) {
                                     Ok(v) => {
-                                        stats.null_count.insert(name.clone(), v);
+                                        stats.null_count.insert(name.clone(), ColumnCountStat::Value(v));
                                     }
                                     _ => {
                                         log::error!("Expect type of stats_parsed.nullRecords value to be struct, got: {}", row);
@@ -363,6 +363,23 @@ impl Add {
 
             Ok(Some(stats))
         })
+    }
+}
+
+
+fn parquet_field_to_json(field: Field) -> serde_json::Value {
+    match field {
+        Field::Bool(val) => serde_json::Value::Bool(val),
+        Field::Byte(val) => serde_json::Value::Number(Number::from(val)),
+        Field::Short(val) => serde_json::Value::Number(Number::from(val)),
+        Field::Int(val) => serde_json::Value::Number(Number::from(val)),
+        Field::Long(val) => serde_json::Value::Number(Number::from(val)),
+        // Field::Float(val) => serde_json::Value(Number::from_f32(val)),
+        // Field::Double(val) => serde_json::Value(Number::from(val)),
+        // Field::Decimal(val) => serde_json::Value::Number(val),
+        // Field::Str(val) => serde_json::Value::String(val),
+        // Field::Bytes(val) => serde_json::Value::String(val),
+        _ => serde_json::Value::Null,
     }
 }
 
