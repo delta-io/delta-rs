@@ -3,10 +3,10 @@
 #![allow(non_camel_case_types)]
 
 use crate::{schema::*, DeltaTableMetaData};
-use parquet::record::{ListAccessor, MapAccessor, RowAccessor, Field};
+use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value, Number};
+use serde_json::{json, Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -288,11 +288,29 @@ impl Add {
         decode_path(&self.path).map(|path| Self { path, ..self })
     }
 
+    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+        
+        match self.get_stats_parsed() {
+            Ok(stats) => {
+                println!("add parquet: file={:?} stats = {:?}", self.path, stats);
+                if stats.is_ok() {
+                    return Ok(stats);
+                }
+            }
+            Err(e) => serde_json::error::Error,
+        }
+        let stats = self.get_json_stats();
+        if stats.is_ok() {
+            println!("add json: file={:?} stats = {:?}", self.path, Ok(stats));
+        }
+        return stats;
+    }
+
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        println!("add: file={:?} stats = {:?}", self.path, self.stats);
-        let add_stats = self.stats
+    pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+        let add_stats = self
+            .stats
             .as_ref()
             .map_or(Ok(None), |s| serde_json::from_str(s));
         return add_stats;
@@ -366,19 +384,18 @@ impl Add {
     }
 }
 
-
 fn parquet_field_to_json(field: Field) -> serde_json::Value {
     match field {
-        Field::Bool(val) => serde_json::Value::Bool(val),
-        Field::Byte(val) => serde_json::Value::Number(Number::from(val)),
-        Field::Short(val) => serde_json::Value::Number(Number::from(val)),
-        Field::Int(val) => serde_json::Value::Number(Number::from(val)),
-        Field::Long(val) => serde_json::Value::Number(Number::from(val)),
-        // Field::Float(val) => serde_json::Value(Number::from_f32(val)),
-        // Field::Double(val) => serde_json::Value(Number::from(val)),
-        // Field::Decimal(val) => serde_json::Value::Number(val),
-        // Field::Str(val) => serde_json::Value::String(val),
-        // Field::Bytes(val) => serde_json::Value::String(val),
+        Field::Bool(val) => json!(val),
+        Field::Byte(val) => json!(val),
+        Field::Short(val) => json!(val),
+        Field::Int(val) => json!(val),
+        Field::Long(val) => json!(val),
+        Field::Float(val) => json!(val),
+        Field::Double(val) => json!(val),
+        // Field::Decimal(val) => json!(val),
+        Field::Str(val) => json!(val),
+        // Field::Bytes(val) => json!(val),
         _ => serde_json::Value::Null,
     }
 }
