@@ -264,11 +264,9 @@ impl Add {
                 },
                 "stats_parsed" => match record.get_group(i) {
                     Ok(stats_parsed) => {
-                        println!("from_parquet_record: found stats_parsed");
                         re.stats_parsed = Some(stats_parsed.clone());
                     }
                     _ => {
-                        println!("from_parquet_record: found stats_parsed");
                         re.stats_parsed = None;
                     }
                 },
@@ -294,33 +292,25 @@ impl Add {
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         match self.get_stats_parsed() {
             Ok(Some(stats)) => {
-                println!("add parquet: file={:?} stats = {:?}", self.path, stats);
                 return Ok(Some(stats));
             }
             Err(e) => {
-                log::error!("Could not read parquet stats {e}");
+                log::error!("Could not read parquet stats {:?} {e}", self.stats_parsed);
             }
-            Ok(stats) => {
-                log::error!(
-                    "No parquet file={:?} stats_parsed={:?} stats={stats:?}",
-                    self.path,
-                    self.stats_parsed
-                );
+            Ok(_) => {
+                log::debug!("No parquet stats")
             }
         }
         let stats = self.get_json_stats();
-        println!("add json: file={:?} stats = {:?}", self.path, stats);
         return stats;
     }
 
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
     pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        let add_stats = self
-            .stats
+        self.stats
             .as_ref()
-            .map_or(Ok(None), |s| serde_json::from_str(s));
-        return add_stats;
+            .map_or(Ok(None), |s| serde_json::from_str(s))
     }
 
     /// Returns the composite HashMap representation of stats contained in the action if present.
@@ -328,7 +318,6 @@ impl Add {
     pub fn get_stats_parsed(&self) -> Result<Option<Stats>, parquet::errors::ParquetError> {
         self.stats_parsed.as_ref().map_or(Ok(None), |record| {
             let mut stats = Stats::default();
-            println!("parsing parquet stats");
 
             for (i, (name, _)) in record.get_column_iter().enumerate() {
                 match name.as_str() {
