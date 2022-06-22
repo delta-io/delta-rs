@@ -264,9 +264,11 @@ impl Add {
                 },
                 "stats_parsed" => match record.get_group(i) {
                     Ok(stats_parsed) => {
+                        println!("from_parquet_record: found stats_parsed");
                         re.stats_parsed = Some(stats_parsed.clone());
                     }
                     _ => {
+                        println!("from_parquet_record: found stats_parsed");
                         re.stats_parsed = None;
                     }
                 },
@@ -288,21 +290,26 @@ impl Add {
         decode_path(&self.path).map(|path| Self { path, ..self })
     }
 
+    /// Get whatever stats are available. Uses (parquet) parsed_stats if present falling back to json stats.
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        
         match self.get_stats_parsed() {
-            Ok(stats) => {
+            Ok(Some(stats)) => {
                 println!("add parquet: file={:?} stats = {:?}", self.path, stats);
-                if stats.is_ok() {
-                    return Ok(stats);
-                }
+                return Ok(Some(stats));
             }
-            Err(e) => serde_json::error::Error,
+            Err(e) => {
+                log::error!("Could not read parquet stats {e}");
+            }
+            Ok(stats) => {
+                log::error!(
+                    "No parquet file={:?} stats_parsed={:?} stats={stats:?}",
+                    self.path,
+                    self.stats_parsed
+                );
+            }
         }
         let stats = self.get_json_stats();
-        if stats.is_ok() {
-            println!("add json: file={:?} stats = {:?}", self.path, Ok(stats));
-        }
+        println!("add json: file={:?} stats = {:?}", self.path, stats);
         return stats;
     }
 
@@ -321,6 +328,7 @@ impl Add {
     pub fn get_stats_parsed(&self) -> Result<Option<Stats>, parquet::errors::ParquetError> {
         self.stats_parsed.as_ref().map_or(Ok(None), |record| {
             let mut stats = Stats::default();
+            println!("parsing parquet stats");
 
             for (i, (name, _)) in record.get_column_iter().enumerate() {
                 match name.as_str() {
