@@ -30,7 +30,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.5.7
+                0.5.8
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -382,16 +382,19 @@ DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p><a class="reference internal" href="api_reference.html#deltalake.write_deltalake" title="deltalake.write_deltalake"><code class="xref py py-func docutils literal notranslate"><span class="pre">write_deltalake()</span></code></a> accepts a Pandas DataFrame, but will convert it to
-a Arrow table before writing. See caveats in <a class="reference external" href="https://arrow.apache.org/docs/python/pandas.html" title="(in Apache Arrow v7.0.0)"><span>Pandas Integration</span></a>.</p>
+a Arrow table before writing. See caveats in <a class="reference external" href="https://arrow.apache.org/docs/python/pandas.html" title="(in Apache Arrow v8.0.0)"><span>Pandas Integration</span></a>.</p>
 </div>
 <p>By default, writes create a new table and error if it already exists. This is
 controlled by the <code class="docutils literal notranslate"><span class="pre">mode</span></code> parameter, which mirrors the behavior of Spark’s
-<a class="reference external" href="https://spark.apache.org/docs/latest/api/python/reference/api/pyspark.sql.DataFrameWriter.saveAsTable.html#pyspark.sql.DataFrameWriter.saveAsTable" title="(in PySpark vmaster)"><code class="xref py py-meth docutils literal notranslate"><span class="pre">pyspark.sql.DataFrameWriter.saveAsTable()</span></code></a> DataFrame method. To overwrite pass in <code class="docutils literal notranslate"><span class="pre">mode='overwrite'</span></code> and
+<a class="reference external" href="https://spark.apache.org/docs/latest/api/python/reference/pyspark.sql/api/pyspark.sql.DataFrameWriter.saveAsTable.html#pyspark.sql.DataFrameWriter.saveAsTable" title="(in PySpark vmaster)"><code class="xref py py-meth docutils literal notranslate"><span class="pre">pyspark.sql.DataFrameWriter.saveAsTable()</span></code></a> DataFrame method. To overwrite pass in <code class="docutils literal notranslate"><span class="pre">mode='overwrite'</span></code> and
 to append pass in <code class="docutils literal notranslate"><span class="pre">mode='append'</span></code>:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;overwrite&#39;</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">mode</span><span class="o">=</span><span class="s1">&#39;append&#39;</span><span class="p">)</span>
 </pre></div>
 </div>
+<p><a class="reference internal" href="api_reference.html#deltalake.write_deltalake" title="deltalake.write_deltalake"><code class="xref py py-meth docutils literal notranslate"><span class="pre">write_deltalake()</span></code></a> will raise <code class="xref py py-exc docutils literal notranslate"><span class="pre">ValueError</span></code> if the schema of
+the data passed to it differs from the existing table’s schema. If you wish to
+alter the schema as part of an overwrite pass in <code class="docutils literal notranslate"><span class="pre">overwrite_schema=True</span></code>.</p>
 </section>
 </section>
 

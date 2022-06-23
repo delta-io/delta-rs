@@ -357,3 +357,7 @@ to append pass in ``mode='append'``:
 
     >>> write_deltalake('path/to/table', df, mode='overwrite')
     >>> write_deltalake('path/to/table', df, mode='append')
+
+:py:meth:`write_deltalake` will raise :py:exc:`ValueError` if the schema of
+the data passed to it differs from the existing table's schema. If you wish to 
+alter the schema as part of an overwrite pass in ``overwrite_schema=True``.

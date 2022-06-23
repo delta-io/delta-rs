@@ -29,7 +29,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.5.7
+                0.5.8
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -260,7 +260,7 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 <dd class="field-odd"><p>the current Schema with the Parquet PyArrow format</p>
 </dd>
 <dt class="field-even">Return type</dt>
-<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v7.0.0)">pyarrow.lib.Schema</a></p>
+<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v8.0.0)">pyarrow.lib.Schema</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -288,34 +288,36 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p></li>
 <li><p><strong>columns</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>]</em>) – The columns to project. This can be a list of column names to include (order and duplicates will be preserved)</p></li>
-<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v7.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
+<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v8.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
 <dd class="field-even"><p>a pandas dataframe</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.4.2)">pandas.DataFrame</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.4.3)">pandas.DataFrame</a></p>
 </dd>
 </dl>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.to_pyarrow_dataset">
-<span class="sig-name descname"><span class="pre">to_pyarrow_dataset</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partitions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filesystem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.to_pyarrow_dataset" title="Permalink to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">to_pyarrow_dataset</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partitions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filesystem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">parquet_read_options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.to_pyarrow_dataset" title="Permalink to this definition"></a></dt>
 <dd><p>Build a PyArrow Dataset using data from the DeltaTable.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p></li>
-<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v7.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
+<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v8.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
+<li><p><strong>parquet_read_options</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html#pyarrow.dataset.ParquetReadOptions" title="(in Apache Arrow v8.0.0)"><em>pyarrow._dataset_parquet.ParquetReadOptions</em></a><em>]</em>) – Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
+More info: <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html">https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html</a></p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
 <dd class="field-even"><p>the PyArrow dataset in PyArrow</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.Dataset.html#pyarrow.dataset.Dataset" title="(in Apache Arrow v7.0.0)">pyarrow._dataset.Dataset</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.Dataset.html#pyarrow.dataset.Dataset" title="(in Apache Arrow v8.0.0)">pyarrow._dataset.Dataset</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -329,14 +331,14 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p></li>
 <li><p><strong>columns</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>]</em>) – The columns to project. This can be a list of column names to include (order and duplicates will be preserved)</p></li>
-<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v7.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
+<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v8.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
 <dd class="field-even"><p>the PyArrow table</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v7.0.0)">pyarrow.lib.Table</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v8.0.0)">pyarrow.lib.Table</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -355,13 +357,14 @@ newer versions.</p>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.vacuum">
-<span class="sig-name descname"><span class="pre">vacuum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">retention_hours</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dry_run</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.vacuum" title="Permalink to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">vacuum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">retention_hours</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dry_run</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">enforce_retention_duration</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.vacuum" title="Permalink to this definition"></a></dt>
 <dd><p>Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>retention_hours</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – the retention threshold in hours, if none then the value from <cite>configuration.deletedFileRetentionDuration</cite> is used or default of 1 week otherwise.</p></li>
 <li><p><strong>dry_run</strong> (<em>bool</em>) – when activated, list only the files, delete otherwise</p></li>
+<li><p><strong>enforce_retention_duration</strong> (<em>bool</em>) – when disabled, accepts retention hours smaller than the value from <cite>configuration.deletedFileRetentionDuration</cite>.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
@@ -400,7 +403,7 @@ newer versions.</p>
 </dl>
 <dl class="py property">
 <dt class="sig sig-object py" id="deltalake.table.Metadata.configuration">
-<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">configuration</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">List</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#deltalake.table.Metadata.configuration" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">property</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">configuration</span></span><em class="property"><span class="p"><span class="pre">:</span></span><span class="w"> </span><span class="pre">Dict</span><span class="p"><span class="pre">[</span></span><span class="pre">str</span><span class="p"><span class="pre">,</span></span><span class="w"> </span><span class="pre">str</span><span class="p"><span class="pre">]</span></span></em><a class="headerlink" href="#deltalake.table.Metadata.configuration" title="Permalink to this definition"></a></dt>
 <dd><p>Return the DeltaTable properties.</p>
 </dd></dl>
 
@@ -466,7 +469,7 @@ newer versions.</p>
 <h2>Writing DeltaTables<a class="headerlink" href="#writing-deltatables" title="Permalink to this headline"></a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="deltalake.write_deltalake">
-<span class="sig-prename descclassname"><span class="pre">deltalake.</span></span><span class="sig-name descname"><span class="pre">write_deltalake</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_or_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">schema</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partition_by</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filesystem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'error'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">description</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">configuration</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.write_deltalake" title="Permalink to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">deltalake.</span></span><span class="sig-name descname"><span class="pre">write_deltalake</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_or_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">schema</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partition_by</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filesystem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'error'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">file_options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_open_files</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1024</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rows_per_file</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_rows_per_group</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rows_per_group</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1048576</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">description</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">configuration</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overwrite_schema</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.write_deltalake" title="Permalink to this definition"></a></dt>
 <dd><p>Write to a Delta Lake table (Experimental)</p>
 <p>If the table does not already exist, it will be created.</p>
 <p>This function only supports protocol version 1 currently. If an attempting
@@ -477,19 +480,39 @@ function will throw DeltaTableProtocolError.</p>
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>table_or_uri</strong> (<em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference internal" href="#deltalake.table.DeltaTable" title="deltalake.table.DeltaTable"><em>deltalake.table.DeltaTable</em></a><em>]</em>) – URI of a table or a DeltaTable object.</p></li>
-<li><p><strong>data</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.4.2)"><em>pandas.core.frame.DataFrame</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v7.0.0)"><em>pyarrow.lib.Table</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v7.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>, </em><em>Iterable</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v7.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>]</em><em>, </em><em>pyarrow.lib.RecordBatchReader</em><em>]</em>) – Data to write. If passing iterable, the schema must also be given.</p></li>
-<li><p><strong>schema</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v7.0.0)"><em>pyarrow.lib.Schema</em></a><em>]</em>) – Optional schema to write.</p></li>
+<li><p><strong>data</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.4.3)"><em>pandas.core.frame.DataFrame</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v8.0.0)"><em>pyarrow.lib.Table</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v8.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>, </em><em>Iterable</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v8.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>]</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader" title="(in Apache Arrow v8.0.0)"><em>pyarrow.lib.RecordBatchReader</em></a><em>]</em>) – Data to write. If passing iterable, the schema must also be given.</p></li>
+<li><p><strong>schema</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v8.0.0)"><em>pyarrow.lib.Schema</em></a><em>]</em>) – Optional schema to write.</p></li>
 <li><p><strong>partition_by</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>]</em>) – List of columns to partition the table by. Only required
 when creating a new table.</p></li>
-<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v7.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em>) – Optional filesystem to pass to PyArrow. If not provided will
+<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v8.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em>) – Optional filesystem to pass to PyArrow. If not provided will
 be inferred from uri.</p></li>
-<li><p><strong>mode</strong> (<em>Literal</em><em>[</em><em>'error'</em><em>, </em><em>'append'</em><em>, </em><em>'overwrite'</em><em>, </em><em>'ignore'</em><em>]</em>) – How to handle existing data. Default is to error if table
-already exists. If ‘append’, will add new data. If ‘overwrite’, will
-replace table with new data. If ‘ignore’, will not write anything if
-table already exists.</p></li>
+<li><p><strong>mode</strong> (<em>Literal</em><em>[</em><em>'error'</em><em>, </em><em>'append'</em><em>, </em><em>'overwrite'</em><em>, </em><em>'ignore'</em><em>]</em>) – How to handle existing data. Default is to error if table already exists.
+If ‘append’, will add new data.
+If ‘overwrite’, will replace table with new data.
+If ‘ignore’, will not write anything if table already exists.</p></li>
+<li><p><strong>file_options</strong> (<em>Optional</em><em>[</em><em>pyarrow._dataset_parquet.ParquetFileWriteOptions</em><em>]</em>) – Optional write options for Parquet (ParquetFileWriteOptions).
+Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
+Please refer to <a class="reference external" href="https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533">https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533</a>
+for the list of available options</p></li>
+<li><p><strong>max_open_files</strong> (<em>int</em>) – Limits the maximum number of
+files that can be left open while writing. If an attempt is made to open
+too many files then the least recently used file will be closed.
+If this setting is set too low you may end up fragmenting your
+data into many small files.</p></li>
+<li><p><strong>max_rows_per_file</strong> (<em>int</em>) – Maximum number of rows per file.
+If greater than 0 then this will limit how many rows are placed in any single file.
+Otherwise there will be no limit and one file will be created in each output directory
+unless files need to be closed to respect max_open_files</p></li>
+<li><p><strong>min_rows_per_group</strong> (<em>int</em>) – Minimum number of rows per group. When the value is set,
+the dataset writer will batch incoming data and only write the row groups to the disk
+when sufficient rows have accumulated.</p></li>
+<li><p><strong>max_rows_per_group</strong> (<em>int</em>) – Maximum number of rows per group.
+If the value is set, then the dataset writer may split up large incoming batches into multiple row groups.
+If this value is set, then min_rows_per_group should also be set.</p></li>
 <li><p><strong>name</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – User-provided identifier for this table.</p></li>
 <li><p><strong>description</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – User-provided description for this table.</p></li>
 <li><p><strong>configuration</strong> (<em>Optional</em><em>[</em><em>Mapping</em><em>[</em><em>str</em><em>, </em><em>Optional</em><em>[</em><em>str</em><em>]</em><em>]</em><em>]</em>) – A map containing configuration options for the metadata action.</p></li>
+<li><p><strong>overwrite_schema</strong> (<em>bool</em>) – If True, allows updating the schema of the table.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type</dt>
@@ -637,7 +660,7 @@ table already exists.</p></li>
 <dd class="field-even"><p>the DataType in PyArrow format</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.DataType.html#pyarrow.DataType" title="(in Apache Arrow v7.0.0)">pyarrow.lib.DataType</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.DataType.html#pyarrow.DataType" title="(in Apache Arrow v8.0.0)">pyarrow.lib.DataType</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -653,7 +676,7 @@ table already exists.</p></li>
 <dd class="field-odd"><p><strong>field</strong> (<em>Dict</em><em>[</em><em>str</em><em>, </em><em>Any</em><em>]</em>) – </p>
 </dd>
 <dt class="field-even">Return type</dt>
-<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Field.html#pyarrow.Field" title="(in Apache Arrow v7.0.0)">pyarrow.lib.Field</a></p>
+<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Field.html#pyarrow.Field" title="(in Apache Arrow v8.0.0)">pyarrow.lib.Field</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -670,7 +693,7 @@ table already exists.</p></li>
 <dd class="field-even"><p>the Schema in PyArrow format</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v7.0.0)">pyarrow.lib.Schema</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v8.0.0)">pyarrow.lib.Schema</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -803,7 +826,7 @@ Otherwise, it is replaced.</p>
 <dd class="field-even"><p>list of file info objects</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><em>List</em>[<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileInfo.html#pyarrow.fs.FileInfo" title="(in Apache Arrow v7.0.0)">pyarrow._fs.FileInfo</a>]</p>
+<dd class="field-odd"><p><em>List</em>[<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileInfo.html#pyarrow.fs.FileInfo" title="(in Apache Arrow v8.0.0)">pyarrow._fs.FileInfo</a>]</p>
 </dd>
 </dl>
 </dd></dl>
@@ -814,13 +837,13 @@ Otherwise, it is replaced.</p>
 <dd><p>Get info for the files defined by FileSelector.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>selector</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSelector.html#pyarrow.fs.FileSelector" title="(in Apache Arrow v7.0.0)"><em>pyarrow._fs.FileSelector</em></a>) – FileSelector object</p>
+<dd class="field-odd"><p><strong>selector</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSelector.html#pyarrow.fs.FileSelector" title="(in Apache Arrow v8.0.0)"><em>pyarrow._fs.FileSelector</em></a>) – FileSelector object</p>
 </dd>
 <dt class="field-even">Returns</dt>
 <dd class="field-even"><p>list of file info objects</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><em>List</em>[<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileInfo.html#pyarrow.fs.FileInfo" title="(in Apache Arrow v7.0.0)">pyarrow._fs.FileInfo</a>]</p>
+<dd class="field-odd"><p><em>List</em>[<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileInfo.html#pyarrow.fs.FileInfo" title="(in Apache Arrow v8.0.0)">pyarrow._fs.FileInfo</a>]</p>
 </dd>
 </dl>
 </dd></dl>
@@ -892,7 +915,7 @@ behavior is unspecified (implementation-dependent).</p>
 <dd class="field-even"><p>NativeFile</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.NativeFile.html#pyarrow.NativeFile" title="(in Apache Arrow v7.0.0)">pyarrow.lib.NativeFile</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.NativeFile.html#pyarrow.NativeFile" title="(in Apache Arrow v8.0.0)">pyarrow.lib.NativeFile</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -912,7 +935,7 @@ behavior is unspecified (implementation-dependent).</p>
 <dd class="field-even"><p>NativeFile</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.NativeFile.html#pyarrow.NativeFile" title="(in Apache Arrow v7.0.0)">pyarrow.lib.NativeFile</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.NativeFile.html#pyarrow.NativeFile" title="(in Apache Arrow v8.0.0)">pyarrow.lib.NativeFile</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -932,7 +955,7 @@ behavior is unspecified (implementation-dependent).</p>
 <dd class="field-even"><p>NativeFile</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.NativeFile.html#pyarrow.NativeFile" title="(in Apache Arrow v7.0.0)">pyarrow.lib.NativeFile</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.NativeFile.html#pyarrow.NativeFile" title="(in Apache Arrow v8.0.0)">pyarrow.lib.NativeFile</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -953,7 +976,7 @@ behavior is unspecified (implementation-dependent).</p>
 <dd class="field-even"><p>NativeFile</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.NativeFile.html#pyarrow.NativeFile" title="(in Apache Arrow v7.0.0)">pyarrow.lib.NativeFile</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.NativeFile.html#pyarrow.NativeFile" title="(in Apache Arrow v8.0.0)">pyarrow.lib.NativeFile</a></p>
 </dd>
 </dl>
 </dd></dl>
