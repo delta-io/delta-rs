@@ -295,6 +295,7 @@ impl Add {
             Ok(None) => self.get_json_stats(),
             Err(e) => {
                 log::error!("Could not read parquet stats {:?} {e}", self.stats_parsed);
+                return self.get_json_stats();
             }
         }
     }
