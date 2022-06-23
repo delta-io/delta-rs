@@ -3,9 +3,7 @@ import json
 import os
 import pathlib
 import random
-import sys
-from datetime import date, datetime, timedelta
-from decimal import Decimal
+from datetime import datetime
 from typing import Dict, Iterable, List
 from unittest.mock import Mock
 
@@ -26,42 +24,6 @@ except ModuleNotFoundError:
     _has_pandas = False
 else:
     _has_pandas = True
-
-
-@pytest.fixture()
-def sample_data():
-    nrows = 5
-    return pa.table(
-        {
-            "utf8": pa.array([str(x) for x in range(nrows)]),
-            "int64": pa.array(list(range(nrows)), pa.int64()),
-            "int32": pa.array(list(range(nrows)), pa.int32()),
-            "int16": pa.array(list(range(nrows)), pa.int16()),
-            "int8": pa.array(list(range(nrows)), pa.int8()),
-            "float32": pa.array([float(x) for x in range(nrows)], pa.float32()),
-            "float64": pa.array([float(x) for x in range(nrows)], pa.float64()),
-            "bool": pa.array([x % 2 == 0 for x in range(nrows)]),
-            "binary": pa.array([str(x).encode() for x in range(nrows)]),
-            "decimal": pa.array([Decimal("10.000") + x for x in range(nrows)]),
-            "date32": pa.array(
-                [date(2022, 1, 1) + timedelta(days=x) for x in range(nrows)]
-            ),
-            "timestamp": pa.array(
-                [datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)]
-            ),
-            "struct": pa.array([{"x": x, "y": str(x)} for x in range(nrows)]),
-            "list": pa.array([list(range(x + 1)) for x in range(nrows)]),
-            # NOTE: https://github.com/apache/arrow-rs/issues/477
-            #'map': pa.array([[(str(y), y) for y in range(x)] for x in range(nrows)], pa.map_(pa.string(), pa.int64())),
-        }
-    )
-
-
-@pytest.fixture()
-def existing_table(tmp_path: pathlib.Path, sample_data: pa.Table):
-    path = str(tmp_path)
-    write_deltalake(path, sample_data)
-    return DeltaTable(path)
 
 
 @pytest.mark.skip(reason="Waiting on #570")
@@ -91,6 +53,11 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
     for add_path in get_add_paths(delta_table):
         # Paths should be relative, and with no partitioning have no directories
         assert "/" not in add_path
+
+    for action in get_add_actions(delta_table):
+        path = os.path.join(tmp_path, action["path"])
+        actual_size = os.path.getsize(path)
+        assert actual_size == action["size"]
 
 
 @pytest.mark.parametrize("mode", ["append", "overwrite"])
@@ -180,6 +147,20 @@ def test_roundtrip_partitioned(
     for add_path in get_add_paths(delta_table):
         # Paths should be relative
         assert add_path.count("/") == 1
+
+
+def test_roundtrip_null_partition(tmp_path: pathlib.Path, sample_data: pa.Table):
+    sample_data = sample_data.add_column(
+        0, "utf8_with_nulls", pa.array(["a"] * 4 + [None])
+    )
+    write_deltalake(str(tmp_path), sample_data, partition_by=["utf8_with_nulls"])
+
+    delta_table = DeltaTable(str(tmp_path))
+    assert delta_table.pyarrow_schema() == sample_data.schema
+
+    table = delta_table.to_pyarrow_table()
+    table = table.take(pc.sort_indices(table["int64"]))
+    assert table == sample_data
 
 
 def test_roundtrip_multi_partitioned(tmp_path: pathlib.Path, sample_data: pa.Table):
@@ -308,31 +289,31 @@ def get_log_path(table: DeltaTable) -> str:
     return table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
 
 
-def get_stats(table: DeltaTable):
+def get_add_actions(table: DeltaTable) -> List[str]:
     log_path = get_log_path(table)
 
-    # Should only have single add entry
+    actions = []
+
     for line in open(log_path, "r").readlines():
         log_entry = json.loads(line)
 
         if "add" in log_entry:
-            return json.loads(log_entry["add"]["stats"])
+            actions.append(log_entry["add"])
+
+    return actions
+
+
+def get_stats(table: DeltaTable):
+    actions = get_add_actions(table)
+    # Should only have single add entry
+    if len(actions) == 1:
+        return json.loads(actions[0]["stats"])
     else:
         raise AssertionError("No add action found!")
 
 
 def get_add_paths(table: DeltaTable) -> List[str]:
-    log_path = get_log_path(table)
-
-    paths = []
-
-    for line in open(log_path, "r").readlines():
-        log_entry = json.loads(line)
-
-        if "add" in log_entry:
-            paths.append(log_entry["add"]["path"])
-
-    return paths
+    return [action["path"] for action in get_add_actions(table)]
 
 
 def test_writer_stats(existing_table: DeltaTable, sample_data: pa.Table):

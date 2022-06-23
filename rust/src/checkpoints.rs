@@ -12,7 +12,6 @@ use lazy_static::lazy_static;
 use log::*;
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
-use parquet::file::writer::InMemoryWriteableCursor;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -86,10 +85,10 @@ impl From<CheckpointError> for ArrowError {
     }
 }
 
-/// Creates checkpoint at `table.version` for given `table`.
+/// Creates checkpoint at current table version
 pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), CheckpointError> {
     create_checkpoint_for(
-        table.version,
+        table.version(),
         table.get_state(),
         table.storage.as_ref(),
         &table.table_uri,
@@ -105,7 +104,7 @@ pub async fn cleanup_metadata(table: &DeltaTable) -> Result<i32, DeltaTableError
     let log_retention_timestamp =
         Utc::now().timestamp_millis() - table.get_state().log_retention_millis();
     cleanup_expired_logs_for(
-        table.version + 1,
+        table.version() + 1,
         table.storage.as_ref(),
         log_retention_timestamp,
         &table.table_uri,
@@ -133,7 +132,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     let enable_expired_log_cleanup =
         cleanup.unwrap_or_else(|| table.get_state().enable_expired_log_cleanup());
 
-    if table.version >= 0 && enable_expired_log_cleanup {
+    if table.version() >= 0 && enable_expired_log_cleanup {
         let deleted_log_num = cleanup_metadata(&table).await?;
         debug!("Deleted {:?} log files.", deleted_log_num);
     }
@@ -250,6 +249,7 @@ async fn cleanup_expired_logs_for(
         ObjectMeta {
             path: String::new(),
             modified: MIN_DATETIME,
+            size: None,
         },
     );
     let file_needs_time_adjustment =
@@ -293,6 +293,7 @@ async fn cleanup_expired_logs_for(
                 ObjectMeta {
                     path: current_file.1.path.clone(),
                     modified: last_file.1.modified.add(Duration::seconds(1)),
+                    size: None,
                 },
             );
             maybe_delete_files.push(updated);
@@ -400,8 +401,8 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
 
     debug!("Writing to checkpoint parquet buffer...");
     // Write the Checkpoint parquet file.
-    let writeable_cursor = InMemoryWriteableCursor::default();
-    let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
+    let mut bytes = vec![];
+    let mut writer = ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), None)?;
     let options = DecoderOptions::new().with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE);
     let decoder = Decoder::new(arrow_schema, options);
     while let Some(batch) = decoder.next_batch(&mut jsons)? {
@@ -410,7 +411,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
     let _ = writer.close()?;
     debug!("Finished writing checkpoint parquet buffer.");
 
-    Ok(writeable_cursor.data())
+    Ok(bytes)
 }
 
 fn checkpoint_add_from_state(

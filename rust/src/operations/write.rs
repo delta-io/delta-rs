@@ -423,7 +423,7 @@ mod tests {
     async fn test_append_data() {
         let partition_cols = vec!["modified".to_string()];
         let mut table = create_initialized_table(&partition_cols).await;
-        assert_eq!(table.version, 0);
+        assert_eq!(table.version(), 0);
 
         let transaction = get_transaction(table.table_uri.clone(), 0, SaveMode::Append);
         let session_ctx = SessionContext::new();
@@ -434,20 +434,20 @@ mod tests {
             .unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
-        assert_eq!(table.version, 1);
+        assert_eq!(table.version(), 1);
 
         let transaction = get_transaction(table.table_uri.clone(), 1, SaveMode::Append);
         let _ = collect(transaction.clone(), task_ctx).await.unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 4);
-        assert_eq!(table.version, 2);
+        assert_eq!(table.version(), 2);
     }
 
     #[tokio::test]
     async fn test_overwrite_data() {
         let partition_cols = vec!["modified".to_string()];
         let mut table = create_initialized_table(&partition_cols).await;
-        assert_eq!(table.version, 0);
+        assert_eq!(table.version(), 0);
 
         let transaction = get_transaction(table.table_uri.clone(), 0, SaveMode::Overwrite);
         let session_ctx = SessionContext::new();
@@ -458,13 +458,13 @@ mod tests {
             .unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
-        assert_eq!(table.version, 1);
+        assert_eq!(table.version(), 1);
 
         let transaction = get_transaction(table.table_uri.clone(), 1, SaveMode::Overwrite);
         let _ = collect(transaction.clone(), task_ctx).await.unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
-        assert_eq!(table.version, 2);
+        assert_eq!(table.version(), 2);
     }
 
     #[tokio::test]
@@ -487,7 +487,7 @@ mod tests {
         // THe table should be created on write and thus have version 0
         let table = open_table(table_path.to_str().unwrap()).await.unwrap();
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
-        assert_eq!(table.version, 0);
+        assert_eq!(table.version(), 0);
     }
 
     fn get_transaction(

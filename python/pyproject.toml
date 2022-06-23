@@ -38,6 +38,10 @@ devel = [
     "toml",
     "typing-extensions"
 ]
+pyspark = [
+    "pyspark",
+    "delta-spark"
+]
 
 [project.urls]
 documentation = "https://delta-io.github.io/delta-rs/python/"
@@ -78,4 +82,5 @@ markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "s3: marks tests as integration tests with S3 (deselect with '-m \"not s3\"')",
     "pandas: marks tests that require pandas",
+    "pyspark: marks tests that require pyspark",
 ]

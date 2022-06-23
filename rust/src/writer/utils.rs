@@ -9,12 +9,11 @@ use arrow::{
     json::reader::{Decoder, DecoderOptions},
     record_batch::*,
 };
-use parquet::file::writer::InMemoryWriteableCursor;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::Write;
-use std::sync::Arc;
+use std::sync::{Arc, RwLock};
 use uuid::Uuid;
 
 const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
@@ -97,13 +96,6 @@ pub(crate) fn next_data_path(
 
     let partition_key = PartitionPath::from_hashmap(partition_columns, partition_values)?;
     Ok(format!("{}/{}", partition_key, file_name))
-}
-
-/// Create a new cursor from existing bytes
-pub(crate) fn cursor_from_bytes(bytes: &[u8]) -> Result<InMemoryWriteableCursor, std::io::Error> {
-    let mut cursor = InMemoryWriteableCursor::default();
-    cursor.write_all(bytes)?;
-    Ok(cursor)
 }
 
 /// partition json values
@@ -207,4 +199,59 @@ pub(crate) fn record_batch_without_partitions(
     }
 
     Ok(record_batch.project(&non_partition_columns)?)
+}
+
+/// An in memory buffer that allows for shared ownership and interior mutability.
+/// The underlying buffer is wrapped in an `Arc` and `RwLock`, so cloning the instance
+/// allows multiple owners to have access to the same underlying buffer.
+#[derive(Debug, Default, Clone)]
+pub struct ShareableBuffer {
+    buffer: Arc<RwLock<Vec<u8>>>,
+}
+
+impl ShareableBuffer {
+    /// Consumes this instance and returns the underlying buffer.
+    /// Returns None if there are other references to the instance.
+    pub fn into_inner(self) -> Option<Vec<u8>> {
+        Arc::try_unwrap(self.buffer)
+            .ok()
+            .and_then(|lock| lock.into_inner().ok())
+    }
+
+    /// Returns a clone of the the underlying buffer as a `Vec`.
+    pub fn to_vec(&self) -> Vec<u8> {
+        let inner = self.buffer.read().unwrap();
+        inner.to_vec()
+    }
+
+    /// Returns the number of bytes in the underlying buffer.
+    pub fn len(&self) -> usize {
+        let inner = self.buffer.read().unwrap();
+        inner.len()
+    }
+
+    /// Returns true if the underlying buffer is empty.
+    pub fn is_empty(&self) -> bool {
+        let inner = self.buffer.read().unwrap();
+        inner.is_empty()
+    }
+
+    /// Creates a new instance with buffer initialized from the underylying bytes.
+    pub fn from_bytes(bytes: &[u8]) -> Self {
+        Self {
+            buffer: Arc::new(RwLock::new(bytes.to_vec())),
+        }
+    }
+}
+
+impl Write for ShareableBuffer {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let mut inner = self.buffer.write().unwrap();
+        inner.write(buf)
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        let mut inner = self.buffer.write().unwrap();
+        inner.flush()
+    }
 }

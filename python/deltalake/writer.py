@@ -1,4 +1,5 @@
 import json
+import os.path
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -15,6 +16,8 @@ from typing import (
     Tuple,
     Union,
 )
+
+from deltalake.fs import DeltaStorageHandler
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -143,6 +146,7 @@ def write_deltalake(
     # TODO: Pass through filesystem once it is complete
     # if filesystem is None:
     #    filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri))
+    fs = DeltaStorageHandler(table_uri)
 
     if table:  # already exists
         if schema != table.pyarrow_schema() and not (
@@ -188,10 +192,12 @@ def write_deltalake(
         path, partition_values = get_partitions_from_path(table_uri, written_file.path)
         stats = get_file_stats_from_metadata(written_file.metadata)
 
+        size = fs.get_file_info([os.path.join(table_uri, path)])[0].size
+
         add_actions.append(
             AddAction(
                 path,
-                written_file.metadata.serialized_size,
+                size,
                 partition_values,
                 int(datetime.now().timestamp()),
                 True,
@@ -276,18 +282,23 @@ def try_get_deltatable(table_uri: str) -> Optional[DeltaTable]:
         return None
 
 
-def get_partitions_from_path(base_path: str, path: str) -> Tuple[str, Dict[str, str]]:
+def get_partitions_from_path(
+    base_path: str, path: str
+) -> Tuple[str, Dict[str, Optional[str]]]:
     path = path.split(base_path, maxsplit=1)[1]
     if path[0] == "/":
         path = path[1:]
     parts = path.split("/")
     parts.pop()  # remove filename
-    out = {}
+    out: Dict[str, Optional[str]] = {}
     for part in parts:
         if part == "":
             continue
         key, value = part.split("=", maxsplit=1)
-        out[key] = value
+        if value == "__HIVE_DEFAULT_PARTITION__":
+            out[key] = None
+        else:
+            out[key] = value
     return path, out
 
 

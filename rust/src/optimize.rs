@@ -284,7 +284,7 @@ impl MergePlan {
         // optimized partition was updated then abort the commit. Requires (#593).
         if !actions.is_empty() {
             let mut metadata = Map::new();
-            metadata.insert("readVersion".to_owned(), table.version.into());
+            metadata.insert("readVersion".to_owned(), table.version().into());
             let maybe_map_metrics = serde_json::to_value(metrics.clone());
             if let Ok(map) = maybe_map_metrics {
                 metadata.insert("operationMetrics".to_owned(), map);
