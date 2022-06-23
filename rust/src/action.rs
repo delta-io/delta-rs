@@ -291,18 +291,12 @@ impl Add {
     /// Get whatever stats are available. Uses (parquet) parsed_stats if present falling back to json stats.
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         match self.get_stats_parsed() {
-            Ok(Some(stats)) => {
-                return Ok(Some(stats));
-            }
+            Ok(Some(stats)) => Ok(Some(stats)),
+            Ok(None) => self.get_json_stats(),
             Err(e) => {
                 log::error!("Could not read parquet stats {:?} {e}", self.stats_parsed);
             }
-            Ok(_) => {
-                log::debug!("No parquet stats")
-            }
         }
-        let stats = self.get_json_stats();
-        return stats;
     }
 
     /// Returns the serde_json representation of stats contained in the action if present.
