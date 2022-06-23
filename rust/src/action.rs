@@ -288,13 +288,16 @@ impl Add {
         decode_path(&self.path).map(|path| Self { path, ..self })
     }
 
-    /// Get whatever stats are available. Uses (parquet) parsed_stats if present falling back to json stats.
+    /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         match self.get_stats_parsed() {
             Ok(Some(stats)) => Ok(Some(stats)),
             Ok(None) => self.get_json_stats(),
             Err(e) => {
-                log::error!("Could not read parquet stats {:?} {e}", self.stats_parsed);
+                log::error!(
+                    "Error when reading parquet stats {:?} {e}. Attempting to read json stats",
+                    self.stats_parsed
+                );
                 return self.get_json_stats();
             }
         }
