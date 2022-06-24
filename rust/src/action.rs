@@ -380,7 +380,15 @@ impl Add {
 }
 
 fn parquet_field_to_json(field: Field) -> serde_json::Value {
+    println!("{field:?}");
     match field {
+        Field::Group(group) => {
+            return serde_json::Value::Object(serde_json::Map::from_iter(
+                group.get_column_iter().map(|(field_name, field)| {
+                    (field_name.clone(), parquet_field_to_json(field.clone()))
+                }),
+            ));
+        }
         Field::Bool(val) => json!(val),
         Field::Byte(val) => json!(val),
         Field::Short(val) => json!(val),
@@ -388,12 +396,19 @@ fn parquet_field_to_json(field: Field) -> serde_json::Value {
         Field::Long(val) => json!(val),
         Field::Float(val) => json!(val),
         Field::Double(val) => json!(val),
-        // Field::Decimal(val) => json!(val),
+        // Field::Decimal(val) => json!(parquet::basic::LogicalType::from(val).to_string()),
         Field::Str(val) => json!(val),
-        // Field::Bytes(val) => json!(val),
-        _ => serde_json::Value::Null,
+        _ => {
+            log::warn!(
+                "Unexpected field type `{}`. Stats on this field will not be parsed",
+                field
+            );
+            return serde_json::Value::Null;
+        }
     }
 }
+
+// fn parquet_decimal_to_string(decimal: Field::Decimal) {}
 
 /// Describes the data format of files in the table.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]

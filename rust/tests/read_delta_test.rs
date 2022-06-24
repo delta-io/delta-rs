@@ -488,7 +488,6 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
             .get_file_uris()
             .zip(table.get_stats())
             .filter_map(|(file_uri, file_stats)| {
-                println!("{file_uri}");
                 if file_uri.ends_with(&file_name) {
                     return file_stats.unwrap();
                 }
@@ -524,7 +523,7 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
             })
             .count()
         }
-    assert_eq!(first_file_stats.num_records, 1)
+    assert_eq!(first_file_stats.num_records, 1);
     assert_eq!(
         first_file_stats.null_count.iter()
         .filter(|(_, column_value_stat)| {
