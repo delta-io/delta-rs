@@ -3,6 +3,7 @@
 #![allow(non_camel_case_types)]
 
 use crate::{schema::*, DeltaTableMetaData};
+use chrono::{NaiveDateTime, SecondsFormat, TimeZone, Utc};
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
@@ -114,7 +115,7 @@ impl ColumnCountStat {
 }
 
 /// Statistics associated with Add actions contained in the Delta log.
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
     /// Number of records in the file associated with the log action.
@@ -380,7 +381,7 @@ impl Add {
 }
 
 fn parquet_field_to_json(field: Field) -> serde_json::Value {
-    println!("{field:?}");
+    // println!("{field:?}");
     match field {
         Field::Group(group) => {
             return serde_json::Value::Object(serde_json::Map::from_iter(
@@ -389,23 +390,16 @@ fn parquet_field_to_json(field: Field) -> serde_json::Value {
                 }),
             ));
         }
-        Field::Bool(val) => json!(val),
-        Field::Byte(val) => json!(val),
-        Field::Short(val) => json!(val),
-        Field::Int(val) => json!(val),
-        Field::Long(val) => json!(val),
-        Field::Float(val) => json!(val),
-        Field::Double(val) => json!(val),
-        // Field::Decimal(val) => json!(parquet::basic::LogicalType::from(val).to_string()),
-        Field::Str(val) => json!(val),
-        _ => {
-            log::warn!(
-                "Unexpected field type `{}`. Stats on this field will not be parsed",
-                field
-            );
-            return serde_json::Value::Null;
+        Field::TimestampMillis(timestamp) => {
+            serde_json::Value::String(convert_timestamp_millis_to_string(timestamp))
         }
+        _ => field.to_json_value(),
     }
+}
+
+fn convert_timestamp_millis_to_string(value: u64) -> String {
+    let dt = Utc.timestamp((value / 1000) as i64, ((value % 1000) * 1000000) as u32);
+    return dt.to_rfc3339_opts(SecondsFormat::Millis, true);
 }
 
 // fn parquet_decimal_to_string(decimal: Field::Decimal) {}
