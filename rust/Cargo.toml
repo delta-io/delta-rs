@@ -25,6 +25,8 @@ uuid = { version = "1", features = ["serde", "v4"] }
 lazy_static = "1"
 percent-encoding = "2"
 itertools = "0.10.2"
+num-bigint = "0.4"
+num-traits = "0.2.15"
 
 # HTTP Client
 reqwest = { version = "0.11", default-features = false, features = [

@@ -4,13 +4,14 @@
 
 use crate::{schema::*, DeltaTableMetaData};
 use chrono::{NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use num_traits::cast::ToPrimitive;
 use parquet::data_type::Decimal;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Number, Value};
 // use serde_json::Deserializer::{deserialize_any, deserialize_str};
-use num_bigint::BigUint;
+use num_bigint::{BigInt, Sign};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -396,9 +397,25 @@ fn parquet_field_to_column_stat(field: Field) -> ColumnValueStat {
                 },
             )));
         }
-        // Field::Decimal(_) => {
-        //     ColumnValueStat::Value(serde_json::Value::Number(field.to_json_value()))
-        // }
+        Field::Decimal(decimal) => {
+            println!(
+                "{:?}",
+                BigInt::from_signed_bytes_be(decimal.data()).to_f64()
+            );
+            println!("{:?}", (10_i32.pow(decimal.scale().try_into().unwrap())));
+            let unscaled_int = BigInt::from_signed_bytes_be(decimal.data());
+            let negative = if unscaled_int.sign() == Sign::Minus {
+                1
+            } else {
+                0
+            };
+            match unscaled_int.to_f64() {
+                Some(int) => ColumnValueStat::Value(json!(
+                    int / (10_i64.pow((decimal.scale() - negative).try_into().unwrap()) as f64)
+                )),
+                _ => ColumnValueStat::Value(serde_json::Value::Null),
+            }
+        }
         Field::TimestampMillis(timestamp) => ColumnValueStat::Value(serde_json::Value::String(
             convert_timestamp_millis_to_string(timestamp),
         )),
