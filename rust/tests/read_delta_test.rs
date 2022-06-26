@@ -472,14 +472,13 @@ async fn vacuum_delta_8_0_table() {
     );
 }
 
-
 #[tokio::test]
 async fn read_delta_1_2_1_struct_stats_table_without_version() {
     let table_uri = "./tests/data/delta-1.2.1-only-struct-stats";
-    let table_from_struct_stats = deltalake::open_table(table_uri)
+    let table_from_struct_stats = deltalake::open_table(table_uri).await.unwrap();
+    let table_from_json_stats = deltalake::open_table_with_version(table_uri, 1)
         .await
         .unwrap();
-    let table_from_json_stats = deltalake::open_table_with_version(table_uri, 1).await.unwrap();
 
     fn get_stats_for_file(
         table: &deltalake::DeltaTable,
@@ -500,10 +499,23 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
 
     let file_to_compare = "part-00000-b5f1c7b4-7d81-4461-ac30-4446d48a53a4-c000.snappy.parquet";
 
-    println!("{:?}", get_stats_for_file(&table_from_struct_stats, &file_to_compare));
-    println!("{:?}", get_stats_for_file(&table_from_json_stats, &file_to_compare));
+    println!(
+        "{:?}",
+        get_stats_for_file(&table_from_struct_stats, &file_to_compare)
+    );
+    println!(
+        "{:?}",
+        get_stats_for_file(&table_from_json_stats, &file_to_compare)
+    );
 
-    assert_eq!(get_stats_for_file(&table_from_struct_stats, &file_to_compare), get_stats_for_file(&table_from_json_stats, &file_to_compare))
+    assert_eq!(
+        get_stats_for_file(&table_from_struct_stats, &file_to_compare)
+            .min_values
+            .get("decimal"),
+        get_stats_for_file(&table_from_json_stats, &file_to_compare)
+            .min_values
+            .get("decimal")
+    )
 }
 
 #[tokio::test]

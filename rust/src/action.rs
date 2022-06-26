@@ -4,6 +4,7 @@
 
 use crate::{schema::*, DeltaTableMetaData};
 use chrono::{NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use parquet::data_type::Decimal;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
@@ -390,9 +391,13 @@ fn parquet_field_to_json(field: Field) -> serde_json::Value {
                 }),
             ));
         }
+        Field::Decimal(decimal) => {
+            json!(convert_decimal_to_string(&decimal))
+        }
         Field::TimestampMillis(timestamp) => {
             serde_json::Value::String(convert_timestamp_millis_to_string(timestamp))
         }
+        Field::Date(date) => serde_json::Value::String(convert_date_to_string(date)),
         _ => field.to_json_value(),
     }
 }
@@ -400,6 +405,40 @@ fn parquet_field_to_json(field: Field) -> serde_json::Value {
 fn convert_timestamp_millis_to_string(value: u64) -> String {
     let dt = Utc.timestamp((value / 1000) as i64, ((value % 1000) * 1000000) as u32);
     return dt.to_rfc3339_opts(SecondsFormat::Millis, true);
+}
+
+fn convert_date_to_string(value: u32) -> String {
+    static NUM_SECONDS_IN_DAY: i64 = 60 * 60 * 24;
+    let dt = Utc.timestamp(value as i64 * NUM_SECONDS_IN_DAY, 0).date();
+    format!("{}", dt.format("%Y-%m-%d"))
+}
+
+fn convert_decimal_to_string(decimal: &Decimal) -> String {
+    assert!(decimal.scale() >= 0 && decimal.precision() > decimal.scale());
+
+    // Specify as signed bytes to resolve sign as part of conversion.
+    let num = BigInt::from_signed_bytes_be(decimal.data());
+
+    // Offset of the first digit in a string.
+    let negative = if num.sign() == Sign::Minus { 1 } else { 0 };
+    let mut num_str = num.to_string();
+    let mut point = num_str.len() as i32 - decimal.scale() - negative;
+
+    // Convert to string form without scientific notation.
+    if point <= 0 {
+        // Zeros need to be prepended to the unscaled value.
+        while point < 0 {
+            num_str.insert(negative as usize, '0');
+            point += 1;
+        }
+        num_str.insert_str(negative as usize, "0.");
+    } else {
+        // No zeroes need to be prepended to the unscaled value, simply insert decimal
+        // point.
+        num_str.insert((point + negative) as usize, '.');
+    }
+
+    num_str
 }
 
 // fn parquet_decimal_to_string(decimal: Field::Decimal) {}
