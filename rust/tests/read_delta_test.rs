@@ -499,15 +499,6 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
 
     let file_to_compare = "part-00000-51653f4d-b029-44bd-9fda-578e73518a26-c000.snappy.parquet";
 
-    println!(
-        "{:?}",
-        get_stats_for_file(&table_from_struct_stats, &file_to_compare)
-    );
-    println!(
-        "{:?}",
-        get_stats_for_file(&table_from_json_stats, &file_to_compare)
-    );
-
     assert_eq!(
         get_stats_for_file(&table_from_struct_stats, &file_to_compare).min_values,
         get_stats_for_file(&table_from_json_stats, &file_to_compare).min_values,
