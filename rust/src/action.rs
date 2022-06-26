@@ -397,25 +397,12 @@ fn parquet_field_to_column_stat(field: Field) -> ColumnValueStat {
                 },
             )));
         }
-        Field::Decimal(decimal) => {
-            println!(
-                "{:?}",
-                BigInt::from_signed_bytes_be(decimal.data()).to_f64()
-            );
-            println!("{:?}", (10_i32.pow(decimal.scale().try_into().unwrap())));
-            let unscaled_int = BigInt::from_signed_bytes_be(decimal.data());
-            let negative = if unscaled_int.sign() == Sign::Minus {
-                1
-            } else {
-                0
-            };
-            match unscaled_int.to_f64() {
-                Some(int) => ColumnValueStat::Value(json!(
-                    int / (10_i64.pow((decimal.scale() - negative).try_into().unwrap()) as f64)
-                )),
-                _ => ColumnValueStat::Value(serde_json::Value::Null),
-            }
-        }
+        Field::Decimal(decimal) => match BigInt::from_signed_bytes_be(decimal.data()).to_f64() {
+            Some(int) => ColumnValueStat::Value(json!(
+                int / (10_i64.pow((decimal.scale()).try_into().unwrap()) as f64)
+            )),
+            _ => ColumnValueStat::Value(serde_json::Value::Null),
+        },
         Field::TimestampMillis(timestamp) => ColumnValueStat::Value(serde_json::Value::String(
             convert_timestamp_millis_to_string(timestamp),
         )),

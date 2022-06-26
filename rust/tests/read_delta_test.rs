@@ -497,7 +497,7 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
             .unwrap()
     }
 
-    let file_to_compare = "part-00000-5746977a-f650-4b65-8ea3-169b31a8d12f-c000.snappy.parquet";
+    let file_to_compare = "part-00000-51653f4d-b029-44bd-9fda-578e73518a26-c000.snappy.parquet";
 
     println!(
         "{:?}",
@@ -508,25 +508,10 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
         get_stats_for_file(&table_from_json_stats, &file_to_compare)
     );
 
-    for column in [
-        "struct",
-        "nested_struct_element",
-        // "float",
-        "integer",
-        "string",
-        "date",
-        "timestamp",
-        "decimal",
-    ] {
-        assert_eq!(
-            get_stats_for_file(&table_from_struct_stats, &file_to_compare)
-                .min_values
-                .get(column),
-            get_stats_for_file(&table_from_json_stats, &file_to_compare)
-                .min_values
-                .get(column)
-        )
-    }
+    assert_eq!(
+        get_stats_for_file(&table_from_struct_stats, &file_to_compare).min_values,
+        get_stats_for_file(&table_from_json_stats, &file_to_compare).min_values,
+    )
 }
 
 #[tokio::test]
