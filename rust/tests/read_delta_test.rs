@@ -508,14 +508,24 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
         get_stats_for_file(&table_from_json_stats, &file_to_compare)
     );
 
-    assert_eq!(
-        get_stats_for_file(&table_from_struct_stats, &file_to_compare)
-            .min_values
-            .get("decimal"),
-        get_stats_for_file(&table_from_json_stats, &file_to_compare)
-            .min_values
-            .get("decimal")
-    )
+    for column in [
+        "struct",
+        // "float",
+        "integer",
+        "string",
+        "date",
+        "timestamp",
+        "decimal",
+    ] {
+        assert_eq!(
+            get_stats_for_file(&table_from_struct_stats, &file_to_compare)
+                .min_values
+                .get(column),
+            get_stats_for_file(&table_from_json_stats, &file_to_compare)
+                .min_values
+                .get(column)
+        )
+    }
 }
 
 #[tokio::test]

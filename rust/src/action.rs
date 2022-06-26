@@ -9,6 +9,7 @@ use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Map, Value};
+// use serde_json::Deserializer::{deserialize_any, deserialize_str};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -332,7 +333,7 @@ impl Add {
                     "minValues" => match record.get_group(i) {
                         Ok(row) => {
                             for (name, field) in row.get_column_iter() {
-                                stats.min_values.insert(name.clone(), ColumnValueStat::Value(parquet_field_to_json(field.clone())));
+                                stats.min_values.insert(name.clone(), parquet_field_to_column_stat(field.clone()));
                             }
                         }
                         _ => {
@@ -342,7 +343,7 @@ impl Add {
                     "maxValues" => match record.get_group(i) {
                         Ok(row) => {
                             for (name, field) in row.get_column_iter() {
-                                stats.max_values.insert(name.clone(), ColumnValueStat::Value(parquet_field_to_json(field.clone())));
+                                stats.max_values.insert(name.clone(), parquet_field_to_column_stat(field.clone()));
                             }
                         }
                         _ => {
@@ -381,24 +382,24 @@ impl Add {
     }
 }
 
-fn parquet_field_to_json(field: Field) -> serde_json::Value {
+fn parquet_field_to_column_stat(field: Field) -> ColumnValueStat {
     // println!("{field:?}");
     match field {
         Field::Group(group) => {
-            return serde_json::Value::Object(serde_json::Map::from_iter(
+            return ColumnValueStat::Column(HashMap::from_iter(
                 group.get_column_iter().map(|(field_name, field)| {
-                    (field_name.clone(), parquet_field_to_json(field.clone()))
+                    (field_name.clone(), parquet_field_to_column_stat(field.clone()))
                 }),
             ));
         }
-        Field::Decimal(decimal) => {
-            json!(convert_decimal_to_string(&decimal))
-        }
+        // Field::Decimal(decimal) => {
+        //     deserialize_any!(convert_decimal_to_string(&decimal))
+        // }
         Field::TimestampMillis(timestamp) => {
-            serde_json::Value::String(convert_timestamp_millis_to_string(timestamp))
+            ColumnValueStat::Value(serde_json::Value::String(convert_timestamp_millis_to_string(timestamp)))
         }
-        Field::Date(date) => serde_json::Value::String(convert_date_to_string(date)),
-        _ => field.to_json_value(),
+        Field::Date(date) => ColumnValueStat::Value(serde_json::Value::String(convert_date_to_string(date))),
+        _ => ColumnValueStat::Value(field.to_json_value()),
     }
 }
 
@@ -413,33 +414,33 @@ fn convert_date_to_string(value: u32) -> String {
     format!("{}", dt.format("%Y-%m-%d"))
 }
 
-fn convert_decimal_to_string(decimal: &Decimal) -> String {
-    assert!(decimal.scale() >= 0 && decimal.precision() > decimal.scale());
+// fn convert_decimal_to_string(decimal: &Decimal) -> String {
+//     assert!(decimal.scale() >= 0 && decimal.precision() > decimal.scale());
 
-    // Specify as signed bytes to resolve sign as part of conversion.
-    let num = BigInt::from_signed_bytes_be(decimal.data());
+//     // Specify as signed bytes to resolve sign as part of conversion.
+//     let num = BigInt::from_signed_bytes_be(decimal.data());
 
-    // Offset of the first digit in a string.
-    let negative = if num.sign() == Sign::Minus { 1 } else { 0 };
-    let mut num_str = num.to_string();
-    let mut point = num_str.len() as i32 - decimal.scale() - negative;
+//     // Offset of the first digit in a string.
+//     let negative = if num.sign() == Sign::Minus { 1 } else { 0 };
+//     let mut num_str = num.to_string();
+//     let mut point = num_str.len() as i32 - decimal.scale() - negative;
 
-    // Convert to string form without scientific notation.
-    if point <= 0 {
-        // Zeros need to be prepended to the unscaled value.
-        while point < 0 {
-            num_str.insert(negative as usize, '0');
-            point += 1;
-        }
-        num_str.insert_str(negative as usize, "0.");
-    } else {
-        // No zeroes need to be prepended to the unscaled value, simply insert decimal
-        // point.
-        num_str.insert((point + negative) as usize, '.');
-    }
+//     // Convert to string form without scientific notation.
+//     if point <= 0 {
+//         // Zeros need to be prepended to the unscaled value.
+//         while point < 0 {
+//             num_str.insert(negative as usize, '0');
+//             point += 1;
+//         }
+//         num_str.insert_str(negative as usize, "0.");
+//     } else {
+//         // No zeroes need to be prepended to the unscaled value, simply insert decimal
+//         // point.
+//         num_str.insert((point + negative) as usize, '.');
+//     }
 
-    num_str
-}
+//     num_str
+// }
 
 // fn parquet_decimal_to_string(decimal: Field::Decimal) {}
 
