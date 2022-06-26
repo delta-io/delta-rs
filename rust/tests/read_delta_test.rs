@@ -497,7 +497,7 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
             .unwrap()
     }
 
-    let file_to_compare = "part-00000-b5f1c7b4-7d81-4461-ac30-4446d48a53a4-c000.snappy.parquet";
+    let file_to_compare = "part-00000-5746977a-f650-4b65-8ea3-169b31a8d12f-c000.snappy.parquet";
 
     println!(
         "{:?}",
@@ -510,6 +510,7 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
 
     for column in [
         "struct",
+        "nested_struct_element",
         // "float",
         "integer",
         "string",
