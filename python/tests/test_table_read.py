@@ -193,16 +193,6 @@ def test_read_table_with_stats():
     # assert data.num_rows == 0
 
 
-def test_read_table_with_only_struct_stats():
-    table_path = "../rust/tests/data/delta-1.2.1-only-struct-stats"
-    dt = DeltaTable(table_path)
-
-    dataset = dt.to_pyarrow_dataset()
-
-    filter_expr = ds.field("a") == 5
-    assert len(list(dataset.get_fragments(filter=filter_expr))) == 1
-
-
 def test_vacuum_dry_run_simple_table():
     table_path = "../rust/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path)
