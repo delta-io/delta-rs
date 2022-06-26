@@ -150,7 +150,7 @@ def test_read_table_with_column_subset():
 
 
 def test_read_table_with_filter():
-    table_path = "../rust/tests/data/stats_problem"
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
     expected = {
         "value": ["6", "7", "5"],
@@ -199,17 +199,7 @@ def test_read_table_with_only_struct_stats():
 
     dataset = dt.to_pyarrow_dataset()
 
-    filter_expr = (ds.field("a") == 5)
-    assert len(list(dataset.get_fragments(filter=filter_expr))) == 1
-
-
-def test_read_table_with_only_struct_stats():
-    table_path = "../rust/tests/data/delta-1.2.1-only-struct-stats"
-    dt = DeltaTable(table_path)
-
-    dataset = dt.to_pyarrow_dataset()
-
-    filter_expr = (ds.field("a") == 5)
+    filter_expr = ds.field("a") == 5
     assert len(list(dataset.get_fragments(filter=filter_expr))) == 1
 
 
