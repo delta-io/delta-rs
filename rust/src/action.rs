@@ -3,15 +3,13 @@
 #![allow(non_camel_case_types)]
 
 use crate::{schema::*, DeltaTableMetaData};
-use chrono::{NaiveDateTime, SecondsFormat, TimeZone, Utc};
+use chrono::{SecondsFormat, TimeZone, Utc};
+use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
-use parquet::data_type::Decimal;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Number, Value};
-// use serde_json::Deserializer::{deserialize_any, deserialize_str};
-use num_bigint::{BigInt, Sign};
+use serde_json::{json, Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -385,7 +383,6 @@ impl Add {
 }
 
 fn parquet_field_to_column_stat(field: Field) -> ColumnValueStat {
-    // println!("{field:?}");
     match field {
         Field::Group(group) => {
             return ColumnValueStat::Column(HashMap::from_iter(group.get_column_iter().map(
@@ -423,36 +420,6 @@ fn convert_date_to_string(value: u32) -> String {
     let dt = Utc.timestamp(value as i64 * NUM_SECONDS_IN_DAY, 0).date();
     format!("{}", dt.format("%Y-%m-%d"))
 }
-
-// fn convert_decimal_to_json_number(decimal: &Decimal) -> Number {
-//     assert!(decimal.scale() >= 0 && decimal.precision() > decimal.scale());
-
-//     // Specify as signed bytes to resolve sign as part of conversion.
-//     let num = BigInt::from_signed_bytes_be(decimal.data());
-
-//     // Offset of the first digit in a string.
-//     let negative = if num.sign() == Sign::Minus { 1 } else { 0 };
-//     let mut num_str = num.to_string();
-//     let mut point = num_str.len() as i32 - decimal.scale() - negative;
-
-//     // Convert to string form without scientific notation.
-//     if point <= 0 {
-//         // Zeros need to be prepended to the unscaled value.
-//         while point < 0 {
-//             num_str.insert(negative as usize, '0');
-//             point += 1;
-//         }
-//         num_str.insert_str(negative as usize, "0.");
-//     } else {
-//         // No zeroes need to be prepended to the unscaled value, simply insert decimal
-//         // point.
-//         num_str.insert((point + negative) as usize, '.');
-//     }
-
-//     num_str
-// }
-
-// fn parquet_decimal_to_string(decimal: Field::Decimal) {}
 
 /// Describes the data format of files in the table.
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
