@@ -301,7 +301,7 @@ impl Add {
                     "Error when reading parquet stats {:?} {e}. Attempting to read json stats",
                     self.stats_parsed
                 );
-                return self.get_json_stats();
+                self.get_json_stats()
             }
         }
     }
@@ -417,14 +417,14 @@ fn primitive_parquet_field_to_json_value(field: Field) -> serde_json::Value {
         Field::Date(date) => serde_json::Value::String(convert_date_to_string(date)),
         _ => {
             log::warn!("Unexpected field type {:?}", field,);
-            return serde_json::Value::Null;
+            serde_json::Value::Null
         }
     }
 }
 
 fn convert_timestamp_millis_to_string(value: u64) -> String {
     let dt = Utc.timestamp((value / 1000) as i64, ((value % 1000) * 1000000) as u32);
-    return dt.to_rfc3339_opts(SecondsFormat::Millis, true);
+    dt.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
 fn convert_date_to_string(value: u32) -> String {
