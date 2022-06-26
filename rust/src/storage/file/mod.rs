@@ -2,6 +2,7 @@
 //!
 //! The local file storage backend is multi-writer safe.
 
+use std::io;
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 
@@ -93,11 +94,25 @@ impl StorageBackend for FileStorageBackend {
         let readdir = ReadDirStream::new(fs::read_dir(path).await?);
 
         Ok(Box::pin(readdir.err_into().and_then(|entry| async move {
-            Ok(ObjectMeta {
-                path: String::from(entry.path().to_str().unwrap()),
-                modified: DateTime::from(entry.metadata().await.unwrap().modified().unwrap()),
-                size: Some(entry.metadata().await.unwrap().len().try_into().unwrap()),
-            })
+            let path = String::from(
+                entry
+                    .path()
+                    .to_str()
+                    .ok_or_else(|| StorageError::Generic("invalid path".to_string()))?,
+            );
+            match entry.metadata().await {
+                Ok(meta) => {
+                    Ok(ObjectMeta {
+                        path,
+                        modified: meta.modified()?.into(),
+                        size: Some(meta.len().try_into().map_err(|_| {
+                            StorageError::Generic("cannot convert to i64".to_string())
+                        })?),
+                    })
+                }
+                Err(err) if err.kind() == io::ErrorKind::NotFound => Err(StorageError::NotFound),
+                Err(err) => Err(StorageError::Io { source: err }),
+            }
         })))
     }
 

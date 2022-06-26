@@ -26,11 +26,12 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
 use async_trait::async_trait;
-use datafusion::datafusion_data_access::object_store::local::LocalFileSystem;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::{TableProvider, TableType};
+use datafusion::execution::context::SessionState;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::ExecutionPlan;
@@ -232,6 +233,7 @@ impl TableProvider for delta::DeltaTable {
 
     async fn scan(
         &self,
+        _: &SessionState,
         projection: &Option<Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
@@ -252,11 +254,13 @@ impl TableProvider for delta::DeltaTable {
             })
             .collect::<datafusion::error::Result<_>>()?;
 
-        let df_object_store = Arc::new(LocalFileSystem {});
+        let dt_object_store_url = ObjectStoreUrl::parse(&self.table_uri)
+            .unwrap_or_else(|_| ObjectStoreUrl::local_filesystem());
+
         ParquetFormat::default()
             .create_physical_plan(
                 FileScanConfig {
-                    object_store: df_object_store,
+                    object_store_url: dt_object_store_url,
                     file_schema: schema,
                     file_groups: partitions,
                     statistics: self.datafusion_table_statistics(),

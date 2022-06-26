@@ -29,12 +29,12 @@
 use super::{
     stats::{create_add, NullCounts},
     utils::{
-        cursor_from_bytes, next_data_path, record_batch_without_partitions,
-        stringified_partition_value, PartitionPath,
+        next_data_path, record_batch_without_partitions, stringified_partition_value, PartitionPath,
     },
     DeltaWriter, DeltaWriterError,
 };
 use crate::writer::stats::apply_null_counts;
+use crate::writer::utils::ShareableBuffer;
 use crate::{
     action::Add, get_backend_for_uri_with_options, DeltaTable, DeltaTableMetaData, Schema,
     StorageBackend,
@@ -46,7 +46,7 @@ use arrow::{
     datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
     error::ArrowError,
 };
-use parquet::{arrow::ArrowWriter, errors::ParquetError, file::writer::InMemoryWriteableCursor};
+use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
 use std::collections::HashMap;
 use std::convert::TryFrom;
@@ -249,7 +249,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 
             let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
 
-            let obj_bytes = writer.cursor.data();
+            let obj_bytes = writer.buffer.to_vec();
             let file_size = obj_bytes.len() as i64;
             let storage_path = self
                 .storage
@@ -289,8 +289,8 @@ pub struct PartitionResult {
 pub(crate) struct PartitionWriter {
     arrow_schema: Arc<ArrowSchema>,
     writer_properties: WriterProperties,
-    pub(super) cursor: InMemoryWriteableCursor,
-    pub(super) arrow_writer: ArrowWriter<InMemoryWriteableCursor>,
+    pub(super) buffer: ShareableBuffer,
+    pub(super) arrow_writer: ArrowWriter<ShareableBuffer>,
     pub(super) partition_values: HashMap<String, Option<String>>,
     pub(super) null_counts: NullCounts,
     pub(super) buffered_record_batch_count: usize,
@@ -302,9 +302,9 @@ impl PartitionWriter {
         partition_values: HashMap<String, Option<String>>,
         writer_properties: WriterProperties,
     ) -> Result<Self, ParquetError> {
-        let cursor = InMemoryWriteableCursor::default();
+        let buffer = ShareableBuffer::default();
         let arrow_writer = ArrowWriter::try_new(
-            cursor.clone(),
+            buffer.clone(),
             arrow_schema.clone(),
             Some(writer_properties.clone()),
         )?;
@@ -315,7 +315,7 @@ impl PartitionWriter {
         Ok(Self {
             arrow_schema,
             writer_properties,
-            cursor,
+            buffer,
             arrow_writer,
             partition_values,
             null_counts,
@@ -335,7 +335,8 @@ impl PartitionWriter {
         }
 
         // Copy current cursor bytes so we can recover from failures
-        let current_cursor_bytes = self.cursor.data();
+        let buffer_bytes = self.buffer.to_vec();
+
         match self.arrow_writer.write(record_batch) {
             Ok(_) => {
                 self.buffered_record_batch_count += 1;
@@ -344,10 +345,10 @@ impl PartitionWriter {
             }
             // If a write fails we need to reset the state of the PartitionWriter
             Err(e) => {
-                let new_cursor = cursor_from_bytes(current_cursor_bytes.as_slice())?;
-                let _ = std::mem::replace(&mut self.cursor, new_cursor.clone());
+                let new_buffer = ShareableBuffer::from_bytes(buffer_bytes.as_slice());
+                let _ = std::mem::replace(&mut self.buffer, new_buffer.clone());
                 let arrow_writer = ArrowWriter::try_new(
-                    new_cursor,
+                    new_buffer,
                     self.arrow_schema.clone(),
                     Some(self.writer_properties.clone()),
                 )?;
@@ -360,7 +361,7 @@ impl PartitionWriter {
     /// Returns the current byte length of the in memory buffer.
     /// This may be used by the caller to decide when to finalize the file write.
     pub fn buffer_len(&self) -> usize {
-        self.cursor.len()
+        self.buffer.len()
     }
 }
 

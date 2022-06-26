@@ -58,8 +58,8 @@ async-stream = { version = "0.3.2", default-features = true, optional = true }
 # High-level writer
 parquet-format = "~4.0.0"
 
-arrow = "13"
-parquet = "13"
+arrow = "15"
+parquet = "15"
 
 crossbeam = { version = "0", optional = true }
 
@@ -71,7 +71,7 @@ async-trait = "0.1"
 # rust-dataframe = {version = "0.*", optional = true }
 
 [dependencies.datafusion]
-version = "8"
+version = "9"
 optional = true
 
 [features]
