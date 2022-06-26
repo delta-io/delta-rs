@@ -333,7 +333,7 @@ impl Add {
                     "minValues" => match record.get_group(i) {
                         Ok(row) => {
                             for (name, field) in row.get_column_iter() {
-                                stats.min_values.insert(name.clone(), parquet_field_to_column_stat(field.clone()));
+                                stats.min_values.insert(name.clone(), parquet_field_to_column_value_stat(field.clone()));
                             }
                         }
                         _ => {
@@ -343,7 +343,7 @@ impl Add {
                     "maxValues" => match record.get_group(i) {
                         Ok(row) => {
                             for (name, field) in row.get_column_iter() {
-                                stats.max_values.insert(name.clone(), parquet_field_to_column_stat(field.clone()));
+                                stats.max_values.insert(name.clone(), parquet_field_to_column_value_stat(field.clone()));
                             }
                         }
                         _ => {
@@ -382,31 +382,43 @@ impl Add {
     }
 }
 
-fn parquet_field_to_column_stat(field: Field) -> ColumnValueStat {
+fn parquet_field_to_column_value_stat(field: Field) -> ColumnValueStat {
     match field {
-        Field::Group(group) => {
-            return ColumnValueStat::Column(HashMap::from_iter(group.get_column_iter().map(
-                |(field_name, field)| {
-                    (
-                        field_name.clone(),
-                        parquet_field_to_column_stat(field.clone()),
-                    )
-                },
-            )));
-        }
-        Field::Decimal(decimal) => match BigInt::from_signed_bytes_be(decimal.data()).to_f64() {
-            Some(int) => ColumnValueStat::Value(json!(
-                int / (10_i64.pow((decimal.scale()).try_into().unwrap()) as f64)
-            )),
-            _ => ColumnValueStat::Value(serde_json::Value::Null),
-        },
-        Field::TimestampMillis(timestamp) => ColumnValueStat::Value(serde_json::Value::String(
-            convert_timestamp_millis_to_string(timestamp),
+        Field::Group(group) => ColumnValueStat::Column(HashMap::from_iter(
+            group.get_column_iter().map(|(field_name, field)| {
+                (
+                    field_name.clone(),
+                    parquet_field_to_column_value_stat(field.clone()),
+                )
+            }),
         )),
-        Field::Date(date) => {
-            ColumnValueStat::Value(serde_json::Value::String(convert_date_to_string(date)))
+        _ => ColumnValueStat::Value(primitive_parquet_field_to_json_value(field)),
+    }
+}
+
+fn primitive_parquet_field_to_json_value(field: Field) -> serde_json::Value {
+    match field {
+        Field::Null => serde_json::Value::Null,
+        Field::Bool(value) => json!(value),
+        Field::Byte(value) => json!(value),
+        Field::Short(value) => json!(value),
+        Field::Int(value) => json!(value),
+        Field::Long(value) => json!(value),
+        Field::Float(value) => json!(value),
+        Field::Double(value) => json!(value),
+        Field::Str(value) => json!(value),
+        Field::Decimal(decimal) => match BigInt::from_signed_bytes_be(decimal.data()).to_f64() {
+            Some(int) => json!(int / (10_i64.pow((decimal.scale()).try_into().unwrap()) as f64)),
+            _ => serde_json::Value::Null,
+        },
+        Field::TimestampMillis(timestamp) => {
+            serde_json::Value::String(convert_timestamp_millis_to_string(timestamp))
         }
-        _ => ColumnValueStat::Value(field.to_json_value()),
+        Field::Date(date) => serde_json::Value::String(convert_date_to_string(date)),
+        _ => {
+            log::warn!("Unexpected field type {:?}", field,);
+            return serde_json::Value::Null;
+        }
     }
 }
 
