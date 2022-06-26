@@ -8,8 +8,9 @@ use parquet::data_type::Decimal;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+use serde_json::{json, Map, Number, Value};
 // use serde_json::Deserializer::{deserialize_any, deserialize_str};
+use num_bigint::BigUint;
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -386,19 +387,24 @@ fn parquet_field_to_column_stat(field: Field) -> ColumnValueStat {
     // println!("{field:?}");
     match field {
         Field::Group(group) => {
-            return ColumnValueStat::Column(HashMap::from_iter(
-                group.get_column_iter().map(|(field_name, field)| {
-                    (field_name.clone(), parquet_field_to_column_stat(field.clone()))
-                }),
-            ));
+            return ColumnValueStat::Column(HashMap::from_iter(group.get_column_iter().map(
+                |(field_name, field)| {
+                    (
+                        field_name.clone(),
+                        parquet_field_to_column_stat(field.clone()),
+                    )
+                },
+            )));
         }
-        // Field::Decimal(decimal) => {
-        //     deserialize_any!(convert_decimal_to_string(&decimal))
+        // Field::Decimal(_) => {
+        //     ColumnValueStat::Value(serde_json::Value::Number(field.to_json_value()))
         // }
-        Field::TimestampMillis(timestamp) => {
-            ColumnValueStat::Value(serde_json::Value::String(convert_timestamp_millis_to_string(timestamp)))
+        Field::TimestampMillis(timestamp) => ColumnValueStat::Value(serde_json::Value::String(
+            convert_timestamp_millis_to_string(timestamp),
+        )),
+        Field::Date(date) => {
+            ColumnValueStat::Value(serde_json::Value::String(convert_date_to_string(date)))
         }
-        Field::Date(date) => ColumnValueStat::Value(serde_json::Value::String(convert_date_to_string(date))),
         _ => ColumnValueStat::Value(field.to_json_value()),
     }
 }
@@ -414,7 +420,7 @@ fn convert_date_to_string(value: u32) -> String {
     format!("{}", dt.format("%Y-%m-%d"))
 }
 
-// fn convert_decimal_to_string(decimal: &Decimal) -> String {
+// fn convert_decimal_to_json_number(decimal: &Decimal) -> Number {
 //     assert!(decimal.scale() >= 0 && decimal.precision() > decimal.scale());
 
 //     // Specify as signed bytes to resolve sign as part of conversion.
