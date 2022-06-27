@@ -413,7 +413,7 @@ fn primitive_parquet_field_to_json_value(field: &Field) -> serde_json::Value {
         Field::TimestampMillis(timestamp) => {
             serde_json::Value::String(convert_timestamp_millis_to_string(*timestamp))
         }
-        Field::Date(date) => serde_json::Value::String(convert_date_to_string(date)),
+        Field::Date(date) => serde_json::Value::String(convert_date_to_string(*date)),
         _ => {
             log::warn!("Unexpected field type {:?}", field,);
             serde_json::Value::Null
