@@ -18,6 +18,7 @@ dependencies = [
     "pyarrow>=4",
     'numpy<1.20.0;python_version<="3.6"',
     'dataclasses;python_version<="3.6"',
+    "packaging>=20",
 ]
 
 [project.optional-dependencies]
