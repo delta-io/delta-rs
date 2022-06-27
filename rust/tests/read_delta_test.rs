@@ -489,9 +489,10 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
             .zip(table.get_stats())
             .filter_map(|(file_uri, file_stats)| {
                 if file_uri.ends_with(file_name) {
-                    return file_stats.unwrap();
+                    file_stats.unwrap()
+                } else {
+                    None
                 }
-                return None;
             })
             .next()
             .unwrap()
