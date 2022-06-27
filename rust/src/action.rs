@@ -343,7 +343,7 @@ impl Add {
                     "maxValues" => match record.get_group(i) {
                         Ok(row) => {
                             for (name, field) in row.get_column_iter() {
-                                stats.max_values.insert(name.clone(), parquet_field_to_column_value_stat(field.clone()));
+                                stats.max_values.insert(name.clone(), field.into());
                             }
                         }
                         _ => {
