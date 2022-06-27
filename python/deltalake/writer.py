@@ -39,6 +39,8 @@ except ModuleNotFoundError:
 else:
     _has_pandas = True
 
+PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
+
 
 class DeltaTableProtocolError(PyDeltaTableError):
     pass
@@ -338,10 +340,15 @@ def get_file_stats_from_metadata(
                     .column(column_idx)
                     .statistics.logical_type.type
                 )
-                #
-                if logical_type not in ["STRING", "INT", "TIMESTAMP", "NONE"]:
+
+                if PYARROW_MAJOR_VERSION < 8 and logical_type not in [
+                    "STRING",
+                    "INT",
+                    "TIMESTAMP",
+                    "NONE",
+                ]:
                     continue
-                # import pdb; pdb.set_trace()
+
                 stats["minValues"][name] = min(
                     group.column(column_idx).statistics.min
                     for group in iter_groups(metadata)

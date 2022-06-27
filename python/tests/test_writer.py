@@ -10,6 +10,7 @@ from unittest.mock import Mock
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
+from packaging import version
 from pyarrow._dataset_parquet import ParquetReadOptions
 from pyarrow.dataset import ParquetFileFormat
 from pyarrow.lib import RecordBatchReader
@@ -333,14 +334,16 @@ def test_writer_stats(existing_table: DeltaTable, sample_data: pa.Table):
         "float64": 0.0,
         "bool": False,
         "binary": "0",
-        # TODO: Writer needs special decoding for decimal and date32.
-        #'decimal': '10.000',
-        # "date32": '2022-01-01',
         "timestamp": "2022-01-01T00:00:00",
         "struct.x": 0,
         "struct.y": "0",
         "list.list.item": 0,
     }
+    # PyArrow added support for decimal and date32 in 8.0.0
+    if version.parse(pa.__version__).major >= 8:
+        expected_mins["decimal"] = "10.000"
+        expected_mins["date32"] = "2022-01-01"
+
     assert stats["minValues"] == expected_mins
 
     expected_maxs = {
@@ -353,13 +356,16 @@ def test_writer_stats(existing_table: DeltaTable, sample_data: pa.Table):
         "float64": 4.0,
         "bool": True,
         "binary": "4",
-        #'decimal': '40.000',
-        # "date32": '2022-01-04',
         "timestamp": "2022-01-01T04:00:00",
         "struct.x": 4,
         "struct.y": "4",
         "list.list.item": 4,
     }
+    # PyArrow added support for decimal and date32 in 8.0.0
+    if version.parse(pa.__version__).major >= 8:
+        expected_maxs["decimal"] = "14.000"
+        expected_maxs["date32"] = "2022-01-05"
+
     assert stats["maxValues"] == expected_maxs
 
 
