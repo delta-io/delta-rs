@@ -28,6 +28,7 @@ use super::schema::*;
 use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
 use super::table_state::DeltaTableState;
+use crate::conflict_checker::{CommitConflictError, ConflictChecker};
 use crate::delta_config::DeltaConfigError;
 
 const MILLIS_IN_HOUR: i64 = 3600000;
@@ -198,6 +199,13 @@ pub enum DeltaTableError {
     /// Error returned when user attempts to commit actions that don't belong to the next version.
     #[error("Delta transaction failed, version {0} does not follow {1}")]
     VersionMismatch(DeltaDataTypeVersion, DeltaDataTypeVersion),
+    /// Error returned for non resolvable commit conflicts
+    #[error("Delta transaction failed: {source}")]
+    CommitConflict {
+        /// underlying error returned from conflict checker
+        #[from]
+        source: CommitConflictError,
+    },
     /// Generic Delta Table error
     #[error("Generic DeltaTable error: {0}")]
     Generic(String),
@@ -816,7 +824,7 @@ impl DeltaTable {
         Ok(version)
     }
 
-    /// Currently loaded evrsion of the table
+    /// Currently loaded version of the table
     pub fn version(&self) -> DeltaDataTypeVersion {
         self.state.version
     }
@@ -1658,6 +1666,10 @@ impl<'a> DeltaTransaction<'a> {
                 Err(e) => {
                     match e {
                         DeltaTableError::VersionAlreadyExists(_) => {
+                            let checker =
+                                ConflictChecker::try_new(self.delta_table, version).await?;
+                            let result = checker.check_conflicts()?;
+                            // TODO update prepared commit in case transaction info got updated.
                             if attempt_number > self.options.max_retry_commit_attempts + 1 {
                                 debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
                                 return Err(e);

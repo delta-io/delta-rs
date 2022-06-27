@@ -74,25 +74,17 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 
-extern crate log;
-
-pub use arrow;
-extern crate chrono;
-extern crate lazy_static;
-extern crate parquet;
-extern crate regex;
-extern crate serde;
-#[cfg(test)]
-#[macro_use]
-extern crate serde_json;
-extern crate thiserror;
-
 pub mod action;
 pub mod checkpoints;
+mod conflict_checker;
 pub mod data_catalog;
 mod delta;
 pub mod delta_arrow;
 pub mod delta_config;
+#[cfg(feature = "rust-dataframe-ext")]
+mod delta_dataframe;
+#[cfg(feature = "datafusion-ext")]
+pub mod delta_datafusion;
 #[cfg(feature = "datafusion-ext")]
 pub mod operations;
 pub mod optimize;
@@ -103,20 +95,17 @@ mod table_state;
 pub mod time_utils;
 pub mod writer;
 
-#[cfg(feature = "datafusion-ext")]
-pub mod delta_datafusion;
-
-#[cfg(feature = "rust-dataframe-ext")]
-mod delta_dataframe;
-
 pub use self::data_catalog::{get_data_catalog, DataCatalog, DataCatalogError};
 pub use self::delta::*;
 pub use self::partitions::*;
 pub use self::schema::*;
+#[cfg(feature = "azure")]
+pub use self::storage::azure::azure_storage_options;
+#[cfg(feature = "s3")]
+pub use self::storage::s3::s3_storage_options;
 pub use self::storage::{
     get_backend_for_uri, get_backend_for_uri_with_options, parse_uri, StorageBackend, StorageError,
     Uri, UriError,
 };
-
-#[cfg(feature = "s3")]
-pub use self::storage::s3::s3_storage_options;
+pub use arrow;
+pub use parquet;
