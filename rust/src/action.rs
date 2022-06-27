@@ -395,7 +395,7 @@ impl From<&Field> for ColumnValueStat {
     }
 }
 
-fn primitive_parquet_field_to_json_value(field: Field) -> serde_json::Value {
+fn primitive_parquet_field_to_json_value(field: &Field) -> serde_json::Value {
     match field {
         Field::Null => serde_json::Value::Null,
         Field::Bool(value) => json!(value),
