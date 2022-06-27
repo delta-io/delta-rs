@@ -1,7 +1,10 @@
 //! Main writer API to write json messages to delta table
 use super::{
     stats::{apply_null_counts, create_add, NullCounts},
-    utils::{next_data_path, record_batch_from_message, stringified_partition_value},
+    utils::{
+        arrow_schema_without_partitions, next_data_path, record_batch_from_message,
+        record_batch_without_partitions, stringified_partition_value,
+    },
     DeltaWriter, DeltaWriterError,
 };
 use crate::writer::utils::ShareableBuffer;
@@ -114,6 +117,7 @@ impl DataArrowWriter {
         // Copy current buffered bytes so we can recover from failures
         let buffer_bytes = self.buffer.to_vec();
 
+        let record_batch = record_batch_without_partitions(&record_batch, partition_columns)?;
         let result = self.arrow_writer.write(&record_batch);
 
         match result {
@@ -327,8 +331,9 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                         .await,
                 )?,
                 None => {
-                    let mut writer =
-                        DataArrowWriter::new(arrow_schema.clone(), self.writer_properties.clone())?;
+                    let schema =
+                        arrow_schema_without_partitions(&arrow_schema, &self.partition_columns);
+                    let mut writer = DataArrowWriter::new(schema, self.writer_properties.clone())?;
 
                     collect_partial_write_failure(
                         &mut partial_writes,
@@ -447,4 +452,60 @@ fn extract_partition_values(
     }
 
     Ok(partition_values)
+}
+
+#[cfg(test)]
+mod tests {
+
+    use crate::writer::test_utils::get_delta_schema;
+    use crate::writer::DeltaWriter;
+    use crate::writer::JsonWriter;
+    use crate::Schema;
+    use arrow::datatypes::Schema as ArrowSchema;
+    use parquet::file::reader::FileReader;
+    use parquet::file::serialized_reader::SerializedFileReader;
+    use std::fs::File;
+    use std::sync::Arc;
+
+    #[tokio::test]
+    async fn test_partition_not_written_to_parquet() {
+        let table_dir = tempfile::tempdir().unwrap();
+        let schema = get_delta_schema();
+        let path = table_dir.path().to_str().unwrap().to_string();
+
+        let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&schema).unwrap();
+        let mut writer = JsonWriter::try_new(
+            path.clone(),
+            Arc::new(arrow_schema),
+            Some(vec!["modified".to_string()]),
+            None,
+        )
+        .unwrap();
+
+        let data = json!(
+            {
+                "id" : "A",
+                "value": "test",
+                "modified": "2021-02-01"
+            }
+        );
+
+        writer.write(vec![data]).await.unwrap();
+        let add_actions = writer.flush().await.unwrap();
+        let add = &add_actions[0];
+        let path = table_dir.path().join(&add.path);
+
+        let file = File::open(path.as_path()).unwrap();
+        let reader = SerializedFileReader::new(file).unwrap();
+
+        let metadata = reader.metadata();
+        let schema_desc = metadata.file_metadata().schema_descr();
+
+        let columns = schema_desc
+            .columns()
+            .iter()
+            .map(|desc| desc.name().to_string())
+            .collect::<Vec<String>>();
+        assert_eq!(columns, vec!["id".to_string(), "value".to_string()]);
+    }
 }
