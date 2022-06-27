@@ -382,17 +382,16 @@ impl Add {
     }
 }
 
-fn parquet_field_to_column_value_stat(field: Field) -> ColumnValueStat {
-    match field {
-        Field::Group(group) => ColumnValueStat::Column(HashMap::from_iter(
-            group.get_column_iter().map(|(field_name, field)| {
-                (
-                    field_name.clone(),
-                    parquet_field_to_column_value_stat(field.clone()),
-                )
-            }),
-        )),
-        _ => ColumnValueStat::Value(primitive_parquet_field_to_json_value(field)),
+impl From<&Field> for ColumnValueStat {
+    fn from(field: &Field) -> Self {
+        match field {
+            Field::Group(group) => ColumnValueStat::Column(HashMap::from_iter(
+                group
+                    .get_column_iter()
+                    .map(|(field_name, field)| (field_name.clone(), field.into())),
+            )),
+            _ => ColumnValueStat::Value(primitive_parquet_field_to_json_value(field)),
+        }
     }
 }
 
