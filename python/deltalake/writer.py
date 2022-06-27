@@ -17,8 +17,6 @@ from typing import (
     Union,
 )
 
-from packaging.version import Version, parse
-
 from deltalake.fs import DeltaStorageHandler
 
 if TYPE_CHECKING:
@@ -41,7 +39,7 @@ except ModuleNotFoundError:
 else:
     _has_pandas = True
 
-PYARROW_VERSION = Version(pa.__version__)
+PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
 
 
 class DeltaTableProtocolError(PyDeltaTableError):
@@ -343,7 +341,7 @@ def get_file_stats_from_metadata(
                     .statistics.logical_type.type
                 )
 
-                if PYARROW_VERSION.major < 8 and logical_type not in [
+                if PYARROW_MAJOR_VERSION < 8 and logical_type not in [
                     "STRING",
                     "INT",
                     "TIMESTAMP",
