@@ -29,7 +29,8 @@
 use super::{
     stats::{create_add, NullCounts},
     utils::{
-        next_data_path, record_batch_without_partitions, stringified_partition_value, PartitionPath,
+        arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
+        stringified_partition_value, PartitionPath,
     },
     DeltaWriter, DeltaWriterError,
 };
@@ -153,7 +154,7 @@ impl RecordBatchWriter {
         values: &RecordBatch,
     ) -> Result<Vec<PartitionResult>, DeltaWriterError> {
         divide_by_partition_values(
-            self.partition_arrow_schema(),
+            arrow_schema_without_partitions(&self.arrow_schema_ref, &self.partition_columns),
             self.partition_columns.clone(),
             values,
         )
@@ -184,25 +185,14 @@ impl RecordBatchWriter {
         self.arrow_schema_ref.clone()
     }
 
-    /// Returns the arrow schema representation of the partitioned files written to table
-    pub fn partition_arrow_schema(&self) -> ArrowSchemaRef {
-        Arc::new(ArrowSchema::new(
-            self.arrow_schema_ref
-                .fields()
-                .iter()
-                .filter(|f| !self.partition_columns.contains(f.name()))
-                .map(|f| f.to_owned())
-                .collect::<Vec<_>>(),
-        ))
-    }
-
     ///Write a batch to the specified partition
     pub async fn write_partition(
         &mut self,
         record_batch: RecordBatch,
         partition_values: &HashMap<String, Option<String>>,
     ) -> Result<(), DeltaWriterError> {
-        let arrow_schema = self.partition_arrow_schema();
+        let arrow_schema =
+            arrow_schema_without_partitions(&self.arrow_schema_ref, &self.partition_columns);
         let partition_key =
             PartitionPath::from_hashmap(&self.partition_columns, partition_values)?.into();
 

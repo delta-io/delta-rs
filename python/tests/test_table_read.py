@@ -2,6 +2,8 @@ import os
 from datetime import datetime
 from threading import Barrier, Thread
 
+from packaging import version
+
 try:
     import pandas as pd
 except ModuleNotFoundError:
@@ -183,14 +185,13 @@ def test_read_table_with_stats():
     data = dataset.to_table(filter=filter_expr)
     assert data.num_rows == 0
 
-    # TODO(wjones127): Enable these tests once C++ Arrow implements is_null and is_valid
-    # simplification. Blocked on: https://issues.apache.org/jira/browse/ARROW-12659
+    # PyArrow added support for is_null and is_valid simplification in 8.0.0
+    if version.parse(pa.__version__).major >= 8:
+        filter_expr = ds.field("cases").is_null()
+        assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
 
-    # filter_expr = ds.field("cases").is_null()
-    # assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
-
-    # data = dataset.to_table(filter=filter_expr)
-    # assert data.num_rows == 0
+        data = dataset.to_table(filter=filter_expr)
+        assert data.num_rows == 0
 
 
 def test_vacuum_dry_run_simple_table():

@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin==0.12.12"]
+requires = ["maturin==0.12.19"]
 build-backend = "maturin"
 
 [project]
@@ -29,6 +29,7 @@ devel = [
     "mypy",
     "black",
     "isort",
+    "packaging>=20",
     "pytest",
     "pytest-mock",
     "pytest-cov",

@@ -3,8 +3,8 @@ use crate::writer::DeltaWriterError;
 use arrow::{
     array::{as_primitive_array, Array},
     datatypes::{
-        DataType, Int16Type, Int32Type, Int64Type, Int8Type, Schema as ArrowSchema, UInt16Type,
-        UInt32Type, UInt64Type, UInt8Type,
+        DataType, Int16Type, Int32Type, Int64Type, Int8Type, Schema as ArrowSchema,
+        SchemaRef as ArrowSchemaRef, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
     },
     json::reader::{Decoder, DecoderOptions},
     record_batch::*,
@@ -199,6 +199,21 @@ pub(crate) fn record_batch_without_partitions(
     }
 
     Ok(record_batch.project(&non_partition_columns)?)
+}
+
+/// Arrow schema for the physical file which has partition columns removed
+pub(crate) fn arrow_schema_without_partitions(
+    arrow_schema: &Arc<ArrowSchema>,
+    partition_columns: &[String],
+) -> ArrowSchemaRef {
+    Arc::new(ArrowSchema::new(
+        arrow_schema
+            .fields()
+            .iter()
+            .filter(|f| !partition_columns.contains(f.name()))
+            .map(|f| f.to_owned())
+            .collect::<Vec<_>>(),
+    ))
 }
 
 /// An in memory buffer that allows for shared ownership and interior mutability.

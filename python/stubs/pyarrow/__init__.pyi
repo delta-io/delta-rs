@@ -1,5 +1,6 @@
 from typing import Any, Callable
 
+__version__: str
 Schema: Any
 Table: Any
 RecordBatch: Any
