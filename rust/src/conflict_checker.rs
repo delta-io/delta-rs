@@ -1,5 +1,5 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
-use crate::action::{Action, Add, MetaData, Protocol, Remove};
+use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
 use crate::{
     table_state::DeltaTableState, DeltaDataTypeTimestamp, DeltaDataTypeVersion, DeltaTable,
     DeltaTableError, DeltaTableMetaData,
@@ -7,6 +7,7 @@ use crate::{
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::{HashMap, HashSet};
+use std::io::{BufRead, BufReader, Cursor};
 
 /// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
 /// However the reference implementation as well as delta-rs store useful information that may for instance
@@ -112,7 +113,7 @@ pub(crate) struct CurrentTransactionInfo {
 }
 
 impl CurrentTransactionInfo {
-    pub fn new() -> Self {
+    pub fn try_new(table: &DeltaTable, operation: DeltaOperation) -> Result<Self, DeltaTableError> {
         todo!()
     }
 
@@ -239,8 +240,8 @@ impl WinningCommitSummary {
     }
 }
 
-pub(crate) struct ConflictChecker<'a> {
-    delta_table: &'a mut DeltaTable,
+pub(crate) struct ConflictChecker {
+    /// transaction information for current transaction at start of check
     initial_current_transaction_info: CurrentTransactionInfo,
     winning_commit_version: DeltaDataTypeVersion,
     /// Summary of the transaction, that has been committed ahead of the current transaction
@@ -251,18 +252,36 @@ pub(crate) struct ConflictChecker<'a> {
     state: DeltaTableState,
 }
 
-impl<'a> ConflictChecker<'a> {
+impl ConflictChecker {
     pub async fn try_new(
-        table: &'a mut DeltaTable,
+        table: &DeltaTable,
         winning_commit_version: DeltaDataTypeVersion,
-    ) -> Result<ConflictChecker<'a>, DeltaTableError> {
+        operation: DeltaOperation,
+    ) -> Result<Self, DeltaTableError> {
         // TODO raise proper error here
         assert!(winning_commit_version == table.version() + 1);
-        let next_state = DeltaTableState::from_commit(table, winning_commit_version).await?;
-        let mut new_state = table.get_state().clone();
-        new_state.merge(next_state, true, true);
-        todo!()
-        // Self {}
+
+        // create winning commit summary
+        let commit_uri = table.commit_uri_from_version(winning_commit_version);
+        let commit_log_bytes = table.storage.get_obj(&commit_uri).await?;
+        let reader = BufReader::new(Cursor::new(commit_log_bytes));
+        let mut commit_actions = Vec::new();
+        for line in reader.lines() {
+            commit_actions.push(serde_json::from_str::<Action>(line?.as_str())?);
+        }
+        let winning_commit_summary =
+            WinningCommitSummary::new(commit_actions, winning_commit_version);
+
+        let initial_current_transaction_info = CurrentTransactionInfo::try_new(table, operation)?;
+
+        Ok(Self {
+            initial_current_transaction_info,
+            winning_commit_summary,
+            winning_commit_version,
+            isolation_level: IsolationLevel::Serializable,
+            // TODO cloning the state is probably a bad idea, since it can be very large...
+            state: table.state.clone(),
+        })
     }
 
     fn current_transaction_info(&self) -> &CurrentTransactionInfo {

@@ -37,12 +37,14 @@ pub struct DeltaTableState {
 }
 
 impl DeltaTableState {
+    /// Create a new table state instance with default values and version specified
     pub fn with_version(version: DeltaDataTypeVersion) -> Self {
         Self {
             version,
             ..Self::default()
         }
     }
+
     /// Construct a delta table state object from commit version.
     pub async fn from_commit(
         table: &DeltaTable,

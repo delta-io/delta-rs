@@ -1566,10 +1566,6 @@ impl<'a> DeltaTransaction<'a> {
         operation: Option<DeltaOperation>,
         app_metadata: Option<Map<String, Value>>,
     ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
-        // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action),
-        // but leaving it unused for now. `CommitInfo` is a fairly dynamic data structure so we should work
-        // out the data structure approach separately.
-
         // TODO: calculate isolation level to use when checking for conflicts.
         // Leaving conflict checking unimplemented for now to get the "single writer" implementation off the ground.
         // Leaving some commmented code in place as a guidepost for the future.
@@ -1585,10 +1581,13 @@ impl<'a> DeltaTransaction<'a> {
         //     IsolationLevel::Serializable
         // };
 
-        let prepared_commit = self.prepare_commit(operation, app_metadata).await?;
+        // TODO make operation a required parameter
+        let op = operation.unwrap();
+
+        let prepared_commit = self.prepare_commit(Some(op.clone()), app_metadata).await?;
 
         // try to commit in a loop in case other writers write the next version first
-        let version = self.try_commit_loop(&prepared_commit).await?;
+        let version = self.try_commit_loop(&prepared_commit, op).await?;
 
         Ok(version)
     }
@@ -1648,6 +1647,7 @@ impl<'a> DeltaTransaction<'a> {
     async fn try_commit_loop(
         &mut self,
         commit: &PreparedCommit,
+        operation: DeltaOperation,
     ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         let mut attempt_number: u32 = 0;
         loop {
@@ -1666,9 +1666,13 @@ impl<'a> DeltaTransaction<'a> {
                 Err(e) => {
                     match e {
                         DeltaTableError::VersionAlreadyExists(_) => {
-                            let checker =
-                                ConflictChecker::try_new(self.delta_table, version).await?;
-                            let result = checker.check_conflicts()?;
+                            let checker = ConflictChecker::try_new(
+                                self.delta_table,
+                                version,
+                                operation.clone(),
+                            )
+                            .await?;
+                            let _result = checker.check_conflicts()?;
                             // TODO update prepared commit in case transaction info got updated.
                             if attempt_number > self.options.max_retry_commit_attempts + 1 {
                                 debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);

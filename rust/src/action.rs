@@ -874,6 +874,7 @@ pub enum DeltaOperation {
         /// The predicate used during the write.
         predicate: Option<String>,
     },
+
     /// Represents a Delta `StreamingUpdate` operation.
     #[serde(rename_all = "camelCase")]
     StreamingUpdate {
