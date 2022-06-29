@@ -6,6 +6,7 @@ use std::{fmt, pin::Pin};
 
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::Stream;
+
 use log::debug;
 use rusoto_core::{HttpClient, HttpConfig, Region, RusotoError};
 use rusoto_credential::AutoRefreshingProvider;
@@ -27,6 +28,12 @@ use std::time::Duration;
 use uuid::Uuid;
 
 use dynamodb_lock::{LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};
+
+use hyper::client::HttpConnector;
+use hyper_proxy::{Intercept, Proxy, ProxyConnector};
+use hyper_rustls::{HttpsConnectorBuilder, HttpsConnector};
+
+use std::env;
 
 /// Lock data which stores an attempt to rename `source` into `destination`
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -416,10 +423,25 @@ fn get_sts_assume_role_provider(
     Ok(AutoRefreshingProvider::new(provider)?)
 }
 
-fn create_http_client(pool_idle_timeout: Duration) -> Result<HttpClient, StorageError> {
+fn create_http_client(pool_idle_timeout: Duration) -> Result<HttpClient<ProxyConnector<HttpsConnector<HttpConnector>>>, StorageError> {
     let mut config = HttpConfig::new();
     config.pool_idle_timeout(pool_idle_timeout);
-    Ok(HttpClient::new_with_config(config)?)
+    let https_connector = HttpsConnectorBuilder::new()
+                .with_native_roots()
+                .https_or_http()
+                .enable_http2()
+                .build();
+    match env::var("HTTPS_PROXY") {
+        Ok(proxy_uri) => {
+            let proxy = Proxy::new(Intercept::All, proxy_uri.parse().unwrap());
+            let proxy_connector = ProxyConnector::from_proxy(https_connector, proxy)?;
+            return Ok(HttpClient::from_connector_with_config(proxy_connector, config));
+        }
+        Err(_) => {
+            return Ok(HttpClient::from_connector_with_config(ProxyConnector::new(https_connector)?, config));
+        },
+    };
+
 }
 
 fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvider>, StorageError>
