@@ -894,32 +894,59 @@ pub enum DeltaOperation {
         predicate: Option<String>,
         /// Target optimize size
         target_size: DeltaDataTypeLong,
-    }, // TODO: Add more operations
+    },
+    // TODO: Add more operations
 }
 
 impl DeltaOperation {
-    /// Retrieve basic commit information to be added to Delta commits
-    pub fn get_commit_info(&self) -> Map<String, Value> {
-        let mut commit_info = Map::<String, Value>::new();
-        let operation = match &self {
+    /// Name of the operation
+    pub fn name(&self) -> String {
+        match &self {
             DeltaOperation::Create { .. } => "delta-rs.Create",
             DeltaOperation::Write { .. } => "delta-rs.Write",
             DeltaOperation::StreamingUpdate { .. } => "delta-rs.StreamingUpdate",
             DeltaOperation::Optimize { .. } => "delta-rs.Optimize",
-        };
+        }
+        .into()
+    }
+
+    pub fn operation_parameters(&self) -> Option<Map<String, Value>> {
+        if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(self) {
+            Some(map.values().next().unwrap().clone())
+        } else {
+            None
+        }
+    }
+
+    /// Retrieve basic commit information to be added to Delta commits
+    pub fn get_commit_info(&self) -> Map<String, Value> {
+        let mut commit_info = Map::<String, Value>::new();
         commit_info.insert(
             "operation".to_string(),
-            serde_json::Value::String(operation.into()),
+            serde_json::Value::String(self.name()),
         );
-
-        if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(self) {
-            commit_info.insert(
-                "operationParameters".to_string(),
-                map.values().next().unwrap().clone(),
-            );
+        if let Some(params) = self.operation_parameters() {
+            commit_info.insert("operationParameters".to_string(), params);
         };
-
         commit_info
+    }
+
+    /// Denotes whether the operation will change the data contained in the table
+    pub fn changes_data(&self) -> bool {
+        // TODO update accordingly when new operations are added
+        // Operations that change data:
+        // - Write
+        // - StreamingUpdate
+        // - Delete
+        // - Truncate
+        // - Convert
+        // - Merge
+        // - Update
+        // - ReplaceTable
+        !matches!(
+            self,
+            DeltaOperation::Create { .. } | DeltaOperation::Optimize { .. }
+        )
     }
 }
 

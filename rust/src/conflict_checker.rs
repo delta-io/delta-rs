@@ -91,6 +91,14 @@ pub enum IsolationLevel {
     SnapshotIsolation,
 }
 
+impl IsolationLevel {
+    /// The default isolation level to use, analogous to reference implementation
+    pub fn default_level() -> Self {
+        // https://github.com/delta-io/delta/blob/abb171c8401200e7772b27e3be6ea8682528ac72/core/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala#L1023
+        IsolationLevel::Serializable
+    }
+}
+
 /// A struct representing different attributes of current transaction needed for conflict detection.
 pub(crate) struct CurrentTransactionInfo {
     txn_id: String,

@@ -28,7 +28,7 @@ use super::schema::*;
 use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
 use super::table_state::DeltaTableState;
-use crate::conflict_checker::{CommitConflictError, ConflictChecker};
+use crate::conflict_checker::{CommitConflictError, CommitInfo, ConflictChecker, IsolationLevel};
 use crate::delta_config::DeltaConfigError;
 
 const MILLIS_IN_HOUR: i64 = 3600000;
@@ -1533,6 +1533,7 @@ pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
     actions: Vec<Action>,
     options: DeltaTransactionOptions,
+    txn_id: String,
 }
 
 impl<'a> DeltaTransaction<'a> {
@@ -1544,6 +1545,7 @@ impl<'a> DeltaTransaction<'a> {
             delta_table,
             actions: vec![],
             options: options.unwrap_or_default(),
+            txn_id: Uuid::new_v4().into(),
         }
     }
 
@@ -1566,23 +1568,47 @@ impl<'a> DeltaTransaction<'a> {
         operation: Option<DeltaOperation>,
         app_metadata: Option<Map<String, Value>>,
     ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
-        // TODO: calculate isolation level to use when checking for conflicts.
-        // Leaving conflict checking unimplemented for now to get the "single writer" implementation off the ground.
-        // Leaving some commmented code in place as a guidepost for the future.
-
-        // let no_data_changed = actions.iter().all(|a| match a {
-        //     Action::add(x) => !x.dataChange,
-        //     Action::remove(x) => !x.dataChange,
-        //     _ => false,
-        // });
-        // let isolation_level = if no_data_changed {
-        //     IsolationLevel::SnapshotIsolation
-        // } else {
-        //     IsolationLevel::Serializable
-        // };
-
         // TODO make operation a required parameter
         let op = operation.unwrap();
+
+        // TODO(roeap) in the reference implementation this logic is implemented, which seems somewhat strange,
+        // as it seems we will never have "WriteSerializable" as level - probably need to check the table config ...
+        // https://github.com/delta-io/delta/blob/abb171c8401200e7772b27e3be6ea8682528ac72/core/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala#L964
+        let isolation_level = if self.can_downgrade_to_snapshot_isolation(&op) {
+            IsolationLevel::SnapshotIsolation
+        } else {
+            IsolationLevel::default_level()
+        };
+
+        let only_add_files = self
+            .actions
+            .iter()
+            .any(|action| !matches!(action, Action::add(_)));
+
+        // readPredicates.nonEmpty || readFiles.nonEmpty
+        // TODO revise logic if files are read
+        let depends_on_files = match op {
+            DeltaOperation::Create { .. } | DeltaOperation::StreamingUpdate { .. } => false,
+            DeltaOperation::Optimize { .. } => true,
+            DeltaOperation::Write {
+                predicate: Some(_), ..
+            } => true,
+            _ => false,
+        };
+
+        let is_blind_append = only_add_files && !depends_on_files;
+
+        let commit_info = CommitInfo {
+            version: None,
+            timestamp: chrono::Utc::now().timestamp(),
+            read_version: Some(self.delta_table.version()),
+            isolation_level: Some(isolation_level),
+            operation,
+            operation_parameters: op.operation_parameters(),
+            user_id: None,
+            user_name: None,
+            is_blind_append: Some(is_blind_append),
+        };
 
         let prepared_commit = self.prepare_commit(Some(op.clone()), app_metadata).await?;
 
@@ -1689,6 +1715,50 @@ impl<'a> DeltaTransaction<'a> {
                     }
                 }
             }
+        }
+    }
+
+    fn can_downgrade_to_snapshot_isolation(&self, operation: &DeltaOperation) -> bool {
+        let mut data_changed = false;
+        let mut has_non_file_actions = false;
+        for action in &self.actions {
+            match action {
+                Action::add(act) if act.data_change => data_changed = true,
+                Action::remove(rem) if rem.data_change => data_changed = true,
+                _ => has_non_file_actions = true,
+            }
+        }
+
+        if has_non_file_actions {
+            // if Non-file-actions are present (e.g. METADATA etc.), then don't downgrade the isolation
+            // level to SnapshotIsolation.
+            return false;
+        }
+
+        let default_isolation_level = IsolationLevel::default_level();
+        // Note-1: For no-data-change transactions such as OPTIMIZE/Auto Compaction/ZorderBY, we can
+        // change the isolation level to SnapshotIsolation. SnapshotIsolation allows reduced conflict
+        // detection by skipping the
+        // [[ConflictChecker.checkForAddedFilesThatShouldHaveBeenReadByCurrentTxn]] check i.e.
+        // don't worry about concurrent appends.
+        // Note-2:
+        // We can also use SnapshotIsolation for empty transactions. e.g. consider a commit:
+        // t0 - Initial state of table
+        // t1 - Q1, Q2 starts
+        // t2 - Q1 commits
+        // t3 - Q2 is empty and wants to commit.
+        // In this scenario, we can always allow Q2 to commit without worrying about new files
+        // generated by Q1.
+        // The final order which satisfies both Serializability and WriteSerializability is: Q2, Q1
+        // Note that Metadata only update transactions shouldn't be considered empty. If Q2 above has
+        // a Metadata update (say schema change/identity column high watermark update), then Q2 can't
+        // be moved above Q1 in the final SERIALIZABLE order. This is because if Q2 is moved above Q1,
+        // then Q1 should see the updates from Q2 - which actually didn't happen.
+
+        match default_isolation_level {
+            IsolationLevel::Serializable => !data_changed,
+            IsolationLevel::WriteSerializable => !data_changed && !operation.changes_data(),
+            _ => false, // This case should never happen
         }
     }
 }
