@@ -24,9 +24,6 @@ chrono = "0"
 uuid = { version = "1", features = ["serde", "v4"] }
 lazy_static = "1"
 percent-encoding = "2"
-hyper = "0.14.19"
-hyper-rustls = {  version = "0.23.0", features = ["http2"] } 
-hyper-proxy = {  version = "0.9.1", default-features = false, features = ["rustls"] }
 
 # HTTP Client
 reqwest = { version = "0.11", default-features = false, features = [
@@ -47,6 +44,9 @@ rusoto_s3 = { version = "0.48", default-features = false, optional = true }
 rusoto_sts = { version = "0.48", default-features = false, optional = true }
 rusoto_dynamodb = { version = "0.48", default-features = false, optional = true }
 maplit = { version = "1", optional = true }
+hyper = {  version = "0.14.19", default-features = false, optional = true}
+hyper-rustls = {  version = "0.23.0", default-features = false, optional = true, features = ["http2", "rustls-native-certs", "tokio-runtime"] } 
+hyper-proxy = {  version = "0.9.1", default-features = false, optional = true, features = ["rustls"] }
 
 # Glue
 rusoto_glue = { version = "0.48", default-features = false, optional = true }
@@ -94,6 +94,9 @@ s3 = [
     "rusoto_dynamodb/native-tls",
     "maplit",
     "dynamodb_lock/native-tls",
+    "hyper",
+    "hyper-rustls",
+    "hyper-proxy"
 ]
 s3-rustls = [
     "rusoto_core/rustls",
@@ -103,6 +106,9 @@ s3-rustls = [
     "rusoto_dynamodb/rustls",
     "maplit",
     "dynamodb_lock/rustls",
+    "hyper",
+    "hyper-rustls",
+    "hyper-proxy"
 ]
 gcs = ["async-stream", "tame-gcs", "tame-oauth", "reqwest"]
 glue = ["s3", "rusoto_glue"]

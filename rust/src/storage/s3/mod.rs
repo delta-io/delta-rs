@@ -31,7 +31,7 @@ use dynamodb_lock::{LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPT
 
 use hyper::client::HttpConnector;
 use hyper_proxy::{Intercept, Proxy, ProxyConnector};
-use hyper_rustls::{HttpsConnectorBuilder, HttpsConnector};
+use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
 
 use std::env;
 
@@ -423,25 +423,32 @@ fn get_sts_assume_role_provider(
     Ok(AutoRefreshingProvider::new(provider)?)
 }
 
-fn create_http_client(pool_idle_timeout: Duration) -> Result<HttpClient<ProxyConnector<HttpsConnector<HttpConnector>>>, StorageError> {
+fn create_http_client(
+    pool_idle_timeout: Duration,
+) -> Result<HttpClient<ProxyConnector<HttpsConnector<HttpConnector>>>, StorageError> {
     let mut config = HttpConfig::new();
     config.pool_idle_timeout(pool_idle_timeout);
     let https_connector = HttpsConnectorBuilder::new()
-                .with_native_roots()
-                .https_or_http()
-                .enable_http2()
-                .build();
+        .with_native_roots()
+        .https_or_http()
+        .enable_http2()
+        .build();
     match env::var("HTTPS_PROXY") {
         Ok(proxy_uri) => {
             let proxy = Proxy::new(Intercept::All, proxy_uri.parse().unwrap());
             let proxy_connector = ProxyConnector::from_proxy(https_connector, proxy)?;
-            return Ok(HttpClient::from_connector_with_config(proxy_connector, config));
+            Ok(HttpClient::<ProxyConnector<HttpsConnector<HttpConnector>>>::from_connector_with_config(
+                proxy_connector,
+                config,
+            ))
         }
-        Err(_) => {
-            return Ok(HttpClient::from_connector_with_config(ProxyConnector::new(https_connector)?, config));
-        },
-    };
-
+        Err(_) => Ok(
+            HttpClient::<ProxyConnector<HttpsConnector<HttpConnector>>>::from_connector_with_config(
+                ProxyConnector::new(https_connector)?,
+                config,
+            ),
+        ),
+    }
 }
 
 fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvider>, StorageError>
