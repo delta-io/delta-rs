@@ -22,11 +22,12 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use bytes::Bytes;
 
 use log::debug;
 use log::error;
 use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
-use parquet::file::serialized_reader::{SerializedFileReader, SliceableCursor};
+use parquet::file::serialized_reader::{SerializedFileReader};
 
 use crate::action::DeltaOperation;
 use crate::action::{self, Action};
@@ -219,7 +220,7 @@ impl MergePlan {
                     let parquet_uri = table.storage.join_path(&table.table_uri, path);
                     let data = table.storage.get_obj(&parquet_uri).await?;
                     let size: DeltaDataTypeLong = data.len().try_into().unwrap();
-                    let data = SliceableCursor::new(data);
+                    let data = Bytes::from(data);
                     let reader = SerializedFileReader::new(data)?;
                     let records = reader.metadata().file_metadata().num_rows();
 
