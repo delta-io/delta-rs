@@ -1,5 +1,7 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+use hyper::http::uri::InvalidUri;
 use std::fmt::Debug;
 use std::pin::Pin;
 
@@ -407,6 +409,15 @@ pub enum StorageError {
         #[from]
         /// Uri error details when the URI is invalid.
         source: UriError,
+    },
+
+    /// Error returned when the URI is invalid.
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    #[error("Invalid URI parsing")]
+    ParsingUri {
+        #[from]
+        /// Uri error details when the URI parsing is invalid.
+        source: InvalidUri,
     },
 }
 

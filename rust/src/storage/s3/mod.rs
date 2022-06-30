@@ -435,7 +435,7 @@ fn create_http_client(
         .build();
     match env::var("HTTPS_PROXY") {
         Ok(proxy_uri) => {
-            let proxy = Proxy::new(Intercept::All, proxy_uri.parse().unwrap());
+            let proxy = Proxy::new(Intercept::All, proxy_uri.parse()?);
             let proxy_connector = ProxyConnector::from_proxy(https_connector, proxy)?;
             Ok(HttpClient::<ProxyConnector<HttpsConnector<HttpConnector>>>::from_connector_with_config(
                 proxy_connector,
