@@ -263,10 +263,10 @@ pub async fn create_vacuum_plan(
         .storage
         .list_objs(&table.table_uri)
         .await
-        .map_err(|err| DeltaTableError::from(err))?;
+        .map_err(DeltaTableError::from)?;
 
     while let Some(obj_meta) = all_files.next().await {
-        let obj_meta = obj_meta.map_err(|err| DeltaTableError::from(err))?;
+        let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
         let rel_path = extract_rel_path(&table.table_uri, &obj_meta.path)?;
 
         if valid_files.contains(rel_path) // file is still being tracked in table

@@ -1,12 +1,11 @@
+use chrono::Duration;
+use deltalake::storage::file::FileStorageBackend;
+use deltalake::vacuum::Vacuum;
 use deltalake::DeltaTable;
+use deltalake::StorageBackend;
 use serial_test::serial;
 use std::error::Error;
-use chrono::Duration;
-use deltalake::vacuum::Vacuum;
 use std::time::SystemTime;
-use deltalake::storage::file::FileStorageBackend;
-use deltalake::StorageBackend;
-
 
 /*
 TODO new Tests:
@@ -34,17 +33,17 @@ async fn vacuum_delta_8_0_table() {
         deltalake::vacuum::VacuumError::InvalidVacuumRetentionPeriod {
             provided,
             min,
-        } if provided == Duration::hours(1).num_milliseconds() 
+        } if provided == Duration::hours(1).num_milliseconds()
             && min == table.get_state().tombstone_retention_millis(),
     ));
-
 
     let result = Vacuum::default()
         .with_retention_period(Duration::hours(0))
         .dry_run(true)
         .enforce_retention_duration(false)
         .execute(&mut table)
-        .await.unwrap();
+        .await
+        .unwrap();
     // do not enforce retention duration check with 0 hour will purge all files
     assert_eq!(
         result.files_to_delete,
@@ -60,7 +59,8 @@ async fn vacuum_delta_8_0_table() {
         .with_retention_period(Duration::hours(169))
         .dry_run(true)
         .execute(&mut table)
-        .await.unwrap();
+        .await
+        .unwrap();
 
     assert_eq!(
         result.files_to_delete,
@@ -81,10 +81,9 @@ async fn vacuum_delta_8_0_table() {
     let result = Vacuum::default()
         .with_retention_period(Duration::hours(retention_hours as i64))
         .dry_run(true)
-        .execute(&mut table).await.unwrap();
+        .execute(&mut table)
+        .await
+        .unwrap();
 
-    assert_eq!(
-        result.files_to_delete,
-        empty
-    );
+    assert_eq!(result.files_to_delete, empty);
 }

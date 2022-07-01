@@ -408,7 +408,6 @@ async fn read_delta_8_0_table_partition_with_compare_op() {
     );
 }
 
-
 #[tokio::test]
 async fn test_action_reconciliation() {
     let path = "./tests/data/action_reconciliation";
