@@ -893,6 +893,21 @@ pub enum DeltaOperation {
         predicate: Option<String>,
         /// Target optimize size
         target_size: DeltaDataTypeLong,
+    },
+    /// Represents the start of a `Vacuum` operation
+    VacuumStart {
+        /// Did the caller ignore the retention check
+        retention_check_enabled: bool,
+        /// Did the caller specify a retention period
+        #[serde(skip_serializing_if = "Option::is_none")]
+        specified_retention_millis: Option<i64>,
+        /// The default retention time configured when the plan was executed
+        default_retention_millis: i64,
+    },
+    /// Represents the end of a `Vacuum` operation
+    VacuumEnd {
+        /// If the vacuum was successful TODO: Maybe make this an enum..
+        status: String,
     }, // TODO: Add more operations
 }
 
@@ -905,6 +920,8 @@ impl DeltaOperation {
             DeltaOperation::Write { .. } => "delta-rs.Write",
             DeltaOperation::StreamingUpdate { .. } => "delta-rs.StreamingUpdate",
             DeltaOperation::Optimize { .. } => "delta-rs.Optimize",
+            DeltaOperation::VacuumStart { .. } => "delta-rs.VacuumStart",
+            DeltaOperation::VacuumEnd { .. } => "delta-rs.VacuumEnd",
         };
         commit_info.insert(
             "operation".to_string(),

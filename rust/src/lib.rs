@@ -101,6 +101,7 @@ pub mod schema;
 pub mod storage;
 mod table_state;
 pub mod time_utils;
+pub mod vacuum;
 pub mod writer;
 
 #[cfg(feature = "datafusion-ext")]
