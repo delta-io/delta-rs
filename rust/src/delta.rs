@@ -4,7 +4,7 @@
 //
 
 use arrow::error::ArrowError;
-use chrono::{DateTime, FixedOffset, Utc, Duration};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::*;
