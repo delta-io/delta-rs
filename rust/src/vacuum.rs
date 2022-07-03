@@ -7,13 +7,22 @@
 //! corrupted when vacuum deletes files that have not yet been committed.
 //! If `retention_hours` is not set then the `configuration.deletedFileRetentionDuration` of
 //! delta table is used or if that's missing too, then the default value of 7 days otherwise.
-/* TODO:
-    * What happens if a file is deleted by another process?
-        * Should we fail? Maybe continue with best effort until a error threshold is met
-    * reference Vacuum contains a count of files to delete in the log so a 'plan' must have been made
-    * Don't see anywhere were deletedFileRetentionDuration is acutally obtained
+
+/*
+    Observations with the reference implementation:
+
+    1. Trying to cause a vacuum job to fail
+        Tried running two vacuum jobs at the same time expecting one to fail since files would be deleted by the other job.
+        This did not occur both jobs were marked as COMPLETED with one having deleted all the files and the other deleting 0 files
+        Investigating the logs showed multiple 404 errors by the task which must have been ignored.
+    2. Filesystem creation time is used for files not managed by Delta
+        On ADLS Delta table, create a directory, upload a file and perform a vacuum with 1 hour retention. It will not be deleted.
+        Set the retention to 0 and the file will be deleted. The directory will remain and be cleaned up in the next run
+        TODO: Determine if the file's  create date or last modified date is used
+        The current implementation has a gap where files not being tracked are missed
 
 */
+
 use crate::action::DeltaOperation;
 use crate::delta::extract_rel_path;
 use crate::{DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableError};
@@ -22,8 +31,16 @@ use futures::StreamExt;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
 use std::collections::HashSet;
+use std::fmt::Debug;
+use std::sync::Arc;
 
-#[derive(Debug, Clone)]
+/// A source of time
+pub trait Clock: Debug {
+    /// get the current time in milliseconds since epoch
+    fn current_timestamp_millis(&self) -> i64;
+}
+
+#[derive(Debug)]
 /// Vacuum a Delta table with the given options
 ///
 /// TODO: Talk about retention period and default retention_period..
@@ -34,6 +51,8 @@ pub struct Vacuum {
     pub enforce_retention_duration: bool,
     /// Don't delete the files. Just determine which files can be deleted
     pub dry_run: bool,
+    /// Override the source for the current time
+    pub clock: Option<Arc<dyn Clock>>,
 }
 
 impl Default for Vacuum {
@@ -42,6 +61,7 @@ impl Default for Vacuum {
             retention_period: None,
             enforce_retention_duration: true,
             dry_run: false,
+            clock: None,
         }
     }
 }
@@ -61,10 +81,10 @@ pub struct VacuumPlan {
 /// Details for the Vacuum operation including which files were
 #[derive(Debug)]
 pub struct VacuumMetrics {
+    /// Was this a dry run
+    pub dry_run: bool,
     /// Files deleted successfully
     pub files_deleted: Vec<String>,
-    /// Files that were not deleted but marked for deletion. Only used for dry runs
-    pub files_to_delete: Vec<String>,
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -78,8 +98,8 @@ pub(crate) struct VacuumStartMetrics {
 #[serde(rename_all = "camelCase")]
 /// End Metrics that are committed to the delta log
 pub(crate) struct VacuumEndMetrics {
+    // How many files directories were deleted
     num_deleted_files: usize,
-    num_vacuumed_directories: usize,
 }
 
 /// Errors that can occur during vacuum
@@ -119,9 +139,9 @@ pub enum VacuumError {
 pub(crate) fn get_stale_files(
     table: &DeltaTable,
     retention_period: Duration,
+    now_timestamp_millis: i64,
 ) -> Result<HashSet<&str>, VacuumError> {
-    let tombstone_retention_timestamp = Utc::now() - retention_period;
-    let tombstone_retention_timestamp = tombstone_retention_timestamp.timestamp_millis();
+    let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
 
     Ok(table
         .state
@@ -161,8 +181,8 @@ impl VacuumPlan {
     pub async fn execute(self, table: &mut DeltaTable) -> Result<VacuumMetrics, VacuumError> {
         if self.files_to_delete.is_empty() {
             return Ok(VacuumMetrics {
+                dry_run: false,
                 files_deleted: Vec::new(),
-                files_to_delete: Vec::new(),
             });
         }
 
@@ -186,18 +206,14 @@ impl VacuumPlan {
                         .params
                         .retention_period
                         .map(|dur| dur.num_milliseconds()),
-                    default_retention_millis: 0,
+                    default_retention_millis: self.min_retention.num_milliseconds(),
                 }),
                 Some(start_metadata),
             )
             .await?;
 
         // Delete the files
-        // ASK: delete_objs isn't all or nothing. it's possible for only some
-        // files to have been deleted...  It would also be nice for the obj
-        // store to expose a size hint on how many deletes can be performed in a
-        // API request
-        // It would also be nice for it to expose which files were successfully deleted and which ones failed
+        // TODO: Modify delete_objs to returns which deletes failed and which ones passed
         let files_deleted = match table.storage.delete_objs(&self.files_to_delete).await {
             Ok(_) => Ok(self.files_to_delete),
             Err(err) => Err(VacuumError::from(DeltaTableError::StorageError {
@@ -205,13 +221,11 @@ impl VacuumPlan {
             })),
         }?;
 
-        // TODO: Commit to the table that the vacuum has finished. Even if an error occurred
+        // Commit to the table that the vacuum has finished. Even if an error occurred
         let mut end_transaction = table.create_transaction(None);
         let mut end_metadata = Map::new();
         let end_metrics = VacuumEndMetrics {
             num_deleted_files: files_deleted.len(),
-            // Todo...
-            num_vacuumed_directories: 0,
         };
         end_metadata.insert(
             "operationMetrics".to_owned(),
@@ -231,7 +245,7 @@ impl VacuumPlan {
 
         Ok(VacuumMetrics {
             files_deleted,
-            files_to_delete: Vec::new(),
+            dry_run: false,
         })
     }
 }
@@ -242,11 +256,11 @@ pub async fn create_vacuum_plan(
     params: Vacuum,
 ) -> Result<VacuumPlan, VacuumError> {
     let read_version = table.version();
+    let min_retention = Duration::milliseconds(table.state.tombstone_retention_millis());
     let retention_period = params
         .retention_period
-        .unwrap_or_else(|| Duration::milliseconds(table.state.tombstone_retention_millis()));
+        .unwrap_or_else(|| min_retention.clone());
     let enforce_retention_duration = params.enforce_retention_duration;
-    let min_retention = Duration::milliseconds(table.state.tombstone_retention_millis());
 
     if enforce_retention_duration && retention_period < min_retention {
         return Err(VacuumError::InvalidVacuumRetentionPeriod {
@@ -255,7 +269,12 @@ pub async fn create_vacuum_plan(
         });
     }
 
-    let expired_tombstones = get_stale_files(table, retention_period)?;
+    let now_millis = match &params.clock {
+        Some(clock) => clock.current_timestamp_millis(),
+        _ => Utc::now().timestamp_millis(),
+    };
+
+    let expired_tombstones = get_stale_files(table, retention_period, now_millis)?;
     let valid_files = table.get_file_set();
 
     let mut files_to_delete = vec![];
@@ -313,8 +332,8 @@ impl Vacuum {
         let plan = create_vacuum_plan(table, self).await?;
         if dry_run {
             return Ok(VacuumMetrics {
-                files_deleted: Vec::new(),
-                files_to_delete: plan.files_to_delete,
+                files_deleted: plan.files_to_delete,
+                dry_run: true,
             });
         }
 
