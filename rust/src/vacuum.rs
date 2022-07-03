@@ -51,6 +51,8 @@ pub struct Vacuum {
     pub enforce_retention_duration: bool,
     /// Don't delete the files. Just determine which files can be deleted
     pub dry_run: bool,
+    /// Should metrics be committed to the log
+    pub commit_to_log: bool,
     /// Override the source for the current time
     pub clock: Option<Arc<dyn Clock>>,
 }
@@ -62,6 +64,7 @@ impl Default for Vacuum {
             enforce_retention_duration: true,
             dry_run: false,
             clock: None,
+            commit_to_log: true,
         }
     }
 }
@@ -187,30 +190,33 @@ impl VacuumPlan {
         }
 
         // Commit to the table that a vacuum is occuring
-        let mut start_transaction = table.create_transaction(None);
-        let mut start_metadata = Map::new();
-        let start_metrics = VacuumStartMetrics {
-            num_files_to_delete: self.files_to_delete.len(),
-        };
-        start_metadata.insert("readVersion".to_owned(), self.read_version.into());
-        start_metadata.insert(
-            "operationMetrics".to_owned(),
-            serde_json::to_value(start_metrics).expect("VacuumStartMetrics should be serializable"),
-        );
+        if self.params.commit_to_log {
+            let mut start_transaction = table.create_transaction(None);
+            let mut start_metadata = Map::new();
+            let start_metrics = VacuumStartMetrics {
+                num_files_to_delete: self.files_to_delete.len(),
+            };
+            start_metadata.insert("readVersion".to_owned(), self.read_version.into());
+            start_metadata.insert(
+                "operationMetrics".to_owned(),
+                serde_json::to_value(start_metrics)
+                    .expect("VacuumStartMetrics should be serializable"),
+            );
 
-        start_transaction
-            .commit(
-                Some(DeltaOperation::VacuumStart {
-                    retention_check_enabled: self.params.enforce_retention_duration,
-                    specified_retention_millis: self
-                        .params
-                        .retention_period
-                        .map(|dur| dur.num_milliseconds()),
-                    default_retention_millis: self.min_retention.num_milliseconds(),
-                }),
-                Some(start_metadata),
-            )
-            .await?;
+            start_transaction
+                .commit(
+                    Some(DeltaOperation::VacuumStart {
+                        retention_check_enabled: self.params.enforce_retention_duration,
+                        specified_retention_millis: self
+                            .params
+                            .retention_period
+                            .map(|dur| dur.num_milliseconds()),
+                        default_retention_millis: self.min_retention.num_milliseconds(),
+                    }),
+                    Some(start_metadata),
+                )
+                .await?;
+        }
 
         // Delete the files
         // TODO: Modify delete_objs to returns which deletes failed and which ones passed
@@ -222,26 +228,28 @@ impl VacuumPlan {
         }?;
 
         // Commit to the table that the vacuum has finished. Even if an error occurred
-        let mut end_transaction = table.create_transaction(None);
-        let mut end_metadata = Map::new();
-        let end_metrics = VacuumEndMetrics {
-            num_deleted_files: files_deleted.len(),
-        };
-        end_metadata.insert(
-            "operationMetrics".to_owned(),
-            serde_json::to_value(end_metrics).expect("VacuumEndMetrics should be serializable"),
-        );
+        if self.params.commit_to_log {
+            let mut end_transaction = table.create_transaction(None);
+            let mut end_metadata = Map::new();
+            let end_metrics = VacuumEndMetrics {
+                num_deleted_files: files_deleted.len(),
+            };
+            end_metadata.insert(
+                "operationMetrics".to_owned(),
+                serde_json::to_value(end_metrics).expect("VacuumEndMetrics should be serializable"),
+            );
 
-        // TODO: Having the end_transaction fail isn't really a big deal...
-        // TODO: Determine what kind of statues are accepted.
-        end_transaction
-            .commit(
-                Some(DeltaOperation::VacuumEnd {
-                    status: "COMPLETED".to_string(),
-                }),
-                Some(end_metadata),
-            )
-            .await?;
+            // TODO: Having the end_transaction fail isn't really a big deal...
+            // TODO: Determine what kind of statues are accepted.
+            end_transaction
+                .commit(
+                    Some(DeltaOperation::VacuumEnd {
+                        status: "COMPLETED".to_string(),
+                    }),
+                    Some(end_metadata),
+                )
+                .await?;
+        }
 
         Ok(VacuumMetrics {
             files_deleted,

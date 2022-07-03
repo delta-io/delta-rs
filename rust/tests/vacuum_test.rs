@@ -1,6 +1,6 @@
 use chrono::Duration;
 use deltalake::action;
-use deltalake::action::Add;
+use deltalake::action::{Add, Remove};
 use deltalake::get_backend_for_uri_with_options;
 use deltalake::storage::file::FileStorageBackend;
 use deltalake::vacuum::Vacuum;
@@ -99,9 +99,49 @@ async fn vacuum_delta_8_0_table() {
 }
 
 #[tokio::test]
+// Validate vacuum works on a non-partitioned table
+async fn test_non_partitioned_table() {
+    let mut context = Context::from_env();
+    context.create_table_from_schema(get_schema(), &[]).await;
+    let clock = TestClock::from_systemtime();
+
+    let paths = ["delete_me.parquet", "dont_delete_me.parquet"];
+
+    for path in paths {
+        context
+            .add_file(
+                path,
+                "random junk".as_ref(),
+                &[],
+                clock.current_timestamp_millis(),
+                true,
+            )
+            .await;
+    }
+
+    clock.tick(Duration::seconds(10));
+
+    context
+        .remove_file("delete_me.parquet", &[], clock.current_timestamp_millis())
+        .await;
+
+    let res = {
+        clock.tick(Duration::days(8));
+        let table = context.table.as_mut().unwrap();
+        let mut plan = Vacuum::default();
+        plan.clock = Some(Arc::new(clock.clone()));
+        plan.execute(table).await.unwrap()
+    };
+
+    assert_eq!(res.files_deleted.len(), 1);
+    assert!(is_deleted(&mut context, "delete_me.parquet").await);
+    assert!(!is_deleted(&mut context, "dont_delete_me.parquet").await);
+}
+
+#[tokio::test]
 // Validate that files and directories that start with '.' or '_' are ignored
 async fn test_ignored_files() {
-    let mut context = setup_local_context();
+    let mut context = Context::from_env();
     context
         .create_table_from_schema(get_schema(), &["date"])
         .await;
@@ -147,12 +187,59 @@ async fn test_ignored_files() {
 
 #[tokio::test]
 // TODO: Partitions that start with _ are not ignored
-async fn test_partitions_included() {}
+async fn test_partitions_included() {
+    let mut context = Context::from_env();
+    context
+        .create_table_from_schema(get_underscore_schema(), &["_date"])
+        .await;
+    let clock = TestClock::from_systemtime();
+
+    let paths = [
+        "_date=2022-07-03/delete_me.parquet",
+        "_date=2022-07-03/dont_delete_me.parquet",
+    ];
+
+    let partition_values = &[("_date", Some("2022-07-03"))];
+
+    for path in paths {
+        context
+            .add_file(
+                path,
+                "random junk".as_ref(),
+                partition_values,
+                clock.current_timestamp_millis(),
+                true,
+            )
+            .await;
+    }
+
+    clock.tick(Duration::seconds(10));
+
+    context
+        .remove_file(
+            "_date=2022-07-03/delete_me.parquet",
+            partition_values,
+            clock.current_timestamp_millis(),
+        )
+        .await;
+
+    let res = {
+        clock.tick(Duration::days(8));
+        let table = context.table.as_mut().unwrap();
+        let mut plan = Vacuum::default();
+        plan.clock = Some(Arc::new(clock.clone()));
+        plan.execute(table).await.unwrap()
+    };
+
+    assert_eq!(res.files_deleted.len(), 1);
+    assert!(is_deleted(&mut context, "_date=2022-07-03/delete_me.parquet").await);
+    assert!(!is_deleted(&mut context, "_date=2022-07-03/dont_delete_me.parquet").await);
+}
 
 #[tokio::test]
 // files that are not managed by the delta log and have a last_modified greater than the retention period should be deleted
 async fn test_non_managed_files() {
-    let mut context = setup_local_context();
+    let mut context = Context::from_env();
     context
         .create_table_from_schema(get_schema(), &["date"])
         .await;
@@ -161,7 +248,7 @@ async fn test_non_managed_files() {
     let paths = [
         "garbage_file",
         "nested/garbage_file",
-        "nested2/really/garbage_file",
+        "nested2/really/deep/garbage_file",
     ];
 
     for path in paths {
@@ -277,6 +364,29 @@ pub fn get_schema() -> Schema {
     ]);
 }
 
+pub fn get_underscore_schema() -> Schema {
+    return Schema::new(vec![
+        SchemaField::new(
+            "x".to_owned(),
+            SchemaDataType::primitive("integer".to_owned()),
+            false,
+            HashMap::new(),
+        ),
+        SchemaField::new(
+            "y".to_owned(),
+            SchemaDataType::primitive("integer".to_owned()),
+            false,
+            HashMap::new(),
+        ),
+        SchemaField::new(
+            "_date".to_owned(),
+            SchemaDataType::primitive("string".to_owned()),
+            false,
+            HashMap::new(),
+        ),
+    ]);
+}
+
 #[derive(Default)]
 pub struct Context {
     pub table: Option<DeltaTable>,
@@ -290,6 +400,17 @@ pub struct LocalFS {
 }
 
 impl Context {
+    pub fn from_env() -> Self {
+        let backend = std::env::var("DELTA_RS_TEST_BACKEND");
+        let backend_ref = backend.as_ref().map(|s| s.as_str());
+        let context = match backend_ref {
+            Ok("LOCALFS") | Err(std::env::VarError::NotPresent) => setup_local_context(),
+            _ => panic!("Invalid backend for delta-rs tests"),
+        };
+
+        return context;
+    }
+
     pub fn get_storage(&mut self) -> &Box<dyn StorageBackend> {
         if self.backend.is_none() {
             self.backend = Some(self.new_storage())
@@ -338,6 +459,34 @@ impl Context {
         }
     }
 
+    pub async fn remove_file(
+        &mut self,
+        path: &str,
+        partition_values: &[(&str, Option<&str>)],
+        deletion_timestamp: i64,
+    ) {
+        let uri = self.table.as_ref().unwrap().table_uri.to_string();
+        let backend = self.get_storage();
+        let remote_path = uri + "/" + path;
+
+        let mut part_values = HashMap::new();
+        for v in partition_values {
+            part_values.insert(v.0.to_string(), v.1.map(|v| v.to_string()));
+        }
+
+        let remove = Remove {
+            path: path.into(),
+            deletion_timestamp: Some(deletion_timestamp),
+            partition_values: Some(part_values),
+            data_change: true,
+            ..Default::default()
+        };
+        let table = self.table.as_mut().unwrap();
+        let mut transaction = table.create_transaction(None);
+        transaction.add_action(action::Action::remove(remove));
+        transaction.commit(None, None).await.unwrap();
+    }
+
     //Create and set a new table from the provided schema
     pub async fn create_table_from_schema(&mut self, schema: Schema, partitions: &[&str]) {
         let p = partitions
@@ -355,6 +504,7 @@ impl Context {
 
         let backend = self.new_storage();
         let p = self.config.get("URI").unwrap().to_string();
+        println!("{:?}", p);
         let mut dt = DeltaTable::new(&p, backend, DeltaTableConfig::default()).unwrap();
         let mut commit_info = Map::<String, Value>::new();
 
