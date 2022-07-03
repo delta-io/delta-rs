@@ -8,6 +8,7 @@ use deltalake::StorageBackend;
 use deltalake::{
     DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
 };
+use rand::Rng;
 use serde_json::{json, Map, Value};
 use serial_test::serial;
 use std::any::Any;
@@ -17,11 +18,19 @@ use std::sync::Arc;
 use std::sync::Mutex;
 use std::time::SystemTime;
 use tempdir::TempDir;
+use tokio::runtime::Handle;
 
 use deltalake::storage::StorageError;
 
 use chrono::Utc;
 use deltalake::vacuum::Clock;
+
+#[cfg(feature = "azure")]
+use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
+#[cfg(feature = "azure")]
+use azure_storage_datalake::clients::DataLakeClient;
+#[cfg(feature = "azure")]
+use azure_storage_datalake::clients::FileSystemClient;
 
 #[tokio::test]
 async fn vacuum_delta_8_0_table() {
@@ -31,7 +40,6 @@ async fn vacuum_delta_8_0_table() {
         .unwrap();
 
     let retention_hours = 1;
-    let dry_run = true;
 
     let result = Vacuum::default()
         .with_retention_period(Duration::hours(1))
@@ -101,7 +109,7 @@ async fn vacuum_delta_8_0_table() {
 #[tokio::test]
 // Validate vacuum works on a non-partitioned table
 async fn test_non_partitioned_table() {
-    let mut context = Context::from_env();
+    let mut context = Context::from_env().await;
     context.create_table_from_schema(get_schema(), &[]).await;
     let clock = TestClock::from_systemtime();
 
@@ -139,9 +147,59 @@ async fn test_non_partitioned_table() {
 }
 
 #[tokio::test]
+// Validate vacuum works on a table with multiple partitions
+async fn test_partitioned_table() {
+    let mut context = Context::from_env().await;
+    context
+        .create_table_from_schema(get_schema(), &["date", "x"])
+        .await;
+    let clock = TestClock::from_systemtime();
+
+    let paths = [
+        "date=2022-07-03/x=2/delete_me.parquet",
+        "date=2022-07-03/x=2/dont_delete_me.parquet",
+    ];
+    let partition_values = [("date", Some("2022-07-03")), ("x", Some("2"))];
+
+    for path in paths {
+        context
+            .add_file(
+                path,
+                "random junk".as_ref(),
+                &partition_values,
+                clock.current_timestamp_millis(),
+                true,
+            )
+            .await;
+    }
+
+    clock.tick(Duration::seconds(10));
+
+    context
+        .remove_file(
+            "date=2022-07-03/x=2/delete_me.parquet",
+            &partition_values,
+            clock.current_timestamp_millis(),
+        )
+        .await;
+
+    let res = {
+        clock.tick(Duration::days(8));
+        let table = context.table.as_mut().unwrap();
+        let mut plan = Vacuum::default();
+        plan.clock = Some(Arc::new(clock.clone()));
+        plan.execute(table).await.unwrap()
+    };
+
+    assert_eq!(res.files_deleted.len(), 1);
+    assert!(is_deleted(&mut context, "date=2022-07-03/x=2/delete_me.parquet").await);
+    assert!(!is_deleted(&mut context, "date=2022-07-03/x=2/dont_delete_me.parquet").await);
+}
+
+#[tokio::test]
 // Validate that files and directories that start with '.' or '_' are ignored
 async fn test_ignored_files() {
-    let mut context = Context::from_env();
+    let mut context = Context::from_env().await;
     context
         .create_table_from_schema(get_schema(), &["date"])
         .await;
@@ -188,7 +246,7 @@ async fn test_ignored_files() {
 #[tokio::test]
 // TODO: Partitions that start with _ are not ignored
 async fn test_partitions_included() {
-    let mut context = Context::from_env();
+    let mut context = Context::from_env().await;
     context
         .create_table_from_schema(get_underscore_schema(), &["_date"])
         .await;
@@ -239,7 +297,7 @@ async fn test_partitions_included() {
 #[tokio::test]
 // files that are not managed by the delta log and have a last_modified greater than the retention period should be deleted
 async fn test_non_managed_files() {
-    let mut context = Context::from_env();
+    let mut context = Context::from_env().await;
     context
         .create_table_from_schema(get_schema(), &["date"])
         .await;
@@ -400,11 +458,13 @@ pub struct LocalFS {
 }
 
 impl Context {
-    pub fn from_env() -> Self {
+    pub async fn from_env() -> Self {
         let backend = std::env::var("DELTA_RS_TEST_BACKEND");
         let backend_ref = backend.as_ref().map(|s| s.as_str());
         let context = match backend_ref {
-            Ok("LOCALFS") | Err(std::env::VarError::NotPresent) => setup_local_context(),
+            Ok("LOCALFS") | Err(std::env::VarError::NotPresent) => setup_local_context().await,
+            #[cfg(feature = "azure")]
+            Ok("AZURE_GEN2") => setup_azure_gen2_context().await,
             _ => panic!("Invalid backend for delta-rs tests"),
         };
 
@@ -531,7 +591,7 @@ impl Context {
     }
 }
 
-pub fn setup_local_context() -> Context {
+pub async fn setup_local_context() -> Context {
     let tmp_dir = tempdir::TempDir::new("delta-rs_tests").unwrap();
     let mut config = HashMap::new();
     config.insert(
@@ -543,6 +603,83 @@ pub fn setup_local_context() -> Context {
 
     Context {
         storage_context: Some(Box::new(localfs)),
+        config,
+        ..Context::default()
+    }
+}
+
+#[cfg(feature = "azure")]
+pub struct AzureGen2 {
+    account_name: String,
+    account_key: String,
+    file_system_name: String,
+}
+
+#[cfg(feature = "azure")]
+impl Drop for AzureGen2 {
+    fn drop(&mut self) {
+        let storage_account_name = self.account_name.clone();
+        let storage_account_key = self.account_key.clone();
+        let file_system_name = self.file_system_name.clone();
+
+        let thread_handle = std::thread::spawn(move || {
+            let runtime = tokio::runtime::Runtime::new().unwrap();
+            let data_lake_client = DataLakeClient::new(
+                StorageSharedKeyCredential::new(
+                    storage_account_name.to_owned(),
+                    storage_account_key.to_owned(),
+                ),
+                None,
+            );
+            let file_system_client =
+                data_lake_client.into_file_system_client(file_system_name.to_owned());
+            runtime
+                .block_on(file_system_client.delete().into_future())
+                .unwrap();
+        });
+
+        thread_handle.join();
+    }
+}
+
+#[cfg(feature = "azure")]
+pub async fn setup_azure_gen2_context() -> Context {
+    let mut config = HashMap::new();
+
+    let storage_account_name = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
+    let storage_account_key = std::env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
+
+    let data_lake_client = DataLakeClient::new(
+        StorageSharedKeyCredential::new(
+            storage_account_name.to_owned(),
+            storage_account_key.to_owned(),
+        ),
+        None,
+    );
+    let rand: u16 = rand::thread_rng().gen();
+    let file_system_name = format!("delta-rs-test-{}-{}", Utc::now().timestamp(), rand);
+
+    let file_system_client = data_lake_client.into_file_system_client(file_system_name.to_owned());
+    file_system_client.create().into_future().await.unwrap();
+
+    let table_uri = format!("adls2://{}/{}/", storage_account_name, file_system_name);
+
+    config.insert("URI".to_string(), table_uri);
+    config.insert(
+        "AZURE_STORAGE_ACCOUNT_NAME".to_string(),
+        storage_account_name.clone(),
+    );
+    config.insert(
+        "AZRUE_STORAGE_ACCOUNT_KEY".to_string(),
+        storage_account_key.clone(),
+    );
+
+    Context {
+        storage_context: Some(Box::new(AzureGen2 {
+            account_name: storage_account_name,
+            account_key: storage_account_key,
+            file_system_name,
+        })),
         config,
         ..Context::default()
     }
