@@ -332,6 +332,12 @@ impl Vacuum {
         self
     }
 
+    /// Should vacuum start and vacuum end statistics be committed to the log
+    pub fn commit_to_log(mut self, commit: bool) -> Self {
+        self.commit_to_log = commit;
+        self
+    }
+
     /// Perform the vacuum. Returns metrics on which files were deleted
     pub async fn execute(self, table: &mut DeltaTable) -> Result<VacuumMetrics, VacuumError> {
         let dry_run = self.dry_run;
