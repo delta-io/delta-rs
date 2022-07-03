@@ -142,7 +142,7 @@ async fn test_ignored_files() {
     assert_eq!(res.files_deleted.len(), 0);
     for path in paths {
         assert!(!is_deleted(&mut context, path).await);
-    } 
+    }
 }
 
 #[tokio::test]
@@ -176,7 +176,6 @@ async fn test_non_managed_files() {
             .await;
     }
 
-
     // Validate unmanaged files are not deleted within the retention period
 
     let res = {
@@ -190,7 +189,7 @@ async fn test_non_managed_files() {
     assert_eq!(res.files_deleted.len(), 0);
     for path in paths {
         assert!(!is_deleted(&mut context, path).await);
-    } 
+    }
 
     // Validate unmanaged files are deleted after the retention period
     let res = {
@@ -204,7 +203,7 @@ async fn test_non_managed_files() {
     assert_eq!(res.files_deleted.len(), paths.len());
     for path in paths {
         assert!(is_deleted(&mut context, path).await);
-    } 
+    }
 }
 
 async fn is_deleted(context: &mut Context, path: &str) -> bool {

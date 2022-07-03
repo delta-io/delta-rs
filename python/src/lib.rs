@@ -42,6 +42,10 @@ impl PyDeltaTableError {
         PyDeltaTableError::new_err(err.to_string())
     }
 
+    fn from_vacuum_error(err: deltalake::vacuum::VacuumError) -> pyo3::PyErr {
+        PyDeltaTableError::new_err(err.to_string())
+    }
+
     fn from_storage(err: deltalake::StorageError) -> pyo3::PyErr {
         PyDeltaTableError::new_err(err.to_string())
     }
@@ -232,12 +236,11 @@ impl RawDeltaTable {
         enforce_retention_duration: bool,
     ) -> PyResult<Vec<String>> {
         rt()?
-            .block_on(self._table.vacuum(
-                retention_hours,
-                dry_run,
-                Some(enforce_retention_duration),
-            ))
-            .map_err(PyDeltaTableError::from_raw)
+            .block_on(
+                self._table
+                    .vacuum(retention_hours, dry_run, enforce_retention_duration),
+            )
+            .map_err(PyDeltaTableError::from_vacuum_error)
     }
 
     // Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.

@@ -4,7 +4,7 @@
 //
 
 use arrow::error::ArrowError;
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, FixedOffset, Utc, Duration};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::*;
@@ -29,6 +29,7 @@ use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
 use super::table_state::DeltaTableState;
 use crate::delta_config::DeltaConfigError;
+use crate::vacuum::{Vacuum, VacuumError};
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
@@ -1174,6 +1175,24 @@ impl DeltaTable {
     /// metadata.
     pub fn get_min_writer_version(&self) -> i32 {
         self.state.min_writer_version()
+    }
+
+    /// Vacuum the delta table seee [`Vacuum`] for more info
+    pub async fn vacuum(
+        &mut self,
+        retention_hours: Option<u64>,
+        dry_run: bool,
+        enforce_retention_duration: bool,
+    ) -> Result<Vec<String>, VacuumError> {
+        let mut plan = Vacuum::default()
+            .dry_run(dry_run)
+            .enforce_retention_duration(enforce_retention_duration);
+        if let Some(hours) = retention_hours {
+            plan = plan.with_retention_period(Duration::hours(hours as i64));
+        }
+
+        let res = plan.execute(self).await?;
+        Ok(res.files_deleted)
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or

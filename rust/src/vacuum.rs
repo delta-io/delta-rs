@@ -259,7 +259,7 @@ pub async fn create_vacuum_plan(
     let min_retention = Duration::milliseconds(table.state.tombstone_retention_millis());
     let retention_period = params
         .retention_period
-        .unwrap_or_else(|| min_retention.clone());
+        .unwrap_or(min_retention);
     let enforce_retention_duration = params.enforce_retention_duration;
 
     if enforce_retention_duration && retention_period < min_retention {
