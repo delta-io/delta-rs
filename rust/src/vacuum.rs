@@ -8,21 +8,6 @@
 //! If `retention_hours` is not set then the `configuration.deletedFileRetentionDuration` of
 //! delta table is used or if that's missing too, then the default value of 7 days otherwise.
 
-/*
-    Observations with the reference implementation:
-
-    1. Trying to cause a vacuum job to fail
-        Tried running two vacuum jobs at the same time expecting one to fail since files would be deleted by the other job.
-        This did not occur both jobs were marked as COMPLETED with one having deleted all the files and the other deleting 0 files
-        Investigating the logs showed multiple 404 errors by the task which must have been ignored.
-    2. Filesystem creation time is used for files not managed by Delta
-        On ADLS Delta table, create a directory, upload a file and perform a vacuum with 1 hour retention. It will not be deleted.
-        Set the retention to 0 and the file will be deleted. The directory will remain and be cleaned up in the next run
-        TODO: Determine if the file's  create date or last modified date is used
-        The current implementation has a gap where files not being tracked are missed
-
-*/
-
 use crate::action::DeltaOperation;
 use crate::delta::extract_rel_path;
 use crate::{DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableError};
@@ -110,7 +95,7 @@ pub(crate) struct VacuumEndMetrics {
 pub enum VacuumError {
     /// Error returned when Vacuum retention period is below the safe threshold
     #[error(
-        "Invalid retention period, minimum retention for vacuum is configured to be greater than {} milliseconds, got {} milliseconds", .min, .provided
+        "Invalid retention period, minimum retention for vacuum is configured to be greater than {} hours, got {} hours", .min, .provided
     )]
     InvalidVacuumRetentionPeriod {
         /// User provided retention on vacuum call
@@ -270,8 +255,8 @@ pub async fn create_vacuum_plan(
 
     if enforce_retention_duration && retention_period < min_retention {
         return Err(VacuumError::InvalidVacuumRetentionPeriod {
-            provided: retention_period.num_milliseconds(),
-            min: min_retention.num_milliseconds(),
+            provided: retention_period.num_hours(),
+            min: min_retention.num_hours(),
         });
     }
 
