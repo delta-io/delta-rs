@@ -14,7 +14,7 @@ pub mod adls;
 pub mod clock;
 
 #[derive(Default)]
-pub struct Context {
+pub struct TestContext {
     pub table: Option<DeltaTable>,
     pub backend: Option<Box<dyn StorageBackend>>,
     pub config: HashMap<String, String>,
@@ -25,7 +25,7 @@ pub struct LocalFS {
     pub tmp_dir: TempDir,
 }
 
-impl Context {
+impl TestContext {
     pub async fn from_env() -> Self {
         let backend = std::env::var("DELTA_RS_TEST_BACKEND");
         let backend_ref = backend.as_ref().map(|s| s.as_str());
@@ -129,7 +129,6 @@ impl Context {
 
         let backend = self.new_storage();
         let p = self.config.get("URI").unwrap().to_string();
-        println!("{:?}", p);
         let mut dt = DeltaTable::new(&p, backend, DeltaTableConfig::default()).unwrap();
         let mut commit_info = Map::<String, Value>::new();
 
@@ -156,7 +155,7 @@ impl Context {
     }
 }
 
-pub async fn setup_local_context() -> Context {
+pub async fn setup_local_context() -> TestContext {
     let tmp_dir = tempdir::TempDir::new("delta-rs_tests").unwrap();
     let mut config = HashMap::new();
     config.insert(
@@ -166,9 +165,9 @@ pub async fn setup_local_context() -> Context {
 
     let localfs = LocalFS { tmp_dir };
 
-    Context {
+    TestContext {
         storage_context: Some(Box::new(localfs)),
         config,
-        ..Context::default()
+        ..TestContext::default()
     }
 }

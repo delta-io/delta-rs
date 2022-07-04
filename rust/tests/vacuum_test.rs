@@ -12,7 +12,7 @@ use deltalake::vacuum::Clock;
 use std::sync::Arc;
 
 use common::clock::TestClock;
-use common::Context;
+use common::TestContext;
 use std::time::SystemTime;
 
 #[tokio::test]
@@ -92,7 +92,7 @@ async fn vacuum_delta_8_0_table() {
 #[tokio::test]
 // Validate vacuum works on a non-partitioned table
 async fn test_non_partitioned_table() {
-    let mut context = Context::from_env().await;
+    let mut context = TestContext::from_env().await;
     context.create_table_from_schema(get_schema(), &[]).await;
     let clock = TestClock::from_systemtime();
 
@@ -132,7 +132,7 @@ async fn test_non_partitioned_table() {
 #[tokio::test]
 // Validate vacuum works on a table with multiple partitions
 async fn test_partitioned_table() {
-    let mut context = Context::from_env().await;
+    let mut context = TestContext::from_env().await;
     context
         .create_table_from_schema(get_schema(), &["date", "x"])
         .await;
@@ -182,7 +182,7 @@ async fn test_partitioned_table() {
 #[tokio::test]
 // Validate that files and directories that start with '.' or '_' are ignored
 async fn test_ignored_files() {
-    let mut context = Context::from_env().await;
+    let mut context = TestContext::from_env().await;
     context
         .create_table_from_schema(get_schema(), &["date"])
         .await;
@@ -229,7 +229,7 @@ async fn test_ignored_files() {
 #[tokio::test]
 // TODO: Partitions that start with _ are not ignored
 async fn test_partitions_included() {
-    let mut context = Context::from_env().await;
+    let mut context = TestContext::from_env().await;
     context
         .create_table_from_schema(get_underscore_schema(), &["_date"])
         .await;
@@ -280,7 +280,7 @@ async fn test_partitions_included() {
 #[tokio::test]
 // files that are not managed by the delta log and have a last_modified greater than the retention period should be deleted
 async fn test_non_managed_files() {
-    let mut context = Context::from_env().await;
+    let mut context = TestContext::from_env().await;
     context
         .create_table_from_schema(get_schema(), &["date"])
         .await;
@@ -334,7 +334,7 @@ async fn test_non_managed_files() {
     }
 }
 
-async fn is_deleted(context: &mut Context, path: &str) -> bool {
+async fn is_deleted(context: &mut TestContext, path: &str) -> bool {
     let uri = context.table.as_ref().unwrap().table_uri.to_string();
     let backend = context.get_storage();
     let path = uri + "/" + path;

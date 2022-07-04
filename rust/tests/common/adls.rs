@@ -5,7 +5,7 @@ use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
 use azure_storage_datalake::clients::DataLakeClient;
 use rand::Rng;
 
-use super::Context;
+use super::TestContext;
 
 pub struct AzureGen2 {
     account_name: String,
@@ -39,7 +39,7 @@ impl Drop for AzureGen2 {
     }
 }
 
-pub async fn setup_azure_gen2_context() -> Context {
+pub async fn setup_azure_gen2_context() -> TestContext {
     let mut config = HashMap::new();
 
     let storage_account_name = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
@@ -70,13 +70,13 @@ pub async fn setup_azure_gen2_context() -> Context {
         storage_account_key.clone(),
     );
 
-    Context {
+    TestContext {
         storage_context: Some(Box::new(AzureGen2 {
             account_name: storage_account_name,
             account_key: storage_account_key,
             file_system_name,
         })),
         config,
-        ..Context::default()
+        ..TestContext::default()
     }
 }
