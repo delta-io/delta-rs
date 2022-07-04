@@ -1,13 +1,10 @@
 extern crate deltalake;
 
 use chrono::Utc;
-use deltalake::storage::file::FileStorageBackend;
 use deltalake::DeltaTableBuilder;
 use deltalake::PeekCommit;
-use deltalake::StorageBackend;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
-use std::time::SystemTime;
 
 #[allow(dead_code)]
 mod fs_common;
@@ -409,6 +406,7 @@ async fn read_delta_8_0_table_partition_with_compare_op() {
 }
 
 #[tokio::test]
+<<<<<<< HEAD
 async fn vacuum_delta_8_0_table() {
     let backend = FileStorageBackend::new("");
     let table = deltalake::open_table(&backend.join_paths(&["tests", "data", "delta-0.8.0"]))
@@ -507,6 +505,8 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
 }
 
 #[tokio::test]
+=======
+>>>>>>> 185ee85 (Refactor vacuum out and use a builder)
 async fn test_action_reconciliation() {
     let path = "./tests/data/action_reconciliation";
     let mut table = fs_common::create_table(path, None).await;

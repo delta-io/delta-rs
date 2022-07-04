@@ -4,7 +4,7 @@
 //
 
 use arrow::error::ArrowError;
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::*;
@@ -29,8 +29,7 @@ use super::storage;
 use super::storage::{StorageBackend, StorageError, UriError};
 use super::table_state::DeltaTableState;
 use crate::delta_config::DeltaConfigError;
-
-const MILLIS_IN_HOUR: i64 = 3600000;
+use crate::vacuum::{Vacuum, VacuumError};
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
@@ -174,16 +173,6 @@ pub enum DeltaTableError {
     InvalidPartitionFilter {
         /// The invalid partition filter used.
         partition_filter: String,
-    },
-    /// Error returned when Vacuum retention period is below the safe threshold
-    #[error(
-        "Invalid retention period, minimum retention for vacuum is configured to be greater than {} hours, got {} hours", .min, .provided
-    )]
-    InvalidVacuumRetentionPeriod {
-        /// User provided retention on vacuum call
-        provided: DeltaDataTypeLong,
-        /// Minimal retention configured in delta table config
-        min: DeltaDataTypeLong,
     },
     /// Error returned when a line from log record is invalid.
     #[error("Failed to read line from log record")]
@@ -404,7 +393,7 @@ impl From<StorageError> for LoadCheckpointError {
 
 #[inline]
 /// Return path relative to parent_path
-fn extract_rel_path<'a, 'b>(
+pub(crate) fn extract_rel_path<'a, 'b>(
     parent_path: &'b str,
     path: &'a str,
 ) -> Result<&'a str, DeltaTableError> {
@@ -1188,99 +1177,22 @@ impl DeltaTable {
         self.state.min_writer_version()
     }
 
-    /// List files no longer referenced by a Delta table and are older than the retention threshold.
-    fn get_stale_files(
-        &self,
-        retention_hours: Option<u64>,
-        enforce_retention_duration: Option<bool>,
-    ) -> Result<HashSet<&str>, DeltaTableError> {
-        let retention_millis = retention_hours
-            .map(|hours| MILLIS_IN_HOUR * hours as i64)
-            .unwrap_or_else(|| self.state.tombstone_retention_millis());
-
-        if enforce_retention_duration.unwrap_or(true) {
-            let min_retention_mills = self.state.tombstone_retention_millis();
-            if retention_millis < min_retention_mills {
-                return Err(DeltaTableError::InvalidVacuumRetentionPeriod {
-                    provided: retention_millis / MILLIS_IN_HOUR,
-                    min: min_retention_mills / MILLIS_IN_HOUR,
-                });
-            }
-        }
-
-        let tombstone_retention_timestamp = Utc::now().timestamp_millis() - retention_millis;
-
-        Ok(self
-            .state
-            .all_tombstones()
-            .iter()
-            .filter(|tombstone| {
-                // if the file has a creation time before the `tombstone_retention_timestamp`
-                // then it's considered as a stale file
-                tombstone.deletion_timestamp.unwrap_or(0) < tombstone_retention_timestamp
-            })
-            .map(|tombstone| tombstone.path.as_str())
-            .collect::<HashSet<_>>())
-    }
-
-    /// Whether a path should be hidden for delta-related file operations, such as Vacuum.
-    /// Names of the form partitionCol=[value] are partition directories, and should be
-    /// deleted even if they'd normally be hidden. The _db_index directory contains (bloom filter)
-    /// indexes and these must be deleted when the data they are tied to is deleted.
-    fn is_hidden_directory(&self, path_name: &str) -> Result<bool, DeltaTableError> {
-        Ok((path_name.starts_with('.') || path_name.starts_with('_'))
-            && !path_name.starts_with("_delta_index")
-            && !path_name.starts_with("_change_data")
-            && !self
-                .state
-                .current_metadata()
-                .ok_or(DeltaTableError::NoMetadata)?
-                .partition_columns
-                .iter()
-                .any(|partition_column| path_name.starts_with(partition_column)))
-    }
-
-    /// Run the Vacuum command on the Delta Table: delete files no longer referenced by a Delta table and are older than the retention threshold.
-    /// We do not recommend that you set a retention interval shorter than 7 days, because old snapshots
-    /// and uncommitted files can still be in use by concurrent readers or writers to the table.
-    /// If vacuum cleans up active files, concurrent readers can fail or, worse, tables can be
-    /// corrupted when vacuum deletes files that have not yet been committed.
-    /// If `retention_hours` is not set then the `configuration.deletedFileRetentionDuration` of
-    /// delta table is used or if that's missing too, then the default value of 7 days otherwise.
+    /// Vacuum the delta table seee [`Vacuum`] for more info
     pub async fn vacuum(
-        &self,
+        &mut self,
         retention_hours: Option<u64>,
         dry_run: bool,
-        enforce_retention_duration: Option<bool>,
-    ) -> Result<Vec<String>, DeltaTableError> {
-        let expired_tombstones =
-            self.get_stale_files(retention_hours, enforce_retention_duration)?;
-        let valid_files = self.get_file_set();
-
-        let mut files_to_delete = vec![];
-        let mut all_files = self.storage.list_objs(&self.table_uri).await?;
-
-        while let Some(obj_meta) = all_files.next().await {
-            let obj_meta = obj_meta?;
-            let rel_path = extract_rel_path(&self.table_uri, &obj_meta.path)?;
-
-            if valid_files.contains(rel_path) // file is still being tracked in table
-                || !expired_tombstones.contains(rel_path) // file is not an expired tombstone
-                || self.is_hidden_directory(rel_path)?
-            {
-                continue;
-            }
-
-            files_to_delete.push(obj_meta.path);
+        enforce_retention_duration: bool,
+    ) -> Result<Vec<String>, VacuumError> {
+        let mut plan = Vacuum::default()
+            .dry_run(dry_run)
+            .enforce_retention_duration(enforce_retention_duration);
+        if let Some(hours) = retention_hours {
+            plan = plan.with_retention_period(Duration::hours(hours as i64));
         }
 
-        if dry_run {
-            return Ok(files_to_delete);
-        }
-        match self.storage.delete_objs(&files_to_delete).await {
-            Ok(_) => Ok(files_to_delete),
-            Err(err) => Err(DeltaTableError::StorageError { source: err }),
-        }
+        let res = plan.execute(self).await?;
+        Ok(res.files_deleted)
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
