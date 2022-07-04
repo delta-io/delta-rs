@@ -157,7 +157,7 @@ fn min_max_values_from_file_metadata(
             .filter_map(|g| g.column(i).statistics())
             .collect();
 
-        let _ = apply_min_max_for_column(
+        apply_min_max_for_column(
             statistics.as_slice(),
             column_descr.clone(),
             column_path_parts,
