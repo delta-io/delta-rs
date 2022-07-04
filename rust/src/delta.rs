@@ -1285,12 +1285,7 @@ impl DeltaTable {
         if dry_run {
             return Ok(files_to_delete);
         }
-
-        let paths = &files_to_delete
-            .iter()
-            .map(|rel_path| self.storage.join_path(&self.table_uri, rel_path))
-            .collect::<Vec<_>>();
-        match self.storage.delete_objs(paths).await {
+        match self.storage.delete_objs(&files_to_delete).await {
             Ok(_) => Ok(files_to_delete),
             Err(err) => Err(DeltaTableError::StorageError { source: err }),
         }
