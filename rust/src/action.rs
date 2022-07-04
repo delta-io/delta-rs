@@ -912,6 +912,7 @@ impl DeltaOperation {
 
     pub fn operation_parameters(&self) -> Option<Map<String, Value>> {
         if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(self) {
+            // serializing self will always yield something like {"<op_name>": {...}} so unwrapping is safe
             Some(map.values().next().unwrap().clone())
         } else {
             None

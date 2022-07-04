@@ -101,23 +101,23 @@ impl IsolationLevel {
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
 pub(crate) struct CurrentTransactionInfo {
-    txn_id: String,
+    pub(crate) txn_id: String,
     /// partition predicates by which files have been queried by the transaction
-    read_predicates: Vec<String>,
+    pub(crate) read_predicates: Vec<String>,
     /// files that have been seen by the transaction
-    read_files: HashSet<Add>,
+    pub(crate) read_files: HashSet<Add>,
     /// whether the whole table was read during the transaction
-    read_whole_table: bool,
+    pub(crate) read_whole_table: bool,
     /// appIds that have been seen by the transaction
-    read_app_ids: HashSet<String>,
+    pub(crate) read_app_ids: HashSet<String>,
     /// table metadata for the transaction
-    metadata: DeltaTableMetaData,
+    pub(crate) metadata: DeltaTableMetaData,
     /// delta log actions that the transaction wants to commit
-    actions: Vec<Action>,
-    /// read [[Snapshot]] used for the transaction
-    // read_snapshot: Snapshot,
+    pub(crate) actions: Vec<Action>,
+    /// read [DeltaTableState] used for the transaction
+    pub(crate) read_snapshot: DeltaTableState,
     /// [CommitInfo] for the commit
-    commit_info: Option<Map<String, Value>>,
+    pub(crate) commit_info: Option<Map<String, Value>>,
 }
 
 impl CurrentTransactionInfo {
@@ -296,6 +296,7 @@ impl ConflictChecker {
         // TODO figure out when we need to update this
         &self.initial_current_transaction_info
     }
+
     /// This function checks conflict of the `initial_current_transaction_info` against the
     /// `winning_commit_version` and returns an updated [CurrentTransactionInfo] that represents
     /// the transaction as if it had started while reading the `winning_commit_version`.
