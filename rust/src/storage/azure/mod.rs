@@ -359,16 +359,12 @@ impl StorageBackend for AdlsGen2Backend {
         Ok(self
             .file_system_client
             .list_paths()
-            // TODO this assumes we are always only interested in listing contents in one directory.
-            // to make list requests cheaper. As far as I can tell this should work in this case,
-            // although this behavior might be different in other object store implementations.
-            .recursive(false)
             .directory(obj.path)
             .into_stream()
             .flat_map(|it| match it {
                 Ok(paths) => Either::Left(stream::iter(paths.into_iter().map(|p| {
                     Ok(ObjectMeta {
-                        path: path.to_string(),
+                        path: format!("adls2://{}/{}", self.file_system_name, path.to_owned()),
                         modified: p.last_modified,
                         size: Some(p.content_length),
                     })
