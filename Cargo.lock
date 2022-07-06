@@ -758,6 +758,8 @@ dependencies = [
  "libc",
  "log",
  "maplit",
+ "num-bigint",
+ "num-traits",
  "parquet",
  "parquet-format",
  "percent-encoding",

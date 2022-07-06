@@ -473,6 +473,40 @@ async fn vacuum_delta_8_0_table() {
 }
 
 #[tokio::test]
+async fn read_delta_1_2_1_struct_stats_table_without_version() {
+    let table_uri = "./tests/data/delta-1.2.1-only-struct-stats";
+    let table_from_struct_stats = deltalake::open_table(table_uri).await.unwrap();
+    let table_from_json_stats = deltalake::open_table_with_version(table_uri, 1)
+        .await
+        .unwrap();
+
+    fn get_stats_for_file(
+        table: &deltalake::DeltaTable,
+        file_name: &str,
+    ) -> deltalake::action::Stats {
+        table
+            .get_file_uris()
+            .zip(table.get_stats())
+            .filter_map(|(file_uri, file_stats)| {
+                if file_uri.ends_with(file_name) {
+                    file_stats.unwrap()
+                } else {
+                    None
+                }
+            })
+            .next()
+            .unwrap()
+    }
+
+    let file_to_compare = "part-00000-51653f4d-b029-44bd-9fda-578e73518a26-c000.snappy.parquet";
+
+    assert_eq!(
+        get_stats_for_file(&table_from_struct_stats, &file_to_compare).min_values,
+        get_stats_for_file(&table_from_json_stats, &file_to_compare).min_values,
+    )
+}
+
+#[tokio::test]
 async fn test_action_reconciliation() {
     let path = "./tests/data/action_reconciliation";
     let mut table = fs_common::create_table(path, None).await;
