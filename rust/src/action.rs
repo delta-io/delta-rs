@@ -3,10 +3,13 @@
 #![allow(non_camel_case_types)]
 
 use crate::{schema::*, DeltaTableMetaData};
-use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
+use chrono::{SecondsFormat, TimeZone, Utc};
+use num_bigint::BigInt;
+use num_traits::cast::ToPrimitive;
+use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
+use serde_json::{json, Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -114,7 +117,7 @@ impl ColumnCountStat {
 }
 
 /// Statistics associated with Add actions contained in the Delta log.
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
     /// Number of records in the file associated with the log action.
@@ -288,9 +291,24 @@ impl Add {
         decode_path(&self.path).map(|path| Self { path, ..self })
     }
 
+    /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
+    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+        match self.get_stats_parsed() {
+            Ok(Some(stats)) => Ok(Some(stats)),
+            Ok(None) => self.get_json_stats(),
+            Err(e) => {
+                log::error!(
+                    "Error when reading parquet stats {:?} {e}. Attempting to read json stats",
+                    self.stats_parsed
+                );
+                self.get_json_stats()
+            }
+        }
+    }
+
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+    pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         self.stats
             .as_ref()
             .map_or(Ok(None), |s| serde_json::from_str(s))
@@ -298,9 +316,9 @@ impl Add {
 
     /// Returns the composite HashMap representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    pub fn get_stats_parsed(&self) -> Result<Option<StatsParsed>, parquet::errors::ParquetError> {
+    pub fn get_stats_parsed(&self) -> Result<Option<Stats>, parquet::errors::ParquetError> {
         self.stats_parsed.as_ref().map_or(Ok(None), |record| {
-            let mut stats = StatsParsed::default();
+            let mut stats = Stats::default();
 
             for (i, (name, _)) in record.get_column_iter().enumerate() {
                 match name.as_str() {
@@ -315,7 +333,7 @@ impl Add {
                     "minValues" => match record.get_group(i) {
                         Ok(row) => {
                             for (name, field) in row.get_column_iter() {
-                                stats.min_values.insert(name.clone(), field.clone());
+                                stats.min_values.insert(name.clone(), field.into());
                             }
                         }
                         _ => {
@@ -325,7 +343,7 @@ impl Add {
                     "maxValues" => match record.get_group(i) {
                         Ok(row) => {
                             for (name, field) in row.get_column_iter() {
-                                stats.max_values.insert(name.clone(), field.clone());
+                                stats.max_values.insert(name.clone(), field.into());
                             }
                         }
                         _ => {
@@ -337,7 +355,7 @@ impl Add {
                             for (i, (name, _)) in row.get_column_iter().enumerate() {
                                 match row.get_long(i) {
                                     Ok(v) => {
-                                        stats.null_count.insert(name.clone(), v);
+                                        stats.null_count.insert(name.clone(), ColumnCountStat::Value(v));
                                     }
                                     _ => {
                                         log::error!("Expect type of stats_parsed.nullRecords value to be struct, got: {}", row);
@@ -362,6 +380,56 @@ impl Add {
             Ok(Some(stats))
         })
     }
+}
+
+impl From<&Field> for ColumnValueStat {
+    fn from(field: &Field) -> Self {
+        match field {
+            Field::Group(group) => ColumnValueStat::Column(HashMap::from_iter(
+                group
+                    .get_column_iter()
+                    .map(|(field_name, field)| (field_name.clone(), field.into())),
+            )),
+            _ => ColumnValueStat::Value(primitive_parquet_field_to_json_value(field)),
+        }
+    }
+}
+
+fn primitive_parquet_field_to_json_value(field: &Field) -> serde_json::Value {
+    match field {
+        Field::Null => serde_json::Value::Null,
+        Field::Bool(value) => json!(value),
+        Field::Byte(value) => json!(value),
+        Field::Short(value) => json!(value),
+        Field::Int(value) => json!(value),
+        Field::Long(value) => json!(value),
+        Field::Float(value) => json!(value),
+        Field::Double(value) => json!(value),
+        Field::Str(value) => json!(value),
+        Field::Decimal(decimal) => match BigInt::from_signed_bytes_be(decimal.data()).to_f64() {
+            Some(int) => json!(int / (10_i64.pow((decimal.scale()).try_into().unwrap()) as f64)),
+            _ => serde_json::Value::Null,
+        },
+        Field::TimestampMillis(timestamp) => {
+            serde_json::Value::String(convert_timestamp_millis_to_string(*timestamp))
+        }
+        Field::Date(date) => serde_json::Value::String(convert_date_to_string(*date)),
+        _ => {
+            log::warn!("Unexpected field type {:?}", field,);
+            serde_json::Value::Null
+        }
+    }
+}
+
+fn convert_timestamp_millis_to_string(value: u64) -> String {
+    let dt = Utc.timestamp((value / 1000) as i64, ((value % 1000) * 1000000) as u32);
+    dt.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn convert_date_to_string(value: u32) -> String {
+    static NUM_SECONDS_IN_DAY: i64 = 60 * 60 * 24;
+    let dt = Utc.timestamp(value as i64 * NUM_SECONDS_IN_DAY, 0).date();
+    format!("{}", dt.format("%Y-%m-%d"))
 }
 
 /// Describes the data format of files in the table.
