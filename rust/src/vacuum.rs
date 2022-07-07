@@ -3,10 +3,20 @@
 //! Run the Vacuum command on the Delta Table: delete files no longer referenced by a Delta table and are older than the retention threshold.
 //! We do not recommend that you set a retention interval shorter than 7 days, because old snapshots
 //! and uncommitted files can still be in use by concurrent readers or writers to the table.
+//!
 //! If vacuum cleans up active files, concurrent readers can fail or, worse, tables can be
 //! corrupted when vacuum deletes files that have not yet been committed.
-//! If `retention_hours` is not set then the `configuration.deletedFileRetentionDuration` of
+//! If `retention_period` is not set then the `configuration.deletedFileRetentionDuration` of
 //! delta table is used or if that's missing too, then the default value of 7 days otherwise.
+//! 
+//! When you run vacuum then you cannot use time travel to a version older than
+//! the specified retention period.
+//!
+//! # Example
+//! ```rust ignore
+//! let table = open_table("../path/to/table")?;
+//! let metrics = Vacuum::default().execute(table).await?;
+//! ````
 
 use crate::delta::extract_rel_path;
 use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError};
