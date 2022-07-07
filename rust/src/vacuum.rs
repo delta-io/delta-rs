@@ -8,7 +8,7 @@
 //! corrupted when vacuum deletes files that have not yet been committed.
 //! If `retention_period` is not set then the `configuration.deletedFileRetentionDuration` of
 //! delta table is used or if that's missing too, then the default value of 7 days otherwise.
-//! 
+//!
 //! When you run vacuum then you cannot use time travel to a version older than
 //! the specified retention period.
 //!
