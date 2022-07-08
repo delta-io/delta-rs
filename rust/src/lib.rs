@@ -93,6 +93,7 @@ pub mod schema;
 pub mod storage;
 mod table_state;
 pub mod time_utils;
+pub mod vacuum;
 pub mod writer;
 
 pub use self::data_catalog::{get_data_catalog, DataCatalog, DataCatalogError};

@@ -1,13 +1,10 @@
 extern crate deltalake;
 
 use chrono::Utc;
-use deltalake::storage::file::FileStorageBackend;
 use deltalake::DeltaTableBuilder;
 use deltalake::PeekCommit;
-use deltalake::StorageBackend;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
-use std::time::SystemTime;
 
 #[allow(dead_code)]
 mod fs_common;
@@ -409,67 +406,37 @@ async fn read_delta_8_0_table_partition_with_compare_op() {
 }
 
 #[tokio::test]
-async fn vacuum_delta_8_0_table() {
-    let backend = FileStorageBackend::new("");
-    let table = deltalake::open_table(&backend.join_paths(&["tests", "data", "delta-0.8.0"]))
+async fn read_delta_1_2_1_struct_stats_table_without_version() {
+    let table_uri = "./tests/data/delta-1.2.1-only-struct-stats";
+    let table_from_struct_stats = deltalake::open_table(table_uri).await.unwrap();
+    let table_from_json_stats = deltalake::open_table_with_version(table_uri, 1)
         .await
         .unwrap();
 
-    let retention_hours = 1;
-    let dry_run = true;
-
-    assert!(matches!(
+    fn get_stats_for_file(
+        table: &deltalake::DeltaTable,
+        file_name: &str,
+    ) -> deltalake::action::Stats {
         table
-            .vacuum(Some(retention_hours), dry_run, None)
-            .await
-            .unwrap_err(),
-        deltalake::DeltaTableError::InvalidVacuumRetentionPeriod {
-            provided,
-            min,
-        } if provided == retention_hours as i64
-            && min == table.get_state().tombstone_retention_millis() / 3600000,
-    ));
+            .get_file_uris()
+            .zip(table.get_stats())
+            .filter_map(|(file_uri, file_stats)| {
+                if file_uri.ends_with(file_name) {
+                    file_stats.unwrap()
+                } else {
+                    None
+                }
+            })
+            .next()
+            .unwrap()
+    }
 
-    // do not enforce retention duration check with 0 hour will purge all files
-    assert_eq!(
-        table.vacuum(Some(0), dry_run, Some(false)).await.unwrap(),
-        vec![backend.join_paths(&[
-            "tests",
-            "data",
-            "delta-0.8.0",
-            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet",
-        ])]
-    );
-
-    let retention_hours = 169;
+    let file_to_compare = "part-00000-51653f4d-b029-44bd-9fda-578e73518a26-c000.snappy.parquet";
 
     assert_eq!(
-        table
-            .vacuum(Some(retention_hours), dry_run, None)
-            .await
-            .unwrap(),
-        vec![backend.join_paths(&[
-            "tests",
-            "data",
-            "delta-0.8.0",
-            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet",
-        ])]
-    );
-
-    let retention_hours = SystemTime::now()
-        .duration_since(SystemTime::UNIX_EPOCH)
-        .unwrap()
-        .as_secs()
-        / 3600;
-    let empty: Vec<String> = Vec::new();
-
-    assert_eq!(
-        table
-            .vacuum(Some(retention_hours), dry_run, None)
-            .await
-            .unwrap(),
-        empty
-    );
+        get_stats_for_file(&table_from_struct_stats, &file_to_compare).min_values,
+        get_stats_for_file(&table_from_json_stats, &file_to_compare).min_values,
+    )
 }
 
 #[tokio::test]
