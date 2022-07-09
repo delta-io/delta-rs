@@ -551,16 +551,19 @@ impl<'a> fmt::Display for S3Object<'a> {
 /// or configure the locking client within [S3StorageOptions]. For example:
 ///
 /// ```rust
-/// let options = S3StorageOptions::from_map(hashmap! {
-///     s3_storage_options::AWS_S3_LOCKING_PROVIDER.to_string() => "dynamodb",
+/// use std::collections::HashMap;
+/// use deltalake::storage::s3::{S3StorageOptions, S3StorageBackend, s3_storage_options};
+///
+/// let options = S3StorageOptions::from_map([
+///     (s3_storage_options::AWS_S3_LOCKING_PROVIDER, "dynamodb"),
 ///     // Options passed down to dynamodb_lock::DynamoDbOptions (default values shown below)
-///     "table_name".to_string() => "delta_rs_lock_table",
-///     "partition_key_value".to_string() => "delta-rs",
-///     "owner_name".to_string() => "<some UUID>", // Should be unique across writers
-///     "lease_duration".to_string() => "20", // seconds
-///     "refresh_period".to_string() => "1000", // milliseconds
-///     "additional_time_to_wait_for_lock".to_string() => "1000", // milliseconds
-/// });
+///     ("table_name", "delta_rs_lock_table"),
+///     ("partition_key_value", "delta-rs"),
+///     ("owner_name", "<some UUID>"), // Should be unique across writers
+///     ("lease_duration", "20"), // seconds
+///     ("refresh_period", "1000"), // milliseconds
+///     ("additional_time_to_wait_for_lock", "1000"), // milliseconds
+/// ].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect());
 /// let backend = S3StorageBackend::new_from_options(options);
 /// ```
 pub struct S3StorageBackend {
