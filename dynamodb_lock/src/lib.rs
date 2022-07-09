@@ -1,5 +1,5 @@
 //! Distributed lock backed by Dynamodb.
-//! Adapted from https://github.com/awslabs/amazon-dynamodb-lock-client.
+//! Adapted from <https://github.com/awslabs/amazon-dynamodb-lock-client>.
 
 use std::collections::HashMap;
 use std::fmt::Debug;

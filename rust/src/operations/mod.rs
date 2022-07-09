@@ -26,7 +26,7 @@ pub mod write;
 
 type DeltaCommandResult<T> = Result<T, DeltaCommandError>;
 
-/// Enum representing an error when calling [`DeltaCommandExec`].
+/// Enum representing an error when calling [DeltaCommands.execute].
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaCommandError {
     /// Error returned when some data is expected but only an empty dataset is provided.
