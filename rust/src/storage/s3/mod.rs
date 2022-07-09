@@ -169,35 +169,35 @@ pub mod s3_storage_options {
     pub const AWS_S3_ROLE_SESSION_NAME: &str = "AWS_S3_ROLE_SESSION_NAME";
     /// The `pool_idle_timeout` option of aws http client. Has to be lower than 20 seconds, which is
     /// default S3 server timeout <https://aws.amazon.com/premiumsupport/knowledge-center/s3-socket-connection-timeout-error/>.
-    /// However, since rusoto uses hyper as a client, its default timeout is 90 seconds 
+    /// However, since rusoto uses hyper as a client, its default timeout is 90 seconds
     /// <https://docs.rs/hyper/0.13.2/hyper/client/struct.Builder.html#method.keep_alive_timeout>.
     /// Hence, the `connection closed before message completed` could occur.
     /// To avoid that, the default value of this setting is 15 seconds if it's not set otherwise.
     pub const AWS_S3_POOL_IDLE_TIMEOUT_SECONDS: &str = "AWS_S3_POOL_IDLE_TIMEOUT_SECONDS";
-    /// The `pool_idle_timeout` for the as3_storage_optionsws sts client. See 
+    /// The `pool_idle_timeout` for the as3_storage_optionsws sts client. See
     /// the reasoning in `AWS_S3_POOL_IDLE_TIMEOUT_SECONDS`.
     pub const AWS_STS_POOL_IDLE_TIMEOUT_SECONDS: &str = "AWS_STS_POOL_IDLE_TIMEOUT_SECONDS";
     /// The number of retries for S3 GET requests failed with 500 Internal Server Error.
     pub const AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES: &str =
         "AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES";
     /// The web identity token file to use when using a web identity provider.
-    /// NOTE: web identity related options are set in the environment when 
+    /// NOTE: web identity related options are set in the environment when
     /// creating an instance of [crate::storage::s3::S3StorageOptions].
     /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
     pub const AWS_WEB_IDENTITY_TOKEN_FILE: &str = "AWS_WEB_IDENTITY_TOKEN_FILE";
     /// The role name to use for web identity.
-    /// NOTE: web identity related options are set in the environment when 
+    /// NOTE: web identity related options are set in the environment when
     /// creating an instance of [crate::storage::s3::S3StorageOptions].
     /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
     pub const AWS_ROLE_ARN: &str = "AWS_ROLE_ARN";
     /// The role session name to use for web identity.
-    /// NOTE: web identity related options are set in the environment when 
+    /// NOTE: web identity related options are set in the environment when
     /// creating an instance of [crate::storage::s3::S3StorageOptions].
     /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
     pub const AWS_ROLE_SESSION_NAME: &str = "AWS_ROLE_SESSION_NAME";
 
     /// The list of option keys owned by the S3 module.
-    /// Option keys not contained in this list will be added to the `extra_opts` 
+    /// Option keys not contained in this list will be added to the `extra_opts`
     /// field of [crate::storage::s3::S3StorageOptions].
     /// `extra_opts` are passed to [dynamodb_lock::DynamoDbOptions] to configure the lock client.
     pub const S3_OPTS: &[&str] = &[
@@ -545,11 +545,11 @@ impl<'a> fmt::Display for S3Object<'a> {
 }
 
 /// An S3 implementation of the [StorageBackend] trait
-/// 
+///
 /// The backend can optionally use [dynamodb_lock] to better support concurrent
 /// writers. To do so, either pass in a [dynamodb_lock::LockClient] to [S3StorageBackend::new_with]
 /// or configure the locking client within [S3StorageOptions]. For example:
-/// 
+///
 /// ```rust
 /// let options = S3StorageOptions::from_map(hashmap! {
 ///     s3_storage_options::AWS_S3_LOCKING_PROVIDER.to_string() => "dynamodb",
@@ -584,7 +584,7 @@ impl S3StorageBackend {
     }
 
     /// Creates a new S3StorageBackend from the provided options.
-    /// 
+    ///
     /// Options are described in [s3_storage_options].
     pub fn new_from_options(options: S3StorageOptions) -> Result<Self, StorageError> {
         let client = create_s3_client(&options)?;
