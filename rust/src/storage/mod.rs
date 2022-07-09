@@ -577,10 +577,10 @@ pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, Storage
 /// Currently, S3 and Azure are the only backends that accept options.
 /// Options may be passed in the HashMap or set as environment variables.
 ///
-/// [S3StorageOptions] describes the available options for the S3 backend.
-/// [s3::dynamodb_lock::DynamoDbLockClient] describes additional options for the atomic rename client.
+/// [s3::S3StorageOptions] describes the available options for the S3 backend.
+/// [dynamodb_lock::DynamoDbLockClient] describes additional options for the atomic rename client.
 ///
-/// [AzureStorageOptions] describes the available options for the Azure backend.
+/// [azure::AzureStorageOptions] describes the available options for the Azure backend.
 pub fn get_backend_for_uri_with_options(
     uri: &str,
     #[allow(unused)] options: HashMap<String, String>,

@@ -213,7 +213,7 @@ impl AdlsGen2Backend {
     }
 
     /// Create a new [`AdlsGen2Backend`] using a [`TokenCredential`]
-    /// See [`azure_identity::token_credentials`] for various implementations
+    /// See [`azure_core::auth::TokenCredential`] for various implementations
     pub fn new_with_token_credential(
         storage_account_name: impl Into<String>,
         file_system_name: impl Into<String> + Clone,

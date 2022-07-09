@@ -43,9 +43,11 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v1
       - name: build and lint with clippy
-        run: cargo clippy --features azure,datafusion-ext,s3
+        run: cargo clippy --features azure,datafusion-ext,s3,gcs,glue
       - name: Spot-check build for rustls features
         run: cargo clippy --features s3-rustls
+      - name: Check docs
+        run: cargo docs --features azure,datafusion-ext,s3,gcs,glue
 
   test:
     strategy:
