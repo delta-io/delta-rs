@@ -1452,7 +1452,7 @@ impl<'a> DeltaTransaction<'a> {
             delta_table,
             actions: vec![],
             options: options.unwrap_or_default(),
-            txn_id: Uuid::new_v4().into(),
+            txn_id: Uuid::new_v4().to_string(),
         }
     }
 
@@ -1472,12 +1472,9 @@ impl<'a> DeltaTransaction<'a> {
     /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
     pub async fn commit(
         &mut self,
-        operation: Option<DeltaOperation>,
+        operation: DeltaOperation,
         app_metadata: Option<Map<String, Value>>,
     ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
-        // TODO make operation a required parameter
-        let op = operation.unwrap();
-
         // TODO(roeap) in the reference implementation this logic is implemented, which seems somewhat strange,
         // as it seems we will never have "WriteSerializable" as level - probably need to check the table config ...
         // https://github.com/delta-io/delta/blob/abb171c8401200e7772b27e3be6ea8682528ac72/core/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala#L964
@@ -1494,7 +1491,7 @@ impl<'a> DeltaTransaction<'a> {
 
         // readPredicates.nonEmpty || readFiles.nonEmpty
         // TODO revise logic if files are read
-        let depends_on_files = match op {
+        let depends_on_files = match operation {
             DeltaOperation::Create { .. } | DeltaOperation::StreamingUpdate { .. } => false,
             DeltaOperation::Optimize { .. } => true,
             DeltaOperation::Write {
@@ -1510,7 +1507,7 @@ impl<'a> DeltaTransaction<'a> {
             timestamp: chrono::Utc::now().timestamp(),
             read_version: Some(self.delta_table.version()),
             isolation_level: Some(isolation_level),
-            operation,
+            operation: operation.name(),
             operation_parameters: op.operation_parameters(),
             user_id: None,
             user_name: None,
@@ -1530,7 +1527,7 @@ impl<'a> DeltaTransaction<'a> {
     /// with `DeltaTable.try_commit_transaction`.
     pub async fn prepare_commit(
         &mut self,
-        operation: Option<DeltaOperation>,
+        operation: &DeltaOperation,
         app_metadata: Option<Map<String, Value>>,
     ) -> Result<PreparedCommit, DeltaTableError> {
         if !self
@@ -1547,10 +1544,8 @@ impl<'a> DeltaTransaction<'a> {
                 "clientVersion".to_string(),
                 Value::String(format!("delta-rs.{}", crate_version())),
             );
+            commit_info.append(&mut operation.get_commit_info());
 
-            if let Some(op) = &operation {
-                commit_info.append(&mut op.get_commit_info())
-            }
             if let Some(mut meta) = app_metadata {
                 commit_info.append(&mut meta)
             }

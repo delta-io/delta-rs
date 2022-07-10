@@ -995,7 +995,10 @@ impl DeltaOperation {
             serde_json::Value::String(self.name()),
         );
         if let Some(params) = self.operation_parameters() {
-            commit_info.insert("operationParameters".to_string(), params);
+            commit_info.insert(
+                "operationParameters".to_string(),
+                serde_json::Value::Object(params),
+            );
         };
         commit_info
     }
