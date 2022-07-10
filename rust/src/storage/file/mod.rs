@@ -2,18 +2,16 @@
 //!
 //! The local file storage backend is multi-writer safe.
 
+use super::{ObjectMeta, StorageBackend, StorageError};
+use chrono::DateTime;
+use futures::{stream::BoxStream, StreamExt};
+use std::collections::VecDeque;
 use std::io;
 use std::path::{Path, PathBuf};
-use std::pin::Pin;
-
-use chrono::DateTime;
-use futures::{Stream, TryStreamExt};
 use tokio::fs;
 use tokio::io::AsyncWriteExt;
-use tokio_stream::wrappers::ReadDirStream;
-
-use super::{ObjectMeta, StorageBackend, StorageError};
 use uuid::Uuid;
+use walkdir::WalkDir;
 
 mod rename;
 
@@ -87,33 +85,70 @@ impl StorageBackend for FileStorageBackend {
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
-        StorageError,
-    > {
-        let readdir = ReadDirStream::new(fs::read_dir(path).await?);
+    ) -> Result<BoxStream<'a, Result<ObjectMeta, StorageError>>, StorageError> {
+        let walkdir = WalkDir::new(path)
+            // Don't include the root directory itself
+            .min_depth(1);
 
-        Ok(Box::pin(readdir.err_into().and_then(|entry| async move {
-            let path = String::from(
-                entry
-                    .path()
-                    .to_str()
-                    .ok_or_else(|| StorageError::Generic("invalid path".to_string()))?,
-            );
-            match entry.metadata().await {
-                Ok(meta) => {
-                    Ok(ObjectMeta {
-                        path,
-                        modified: meta.modified()?.into(),
-                        size: Some(meta.len().try_into().map_err(|_| {
-                            StorageError::Generic("cannot convert to i64".to_string())
-                        })?),
-                    })
+        let s =
+            walkdir.into_iter().flat_map(move |result_dir_entry| {
+                match convert_walkdir_result(result_dir_entry) {
+                    Err(e) => Some(Err(e)),
+                    Ok(None) => None,
+                    Ok(entry @ Some(_)) => entry
+                        .filter(|dir_entry| dir_entry.file_type().is_file())
+                        .map(|entry| {
+                            let file_path =
+                                String::from(entry.path().to_str().ok_or_else(|| {
+                                    StorageError::Generic("invalid path".to_string())
+                                })?);
+                            match entry.metadata() {
+                                Ok(meta) => Ok(ObjectMeta {
+                                    path: file_path,
+                                    modified: meta.modified()?.into(),
+                                    size: Some(meta.len().try_into().map_err(|_| {
+                                        StorageError::Generic("cannot convert to i64".to_string())
+                                    })?),
+                                }),
+                                Err(err)
+                                    if err.io_error().map(|e| e.kind())
+                                        == Some(io::ErrorKind::NotFound) =>
+                                {
+                                    Err(StorageError::NotFound)
+                                }
+                                Err(err) => Err(StorageError::WalkDir { source: err }),
+                            }
+                        }),
                 }
-                Err(err) if err.kind() == io::ErrorKind::NotFound => Err(StorageError::NotFound),
-                Err(err) => Err(StorageError::Io { source: err }),
+            });
+
+        // list in batches of CHUNK_SIZE
+        const CHUNK_SIZE: usize = 1024;
+
+        let buffer = VecDeque::with_capacity(CHUNK_SIZE);
+        let stream = futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
+            if buffer.is_empty() {
+                (s, buffer) = tokio::task::spawn_blocking(move || {
+                    for _ in 0..CHUNK_SIZE {
+                        match s.next() {
+                            Some(r) => buffer.push_back(r),
+                            None => break,
+                        }
+                    }
+                    (s, buffer)
+                })
+                .await
+                .map_err(|err| StorageError::Generic(err.to_string()))?;
             }
-        })))
+
+            match buffer.pop_front() {
+                Some(Err(e)) => Err(e),
+                Some(Ok(meta)) => Ok(Some((meta, (s, buffer)))),
+                None => Ok(None),
+            }
+        });
+
+        Ok(stream.boxed())
     }
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
@@ -149,6 +184,22 @@ impl StorageBackend for FileStorageBackend {
 
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
         fs::remove_file(path).await.map_err(StorageError::from)
+    }
+}
+
+/// Convert walkdir results and converts not-found errors into `None`.
+fn convert_walkdir_result(
+    res: std::result::Result<walkdir::DirEntry, walkdir::Error>,
+) -> Result<Option<walkdir::DirEntry>, StorageError> {
+    match res {
+        Ok(entry) => Ok(Some(entry)),
+        Err(walkdir_err) => match walkdir_err.io_error() {
+            Some(io_err) => match io_err.kind() {
+                io::ErrorKind::NotFound => Ok(None),
+                _ => Err(StorageError::Generic(io_err.to_string())),
+            },
+            None => Err(StorageError::Generic(walkdir_err.to_string())),
+        },
     }
 }
 

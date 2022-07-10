@@ -1,11 +1,11 @@
 //! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
 
 use std::collections::HashMap;
+use std::fmt;
 use std::fmt::Debug;
-use std::{fmt, pin::Pin};
 
 use chrono::{DateTime, FixedOffset, Utc};
-use futures::Stream;
+use futures::stream::BoxStream;
 
 use log::debug;
 use rusoto_core::{HttpClient, HttpConfig, Region, RusotoError};
@@ -714,10 +714,7 @@ impl StorageBackend for S3StorageBackend {
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
-        StorageError,
-    > {
+    ) -> Result<BoxStream<'_, Result<ObjectMeta, StorageError>>, StorageError> {
         let uri = parse_uri(path)?.into_s3object()?;
 
         /// This enum is used to represent 3 states in our object metadata streaming logic:

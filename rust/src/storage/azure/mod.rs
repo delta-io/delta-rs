@@ -10,13 +10,13 @@ use azure_identity::{
 };
 use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
 use azure_storage_datalake::prelude::*;
-use futures::stream::{self, Stream};
+use futures::stream::{self, BoxStream};
 use futures::{future::Either, StreamExt};
 use log::debug;
 use std::collections::HashMap;
+use std::fmt;
 use std::fmt::Debug;
 use std::sync::Arc;
-use std::{fmt, pin::Pin};
 
 /// Storage option keys to use when creating [crate::storage::azure::AzureStorageOptions].
 /// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
@@ -348,10 +348,7 @@ impl StorageBackend for AdlsGen2Backend {
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
-        StorageError,
-    > {
+    ) -> Result<BoxStream<'a, Result<ObjectMeta, StorageError>>, StorageError> {
         debug!("Listing objects under {}", path);
         let obj = parse_uri(path)?.into_adlsgen2_object()?;
         self.validate_container(&obj)?;
