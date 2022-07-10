@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use deltalake::{Schema, SchemaDataType, SchemaField};
+use std::collections::HashMap;
 
 /// Basic schema
 pub fn get_xy_date_schema() -> Schema {

@@ -11,9 +11,9 @@ use std::collections::HashMap;
 
 #[cfg(feature = "azure")]
 pub mod adls;
+pub mod clock;
 #[cfg(feature = "s3")]
 pub mod s3;
-pub mod clock;
 pub mod schemas;
 
 #[derive(Default)]

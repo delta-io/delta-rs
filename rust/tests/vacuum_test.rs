@@ -8,10 +8,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use common::clock::TestClock;
-use common::TestContext;
 use common::schemas::{get_vacuum_underscore_schema, get_xy_date_schema};
+use common::TestContext;
 use std::time::SystemTime;
-
 
 mod common;
 
@@ -91,7 +90,9 @@ async fn vacuum_delta_8_0_table() {
 // Validate vacuum works on a non-partitioned table
 async fn test_non_partitioned_table() {
     let mut context = TestContext::from_env().await;
-    context.create_table_from_schema(get_xy_date_schema(), &[]).await;
+    context
+        .create_table_from_schema(get_xy_date_schema(), &[])
+        .await;
     let clock = TestClock::from_systemtime();
 
     let paths = ["delete_me.parquet", "dont_delete_me.parquet"];
@@ -342,4 +343,3 @@ async fn is_deleted(context: &mut TestContext, path: &str) -> bool {
         _ => false,
     }
 }
-
