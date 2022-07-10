@@ -25,7 +25,6 @@ mod rename;
 ///   *  xfs requires >= Linux 4.0
 ///   *  ext2, minix, reiserfs, jfs, vfat, and bpf requires >= Linux 4.9
 /// * Darwin is supported but not fully tested.
-/// * Windows is not supported because we are not using native atomic file rename system call.
 /// Patches welcome.
 /// * Support for other platforms are not implemented at the moment.
 #[derive(Default, Debug)]
