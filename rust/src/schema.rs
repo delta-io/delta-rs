@@ -62,6 +62,55 @@ impl SchemaTypeStruct {
             name, valid_fields
         )))
     }
+
+    /// Get all invariants in the schemas
+    pub fn get_invariants(&self) -> Result<Vec<String>, crate::DeltaTableError> {
+        let mut remaining_fields: Vec<SchemaField> = self.get_fields().clone();
+        let mut invariants: Vec<String> = Vec::new();
+
+        while let Some(field) = remaining_fields.pop() {
+            match field.r#type {
+                SchemaDataType::r#struct(inner) => {
+                    remaining_fields.extend(inner.get_fields().clone());
+                }
+                SchemaDataType::array(inner) => {
+                    remaining_fields.push(SchemaField::new(
+                        "dummy".to_string(),
+                        *inner.elementType,
+                        false,
+                        HashMap::new(),
+                    ));
+                }
+                SchemaDataType::map(inner) => {
+                    remaining_fields.push(SchemaField::new(
+                        "dummy".to_string(),
+                        *inner.keyType,
+                        false,
+                        HashMap::new(),
+                    ));
+                    remaining_fields.push(SchemaField::new(
+                        "dummy".to_string(),
+                        *inner.valueType,
+                        false,
+                        HashMap::new(),
+                    ));
+                }
+                _ => {}
+            }
+            // JSON format: {"expression": {"expression": "<SQL STRING>"} }
+            if let Some(Value::String(invariant_json)) = field.metadata.get("delta.invariants") {
+                let json: Value = serde_json::from_str(invariant_json)?;
+                if let Value::Object(json) = json {
+                    if let Some(Value::Object(expr1)) = json.get("expression") {
+                        if let Some(Value::String(sql)) = expr1.get("expression") {
+                            invariants.push(sql.clone());
+                        }
+                    }
+                }
+            }
+        }
+        Ok(invariants)
+    }
 }
 
 /// Describes a specific field of the Delta table schema.
@@ -219,3 +268,69 @@ pub enum SchemaDataType {
 
 /// Represents the schema of the delta table.
 pub type Schema = SchemaTypeStruct;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_get_invariants() {
+        let schema: Schema = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [{"name": "x", "type": "string", "nullable": true, "metadata": {}}]
+        }))
+        .unwrap();
+        let invariants = schema.get_invariants().unwrap();
+        assert_eq!(invariants.len(), 0);
+
+        let schema: Schema = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [
+                {"name": "x", "type": "integer", "nullable": true, "metadata": {
+                    "delta.invariants": "{\"expression\": { \"expression\": \"x > 2\"} }"
+                }},
+                {"name": "y", "type": "integer", "nullable": true, "metadata": {
+                    "delta.invariants": "{\"expression\": { \"expression\": \"y < 4\"} }"
+                }}
+            ]
+        }))
+        .unwrap();
+        let invariants = schema.get_invariants().unwrap();
+        assert_eq!(invariants.len(), 2);
+        assert!(invariants.contains(&"x > 2".to_string()));
+        assert!(invariants.contains(&"y < 4".to_string()));
+
+        let schema: Schema = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [{
+                "name": "a_map",
+                "type": {
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": {
+                        "type": "array",
+                        "elementType": {
+                            "type": "struct",
+                            "fields": [{
+                                "name": "d",
+                                "type": "integer",
+                                "metadata": {
+                                    "delta.invariants": "{\"expression\": { \"expression\": \"a_map.value.element.d < 4\"} }"
+                                },
+                                "nullable": false
+                            }]
+                        },
+                        "containsNull": false
+                    },
+                    "valueContainsNull": false
+                },
+                "nullable": false,
+                "metadata": {}
+            }]
+        })).unwrap();
+        let invariants = schema.get_invariants().unwrap();
+        assert_eq!(invariants.len(), 1);
+        assert_eq!(invariants[0], "a_map.value.element.d < 4");
+    }
+}
