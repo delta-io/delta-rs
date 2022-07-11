@@ -362,12 +362,21 @@ impl StorageBackend for AdlsGen2Backend {
             .directory(obj.path)
             .into_stream()
             .flat_map(|it| match it {
-                Ok(paths) => Either::Left(stream::iter(paths.into_iter().map(|p| {
-                    Ok(ObjectMeta {
-                        path: format!("adls2://{}/{}", self.file_system_name, path.to_owned()),
-                        modified: p.last_modified,
-                        size: Some(p.content_length),
-                    })
+                Ok(paths) => Either::Left(stream::iter(paths.into_iter().filter_map(|p| {
+                    if p.is_directory {
+                        None
+                    } else {
+                        Some(Ok(ObjectMeta {
+                            path: format!(
+                                "adls2://{}/{}/{}",
+                                obj.account_name.to_owned(),
+                                self.file_system_name,
+                                p.name
+                            ),
+                            modified: p.last_modified,
+                            size: Some(p.content_length),
+                        }))
+                    }
                 }))),
                 Err(err) => Either::Right(stream::once(async {
                     Err(StorageError::Azure { source: err })
