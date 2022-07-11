@@ -362,7 +362,7 @@ impl StorageBackend for AdlsGen2Backend {
             .directory(obj.path)
             .into_stream()
             .flat_map(|it| match it {
-                Ok(paths) => Either::Left(stream::iter(paths.into_iter().flat_map(|p| {
+                Ok(paths) => Either::Left(stream::iter(paths.into_iter().filter_map(|p| {
                     if p.is_directory {
                         None
                     } else {
