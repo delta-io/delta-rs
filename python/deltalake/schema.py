@@ -1,126 +1,19 @@
 import json
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from struct import Struct
+from typing import Any, Dict, List, Optional, Union
 
 import pyarrow
+
+from .deltalake import ArrayType, MapType, StructType, PrimitiveType
 
 # TODO: implement this module in Rust land to avoid JSON serialization
 # https://github.com/delta-io/delta-rs/issues/95
 
 
-@dataclass
-class DataType:
-    """
-    Base class of all Delta data types.
-    """
-
-    type: str
-
-    def __str__(self) -> str:
-        return f"DataType({self.type})"
-
-    @classmethod
-    def from_dict(cls, json_dict: Dict[str, Any]) -> "DataType":
-        """
-        Generate a DataType from a DataType in json format.
-
-        :param json_dict: the data type in json format
-        :return: the Delta DataType
-        """
-        type_class = json_dict["type"]
-        if type_class == "map":
-            key_type_dict = {"type": json_dict["keyType"]}
-            value_type_dict = {"type": json_dict["valueType"]}
-            value_contains_null = json_dict["valueContainsNull"]
-            key_type = cls.from_dict(json_dict=key_type_dict)
-            value_type = cls.from_dict(json_dict=value_type_dict)
-            return MapType(
-                key_type=key_type,
-                value_type=value_type,
-                value_contains_null=value_contains_null,
-            )
-        if type_class == "array":
-            field = json_dict["elementType"]
-            if isinstance(field, str):
-                element_type = cls(field)
-            else:
-                element_type = cls.from_dict(json_dict=field)
-            return ArrayType(
-                element_type=element_type,
-                contains_null=json_dict["containsNull"],
-            )
-        if type_class == "struct":
-            fields = []
-            for json_field in json_dict["fields"]:
-                if isinstance(json_field["type"], str):
-                    data_type = cls(json_field["type"])
-                else:
-                    data_type = cls.from_dict(json_field["type"])
-                field = Field(
-                    name=json_field["name"],
-                    type=data_type,
-                    nullable=json_field["nullable"],
-                    metadata=json_field.get("metadata"),
-                )
-                fields.append(field)
-            return StructType(fields=fields)
-
-        return DataType(type_class)
-
-
-@dataclass(init=False)
-class MapType(DataType):
-    """Concrete class for map data types."""
-
-    key_type: DataType
-    value_type: DataType
-    value_contains_null: bool
-    type: str
-
-    def __init__(
-        self, key_type: "DataType", value_type: "DataType", value_contains_null: bool
-    ):
-        super().__init__("map")
-        self.key_type = key_type
-        self.value_type = value_type
-        self.value_contains_null = value_contains_null
-
-    def __str__(self) -> str:
-        return f"DataType(map<{self.key_type}, {self.value_type}, {self.value_contains_null}>)"
-
-
-@dataclass(init=False)
-class ArrayType(DataType):
-    """Concrete class for array data types."""
-
-    element_type: DataType
-    contains_null: bool
-    type: str
-
-    def __init__(self, element_type: DataType, contains_null: bool):
-        super().__init__("array")
-        self.element_type = element_type
-        self.contains_null = contains_null
-
-    def __str__(self) -> str:
-        return f"DataType(array<{self.element_type}> {self.contains_null})"
-
-
-@dataclass(init=False)
-class StructType(DataType):
-    """Concrete class for struct data types."""
-
-    fields: List["Field"]
-    type: str
-
-    def __init__(self, fields: List["Field"]):
-        super().__init__("struct")
-        self.fields = fields
-
-    def __str__(self) -> str:
-        field_strs = [str(f) for f in self.fields]
-        return f"DataType(struct<{', '.join(field_strs)}>)"
-
+# Can't implement inheritance (see note in src/schema.rs), so this is next
+# best thing.
+DataType = Union[PrimitiveType, MapType, StructType, ArrayType]
 
 @dataclass
 class Field:
