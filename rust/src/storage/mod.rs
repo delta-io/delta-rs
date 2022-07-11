@@ -1,15 +1,14 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
-use hyper::http::uri::InvalidUri;
-use std::fmt::Debug;
-use std::pin::Pin;
-
 #[cfg(feature = "azure")]
 use azure_core::error::{Error as AzureError, ErrorKind as AzureErrorKind};
 use chrono::{DateTime, Utc};
-use futures::Stream;
+use futures::stream::BoxStream;
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+use hyper::http::uri::InvalidUri;
 use std::collections::HashMap;
+use std::fmt::Debug;
+use walkdir::Error as WalkDirError;
 
 #[cfg(feature = "azure")]
 pub mod azure;
@@ -278,6 +277,14 @@ pub enum StorageError {
         /// The raw error returned when trying to read the local file.
         source: std::io::Error,
     },
+
+    #[error("Failed to walk directory: {source}")]
+    /// Error raised when failing to traverse a directory
+    WalkDir {
+        /// The raw error returned when trying to read the local file.
+        #[from]
+        source: WalkDirError,
+    },
     /// The file system represented by the scheme is not known.
     #[error("File system not supported")]
     FileSystemNotSupported,
@@ -519,10 +526,7 @@ pub trait StorageBackend: Send + Sync + Debug {
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
-        StorageError,
-    >;
+    ) -> Result<BoxStream<'a, Result<ObjectMeta, StorageError>>, StorageError>;
 
     /// Create new object with `obj_bytes` as content.
     ///
@@ -577,10 +581,10 @@ pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, Storage
 /// Currently, S3 and Azure are the only backends that accept options.
 /// Options may be passed in the HashMap or set as environment variables.
 ///
-/// [S3StorageOptions] describes the available options for the S3 backend.
-/// [s3::dynamodb_lock::DynamoDbLockClient] describes additional options for the atomic rename client.
+/// [s3::S3StorageOptions] describes the available options for the S3 backend.
+/// [dynamodb_lock::DynamoDbLockClient] describes additional options for the atomic rename client.
 ///
-/// [AzureStorageOptions] describes the available options for the Azure backend.
+/// [azure::AzureStorageOptions] describes the available options for the Azure backend.
 pub fn get_backend_for_uri_with_options(
     uri: &str,
     #[allow(unused)] options: HashMap<String, String>,

@@ -37,10 +37,12 @@
 //!
 //! # Optional cargo package features
 //!
-//! - `s3` - enable the S3 storage backend to work with Delta Tables in AWS S3.
+//! - `s3`, `gcs`, `azure` - enable the storage backends for AWS S3, Google Cloud Storage (GCS),
+//!   or Azure Data Lake Storage Gen2 (ADLS2). Use `s3-rustls` to use Rust TLS instead of native
+//!   TLS implementation.
 //! - `glue` - enable the Glue data catalog to work with Delta Tables with AWS Glue.
-//! - `azure` - enable the Azure storage backend to work with Delta Tables in Azure Data Lake Storage Gen2 accounts.
-//! - `datafusion-ext` - enable the `datafusion::datasource::TableProvider` trait implementation for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow-datafusion).
+//! - `datafusion-ext` - enable the `datafusion::datasource::TableProvider` trait implementation
+//!   for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow-datafusion).
 //!
 //! # Querying Delta Tables with Datafusion
 //!
