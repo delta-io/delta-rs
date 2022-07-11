@@ -89,63 +89,65 @@ impl StorageBackend for FileStorageBackend {
             // Don't include the root directory itself
             .min_depth(1);
 
-        let s =
-            walkdir.into_iter().flat_map(move |result_dir_entry| {
-                match convert_walkdir_result(result_dir_entry) {
-                    Err(e) => Some(Err(e)),
-                    Ok(None) => None,
-                    Ok(entry @ Some(_)) => entry
-                        .filter(|dir_entry| dir_entry.file_type().is_file())
-                        .map(|entry| {
-                            let file_path =
-                                String::from(entry.path().to_str().ok_or_else(|| {
-                                    StorageError::Generic("invalid path".to_string())
-                                })?);
-                            match entry.metadata() {
-                                Ok(meta) => Ok(ObjectMeta {
-                                    path: file_path,
-                                    modified: meta.modified()?.into(),
-                                    size: Some(meta.len().try_into().map_err(|_| {
-                                        StorageError::Generic("cannot convert to i64".to_string())
-                                    })?),
-                                }),
-                                Err(err)
-                                    if err.io_error().map(|e| e.kind())
-                                        == Some(io::ErrorKind::NotFound) =>
-                                {
-                                    Err(StorageError::NotFound)
-                                }
-                                Err(err) => Err(StorageError::WalkDir { source: err }),
+        let meta_iter = walkdir.into_iter().filter_map(move |result_dir_entry| {
+            match convert_walkdir_result(result_dir_entry) {
+                Err(e) => Some(Err(e)),
+                Ok(None) => None,
+                Ok(entry @ Some(_)) => entry
+                    .filter(|dir_entry| dir_entry.file_type().is_file())
+                    .map(|entry| {
+                        let file_path =
+                            String::from(entry.path().to_str().ok_or_else(|| {
+                                StorageError::Generic("invalid path".to_string())
+                            })?);
+                        match entry.metadata() {
+                            Ok(meta) => Ok(ObjectMeta {
+                                path: file_path,
+                                modified: meta.modified()?.into(),
+                                size: Some(meta.len().try_into().map_err(|_| {
+                                    StorageError::Generic("cannot convert to i64".to_string())
+                                })?),
+                            }),
+                            Err(err)
+                                if err.io_error().map(|e| e.kind())
+                                    == Some(io::ErrorKind::NotFound) =>
+                            {
+                                Err(StorageError::NotFound)
                             }
-                        }),
-                }
-            });
+                            Err(err) => Err(StorageError::WalkDir { source: err }),
+                        }
+                    }),
+            }
+        });
 
         // list in batches of CHUNK_SIZE
         const CHUNK_SIZE: usize = 1024;
 
         let buffer = VecDeque::with_capacity(CHUNK_SIZE);
-        let stream = futures::stream::try_unfold((s, buffer), |(mut s, mut buffer)| async move {
-            if buffer.is_empty() {
-                (s, buffer) = tokio::task::spawn_blocking(move || {
-                    for _ in 0..CHUNK_SIZE {
-                        match s.next() {
-                            Some(r) => buffer.push_back(r),
-                            None => break,
+        let stream = futures::stream::try_unfold(
+            (meta_iter, buffer),
+            |(mut meta_iter, mut buffer)| async move {
+                if buffer.is_empty() {
+                    (meta_iter, buffer) = tokio::task::spawn_blocking(move || {
+                        for _ in 0..CHUNK_SIZE {
+                            match meta_iter.next() {
+                                Some(r) => buffer.push_back(r),
+                                None => break,
+                            }
                         }
-                    }
-                    (s, buffer)
-                })
-                .await
-                .map_err(|err| StorageError::Generic(err.to_string()))?;
-            }
+                        (meta_iter, buffer)
+                    })
+                    .await
+                    .map_err(|err| StorageError::Generic(err.to_string()))?;
+                }
 
-            match buffer.pop_front() {
-                Some(Err(e)) => Err(e),
-                Some(Ok(meta)) => Ok(Some((meta, (s, buffer)))),
-                None => Ok(None),
-            }
-        });
+                match buffer.pop_front() {
+                    Some(Err(e)) => Err(e),
+                    Some(Ok(meta)) => Ok(Some((meta, (meta_iter, buffer)))),
+                    None => Ok(None),
+                }
+            },
+        );
 
         Ok(stream.boxed())
     }
