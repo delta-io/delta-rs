@@ -1,6 +1,8 @@
-#![deny(warnings)]
+// #![deny(warnings)]
 
 extern crate pyo3;
+
+pub mod schema;
 
 use chrono::{DateTime, FixedOffset, Utc};
 use deltalake::action;
@@ -616,5 +618,11 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<DeltaStorageFsBackend>()?;
     m.add("PyDeltaTableError", py.get_type::<PyDeltaTableError>())?;
+    // There are issues with submodules, so we will expose them flat for now
+    // See also: https://github.com/PyO3/pyo3/issues/759
+    m.add_class::<schema::PrimitiveType>()?;
+    m.add_class::<schema::ArrayType>()?;
+    m.add_class::<schema::MapType>()?;
+    m.add_class::<schema::StructType>()?;
     Ok(())
 }
