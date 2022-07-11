@@ -14,9 +14,8 @@ pub(crate) use client::GCSStorageBackend;
 pub(crate) use error::GCSClientError;
 pub(crate) use object::GCSObject;
 
-use futures::Stream;
+use futures::stream::BoxStream;
 use std::convert::TryInto;
-use std::pin::Pin;
 
 use log::debug;
 
@@ -70,10 +69,7 @@ impl StorageBackend for GCSStorageBackend {
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
-        StorageError,
-    > {
+    ) -> Result<BoxStream<'a, Result<ObjectMeta, StorageError>>, StorageError> {
         let prefix = parse_uri(path)?.into_gcs_object()?;
         let obj_meta_stream = async_stream::stream! {
             for await meta in self.list(prefix) {
