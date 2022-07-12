@@ -4,7 +4,6 @@ use deltalake::storage::StorageError;
 use deltalake::vacuum::Clock;
 use deltalake::vacuum::Vacuum;
 use deltalake::StorageBackend;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use common::clock::TestClock;
@@ -282,7 +281,7 @@ async fn test_non_managed_files() {
     };
 
     assert_eq!(res.files_deleted.len(), 0);
-    for path in paths_delete.iter().chain(paths_ignore.iter()){
+    for path in paths_delete.iter().chain(paths_ignore.iter()) {
         assert!(!is_deleted(&mut context, path).await);
     }
 

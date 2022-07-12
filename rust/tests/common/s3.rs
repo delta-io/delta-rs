@@ -6,6 +6,7 @@ use std::env;
 use std::process::Command;
 
 /// Create a bucket and dynamodb lock table for s3 backend tests
+/// Requires local stack running in the background
 pub async fn setup_s3_context() -> TestContext {
     // Create a new prefix per test run.
     let rand: u16 = rand::thread_rng().gen();

@@ -1,6 +1,5 @@
 use deltalake::Schema;
 use serde_json::json;
-use std::collections::HashMap;
 
 /// Basic schema
 pub fn get_xy_date_schema() -> Schema {
