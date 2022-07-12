@@ -5,23 +5,7 @@ use std::collections::HashMap;
 use std::env;
 use std::process::Command;
 
-/// TODO: Currently this requires local stack to be setup prior to test execution.
-/// If we want to have this automated these are the key requirements:
-///     Multiple tests using the backend can run at the same time
-///     The start time for local stack is expensive so it should only setup once per execution not per test run
-///     When all tests have finished executing, local stack must terminate
-///  
-/// A possible solution is to have global variable to indicate if it was setup is complete.
-/// First obtain a read lock and check if local stack was setup. If it was not
-/// setup, then release the read lock and obtain a write lock. When the write
-/// lock is obtained, check the global variable again and return early if it was
-/// set. Otherwise, Spawn a new process which will setup local stack and then
-/// notify the parent of completion. The parent can then set the global variable
-/// and release the lock. The child will then wait until the parent process
-/// terminates then will clean up local stack.
-///
-/// Problems: This solution might have some issues on Windows and Mac
-///
+/// Create a bucket and dynamodb lock table for s3 backend tests
 pub async fn setup_s3_context() -> TestContext {
     // Create a new prefix per test run.
     let rand: u16 = rand::thread_rng().gen();
