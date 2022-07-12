@@ -179,53 +179,6 @@ async fn test_partitioned_table() {
 }
 
 #[tokio::test]
-// Validate that files and directories that start with '.' or '_' are ignored
-async fn test_ignored_files() {
-    let mut context = TestContext::from_env().await;
-    context
-        .create_table_from_schema(get_xy_date_schema(), &["date"])
-        .await;
-    let clock = TestClock::from_systemtime();
-
-    let paths = [
-        ".dotfile",
-        "_underscore",
-        "nested/.dotfile",
-        "nested2/really/deep/_underscore",
-        // Directories
-        "_underscoredir/dont_delete_me",
-        "_dotdir/dont_delete_me",
-        "nested3/_underscoredir/dont_delete_me",
-        "nested4/really/deep/.dotdir/dont_delete_me",
-    ];
-
-    for path in paths {
-        context
-            .add_file(
-                path,
-                "random junk".as_ref(),
-                &[],
-                clock.current_timestamp_millis(),
-                false,
-            )
-            .await;
-    }
-
-    let res = {
-        clock.tick(Duration::days(8));
-        let table = context.table.as_mut().unwrap();
-        let mut plan = Vacuum::default();
-        plan.clock = Some(Arc::new(clock.clone()));
-        plan.execute(table).await.unwrap()
-    };
-
-    assert_eq!(res.files_deleted.len(), 0);
-    for path in paths {
-        assert!(!is_deleted(&mut context, path).await);
-    }
-}
-
-#[tokio::test]
 //Partitions that start with _ are not ignored
 async fn test_partitions_included() {
     let mut context = TestContext::from_env().await;
@@ -276,8 +229,11 @@ async fn test_partitions_included() {
     assert!(!is_deleted(&mut context, "_date=2022-07-03/dont_delete_me.parquet").await);
 }
 
+#[ignore]
 #[tokio::test]
-// files that are not managed by the delta log and have a last_modified greater than the retention period should be deleted
+// files that are not managed by the delta log and have a last_modified greater
+// than the retention period should be deleted. Unmanaged files and directories
+// that start with _ or . are ignored
 async fn test_non_managed_files() {
     let mut context = TestContext::from_env().await;
     context
@@ -285,13 +241,25 @@ async fn test_non_managed_files() {
         .await;
     let clock = TestClock::from_systemtime();
 
-    let paths = [
+    let paths_delete = vec![
         "garbage_file",
         "nested/garbage_file",
         "nested2/really/deep/garbage_file",
     ];
 
-    for path in paths {
+    let paths_ignore = vec![
+        ".dotfile",
+        "_underscore",
+        "nested/.dotfile",
+        "nested2/really/deep/_underscore",
+        // Directories
+        "_underscoredir/dont_delete_me",
+        "_dotdir/dont_delete_me",
+        "nested3/_underscoredir/dont_delete_me",
+        "nested4/really/deep/.dotdir/dont_delete_me",
+    ];
+
+    for path in paths_delete.iter().chain(paths_ignore.iter()) {
         context
             .add_file(
                 path,
@@ -314,7 +282,7 @@ async fn test_non_managed_files() {
     };
 
     assert_eq!(res.files_deleted.len(), 0);
-    for path in paths {
+    for path in paths_delete.iter().chain(paths_ignore.iter()){
         assert!(!is_deleted(&mut context, path).await);
     }
 
@@ -327,9 +295,13 @@ async fn test_non_managed_files() {
         plan.execute(table).await.unwrap()
     };
 
-    assert_eq!(res.files_deleted.len(), paths.len());
-    for path in paths {
+    assert_eq!(res.files_deleted.len(), paths_delete.len());
+    for path in paths_delete {
         assert!(is_deleted(&mut context, path).await);
+    }
+
+    for path in paths_ignore {
+        assert!(!is_deleted(&mut context, path).await);
     }
 }
 
