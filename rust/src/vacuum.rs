@@ -12,6 +12,9 @@
 //! When you run vacuum then you cannot use time travel to a version older than
 //! the specified retention period.
 //!
+//! Warning: Vacuum does not support partitioned tables on Windows. This is due
+//! to Windows not using unix style paths. See #682
+//!
 //! # Example
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;

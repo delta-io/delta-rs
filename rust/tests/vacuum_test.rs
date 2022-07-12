@@ -127,6 +127,8 @@ async fn test_non_partitioned_table() {
     assert!(!is_deleted(&mut context, "dont_delete_me.parquet").await);
 }
 
+// TODO: See #682. Issues with deleting since windows uses \ for paths
+#[cfg(not(target_os = "windows"))]
 #[tokio::test]
 // Validate vacuum works on a table with multiple partitions
 async fn test_partitioned_table() {
@@ -177,8 +179,10 @@ async fn test_partitioned_table() {
     assert!(!is_deleted(&mut context, "date=2022-07-03/x=2/dont_delete_me.parquet").await);
 }
 
+// TODO: See #682. Issues with deleting since windows uses \ for paths
+#[cfg(not(target_os = "windows"))]
 #[tokio::test]
-//Partitions that start with _ are not ignored
+// Partitions that start with _ are not ignored
 async fn test_partitions_included() {
     let mut context = TestContext::from_env().await;
     context
