@@ -12,6 +12,9 @@
 //! When you run vacuum then you cannot use time travel to a version older than
 //! the specified retention period.
 //!
+//! Warning: Vacuum does not support partitioned tables on Windows. This is due
+//! to Windows not using unix style paths. See #682
+//!
 //! # Example
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;
@@ -24,6 +27,7 @@ use chrono::{Duration, Utc};
 use futures::StreamExt;
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 #[derive(Debug)]
 /// Vacuum a Delta table with the given options
@@ -35,6 +39,8 @@ pub struct Vacuum {
     pub enforce_retention_duration: bool,
     /// Don't delete the files. Just determine which files can be deleted
     pub dry_run: bool,
+    /// Override the source of time
+    pub clock: Option<Arc<dyn Clock>>,
 }
 
 impl Default for Vacuum {
@@ -43,6 +49,7 @@ impl Default for Vacuum {
             retention_period: None,
             enforce_retention_duration: true,
             dry_run: false,
+            clock: None,
         }
     }
 }
@@ -163,7 +170,11 @@ pub async fn create_vacuum_plan(
         });
     }
 
-    let now_millis = Utc::now().timestamp_millis();
+    let now_millis = match params.clock {
+        Some(clock) => clock.current_timestamp_millis(),
+        None => Utc::now().timestamp_millis(),
+    };
+
     let expired_tombstones = get_stale_files(table, retention_period, now_millis)?;
     let valid_files = table.get_file_set();
 
@@ -224,4 +235,10 @@ impl Vacuum {
 
         return plan.execute(table).await;
     }
+}
+
+/// A source of time
+pub trait Clock: Debug {
+    /// get the current time in milliseconds since epoch
+    fn current_timestamp_millis(&self) -> i64;
 }
