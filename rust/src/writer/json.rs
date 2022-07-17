@@ -30,7 +30,7 @@ type BadValue = (Value, ParquetError);
 
 /// Writes messages to a delta lake table.
 pub struct JsonWriter {
-    storage: Box<dyn StorageBackend>,
+    storage: Arc<dyn StorageBackend>,
     table_uri: String,
     arrow_schema_ref: Arc<arrow::datatypes::Schema>,
     writer_properties: WriterProperties,

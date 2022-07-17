@@ -211,7 +211,7 @@ impl MergePlan {
             debug!("{:?}", _partition_path);
 
             for bin in bins {
-                let mut writer = RecordBatchWriter::for_table(table, HashMap::new())?;
+                let mut writer = RecordBatchWriter::for_table(table)?;
 
                 for path in &bin.files {
                     //Read the file into memory and append it to the writer.

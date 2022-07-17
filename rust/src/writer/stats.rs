@@ -435,7 +435,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut writer = RecordBatchWriter::for_table(&table, HashMap::new()).unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let arrow_schema = writer.arrow_schema();
         let batch = record_batch_from_message(arrow_schema, JSON_ROWS.clone().as_ref()).unwrap();

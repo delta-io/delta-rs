@@ -3,6 +3,7 @@
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 //
 
+use crate::action::{Add, Stats};
 use arrow::error::ArrowError;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
 use futures::StreamExt;
@@ -16,10 +17,9 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
 use std::io::{BufRead, BufReader, Cursor};
+use std::sync::Arc;
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 use uuid::Uuid;
-
-use crate::action::{Add, Stats};
 
 use super::action;
 use super::action::{Action, DeltaOperation};
@@ -459,7 +459,7 @@ pub struct DeltaTableLoadOptions {
     /// table root uri
     pub table_uri: String,
     /// backend to access storage system
-    pub storage_backend: Option<Box<dyn StorageBackend>>,
+    pub storage_backend: Option<Arc<dyn StorageBackend>>,
     /// specify the version we are going to load: a time stamp, a version, or just the newest
     /// available version
     pub version: DeltaVersion,
@@ -537,7 +537,7 @@ impl DeltaTableBuilder {
     }
 
     /// Set the storage backend. If a backend is not provided then it is derived from `table_uri` when `load` is called.
-    pub fn with_storage_backend(mut self, storage: Box<dyn StorageBackend>) -> Self {
+    pub fn with_storage_backend(mut self, storage: Arc<dyn StorageBackend>) -> Self {
         self.options.storage_backend = Some(storage);
         self
     }
@@ -587,7 +587,7 @@ pub struct DeltaTable {
     pub config: DeltaTableConfig,
     // metadata
     // application_transactions
-    pub(crate) storage: Box<dyn StorageBackend>,
+    pub(crate) storage: Arc<dyn StorageBackend>,
 
     last_check_point: Option<CheckPoint>,
     log_uri: String,
@@ -595,6 +595,10 @@ pub struct DeltaTable {
 }
 
 impl DeltaTable {
+    /// Get a shared reference to the underlying storage backend
+    pub fn get_object_store(&self) -> Arc<dyn StorageBackend> {
+        self.storage.clone()
+    }
     /// Return the uri of commit version.
     pub fn commit_uri_from_version(&self, version: DeltaDataTypeVersion) -> String {
         let version = format!("{:020}.json", version);
@@ -1257,7 +1261,7 @@ impl DeltaTable {
     /// call one of the `open_table` helper methods instead.
     pub fn new(
         table_uri: &str,
-        storage_backend: Box<dyn StorageBackend>,
+        storage_backend: Arc<dyn StorageBackend>,
         config: DeltaTableConfig,
     ) -> Result<Self, DeltaTableError> {
         let table_uri = storage_backend.trim_path(table_uri);
@@ -1724,7 +1728,7 @@ mod tests {
         let table_dir = tmp_dir.path().join("test_create");
 
         let path = table_dir.to_str().unwrap();
-        let backend = Box::new(storage::file::FileStorageBackend::new(
+        let backend = Arc::new(storage::file::FileStorageBackend::new(
             tmp_dir.path().to_str().unwrap(),
         ));
         let mut dt = DeltaTable::new(path, backend, DeltaTableConfig::default()).unwrap();
