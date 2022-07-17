@@ -81,7 +81,7 @@ walkdir = "2"
 # rust-dataframe = {version = "0.*", optional = true }
 
 [dependencies.datafusion]
-version = "9"
+version = "10"
 optional = true
 
 [features]
