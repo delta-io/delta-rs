@@ -206,12 +206,7 @@ impl JsonWriter {
     }
 
     /// Creates a JsonWriter to write to the given table
-    pub fn for_table(
-        table: &DeltaTable,
-        storage_options: HashMap<String, String>,
-    ) -> Result<JsonWriter, DeltaWriterError> {
-        let storage = get_backend_for_uri_with_options(&table.table_uri, storage_options)?;
-
+    pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaWriterError> {
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.get_metadata()?;
         let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
@@ -225,7 +220,7 @@ impl JsonWriter {
             .build();
 
         Ok(Self {
-            storage,
+            storage: table.storage.clone(),
             table_uri: table.table_uri.clone(),
             arrow_schema_ref,
             writer_properties,
