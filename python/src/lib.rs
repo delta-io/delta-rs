@@ -24,6 +24,7 @@ use pyo3::types::{PyBytes, PyTuple, PyType};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -474,7 +475,7 @@ fn filestats_to_expression<'py>(
 
 #[pyclass]
 pub struct DeltaStorageFsBackend {
-    _storage: Box<dyn StorageBackend>,
+    _storage: Arc<dyn StorageBackend>,
 }
 
 #[pymethods]
