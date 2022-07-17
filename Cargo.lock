@@ -87,7 +87,7 @@ dependencies = [
  "comfy-table",
  "csv",
  "flatbuffers",
- "half",
+ "half 1.8.2",
  "hex",
  "indexmap",
  "lazy_static",
@@ -96,6 +96,30 @@ dependencies = [
  "num",
  "pyo3",
  "rand 0.8.5",
+ "regex",
+ "serde",
+ "serde_derive",
+ "serde_json",
+]
+
+[[package]]
+name = "arrow"
+version = "18.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a5f89d2bc04fa746ee395d20c4cbfa508e4cce5c00bae816f0fae434fcfb9853"
+dependencies = [
+ "ahash",
+ "bitflags",
+ "chrono",
+ "flatbuffers",
+ "half 2.0.0",
+ "hashbrown",
+ "hex",
+ "indexmap",
+ "lazy_static",
+ "lexical-core",
+ "multiversion",
+ "num",
  "regex",
  "serde",
  "serde_derive",
@@ -592,7 +616,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "9f912a89e5ad2f716fcbbad090b1b1bc4b57c07604de1da60925a6652a4b8219"
 dependencies = [
  "ahash",
- "arrow",
+ "arrow 15.0.0",
  "async-trait",
  "chrono",
  "datafusion-common",
@@ -611,7 +635,7 @@ dependencies = [
  "num_cpus",
  "ordered-float 3.0.0",
  "parking_lot 0.12.1",
- "parquet",
+ "parquet 15.0.0",
  "paste",
  "pin-project-lite",
  "rand 0.8.5",
@@ -630,9 +654,9 @@ version = "9.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ec26c175360423abaa97cf45f41c367d07d40f5b631f7772aba4948e1af19e5a"
 dependencies = [
- "arrow",
+ "arrow 15.0.0",
  "ordered-float 3.0.0",
- "parquet",
+ "parquet 15.0.0",
  "sqlparser",
 ]
 
@@ -657,7 +681,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "1c4967ba29f27354745154be8d5a03c5236333666b45f3c09e91283021dbb3cf"
 dependencies = [
  "ahash",
- "arrow",
+ "arrow 15.0.0",
  "datafusion-common",
  "sqlparser",
 ]
@@ -668,7 +692,7 @@ version = "9.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f5630b25a6473a58fb096fbbc0b1bf6d28b0b256e5c3d9142a07de270bd3e27b"
 dependencies = [
- "arrow",
+ "arrow 15.0.0",
  "async-trait",
  "chrono",
  "datafusion-common",
@@ -685,7 +709,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ca0ed9091539791f406b3928e7802fe65163e4e78dd15d08ad7d67f19c6c6c7d"
 dependencies = [
  "ahash",
- "arrow",
+ "arrow 15.0.0",
  "blake2",
  "blake3",
  "chrono",
@@ -709,7 +733,7 @@ version = "9.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ad857586d0ffd7fbb12b7c9031dcf8801fdbe450b42bf049ef29bb7474c0d4ae"
 dependencies = [
- "arrow",
+ "arrow 15.0.0",
  "datafusion-common",
  "paste",
  "rand 0.8.5",
@@ -722,7 +746,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f7817f26fbfb3db3310905a83643a99b7518e7f672d1801247d653349268db7b"
 dependencies = [
  "ahash",
- "arrow",
+ "arrow 15.0.0",
  "datafusion-common",
  "datafusion-expr",
  "hashbrown",
@@ -735,7 +759,7 @@ name = "deltalake"
 version = "0.4.1"
 dependencies = [
  "anyhow",
- "arrow",
+ "arrow 15.0.0",
  "async-stream",
  "async-trait",
  "azure_core",
@@ -760,7 +784,7 @@ dependencies = [
  "maplit",
  "num-bigint",
  "num-traits",
- "parquet",
+ "parquet 18.0.0",
  "parquet-format",
  "percent-encoding",
  "pretty_assertions",
@@ -1201,6 +1225,12 @@ name = "half"
 version = "1.8.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "eabb4a44450da02c90444cf74558da904edde8fb4e9035a9a6a4e15445af0bd7"
+
+[[package]]
+name = "half"
+version = "2.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c207b0ee023c7fce79daf01828163aaf53a1ddd0be8b1ef9541da7d41f6fa63a"
 
 [[package]]
 name = "hashbrown"
@@ -2026,7 +2056,30 @@ version = "15.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "94d31dde60b151ef88ec2c847e3a8f66d42d7dbdaeefd05d13d79db676b0b56f"
 dependencies = [
- "arrow",
+ "arrow 15.0.0",
+ "base64",
+ "brotli",
+ "byteorder",
+ "bytes",
+ "chrono",
+ "flate2",
+ "lz4",
+ "num",
+ "num-bigint",
+ "parquet-format",
+ "rand 0.8.5",
+ "snap",
+ "thrift",
+ "zstd",
+]
+
+[[package]]
+name = "parquet"
+version = "18.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "65f61759af307fad711e7656c705218402a8a79b776c893c20fef96e8ffd2a7d"
+dependencies = [
+ "arrow 18.0.0",
  "base64",
  "brotli",
  "byteorder",
