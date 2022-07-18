@@ -8,6 +8,7 @@ use futures::stream::BoxStream;
 use hyper::http::uri::InvalidUri;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::sync::Arc;
 use walkdir::Error as WalkDirError;
 
 #[cfg(feature = "azure")]
@@ -563,15 +564,15 @@ pub trait StorageBackend: Send + Sync + Debug {
 }
 
 /// Dynamically construct a Storage backend trait object based on scheme for provided URI
-pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, StorageError> {
+pub fn get_backend_for_uri(uri: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
     match parse_uri(uri)? {
-        Uri::LocalPath(root) => Ok(Box::new(file::FileStorageBackend::new(root))),
+        Uri::LocalPath(root) => Ok(Arc::new(file::FileStorageBackend::new(root))),
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-        Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new()?)),
+        Uri::S3Object(_) => Ok(Arc::new(s3::S3StorageBackend::new()?)),
         #[cfg(feature = "azure")]
-        Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
+        Uri::AdlsGen2Object(obj) => Ok(Arc::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
         #[cfg(feature = "gcs")]
-        Uri::GCSObject(_) => Ok(Box::new(gcs::GCSStorageBackend::new()?)),
+        Uri::GCSObject(_) => Ok(Arc::new(gcs::GCSStorageBackend::new()?)),
     }
 }
 
@@ -588,14 +589,14 @@ pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, Storage
 pub fn get_backend_for_uri_with_options(
     uri: &str,
     #[allow(unused)] options: HashMap<String, String>,
-) -> Result<Box<dyn StorageBackend>, StorageError> {
+) -> Result<Arc<dyn StorageBackend>, StorageError> {
     match parse_uri(uri)? {
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-        Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new_from_options(
+        Uri::S3Object(_) => Ok(Arc::new(s3::S3StorageBackend::new_from_options(
             s3::S3StorageOptions::from_map(options),
         )?)),
         #[cfg(feature = "azure")]
-        Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::new_from_options(
+        Uri::AdlsGen2Object(obj) => Ok(Arc::new(azure::AdlsGen2Backend::new_from_options(
             obj.file_system,
             azure::AzureStorageOptions::from_map(options),
         )?)),

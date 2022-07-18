@@ -55,7 +55,7 @@ use std::sync::Arc;
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
-    pub(crate) storage: Box<dyn StorageBackend>,
+    pub(crate) storage: Arc<dyn StorageBackend>,
     pub(crate) table_uri: String,
     pub(crate) arrow_schema_ref: Arc<arrow::datatypes::Schema>,
     pub(crate) writer_properties: WriterProperties,
@@ -97,12 +97,7 @@ impl RecordBatchWriter {
     }
 
     /// Creates a RecordBatchWriter to write data to provided Delta Table
-    pub fn for_table(
-        table: &DeltaTable,
-        storage_options: HashMap<String, String>,
-    ) -> Result<RecordBatchWriter, DeltaWriterError> {
-        let storage = get_backend_for_uri_with_options(&table.table_uri, storage_options)?;
-
+    pub fn for_table(table: &DeltaTable) -> Result<RecordBatchWriter, DeltaWriterError> {
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.get_metadata()?;
         let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema.clone())?;
@@ -116,7 +111,7 @@ impl RecordBatchWriter {
             .build();
 
         Ok(Self {
-            storage,
+            storage: table.storage.clone(),
             table_uri: table.table_uri.clone(),
             arrow_schema_ref,
             writer_properties,
@@ -437,7 +432,6 @@ mod tests {
         test_utils::{create_initialized_table, get_record_batch},
         utils::PartitionPath,
     };
-    use std::collections::HashMap;
     use std::path::Path;
 
     #[tokio::test]
@@ -445,7 +439,7 @@ mod tests {
         let batch = get_record_batch(None, false);
         let partition_cols = vec![];
         let table = create_initialized_table(&partition_cols).await;
-        let mut writer = RecordBatchWriter::for_table(&table, HashMap::new()).unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
 
@@ -458,7 +452,7 @@ mod tests {
         let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string()];
         let table = create_initialized_table(&partition_cols).await;
-        let mut writer = RecordBatchWriter::for_table(&table, HashMap::new()).unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
 
@@ -474,7 +468,7 @@ mod tests {
         let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string(), "id".to_string()];
         let table = create_initialized_table(&partition_cols).await;
-        let mut writer = RecordBatchWriter::for_table(&table, HashMap::new()).unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
 
@@ -492,7 +486,7 @@ mod tests {
         let batch = get_record_batch(None, false);
         let partition_cols = vec![];
         let table = create_initialized_table(&partition_cols).await;
-        let mut writer = RecordBatchWriter::for_table(&table, HashMap::new()).unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         writer.write(batch).await.unwrap();
         let adds = writer.flush().await.unwrap();
@@ -504,7 +498,7 @@ mod tests {
         let batch = get_record_batch(None, false);
         let partition_cols = vec!["modified".to_string(), "id".to_string()];
         let table = create_initialized_table(&partition_cols).await;
-        let mut writer = RecordBatchWriter::for_table(&table, HashMap::new()).unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         writer.write(batch).await.unwrap();
         let adds = writer.flush().await.unwrap();

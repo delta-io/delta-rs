@@ -163,7 +163,7 @@ mod optimize {
     async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
         let context = setup_test(false).await?;
         let mut dt = context.table;
-        let mut writer = RecordBatchWriter::for_table(&dt, HashMap::new())?;
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
 
         write(
             &mut writer,
@@ -226,7 +226,7 @@ mod optimize {
     async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
         let context = setup_test(true).await?;
         let mut dt = context.table;
-        let mut writer = RecordBatchWriter::for_table(&dt, HashMap::new())?;
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
 
         write(
             &mut writer,
@@ -274,7 +274,7 @@ mod optimize {
     async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         let context = setup_test(true).await?;
         let mut dt = context.table;
-        let mut writer = RecordBatchWriter::for_table(&dt, HashMap::new())?;
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
 
         write(
             &mut writer,
@@ -329,7 +329,7 @@ mod optimize {
     async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         let context = setup_test(true).await?;
         let mut dt = context.table;
-        let mut writer = RecordBatchWriter::for_table(&dt, HashMap::new())?;
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
 
         write(
             &mut writer,
@@ -353,7 +353,7 @@ mod optimize {
 
         let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
         let mut other_dt = deltalake::open_table(uri).await?;
-        let mut writer = RecordBatchWriter::for_table(&other_dt, HashMap::new())?;
+        let mut writer = RecordBatchWriter::for_table(&other_dt)?;
         write(
             &mut writer,
             &mut other_dt,
@@ -376,7 +376,7 @@ mod optimize {
         //Maybe just commit files with a known size
         let context = setup_test(true).await?;
         let mut dt = context.table;
-        let mut writer = RecordBatchWriter::for_table(&dt, HashMap::new())?;
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
 
         write(
             &mut writer,
@@ -422,7 +422,7 @@ mod optimize {
     async fn test_idempotent_metrics() -> Result<(), Box<dyn Error>> {
         let context = setup_test(true).await?;
         let mut dt = context.table;
-        let mut writer = RecordBatchWriter::for_table(&dt, HashMap::new())?;
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
 
         write(
             &mut writer,
@@ -463,7 +463,7 @@ mod optimize {
     async fn test_commit_info() -> Result<(), Box<dyn Error>> {
         let context = setup_test(true).await?;
         let mut dt = context.table;
-        let mut writer = RecordBatchWriter::for_table(&dt, HashMap::new())?;
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
 
         write(
             &mut writer,

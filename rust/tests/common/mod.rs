@@ -8,6 +8,7 @@ use deltalake::StorageBackend;
 use deltalake::{DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
+use std::sync::Arc;
 
 #[cfg(feature = "azure")]
 pub mod adls;
@@ -20,7 +21,7 @@ pub mod schemas;
 pub struct TestContext {
     /// The main table under test
     pub table: Option<DeltaTable>,
-    pub backend: Option<Box<dyn StorageBackend>>,
+    pub backend: Option<Arc<dyn StorageBackend>>,
     /// The configuration used to create the backend.
     pub config: HashMap<String, String>,
     /// An object when it is dropped will clean up any temporary resources created for the test
@@ -47,15 +48,15 @@ impl TestContext {
         return context;
     }
 
-    pub fn get_storage(&mut self) -> &Box<dyn StorageBackend> {
+    pub fn get_storage(&mut self) -> Arc<dyn StorageBackend> {
         if self.backend.is_none() {
             self.backend = Some(self.new_storage())
         }
 
-        return self.backend.as_ref().unwrap();
+        return self.backend.as_ref().unwrap().clone();
     }
 
-    fn new_storage(&self) -> Box<dyn StorageBackend> {
+    fn new_storage(&self) -> Arc<dyn StorageBackend> {
         let config = self.config.clone();
         let uri = config.get("URI").unwrap().to_string();
         get_backend_for_uri_with_options(&uri, config).unwrap()
