@@ -46,7 +46,7 @@ rusoto_s3 = { version = "0.48", default-features = false, optional = true }
 rusoto_sts = { version = "0.48", default-features = false, optional = true }
 rusoto_dynamodb = { version = "0.48", default-features = false, optional = true }
 maplit = { version = "1", optional = true }
-hyper = { version = "0.14.19", default-features = false, optional = true }
+hyper = { version = "0.14.20", default-features = false, optional = true }
 hyper-rustls = { version = "0.23.0", default-features = false, optional = true, features = [
     "http2",
     "rustls-native-certs",
