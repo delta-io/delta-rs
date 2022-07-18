@@ -165,7 +165,7 @@ pub fn get_delta_metadata(partition_cols: &[String]) -> DeltaTableMetaData {
 pub fn create_bare_table() -> DeltaTable {
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
-    let backend = Box::new(crate::storage::file::FileStorageBackend::new(
+    let backend = Arc::new(crate::storage::file::FileStorageBackend::new(
         table_path.to_str().unwrap(),
     ));
     DeltaTable::new(

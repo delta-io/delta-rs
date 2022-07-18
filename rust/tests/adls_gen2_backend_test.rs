@@ -14,6 +14,7 @@ mod adls_gen2_backend {
     use futures::TryStreamExt;
     use serial_test::serial;
     use std::env;
+    use std::sync::Arc;
 
     #[ignore]
     #[tokio::test]
@@ -242,7 +243,7 @@ mod adls_gen2_backend {
 
     async fn setup(
         file_system_name: &String,
-    ) -> (FileSystemClient, String, Box<dyn StorageBackend>) {
+    ) -> (FileSystemClient, String, Arc<dyn StorageBackend>) {
         let storage_account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
         let storage_account_key = env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
 
