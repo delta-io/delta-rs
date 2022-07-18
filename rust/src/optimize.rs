@@ -19,23 +19,22 @@
 //! let metrics = Optimize::default().execute(table).await?;
 //! ````
 
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use log::debug;
-use log::error;
-use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
-use parquet::file::serialized_reader::{SerializedFileReader, SliceableCursor};
-
 use crate::action::DeltaOperation;
 use crate::action::{self, Action};
 use crate::parquet::file::reader::FileReader;
 use crate::writer::utils::PartitionPath;
 use crate::writer::{DeltaWriter, DeltaWriterError, RecordBatchWriter};
 use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter};
+use bytes::Bytes;
+use log::debug;
+use log::error;
+use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
+use parquet::file::serialized_reader::SerializedFileReader;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -219,7 +218,7 @@ impl MergePlan {
                     let parquet_uri = table.storage.join_path(&table.table_uri, path);
                     let data = table.storage.get_obj(&parquet_uri).await?;
                     let size: DeltaDataTypeLong = data.len().try_into().unwrap();
-                    let data = SliceableCursor::new(data);
+                    let data = Bytes::from(data);
                     let reader = SerializedFileReader::new(data)?;
                     let records = reader.metadata().file_metadata().num_rows();
 

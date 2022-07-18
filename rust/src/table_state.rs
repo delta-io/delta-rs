@@ -1,22 +1,19 @@
 //! The module for delta table state.
 
-use chrono::Utc;
-use parquet::file::{
-    reader::{FileReader, SerializedFileReader},
-    serialized_reader::SliceableCursor,
-};
-use serde_json::{Map, Value};
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::convert::TryFrom;
-use std::io::{BufRead, BufReader, Cursor};
-
 use super::{
     ApplyLogError, CheckPoint, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable,
     DeltaTableError, DeltaTableMetaData,
 };
 use crate::action::{self, Action};
 use crate::delta_config;
+use bytes::Bytes;
+use chrono::Utc;
+use parquet::file::reader::{FileReader, SerializedFileReader};
+use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::convert::TryFrom;
+use std::io::{BufRead, BufReader, Cursor};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Default, Debug, Clone)]
@@ -88,7 +85,7 @@ impl DeltaTableState {
 
         for f in &checkpoint_data_paths {
             let obj = table.storage.get_obj(f).await?;
-            let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
+            let preader = SerializedFileReader::new(Bytes::from(obj))?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
                 return Err(DeltaTableError::from(action::ActionError::Generic(
