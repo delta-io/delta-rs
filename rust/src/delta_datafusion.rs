@@ -248,14 +248,17 @@ impl TableProvider for delta::DeltaTable {
             .zip(self.get_active_add_actions())
             .enumerate()
             .map(|(_idx, (fname, action))| {
+                let path = std::fs::canonicalize(std::path::PathBuf::from(fname))?;
                 // TODO: no way to associate stats per file in datafusion at the moment, see:
                 // https://github.com/apache/arrow-datafusion/issues/1301
-                Ok(vec![PartitionedFile::new(fname, action.size as u64)])
+                Ok(vec![PartitionedFile::new(
+                    path.to_str().unwrap().to_string(),
+                    action.size as u64,
+                )])
             })
             .collect::<datafusion::error::Result<_>>()?;
 
-        let dt_object_store_url = ObjectStoreUrl::parse(&self.table_uri)
-            .unwrap_or_else(|_| ObjectStoreUrl::local_filesystem());
+        let dt_object_store_url = ObjectStoreUrl::local_filesystem();
 
         ParquetFormat::default()
             .create_physical_plan(
