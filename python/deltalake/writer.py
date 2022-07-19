@@ -194,7 +194,11 @@ def write_deltalake(
         path, partition_values = get_partitions_from_path(table_uri, written_file.path)
         stats = get_file_stats_from_metadata(written_file.metadata)
 
-        size = fs.get_file_info([os.path.join(table_uri, path)])[0].size
+        # PyArrow added support for written_file.size in 9.0.0
+        if PYARROW_MAJOR_VERSION >= 9:
+            size = written_file.size
+        else:
+            size = fs.get_file_info([os.path.join(table_uri, path)])[0].size
 
         add_actions.append(
             AddAction(
