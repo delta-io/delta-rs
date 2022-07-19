@@ -253,7 +253,7 @@ impl TableProvider for delta::DeltaTable {
                     .components()
                     .map(|c| c.as_os_str().to_str().unwrap())
                     .collect::<Vec<_>>()
-                    .join('/');
+                    .join("/");
                 // TODO: no way to associate stats per file in datafusion at the moment, see:
                 // https://github.com/apache/arrow-datafusion/issues/1301
                 Ok(vec![PartitionedFile::new(path_str, action.size as u64)])
