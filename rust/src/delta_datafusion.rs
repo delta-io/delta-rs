@@ -249,12 +249,14 @@ impl TableProvider for delta::DeltaTable {
             .enumerate()
             .map(|(_idx, (fname, action))| {
                 let path = std::fs::canonicalize(std::path::PathBuf::from(fname))?;
+                let path_str = path
+                    .components()
+                    .map(|c| c.as_os_str().to_str().unwrap())
+                    .collect::<Vec<_>>()
+                    .join('/');
                 // TODO: no way to associate stats per file in datafusion at the moment, see:
                 // https://github.com/apache/arrow-datafusion/issues/1301
-                Ok(vec![PartitionedFile::new(
-                    path.to_str().unwrap().to_string(),
-                    action.size as u64,
-                )])
+                Ok(vec![PartitionedFile::new(path_str, action.size as u64)])
             })
             .collect::<datafusion::error::Result<_>>()?;
 
