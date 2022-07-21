@@ -28,7 +28,9 @@ class PrimitiveType:
     def from_pyarrow(type: pa.DataType) -> "PrimitiveType": ...
 
 class ArrayType:
-    def __init__(self, element_type: DataType, *, contains_null: bool = True) -> None: ...
+    def __init__(
+        self, element_type: DataType, *, contains_null: bool = True
+    ) -> None: ...
     type: Literal["array"]
     element_type: DataType
     contains_null: bool
@@ -44,7 +46,11 @@ class ArrayType:
 
 class MapType:
     def __init__(
-        self, key_type: DataType, value_type: DataType, *, value_contains_null: bool = True
+        self,
+        key_type: DataType,
+        value_type: DataType,
+        *,
+        value_contains_null: bool = True
     ) -> None: ...
     type: Literal["map"]
     key_type: DataType
@@ -60,7 +66,12 @@ class MapType:
 
 class Field:
     def __init__(
-        self, name: str, type: DataType, *, nullable: bool = True, metadata: Optional[Dict[str, Any]] = None
+        self,
+        name: str,
+        type: DataType,
+        *,
+        nullable: bool = True,
+        metadata: Optional[Dict[str, Any]] = None
     ) -> None: ...
     name: str
     type: DataType
