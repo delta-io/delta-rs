@@ -13,7 +13,7 @@ if TYPE_CHECKING:
 from .data_catalog import DataCatalog
 from .deltalake import RawDeltaTable
 from .fs import DeltaStorageHandler
-from .schema import Schema, pyarrow_schema_from_json
+from .schema import Schema
 
 
 @dataclass(init=False)
@@ -214,7 +214,7 @@ class DeltaTable:
 
         :return: the current Schema registered in the transaction log
         """
-        return Schema.from_json(self._table.schema_json())
+        return self._table.schema
 
     def metadata(self) -> Metadata:
         """
@@ -264,9 +264,16 @@ class DeltaTable:
         """
         Get the current schema of the DeltaTable with the Parquet PyArrow format.
 
+        DEPRECATED: use DeltaTable.schema().to_pyarrow() instead.
+
         :return: the current Schema with the Parquet PyArrow format
         """
-        return pyarrow_schema_from_json(self._table.arrow_schema_json())
+        warnings.warn(
+            "DeltaTable.pyarrow_schema() is deprecated. Use DeltaTable.schema().to_pyarrow() instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.schema().to_pyarrow()
 
     def to_pyarrow_dataset(
         self,

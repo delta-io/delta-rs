@@ -1,19 +1,17 @@
 extern crate pyo3;
 
+use crate::pyo3::types::IntoPyDict;
 use deltalake::arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
-    SchemaRef as ArrowSchemaRef, TimeUnit,
 };
 use deltalake::arrow::error::ArrowError;
 use deltalake::schema::{
     Schema, SchemaDataType, SchemaField, SchemaTypeArray, SchemaTypeMap, SchemaTypeStruct,
 };
 use lazy_static::lazy_static;
-use pyo3::exceptions::{
-    PyAssertionError, PyException, PyNotImplementedError, PyTypeError, PyValueError,
-};
+use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
-use pyo3::PyResult;
+use pyo3::{PyRef, PyResult};
 use regex::Regex;
 use std::collections::HashMap;
 
@@ -62,7 +60,10 @@ fn schema_type_to_python(schema_type: SchemaDataType, py: Python) -> PyResult<Py
             let map_type: MapType = map_type.into();
             Ok(map_type.into_py(py))
         }
-        SchemaDataType::r#struct(_) => todo!(),
+        SchemaDataType::r#struct(struct_type) => {
+            let struct_type: StructType = struct_type.into();
+            Ok(struct_type.into_py(py))
+        }
     }
 }
 
@@ -76,6 +77,9 @@ fn python_type_to_schema(ob: PyObject, py: Python) -> PyResult<SchemaDataType> {
     if let Ok(map_type) = ob.extract::<MapType>(py) {
         return Ok(map_type.into());
     }
+    if let Ok(struct_type) = ob.extract::<StructType>(py) {
+        return Ok(struct_type.into());
+    }
     if let Ok(raw_primitive) = ob.extract::<String>(py) {
         // Pass through PrimitiveType::new() to do validation
         return PrimitiveType::new(raw_primitive)
@@ -84,7 +88,7 @@ fn python_type_to_schema(ob: PyObject, py: Python) -> PyResult<SchemaDataType> {
     Err(PyValueError::new_err("Invalid data type"))
 }
 
-#[pyclass]
+#[pyclass(module = "deltalake.schema", text_signature = "(data_type: str)")]
 #[derive(Clone)]
 pub struct PrimitiveType {
     inner_type: String,
@@ -146,7 +150,7 @@ impl PrimitiveType {
     }
 
     fn __repr__(&self) -> PyResult<String> {
-        Ok(format!("DataType({})", self.get_type()?))
+        Ok(format!("PrimitiveType(\"{}\")", &self.inner_type))
     }
 
     fn to_json(&self) -> PyResult<String> {
@@ -179,7 +183,10 @@ impl PrimitiveType {
     }
 }
 
-#[pyclass]
+#[pyclass(
+    module = "deltalake.schema",
+    text_signature = "(element_type: DataType, contains_null: bool)"
+)]
 #[derive(Clone)]
 pub struct ArrayType {
     inner_type: SchemaTypeArray,
@@ -191,9 +198,9 @@ impl From<SchemaTypeArray> for ArrayType {
     }
 }
 
-impl Into<SchemaDataType> for ArrayType {
-    fn into(self) -> SchemaDataType {
-        SchemaDataType::array(self.inner_type)
+impl From<ArrayType> for SchemaDataType {
+    fn from(arr: ArrayType) -> SchemaDataType {
+        SchemaDataType::array(arr.inner_type)
     }
 }
 
@@ -210,6 +217,7 @@ impl TryFrom<SchemaDataType> for ArrayType {
 #[pymethods]
 impl ArrayType {
     #[new]
+    #[args(contains_bool = true)]
     fn new(element_type: PyObject, contains_null: bool, py: Python) -> PyResult<Self> {
         let inner_type = SchemaTypeArray::new(
             Box::new(python_type_to_schema(element_type, py)?),
@@ -218,11 +226,19 @@ impl ArrayType {
         Ok(Self { inner_type })
     }
 
-    fn __repr__(&self) -> PyResult<String> {
+    fn __repr__(&self, py: Python) -> PyResult<String> {
+        let type_repr: String =
+            schema_type_to_python(self.inner_type.get_element_type().clone(), py)?
+                .call_method0(py, "__repr__")?
+                .extract(py)?;
         Ok(format!(
-            "DataType(array<{:?}, {:?}>)",
-            self.inner_type.get_element_type(),
-            self.inner_type.contains_null(),
+            "ArrayType({}, contains_null={})",
+            type_repr,
+            if self.inner_type.contains_null() {
+                "True"
+            } else {
+                "False"
+            },
         ))
     }
 
@@ -279,7 +295,10 @@ impl ArrayType {
     }
 }
 
-#[pyclass]
+#[pyclass(
+    module = "deltalake.schema",
+    text_signature = "(key_type: DataType, value_type: DataType, value_contains_null: bool)"
+)]
 #[derive(Clone)]
 pub struct MapType {
     inner_type: SchemaTypeMap,
@@ -291,9 +310,9 @@ impl From<SchemaTypeMap> for MapType {
     }
 }
 
-impl Into<SchemaDataType> for MapType {
-    fn into(self) -> SchemaDataType {
-        SchemaDataType::map(self.inner_type)
+impl From<MapType> for SchemaDataType {
+    fn from(map: MapType) -> SchemaDataType {
+        SchemaDataType::map(map.inner_type)
     }
 }
 
@@ -310,6 +329,7 @@ impl TryFrom<SchemaDataType> for MapType {
 #[pymethods]
 impl MapType {
     #[new]
+    #[args(value_contains_null = true)]
     fn new(
         key_type: PyObject,
         value_type: PyObject,
@@ -324,12 +344,23 @@ impl MapType {
         Ok(Self { inner_type })
     }
 
-    fn __repr__(&self) -> PyResult<String> {
+    fn __repr__(&self, py: Python) -> PyResult<String> {
+        let key_repr: String = schema_type_to_python(self.inner_type.get_key_type().clone(), py)?
+            .call_method0(py, "__repr__")?
+            .extract(py)?;
+        let value_repr: String =
+            schema_type_to_python(self.inner_type.get_value_type().clone(), py)?
+                .call_method0(py, "__repr__")?
+                .extract(py)?;
         Ok(format!(
-            "DataType(map<{:?}, {:?}, {:?}>)",
-            self.inner_type.get_key_type(),
-            self.inner_type.get_value_type(),
-            self.inner_type.get_value_contains_null()
+            "MapType({}, {}, value_contains_null={})",
+            key_repr,
+            value_repr,
+            if self.inner_type.get_value_contains_null() {
+                "True"
+            } else {
+                "False"
+            }
         ))
     }
 
@@ -391,7 +422,136 @@ impl MapType {
     }
 }
 
-#[pyclass]
+#[pyclass(module = "deltalake.schema")]
+#[derive(Clone)]
+pub struct Field {
+    inner: SchemaField,
+}
+
+#[pymethods]
+impl Field {
+    #[new]
+    #[args(nullable = true)]
+    fn new(
+        name: String,
+        ty: PyObject,
+        nullable: bool,
+        metadata: Option<PyObject>,
+        py: Python,
+    ) -> PyResult<Self> {
+        let ty = python_type_to_schema(ty, py)?;
+
+        // Serialize and de-serialize JSON (it needs to be valid JSON anyways)
+        let metadata: HashMap<String, serde_json::Value> = if let Some(ref json) = metadata {
+            let json_dumps = PyModule::import(py, "json")?.getattr("dumps")?;
+            let metadata_json: String = json_dumps.call1((json,))?.extract()?;
+            let metadata_json = Some(metadata_json)
+                .filter(|x| x != "null")
+                .unwrap_or_else(|| "{}".to_string());
+            serde_json::from_str(&metadata_json)
+                .map_err(|err| PyValueError::new_err(err.to_string()))?
+        } else {
+            HashMap::new()
+        };
+
+        Ok(Self {
+            inner: SchemaField::new(name, ty, nullable, metadata),
+        })
+    }
+
+    #[getter]
+    fn name(&self) -> String {
+        self.inner.get_name().to_string()
+    }
+
+    #[getter]
+    fn get_type(&self, py: Python) -> PyResult<PyObject> {
+        schema_type_to_python(self.inner.get_type().clone(), py)
+    }
+
+    #[getter]
+    fn nullable(&self) -> bool {
+        self.inner.is_nullable()
+    }
+
+    #[getter]
+    fn metadata(&self, py: Python) -> PyResult<PyObject> {
+        let json_loads = PyModule::import(py, "json")?.getattr("loads")?;
+        let metadata_json: String = serde_json::to_string(self.inner.get_metadata())
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+        Ok(json_loads.call1((metadata_json,))?.to_object(py))
+    }
+
+    fn __repr__(&self, py: Python) -> PyResult<String> {
+        let type_repr: String = schema_type_to_python(self.inner.get_type().clone(), py)?
+            .call_method0(py, "__repr__")?
+            .extract(py)?;
+
+        let metadata = self.inner.get_metadata();
+        let maybe_metadata = if metadata.is_empty() {
+            "".to_string()
+        } else {
+            let metadata_repr: String = self
+                .metadata(py)?
+                .call_method0(py, "__repr__")?
+                .extract(py)?;
+            format!(", metadata={}", metadata_repr)
+        };
+        Ok(format!(
+            "Field({}, {}, nullable={}{})",
+            self.inner.get_name(),
+            type_repr,
+            if self.inner.is_nullable() {
+                "True"
+            } else {
+                "False"
+            },
+            maybe_metadata,
+        ))
+    }
+
+    fn __richcmp__(&self, other: Field, cmp: pyo3::basic::CompareOp) -> PyResult<bool> {
+        match cmp {
+            pyo3::basic::CompareOp::Eq => Ok(self.inner == other.inner),
+            pyo3::basic::CompareOp::Ne => Ok(self.inner != other.inner),
+            _ => Err(PyNotImplementedError::new_err(
+                "Only == and != are supported.",
+            )),
+        }
+    }
+
+    fn to_json(&self) -> PyResult<String> {
+        serde_json::to_string(&self.inner).map_err(|err| PyException::new_err(err.to_string()))
+    }
+
+    #[staticmethod]
+    fn from_json(field_json: String) -> PyResult<Self> {
+        let field: SchemaField = serde_json::from_str(&field_json)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+
+        Ok(Self { inner: field })
+    }
+
+    fn to_pyarrow(&self) -> PyResult<ArrowField> {
+        (&self.inner)
+            .try_into()
+            .map_err(|err: ArrowError| PyException::new_err(err.to_string()))
+    }
+
+    #[staticmethod]
+    fn from_pyarrow(field: ArrowField) -> PyResult<Self> {
+        Ok(Self {
+            inner: SchemaField::try_from(&field)
+                .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?,
+        })
+    }
+}
+
+#[pyclass(
+    subclass,
+    module = "deltalake.schema",
+    text_signature = "(fields: List[Field])"
+)]
 #[derive(Clone)]
 pub struct StructType {
     inner_type: SchemaTypeStruct,
@@ -403,9 +563,9 @@ impl From<SchemaTypeStruct> for StructType {
     }
 }
 
-impl Into<SchemaDataType> for StructType {
-    fn into(self) -> SchemaDataType {
-        SchemaDataType::r#struct(self.inner_type)
+impl From<StructType> for SchemaDataType {
+    fn from(str: StructType) -> SchemaDataType {
+        SchemaDataType::r#struct(str.inner_type)
     }
 }
 
@@ -418,47 +578,16 @@ impl TryFrom<SchemaDataType> for StructType {
         }
     }
 }
-
-fn field_from_pyobject(obj: PyObject, py: Python) -> PyResult<SchemaField> {
-    let name: String = obj.getattr(py, "name")?.extract(py)?;
-    let data_type: SchemaDataType = python_type_to_schema(obj.getattr(py, "type")?, py)?;
-    let nullable: bool = obj.getattr(py, "nullable")?.extract(py)?;
-
-    // Best we can do is serialize and re-serialize as json
-    let json_dumps = PyModule::import(py, "json")?.getattr("dumps")?;
-    let metadata_json: String = json_dumps
-        .call1((obj.getattr(py, "metadata")?,))?
-        .extract()?;
-    let metadata: HashMap<String, serde_json::Value> = serde_json::from_str(&metadata_json)
-        .map_err(|err| PyValueError::new_err(err.to_string()))?;
-
-    Ok(SchemaField::new(name, data_type, nullable, metadata))
-}
-
-fn field_as_pyobject(field: &SchemaField, py: Python) -> PyResult<PyObject> {
-    let data_type = schema_type_to_python(field.get_type().clone(), py)?;
-
-    // Best we can do is serialize and re-serialize as json
-    let json_loads = PyModule::import(py, "json")?.getattr("loads")?;
-    let metadata_json: String = serde_json::to_string(field.get_metadata())
-        .map_err(|err| PyValueError::new_err(err.to_string()))?;
-    let metadata = json_loads.call1((metadata_json.into_py(py),))?;
-
-    let args = (field.get_name(), data_type, field.is_nullable(), metadata);
-    let py_field = PyModule::import(py, "deltalake.schema")?.getattr("Field")?;
-    Ok(py_field.call1(args)?.to_object(py))
-}
-
 #[pymethods]
 impl StructType {
     #[new]
-    fn new(fields: Vec<PyObject>, py: Python) -> PyResult<Self> {
+    fn new(fields: Vec<PyRef<Field>>) -> Self {
         let fields: Vec<SchemaField> = fields
             .into_iter()
-            .map(|obj| field_from_pyobject(obj, py))
-            .collect::<PyResult<_>>()?;
+            .map(|field| field.inner.clone())
+            .collect();
         let inner_type = SchemaTypeStruct::new(fields);
-        Ok(Self { inner_type })
+        Self { inner_type }
     }
 
     fn __repr__(&self, py: Python) -> PyResult<String> {
@@ -467,13 +596,11 @@ impl StructType {
             .get_fields()
             .iter()
             .map(|field| {
-                let type_repr: String = schema_type_to_python(field.get_type().clone(), py)?
-                    .call_method0(py, "__repr__")?
-                    .extract(py)?;
-                Ok(format!("{}: {}", field.get_name(), type_repr))
+                let field = Field { inner: field.clone() };
+                field.__repr__(py)
             })
             .collect::<PyResult<_>>()?;
-        Ok(format!("DataType(struct<{}>)", inner_data.join(", ")))
+        Ok(format!("StructType([{}])", inner_data.join(", ")))
     }
 
     fn __richcmp__(&self, other: StructType, cmp: pyo3::basic::CompareOp) -> PyResult<bool> {
@@ -492,14 +619,14 @@ impl StructType {
     }
 
     #[getter]
-    fn fields(&self, py: Python) -> PyResult<PyObject> {
-        let fields: Vec<PyObject> = self
-            .inner_type
+    fn fields(&self) -> Vec<Field> {
+        self.inner_type
             .get_fields()
             .iter()
-            .map(|field| field_as_pyobject(field, py))
-            .collect::<PyResult<_>>()?;
-        Ok(fields.into_py(py))
+            .map(|field| Field {
+                inner: field.clone(),
+            })
+            .collect::<Vec<Field>>()
     }
 
     fn to_json(&self) -> PyResult<String> {
@@ -527,5 +654,88 @@ impl StructType {
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         inner_type.try_into()
+    }
+}
+
+pub fn schema_to_pyobject(schema: &Schema, py: Python) -> PyResult<PyObject> {
+    let fields: Vec<Field> = schema
+        .get_fields()
+        .iter()
+        .map(|field| Field {
+            inner: field.clone(),
+        })
+        .collect();
+
+    let py_schema = PyModule::import(py, "deltalake.schema")?.getattr("Schema")?;
+
+    py_schema
+        .call1((fields,))
+        .map(|schema| schema.to_object(py))
+}
+
+#[pyclass(extends=StructType, name="Schema", module="deltalake.schema")]
+pub struct PySchema;
+
+#[pymethods]
+impl PySchema {
+    #[new]
+    fn new(fields: Vec<PyRef<Field>>) -> PyResult<(Self, StructType)> {
+        let fields: Vec<SchemaField> = fields
+            .into_iter()
+            .map(|field| field.inner.clone())
+            .collect();
+        let inner_type = SchemaTypeStruct::new(fields);
+        Ok((Self {}, StructType { inner_type }))
+    }
+
+    fn __repr__(self_: PyRef<'_, Self>, py: Python) -> PyResult<String> {
+        let super_ = self_.as_ref();
+        let inner_data: Vec<String> = super_
+            .inner_type
+            .get_fields()
+            .iter()
+            .map(|field| {
+                let field = Field { inner: field.clone() };
+                field.__repr__(py)
+            })
+            .collect::<PyResult<_>>()?;
+        Ok(format!("Schema([{}])", inner_data.join(", ")))
+    }
+
+    fn json(self_: PyRef<'_, Self>, py: Python) -> PyResult<PyObject> {
+        let warnings_warn = PyModule::import(py, "warnings")?.getattr("warn")?;
+        let deprecation_warning = PyModule::import(py, "builtins")?
+            .getattr("DeprecationWarning")?
+            .to_object(py);
+        let kwargs: [(&str, PyObject); 2] = [
+            ("category", deprecation_warning),
+            ("stacklevel", 2.to_object(py)),
+        ];
+        warnings_warn.call(
+            ("Schema.json() is deprecated. Use json.loads(Schema.to_json()) instead.",),
+            Some(kwargs.into_py_dict(py)),
+        )?;
+
+        let super_ = self_.as_ref();
+        let json = super_.to_json()?;
+        let json_loads = PyModule::import(py, "json")?.getattr("loads")?;
+        json_loads
+            .call1((json.into_py(py),))
+            .map(|obj| obj.to_object(py))
+    }
+    fn to_pyarrow(self_: PyRef<'_, Self>) -> PyResult<ArrowSchema> {
+        let super_ = self_.as_ref();
+        (&super_.inner_type.clone())
+            .try_into()
+            .map_err(|err: ArrowError| PyException::new_err(err.to_string()))
+    }
+
+    #[staticmethod]
+    fn from_pyarrow(data_type: ArrowSchema, py: Python) -> PyResult<PyObject> {
+        let inner_type: SchemaTypeStruct = (&data_type)
+            .try_into()
+            .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
+
+        schema_to_pyobject(&inner_type, py)
     }
 }

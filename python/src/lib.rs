@@ -30,6 +30,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use crate::schema::schema_to_pyobject;
+
 create_exception!(deltalake, PyDeltaTableError, PyException);
 
 impl PyDeltaTableError {
@@ -222,13 +224,13 @@ impl RawDeltaTable {
         Ok(self._table.get_file_uris().collect())
     }
 
-    pub fn schema_json(&self) -> PyResult<String> {
-        let schema = self
+    #[getter]
+    pub fn schema(&self, py: Python) -> PyResult<PyObject> {
+        let schema: &Schema = self
             ._table
             .get_schema()
             .map_err(PyDeltaTableError::from_raw)?;
-        serde_json::to_string(&schema)
-            .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))
+        schema_to_pyobject(schema, py)
     }
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
@@ -623,6 +625,8 @@ fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<schema::PrimitiveType>()?;
     m.add_class::<schema::ArrayType>()?;
     m.add_class::<schema::MapType>()?;
+    m.add_class::<schema::Field>()?;
     m.add_class::<schema::StructType>()?;
+    m.add_class::<schema::PySchema>()?;
     Ok(())
 }
