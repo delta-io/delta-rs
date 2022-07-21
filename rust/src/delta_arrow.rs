@@ -8,9 +8,9 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::collections::BTreeMap;
 
 impl TryFrom<&schema::Schema> for ArrowSchema {
     type Error = ArrowError;
