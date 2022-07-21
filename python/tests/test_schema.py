@@ -187,11 +187,18 @@ def test_struct_delta_types():
     assert struct_type.type == "struct"
     assert struct_type.fields == fields
 
-    pa_type = struct_type.to_pyarrow()
-    assert struct_type == StructType.from_pyarrow(pa_type)
-
     json_type = struct_type.to_json()
     assert struct_type == StructType.from_json(json_type)
+
+    # Field metadata doesn't roundtrip currently
+    # See: https://github.com/apache/arrow-rs/issues/478
+    fields = [
+        Field("x", "integer", nullable=True),
+        Field("y", PrimitiveType("string"), nullable=False),
+    ]
+    struct_type = StructType(fields)
+    pa_type = struct_type.to_pyarrow()
+    assert struct_type == StructType.from_pyarrow(pa_type)
 
 
 def test_delta_field():
@@ -206,13 +213,16 @@ def test_delta_field():
     for name, ty, nullable, metadata in args:
         field = Field(name, ty, nullable=nullable, metadata=metadata)
 
-        assert field.name == name        
+        assert field.name == name
         assert field.type == (PrimitiveType(ty) if isinstance(ty, str) else ty)
         assert field.nullable == nullable
-        assert field.metadata == metadata
+        assert field.metadata == (metadata or {})
 
-        pa_field = field.to_pyarrow()
-        assert field == Field.from_pyarrow(pa_field)
+        # Field metadata doesn't roundtrip currently
+        # See: https://github.com/apache/arrow-rs/issues/478
+        if len(field.metadata) == 0:
+            pa_field = field.to_pyarrow()
+            assert field == Field.from_pyarrow(pa_field)
 
         json_field = field.to_json()
         assert field == Field.from_json(json_field)
@@ -228,80 +238,16 @@ def test_delta_schema():
 
     assert schema.fields == fields
 
-    pa_schema = schema.to_pyarrow()
-    assert schema == Schema.from_pyarrow(pa_schema)
-
     empty_schema = Schema([])
     pa_schema = empty_schema.to_pyarrow()
-    assert schema == Schema.from_pyarrow(empty_schema)
+    assert empty_schema == Schema.from_pyarrow(pa_schema)
 
-
-# def test_schema_delta_types():
-#     field_name = "column1"
-#     metadata = {"metadata_k": "metadata_v"}
-#     delta_field = Field(
-#         name=field_name,
-#         type=DataType.from_dict({"type": "integer"}),
-#         metadata={"metadata_k": "metadata_v"},
-#         nullable=False,
-#     )
-#     assert delta_field.name == field_name
-#     assert delta_field.type == DataType("integer")
-#     assert delta_field.metadata == metadata
-#     assert delta_field.nullable is False
-
-#     delta_field = Field(
-#         name=field_name,
-#         type=DataType.from_dict(
-#             {"type": "array", "elementType": {"type": "integer"}, "containsNull": True}
-#         ),
-#         metadata={"metadata_k": "metadata_v"},
-#         nullable=False,
-#     )
-#     assert delta_field.name == field_name
-#     assert delta_field.type == ArrayType(DataType("integer"), True)
-#     assert delta_field.metadata == metadata
-#     assert delta_field.nullable is False
-
-#     delta_field = Field(
-#         name=field_name,
-#         type=DataType.from_dict(
-#             {
-#                 "type": "map",
-#                 "keyType": "integer",
-#                 "valueType": "integer",
-#                 "valueContainsNull": True,
-#             }
-#         ),
-#         metadata={"metadata_k": "metadata_v"},
-#         nullable=False,
-#     )
-#     assert delta_field.name == field_name
-#     key_type = DataType("integer")
-#     value_type = DataType("integer")
-#     assert delta_field.type == MapType(key_type, value_type, True)
-#     assert delta_field.metadata == metadata
-#     assert delta_field.nullable is False
-
-#     delta_field = Field(
-#         name=field_name,
-#         type=DataType.from_dict(
-#             {
-#                 "type": "struct",
-#                 "fields": [
-#                     {
-#                         "name": "x",
-#                         "type": {"type": "integer"},
-#                         "nullable": True,
-#                         "metadata": {},
-#                     }
-#                 ],
-#             }
-#         ),
-#         metadata={"metadata_k": "metadata_v"},
-#         nullable=False,
-#     )
-#     assert delta_field.name == field_name
-#     assert delta_field.type == StructType([Field("x", DataType("integer"), True, {})])
-#     assert delta_field.metadata == metadata
-#     assert delta_field.nullable is False
+    # Field metadata doesn't roundtrip currently
+    # See: https://github.com/apache/arrow-rs/issues/478
+    fields = [
+        Field("x", "integer", nullable=True),
+        Field("y", ArrayType("string", contains_null=True), nullable=False),
+    ]
+    schema_without_metadata = schema = Schema(fields)
+    pa_schema = schema_without_metadata.to_pyarrow()
+    assert schema_without_metadata == Schema.from_pyarrow(pa_schema)

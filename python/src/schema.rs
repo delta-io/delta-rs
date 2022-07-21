@@ -596,7 +596,9 @@ impl StructType {
             .get_fields()
             .iter()
             .map(|field| {
-                let field = Field { inner: field.clone() };
+                let field = Field {
+                    inner: field.clone(),
+                };
                 field.__repr__(py)
             })
             .collect::<PyResult<_>>()?;
@@ -695,7 +697,9 @@ impl PySchema {
             .get_fields()
             .iter()
             .map(|field| {
-                let field = Field { inner: field.clone() };
+                let field = Field {
+                    inner: field.clone(),
+                };
                 field.__repr__(py)
             })
             .collect::<PyResult<_>>()?;
