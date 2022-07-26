@@ -397,7 +397,7 @@ impl From<&Field> for ColumnCountStat {
                     .map(|(field_name, field)| (field_name.clone(), field.into())),
             )),
             Field::Long(value) => ColumnCountStat::Value(value.clone()),
-            _ => panic!("DataType::Map should contain a struct field child"),
+            _ => panic!("nullCount columns stats must be a struct of int64s."),
         }
     }
 }
