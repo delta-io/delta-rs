@@ -396,7 +396,7 @@ impl From<&Field> for ColumnCountStat {
                     .get_column_iter()
                     .map(|(field_name, field)| (field_name.clone(), field.into())),
             )),
-            Field::Long(value) => ColumnCountStat::Value(value.clone()),
+            Field::Long(value) => ColumnCountStat::Value(*value),
             _ => panic!("nullCount columns stats must be a struct of int64s."),
         }
     }
