@@ -436,24 +436,9 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
 
     let file_to_compare = "part-00000-51653f4d-b029-44bd-9fda-578e73518a26-c000.snappy.parquet";
 
-    let struct_stats_for_file = get_stats_for_file(&table_from_struct_stats, &file_to_compare);
-    let json_stats_for_file = get_stats_for_file(&table_from_json_stats, &file_to_compare);
-
     assert_eq!(
-        struct_stats_for_file.min_values,
-        json_stats_for_file.min_values,
-    );
-    assert_eq!(
-        struct_stats_for_file.max_values,
-        json_stats_for_file.max_values,
-    );
-    assert_eq!(
-        struct_stats_for_file.null_count,
-        json_stats_for_file.null_count,
-    );
-    assert_eq!(
-        struct_stats_for_file.num_records,
-        json_stats_for_file.num_records,
+        get_stats_for_file(&table_from_struct_stats, &file_to_compare),
+        get_stats_for_file(&table_from_json_stats, &file_to_compare),
     );
 }
 
