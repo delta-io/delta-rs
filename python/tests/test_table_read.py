@@ -199,7 +199,7 @@ def test_read_table_with_only_struct_stats():
 
     dataset = dt.to_pyarrow_dataset()
 
-    filter_expr = ds.field("a") == 5
+    filter_expr = ds.field("integer") == 5
     assert len(list(dataset.get_fragments(filter=filter_expr))) == 1
 
 def test_read_partitioned_table_metadata():
