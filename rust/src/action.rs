@@ -352,19 +352,12 @@ impl Add {
                     }
                     "nullCount" => match record.get_group(i) {
                         Ok(row) => {
-                            for (i, (name, _)) in row.get_column_iter().enumerate() {
-                                match row.get_long(i) {
-                                    Ok(v) => {
-                                        stats.null_count.insert(name.clone(), ColumnCountStat::Value(v));
-                                    }
-                                    _ => {
-                                        log::error!("Expect type of stats_parsed.nullRecords value to be struct, got: {}", row);
-                                    }
-                                }
+                            for (name, field) in row.get_column_iter() {
+                                stats.null_count.insert(name.clone(), field.into());
                             }
                         }
                         _ => {
-                            log::error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
+                            log::error!("Expect type of stats_parsed field nullCount to be struct of ints, got: {}", record);
                         }
                     }
                     _ => {
@@ -391,6 +384,20 @@ impl From<&Field> for ColumnValueStat {
                     .map(|(field_name, field)| (field_name.clone(), field.into())),
             )),
             _ => ColumnValueStat::Value(primitive_parquet_field_to_json_value(field)),
+        }
+    }
+}
+
+impl From<&Field> for ColumnCountStat {
+    fn from(field: &Field) -> Self {
+        match field {
+            Field::Group(group) => ColumnCountStat::Column(HashMap::from_iter(
+                group
+                    .get_column_iter()
+                    .map(|(field_name, field)| (field_name.clone(), field.into())),
+            )),
+            Field::Long(value) => ColumnCountStat::Value(value.clone()),
+            _ => panic!("DataType::Map should contain a struct field child"),
         }
     }
 }
