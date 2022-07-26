@@ -54,6 +54,17 @@ def test_table_schema_pyarrow_020():
     assert field.nullable is True
     assert field.metadata is None
 
+def test_table_schema_pyarrow_121():
+    table_path = "../rust/tests/data/delta-1.2.1-only-struct-stats"
+    dt = DeltaTable(table_path)
+    schema = dt.pyarrow_schema()
+    field = schema.field(0)
+    assert len(schema.types) == 1
+    assert field.name == "value"
+    assert field.type == pyarrow.int32()
+    assert field.nullable is True
+    assert field.metadata is None
+
 
 def test_schema_pyarrow_from_decimal_and_floating_types():
     field_name = "decimal_test"
