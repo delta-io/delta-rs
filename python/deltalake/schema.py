@@ -215,6 +215,11 @@ def pyarrow_datatype_from_dict(json_dict: Dict[str, Any]) -> pyarrow.DataType:
             "nullable": json_dict["nullable"],
         }
         return pyarrow.map_(key, pyarrow_datatype_from_dict(value_type))
+    elif type_class == "map":
+        key_type = pyarrow_datatype_from_dict(json_dict["children"][0]["children"][0])
+        value_type = pyarrow_datatype_from_dict(json_dict["children"][0]["children"][1])
+        keys_sorted = json_dict["type"]["keysSorted"]
+        return pyarrow.map_(key_type, value_type, keys_sorted=keys_sorted)
     elif type_class == "list":
         field = json_dict["children"][0]
         element_type = pyarrow_datatype_from_dict(field)
