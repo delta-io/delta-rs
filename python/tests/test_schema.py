@@ -54,10 +54,12 @@ def test_table_schema_pyarrow_020():
     assert field.nullable is True
     assert field.metadata is None
 
+
 def test_table_schema_pyarrow_121():
     table_path = "../rust/tests/data/delta-1.2.1-only-struct-stats"
     dt = DeltaTable(table_path)
     schema = dt.pyarrow_schema()
+    print(schema)
     field = schema.field(0)
     assert len(schema.types) == 1
     assert field.name == "value"
@@ -230,6 +232,91 @@ def test_schema_pyarrow_types():
     assert pyarrow_field.name == field_name
     assert pyarrow_field.type == pyarrow.date32()
     assert dict(pyarrow_field.metadata) == metadata
+    assert pyarrow_field.nullable is False
+
+    field_name = "simple_map"
+    pyarrow_field = pyarrow_field_from_dict(
+        {
+            "name": field_name,
+            "nullable": False,
+            "metadata": metadata,
+            "type": {"name": "map", "keysSorted": False},
+            "children": [
+                {
+                    "name": "key_value",
+                    "nullable": False,
+                    "type": {"name": "struct"},
+                    "children": [
+                        {
+                            "name": "key",
+                            "nullable": False,
+                            "type": {"name": "utf8"},
+                            "children": [],
+                        },
+                        {
+                            "name": "value",
+                            "nullable": True,
+                            "type": {"name": "utf8"},
+                            "children": [],
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    assert pyarrow_field.name == field_name
+    assert pyarrow_field.type == pyarrow.map_(
+        pyarrow.string(), pyarrow.string(), keys_sorted=False
+    )
+    assert pyarrow_field.metadata == metadata
+    assert pyarrow_field.nullable is False
+
+    field_name = "struct_map"
+    pyarrow_field = pyarrow_field_from_dict(
+        {
+            "name": field_name,
+            "nullable": False,
+            "metadata": metadata,
+            "type": {"name": "map", "keysSorted": False},
+            "children": [
+                {
+                    "name": "key_value",
+                    "nullable": False,
+                    "type": {"name": "struct"},
+                    "children": [
+                        {
+                            "name": "key",
+                            "nullable": False,
+                            "type": {"name": "struct"},
+                            "children": [
+                                {
+                                    "name": "struct_element",
+                                    "nullable": False,
+                                    "type": {"name": "utf8"},
+                                    "children": [],
+                                }
+                            ],
+                        },
+                        {
+                            "name": "value",
+                            "nullable": True,
+                            "type": {"name": "utf8"},
+                            "children": [],
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+    assert pyarrow_field.name == field_name
+    assert pyarrow_field.type == pyarrow.map_(
+        pyarrow.struct(
+            [pyarrow.field("struct_element", pyarrow.string(), nullable=False)]
+        ),
+        pyarrow.string(),
+        keys_sorted=False,
+    )
+    assert pyarrow_field.metadata == metadata
     assert pyarrow_field.nullable is False
 
     field_name = "simple_list"
