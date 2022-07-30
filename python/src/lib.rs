@@ -488,7 +488,7 @@ impl DeltaStorageFsBackend {
     }
 
     fn normalize_path(&self, path: &str) -> PyResult<String> {
-        Ok(self._storage.trim_path(path))
+        Ok(path.trim_end_matches(std::path::MAIN_SEPARATOR)?)
     }
 
     fn head_obj<'py>(&mut self, py: Python<'py>, path: &str) -> PyResult<&'py PyTuple> {

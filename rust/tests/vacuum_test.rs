@@ -1,9 +1,7 @@
 use chrono::Duration;
-use deltalake::storage::file::FileStorageBackend;
 use deltalake::storage::StorageError;
 use deltalake::vacuum::Clock;
 use deltalake::vacuum::Vacuum;
-use deltalake::StorageBackend;
 use std::sync::Arc;
 
 use common::clock::TestClock;
@@ -15,8 +13,7 @@ mod common;
 
 #[tokio::test]
 async fn vacuum_delta_8_0_table() {
-    let backend = FileStorageBackend::new("");
-    let mut table = deltalake::open_table(&backend.join_paths(&["tests", "data", "delta-0.8.0"]))
+    let mut table = deltalake::open_table("./tests/data/delta-0.8.0")
         .await
         .unwrap();
 
