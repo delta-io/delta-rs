@@ -34,6 +34,7 @@ pub async fn create_table_from_json(
     assert!(path.starts_with("./tests/data"));
     std::fs::create_dir_all(path).unwrap();
     std::fs::remove_dir_all(path).unwrap();
+    std::fs::create_dir_all(path).unwrap();
     let schema: Schema = serde_json::from_value(schema).unwrap();
     let config: HashMap<String, Option<String>> = serde_json::from_value(config).unwrap();
     create_test_table(path, schema, partition_columns, config).await

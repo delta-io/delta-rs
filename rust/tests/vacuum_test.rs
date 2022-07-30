@@ -44,12 +44,7 @@ async fn vacuum_delta_8_0_table() {
     // do not enforce retention duration check with 0 hour will purge all files
     assert_eq!(
         result.files_deleted,
-        vec![backend.join_paths(&[
-            "tests",
-            "data",
-            "delta-0.8.0",
-            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet",
-        ])]
+        vec!["part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"]
     );
 
     let result = Vacuum::default()
@@ -61,12 +56,7 @@ async fn vacuum_delta_8_0_table() {
 
     assert_eq!(
         result.files_deleted,
-        vec![backend.join_paths(&[
-            "tests",
-            "data",
-            "delta-0.8.0",
-            "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet",
-        ])]
+        vec!["part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"]
     );
 
     let retention_hours = SystemTime::now()
@@ -127,8 +117,6 @@ async fn test_non_partitioned_table() {
     assert!(!is_deleted(&mut context, "dont_delete_me.parquet").await);
 }
 
-// TODO: See #682. Issues with deleting since windows uses \ for paths
-#[cfg(not(target_os = "windows"))]
 #[tokio::test]
 // Validate vacuum works on a table with multiple partitions
 async fn test_partitioned_table() {
@@ -179,8 +167,6 @@ async fn test_partitioned_table() {
     assert!(!is_deleted(&mut context, "date=2022-07-03/x=2/dont_delete_me.parquet").await);
 }
 
-// TODO: See #682. Issues with deleting since windows uses \ for paths
-#[cfg(not(target_os = "windows"))]
 #[tokio::test]
 // Partitions that start with _ are not ignored
 async fn test_partitions_included() {
@@ -309,7 +295,13 @@ async fn test_non_managed_files() {
 }
 
 async fn is_deleted(context: &mut TestContext, path: &str) -> bool {
-    let uri = context.table.as_ref().unwrap().table_uri.to_string();
+    let uri = context
+        .table
+        .as_ref()
+        .unwrap()
+        .table_uri
+        .trim_start_matches("file:/")
+        .to_string();
     let backend = context.get_storage();
     let path = uri + "/" + path;
     let res = backend.head_obj(&path).await;

@@ -6,8 +6,8 @@ use super::{
 };
 use crate::action::{self, Action};
 use crate::delta_config;
-use bytes::Bytes;
 use chrono::Utc;
+use object_store::ObjectStore;
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -46,7 +46,7 @@ impl DeltaTableState {
         version: DeltaDataTypeVersion,
     ) -> Result<Self, ApplyLogError> {
         let commit_uri = table.commit_uri_from_version(version);
-        let commit_log_bytes = table.storage.get_obj(&commit_uri).await?;
+        let commit_log_bytes = table.storage.get(&commit_uri).await?.bytes().await?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
         let mut new_state = DeltaTableState::with_version(version);
@@ -84,8 +84,8 @@ impl DeltaTableState {
         let mut new_state = DeltaTableState::with_version(check_point.version);
 
         for f in &checkpoint_data_paths {
-            let obj = table.storage.get_obj(f).await?;
-            let preader = SerializedFileReader::new(Bytes::from(obj))?;
+            let obj = table.storage.get(f).await?.bytes().await?;
+            let preader = SerializedFileReader::new(obj)?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
                 return Err(DeltaTableError::from(action::ActionError::Generic(

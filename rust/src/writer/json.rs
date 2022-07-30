@@ -7,16 +7,15 @@ use super::{
     },
     DeltaWriter, DeltaWriterError,
 };
-use crate::writer::utils::ShareableBuffer;
-use crate::{
-    action::Add, get_backend_for_uri_with_options, DeltaTable, DeltaTableMetaData, Schema,
-    StorageBackend,
-};
+use crate::{action::Add, DeltaTable, DeltaTableMetaData, Schema};
+use crate::{object_store::DeltaObjectStore, writer::utils::ShareableBuffer};
 use arrow::{
     datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
     record_batch::*,
 };
+use bytes::Bytes;
 use log::{info, warn};
+use object_store::ObjectStore;
 use parquet::{
     arrow::ArrowWriter, basic::Compression, errors::ParquetError,
     file::properties::WriterProperties,
@@ -30,8 +29,7 @@ type BadValue = (Value, ParquetError);
 
 /// Writes messages to a delta lake table.
 pub struct JsonWriter {
-    storage: Arc<dyn StorageBackend>,
-    table_uri: String,
+    storage: Arc<DeltaObjectStore>,
     arrow_schema_ref: Arc<arrow::datatypes::Schema>,
     writer_properties: WriterProperties,
     partition_columns: Vec<String>,
@@ -186,8 +184,7 @@ impl JsonWriter {
         partition_columns: Option<Vec<String>>,
         storage_options: Option<HashMap<String, String>>,
     ) -> Result<Self, DeltaWriterError> {
-        let storage =
-            get_backend_for_uri_with_options(&table_uri, storage_options.unwrap_or_default())?;
+        let storage = DeltaObjectStore::try_new_with_options(&table_uri, storage_options)?;
 
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = WriterProperties::builder()
@@ -196,8 +193,7 @@ impl JsonWriter {
             .build();
 
         Ok(Self {
-            storage,
-            table_uri,
+            storage: Arc::new(storage),
             arrow_schema_ref: schema,
             writer_properties,
             partition_columns: partition_columns.unwrap_or_default(),
@@ -221,7 +217,6 @@ impl JsonWriter {
 
         Ok(Self {
             storage: table.storage.clone(),
-            table_uri: table.table_uri.clone(),
             arrow_schema_ref,
             writer_properties,
             partition_columns,
@@ -364,21 +359,10 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
 
         for (_, mut writer) in writers {
             let metadata = writer.arrow_writer.close()?;
-
             let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
-
-            let obj_bytes = writer.buffer.to_vec();
+            let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
-
-            let storage_path = self.storage.join_path(&self.table_uri, path.as_str());
-
-            //
-            // TODO: Wrap in retry loop to handle temporary network errors
-            //
-
-            self.storage
-                .put_obj(&storage_path, obj_bytes.as_slice())
-                .await?;
+            self.storage.put(&path, obj_bytes).await?;
 
             // Replace self null_counts with an empty map. Use the other for stats.
             let null_counts = std::mem::take(&mut writer.null_counts);
@@ -386,7 +370,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
             actions.push(create_add(
                 &writer.partition_values,
                 null_counts,
-                path,
+                path.to_string(),
                 file_size,
                 &metadata,
             )?);

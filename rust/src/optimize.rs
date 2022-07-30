@@ -25,9 +25,9 @@ use crate::parquet::file::reader::FileReader;
 use crate::writer::utils::PartitionPath;
 use crate::writer::{DeltaWriter, DeltaWriterError, RecordBatchWriter};
 use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter};
-use bytes::Bytes;
 use log::debug;
 use log::error;
+use object_store::{path::Path, ObjectStore};
 use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
 use parquet::file::serialized_reader::SerializedFileReader;
 use serde::{Deserialize, Serialize};
@@ -137,7 +137,7 @@ impl From<OptimizeInput> for DeltaOperation {
 /// A collection of bins for a particular partition
 #[derive(Debug)]
 struct MergeBin {
-    files: Vec<String>,
+    files: Vec<Path>,
     size_bytes: DeltaDataTypeLong,
 }
 
@@ -163,7 +163,7 @@ impl MergeBin {
         self.files.len()
     }
 
-    fn add(&mut self, file_path: String, size: i64) {
+    fn add(&mut self, file_path: Path, size: i64) {
         self.files.push(file_path);
         self.size_bytes += size;
     }
@@ -214,11 +214,8 @@ impl MergePlan {
 
                 for path in &bin.files {
                     //Read the file into memory and append it to the writer.
-
-                    let parquet_uri = table.storage.join_path(&table.table_uri, path);
-                    let data = table.storage.get_obj(&parquet_uri).await?;
+                    let data = table.storage.get(path).await?.bytes().await?;
                     let size: DeltaDataTypeLong = data.len().try_into().unwrap();
-                    let data = Bytes::from(data);
                     let reader = SerializedFileReader::new(data)?;
                     let records = reader.metadata().file_metadata().num_rows();
 
@@ -231,7 +228,7 @@ impl MergePlan {
                         writer.write_partition(batch, partition_values).await?;
                     }
 
-                    actions.push(create_remove(path, partition_values, size)?);
+                    actions.push(create_remove(path.as_ref(), partition_values, size)?);
 
                     metrics.num_files_removed += 1;
                     metrics.files_removed.total_files += 1;
@@ -361,7 +358,7 @@ pub fn create_merge_plan<'a>(
             }
 
             if file.size + curr_bin.get_total_file_size() < target_size {
-                curr_bin.add(file.path.clone(), file.size);
+                curr_bin.add(Path::from(file.path.as_str()), file.size);
             } else {
                 if curr_bin.get_num_files() > 1 {
                     bins.push(curr_bin);
@@ -369,7 +366,7 @@ pub fn create_merge_plan<'a>(
                     metrics.total_files_skipped += curr_bin.get_num_files();
                 }
                 curr_bin = MergeBin::new();
-                curr_bin.add(file.path.clone(), file.size);
+                curr_bin.add(Path::from(file.path.as_str()), file.size);
             }
         }
 

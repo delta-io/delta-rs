@@ -6,6 +6,7 @@ use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 use hyper::http::uri::InvalidUri;
+use object_store::Error as ObjectStoreError;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
@@ -426,6 +427,14 @@ pub enum StorageError {
         #[from]
         /// Uri error details when the URI parsing is invalid.
         source: InvalidUri,
+    },
+
+    /// underlying object store returned an error.
+    #[error("ObjectStore interaction failed: {source}")]
+    ObjectStore {
+        /// The wrapped [`ObjectStoreError`]
+        #[from]
+        source: ObjectStoreError,
     },
 }
 

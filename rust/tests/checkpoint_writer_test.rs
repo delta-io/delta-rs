@@ -1,14 +1,13 @@
+use ::object_store::path::Path as ObjectStorePath;
+use chrono::Utc;
+use deltalake::action::*;
+use deltalake::*;
+use maplit::hashmap;
 use std::collections::HashSet;
 use std::fs;
 use std::iter::FromIterator;
 use std::path::{Path, PathBuf};
-
-use chrono::Utc;
-use maplit::hashmap;
 use uuid::Uuid;
-
-use deltalake::action::*;
-use deltalake::*;
 
 #[allow(dead_code)]
 mod fs_common;
@@ -110,7 +109,7 @@ mod delete_expired_delta_log_in_checkpoint {
         )
         .await;
 
-        let table_path = table.table_uri.clone();
+        let table_path = table.table_uri.trim_start_matches("file:/").to_string();
         let set_file_last_modified = |version: usize, last_modified_millis: i64| {
             let last_modified_secs = last_modified_millis / 1000;
             let path = format!("{}/_delta_log/{:020}.json", &table_path, version);
@@ -140,8 +139,15 @@ mod delete_expired_delta_log_in_checkpoint {
         )
         .await
         .unwrap();
+
         table.update().await.unwrap(); // make table to read the checkpoint
-        assert_eq!(table.get_files(), vec![a1.path.as_str(), a2.path.as_str()]);
+        assert_eq!(
+            table.get_files(),
+            vec![
+                ObjectStorePath::from(a1.path.as_ref()),
+                ObjectStorePath::from(a2.path.as_ref())
+            ]
+        );
 
         // log files 0 and 1 are deleted
         table
@@ -152,7 +158,6 @@ mod delete_expired_delta_log_in_checkpoint {
             .load_version(1)
             .await
             .expect_err("Should not load version 1");
-
         // log file 2 is kept
         table.load_version(2).await.expect("Cannot load version 2");
     }
@@ -184,7 +189,13 @@ mod delete_expired_delta_log_in_checkpoint {
         .await
         .unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
-        assert_eq!(table.get_files(), vec![a1.path.as_str(), a2.path.as_str()]);
+        assert_eq!(
+            table.get_files(),
+            vec![
+                ObjectStorePath::from(a1.path.as_ref()),
+                ObjectStorePath::from(a2.path.as_ref())
+            ]
+        );
 
         table
             .load_version(0)
@@ -215,15 +226,27 @@ mod checkpoints_with_tombstones {
         assert_eq!(2, fs_common::commit_add(&mut table, &a2).await);
         checkpoints::create_checkpoint(&table).await.unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
-        assert_eq!(table.get_files(), vec![a1.path.as_str(), a2.path.as_str()]);
+        assert_eq!(
+            table.get_files(),
+            vec![
+                ObjectStorePath::from(a1.path.as_ref()),
+                ObjectStorePath::from(a2.path.as_ref())
+            ]
+        );
 
         let (removes1, opt1) = pseudo_optimize(&mut table, 5 * 59 * 1000).await;
-        assert_eq!(table.get_files(), vec![opt1.path.as_str()]);
+        assert_eq!(
+            table.get_files(),
+            vec![ObjectStorePath::from(opt1.path.as_ref())]
+        );
         assert_eq!(table.get_state().all_tombstones(), &removes1);
 
         checkpoints::create_checkpoint(&table).await.unwrap();
         table.update().await.unwrap(); // make table to read the checkpoint
-        assert_eq!(table.get_files(), vec![opt1.path.as_str()]);
+        assert_eq!(
+            table.get_files(),
+            vec![ObjectStorePath::from(opt1.path.as_ref())]
+        );
         assert_eq!(table.get_state().all_tombstones().len(), 0); // stale removes are deleted from the state
     }
 
