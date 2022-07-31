@@ -79,7 +79,7 @@ number or datetime string:
 .. code-block:: python
 
     >>> dt.load_version(1)
-    >>> dt.load_with_timestamp("2021-11-04 00:05:23.283+00:00")
+    >>> dt.load_with_datetime("2021-11-04 00:05:23.283+00:00")
 
 .. warning::
 
