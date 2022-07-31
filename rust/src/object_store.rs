@@ -319,7 +319,7 @@ fn convert_object_meta(
         location: Path::from(extract_rel_path(
             root_uri.as_ref(),
             // HACK hopefully this will hold over until we have switches to object_store
-            storage_meta.path.as_str().replace("\\", DELIMITER).as_ref(),
+            storage_meta.path.as_str().replace('\\', DELIMITER).as_ref(),
         )?),
         last_modified: storage_meta.modified,
         size: storage_meta.size.unwrap_or_default() as usize,
