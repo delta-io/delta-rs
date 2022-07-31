@@ -41,11 +41,9 @@ def test_vacuum_zero_duration(
     if use_relative:
         monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
         (tmp_path / "path/to/table").mkdir(parents=True)
-        prefix = (tmp_path / "path/to/table").as_posix()
         table_path = "./path/to/table"
     else:
         table_path = str(tmp_path)
-        prefix = tmp_path.as_posix()
 
     write_deltalake(table_path, sample_data, mode="overwrite")
     dt = DeltaTable(table_path)
