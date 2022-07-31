@@ -16,6 +16,7 @@ use log::debug;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// Storage option keys to use when creating [crate::storage::azure::AzureStorageOptions].

@@ -948,7 +948,7 @@ async fn get_object_with_retries(
             .get_object(GetObjectRequest {
                 bucket: bucket.to_string(),
                 key: key.to_string(),
-                range: range.map(format_http_range),
+                range: range.as_ref().map(format_http_range),
                 ..Default::default()
             })
             .await;
@@ -965,7 +965,7 @@ async fn get_object_with_retries(
     }
 }
 
-pub fn format_http_range(range: std::ops::Range<usize>) -> String {
+fn format_http_range(range: &std::ops::Range<usize>) -> String {
     format!("bytes={}-{}", range.start, range.end.saturating_sub(1))
 }
 
