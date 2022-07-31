@@ -46,7 +46,8 @@ impl delta::DeltaTable {
     /// Return statistics for Datafusion Table
     pub fn datafusion_table_statistics(&self) -> Statistics {
         let stats = self
-            .get_active_add_actions()
+            .get_state()
+            .files()
             .iter()
             .fold(
                 Some(Statistics {
@@ -81,8 +82,8 @@ impl delta::DeltaTable {
                                 .get_fields()
                                 .iter()
                                 .zip(col_stats)
-                                .map(|(field, stats)| ColumnStatistics {
-                                    null_count: new_stats
+                                .map(|(field, stats)| {
+                                    let null_count = new_stats
                                         .null_count
                                         .get(field.get_name())
                                         .and_then(|x| {
@@ -90,8 +91,9 @@ impl delta::DeltaTable {
                                             let null_count = x.as_value()? as usize;
                                             Some(null_count_acc + null_count)
                                         })
-                                        .or(stats.null_count),
-                                    max_value: new_stats
+                                        .or(stats.null_count);
+
+                                    let max_value = new_stats
                                         .max_values
                                         .get(field.get_name())
                                         .and_then(|x| {
@@ -113,8 +115,9 @@ impl delta::DeltaTable {
                                                 (None, old) => old,
                                             }
                                         })
-                                        .or_else(|| stats.max_value.clone()),
-                                    min_value: new_stats
+                                        .or_else(|| stats.max_value.clone());
+
+                                    let min_value = new_stats
                                         .min_values
                                         .get(field.get_name())
                                         .and_then(|x| {
@@ -136,8 +139,14 @@ impl delta::DeltaTable {
                                                 (None, old) => old,
                                             }
                                         })
-                                        .or_else(|| stats.min_value.clone()),
-                                    distinct_count: None, // TODO: distinct
+                                        .or_else(|| stats.min_value.clone());
+
+                                    ColumnStatistics {
+                                        null_count,
+                                        max_value,
+                                        min_value,
+                                        distinct_count: None, // TODO: distinct
+                                    }
                                 })
                                 .collect()
                         }),
@@ -146,6 +155,7 @@ impl delta::DeltaTable {
                 },
             )
             .unwrap_or_default();
+
         // Convert column max/min scalar values to correct types based on arrow types.
         Statistics {
             is_exact: true,
@@ -245,7 +255,7 @@ impl TableProvider for delta::DeltaTable {
 
         let partitions = filenames
             .into_iter()
-            .zip(self.get_active_add_actions())
+            .zip(self.get_state().files())
             .enumerate()
             .map(|(_idx, (fname, action))| {
                 let path = std::fs::canonicalize(std::path::PathBuf::from(fname))?;

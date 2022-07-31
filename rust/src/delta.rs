@@ -1061,11 +1061,6 @@ impl DeltaTable {
             .collect())
     }
 
-    /// Return a reference to all active "add" actions present in the loaded state
-    pub fn get_active_add_actions(&self) -> &Vec<action::Add> {
-        self.state.files()
-    }
-
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn get_files_iter(&self) -> impl Iterator<Item = Path> + '_ {
