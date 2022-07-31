@@ -316,7 +316,8 @@ mod tests {
     #[tokio::test]
     async fn test_put() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let table_path = Path::from_filesystem_path(tmp_dir.path()).unwrap();
+        let tmp_path = tmp_dir.path().to_owned();
+        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
         let object_store =
             DeltaObjectStore::try_new_with_options(table_path.as_ref(), None).unwrap();
 
@@ -335,7 +336,8 @@ mod tests {
     #[tokio::test]
     async fn test_head() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let table_path = Path::from_filesystem_path(tmp_dir.path()).unwrap();
+        let tmp_path = tmp_dir.path().to_owned();
+        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
         let object_store =
             DeltaObjectStore::try_new_with_options(table_path.as_ref(), None).unwrap();
 
@@ -354,7 +356,8 @@ mod tests {
     #[tokio::test]
     async fn test_get() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let table_path = Path::from_filesystem_path(tmp_dir.path()).unwrap();
+        let tmp_path = tmp_dir.path().to_owned();
+        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
         let object_store =
             DeltaObjectStore::try_new_with_options(table_path.as_ref(), None).unwrap();
 
@@ -375,7 +378,8 @@ mod tests {
     #[tokio::test]
     async fn test_delete() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let table_path = Path::from_filesystem_path(tmp_dir.path()).unwrap();
+        let tmp_path = tmp_dir.path().to_owned();
+        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
         let object_store =
             DeltaObjectStore::try_new_with_options(table_path.as_ref(), None).unwrap();
 
@@ -394,7 +398,8 @@ mod tests {
     #[tokio::test]
     async fn test_delete_batch() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let table_path = Path::from_filesystem_path(tmp_dir.path()).unwrap();
+        let tmp_path = tmp_dir.path().to_owned();
+        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
         let object_store =
             DeltaObjectStore::try_new_with_options(table_path.as_ref(), None).unwrap();
 
@@ -418,7 +423,8 @@ mod tests {
     #[tokio::test]
     async fn test_list() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let table_path = Path::from_filesystem_path(tmp_dir.path()).unwrap();
+        let tmp_path = tmp_dir.path().to_owned();
+        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
         let object_store =
             DeltaObjectStore::try_new_with_options(table_path.as_ref(), None).unwrap();
 
@@ -463,7 +469,8 @@ mod tests {
     #[tokio::test]
     async fn test_list_prefix() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let table_path = Path::from_filesystem_path(tmp_dir.path()).unwrap();
+        let tmp_path = tmp_dir.path().to_owned();
+        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
         let object_store =
             DeltaObjectStore::try_new_with_options(table_path.as_ref(), None).unwrap();
 
@@ -483,7 +490,8 @@ mod tests {
     #[tokio::test]
     async fn test_rename_if_not_exists() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let table_path = Path::from_filesystem_path(tmp_dir.path()).unwrap();
+        let tmp_path = tmp_dir.path().to_owned();
+        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
         let object_store =
             DeltaObjectStore::try_new_with_options(table_path.as_ref(), None).unwrap();
 
