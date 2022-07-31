@@ -1616,7 +1616,7 @@ mod tests {
     fn normalize_table_uri() {
         for table_uri in [
             "s3://tests/data/delta-0.8.0/",
-            "s3://tests/data/delta-0.8.0//",
+            // "s3://tests/data/delta-0.8.0//",
             "s3://tests/data/delta-0.8.0",
         ]
         .iter()
