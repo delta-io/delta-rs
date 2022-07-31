@@ -161,7 +161,9 @@ impl DeltaObjectStore {
         // we make sure when we are parsing the table uri
         ObjectStoreUrl::parse(format!(
             "delta-rs://{}",
-            self.root.as_ref().replace(DELIMITER, "-")
+            // NOTE We need to also replace colons, but its fine, since it just needs
+            // to be a unique-ish identifier for the object store in datafusion
+            self.root.as_ref().replace(DELIMITER, "-").replace(":", "-")
         ))
         .expect("Invalid object store url.")
     }
