@@ -140,13 +140,11 @@ impl DeltaObjectStore {
         let uri = match self.scheme.as_ref() {
             "file" | "" => {
                 // On windows the drive (e.g. 'c:') is part of root and must not be prefixed.
-                cfg_if::cfg_if! {
-                    if #[cfg(target_os = "windows")] {
-                        format!("{}/{}", self.root, location.as_ref())
-                    } else {
-                        format!("/{}/{}", self.root, location.as_ref())
-                    }
-                }
+                #[cfg(windows)]
+                let os_uri = format!("{}/{}", self.root, location.as_ref());
+                #[cfg(unix)]
+                let os_uri = format!("/{}/{}", self.root, location.as_ref());
+                os_uri
             }
             _ => format!("{}://{}/{}", self.scheme, self.root, location.as_ref()),
         };
@@ -154,8 +152,7 @@ impl DeltaObjectStore {
     }
 
     #[cfg(feature = "datafusion-ext")]
-    /// generate a unique url to identify the store in datafusion.
-    /// The
+    /// generate a unique enough url to identify the store in datafusion.
     pub(crate) fn object_store_url(&self) -> ObjectStoreUrl {
         // we are certain, that the URL can be parsed, since
         // we make sure when we are parsing the table uri
@@ -320,7 +317,7 @@ fn convert_object_meta(
     Ok(ObjectMeta {
         location: Path::from(extract_rel_path(
             root_uri.as_ref(),
-            // HACK hopefully this will hold over until we have switches to object_store
+            // HACK hopefully this will hold over until we have switched to object_store
             storage_meta.path.as_str().replace('\\', DELIMITER).as_ref(),
         )?),
         last_modified: storage_meta.modified,
