@@ -905,7 +905,7 @@ mod tests {
     #[tokio::test]
     async fn cleanup_metadata_fs_test() {
         let table_path = format!("./tests/data/md_cleanup/{}", Uuid::new_v4());
-        std::fs::create_dir(&table_path).unwrap();
+        std::fs::create_dir_all(&table_path).unwrap();
         cleanup_metadata_test(&table_path).await;
         std::fs::remove_dir_all(&table_path).unwrap();
     }
