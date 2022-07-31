@@ -316,6 +316,7 @@ mod tests {
     #[tokio::test]
     async fn test_put() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
+        let table_path = Path::from_filesystem_path(tmp_dir.path()).unwrap();
         let object_store =
             DeltaObjectStore::try_new_with_options(table_path.as_ref(), None).unwrap();
 
