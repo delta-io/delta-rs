@@ -586,6 +586,11 @@ pub struct DeltaTable {
 }
 
 impl DeltaTable {
+    /// get a shared reference to the delta object store
+    pub fn object_store(&self) -> Arc<DeltaObjectStore> {
+        self.storage.clone()
+    }
+
     /// Return the uri of commit version.
     pub fn commit_uri_from_version(&self, version: DeltaDataTypeVersion) -> Path {
         let version = format!("{:020}.json", version);
@@ -595,7 +600,7 @@ impl DeltaTable {
     /// Return the list of paths of given checkpoint.
     pub fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<Path> {
         let checkpoint_prefix = format!("{:020}", check_point.version);
-        let log_path = Path::from("_delta_log");
+        let log_path = self.storage.log_path();
         let mut checkpoint_data_paths = Vec::new();
 
         match check_point.parts {
@@ -1045,7 +1050,7 @@ impl DeltaTable {
     ) -> Result<Vec<Path>, DeltaTableError> {
         Ok(self
             .get_active_add_actions_by_partitions(filters)?
-            .map(|add| Path::from(add.path.clone()))
+            .map(|add| Path::from(add.path.as_ref()))
             .collect())
     }
 
@@ -1081,7 +1086,7 @@ impl DeltaTable {
         self.state
             .files()
             .iter()
-            .map(|add| Path::from(add.path.as_str()))
+            .map(|add| Path::from(add.path.as_ref()))
             .collect()
     }
 
@@ -1684,8 +1689,7 @@ mod tests {
         assert_eq!(dt.state.files().len(), 0);
 
         // assert new _delta_log file created in tempDir
-        let table_path_raw = dt.table_uri.trim_start_matches("file:/");
-        let table_path = Path::new(table_path_raw);
+        let table_path = Path::new(&dt.table_uri);
         assert!(table_path.exists());
 
         let delta_log = table_path.join("_delta_log");

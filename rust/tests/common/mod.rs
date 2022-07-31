@@ -70,13 +70,7 @@ impl TestContext {
         create_time: i64,
         commit_to_log: bool,
     ) {
-        let uri = self
-            .table
-            .as_ref()
-            .unwrap()
-            .table_uri
-            .trim_start_matches("file:/")
-            .to_string();
+        let uri = self.table.as_ref().unwrap().table_uri.clone();
         let backend = self.get_storage();
         let remote_path = uri + "/" + path;
 

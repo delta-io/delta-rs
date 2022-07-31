@@ -1,9 +1,14 @@
 //! Object Store implementation for DeltaTable.
+//!
+//! The object store abstracts all interactions with the underlying storage system.
+//! Currently local filesystem, S3, Azure, and GCS are supported.
 use crate::{
     get_backend_for_uri_with_options,
     storage::{ObjectMeta as StorageObjectMeta, StorageBackend, StorageError},
 };
 use bytes::Bytes;
+#[cfg(feature = "datafusion-ext")]
+use datafusion::datasource::object_store::ObjectStoreUrl;
 use futures::stream::BoxStream;
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -40,6 +45,11 @@ impl From<StorageError> for ObjectStoreError {
 }
 
 /// Object Store implementation for DeltaTable.
+///
+/// The [DeltaObjectStore] implements the [object_store::ObjectStore] trait to facilitate
+/// interoperability with the larger rust / arrow ecosystem. Specifically it can directly
+/// be registered as store within datafusion.
+///
 /// The table root is treated as the root of the object store.
 /// All [Path] are reported relative to the table root.
 #[derive(Debug, Clone)]
@@ -108,13 +118,34 @@ impl DeltaObjectStore {
 
     /// Get fully qualified uri for table root
     pub fn root_uri(&self) -> String {
-        format!("{}://{}/", self.scheme, self.root)
+        match self.scheme.as_ref() {
+            "file" | "" => format!("/{}", self.root),
+            _ => format!("{}://{}", self.scheme, self.root),
+        }
     }
 
     /// convert a table [Path] to a fully qualified uri
     pub fn to_uri(&self, location: &Path) -> String {
-        let uri = format!("{}://{}/{}", self.scheme, self.root, location.as_ref());
+        let uri = match self.scheme.as_ref() {
+            "file" | "" => format!("/{}/{}", self.root, location.as_ref()),
+            _ => format!("{}://{}/{}", self.scheme, self.root, location.as_ref()),
+        };
         uri.trim_end_matches('/').to_string()
+    }
+
+    #[cfg(feature = "datafusion-ext")]
+    /// generate a unique url to identify the store in datafusion.
+    /// The
+    pub(crate) fn object_store_url(&self) -> ObjectStoreUrl {
+        // we are certain, that the URL can be parsed, since
+        // we make sure when we are parsing the table uri
+        ObjectStoreUrl::parse(format!(
+            "delta-rs://{}",
+            self.root
+                .as_ref()
+                .replace(object_store::path::DELIMITER, "-")
+        ))
+        .expect("Invalid object store url.")
     }
 
     /// [Path] to Delta log
@@ -141,19 +172,13 @@ impl ObjectStore for DeltaObjectStore {
     async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
         Ok(self
             .storage
-            .put_obj(
-                self.to_uri(location).trim_start_matches("file:/"),
-                bytes.as_ref(),
-            )
+            .put_obj(&self.to_uri(location), bytes.as_ref())
             .await?)
     }
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
-        let data = self
-            .storage
-            .get_obj(self.to_uri(location).trim_start_matches("file:/"))
-            .await?;
+        let data = self.storage.get_obj(&self.to_uri(location)).await?;
         Ok(GetResult::Stream(
             futures::stream::once(async move { Ok(data.into()) }).boxed(),
         ))
@@ -161,28 +186,23 @@ impl ObjectStore for DeltaObjectStore {
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte range
-    async fn get_range(&self, _location: &Path, _range: Range<usize>) -> ObjectStoreResult<Bytes> {
-        todo!()
+    async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
+        let store = object_store::local::LocalFileSystem::default();
+        let mut root_parts = self.root.parts().collect::<Vec<_>>();
+        root_parts.extend(location.parts());
+        let path = Path::from_iter(root_parts);
+        store.get_range(&path, range).await
     }
 
     /// Return the metadata for the specified location
     async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
-        let meta = self
-            .storage
-            .head_obj(self.to_uri(location).trim_start_matches("file:/"))
-            .await?;
-        convert_object_meta(
-            self.root_uri().trim_start_matches("file:/").to_string(),
-            meta,
-        )
+        let meta = self.storage.head_obj(&self.to_uri(location)).await?;
+        convert_object_meta(self.root_uri(), meta)
     }
 
     /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
-        Ok(self
-            .storage
-            .delete_obj(self.to_uri(location).trim_start_matches("file:/"))
-            .await?)
+        Ok(self.storage.delete_obj(&self.to_uri(location)).await?)
     }
 
     /// List all the objects with the given prefix.
@@ -197,10 +217,10 @@ impl ObjectStore for DeltaObjectStore {
             Some(pre) => self.to_uri(pre),
             None => self.root_uri(),
         };
-        let root_uri = self.root_uri().trim_start_matches("file:/").to_string();
+        let root_uri = self.root_uri();
         let stream = self
             .storage
-            .list_objs(path.trim_start_matches("file:/"))
+            .list_objs(&path)
             .await?
             .map(|obj| match obj {
                 Ok(meta) => convert_object_meta(root_uri.clone(), meta),
@@ -252,10 +272,7 @@ impl ObjectStore for DeltaObjectStore {
     async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
         Ok(self
             .storage
-            .rename_obj_noreplace(
-                self.to_uri(from).trim_start_matches("file:/"),
-                self.to_uri(to).trim_start_matches("file:/"),
-            )
+            .rename_obj_noreplace(&self.to_uri(from), &self.to_uri(to))
             .await?)
     }
 }
@@ -295,28 +312,6 @@ mod tests {
     use super::*;
     use futures::TryStreamExt;
     use tokio::fs;
-
-    #[test]
-    fn test_table_root() {
-        let curr_dir = std::env::current_dir().unwrap();
-        let curr_path = curr_dir.to_str().unwrap();
-        let table_uri = format!("file:/{}", curr_path);
-
-        // table uri with scheme and path
-        let store = DeltaObjectStore::try_new_with_options(&table_uri, None).unwrap();
-        let root_uri = store.to_uri(&Path::from(""));
-        assert_eq!(table_uri, root_uri);
-
-        // absolute path
-        let store = DeltaObjectStore::try_new_with_options(curr_path, None).unwrap();
-        let root_uri = store.to_uri(&Path::from(""));
-        assert_eq!(table_uri, root_uri);
-
-        // relative path
-        let store = DeltaObjectStore::try_new_with_options(".", None).unwrap();
-        let root_uri = store.to_uri(&Path::from(""));
-        assert_eq!(table_uri, root_uri)
-    }
 
     #[tokio::test]
     async fn test_put() {

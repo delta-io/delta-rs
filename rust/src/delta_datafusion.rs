@@ -29,14 +29,15 @@ use async_trait::async_trait;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::{TableProvider, TableType};
+use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::{ColumnStatistics, Statistics};
 use datafusion::scalar::ScalarValue;
+use url::Url;
 
 use crate::action;
 use crate::delta;
@@ -243,39 +244,42 @@ impl TableProvider for delta::DeltaTable {
 
     async fn scan(
         &self,
-        _: &SessionState,
+        session: &SessionState,
         projection: &Option<Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
-    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(<ArrowSchema as TryFrom<&schema::Schema>>::try_from(
             delta::DeltaTable::schema(self).unwrap(),
         )?);
-        let filenames = self.get_file_uris();
 
-        let partitions = filenames
-            .into_iter()
-            .zip(self.get_state().files())
-            .enumerate()
-            .map(|(_idx, (fname, action))| {
-                let path = std::fs::canonicalize(std::path::PathBuf::from(fname))?;
-                let path_str = path
-                    .components()
-                    .map(|c| c.as_os_str().to_str().unwrap())
-                    .collect::<Vec<_>>()
-                    .join("/");
-                // TODO: no way to associate stats per file in datafusion at the moment, see:
-                // https://github.com/apache/arrow-datafusion/issues/1301
-                Ok(vec![PartitionedFile::new(path_str, action.size as u64)])
+        // each delta table must register a specific object store, since paths are internally
+        // handled relative to the table root.
+        let object_store_url = self.storage.object_store_url();
+        let url: &Url = object_store_url.as_ref();
+        session.runtime_env.register_object_store(
+            url.scheme(),
+            url.host_str().unwrap_or_default(),
+            self.object_store(),
+        );
+
+        // TODO prune files based on file statistics and filter expressions
+        let partitions = self
+            .get_state()
+            .files()
+            .iter()
+            .map(|action| {
+                Ok(vec![PartitionedFile::new(
+                    action.path.clone(),
+                    action.size as u64,
+                )])
             })
-            .collect::<datafusion::error::Result<_>>()?;
-
-        let dt_object_store_url = ObjectStoreUrl::local_filesystem();
+            .collect::<DataFusionResult<_>>()?;
 
         ParquetFormat::default()
             .create_physical_plan(
                 FileScanConfig {
-                    object_store_url: dt_object_store_url,
+                    object_store_url,
                     file_schema: schema,
                     file_groups: partitions,
                     statistics: self.datafusion_table_statistics(),

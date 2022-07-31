@@ -292,13 +292,7 @@ async fn test_non_managed_files() {
 }
 
 async fn is_deleted(context: &mut TestContext, path: &str) -> bool {
-    let uri = context
-        .table
-        .as_ref()
-        .unwrap()
-        .table_uri
-        .trim_start_matches("file:/")
-        .to_string();
+    let uri = context.table.as_ref().unwrap().table_uri.clone();
     let backend = context.get_storage();
     let path = uri + "/" + path;
     let res = backend.head_obj(&path).await;

@@ -138,10 +138,7 @@ async fn read_null_partitions_from_checkpoint() {
     )
     .await;
 
-    println!("{}", table.table_uri);
-
-    let table_uri_raw = table.table_uri.trim_start_matches("file:/").to_string();
-    let delta_log = std::path::Path::new(&table_uri_raw).join("_delta_log");
+    let delta_log = std::path::Path::new(&table.table_uri).join("_delta_log");
 
     let add = |partition: Option<String>| Add {
         partition_values: hashmap! {
