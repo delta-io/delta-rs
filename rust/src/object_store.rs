@@ -13,7 +13,8 @@ use futures::stream::BoxStream;
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use object_store::{
-    path::Path, Error as ObjectStoreError, GetResult, ListResult, ObjectMeta, ObjectStore,
+    path::{Path, DELIMITER},
+    Error as ObjectStoreError, GetResult, ListResult, ObjectMeta, ObjectStore,
     Result as ObjectStoreResult,
 };
 use std::collections::HashMap;
@@ -89,9 +90,22 @@ impl DeltaObjectStore {
     ) -> ObjectStoreResult<Self> {
         let (scheme, root) = match Url::parse(table_uri.as_ref()) {
             Ok(result) => {
-                let raw_path = format!("{}{}", result.domain().unwrap_or_default(), result.path());
-                let root = Path::parse(raw_path)?;
-                Ok((result.scheme().to_string(), root))
+                match result.scheme() {
+                    "file" | "gs" | "s3" | "adls2" | "" => {
+                        let raw_path =
+                            format!("{}{}", result.domain().unwrap_or_default(), result.path());
+                        let root = Path::parse(raw_path)?;
+                        Ok((result.scheme().to_string(), root))
+                    }
+                    _ => {
+                        // Since we did find some base / scheme, but don't recognize it, it
+                        // may be a local path (i.e. c:/.. on windows). We need to pipe it through path though
+                        // to get consistent path separators.
+                        let local_path = std::path::Path::new(table_uri.as_ref());
+                        let root = Path::from_filesystem_path(local_path)?;
+                        Ok(("file".to_string(), root))
+                    }
+                }
             }
             Err(ParseError::RelativeUrlWithoutBase) => {
                 let local_path = std::path::Path::new(table_uri.as_ref());
@@ -118,16 +132,22 @@ impl DeltaObjectStore {
 
     /// Get fully qualified uri for table root
     pub fn root_uri(&self) -> String {
-        match self.scheme.as_ref() {
-            "file" | "" => format!("/{}", self.root),
-            _ => format!("{}://{}", self.scheme, self.root),
-        }
+        self.to_uri(&Path::from(""))
     }
 
     /// convert a table [Path] to a fully qualified uri
     pub fn to_uri(&self, location: &Path) -> String {
         let uri = match self.scheme.as_ref() {
-            "file" | "" => format!("/{}/{}", self.root, location.as_ref()),
+            "file" | "" => {
+                // On windows the drive (e.g. 'c:') is part of root and must not be prefixed.
+                cfg_if::cfg_if! {
+                    if #[cfg(target_os = "windows")] {
+                        format!("{}/{}", self.root, location.as_ref())
+                    } else {
+                        format!("/{}/{}", self.root, location.as_ref())
+                    }
+                }
+            }
             _ => format!("{}://{}/{}", self.scheme, self.root, location.as_ref()),
         };
         uri.trim_end_matches('/').to_string()
@@ -141,9 +161,7 @@ impl DeltaObjectStore {
         // we make sure when we are parsing the table uri
         ObjectStoreUrl::parse(format!(
             "delta-rs://{}",
-            self.root
-                .as_ref()
-                .replace(object_store::path::DELIMITER, "-")
+            self.root.as_ref().replace(DELIMITER, "-")
         ))
         .expect("Invalid object store url.")
     }
@@ -300,7 +318,8 @@ fn convert_object_meta(
     Ok(ObjectMeta {
         location: Path::from(extract_rel_path(
             root_uri.as_ref(),
-            storage_meta.path.as_ref(),
+            // HACK hopefully this will hold over until we have switches to object_store
+            storage_meta.path.as_str().replace("\\", DELIMITER).as_ref(),
         )?),
         last_modified: storage_meta.modified,
         size: storage_meta.size.unwrap_or_default() as usize,
@@ -316,9 +335,8 @@ mod tests {
     #[tokio::test]
     async fn test_put() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let tmp_path = tmp_dir.path().to_owned();
-        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
-        let object_store = DeltaObjectStore::try_new_with_options(tmp_path.as_ref(), None).unwrap();
+        let object_store =
+            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
 
         // put object
         let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
@@ -335,9 +353,8 @@ mod tests {
     #[tokio::test]
     async fn test_head() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let tmp_path = tmp_dir.path().to_owned();
-        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
-        let object_store = DeltaObjectStore::try_new_with_options(tmp_path.as_ref(), None).unwrap();
+        let object_store =
+            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
 
         // existing file
         let path1 = Path::from("tmp_file1");
@@ -354,9 +371,8 @@ mod tests {
     #[tokio::test]
     async fn test_get() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let tmp_path = tmp_dir.path().to_owned();
-        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
-        let object_store = DeltaObjectStore::try_new_with_options(tmp_path.as_ref(), None).unwrap();
+        let object_store =
+            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
 
         // existing file
         let path1 = Path::from("tmp_file1");
@@ -375,9 +391,8 @@ mod tests {
     #[tokio::test]
     async fn test_delete() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let tmp_path = tmp_dir.path().to_owned();
-        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
-        let object_store = DeltaObjectStore::try_new_with_options(tmp_path.as_ref(), None).unwrap();
+        let object_store =
+            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
 
         let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
 
@@ -394,9 +409,8 @@ mod tests {
     #[tokio::test]
     async fn test_delete_batch() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let tmp_path = tmp_dir.path().to_owned();
-        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
-        let object_store = DeltaObjectStore::try_new_with_options(tmp_path.as_ref(), None).unwrap();
+        let object_store =
+            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
 
         let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
         let tmp_file_path2 = tmp_dir.path().join("tmp_file2");
@@ -418,9 +432,8 @@ mod tests {
     #[tokio::test]
     async fn test_list() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let tmp_path = tmp_dir.path().to_owned();
-        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
-        let object_store = DeltaObjectStore::try_new_with_options(tmp_path.as_ref(), None).unwrap();
+        let object_store =
+            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
 
         let path1 = Path::from("tmp_file1");
         let path2 = Path::from("tmp_file2");
@@ -463,9 +476,8 @@ mod tests {
     #[tokio::test]
     async fn test_list_prefix() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let tmp_path = tmp_dir.path().to_owned();
-        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
-        let object_store = DeltaObjectStore::try_new_with_options(tmp_path.as_ref(), None).unwrap();
+        let object_store =
+            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
 
         let path1 = Path::from("_delta_log/tmp_file1");
         object_store.put(&path1, bytes::Bytes::new()).await.unwrap();
@@ -483,9 +495,8 @@ mod tests {
     #[tokio::test]
     async fn test_rename_if_not_exists() {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let tmp_path = tmp_dir.path().to_owned();
-        let table_path = Path::from_filesystem_path(tmp_path).unwrap();
-        let object_store = DeltaObjectStore::try_new_with_options(tmp_path.as_ref(), None).unwrap();
+        let object_store =
+            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
 
         let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
         let tmp_file_path2 = tmp_dir.path().join("tmp_file2");
