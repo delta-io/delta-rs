@@ -49,27 +49,19 @@ def test_vacuum_zero_duration(
 
     write_deltalake(table_path, sample_data, mode="overwrite")
     dt = DeltaTable(table_path)
-    original_files = set(dt.file_uris())
+    original_files = set(dt.files())
     write_deltalake(table_path, sample_data, mode="overwrite")
     dt.update_incremental()
-    new_files = set(dt.file_uris())
+    new_files = set(dt.files())
     assert new_files.isdisjoint(original_files)
 
-    tombstones = {
-        f"{prefix}/{f}"
-        for f in dt.vacuum(retention_hours=0, enforce_retention_duration=False)
-    }
+    tombstones = set(dt.vacuum(retention_hours=0, enforce_retention_duration=False))
     assert tombstones == original_files
 
-    tombstones = {
-        f"{prefix}/{f}"
-        for f in dt.vacuum(
-            retention_hours=0, dry_run=False, enforce_retention_duration=False
-        )
-    }
+    tombstones = set(
+        dt.vacuum(retention_hours=0, dry_run=False, enforce_retention_duration=False)
+    )
     assert tombstones == original_files
 
-    parquet_files = {
-        f"{prefix}/{f}" for f in os.listdir(table_path) if f.endswith("parquet")
-    }
+    parquet_files = {f for f in os.listdir(table_path) if f.endswith("parquet")}
     assert parquet_files == new_files
