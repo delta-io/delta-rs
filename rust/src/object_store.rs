@@ -207,11 +207,11 @@ impl ObjectStore for DeltaObjectStore {
     /// Return the bytes that are stored at the specified location
     /// in the given byte range
     async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
-        let store = object_store::local::LocalFileSystem::default();
-        let mut root_parts = self.root.parts().collect::<Vec<_>>();
-        root_parts.extend(location.parts());
-        let path = Path::from_iter(root_parts);
-        store.get_range(&path, range).await
+        let data = self
+            .storage
+            .get_range(&self.to_uri(location), range)
+            .await?;
+        Ok(data.into())
     }
 
     /// Return the metadata for the specified location

@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
+use std::ops::Range;
 
 use chrono::{DateTime, FixedOffset, Utc};
 use futures::stream::BoxStream;
@@ -691,6 +692,37 @@ impl StorageBackend for S3StorageBackend {
             uri.bucket,
             uri.key,
             self.options.s3_get_internal_server_error_retries,
+            None,
+        )
+        .await?;
+
+        debug!("streaming data from {}...", path);
+        let mut buf = Vec::new();
+        let stream = result
+            .body
+            .ok_or_else(|| StorageError::S3MissingObjectBody(path.to_string()))?;
+        stream
+            .into_async_read()
+            .read_to_end(&mut buf)
+            .await
+            .map_err(|e| {
+                StorageError::S3Generic(format!("Failed to read object content: {}", e))
+            })?;
+
+        debug!("s3 object fetched: {}", path);
+        Ok(buf)
+    }
+
+    async fn get_range(&self, path: &str, range: Range<usize>) -> Result<Vec<u8>, StorageError> {
+        debug!("fetching s3 object: {}...", path);
+
+        let uri = parse_uri(path)?.into_s3object()?;
+        let result = get_object_with_retries(
+            &self.client,
+            uri.bucket,
+            uri.key,
+            self.options.s3_get_internal_server_error_retries,
+            Some(range),
         )
         .await?;
 
@@ -908,6 +940,7 @@ async fn get_object_with_retries(
     bucket: &str,
     key: &str,
     retries: usize,
+    range: Option<Range<usize>>,
 ) -> Result<GetObjectOutput, RusotoError<GetObjectError>> {
     let mut tries = 0;
     loop {
@@ -915,6 +948,7 @@ async fn get_object_with_retries(
             .get_object(GetObjectRequest {
                 bucket: bucket.to_string(),
                 key: key.to_string(),
+                range: range.map(format_http_range),
                 ..Default::default()
             })
             .await;
@@ -929,6 +963,10 @@ async fn get_object_with_retries(
             }
         }
     }
+}
+
+pub fn format_http_range(range: std::ops::Range<usize>) -> String {
+    format!("bytes={}-{}", range.start, range.end.saturating_sub(1))
 }
 
 #[cfg(test)]

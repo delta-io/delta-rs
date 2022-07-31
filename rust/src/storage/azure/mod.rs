@@ -345,6 +345,23 @@ impl StorageBackend for AdlsGen2Backend {
         Ok(data)
     }
 
+    /// Fetch a range from object content
+    async fn get_range(&self, path: &str, range: Range<usize>) -> Result<Vec<u8>, StorageError> {
+        let obj = parse_uri(path)?.into_adlsgen2_object()?;
+        self.validate_container(&obj)?;
+
+        let data = self
+            .file_system_client
+            .get_file_client(obj.path)
+            .read()
+            .range(range)
+            .into_future()
+            .await?
+            .data
+            .to_vec();
+        Ok(data)
+    }
+
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,

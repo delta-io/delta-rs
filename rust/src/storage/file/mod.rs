@@ -7,9 +7,11 @@ use chrono::DateTime;
 use futures::{stream::BoxStream, StreamExt};
 use std::collections::VecDeque;
 use std::io;
+use std::io::SeekFrom;
+use std::ops::Range;
 use std::path::Path;
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -56,6 +58,29 @@ impl StorageBackend for FileStorageBackend {
 
     async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
         fs::read(path).await.map_err(StorageError::from)
+    }
+
+    async fn get_range(&self, path: &str, range: Range<usize>) -> Result<Vec<u8>, StorageError> {
+        let mut file = fs::File::open(path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                StorageError::NotFound
+            } else {
+                StorageError::Generic(e.to_string())
+            }
+        })?;
+        let to_read = range.end - range.start;
+        file.seek(SeekFrom::Start(range.start as u64))
+            .await
+            .map_err(|e| StorageError::Generic(e.to_string()))?;
+
+        let mut buf = Vec::with_capacity(to_read);
+        let _read = file
+            .take(to_read as u64)
+            .read_to_end(&mut buf)
+            .await
+            .map_err(|e| StorageError::Generic(e.to_string()))?;
+
+        Ok(buf)
     }
 
     async fn list_objs<'a>(

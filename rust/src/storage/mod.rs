@@ -9,6 +9,7 @@ use hyper::http::uri::InvalidUri;
 use object_store::Error as ObjectStoreError;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::ops::Range;
 use std::sync::Arc;
 use walkdir::Error as WalkDirError;
 
@@ -507,6 +508,9 @@ pub trait StorageBackend: Send + Sync + Debug {
 
     /// Fetch object content
     async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
+
+    /// Fetch a range from object content
+    async fn get_range(&self, path: &str, range: Range<usize>) -> Result<Vec<u8>, StorageError>;
 
     /// Return a list of objects by `path` prefix in an async stream.
     async fn list_objs<'a>(
