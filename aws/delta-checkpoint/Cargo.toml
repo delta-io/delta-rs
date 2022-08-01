@@ -9,7 +9,7 @@ edition = "2018"
 [dependencies]
 anyhow = "1"
 thiserror = "1"
-lambda_runtime = { version = "0.3" }
+lambda_runtime = { version = "0.6" }
 lazy_static = "1"
 log = "0.4"
 openssl = { version = "0.10", features = ["vendored"] }
