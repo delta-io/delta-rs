@@ -57,7 +57,7 @@ impl TryFrom<&schema::SchemaTypeArray> for ArrowField {
 
     fn try_from(a: &schema::SchemaTypeArray) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
-            "element",
+            "item",
             ArrowDataType::try_from(a.get_element_type())?,
             a.contains_null(),
         ))
@@ -69,7 +69,7 @@ impl TryFrom<&schema::SchemaTypeMap> for ArrowField {
 
     fn try_from(a: &schema::SchemaTypeMap) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
-            "key_value",
+            "entries",
             ArrowDataType::Struct(vec![
                 ArrowField::new("key", ArrowDataType::try_from(a.get_key_type())?, false),
                 ArrowField::new(

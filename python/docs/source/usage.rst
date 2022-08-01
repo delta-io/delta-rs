@@ -140,7 +140,7 @@ Use :meth:`DeltaTable.pyarrow_schema` to retrieve the PyArrow schema:
 
 .. code-block:: python
 
-    >>> dt.pyarrow_schema()
+    >>> dt.schema().to_pyarrow()
     id: int64
 
 
@@ -194,7 +194,7 @@ support filtering partitions and selecting particular columns.
 
     >>> from deltalake import DeltaTable
     >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0-partitioned")
-    >>> dt.dt.pyarrow_schema()
+    >>> dt.schema().to_pyarrow()
     value: string
     year: string
     month: string

@@ -39,7 +39,7 @@ def test_table_schema():
 def test_table_schema_pyarrow_simple():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    schema = dt.pyarrow_schema()
+    schema = dt.schema().to_pyarrow()
     field = schema.field(0)
     assert len(schema.types) == 1
     assert field.name == "id"
@@ -51,7 +51,7 @@ def test_table_schema_pyarrow_simple():
 def test_table_schema_pyarrow_020():
     table_path = "../rust/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path)
-    schema = dt.pyarrow_schema()
+    schema = dt.schema().to_pyarrow()
     field = schema.field(0)
     assert len(schema.types) == 1
     assert field.name == "value"
