@@ -16,6 +16,7 @@ pub(crate) use object::GCSObject;
 
 use futures::stream::BoxStream;
 use std::convert::TryInto;
+use std::ops::Range;
 
 use log::debug;
 
@@ -63,6 +64,10 @@ impl StorageBackend for GCSStorageBackend {
             Err(GCSClientError::NotFound) => return Err(StorageError::NotFound),
             res => Ok(res?.to_vec()),
         }
+    }
+
+    async fn get_range(&self, _path: &str, _range: Range<usize>) -> Result<Vec<u8>, StorageError> {
+        todo!("get range not implemented for gcs")
     }
 
     /// Return a list of objects by `path` prefix in an async stream.

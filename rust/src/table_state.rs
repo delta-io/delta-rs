@@ -1,22 +1,19 @@
 //! The module for delta table state.
 
-use chrono::Utc;
-use parquet::file::{
-    reader::{FileReader, SerializedFileReader},
-    serialized_reader::SliceableCursor,
-};
-use serde_json::{Map, Value};
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::convert::TryFrom;
-use std::io::{BufRead, BufReader, Cursor};
-
 use super::{
     ApplyLogError, CheckPoint, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable,
     DeltaTableError, DeltaTableMetaData,
 };
 use crate::action::{self, Action};
 use crate::delta_config;
+use chrono::Utc;
+use object_store::ObjectStore;
+use parquet::file::reader::{FileReader, SerializedFileReader};
+use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::collections::HashSet;
+use std::convert::TryFrom;
+use std::io::{BufRead, BufReader, Cursor};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Default, Debug, Clone)]
@@ -49,7 +46,7 @@ impl DeltaTableState {
         version: DeltaDataTypeVersion,
     ) -> Result<Self, ApplyLogError> {
         let commit_uri = table.commit_uri_from_version(version);
-        let commit_log_bytes = table.storage.get_obj(&commit_uri).await?;
+        let commit_log_bytes = table.storage.get(&commit_uri).await?.bytes().await?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
         let mut new_state = DeltaTableState::with_version(version);
@@ -87,8 +84,8 @@ impl DeltaTableState {
         let mut new_state = DeltaTableState::with_version(check_point.version);
 
         for f in &checkpoint_data_paths {
-            let obj = table.storage.get_obj(f).await?;
-            let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
+            let obj = table.storage.get(f).await?.bytes().await?;
+            let preader = SerializedFileReader::new(obj)?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
                 return Err(DeltaTableError::from(action::ActionError::Generic(

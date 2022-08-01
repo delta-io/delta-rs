@@ -7,9 +7,11 @@ use chrono::DateTime;
 use futures::{stream::BoxStream, StreamExt};
 use std::collections::VecDeque;
 use std::io;
-use std::path::{Path, PathBuf};
+use std::io::SeekFrom;
+use std::ops::Range;
+use std::path::Path;
 use tokio::fs;
-use tokio::io::AsyncWriteExt;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use uuid::Uuid;
 use walkdir::WalkDir;
 
@@ -44,29 +46,6 @@ impl FileStorageBackend {
 
 #[async_trait::async_trait]
 impl StorageBackend for FileStorageBackend {
-    #[inline]
-    fn join_path(&self, path: &str, path_to_join: &str) -> String {
-        let new_path = Path::new(path);
-        new_path
-            .join(path_to_join)
-            .into_os_string()
-            .into_string()
-            .unwrap()
-    }
-
-    #[inline]
-    fn join_paths(&self, paths: &[&str]) -> String {
-        let mut iter = paths.iter();
-        let mut path = PathBuf::from(iter.next().unwrap_or(&""));
-        iter.for_each(|s| path.push(s));
-        path.into_os_string().into_string().unwrap()
-    }
-
-    #[inline]
-    fn trim_path(&self, path: &str) -> String {
-        path.trim_end_matches(std::path::MAIN_SEPARATOR).to_string()
-    }
-
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
         let attr = fs::metadata(path).await?;
 
@@ -79,6 +58,29 @@ impl StorageBackend for FileStorageBackend {
 
     async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
         fs::read(path).await.map_err(StorageError::from)
+    }
+
+    async fn get_range(&self, path: &str, range: Range<usize>) -> Result<Vec<u8>, StorageError> {
+        let mut file = fs::File::open(path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                StorageError::NotFound
+            } else {
+                StorageError::Generic(e.to_string())
+            }
+        })?;
+        let to_read = range.end - range.start;
+        file.seek(SeekFrom::Start(range.start as u64))
+            .await
+            .map_err(|e| StorageError::Generic(e.to_string()))?;
+
+        let mut buf = Vec::with_capacity(to_read);
+        let _read = file
+            .take(to_read as u64)
+            .read_to_end(&mut buf)
+            .await
+            .map_err(|e| StorageError::Generic(e.to_string()))?;
+
+        Ok(buf)
     }
 
     async fn list_objs<'a>(
@@ -272,41 +274,6 @@ mod tests {
             .unwrap();
         assert_eq!(fs::metadata(path1).await.is_ok(), false);
         assert_eq!(fs::metadata(path2).await.is_ok(), false)
-    }
-
-    #[test]
-    fn join_multiple_paths() {
-        let backend = FileStorageBackend::new("./");
-        assert_eq!(
-            Path::new(&backend.join_paths(&["abc", "efg/", "123"])),
-            Path::new("abc").join("efg").join("123"),
-        );
-        assert_eq!(
-            &backend.join_paths(&["abc", "efg"]),
-            &backend.join_path("abc", "efg"),
-        );
-        assert_eq!(&backend.join_paths(&["foo"]), "foo",);
-        assert_eq!(&backend.join_paths(&[]), "",);
-    }
-
-    #[test]
-    fn trim_path() {
-        let be = FileStorageBackend::new("root");
-        let path = be.join_paths(&["foo", "bar"]);
-        assert_eq!(be.trim_path(&path), path);
-        assert_eq!(
-            be.trim_path(&format!("{}{}", path, std::path::MAIN_SEPARATOR)),
-            path,
-        );
-        assert_eq!(
-            be.trim_path(&format!(
-                "{}{}{}",
-                path,
-                std::path::MAIN_SEPARATOR,
-                std::path::MAIN_SEPARATOR
-            )),
-            path,
-        );
     }
 
     #[test]

@@ -17,6 +17,7 @@ use crate::{
 use arrow::{datatypes::SchemaRef, datatypes::*, error::ArrowError};
 use async_trait::async_trait;
 pub use json::JsonWriter;
+use object_store::Error as ObjectStoreError;
 use parquet::{basic::LogicalType, errors::ParquetError};
 pub use record_batch::RecordBatchWriter;
 use serde_json::Value;
@@ -77,6 +78,14 @@ pub enum DeltaWriterError {
         /// The wrapped [`StorageError`]
         #[from]
         source: StorageError,
+    },
+
+    /// underlying object store returned an error.
+    #[error("ObjectStore interaction failed: {source}")]
+    ObjectStore {
+        /// The wrapped [`ObjectStoreError`]
+        #[from]
+        source: ObjectStoreError,
     },
 
     /// Arrow returned an error.

@@ -90,6 +90,7 @@ def test_update_schema(existing_table: DeltaTable):
 
 def test_local_path(tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch):
     monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
+    (tmp_path / "path/to/table").mkdir(parents=True)
 
     local_path = "./path/to/table"
     write_deltalake(local_path, sample_data)

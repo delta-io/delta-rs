@@ -6,8 +6,10 @@ use chrono::{DateTime, Utc};
 use futures::stream::BoxStream;
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 use hyper::http::uri::InvalidUri;
+use object_store::Error as ObjectStoreError;
 use std::collections::HashMap;
 use std::fmt::Debug;
+use std::ops::Range;
 use std::sync::Arc;
 use walkdir::Error as WalkDirError;
 
@@ -427,6 +429,14 @@ pub enum StorageError {
         /// Uri error details when the URI parsing is invalid.
         source: InvalidUri,
     },
+
+    /// underlying object store returned an error.
+    #[error("ObjectStore interaction failed: {source}")]
+    ObjectStore {
+        /// The wrapped [`ObjectStoreError`]
+        #[from]
+        source: ObjectStoreError,
+    },
 }
 
 impl StorageError {
@@ -493,35 +503,14 @@ impl Clone for ObjectMeta {
 /// or local storage systems, simply implement this trait.
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + Debug {
-    /// Create a new path by appending `path_to_join` as a new component to `path`.
-    #[inline]
-    fn join_path(&self, path: &str, path_to_join: &str) -> String {
-        let normalized_path = path.trim_end_matches('/');
-        format!("{}/{}", normalized_path, path_to_join)
-    }
-
-    /// More efficient path join for multiple path components. Use this method if you need to
-    /// combine more than two path components.
-    #[inline]
-    fn join_paths(&self, paths: &[&str]) -> String {
-        paths
-            .iter()
-            .map(|s| s.trim_end_matches('/'))
-            .collect::<Vec<_>>()
-            .join("/")
-    }
-
-    /// Returns trimed path with trailing path separator removed.
-    #[inline]
-    fn trim_path(&self, path: &str) -> String {
-        path.trim_end_matches('/').to_string()
-    }
-
     /// Fetch object metadata without reading the actual content
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError>;
 
     /// Fetch object content
     async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
+
+    /// Fetch a range from object content
+    async fn get_range(&self, path: &str, range: Range<usize>) -> Result<Vec<u8>, StorageError>;
 
     /// Return a list of objects by `path` prefix in an async stream.
     async fn list_objs<'a>(
