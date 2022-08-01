@@ -304,11 +304,13 @@ class DeltaTable:
                 partition_expression=part_expression,
             )
             for file, part_expression in self._table.dataset_partitions(
-                partitions, self.pyarrow_schema()
+                partitions, self.schema().to_pyarrow()
             )
         ]
 
-        return FileSystemDataset(fragments, self.pyarrow_schema(), format, filesystem)
+        return FileSystemDataset(
+            fragments, self.schema().to_pyarrow(), format, filesystem
+        )
 
     def to_pyarrow_table(
         self,
