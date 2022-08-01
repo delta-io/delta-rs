@@ -9,6 +9,7 @@ use arrow::{
     json::reader::{Decoder, DecoderOptions},
     record_batch::*,
 };
+use object_store::path::Path;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
@@ -72,7 +73,7 @@ pub(crate) fn next_data_path(
     partition_columns: &[String],
     partition_values: &HashMap<String, Option<String>>,
     part: Option<i32>,
-) -> Result<String, DeltaWriterError> {
+) -> Result<Path, DeltaWriterError> {
     // TODO: what does 00000 mean?
     // TODO (roeap): my understanding is, that the values are used as a counter - i.e. if a single batch of
     // data written to one partition needs to be split due to desired file size constraints.
@@ -91,11 +92,11 @@ pub(crate) fn next_data_path(
     );
 
     if partition_columns.is_empty() {
-        return Ok(file_name);
+        return Ok(Path::from(file_name));
     }
 
     let partition_key = PartitionPath::from_hashmap(partition_columns, partition_values)?;
-    Ok(format!("{}/{}", partition_key, file_name))
+    Ok(Path::from(format!("{}/{}", partition_key, file_name)))
 }
 
 /// partition json values

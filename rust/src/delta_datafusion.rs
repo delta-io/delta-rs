@@ -29,14 +29,15 @@ use async_trait::async_trait;
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use datafusion::datasource::{TableProvider, TableType};
+use datafusion::error::Result as DataFusionResult;
 use datafusion::execution::context::SessionState;
 use datafusion::logical_plan::Expr;
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::{ColumnStatistics, Statistics};
 use datafusion::scalar::ScalarValue;
+use url::Url;
 
 use crate::action;
 use crate::delta;
@@ -46,7 +47,8 @@ impl delta::DeltaTable {
     /// Return statistics for Datafusion Table
     pub fn datafusion_table_statistics(&self) -> Statistics {
         let stats = self
-            .get_active_add_actions()
+            .get_state()
+            .files()
             .iter()
             .fold(
                 Some(Statistics {
@@ -81,8 +83,8 @@ impl delta::DeltaTable {
                                 .get_fields()
                                 .iter()
                                 .zip(col_stats)
-                                .map(|(field, stats)| ColumnStatistics {
-                                    null_count: new_stats
+                                .map(|(field, stats)| {
+                                    let null_count = new_stats
                                         .null_count
                                         .get(field.get_name())
                                         .and_then(|x| {
@@ -90,8 +92,9 @@ impl delta::DeltaTable {
                                             let null_count = x.as_value()? as usize;
                                             Some(null_count_acc + null_count)
                                         })
-                                        .or(stats.null_count),
-                                    max_value: new_stats
+                                        .or(stats.null_count);
+
+                                    let max_value = new_stats
                                         .max_values
                                         .get(field.get_name())
                                         .and_then(|x| {
@@ -113,8 +116,9 @@ impl delta::DeltaTable {
                                                 (None, old) => old,
                                             }
                                         })
-                                        .or_else(|| stats.max_value.clone()),
-                                    min_value: new_stats
+                                        .or_else(|| stats.max_value.clone());
+
+                                    let min_value = new_stats
                                         .min_values
                                         .get(field.get_name())
                                         .and_then(|x| {
@@ -136,8 +140,14 @@ impl delta::DeltaTable {
                                                 (None, old) => old,
                                             }
                                         })
-                                        .or_else(|| stats.min_value.clone()),
-                                    distinct_count: None, // TODO: distinct
+                                        .or_else(|| stats.min_value.clone());
+
+                                    ColumnStatistics {
+                                        null_count,
+                                        max_value,
+                                        min_value,
+                                        distinct_count: None, // TODO: distinct
+                                    }
                                 })
                                 .collect()
                         }),
@@ -146,6 +156,7 @@ impl delta::DeltaTable {
                 },
             )
             .unwrap_or_default();
+
         // Convert column max/min scalar values to correct types based on arrow types.
         Statistics {
             is_exact: true,
@@ -233,34 +244,42 @@ impl TableProvider for delta::DeltaTable {
 
     async fn scan(
         &self,
-        _: &SessionState,
+        session: &SessionState,
         projection: &Option<Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
-    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(<ArrowSchema as TryFrom<&schema::Schema>>::try_from(
             delta::DeltaTable::schema(self).unwrap(),
         )?);
-        let filenames = self.get_file_uris();
 
-        let partitions = filenames
-            .into_iter()
-            .zip(self.get_active_add_actions())
-            .enumerate()
-            .map(|(_idx, (fname, action))| {
-                // TODO: no way to associate stats per file in datafusion at the moment, see:
-                // https://github.com/apache/arrow-datafusion/issues/1301
-                Ok(vec![PartitionedFile::new(fname, action.size as u64)])
+        // each delta table must register a specific object store, since paths are internally
+        // handled relative to the table root.
+        let object_store_url = self.storage.object_store_url();
+        let url: &Url = object_store_url.as_ref();
+        session.runtime_env.register_object_store(
+            url.scheme(),
+            url.host_str().unwrap_or_default(),
+            self.object_store(),
+        );
+
+        // TODO prune files based on file statistics and filter expressions
+        let partitions = self
+            .get_state()
+            .files()
+            .iter()
+            .map(|action| {
+                Ok(vec![PartitionedFile::new(
+                    action.path.clone(),
+                    action.size as u64,
+                )])
             })
-            .collect::<datafusion::error::Result<_>>()?;
-
-        let dt_object_store_url = ObjectStoreUrl::parse(&self.table_uri)
-            .unwrap_or_else(|_| ObjectStoreUrl::local_filesystem());
+            .collect::<DataFusionResult<_>>()?;
 
         ParquetFormat::default()
             .create_physical_plan(
                 FileScanConfig {
-                    object_store_url: dt_object_store_url,
+                    object_store_url,
                     file_schema: schema,
                     file_groups: partitions,
                     statistics: self.datafusion_table_statistics(),

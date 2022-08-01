@@ -1,5 +1,6 @@
 import os
 from datetime import datetime
+from pathlib import Path
 from threading import Barrier, Thread
 
 from packaging import version
@@ -240,6 +241,9 @@ def test_history_partitioned_table_metadata():
 def test_get_files_partitioned_table():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
+    table_path = (
+        Path.cwd().parent / "rust/tests/data/delta-0.8.0-partitioned"
+    ).as_posix()
     partition_filters = [("day", "=", "3")]
     assert dt.files_by_partitions(partition_filters=partition_filters) == [
         f"{table_path}/year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet"

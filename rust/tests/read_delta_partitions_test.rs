@@ -138,8 +138,6 @@ async fn read_null_partitions_from_checkpoint() {
     )
     .await;
 
-    println!("{}", table.table_uri);
-
     let delta_log = std::path::Path::new(&table.table_uri).join("_delta_log");
 
     let add = |partition: Option<String>| Add {

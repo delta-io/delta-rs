@@ -16,6 +16,7 @@ use log::debug;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
+use std::ops::Range;
 use std::sync::Arc;
 
 /// Storage option keys to use when creating [crate::storage::azure::AzureStorageOptions].
@@ -338,6 +339,23 @@ impl StorageBackend for AdlsGen2Backend {
             .file_system_client
             .get_file_client(obj.path)
             .read()
+            .into_future()
+            .await?
+            .data
+            .to_vec();
+        Ok(data)
+    }
+
+    /// Fetch a range from object content
+    async fn get_range(&self, path: &str, range: Range<usize>) -> Result<Vec<u8>, StorageError> {
+        let obj = parse_uri(path)?.into_adlsgen2_object()?;
+        self.validate_container(&obj)?;
+
+        let data = self
+            .file_system_client
+            .get_file_client(obj.path)
+            .read()
+            .range(range)
             .into_future()
             .await?
             .data

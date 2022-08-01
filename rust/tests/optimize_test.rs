@@ -197,7 +197,7 @@ mod optimize {
         .await?;
 
         let version = dt.version();
-        assert_eq!(dt.get_active_add_actions().len(), 5);
+        assert_eq!(dt.get_state().files().len(), 5);
 
         let optimize = Optimize::default().target_size(2_000_000);
         let metrics = optimize.execute(&mut dt).await?;
@@ -207,7 +207,7 @@ mod optimize {
         assert_eq!(metrics.num_files_removed, 4);
         assert_eq!(metrics.total_considered_files, 5);
         assert_eq!(metrics.partitions_optimized, 1);
-        assert_eq!(dt.get_active_add_actions().len(), 2);
+        assert_eq!(dt.get_state().files().len(), 2);
 
         Ok(())
     }
@@ -263,7 +263,7 @@ mod optimize {
         assert_eq!(version + 1, dt.version());
         assert_eq!(metrics.num_files_added, 1);
         assert_eq!(metrics.num_files_removed, 2);
-        assert_eq!(dt.get_active_add_actions().len(), 3);
+        assert_eq!(dt.get_state().files().len(), 3);
 
         Ok(())
     }
@@ -298,7 +298,7 @@ mod optimize {
 
         let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
         let mut other_dt = deltalake::open_table(uri).await?;
-        let add = &other_dt.get_active_add_actions()[0];
+        let add = &other_dt.get_state().files()[0];
         let remove = Remove {
             path: add.path.clone(),
             deletion_timestamp: Some(
