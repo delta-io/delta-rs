@@ -32,7 +32,6 @@ pub async fn create_table_from_json(
     config: Value,
 ) -> DeltaTable {
     assert!(path.starts_with("./tests/data"));
-    std::fs::create_dir_all(path).unwrap();
     std::fs::remove_dir_all(path).unwrap();
     std::fs::create_dir_all(path).unwrap();
     let schema: Schema = serde_json::from_value(schema).unwrap();

@@ -265,17 +265,6 @@ impl ObjectStore for DeltaObjectStore {
         todo!()
     }
 
-    /// Move an object from one path to another in the same object store.
-    ///
-    /// By default, this is implemented as a copy and then delete source. It may not
-    /// check when deleting source that it was the same object that was originally copied.
-    ///
-    /// If there exists an object at the destination, it will be overwritten.
-    async fn rename(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        self.copy(from, to).await?;
-        self.delete(from).await
-    }
-
     /// Copy an object from one path to another, only if destination is empty.
     ///
     /// Will return an error if the destination already has an object.
