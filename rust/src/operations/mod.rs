@@ -231,6 +231,12 @@ fn get_table_from_uri_without_update(table_uri: String) -> DeltaCommandResult<De
     Ok(table)
 }
 
+impl From<DeltaTable> for DeltaCommands {
+    fn from(table: DeltaTable) -> Self {
+        Self { table }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
