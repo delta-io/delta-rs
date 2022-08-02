@@ -126,17 +126,17 @@ Use :meth:`DeltaTable.schema` to retrieve the delta lake schema:
     >>> from deltalake import DeltaTable
     >>> dt = DeltaTable("../rust/tests/data/simple_table")
     >>> dt.schema()
-    Schema(Field(id: DataType(long) nullable(True) metadata({})))
+    Schema([Field(id, PrimitiveType("long"), nullable=True)])
 
 These schemas have a JSON representation that can be retrieved. To reconstruct
-from json, use :meth:`deltalake.schema.Schema.from_json`.
+from json, use :meth:`deltalake.schema.Schema.from_json()`.
 
 .. code-block:: python
 
     >>> dt.schema().json()
-    {'type': 'struct', 'fields': [{'name': 'id', 'type': 'long', 'nullable': True, 'metadata': {}}]}
+    '{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}'
 
-Use :meth:`DeltaTable.pyarrow_schema` to retrieve the PyArrow schema:
+Use :meth:`deltalake.schema.Schema.to_pyarrow()` to retrieve the PyArrow schema:
 
 .. code-block:: python
 
