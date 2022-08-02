@@ -88,7 +88,30 @@ fn python_type_to_schema(ob: PyObject, py: Python) -> PyResult<SchemaDataType> {
     Err(PyValueError::new_err("Invalid data type"))
 }
 
-#[pyclass(module = "deltalake.schema", text_signature = "(data_type: str)")]
+/// A primitive datatype, such as a string or number.
+///
+/// Can be initialized with a string value:
+///
+/// >>> PrimitiveType("integer")
+/// PrimitiveType("integer")
+///
+/// Valid primitive data types include:
+///
+///  * "string",
+///  * "long",
+///  * "integer",
+///  * "short",
+///  * "byte",
+///  * "float",
+///  * "double",
+///  * "boolean",
+///  * "binary",
+///  * "date",
+///  * "timestamp",
+///  * "decimal(<scale>, <precision>)"
+///
+/// :param data_type: string representation of the data type
+#[pyclass(module = "deltalake.schema", text_signature = "(data_type)")]
 #[derive(Clone)]
 pub struct PrimitiveType {
     inner_type: String,
@@ -134,6 +157,9 @@ impl PrimitiveType {
         }
     }
 
+    /// The inner type
+    ///
+    /// :rtype: str
     #[getter]
     fn get_type(&self) -> PyResult<String> {
         Ok(self.inner_type.clone())
@@ -153,12 +179,27 @@ impl PrimitiveType {
         Ok(format!("PrimitiveType(\"{}\")", &self.inner_type))
     }
 
+    /// Get the JSON string representation of the type.
+    ///
+    /// :rtype: str
+    #[pyo3(text_signature = "($self)")]
     fn to_json(&self) -> PyResult<String> {
         let inner_type = SchemaDataType::primitive(self.inner_type.clone());
         serde_json::to_string(&inner_type).map_err(|err| PyException::new_err(err.to_string()))
     }
 
+    /// Create a PrimitiveType from a JSON string
+    ///
+    /// The JSON representation for a primitive type is just a quoted string:
+    ///
+    /// >>> PrimitiveType.from_json('"integer"')
+    /// PrimitiveType("integer")
+    ///
+    /// :param type_json: A JSON string
+    /// :type type_json: str
+    /// :rtype: PrimitiveType
     #[staticmethod]
+    #[pyo3(text_signature = "(type_json)")]
     fn from_json(type_json: String) -> PyResult<Self> {
         let data_type: SchemaDataType = serde_json::from_str(&type_json)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -166,6 +207,10 @@ impl PrimitiveType {
         data_type.try_into()
     }
 
+    /// Get the equivalent PyArrow type.
+    ///
+    /// :rtype: pyarrow.DataType
+    #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<ArrowDataType> {
         let inner_type = SchemaDataType::primitive(self.inner_type.clone());
         (&inner_type)
@@ -173,6 +218,14 @@ impl PrimitiveType {
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))
     }
 
+    /// Create a PrimitiveType from a PyArrow type
+    ///
+    /// Will raise ``TypeError`` if the PyArrow type is not a primitive type.
+    ///
+    /// :param data_type: A PyArrow DataType
+    /// :type data_type: pyarrow.DataType
+    /// :rtype: PrimitiveType
+    #[pyo3(text_signature = "(data_type)")]
     #[staticmethod]
     fn from_pyarrow(data_type: ArrowDataType) -> PyResult<Self> {
         let inner_type: SchemaDataType = (&data_type)
@@ -183,9 +236,18 @@ impl PrimitiveType {
     }
 }
 
+/// An Array (List) DataType
+///
+/// Can either pass the element type explicitly or can pass a string
+/// if it is a primitive type:
+///
+/// >>> ArrayType(PrimitiveType("integer"))
+/// ArrayType(PrimitiveType("integer"), contains_null=True)
+/// >>> ArrayType("integer", contains_null=False)
+/// ArrayType(PrimitiveType("integer"), contains_null=False)
 #[pyclass(
     module = "deltalake.schema",
-    text_signature = "(element_type: DataType, contains_null: bool)"
+    text_signature = "(element_type, contains_null=True)"
 )]
 #[derive(Clone)]
 pub struct ArrayType {
@@ -217,7 +279,7 @@ impl TryFrom<SchemaDataType> for ArrayType {
 #[pymethods]
 impl ArrayType {
     #[new]
-    #[args(contains_bool = true)]
+    #[args(contains_null = true)]
     fn new(element_type: PyObject, contains_null: bool, py: Python) -> PyResult<Self> {
         let inner_type = SchemaTypeArray::new(
             Box::new(python_type_to_schema(element_type, py)?),
@@ -252,26 +314,55 @@ impl ArrayType {
         }
     }
 
+    /// The string "array"
+    ///
+    /// :rtype: str
     #[getter]
     fn get_type(&self) -> String {
         "array".to_string()
     }
 
+    /// The type of the element
+    ///
+    /// :rtype: Union[PrimitiveType, ArrayType, MapType, StructType]
     #[getter]
     fn element_type(&self, py: Python) -> PyResult<PyObject> {
         schema_type_to_python(self.inner_type.get_element_type().to_owned(), py)
     }
 
+    /// Whether the arrays may contain null values
+    ///
+    /// :rtype: bool
     #[getter]
     fn contains_null(&self, py: Python) -> PyResult<PyObject> {
         Ok(self.inner_type.contains_null().into_py(py))
     }
 
+    /// Get the JSON string representation of the type.
+    ///
+    /// :rtype: str
+    #[pyo3(text_signature = "($self)")]
     fn to_json(&self) -> PyResult<String> {
         serde_json::to_string(&self.inner_type).map_err(|err| PyException::new_err(err.to_string()))
     }
 
+    /// Create an ArrayType from a JSON string
+    ///
+    /// The JSON representation for an array type is an object with ``type`` (set to
+    /// ``"array"``), ``elementType``, and ``containsNull``:
+    ///
+    /// >>> ArrayType.from_json("""{
+    /// ...   "type": "array",
+    /// ...   "elementType": "integer",
+    /// ...   "containsNull": false
+    /// ... }""")
+    /// ArrayType(PrimitiveType("integer"), contains_null=False)
+    ///
+    /// :param type_json: A JSON string
+    /// :type type_json: str
+    /// :rtype: ArrayType
     #[staticmethod]
+    #[pyo3(text_signature = "(type_json)")]
     fn from_json(type_json: String) -> PyResult<Self> {
         let data_type: SchemaDataType = serde_json::from_str(&type_json)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -279,13 +370,25 @@ impl ArrayType {
         data_type.try_into()
     }
 
+    /// Get the equivalent PyArrow type.
+    ///
+    /// :rtype: pyarrow.DataType
+    #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<ArrowDataType> {
         (&SchemaDataType::array(self.inner_type.clone()))
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))
     }
 
+    /// Create an ArrayType from a pyarrow.ListType.
+    ///
+    /// Will raise ``TypeError`` if a different PyArrow DataType is provided.
+    ///
+    /// :param data_type: The PyArrow datatype
+    /// :type data_type: pyarrow.ListType
+    /// :rtype: ArrayType
     #[staticmethod]
+    #[pyo3(text_signature = "(data_type)")]
     fn from_pyarrow(data_type: ArrowDataType) -> PyResult<Self> {
         let inner_type: SchemaDataType = (&data_type)
             .try_into()
@@ -295,9 +398,19 @@ impl ArrayType {
     }
 }
 
+/// A map data type
+///
+/// ``key_type`` and ``value_type`` should be :class PrimitiveType:, :class ArrayType:,
+/// :class ListType:, or :class StructType:. A string can also be passed, which will be
+/// parsed as a primitive type:
+///
+/// >>> MapType(PrimitiveType("integer"), PrimitiveType("string"))
+/// MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=True)
+/// >>> MapType("integer", "string", value_contains_null=False)
+/// MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=False)
 #[pyclass(
     module = "deltalake.schema",
-    text_signature = "(key_type: DataType, value_type: DataType, value_contains_null: bool)"
+    text_signature = "(key_type, value_type, value_contains_null=True)"
 )]
 #[derive(Clone)]
 pub struct MapType {
@@ -374,31 +487,64 @@ impl MapType {
         }
     }
 
+    /// The string "map"
+    ///
+    /// :rtype: str
     #[getter]
     fn get_type(&self) -> String {
         "map".to_string()
     }
 
+    /// The type of the keys
+    ///
+    /// :rtype: Union[PrimitiveType, ArrayType, MapType, StructType]
     #[getter]
     fn key_type(&self, py: Python) -> PyResult<PyObject> {
         schema_type_to_python(self.inner_type.get_key_type().to_owned(), py)
     }
 
+    /// The type of the values
+    ///
+    /// :rtype: Union[PrimitiveType, ArrayType, MapType, StructType]
     #[getter]
     fn value_type(&self, py: Python) -> PyResult<PyObject> {
         schema_type_to_python(self.inner_type.get_value_type().to_owned(), py)
     }
 
+    /// Whether the values in a map may be null
+    ///
+    /// :rtype: bool
     #[getter]
     fn value_contains_null(&self, py: Python) -> PyResult<PyObject> {
         Ok(self.inner_type.get_value_contains_null().into_py(py))
     }
 
+    /// Get JSON string representation of map type.
+    ///
+    /// :rtype: str
+    #[pyo3(text_signature = "($self)")]
     fn to_json(&self) -> PyResult<String> {
         serde_json::to_string(&self.inner_type).map_err(|err| PyException::new_err(err.to_string()))
     }
 
+    /// Create a MapType from a JSON string
+    ///
+    /// The JSON representation for a map type is an object with ``type`` (set to ``map``),
+    /// ``keyType``, ``valueType``, and ``valueContainsNull``:
+    ///
+    /// >>> MapType.from_json("""{
+    /// ...   "type": "map",
+    /// ...   "keyType": "integer",
+    /// ...   "valueType": "string",
+    /// ...   "valueContainsNull": true
+    /// ... }""")
+    /// MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=True)
+    ///
+    /// :param type_json: A JSON string
+    /// :type type_json: str
+    /// :rtype: MapType
     #[staticmethod]
+    #[pyo3(text_signature = "(type_json)")]
     fn from_json(type_json: String) -> PyResult<Self> {
         let data_type: SchemaDataType = serde_json::from_str(&type_json)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -406,13 +552,25 @@ impl MapType {
         data_type.try_into()
     }
 
+    /// Get the equivalent PyArrow data type.
+    ///
+    /// :rtype: pyarrow.MapType
+    #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<ArrowDataType> {
         (&SchemaDataType::map(self.inner_type.clone()))
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))
     }
 
+    /// Create a MapType from a PyArrow MapType.
+    ///
+    /// Will raise ``TypeError`` if passed a different type.
+    ///
+    /// :param data_type: the PyArrow MapType
+    /// :type data_type: pyarrow.MapType
+    /// :rtype: MapType
     #[staticmethod]
+    #[pyo3(text_signature = "(data_type)")]
     fn from_pyarrow(data_type: ArrowDataType) -> PyResult<Self> {
         let inner_type: SchemaDataType = (&data_type)
             .try_into()
@@ -422,7 +580,22 @@ impl MapType {
     }
 }
 
-#[pyclass(module = "deltalake.schema")]
+/// A field in a Delta StructType or Schema
+///
+/// Can create with just a name and a type:
+///
+/// >>> Field("my_int_col", "integer")
+/// Field("my_int_col", PrimitiveType("integer"), nullable=True, metadata=None)
+///
+/// Can also attach metadata to the field. Metadata should be a dictionary with
+/// string keys and JSON-serializable values (str, list, int, float, dict):
+///
+/// >>> Field("my_col", "integer", metadata={"custom_metadata": {"test": 2}})
+/// Field("my_col", PrimitiveType("integer"), nullable=True, metadata={"custom_metadata": {"test": 2}})
+#[pyclass(
+    module = "deltalake.schema",
+    text_signature = "(name, ty, nullable=True, metadata=None)"
+)]
 #[derive(Clone)]
 pub struct Field {
     inner: SchemaField,
@@ -459,21 +632,33 @@ impl Field {
         })
     }
 
+    /// The name of the field
+    ///
+    /// :rtype: str
     #[getter]
     fn name(&self) -> String {
         self.inner.get_name().to_string()
     }
 
+    /// The type of the field
+    ///
+    /// :rtype: Union[PrimitiveType, ArrayType, MapType, StructType]
     #[getter]
     fn get_type(&self, py: Python) -> PyResult<PyObject> {
         schema_type_to_python(self.inner.get_type().clone(), py)
     }
 
+    /// Whether there may be null values in the field
+    ///
+    /// :rtype: bool
     #[getter]
     fn nullable(&self) -> bool {
         self.inner.is_nullable()
     }
 
+    /// The metadata of the field
+    ///
+    /// :rtype: dict
     #[getter]
     fn metadata(&self, py: Python) -> PyResult<PyObject> {
         let json_loads = PyModule::import(py, "json")?.getattr("loads")?;
@@ -520,11 +705,32 @@ impl Field {
         }
     }
 
+    /// Get the field as JSON string.
+    ///
+    /// >>> Field("col", "integer").to_json()
+    /// '{"name":"col","type":"integer","nullable":true,"metadata":{}}'
+    ///
+    /// :rtype: str
+    #[pyo3(text_signature = "($self)")]
     fn to_json(&self) -> PyResult<String> {
         serde_json::to_string(&self.inner).map_err(|err| PyException::new_err(err.to_string()))
     }
 
+    /// Create a Field from a JSON string.
+    ///
+    /// >>> Field.from_json("""{
+    /// ...  "name": "col",
+    /// ...  "type": "integer",
+    /// ...  "nullable": true,
+    /// ...  "metadata": {}
+    /// ... }""")
+    /// Field(col, PrimitiveType("integer"), nullable=True)
+    ///
+    /// :param field_json: the JSON string.
+    /// :type field_json: str
+    /// :rtype: Field
     #[staticmethod]
+    #[pyo3(text_signature = "(field_json)")]
     fn from_json(field_json: String) -> PyResult<Self> {
         let field: SchemaField = serde_json::from_str(&field_json)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -532,13 +738,27 @@ impl Field {
         Ok(Self { inner: field })
     }
 
+    /// Convert to an equivalent PyArrow field
+    ///
+    /// Note: This currently doesn't preserve field metadata.
+    ///
+    /// :rtype: pyarrow.Field
+    #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<ArrowField> {
         (&self.inner)
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))
     }
 
+    /// Create a Field from a PyArrow field
+    ///
+    /// Note: This currently doesn't preserve field metadata.
+    ///
+    /// :param field: a field
+    /// :type: pyarrow.Field
+    /// :rtype: Field
     #[staticmethod]
+    #[pyo3(text_signature = "(field)")]
     fn from_pyarrow(field: ArrowField) -> PyResult<Self> {
         Ok(Self {
             inner: SchemaField::try_from(&field)
@@ -547,11 +767,13 @@ impl Field {
     }
 }
 
-#[pyclass(
-    subclass,
-    module = "deltalake.schema",
-    text_signature = "(fields: List[Field])"
-)]
+/// A struct datatype, containing one or more subfields
+///
+/// Create with a list of :class:`Field`:
+///
+/// >>> StructType([Field("x", "integer"), Field("y", "string")])
+/// StructType([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveType("string"), nullable=True)])
+#[pyclass(subclass, module = "deltalake.schema", text_signature = "(fields)")]
 #[derive(Clone)]
 pub struct StructType {
     inner_type: SchemaTypeStruct,
@@ -615,11 +837,15 @@ impl StructType {
         }
     }
 
+    /// The string "struct"
     #[getter]
     fn get_type(&self) -> String {
         "struct".to_string()
     }
 
+    /// The fields within the struct
+    ///
+    /// :rtype: List[Field]
     #[getter]
     fn fields(&self) -> Vec<Field> {
         self.inner_type
@@ -631,11 +857,30 @@ impl StructType {
             .collect::<Vec<Field>>()
     }
 
+    /// Get the JSON representation of the type.
+    ///
+    /// >>> StructType([Field("x", "integer")]).to_json()
+    /// '{"type":"struct","fields":[{"name":"x","type":"integer","nullable":true,"metadata":{}}]}'
+    ///
+    /// :rtype: str
+    #[pyo3(text_signature = "($self)")]
     fn to_json(&self) -> PyResult<String> {
         serde_json::to_string(&self.inner_type).map_err(|err| PyException::new_err(err.to_string()))
     }
 
+    /// Create a new StructType from a JSON string.
+    ///
+    /// >>> StructType.from_json("""{
+    /// ...  "type": "struct",
+    /// ...  "fields": [{"name": "x", "type": "integer", "nullable": true, "metadata": {}}]
+    /// ...  }""")
+    /// StructType([Field(x, PrimitiveType("integer"), nullable=True)])
+    ///
+    /// :param type_json: a JSON string
+    /// :type type_json: str
+    /// :rtype: StructType
     #[staticmethod]
+    #[pyo3(text_signature = "(type_json)")]
     fn from_json(type_json: String) -> PyResult<Self> {
         let data_type: SchemaDataType = serde_json::from_str(&type_json)
             .map_err(|err| PyValueError::new_err(err.to_string()))?;
@@ -643,13 +888,25 @@ impl StructType {
         data_type.try_into()
     }
 
+    /// Get the equivalent PyArrow StructType
+    ///
+    /// :rtype: pyarrow.StructType
+    #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(&self) -> PyResult<ArrowDataType> {
         (&SchemaDataType::r#struct(self.inner_type.clone()))
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))
     }
 
+    /// Create a new StructType from a PyArrow struct type.
+    ///
+    /// Will raise ``TypeError`` if a different data type is provided.
+    ///
+    /// :param data_type: a PyArrow struct type.
+    /// :type data_type: pyarrow.StructType
+    /// :rtype: StructType
     #[staticmethod]
+    #[pyo3(text_signature = "(data_type)")]
     fn from_pyarrow(data_type: ArrowDataType) -> PyResult<Self> {
         let inner_type: SchemaDataType = (&data_type)
             .try_into()
@@ -675,7 +932,20 @@ pub fn schema_to_pyobject(schema: &Schema, py: Python) -> PyResult<PyObject> {
         .map(|schema| schema.to_object(py))
 }
 
-#[pyclass(extends=StructType, name="Schema", module="deltalake.schema")]
+/// A Delta Lake schema
+///
+/// Create using a list of :class:`Field`:
+///
+/// >>> Schema([Field("x", "integer"), Field("y", "string")])
+/// Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveType("string"), nullable=True)])
+///
+/// Or create from a PyArrow schema:
+///
+/// >>> import pyarrow as pa
+/// >>> Schema.from_pyarrow(pa.schema({"x": pa.int32(), "y": pa.string()}))
+/// Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveType("string"), nullable=True)])
+#[pyclass(extends=StructType, name="Schema", module="deltalake.schema",
+text_signature = "(fields)")]
 pub struct PySchema;
 
 #[pymethods]
@@ -706,6 +976,7 @@ impl PySchema {
         Ok(format!("Schema([{}])", inner_data.join(", ")))
     }
 
+    /// DEPRECATED: Convert to JSON dictionary representation
     fn json(self_: PyRef<'_, Self>, py: Python) -> PyResult<PyObject> {
         let warnings_warn = PyModule::import(py, "warnings")?.getattr("warn")?;
         let deprecation_warning = PyModule::import(py, "builtins")?
@@ -727,6 +998,11 @@ impl PySchema {
             .call1((json.into_py(py),))
             .map(|obj| obj.to_object(py))
     }
+
+    /// Return equivalent PyArrow schema
+    ///
+    /// :rtype: pyarrow.Schema
+    #[pyo3(text_signature = "($self)")]
     fn to_pyarrow(self_: PyRef<'_, Self>) -> PyResult<ArrowSchema> {
         let super_ = self_.as_ref();
         (&super_.inner_type.clone())
@@ -734,12 +1010,58 @@ impl PySchema {
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))
     }
 
+    /// Create from a PyArrow schema
+    ///
+    /// :param data_type: a PyArrow schema
+    /// :type data_type: pyarrow.Schema
+    /// :rtype: Schema
     #[staticmethod]
+    #[pyo3(text_signature = "(data_type)")]
     fn from_pyarrow(data_type: ArrowSchema, py: Python) -> PyResult<PyObject> {
         let inner_type: SchemaTypeStruct = (&data_type)
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         schema_to_pyobject(&inner_type, py)
+    }
+
+    /// Get the JSON representation of the schema.
+    ///
+    /// A schema has the same JSON format as a StructType.
+    ///
+    /// >>> Schema([Field("x", "integer")]).to_json()
+    /// '{"type":"struct","fields":[{"name":"x","type":"integer","nullable":true,"metadata":{}}]}'
+    ///
+    /// :rtype: str
+    #[pyo3(text_signature = "($self)")]
+    fn to_json(self_: PyRef<'_, Self>) -> PyResult<String> {
+        let super_ = self_.as_ref();
+        super_.to_json()
+    }
+
+    /// Create a new Schema from a JSON string.
+    ///
+    /// A schema has the same JSON format as a StructType.
+    ///
+    /// >>> Schema.from_json("""{
+    /// ...  "type": "struct",
+    /// ...  "fields": [{"name": "x", "type": "integer", "nullable": true, "metadata": {}}]
+    /// ...  }""")
+    /// Schema([Field(x, PrimitiveType("integer"), nullable=True)])
+    ///
+    /// :param schema_json: a JSON string
+    /// :type schema_json: str
+    /// :rtype: Schema
+    #[staticmethod]
+    #[pyo3(text_signature = "(schema_json)")]
+    fn from_json(schema_json: String, py: Python) -> PyResult<Py<Self>> {
+        let data_type: SchemaDataType = serde_json::from_str(&schema_json)
+            .map_err(|err| PyValueError::new_err(err.to_string()))?;
+
+        if let SchemaDataType::r#struct(inner_type) = data_type {
+            Py::new(py, (Self {}, StructType { inner_type }))
+        } else {
+            Err(PyTypeError::new_err("Type is not a struct"))
+        }
     }
 }
