@@ -1,6 +1,7 @@
-from typing import Any, Callable, Dict, List, Literal, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union
 
 import pyarrow as pa
+from typing_extensions import Literal
 
 from deltalake.writer import AddAction
 
