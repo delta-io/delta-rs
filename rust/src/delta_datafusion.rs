@@ -299,7 +299,7 @@ impl PruningStatistics for delta::DeltaTable {
                 statistics
                     .null_count
                     .get(&column.name)
-                    .and_then(|f| Some(ScalarValue::UInt64(f.as_value().map(|val| val as u64))))
+                    .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
                     .unwrap_or(ScalarValue::UInt64(None))
             } else {
                 ScalarValue::UInt64(None)
