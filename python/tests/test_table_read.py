@@ -312,6 +312,12 @@ def test_delta_table_to_pandas():
     dt = DeltaTable(table_path)
     assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
 
+@pytest.mark.pandas
+def test_delta_table_with_map_of_arrays_to_pandas():
+    table_path = "../rust/tests/data/table_with_map_of_arrays"
+    dt = DeltaTable(table_path)
+    assert dt.to_pandas().equals(pd.DataFrame({"string": "string_value", "map_arrays": [[("key", ["array_value"])]]}))
+
 
 @pytest.mark.pandas
 def test_delta_table_with_filesystem():
