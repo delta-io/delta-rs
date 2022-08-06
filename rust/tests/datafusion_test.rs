@@ -37,6 +37,30 @@ mod datafusion {
     }
 
     #[tokio::test]
+    async fn test_datafusion_simple_query_partitioned() -> Result<()> {
+        let ctx = SessionContext::new();
+        let table = deltalake::open_table("./tests/data/delta-0.8.0-partitioned")
+            .await
+            .unwrap();
+        ctx.register_table("demo", Arc::new(table))?;
+
+        let batches = ctx
+            .sql("SELECT CAST( day as int ) FROM demo WHERE CAST( year as int ) > 2020 ORDER BY CAST( day as int ) ASC")
+            .await?
+            .collect()
+            .await?;
+
+        let batch = &batches[0];
+
+        assert_eq!(
+            batch.column(0).as_ref(),
+            Arc::new(Int32Array::from(vec![4, 5, 20, 20])).as_ref(),
+        );
+
+        Ok(())
+    }
+
+    #[tokio::test]
     async fn test_datafusion_date_column() -> Result<()> {
         let ctx = SessionContext::new();
         let table = deltalake::open_table("./tests/data/delta-0.8.0-date")

@@ -351,7 +351,7 @@ fn to_scalar_value(stat_val: &serde_json::Value) -> Option<datafusion::scalar::S
             }
         }
         serde_json::Value::String(s) => Some(ScalarValue::from(s.as_str())),
-        // TODO is it permissible to encode arrays / objects as partition values
+        // TODO is it permissible to encode arrays / objects as partition values?
         serde_json::Value::Array(_) => None,
         serde_json::Value::Object(_) => None,
         serde_json::Value::Null => None,
