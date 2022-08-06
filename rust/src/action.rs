@@ -353,11 +353,18 @@ impl Add {
                     "nullCount" => match record.get_group(i) {
                         Ok(row) => {
                             for (name, field) in row.get_column_iter() {
-                                stats.null_count.insert(name.clone(), field.into());
+                                match field.try_into() {
+                                    Ok(count) => {
+                                        stats.null_count.insert(name.clone(), count);
+                                    },
+                                    _ => {
+                                        log::error!("failed parsing null_counts for column")
+                                    },
+                                };
                             }
                         }
                         _ => {
-                            log::error!("Expect type of stats_parsed field nullCount to be struct of ints, got: {}", record);
+                            log::error!("Expect type of stats_parsed field nullCount to be struct, got: {}", record);
                         }
                     }
                     _ => {
@@ -388,16 +395,21 @@ impl From<&Field> for ColumnValueStat {
     }
 }
 
-impl From<&Field> for ColumnCountStat {
-    fn from(field: &Field) -> Self {
+impl TryFrom<&Field> for ColumnCountStat {
+    type Error = &'static str;
+
+    fn try_from(field: &Field) -> Result<Self, Self::Error> {
         match field {
-            Field::Group(group) => ColumnCountStat::Column(HashMap::from_iter(
+            Field::Group(group) => Ok(ColumnCountStat::Column(HashMap::from_iter(
                 group
                     .get_column_iter()
-                    .map(|(field_name, field)| (field_name.clone(), field.into())),
-            )),
-            Field::Long(value) => ColumnCountStat::Value(*value),
-            _ => panic!("nullCount columns stats must be a struct of int64s."),
+                    .filter_map(|(field_name, field)| match field.try_into() {
+                        Ok(value) => Some((field_name.clone(), value)),
+                        Err(_) => None,
+                    }),
+            ))),
+            Field::Long(value) => Ok(ColumnCountStat::Value(*value)),
+            _ => Err("nullCount columns stats must be a struct of int64s."),
         }
     }
 }
