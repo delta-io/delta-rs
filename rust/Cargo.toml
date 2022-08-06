@@ -69,8 +69,8 @@ async-stream = { version = "0.3.2", default-features = true, optional = true }
 # High-level writer
 parquet-format = "~4.0.0"
 
-arrow = "18"
-parquet = "18"
+arrow = "19"
+parquet = "19"
 
 crossbeam = { version = "0", optional = true }
 
