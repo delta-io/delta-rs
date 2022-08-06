@@ -358,7 +358,7 @@ impl Add {
                                         stats.null_count.insert(name.clone(), count);
                                     },
                                     _ => {
-                                        log::error!("failed parsing null_counts for column")
+                                        log::warn!("Expect type of nullCount field to be struct or int64, got: {}", field);
                                     },
                                 };
                             }
@@ -405,11 +405,18 @@ impl TryFrom<&Field> for ColumnCountStat {
                     .get_column_iter()
                     .filter_map(|(field_name, field)| match field.try_into() {
                         Ok(value) => Some((field_name.clone(), value)),
-                        Err(_) => None,
+                        _ => {
+                            log::warn!(
+                                "Unexpected type when parsing nullCounts for {}. Found {}",
+                                field_name,
+                                field
+                            );
+                            None
+                        }
                     }),
             ))),
             Field::Long(value) => Ok(ColumnCountStat::Value(*value)),
-            _ => Err("nullCount columns stats must be a struct of int64s."),
+            _ => Err("Invalid type for nullCounts"),
         }
     }
 }
