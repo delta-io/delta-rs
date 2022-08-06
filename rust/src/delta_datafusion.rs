@@ -26,6 +26,7 @@ use std::sync::Arc;
 
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
 use async_trait::async_trait;
+use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion::datasource::file_format::parquet::ParquetFormat;
 use datafusion::datasource::file_format::FileFormat;
 use datafusion::datasource::listing::PartitionedFile;
@@ -37,6 +38,7 @@ use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::{ColumnStatistics, Statistics};
 use datafusion::scalar::ScalarValue;
+use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
 use crate::action;
@@ -262,6 +264,7 @@ impl TableProvider for delta::DeltaTable {
             url.host_str().unwrap_or_default(),
             self.object_store(),
         );
+        let table_partition_cols = self.get_metadata().unwrap().partition_columns.clone();
 
         // TODO prune files based on file statistics and filter expressions
         let partitions = self
@@ -269,23 +272,61 @@ impl TableProvider for delta::DeltaTable {
             .files()
             .iter()
             .map(|action| {
-                Ok(vec![PartitionedFile::new(
-                    action.path.clone(),
-                    action.size as u64,
-                )])
+                let partition_values = schema
+                    .fields()
+                    .iter()
+                    .filter_map(|f| {
+                        action.partition_values.get(f.name()).map(|val| match val {
+                            Some(value) => {
+                                match to_scalar_value(&serde_json::Value::String(value.to_string()))
+                                {
+                                    Some(parsed) => {
+                                        correct_scalar_value_type(parsed, f.data_type())
+                                            .unwrap_or(ScalarValue::Null)
+                                    }
+                                    None => ScalarValue::Null,
+                                }
+                            }
+                            None => ScalarValue::Null,
+                        })
+                    })
+                    .collect::<Vec<_>>();
+                let ts_secs = action.modification_time / 1000;
+                let ts_ns = (action.modification_time % 1000) * 1_000_000;
+                let last_modified = DateTime::<Utc>::from_utc(
+                    NaiveDateTime::from_timestamp(ts_secs, ts_ns as u32),
+                    Utc,
+                );
+                Ok(vec![PartitionedFile {
+                    object_meta: ObjectMeta {
+                        location: Path::from(action.path.clone()),
+                        last_modified,
+                        size: action.size as usize,
+                    },
+                    partition_values,
+                    range: None,
+                }])
             })
             .collect::<DataFusionResult<_>>()?;
 
+        let file_schema = Arc::new(ArrowSchema::new(
+            schema
+                .fields()
+                .iter()
+                .filter(|f| !table_partition_cols.contains(f.name()))
+                .cloned()
+                .collect(),
+        ));
         ParquetFormat::default()
             .create_physical_plan(
                 FileScanConfig {
                     object_store_url,
-                    file_schema: schema,
+                    file_schema,
                     file_groups: partitions,
                     statistics: self.datafusion_table_statistics(),
                     projection: projection.clone(),
                     limit,
-                    table_partition_cols: self.get_metadata().unwrap().partition_columns.clone(),
+                    table_partition_cols,
                 },
                 filters,
             )
@@ -310,6 +351,7 @@ fn to_scalar_value(stat_val: &serde_json::Value) -> Option<datafusion::scalar::S
             }
         }
         serde_json::Value::String(s) => Some(ScalarValue::from(s.as_str())),
+        // TODO is it permissible to encode arrays / objects as partition values
         serde_json::Value::Array(_) => None,
         serde_json::Value::Object(_) => None,
         serde_json::Value::Null => None,

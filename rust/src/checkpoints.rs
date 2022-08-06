@@ -3,10 +3,7 @@
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
 use arrow::json::reader::{Decoder, DecoderOptions};
-use chrono::Datelike;
-use chrono::Duration;
-use chrono::Utc;
-use chrono::MIN_DATETIME;
+use chrono::{DateTime, Datelike, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::*;
@@ -229,7 +226,7 @@ async fn cleanup_expired_logs_for(
         0,
         ObjectMeta {
             location: Path::from(""),
-            last_modified: MIN_DATETIME,
+            last_modified: DateTime::<Utc>::MIN_UTC,
             size: 0,
         },
     );
