@@ -4,12 +4,22 @@ mod s3_common;
 
 #[cfg(feature = "datafusion-ext")]
 mod datafusion {
-    use std::sync::Arc;
+    use std::{collections::HashSet, sync::Arc};
 
-    use arrow::array::*;
+    use arrow::{
+        array::*,
+        datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema},
+        record_batch::RecordBatch,
+    };
+    use datafusion::datasource::TableProvider;
     use datafusion::error::Result;
-    use datafusion::execution::context::SessionContext;
+    use datafusion::execution::context::{SessionContext, TaskContext};
+    use datafusion::logical_expr::Expr;
+    use datafusion::logical_plan::Column;
+    use datafusion::physical_plan::{coalesce_partitions::CoalescePartitionsExec, ExecutionPlan};
     use datafusion::scalar::ScalarValue;
+    use deltalake::{action::SaveMode, operations::DeltaCommands, DeltaTableMetaData};
+    use std::collections::HashMap;
 
     #[tokio::test]
     async fn test_datafusion_simple_query() -> Result<()> {
@@ -146,6 +156,97 @@ mod datafusion {
                 .collect::<Vec<Option<&ScalarValue>>>(),
             vec![Some(&ScalarValue::from(0 as i32))],
         );
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_files_scanned() -> Result<()> {
+        let table_dir = tempfile::tempdir().unwrap();
+        let table_path = table_dir.path();
+        let table_uri = table_path.to_str().unwrap().to_string();
+
+        let mut commands = DeltaCommands::try_from_uri(table_uri.clone())
+            .await
+            .unwrap();
+
+        let arrow_schema = Arc::new(ArrowSchema::new(vec![
+            ArrowField::new("id", ArrowDataType::Int32, true),
+            ArrowField::new("string", ArrowDataType::Utf8, true),
+        ]));
+
+        let table_schema = arrow_schema.clone().try_into()?;
+        let metadata =
+            DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
+
+        let _ = commands
+            .create(metadata.clone(), SaveMode::Ignore)
+            .await
+            .unwrap();
+
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
+            Arc::new(StringArray::from(vec![Some("hello"), Some("world")])),
+        ];
+        let batch = RecordBatch::try_new(arrow_schema.clone(), columns)?;
+        let _ = commands
+            .write(vec![batch], SaveMode::Overwrite, None)
+            .await
+            .unwrap();
+
+        let columns: Vec<ArrayRef> = vec![
+            Arc::new(Int32Array::from(vec![Some(10), Some(20)])),
+            Arc::new(StringArray::from(vec![Some("hello"), Some("world")])),
+        ];
+        let batch = RecordBatch::try_new(arrow_schema.clone(), columns)?;
+        let _ = commands
+            .write(vec![batch], SaveMode::Append, None)
+            .await
+            .unwrap();
+
+        let table = Arc::new(deltalake::open_table(&table_uri).await?);
+        assert_eq!(table.version(), 2);
+
+        let ctx = SessionContext::new();
+        let plan = table.scan(&ctx.state(), &None, &[], None).await?;
+        let plan = CoalescePartitionsExec::new(plan.clone());
+
+        let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+        let stream = plan.execute(0, task_ctx)?;
+        let _result = datafusion::physical_plan::common::collect(stream).await?;
+
+        let files_scanned = plan.children()[0]
+            .metrics()
+            .unwrap()
+            .clone()
+            .iter()
+            .cloned()
+            .flat_map(|m| m.labels().to_vec())
+            .collect::<HashSet<_>>();
+
+        assert!(files_scanned.len() == 2);
+
+        let filter = Expr::gt(
+            Expr::Column(Column::from_name("id")),
+            Expr::Literal(ScalarValue::Int32(Some(5))),
+        );
+
+        let plan = table.scan(&ctx.state(), &None, &[filter], None).await?;
+        let plan = CoalescePartitionsExec::new(plan.clone());
+        let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
+        let stream = plan.execute(0, task_ctx)?;
+        let _result = datafusion::physical_plan::common::collect(stream).await?;
+
+        let files_scanned = plan.children()[0]
+            .metrics()
+            .unwrap()
+            .clone()
+            .iter()
+            .cloned()
+            .flat_map(|m| m.labels().to_vec())
+            .collect::<HashSet<_>>();
+
+        assert!(files_scanned.len() == 1);
 
         Ok(())
     }
