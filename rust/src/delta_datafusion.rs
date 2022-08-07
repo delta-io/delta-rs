@@ -359,9 +359,11 @@ impl TableProvider for delta::DeltaTable {
                             Some(partitioned_file_from_action(action, &schema))
                         }))
                 })
-                .ok_or(DataFusionError::Execution(
-                    "Failed to evaluate table pruning predicates.".to_string(),
-                ))??
+                .ok_or_else(|| {
+                    DataFusionError::Execution(
+                        "Failed to evaluate table pruning predicates.".to_string(),
+                    )
+                })??
                 .for_each(|f| {
                     file_groups
                         .entry(f.partition_values.clone())
