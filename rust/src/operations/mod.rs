@@ -237,6 +237,12 @@ impl From<DeltaTable> for DeltaCommands {
     }
 }
 
+impl From<DeltaCommands> for DeltaTable {
+    fn from(comm: DeltaCommands) -> Self {
+        comm.table
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
