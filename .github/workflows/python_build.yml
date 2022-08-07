@@ -62,7 +62,6 @@ jobs:
 
       - name: Build and install deltalake
         run: |
-          pip install --upgrade pip
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate

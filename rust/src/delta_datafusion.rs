@@ -21,6 +21,7 @@
 //! ```
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
@@ -51,6 +52,8 @@ impl From<DeltaTableError> for DataFusionError {
         match err {
             DeltaTableError::ArrowError { source } => DataFusionError::ArrowError(source),
             DeltaTableError::Io { source } => DataFusionError::IoError(source),
+            DeltaTableError::ObjectStore { source } => DataFusionError::ObjectStore(source),
+            DeltaTableError::ParquetError { source } => DataFusionError::ParquetError(source),
             _ => DataFusionError::External(Box::new(err)),
         }
     }
@@ -61,6 +64,8 @@ impl From<DataFusionError> for crate::DeltaTableError {
         match err {
             DataFusionError::ArrowError(source) => DeltaTableError::ArrowError { source },
             DataFusionError::IoError(source) => DeltaTableError::Io { source },
+            DataFusionError::ObjectStore(source) => DeltaTableError::ObjectStore { source },
+            DataFusionError::ParquetError(source) => DeltaTableError::ParquetError { source },
             _ => DeltaTableError::Generic(err.to_string()),
         }
     }
@@ -220,27 +225,21 @@ impl PruningStatistics for delta::DeltaTable {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        let field = self
+            .get_schema()
+            .ok()
+            .map(|s| s.get_field_with_name(&column.name).ok())??;
+        let data_type = field.get_type().try_into().ok()?;
         let values = self.get_state().files().iter().map(|add| {
             if let Ok(Some(statistics)) = add.get_stats() {
-                self.get_schema()
-                    .ok()
-                    .map(|s| {
-                        s.get_field_with_name(&column.name)
-                            .ok()
-                            .map(|field| {
-                                statistics
-                                    .min_values
-                                    .get(&column.name)
-                                    .and_then(|f| {
-                                        correct_scalar_value_type(
-                                            to_scalar_value(f.as_value()?)
-                                                .unwrap_or(ScalarValue::Null),
-                                            &field.get_type().try_into().ok()?,
-                                        )
-                                    })
-                                    .unwrap_or(ScalarValue::Null)
-                            })
-                            .unwrap_or(ScalarValue::Null)
+                statistics
+                    .min_values
+                    .get(&column.name)
+                    .and_then(|f| {
+                        correct_scalar_value_type(
+                            to_scalar_value(f.as_value()?).unwrap_or(ScalarValue::Null),
+                            &data_type,
+                        )
                     })
                     .unwrap_or(ScalarValue::Null)
             } else {
@@ -253,27 +252,21 @@ impl PruningStatistics for delta::DeltaTable {
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        let field = self
+            .get_schema()
+            .ok()
+            .map(|s| s.get_field_with_name(&column.name).ok())??;
+        let data_type = field.get_type().try_into().ok()?;
         let values = self.get_state().files().iter().map(|add| {
             if let Ok(Some(statistics)) = add.get_stats() {
-                self.get_schema()
-                    .ok()
-                    .map(|s| {
-                        s.get_field_with_name(&column.name)
-                            .ok()
-                            .map(|field| {
-                                statistics
-                                    .max_values
-                                    .get(&column.name)
-                                    .and_then(|f| {
-                                        correct_scalar_value_type(
-                                            to_scalar_value(f.as_value()?)
-                                                .unwrap_or(ScalarValue::Null),
-                                            &field.get_type().try_into().ok()?,
-                                        )
-                                    })
-                                    .unwrap_or(ScalarValue::Null)
-                            })
-                            .unwrap_or(ScalarValue::Null)
+                statistics
+                    .max_values
+                    .get(&column.name)
+                    .and_then(|f| {
+                        correct_scalar_value_type(
+                            to_scalar_value(f.as_value()?).unwrap_or(ScalarValue::Null),
+                            &data_type,
+                        )
                     })
                     .unwrap_or(ScalarValue::Null)
             } else {
@@ -345,65 +338,48 @@ impl TableProvider for delta::DeltaTable {
             self.object_store(),
         );
 
-        // The pruning predicate indicates which containers / files can be pruned.
-        // i.e. 'true' means the file is to be excluded
-        let files_to_prune = if !filters.is_empty() {
-            if let Some(predicate) = combine_filters(filters) {
-                let pruning_predicate = PruningPredicate::try_new(predicate, schema.clone())?;
-                pruning_predicate.prune(self)?
-            } else {
-                vec![false; self.get_state().files().len()]
-            }
-        } else {
-            vec![false; self.get_state().files().len()]
-        };
-
-        let partitions = self
-            .get_state()
-            .files()
-            .iter()
-            .zip(files_to_prune.into_iter())
-            .filter_map(|(action, prune_file)| {
-                if prune_file {
-                    return None;
-                }
-                let partition_values = schema
-                    .fields()
-                    .iter()
-                    .filter_map(|f| {
-                        action.partition_values.get(f.name()).map(|val| match val {
-                            Some(value) => {
-                                match to_scalar_value(&serde_json::Value::String(value.to_string()))
-                                {
-                                    Some(parsed) => {
-                                        correct_scalar_value_type(parsed, f.data_type())
-                                            .unwrap_or(ScalarValue::Null)
-                                    }
-                                    None => ScalarValue::Null,
-                                }
+        // TODO we group files together by their partition values. If the table is partitioned
+        // and partitions are somewhat evenly distributed, probably not the worst choice ...
+        // However we may want to do some additional balancing in case we are far off from the above.
+        let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
+        if !filters.is_empty() {
+            combine_filters(filters)
+                .map::<DataFusionResult<_>, _>(|predicate| {
+                    let pruning_predicate = PruningPredicate::try_new(predicate, schema.clone())?;
+                    let files_to_prune = pruning_predicate.prune(self)?;
+                    Ok(self
+                        .get_state()
+                        .files()
+                        .iter()
+                        .zip(files_to_prune.into_iter())
+                        .filter_map(|(action, prune_file)| {
+                            if prune_file {
+                                return None;
                             }
-                            None => ScalarValue::Null,
-                        })
-                    })
-                    .collect::<Vec<_>>();
-                let ts_secs = action.modification_time / 1000;
-                let ts_ns = (action.modification_time % 1000) * 1_000_000;
-                let last_modified = DateTime::<Utc>::from_utc(
-                    NaiveDateTime::from_timestamp(ts_secs, ts_ns as u32),
-                    Utc,
-                );
-                // TODO group by partition values, not every file in its own vec ...
-                Some(Ok(vec![PartitionedFile {
-                    object_meta: ObjectMeta {
-                        location: Path::from(action.path.clone()),
-                        last_modified,
-                        size: action.size as usize,
-                    },
-                    partition_values,
-                    range: None,
-                }]))
-            })
-            .collect::<DataFusionResult<_>>()?;
+                            Some(partitioned_file_from_action(action, &schema))
+                        }))
+                })
+                .ok_or(DataFusionError::Execution(
+                    "Failed to evaluate table pruning predicates.".to_string(),
+                ))??
+                .for_each(|f| {
+                    file_groups
+                        .entry(f.partition_values.clone())
+                        .or_default()
+                        .push(f);
+                });
+        } else {
+            self.get_state()
+                .files()
+                .iter()
+                .map(|action| partitioned_file_from_action(action, &schema))
+                .for_each(|f| {
+                    file_groups
+                        .entry(f.partition_values.clone())
+                        .or_default()
+                        .push(f);
+                });
+        };
 
         let table_partition_cols = self.get_metadata()?.partition_columns.clone();
         let file_schema = Arc::new(ArrowSchema::new(
@@ -419,7 +395,7 @@ impl TableProvider for delta::DeltaTable {
                 FileScanConfig {
                     object_store_url,
                     file_schema,
-                    file_groups: partitions,
+                    file_groups: file_groups.into_values().collect(),
                     statistics: self.datafusion_table_statistics(),
                     projection: projection.clone(),
                     limit,
@@ -432,6 +408,38 @@ impl TableProvider for delta::DeltaTable {
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> PartitionedFile {
+    let partition_values = schema
+        .fields()
+        .iter()
+        .filter_map(|f| {
+            action.partition_values.get(f.name()).map(|val| match val {
+                Some(value) => {
+                    match to_scalar_value(&serde_json::Value::String(value.to_string())) {
+                        Some(parsed) => correct_scalar_value_type(parsed, f.data_type())
+                            .unwrap_or(ScalarValue::Null),
+                        None => ScalarValue::Null,
+                    }
+                }
+                None => ScalarValue::Null,
+            })
+        })
+        .collect::<Vec<_>>();
+    let ts_secs = action.modification_time / 1000;
+    let ts_ns = (action.modification_time % 1000) * 1_000_000;
+    let last_modified =
+        DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(ts_secs, ts_ns as u32), Utc);
+    PartitionedFile {
+        object_meta: ObjectMeta {
+            location: Path::from(action.path.clone()),
+            last_modified,
+            size: action.size as usize,
+        },
+        partition_values,
+        range: None,
     }
 }
 
@@ -448,7 +456,6 @@ fn to_scalar_value(stat_val: &serde_json::Value) -> Option<datafusion::scalar::S
             }
         }
         serde_json::Value::String(s) => Some(ScalarValue::from(s.as_str())),
-        // TODO is it permissible to encode arrays / objects as partition values?
         serde_json::Value::Array(_) => None,
         serde_json::Value::Object(_) => None,
         serde_json::Value::Null => None,
