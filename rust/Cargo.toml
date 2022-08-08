@@ -20,7 +20,7 @@ futures = "0.3"
 bytes = "1"
 log = "0"
 regex = "1"
-chrono = "0"
+chrono = "0.4.20"
 uuid = { version = "1", features = ["serde", "v4"] }
 lazy_static = "1"
 percent-encoding = "2"
