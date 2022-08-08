@@ -343,44 +343,34 @@ impl TableProvider for delta::DeltaTable {
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
         if !filters.is_empty() {
-            combine_filters(filters)
-                .map::<DataFusionResult<_>, _>(|predicate| {
-                    let pruning_predicate = PruningPredicate::try_new(predicate, schema.clone())?;
-                    let files_to_prune = pruning_predicate.prune(self)?;
-                    Ok(self
-                        .get_state()
-                        .files()
-                        .iter()
-                        .zip(files_to_prune.into_iter())
-                        .filter_map(|(action, prune_file)| {
-                            if prune_file {
-                                return None;
-                            }
-                            Some(partitioned_file_from_action(action, &schema))
-                        }))
-                })
-                .ok_or_else(|| {
-                    DataFusionError::Execution(
-                        "Failed to evaluate table pruning predicates.".to_string(),
-                    )
-                })??
-                .for_each(|f| {
-                    file_groups
-                        .entry(f.partition_values.clone())
-                        .or_default()
-                        .push(f);
-                });
-        } else {
+            let predicate = combine_filters(filters).ok_or_else(|| {
+                DataFusionError::Execution(
+                    "Failed to evaluate table pruning predicates.".to_string(),
+                )
+            })?;
+            let pruning_predicate = PruningPredicate::try_new(predicate, schema.clone())?;
+            let files_to_prune = pruning_predicate.prune(self)?;
             self.get_state()
                 .files()
                 .iter()
-                .map(|action| partitioned_file_from_action(action, &schema))
-                .for_each(|f| {
-                    file_groups
-                        .entry(f.partition_values.clone())
-                        .or_default()
-                        .push(f);
+                .zip(files_to_prune.into_iter())
+                .for_each(|(action, prune_file)| {
+                    if !prune_file {
+                        let part = partitioned_file_from_action(action, &schema);
+                        file_groups
+                            .entry(part.partition_values.clone())
+                            .or_default()
+                            .push(part);
+                    };
                 });
+        } else {
+            self.get_state().files().iter().for_each(|action| {
+                let part = partitioned_file_from_action(action, &schema);
+                file_groups
+                    .entry(part.partition_values.clone())
+                    .or_default()
+                    .push(part);
+            });
         };
 
         let table_partition_cols = self.get_metadata()?.partition_columns.clone();
