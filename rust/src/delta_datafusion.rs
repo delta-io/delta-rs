@@ -342,12 +342,7 @@ impl TableProvider for delta::DeltaTable {
         // and partitions are somewhat evenly distributed, probably not the worst choice ...
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-        if !filters.is_empty() {
-            let predicate = combine_filters(filters).ok_or_else(|| {
-                DataFusionError::Execution(
-                    "Failed to evaluate table pruning predicates.".to_string(),
-                )
-            })?;
+        if let Some(Some(predicate)) = (!filters.is_empty()).then_some(combine_filters(filters)) {
             let pruning_predicate = PruningPredicate::try_new(predicate, schema.clone())?;
             let files_to_prune = pruning_predicate.prune(self)?;
             self.get_state()
