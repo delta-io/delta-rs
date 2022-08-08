@@ -352,19 +352,19 @@ impl Add {
                     }
                     "nullCount" => match record.get_group(i) {
                         Ok(row) => {
-                            for (i, (name, _)) in row.get_column_iter().enumerate() {
-                                match row.get_long(i) {
-                                    Ok(v) => {
-                                        stats.null_count.insert(name.clone(), ColumnCountStat::Value(v));
-                                    }
+                            for (name, field) in row.get_column_iter() {
+                                match field.try_into() {
+                                    Ok(count) => {
+                                        stats.null_count.insert(name.clone(), count);
+                                    },
                                     _ => {
-                                        log::error!("Expect type of stats_parsed.nullRecords value to be struct, got: {}", row);
-                                    }
-                                }
+                                        log::warn!("Expect type of nullCount field to be struct or int64, got: {}", field);
+                                    },
+                                };
                             }
                         }
                         _ => {
-                            log::error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
+                            log::error!("Expect type of stats_parsed field nullCount to be struct, got: {}", record);
                         }
                     }
                     _ => {
@@ -391,6 +391,32 @@ impl From<&Field> for ColumnValueStat {
                     .map(|(field_name, field)| (field_name.clone(), field.into())),
             )),
             _ => ColumnValueStat::Value(primitive_parquet_field_to_json_value(field)),
+        }
+    }
+}
+
+impl TryFrom<&Field> for ColumnCountStat {
+    type Error = &'static str;
+
+    fn try_from(field: &Field) -> Result<Self, Self::Error> {
+        match field {
+            Field::Group(group) => Ok(ColumnCountStat::Column(HashMap::from_iter(
+                group
+                    .get_column_iter()
+                    .filter_map(|(field_name, field)| match field.try_into() {
+                        Ok(value) => Some((field_name.clone(), value)),
+                        _ => {
+                            log::warn!(
+                                "Unexpected type when parsing nullCounts for {}. Found {}",
+                                field_name,
+                                field
+                            );
+                            None
+                        }
+                    }),
+            ))),
+            Field::Long(value) => Ok(ColumnCountStat::Value(*value)),
+            _ => Err("Invalid type for nullCounts"),
         }
     }
 }

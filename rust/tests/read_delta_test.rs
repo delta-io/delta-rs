@@ -409,7 +409,7 @@ async fn read_delta_8_0_table_partition_with_compare_op() {
 }
 
 #[tokio::test]
-async fn read_delta_1_2_1_struct_stats_table_without_version() {
+async fn read_delta_1_2_1_struct_stats_table() {
     let table_uri = "./tests/data/delta-1.2.1-only-struct-stats";
     let table_from_struct_stats = deltalake::open_table(table_uri).await.unwrap();
     let table_from_json_stats = deltalake::open_table_with_version(table_uri, 1)
@@ -437,9 +437,9 @@ async fn read_delta_1_2_1_struct_stats_table_without_version() {
     let file_to_compare = "part-00000-51653f4d-b029-44bd-9fda-578e73518a26-c000.snappy.parquet";
 
     assert_eq!(
-        get_stats_for_file(&table_from_struct_stats, &file_to_compare).min_values,
-        get_stats_for_file(&table_from_json_stats, &file_to_compare).min_values,
-    )
+        get_stats_for_file(&table_from_struct_stats, &file_to_compare),
+        get_stats_for_file(&table_from_json_stats, &file_to_compare),
+    );
 }
 
 #[tokio::test]
