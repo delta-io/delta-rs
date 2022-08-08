@@ -43,6 +43,25 @@ impl SchemaTypeStruct {
     pub fn get_fields(&self) -> &Vec<SchemaField> {
         &self.fields
     }
+
+    /// Returns an immutable reference of a specific `Field` instance selected by name.
+    pub fn get_field_with_name(&self, name: &str) -> Result<&SchemaField, crate::DeltaTableError> {
+        Ok(&self.fields[self.index_of(name)?])
+    }
+
+    /// Find the index of the column with the given name.
+    pub fn index_of(&self, name: &str) -> Result<usize, crate::DeltaTableError> {
+        for i in 0..self.fields.len() {
+            if self.fields[i].get_name() == name {
+                return Ok(i);
+            }
+        }
+        let valid_fields: Vec<String> = self.fields.iter().map(|f| f.name.clone()).collect();
+        Err(crate::DeltaTableError::Generic(format!(
+            "Unable to get field named \"{}\". Valid fields: {:?}",
+            name, valid_fields
+        )))
+    }
 }
 
 /// Describes a specific field of the Delta table schema.
