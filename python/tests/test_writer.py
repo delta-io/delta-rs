@@ -11,8 +11,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
 from packaging import version
-from pyarrow._dataset_parquet import ParquetReadOptions
-from pyarrow.dataset import ParquetFileFormat
+from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
 from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, write_deltalake
