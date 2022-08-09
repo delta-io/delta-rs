@@ -33,7 +33,7 @@ jobs:
         run: make check-rust
 
   test-minimal:
-    name: Python Build (Python 3.7 PyArrow 4.0.0)
+    name: Python Build (Python 3.7 PyArrow 7.0.0)
     runs-on: ubuntu-latest
     # use the same environment we have for python release
     container: quay.io/pypa/manylinux2010_x86_64:2022-03-14-b2cd80b
@@ -69,7 +69,7 @@ jobs:
           # Install minimum PyArrow version
           # pandas and numpy versions are most recent with Python 3.7 wheels.
           # Otherwise, we have to build those from source.
-          pip install -e .[pandas,devel] pyarrow==4.0.0 pandas==1.2.5 numpy==1.20.3
+          pip install -e .[pandas,devel] pyarrow==7.0.0 pandas==1.2.5 numpy==1.20.3
 
       - name: Run tests
         run: |
