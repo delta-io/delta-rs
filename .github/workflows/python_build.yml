@@ -69,8 +69,7 @@ jobs:
           # Install minimum PyArrow version
           # pandas and numpy versions are most recent with Python 3.7 wheels.
           # Otherwise, we have to build those from source.
-          pip install pyarrow==4.0.0 pandas==1.2.5 numpy==1.20.3
-          make develop
+          pip install -e .[pandas,devel] pyarrow==4.0.0 pandas==1.2.5 numpy==1.20.3
 
       - name: Run tests
         run: |
