@@ -45,7 +45,7 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
     assert ("0" * 20 + ".json") in os.listdir(tmp_path / "_delta_log")
 
     delta_table = DeltaTable(str(tmp_path))
-    assert delta_table.pyarrow_schema() == sample_data.schema
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
     assert table == sample_data
@@ -84,7 +84,7 @@ def test_update_schema(existing_table: DeltaTable):
 
     read_data = existing_table.to_pyarrow_table()
     assert new_data == read_data
-    assert existing_table.pyarrow_schema() == new_data.schema
+    assert existing_table.schema().to_pyarrow() == new_data.schema
 
 
 def test_local_path(tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch):
@@ -94,7 +94,7 @@ def test_local_path(tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch):
     local_path = "./path/to/table"
     write_deltalake(local_path, sample_data)
     delta_table = DeltaTable(local_path)
-    assert delta_table.pyarrow_schema() == sample_data.schema
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
     assert table == sample_data
@@ -139,7 +139,7 @@ def test_roundtrip_partitioned(
     write_deltalake(str(tmp_path), sample_data, partition_by=[column])
 
     delta_table = DeltaTable(str(tmp_path))
-    assert delta_table.pyarrow_schema() == sample_data.schema
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
     table = table.take(pc.sort_indices(table["int64"]))
@@ -157,7 +157,7 @@ def test_roundtrip_null_partition(tmp_path: pathlib.Path, sample_data: pa.Table)
     write_deltalake(str(tmp_path), sample_data, partition_by=["utf8_with_nulls"])
 
     delta_table = DeltaTable(str(tmp_path))
-    assert delta_table.pyarrow_schema() == sample_data.schema
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
     table = table.take(pc.sort_indices(table["int64"]))
@@ -168,7 +168,7 @@ def test_roundtrip_multi_partitioned(tmp_path: pathlib.Path, sample_data: pa.Tab
     write_deltalake(str(tmp_path), sample_data, partition_by=["int32", "bool"])
 
     delta_table = DeltaTable(str(tmp_path))
-    assert delta_table.pyarrow_schema() == sample_data.schema
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
     table = table.take(pc.sort_indices(table["int64"]))

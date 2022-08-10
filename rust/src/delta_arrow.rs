@@ -8,6 +8,7 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::collections::BTreeMap;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
@@ -29,11 +30,25 @@ impl TryFrom<&schema::SchemaField> for ArrowField {
     type Error = ArrowError;
 
     fn try_from(f: &schema::SchemaField) -> Result<Self, ArrowError> {
-        Ok(ArrowField::new(
+        let mut field = ArrowField::new(
             f.get_name(),
             ArrowDataType::try_from(f.get_type())?,
             f.is_nullable(),
-        ))
+        );
+
+        let metadata: Option<BTreeMap<String, String>> = Some(f.get_metadata())
+            .filter(|metadata| metadata.is_empty())
+            .map(|metadata| {
+                metadata
+                    .iter()
+                    .map(|(key, val)| Ok((key.clone(), serde_json::to_string(val)?)))
+                    .collect::<Result<_, serde_json::Error>>()
+                    .map_err(|err| ArrowError::JsonError(err.to_string()))
+            })
+            .transpose()?;
+
+        field.set_metadata(metadata);
+        Ok(field)
     }
 }
 
@@ -42,7 +57,7 @@ impl TryFrom<&schema::SchemaTypeArray> for ArrowField {
 
     fn try_from(a: &schema::SchemaTypeArray) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
-            "element",
+            "item",
             ArrowDataType::try_from(a.get_element_type())?,
             a.contains_null(),
         ))
@@ -54,7 +69,7 @@ impl TryFrom<&schema::SchemaTypeMap> for ArrowField {
 
     fn try_from(a: &schema::SchemaTypeMap) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
-            "key_value",
+            "entries",
             ArrowDataType::Struct(vec![
                 ArrowField::new("key", ArrowDataType::try_from(a.get_key_type())?, false),
                 ArrowField::new(
