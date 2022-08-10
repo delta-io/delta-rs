@@ -151,12 +151,12 @@ def write_deltalake(
     fs = DeltaStorageHandler(table_uri)
 
     if table:  # already exists
-        if schema != table.pyarrow_schema() and not (
+        if schema != table.schema().to_pyarrow() and not (
             mode == "overwrite" and overwrite_schema
         ):
             raise ValueError(
                 "Schema of data does not match table schema\n"
-                f"Table schema:\n{schema}\nData Schema:\n{table.pyarrow_schema()}"
+                f"Table schema:\n{schema}\nData Schema:\n{table.schema().to_pyarrow()}"
             )
 
         if mode == "error":
