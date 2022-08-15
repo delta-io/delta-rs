@@ -39,7 +39,7 @@ reqwest = { version = "0.11", default-features = false, features = [
 azure_core = { version = "0.3", optional = true }
 azure_storage = { version = "0.4", optional = true }
 azure_storage_datalake = { version = "0.4", optional = true }
-azure_identity = { version = "0.4", optional = true }
+azure_identity = { version = "0.5", optional = true }
 
 # S3
 rusoto_core = { version = "0.48", default-features = false, optional = true }
