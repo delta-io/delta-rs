@@ -96,9 +96,35 @@ dependencies = [
  "lexical-core",
  "multiversion",
  "num",
- "pyo3",
  "rand 0.8.5",
  "regex",
+ "serde",
+ "serde_derive",
+ "serde_json",
+]
+
+[[package]]
+name = "arrow"
+version = "20.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c72a69495f06c8abb65b76a87be192a26fa724380d1f292d4e558a32afed9989"
+dependencies = [
+ "ahash",
+ "bitflags",
+ "chrono",
+ "csv",
+ "flatbuffers",
+ "half",
+ "hashbrown",
+ "hex",
+ "indexmap",
+ "lazy_static",
+ "lexical-core",
+ "multiversion",
+ "num",
+ "pyo3",
+ "regex",
+ "regex-syntax",
  "serde",
  "serde_derive",
  "serde_json",
@@ -601,7 +627,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "54617e523e447c9a139fdf3682eeca8f909934bd28cdd0032ebd0ff9783775e1"
 dependencies = [
  "ahash",
- "arrow",
+ "arrow 18.0.0",
  "async-trait",
  "bytes",
  "chrono",
@@ -640,7 +666,7 @@ version = "10.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "794ca54d3b144038c36b7a31d64c9545abb2edbdda6da055e481fb8a13e4e33b"
 dependencies = [
- "arrow",
+ "arrow 18.0.0",
  "object_store",
  "ordered-float 3.0.0",
  "parquet",
@@ -654,7 +680,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "0087a4e55a861c7040314f217672259304fd26b5f174a065867df6b4ac659896"
 dependencies = [
  "ahash",
- "arrow",
+ "arrow 18.0.0",
  "datafusion-common",
  "sqlparser",
 ]
@@ -665,7 +691,7 @@ version = "10.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b822b1a9f4f9c953b142190229085e2856fa9ee52844aa86b40d55edd6e7cc38"
 dependencies = [
- "arrow",
+ "arrow 18.0.0",
  "async-trait",
  "chrono",
  "datafusion-common",
@@ -682,7 +708,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "2328a0e901a89c46391be9445e6e55b6dd8002d4d177e578b0c4a2486ef07cda"
 dependencies = [
  "ahash",
- "arrow",
+ "arrow 18.0.0",
  "blake2",
  "blake3",
  "chrono",
@@ -706,7 +732,7 @@ version = "10.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "ef6b51e6398ed6dcc5e072c16722b9838f472b0c0ffe25b5df536927cda6044f"
 dependencies = [
- "arrow",
+ "arrow 18.0.0",
  "datafusion-common",
  "paste",
  "rand 0.8.5",
@@ -719,7 +745,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "cb9ae561d6c3dcd09d253ff28f71396b576fca05fe4d0f4fb0e75ee2fc951c72"
 dependencies = [
  "ahash",
- "arrow",
+ "arrow 18.0.0",
  "datafusion-common",
  "datafusion-expr",
  "hashbrown",
@@ -732,7 +758,7 @@ name = "deltalake"
 version = "0.4.1"
 dependencies = [
  "anyhow",
- "arrow",
+ "arrow 20.0.0",
  "async-stream",
  "async-trait",
  "azure_core",
@@ -2063,7 +2089,7 @@ version = "18.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "65f61759af307fad711e7656c705218402a8a79b776c893c20fef96e8ffd2a7d"
 dependencies = [
- "arrow",
+ "arrow 18.0.0",
  "base64",
  "brotli",
  "byteorder",
