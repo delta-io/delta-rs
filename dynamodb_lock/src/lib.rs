@@ -81,7 +81,7 @@ pub mod dynamo_lock_options {
 /// Configuration options for [`DynamoDbLockClient`].
 ///
 /// Available options are described in [dynamo_lock_options].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct DynamoDbOptions {
     /// Partition key value of DynamoDB table,
     /// Should be the same among the clients which work with the lock.

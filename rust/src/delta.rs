@@ -694,7 +694,7 @@ impl DeltaTable {
                 Err(ObjectStoreError::NotFound { .. }) => continue,
                 Err(err) => Err(err),
             }?;
-            if let Some(captures) = CHECKPOINT_REGEX.captures(&obj_meta.location.to_string()) {
+            if let Some(captures) = CHECKPOINT_REGEX.captures(obj_meta.location.as_ref()) {
                 let curr_ver_str = captures.get(1).unwrap().as_str();
                 let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
                 if curr_ver > version {
@@ -711,8 +711,7 @@ impl DeltaTable {
                 continue;
             }
 
-            if let Some(captures) = CHECKPOINT_PARTS_REGEX.captures(&obj_meta.location.to_string())
-            {
+            if let Some(captures) = CHECKPOINT_PARTS_REGEX.captures(obj_meta.location.as_ref()) {
                 let curr_ver_str = captures.get(1).unwrap().as_str();
                 let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
                 if curr_ver > version {
