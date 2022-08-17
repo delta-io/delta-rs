@@ -236,7 +236,7 @@ impl Vacuum {
             });
         }
 
-        return plan.execute(table).await;
+        plan.execute(table).await
     }
 }
 
