@@ -22,7 +22,7 @@ pub mod gcs;
 pub mod s3;
 
 /// Error enum that represents an invalid URI.
-#[derive(thiserror::Error, Debug, PartialEq)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum UriError {
     /// Error returned when the URI contains a scheme that is not handled.
     #[error("Invalid URI scheme: {0}")]

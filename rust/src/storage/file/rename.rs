@@ -71,10 +71,10 @@ mod imp {
                         e
                     )));
                 }
-                return Err(StorageError::other_std_io_err(format!(
+                Err(StorageError::other_std_io_err(format!(
                     "failed to rename {} to {}: {}",
                     from, to, e
-                )));
+                )))
             }
             Ok(_) => Ok(()),
         }

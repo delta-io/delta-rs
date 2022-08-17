@@ -39,7 +39,7 @@ pub mod azure_storage_options {
 /// Options used to configure the AdlsGen2Backend.
 ///
 /// Available options are described in [azure_storage_options].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AzureStorageOptions {
     account_key: Option<String>,
     account_name: Option<String>,
@@ -158,7 +158,7 @@ impl TryInto<DataLakeClient> for AzureStorageOptions {
 }
 
 /// An object on an Azure Data Lake Storage Gen2 account.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct AdlsGen2Object<'a> {
     /// The storage account name.
     pub account_name: &'a str,

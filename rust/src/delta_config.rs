@@ -29,7 +29,7 @@ lazy_static! {
 }
 
 /// Delta configuration error
-#[derive(thiserror::Error, Debug, PartialEq)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum DeltaConfigError {
     /// Error returned when configuration validation failed.
     #[error("Validation failed - {0}")]

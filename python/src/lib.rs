@@ -1,4 +1,5 @@
 #![deny(warnings)]
+#![allow(clippy::borrow_deref_ref)]
 
 extern crate pyo3;
 
