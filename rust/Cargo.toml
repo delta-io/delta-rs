@@ -26,7 +26,7 @@ lazy_static = "1"
 percent-encoding = "2"
 num-bigint = "0.4"
 num-traits = "0.2.15"
-object_store = "0.3.0"
+object_store = "0.4.0"
 url = "2.2"
 
 # HTTP Client
