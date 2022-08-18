@@ -36,7 +36,7 @@ reqwest = { version = "0.11", default-features = false, features = [
 ], optional = true }
 
 # Azure
-azure_core = { version = "0.3", optional = true }
+azure_core = { version = "0.4", optional = true }
 azure_storage = { version = "0.4", optional = true }
 azure_storage_datalake = { version = "0.4", optional = true }
 azure_identity = { version = "0.4", optional = true }
