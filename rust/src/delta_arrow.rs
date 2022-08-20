@@ -117,7 +117,8 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                             .get(2)
                             .and_then(|v| v.as_str().parse::<usize>().ok());
                         match (precision, scale) {
-                            (Some(p), Some(s)) => Ok(ArrowDataType::Decimal(p, s)),
+                            // TODO how do we decide which variant (128 / 256) to use?
+                            (Some(p), Some(s)) => Ok(ArrowDataType::Decimal128(p, s)),
                             _ => Err(ArrowError::SchemaError(format!(
                                 "Invalid precision or scale decimal type for Arrow: {}",
                                 decimal
@@ -231,7 +232,11 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
             ArrowDataType::Float64 => Ok(schema::SchemaDataType::primitive("double".to_string())),
             ArrowDataType::Boolean => Ok(schema::SchemaDataType::primitive("boolean".to_string())),
             ArrowDataType::Binary => Ok(schema::SchemaDataType::primitive("binary".to_string())),
-            ArrowDataType::Decimal(p, s) => Ok(schema::SchemaDataType::primitive(format!(
+            ArrowDataType::Decimal128(p, s) => Ok(schema::SchemaDataType::primitive(format!(
+                "decimal({},{})",
+                p, s
+            ))),
+            ArrowDataType::Decimal256(p, s) => Ok(schema::SchemaDataType::primitive(format!(
                 "decimal({},{})",
                 p, s
             ))),

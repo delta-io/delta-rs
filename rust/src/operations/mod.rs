@@ -46,23 +46,23 @@ pub enum DeltaCommandError {
     TableAlreadyExists(String),
 
     /// Error returned when errors occur in underlying delta table instance
-    #[error("Error in underlying DeltaTable")]
-    DeltaTableError {
+    #[error("DeltaTable error: {} ({:?})", source, source)]
+    DeltaTable {
         /// Raw internal DeltaTableError
         #[from]
         source: DeltaTableError,
     },
 
     /// Errors occurring inside the DeltaWriter modules
-    #[error("Error in underlying DeltaWriter")]
-    DeltaWriter {
+    #[error("Writer error: {} ({:?})", source, source)]
+    Writer {
         /// Raw internal DeltaWriterError
         #[from]
         source: DeltaWriterError,
     },
 
     /// Error returned when errors occur in underlying storage instance
-    #[error("Error in underlying storage backend")]
+    #[error("Storage error: {} ({:?})", source, source)]
     Storage {
         /// Raw internal StorageError
         #[from]
@@ -70,7 +70,7 @@ pub enum DeltaCommandError {
     },
 
     /// Error returned when errors occur in Arrow
-    #[error("Error handling arrow data")]
+    #[error("Arrow error: {} ({:?})", source, source)]
     Arrow {
         /// Raw internal ArrowError
         #[from]
@@ -78,12 +78,20 @@ pub enum DeltaCommandError {
     },
 
     /// Error returned for errors internal to Datafusion
-    #[error("Error in Datafusion execution engine")]
+    #[error("Datafusion error: {} ({:?})", source, source)]
     DataFusion {
         /// Raw internal DataFusionError
-        #[from]
         source: DataFusionError,
     },
+}
+
+impl From<DataFusionError> for DeltaCommandError {
+    fn from(err: DataFusionError) -> Self {
+        match err {
+            DataFusionError::ArrowError(source) => DeltaCommandError::Arrow { source },
+            source => DeltaCommandError::DataFusion { source },
+        }
+    }
 }
 
 fn to_datafusion_err(e: impl std::error::Error) -> DataFusionError {

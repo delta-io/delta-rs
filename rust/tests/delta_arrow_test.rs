@@ -10,7 +10,7 @@ fn test_arrow_from_delta_decimal_type() {
     let decimal_field = deltalake::SchemaDataType::primitive(decimal_type);
     assert_eq!(
         <ArrowDataType as TryFrom<&deltalake::SchemaDataType>>::try_from(&decimal_field).unwrap(),
-        ArrowDataType::Decimal(precision, scale)
+        ArrowDataType::Decimal128(precision, scale)
     );
 }
 

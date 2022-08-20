@@ -26,6 +26,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
+use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -235,12 +236,7 @@ impl PruningStatistics for delta::DeltaTable {
                 statistics
                     .min_values
                     .get(&column.name)
-                    .and_then(|f| {
-                        correct_scalar_value_type(
-                            to_scalar_value(f.as_value()?).unwrap_or(ScalarValue::Null),
-                            &data_type,
-                        )
-                    })
+                    .and_then(|f| to_correct_scalar_value(f.as_value()?, &data_type))
                     .unwrap_or(ScalarValue::Null)
             } else {
                 ScalarValue::Null
@@ -262,12 +258,7 @@ impl PruningStatistics for delta::DeltaTable {
                 statistics
                     .max_values
                     .get(&column.name)
-                    .and_then(|f| {
-                        correct_scalar_value_type(
-                            to_scalar_value(f.as_value()?).unwrap_or(ScalarValue::Null),
-                            &data_type,
-                        )
-                    })
+                    .and_then(|f| to_correct_scalar_value(f.as_value()?, &data_type))
                     .unwrap_or(ScalarValue::Null)
             } else {
                 ScalarValue::Null
@@ -404,17 +395,16 @@ fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> P
         .iter()
         .filter_map(|f| {
             action.partition_values.get(f.name()).map(|val| match val {
-                Some(value) => {
-                    match to_scalar_value(&serde_json::Value::String(value.to_string())) {
-                        Some(parsed) => correct_scalar_value_type(parsed, f.data_type())
-                            .unwrap_or(ScalarValue::Null),
-                        None => ScalarValue::Null,
-                    }
-                }
+                Some(value) => to_correct_scalar_value(
+                    &serde_json::Value::String(value.to_string()),
+                    f.data_type(),
+                )
+                .unwrap_or(ScalarValue::Null),
                 None => ScalarValue::Null,
             })
         })
         .collect::<Vec<_>>();
+
     let ts_secs = action.modification_time / 1000;
     let ts_ns = (action.modification_time % 1000) * 1_000_000;
     let last_modified =
@@ -427,6 +417,7 @@ fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> P
         },
         partition_values,
         range: None,
+        extensions: None,
     }
 }
 
@@ -446,6 +437,51 @@ fn to_scalar_value(stat_val: &serde_json::Value) -> Option<datafusion::scalar::S
         serde_json::Value::Array(_) => None,
         serde_json::Value::Object(_) => None,
         serde_json::Value::Null => None,
+    }
+}
+
+fn to_correct_scalar_value(
+    stat_val: &serde_json::Value,
+    field_dt: &ArrowDataType,
+) -> Option<datafusion::scalar::ScalarValue> {
+    match stat_val {
+        serde_json::Value::Array(_) => None,
+        serde_json::Value::Object(_) => None,
+        serde_json::Value::Null => None,
+        serde_json::Value::String(string_val) => match field_dt {
+            ArrowDataType::Timestamp(_, _) => {
+                let time_nanos = ScalarValue::try_from_string(
+                    string_val.to_owned(),
+                    &ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
+                )
+                .ok()?;
+                let cast_arr = cast_with_options(
+                    &time_nanos.to_array(),
+                    field_dt,
+                    &CastOptions { safe: false },
+                )
+                .ok()?;
+                Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)
+            }
+            _ => Some(ScalarValue::try_from_string(string_val.to_owned(), field_dt).ok()?),
+        },
+        other => match field_dt {
+            ArrowDataType::Timestamp(_, _) => {
+                let time_nanos = ScalarValue::try_from_string(
+                    other.to_string(),
+                    &ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
+                )
+                .ok()?;
+                let cast_arr = cast_with_options(
+                    &time_nanos.to_array(),
+                    field_dt,
+                    &CastOptions { safe: false },
+                )
+                .ok()?;
+                Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)
+            }
+            _ => Some(ScalarValue::try_from_string(other.to_string(), field_dt).ok()?),
+        },
     }
 }
 
@@ -490,7 +526,11 @@ fn correct_scalar_value_type(
             let raw_value = bool::try_from(value).ok()?;
             Some(ScalarValue::from(raw_value))
         }
-        ArrowDataType::Decimal(_, _) => {
+        ArrowDataType::Decimal128(_, _) => {
+            let raw_value = f64::try_from(value).ok()?;
+            Some(ScalarValue::from(raw_value))
+        }
+        ArrowDataType::Decimal256(_, _) => {
             let raw_value = f64::try_from(value).ok()?;
             Some(ScalarValue::from(raw_value))
         }
@@ -570,5 +610,121 @@ fn left_larger_than_right(
             );
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use arrow::datatypes::Field;
+    use chrono::{TimeZone, Utc};
+    use serde_json::json;
+
+    // test deserialization of serialized partition values.
+    // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
+    #[test]
+    fn test_parse_scalar_value() {
+        let reference_pairs = &[
+            (
+                json!("2015"),
+                ArrowDataType::Int16,
+                ScalarValue::Int16(Some(2015)),
+            ),
+            (
+                json!("2015"),
+                ArrowDataType::Int32,
+                ScalarValue::Int32(Some(2015)),
+            ),
+            (
+                json!("2015"),
+                ArrowDataType::Int64,
+                ScalarValue::Int64(Some(2015)),
+            ),
+            (
+                json!("2015"),
+                ArrowDataType::Float32,
+                ScalarValue::Float32(Some(2015_f32)),
+            ),
+            (
+                json!("2015"),
+                ArrowDataType::Float64,
+                ScalarValue::Float64(Some(2015_f64)),
+            ),
+            (
+                json!(2015),
+                ArrowDataType::Float64,
+                ScalarValue::Float64(Some(2015_f64)),
+            ),
+            (
+                json!("2015-01-01"),
+                ArrowDataType::Date32,
+                ScalarValue::Date32(Some(16436)),
+            ),
+            // (
+            //     json!("2015-01-01"),
+            //     ArrowDataType::Date64,
+            //     ScalarValue::Date64(Some(16436)),
+            // ),
+            (
+                json!("2020-09-08 13:42:29"),
+                ArrowDataType::Timestamp(TimeUnit::Nanosecond, None),
+                ScalarValue::TimestampNanosecond(Some(1599565349000000000), None),
+            ),
+            (
+                json!("2020-09-08 13:42:29"),
+                ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+                ScalarValue::TimestampMicrosecond(Some(1599565349000000), None),
+            ),
+            (
+                json!("2020-09-08 13:42:29"),
+                ArrowDataType::Timestamp(TimeUnit::Millisecond, None),
+                ScalarValue::TimestampMillisecond(Some(1599565349000), None),
+            ),
+            (
+                json!(true),
+                ArrowDataType::Boolean,
+                ScalarValue::Boolean(Some(true)),
+            ),
+        ];
+
+        for (raw, data_type, ref_scalar) in reference_pairs {
+            let scalar = to_correct_scalar_value(raw, data_type).unwrap();
+            assert_eq!(*ref_scalar, scalar)
+        }
+    }
+
+    #[test]
+    fn test_partitioned_file_from_action() {
+        let mut partition_values = std::collections::HashMap::new();
+        partition_values.insert("month".to_string(), Some("1".to_string()));
+        partition_values.insert("year".to_string(), Some("2015".to_string()));
+        let action = action::Add {
+            path: "year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string(),
+            size: 10644,
+            partition_values,
+            modification_time: 1660497727833,
+            partition_values_parsed: None,
+            data_change: true,
+            stats: None,
+            stats_parsed: None,
+            tags: None,
+        };
+        let schema = ArrowSchema::new(vec![
+            Field::new("year", ArrowDataType::Int64, true),
+            Field::new("month", ArrowDataType::Int64, true),
+        ]);
+
+        let file = partitioned_file_from_action(&action, &schema);
+        let ref_file = PartitionedFile {
+            object_meta: object_store::ObjectMeta {
+                location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
+                last_modified: Utc.timestamp_millis(1660497727833),
+                size: 10644,
+            },
+            partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),
+            range: None,
+            extensions: None,
+        };
+        assert_eq!(file.partition_values, ref_file.partition_values)
     }
 }

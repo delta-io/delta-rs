@@ -14,12 +14,13 @@ use futures::StreamExt;
 use lazy_static::lazy_static;
 use object_store::{
     path::{Path, DELIMITER},
-    Error as ObjectStoreError, GetResult, ListResult, ObjectMeta, ObjectStore,
+    Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
     Result as ObjectStoreResult,
 };
 use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
+use tokio::io::AsyncWrite;
 use url::{ParseError, Url};
 
 lazy_static! {
@@ -280,6 +281,21 @@ impl ObjectStore for DeltaObjectStore {
             .storage
             .rename_obj_noreplace(&self.to_uri(from), &self.to_uri(to))
             .await?)
+    }
+
+    async fn put_multipart(
+        &self,
+        _location: &Path,
+    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+        todo!()
+    }
+
+    async fn abort_multipart(
+        &self,
+        _location: &Path,
+        _multipart_id: &MultipartId,
+    ) -> ObjectStoreResult<()> {
+        todo!()
     }
 }
 
