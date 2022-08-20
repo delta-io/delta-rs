@@ -417,18 +417,23 @@ fn filestats_to_expression<'py>(
     let pa = PyModule::import(py, "pyarrow")?;
     let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
 
+    let cast_to_type = |column_name: &String, value: PyObject, schema: &ArrowSchema| {
+        let column_type = schema
+            .field_with_name(column_name)
+            .map_err(|_| {
+                PyDeltaTableError::new_err(format!("Column not found in schema: {}", column_name))
+            })?
+            .data_type()
+            .clone()
+            .into_py(py);
+        pa.call_method1("scalar", (value,))?
+            .call_method1("cast", (column_type,))
+    };
+
     for (column, value) in partitions_values.iter() {
         if let Some(value) = value {
             // value is a string, but needs to be parsed into appropriate type
-            let column_type = schema
-                .field_with_name(column)
-                .map_err(|_| PyDeltaTableError::new_err("Partition column not found in schema"))?
-                .data_type()
-                .clone()
-                .into_py(py);
-            let converted_value = pa
-                .call_method1("scalar", (value,))?
-                .call_method1("cast", (column_type,))?;
+            let converted_value = cast_to_type(column, value.into_py(py), schema)?;
             expressions.push(
                 field
                     .call1((column,))?
@@ -438,32 +443,38 @@ fn filestats_to_expression<'py>(
     }
 
     if let Some(stats) = stats {
-        for (column, minimum) in stats.min_values.iter().filter_map(|(k, v)| match v {
+        for (col_name, minimum) in stats.min_values.iter().filter_map(|(k, v)| match v {
             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
             // TODO(wjones127): Handle nested field statistics.
             // Blocked on https://issues.apache.org/jira/browse/ARROW-11259
             _ => None,
         }) {
-            expressions.push(field.call1((column,))?.call_method1("__ge__", (minimum,)));
+            let maybe_minimum = cast_to_type(&col_name, minimum, schema);
+            if let Ok(minimum) = maybe_minimum {
+                expressions.push(field.call1((col_name,))?.call_method1("__ge__", (minimum,)));
+            }
         }
 
-        for (column, maximum) in stats.max_values.iter().filter_map(|(k, v)| match v {
+        for (col_name, maximum) in stats.max_values.iter().filter_map(|(k, v)| match v {
             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
             _ => None,
         }) {
-            expressions.push(field.call1((column,))?.call_method1("__le__", (maximum,)));
+            let maybe_maximum = cast_to_type(&col_name, maximum, schema);
+            if let Ok(maximum) = maybe_maximum {
+                expressions.push(field.call1((col_name,))?.call_method1("__le__", (maximum,)));
+            }
         }
 
-        for (column, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
+        for (col_name, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
             ColumnCountStat::Value(val) => Some((k, val)),
             _ => None,
         }) {
             if *null_count == stats.num_records {
-                expressions.push(field.call1((column.clone(),))?.call_method0("is_null"));
+                expressions.push(field.call1((col_name.clone(),))?.call_method0("is_null"));
             }
 
             if *null_count == 0 {
-                expressions.push(field.call1((column.clone(),))?.call_method0("is_valid"));
+                expressions.push(field.call1((col_name.clone(),))?.call_method0("is_valid"));
             }
         }
     }
