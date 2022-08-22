@@ -185,7 +185,7 @@ impl JsonWriter {
         partition_columns: Option<Vec<String>>,
         storage_options: Option<HashMap<String, String>>,
     ) -> Result<Self, DeltaWriterError> {
-        let storage = DeltaTableBuilder::try_from_uri(&table_uri)?
+        let storage = DeltaTableBuilder::from_uri(&table_uri)
             .with_storage_options(storage_options.unwrap_or_default())
             .build_storage()?;
 

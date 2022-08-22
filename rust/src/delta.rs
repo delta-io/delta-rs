@@ -1401,7 +1401,7 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Erro
 /// Creates and loads a DeltaTable from the given path with current metadata.
 /// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table(table_uri: &str) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::try_from_uri(table_uri)?.load().await?;
+    let table = DeltaTableBuilder::from_uri(table_uri).load().await?;
     Ok(table)
 }
 
@@ -1411,7 +1411,7 @@ pub async fn open_table_with_version(
     table_uri: &str,
     version: DeltaDataTypeVersion,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::try_from_uri(table_uri)?
+    let table = DeltaTableBuilder::from_uri(table_uri)
         .with_version(version)
         .load()
         .await?;
@@ -1422,7 +1422,7 @@ pub async fn open_table_with_version(
 /// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
 /// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table_with_ds(table_uri: &str, ds: &str) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::try_from_uri(table_uri)?
+    let table = DeltaTableBuilder::from_uri(table_uri)
         .with_datestring(ds)?
         .load()
         .await?;
@@ -1452,10 +1452,7 @@ mod tests {
         ]
         .iter()
         {
-            let table = DeltaTableBuilder::try_from_uri(table_uri)
-                .unwrap()
-                .build()
-                .unwrap();
+            let table = DeltaTableBuilder::from_uri(table_uri).build().unwrap();
             assert_eq!(table.table_uri, "s3://tests/data/delta-0.8.0");
         }
     }
@@ -1496,8 +1493,7 @@ mod tests {
         let table_dir = tmp_dir.path().join("test_create");
         std::fs::create_dir(&table_dir).unwrap();
 
-        let mut dt = DeltaTableBuilder::try_from_uri(table_dir.to_str().unwrap())
-            .unwrap()
+        let mut dt = DeltaTableBuilder::from_uri(table_dir.to_str().unwrap())
             .build()
             .unwrap();
 

@@ -35,11 +35,7 @@ mod adls_gen2_table {
         let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
         let table_uri = "azure://deltars/simple_table/";
 
-        let table = DeltaTableBuilder::try_from_uri(table_uri)
-            .unwrap()
-            .load()
-            .await
-            .unwrap();
+        let table = DeltaTableBuilder::from_uri(table_uri).load().await.unwrap();
 
         assert_eq!(table.version(), 4);
         assert_eq!(table.get_min_writer_version(), 2);
@@ -90,8 +86,7 @@ mod adls_gen2_table {
 
         // TODO get container here ...
         let table_uri = "azure://simple/";
-        let table = DeltaTableBuilder::try_from_uri(&table_uri)
-            .unwrap()
+        let table = DeltaTableBuilder::from_uri(&table_uri)
             .with_storage_options(options)
             .load()
             .await

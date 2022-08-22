@@ -104,8 +104,7 @@ impl RawDeltaTable {
         version: Option<deltalake::DeltaDataTypeLong>,
         storage_options: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
-        let mut builder = deltalake::DeltaTableBuilder::try_from_uri(table_uri)
-            .map_err(PyDeltaTableError::from_raw)?;
+        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
         if let Some(storage_options) = storage_options {
             builder = builder.with_storage_options(storage_options)
         }
@@ -506,8 +505,7 @@ impl DeltaStorageFsBackend {
 impl DeltaStorageFsBackend {
     #[new]
     fn new(table_uri: &str) -> PyResult<Self> {
-        let storage = DeltaTableBuilder::try_from_uri(table_uri)
-            .map_err(PyDeltaTableError::from_raw(err))?
+        let storage = DeltaTableBuilder::from_uri(table_uri)
             .build_storage()
             .map_err(PyDeltaTableError::from_raw(err))?
             .storage_backend();
@@ -603,8 +601,7 @@ fn write_new_deltalake(
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
 ) -> PyResult<()> {
-    let mut table = DeltaTableBuilder::try_from_uri(table_uri)
-        .map_err(PyDeltaTableError::from_raw)?
+    let mut table = DeltaTableBuilder::from_uri(table_uri)
         .build()
         .map_err(PyDeltaTableError::from_raw)?;
 

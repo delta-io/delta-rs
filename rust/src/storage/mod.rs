@@ -1,7 +1,5 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
-use hyper::http::uri::InvalidUri;
 use object_store::Error as ObjectStoreError;
 use std::fmt::Debug;
 use walkdir::Error as WalkDirError;
@@ -74,15 +72,6 @@ pub enum StorageError {
         /// The underlying Rusoto TlsError
         #[from]
         source: rusoto_core::request::TlsError,
-    },
-
-    /// Error returned when the URI is invalid.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("Invalid URI parsing")]
-    ParsingUri {
-        #[from]
-        /// Uri error details when the URI parsing is invalid.
-        source: InvalidUri,
     },
 
     /// underlying object store returned an error.

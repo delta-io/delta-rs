@@ -356,11 +356,9 @@ mod tests {
 
     fn create_local_test_store() -> (Arc<DeltaObjectStore>, tempdir::TempDir) {
         let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let store =
-            crate::builder::DeltaTableBuilder::try_from_uri(tmp_dir.path().to_str().unwrap())
-                .unwrap()
-                .build_storage()
-                .unwrap();
+        let store = crate::builder::DeltaTableBuilder::from_uri(tmp_dir.path().to_str().unwrap())
+            .build_storage()
+            .unwrap();
         (store, tmp_dir)
     }
 

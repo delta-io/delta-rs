@@ -48,10 +48,7 @@ async fn concurrent_writes_azure() {
     az_cli::create_container(&container_name);
 
     let table_uri = &format!("azure://{}/", container_name);
-    let mut dt = DeltaTableBuilder::try_from_uri(table_uri)
-        .unwrap()
-        .build()
-        .unwrap();
+    let mut dt = DeltaTableBuilder::from_uri(table_uri).build().unwrap();
 
     let schema = Schema::new(vec![SchemaField::new(
         "Id".to_string(),

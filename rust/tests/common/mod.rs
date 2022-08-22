@@ -60,8 +60,7 @@ impl TestContext {
     fn new_storage(&self) -> Arc<DeltaObjectStore> {
         let config = self.config.clone();
         let uri = config.get("URI").unwrap().to_string();
-        DeltaTableBuilder::try_from_uri(uri)
-            .unwrap()
+        DeltaTableBuilder::from_uri(uri)
             .with_storage_options(config)
             .build_storage()
             .unwrap()

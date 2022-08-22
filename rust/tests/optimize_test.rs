@@ -69,7 +69,7 @@ mod optimize {
 
         let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
         let p = tmp_dir.path().to_str().to_owned().unwrap();
-        let mut dt = DeltaTableBuilder::try_from_uri(p)?.build()?;
+        let mut dt = DeltaTableBuilder::from_uri(p).build()?;
 
         let mut commit_info = Map::<String, Value>::new();
 

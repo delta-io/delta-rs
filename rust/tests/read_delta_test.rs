@@ -55,8 +55,7 @@ async fn read_delta_table_with_update() {
 
 #[tokio::test]
 async fn read_delta_table_ignoring_tombstones() {
-    let table = DeltaTableBuilder::try_from_uri("./tests/data/delta-0.8.0")
-        .unwrap()
+    let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
         .without_tombstones()
         .load()
         .await
@@ -77,8 +76,7 @@ async fn read_delta_table_ignoring_tombstones() {
 
 #[tokio::test]
 async fn read_delta_table_ignoring_files() {
-    let table = DeltaTableBuilder::try_from_uri("./tests/data/delta-0.8.0")
-        .unwrap()
+    let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
         .without_files()
         .load()
         .await
@@ -93,8 +91,7 @@ async fn read_delta_table_ignoring_files() {
 
 #[tokio::test]
 async fn read_delta_table_with_ignoring_files_on_apply_log() {
-    let mut table = DeltaTableBuilder::try_from_uri("./tests/data/delta-0.8.0")
-        .unwrap()
+    let mut table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
         .with_version(0)
         .without_files()
         .load()

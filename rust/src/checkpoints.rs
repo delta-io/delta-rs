@@ -840,8 +840,7 @@ mod tests {
     // Last-Modified for S3 could not be altered by user, hence using system pauses which makes
     // test to run longer but reliable
     async fn cleanup_metadata_test(table_path: &str) {
-        let object_store = crate::builder::DeltaTableBuilder::try_from_uri(table_path)
-            .unwrap()
+        let object_store = crate::builder::DeltaTableBuilder::from_uri(table_path)
             .build_storage()
             .unwrap();
 

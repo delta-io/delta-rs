@@ -541,8 +541,7 @@ mod tests {
         table_uri: &str,
         options: HashMap<String, String>,
     ) -> Result<DeltaTable, DeltaTableError> {
-        DeltaTableBuilder::try_from_uri(table_uri)
-            .unwrap()
+        DeltaTableBuilder::from_uri(table_uri)
             .with_storage_options(options)
             .load()
             .await

@@ -136,8 +136,7 @@ async fn do_create(
     metadata: DeltaTableMetaData,
     protocol: Protocol,
 ) -> DataFusionResult<SendableRecordBatchStream> {
-    let mut table = DeltaTableBuilder::try_from_uri(&table_uri)
-        .map_err(to_datafusion_err)?
+    let mut table = DeltaTableBuilder::from_uri(&table_uri)
         .build()
         .map_err(to_datafusion_err)?;
 

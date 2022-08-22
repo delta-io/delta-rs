@@ -46,10 +46,7 @@ pub async fn create_test_table(
     partition_columns: Vec<&str>,
     config: HashMap<String, Option<String>>,
 ) -> DeltaTable {
-    let mut table = DeltaTableBuilder::try_from_uri(path)
-        .unwrap()
-        .build()
-        .unwrap();
+    let mut table = DeltaTableBuilder::from_uri(path).build().unwrap();
     let partition_columns = partition_columns.iter().map(|s| s.to_string()).collect();
     let md = DeltaTableMetaData::new(None, None, None, schema, partition_columns, config);
     let protocol = Protocol {

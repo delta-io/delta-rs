@@ -165,8 +165,7 @@ pub fn get_delta_metadata(partition_cols: &[String]) -> DeltaTableMetaData {
 pub fn create_bare_table() -> DeltaTable {
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
-    DeltaTableBuilder::try_from_uri(table_path.to_str().unwrap())
-        .unwrap()
+    DeltaTableBuilder::from_uri(table_path.to_str().unwrap())
         .build()
         .unwrap()
 }

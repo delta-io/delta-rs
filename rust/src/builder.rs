@@ -89,14 +89,14 @@ pub struct DeltaTableLoadOptions {
 
 impl DeltaTableLoadOptions {
     /// create default table load options for a table uri
-    pub fn new(table_uri: &str) -> Result<Self, DeltaTableError> {
-        Ok(Self {
-            table_uri: table_uri.to_string(),
+    pub fn new(table_uri: impl Into<String>) -> Self {
+        Self {
+            table_uri: table_uri.into(),
             storage_backend: None,
             require_tombstones: true,
             require_files: true,
             version: DeltaVersion::default(),
-        })
+        }
     }
 }
 
@@ -109,11 +109,11 @@ pub struct DeltaTableBuilder {
 
 impl DeltaTableBuilder {
     /// Creates `DeltaTableBuilder` from table uri
-    pub fn try_from_uri(table_uri: impl AsRef<str>) -> Result<Self, DeltaTableError> {
-        Ok(DeltaTableBuilder {
-            options: DeltaTableLoadOptions::new(table_uri.as_ref())?,
+    pub fn from_uri(table_uri: impl AsRef<str>) -> Self {
+        DeltaTableBuilder {
+            options: DeltaTableLoadOptions::new(table_uri.as_ref()),
             storage_options: None,
-        })
+        }
     }
 
     /// Sets `require_tombstones=false` to the builder
@@ -555,8 +555,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_load_simple_local() {
-        let table = DeltaTableBuilder::try_from_uri("./tests/data/simple_table")
-            .unwrap()
+        let table = DeltaTableBuilder::from_uri("./tests/data/simple_table")
             .load()
             .await
             .unwrap();
@@ -569,8 +568,7 @@ mod tests {
     async fn test_load_simple_azure() {
         dotenv::dotenv().ok();
 
-        let table = DeltaTableBuilder::try_from_uri("az://deltars/simple_table")
-            .unwrap()
+        let table = DeltaTableBuilder::from_uri("az://deltars/simple_table")
             .load()
             .await
             .unwrap();
@@ -583,8 +581,7 @@ mod tests {
     async fn test_load_simple_aws() {
         dotenv::dotenv().ok();
 
-        let table = DeltaTableBuilder::try_from_uri("s3://deltars/simple_table")
-            .unwrap()
+        let table = DeltaTableBuilder::from_uri("s3://deltars/simple_table")
             .load()
             .await
             .unwrap();
@@ -597,8 +594,7 @@ mod tests {
     async fn test_load_simple_gcp() {
         dotenv::dotenv().ok();
 
-        let table = DeltaTableBuilder::try_from_uri("gs://deltars/simple_table")
-            .unwrap()
+        let table = DeltaTableBuilder::from_uri("gs://deltars/simple_table")
             .load()
             .await
             .unwrap();

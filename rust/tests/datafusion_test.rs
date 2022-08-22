@@ -299,7 +299,7 @@ mod datafusion {
             setup();
 
             let table_uri = "s3://deltars/simple";
-            let mut table = builder::DeltaTableBuilder::try_from_uri(table_uri).unwrap().with_storage_options(hashmap! {
+            let mut table = builder::DeltaTableBuilder::from_uri(table_uri).with_storage_options(hashmap! {
                 s3_storage_options::AWS_REGION.to_string() => "us-east-2".to_string(),
                 dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "s3::deltars/simple".to_string(),
             }).load().await.unwrap();

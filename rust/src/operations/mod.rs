@@ -123,7 +123,7 @@ impl DeltaCommands {
         let table = if let Ok(tbl) = open_table(&table_uri).await {
             Ok(tbl)
         } else {
-            DeltaTableBuilder::try_from_uri(table_uri)?.build()
+            DeltaTableBuilder::from_uri(table_uri).build()
         }?;
         Ok(Self { table })
     }
