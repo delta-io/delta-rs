@@ -24,13 +24,17 @@ from deltalake import DeltaTable
 def test_read_table_with_edge_timestamps():
     table_path = "../rust/tests/data/table_with_edge_timestamps"
     dt = DeltaTable(table_path)
-    assert dt.to_pyarrow_dataset(
+    dataset = dt.to_pyarrow_dataset(
         parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit="ms")
-    ).to_table().to_pydict() == {
+    )
+    assert dataset.to_table().to_pydict() == {
         "BIG_DATE": [datetime(9999, 12, 31, 0, 0, 0), datetime(9999, 12, 30, 0, 0, 0)],
         "NORMAL_DATE": [datetime(2022, 1, 1, 0, 0, 0), datetime(2022, 2, 1, 0, 0, 0)],
         "SOME_VALUE": [1, 2],
     }
+    # Can push down filters to these timestamps.
+    predicate = ds.field("BIG_DATE") == datetime(9999, 12, 31, 0, 0, 0)
+    assert len(list(dataset.get_fragments(predicate))) == 1
 
 
 def test_read_simple_table_to_dict():

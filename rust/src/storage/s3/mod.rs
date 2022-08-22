@@ -218,7 +218,7 @@ pub mod s3_storage_options {
 /// Options used to configure the S3StorageBackend.
 ///
 /// Available options are described in [s3_storage_options].
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct S3StorageOptions {
     _endpoint_url: Option<String>,
     region: Region,
@@ -339,7 +339,7 @@ fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvi
 }
 
 /// Struct describing an object stored in S3.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub struct S3Object<'a> {
     /// The bucket where the object is stored.
     pub bucket: &'a str,
