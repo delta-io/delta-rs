@@ -491,7 +491,7 @@ pub struct DeltaStorageFsBackend {
 
 impl DeltaStorageFsBackend {
     async fn get_object(&self, path: &Path) -> Result<Vec<u8>, deltalake::ObjectStoreError> {
-        Ok(self._storage.get(&path).await?.bytes().await?.into())
+        Ok(self._storage.get(path).await?.bytes().await?.into())
     }
 }
 

@@ -139,7 +139,7 @@ impl DeltaCommands {
         plan: Arc<dyn ExecutionPlan>,
     ) -> DeltaCommandResult<()> {
         let transaction = Arc::new(DeltaTransactionPlan::new(
-            self.table.table_uri.clone(),
+            self.table.table_uri(),
             self.table.version(),
             plan,
             operation,
@@ -163,7 +163,7 @@ impl DeltaCommands {
         let operation = DeltaOperation::Create {
             mode,
             metadata: metadata.clone(),
-            location: self.table.table_uri.clone(),
+            location: self.table.table_uri(),
             // TODO get the protocol from somewhere central
             protocol: Protocol {
                 min_reader_version: 1,
@@ -171,7 +171,7 @@ impl DeltaCommands {
             },
         };
         let plan = Arc::new(CreateCommand::try_new(
-            &self.table.table_uri,
+            self.table.table_uri(),
             operation.clone(),
         )?);
 
@@ -234,7 +234,7 @@ impl DeltaCommands {
         };
         let data_plan = Arc::new(MemoryExec::try_new(&data, schema, None)?);
         let plan = Arc::new(WriteCommand::try_new(
-            &self.table.table_uri,
+            self.table.table_uri(),
             operation.clone(),
             data_plan,
         )?);
@@ -295,7 +295,7 @@ mod tests {
         let mut table = create_initialized_table(&partition_cols).await;
         assert_eq!(table.version(), 0);
 
-        let mut commands = DeltaCommands::try_from_uri(table.table_uri.to_string())
+        let mut commands = DeltaCommands::try_from_uri(table.table_uri())
             .await
             .unwrap();
 
