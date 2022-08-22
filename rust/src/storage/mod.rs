@@ -1,9 +1,11 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
+pub use delta::DeltaObjectStore;
 use object_store::Error as ObjectStoreError;
 use std::fmt::Debug;
 use walkdir::Error as WalkDirError;
 
+pub mod delta;
 pub mod file;
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 pub mod s3;

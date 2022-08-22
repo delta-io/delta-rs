@@ -19,9 +19,9 @@ use std::ops::Add;
 
 use super::action;
 use super::delta_arrow::delta_log_schema_for_table;
-use super::object_store::DeltaObjectStore;
 use super::open_table_with_version;
 use super::schema::*;
+use super::storage::DeltaObjectStore;
 use super::table_state::DeltaTableState;
 use super::time_utils;
 use super::DeltaTable;

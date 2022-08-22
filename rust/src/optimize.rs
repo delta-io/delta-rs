@@ -21,7 +21,6 @@
 
 use crate::action::DeltaOperation;
 use crate::action::{self, Action};
-use crate::parquet::file::reader::FileReader;
 use crate::writer::utils::PartitionPath;
 use crate::writer::{DeltaWriter, DeltaWriterError, RecordBatchWriter};
 use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter};
@@ -29,6 +28,7 @@ use log::debug;
 use log::error;
 use object_store::{path::Path, ObjectStore};
 use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
+use parquet::file::reader::FileReader;
 use parquet::file::serialized_reader::SerializedFileReader;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;

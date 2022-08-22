@@ -1,8 +1,8 @@
 //! Create or load DeltaTables
 
 use crate::delta::{DeltaTable, DeltaTableError};
-use crate::object_store::DeltaObjectStore;
 use crate::schema::DeltaDataTypeVersion;
+use crate::storage::delta::DeltaObjectStore;
 use crate::storage::file::FileStorageBackend;
 use chrono::{DateTime, FixedOffset, Utc};
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]

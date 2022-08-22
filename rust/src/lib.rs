@@ -76,17 +76,6 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 
-pub use arrow;
-extern crate chrono;
-extern crate lazy_static;
-extern crate parquet;
-extern crate regex;
-extern crate serde;
-#[cfg(test)]
-#[macro_use]
-extern crate serde_json;
-extern crate thiserror;
-
 pub mod action;
 pub mod builder;
 pub mod checkpoints;
@@ -94,7 +83,6 @@ pub mod data_catalog;
 mod delta;
 pub mod delta_arrow;
 pub mod delta_config;
-pub mod object_store;
 #[cfg(feature = "datafusion-ext")]
 pub mod operations;
 pub mod optimize;
@@ -118,4 +106,9 @@ pub use self::delta::*;
 pub use self::partitions::*;
 pub use self::schema::*;
 pub use self::storage::StorageError;
-pub use ::object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
+pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
+
+// convenience exports for consumers to avoid aligning crate versions
+pub use arrow;
+#[cfg(feature = "datafusion-ext")]
+pub use datafusion;

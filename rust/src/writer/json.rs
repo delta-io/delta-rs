@@ -9,7 +9,7 @@ use super::{
 };
 use crate::builder::DeltaTableBuilder;
 use crate::{action::Add, DeltaTable, DeltaTableMetaData, Schema};
-use crate::{object_store::DeltaObjectStore, writer::utils::ShareableBuffer};
+use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
 use arrow::{
     datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
     record_batch::*,

@@ -12,7 +12,7 @@ use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
 pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
 use crate::delta_config::DeltaConfigError;
-use crate::object_store::DeltaObjectStore;
+use crate::storage::DeltaObjectStore;
 use crate::vacuum::{Vacuum, VacuumError};
 use arrow::error::ArrowError;
 use chrono::{DateTime, Duration, Utc};

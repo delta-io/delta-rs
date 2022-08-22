@@ -42,7 +42,7 @@ impl From<StorageError> for ObjectStoreError {
 
 /// Configuration for a DeltaObjectStore
 #[derive(Debug, Clone)]
-pub struct DeltaObjectStoreConfig {
+struct DeltaObjectStoreConfig {
     table_root: Path,
 }
 

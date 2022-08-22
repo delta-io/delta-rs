@@ -37,7 +37,7 @@ use super::{
 use crate::builder::DeltaTableBuilder;
 use crate::writer::stats::apply_null_counts;
 use crate::writer::utils::ShareableBuffer;
-use crate::{action::Add, object_store::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
+use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{Array, UInt32Array},
