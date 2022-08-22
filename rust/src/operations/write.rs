@@ -426,7 +426,7 @@ mod tests {
         let mut table = create_initialized_table(&partition_cols).await;
         assert_eq!(table.version(), 0);
 
-        let transaction = get_transaction(table.table_uri.clone(), 0, SaveMode::Append);
+        let transaction = get_transaction(table.table_uri(), 0, SaveMode::Append);
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
 
@@ -437,7 +437,7 @@ mod tests {
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
         assert_eq!(table.version(), 1);
 
-        let transaction = get_transaction(table.table_uri.clone(), 1, SaveMode::Append);
+        let transaction = get_transaction(table.table_uri(), 1, SaveMode::Append);
         let _ = collect(transaction.clone(), task_ctx).await.unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 4);
@@ -450,7 +450,7 @@ mod tests {
         let mut table = create_initialized_table(&partition_cols).await;
         assert_eq!(table.version(), 0);
 
-        let transaction = get_transaction(table.table_uri.clone(), 0, SaveMode::Overwrite);
+        let transaction = get_transaction(table.table_uri(), 0, SaveMode::Overwrite);
         let session_ctx = SessionContext::new();
         let task_ctx = session_ctx.task_ctx();
 
@@ -461,7 +461,7 @@ mod tests {
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
         assert_eq!(table.version(), 1);
 
-        let transaction = get_transaction(table.table_uri.clone(), 1, SaveMode::Overwrite);
+        let transaction = get_transaction(table.table_uri(), 1, SaveMode::Overwrite);
         let _ = collect(transaction.clone(), task_ctx).await.unwrap();
         table.update().await.unwrap();
         assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
