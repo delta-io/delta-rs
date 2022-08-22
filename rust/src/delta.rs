@@ -1453,7 +1453,7 @@ mod tests {
         .iter()
         {
             let table = DeltaTableBuilder::from_uri(table_uri).build().unwrap();
-            assert_eq!(table.table_uri, "s3://tests/data/delta-0.8.0");
+            assert_eq!(table.table_uri(), "s3://tests/data/delta-0.8.0");
         }
     }
 

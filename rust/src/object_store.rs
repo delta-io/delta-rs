@@ -16,7 +16,6 @@ use object_store::{
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
-use url::{ParseError, Url};
 
 lazy_static! {
     static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
@@ -102,49 +101,6 @@ impl DeltaObjectStore {
             storage,
             config,
         }
-    }
-
-    /// Try creating a new instance of DeltaObjectStore with specified storage
-    pub fn try_new(
-        table_uri: impl AsRef<str>,
-        storage: Arc<DynObjectStore>,
-    ) -> ObjectStoreResult<Self> {
-        let (scheme, root) = match Url::parse(table_uri.as_ref()) {
-            Ok(result) => {
-                match result.scheme() {
-                    "file" | "gs" | "s3" | "adls2" | "" => {
-                        let raw_path =
-                            format!("{}{}", result.domain().unwrap_or_default(), result.path());
-                        let root = Path::parse(raw_path)?;
-                        Ok((result.scheme().to_string(), root))
-                    }
-                    _ => {
-                        // Since we did find some base / scheme, but don't recognize it, it
-                        // may be a local path (i.e. c:/.. on windows). We need to pipe it through path though
-                        // to get consistent path separators.
-                        let local_path = std::path::Path::new(table_uri.as_ref());
-                        let root = Path::from_filesystem_path(local_path)?;
-                        Ok(("file".to_string(), root))
-                    }
-                }
-            }
-            Err(ParseError::RelativeUrlWithoutBase) => {
-                let local_path = std::path::Path::new(table_uri.as_ref());
-                let root = Path::from_filesystem_path(local_path)?;
-                Ok(("file".to_string(), root))
-            }
-            Err(err) => Err(ObjectStoreError::Generic {
-                store: "DeltaObjectStore",
-                source: Box::new(err),
-            }),
-        }?;
-        let config = DeltaObjectStoreConfig::new(root.clone());
-        Ok(Self {
-            scheme,
-            root,
-            storage,
-            config,
-        })
     }
 
     /// Get a reference to the underlying storage backend
