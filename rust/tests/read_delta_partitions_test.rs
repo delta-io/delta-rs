@@ -138,7 +138,7 @@ async fn read_null_partitions_from_checkpoint() {
     )
     .await;
 
-    let delta_log = std::path::Path::new(&table.table_uri).join("_delta_log");
+    let delta_log = std::path::Path::new(&table.table_uri()).join("_delta_log");
 
     let add = |partition: Option<String>| Add {
         partition_values: hashmap! {
@@ -162,6 +162,6 @@ async fn read_null_partitions_from_checkpoint() {
     assert!(cp.exists());
 
     // verify that table loads from checkpoint and handles null partitions
-    let table = deltalake::open_table(&table.table_uri).await.unwrap();
+    let table = deltalake::open_table(&table.table_uri()).await.unwrap();
     assert_eq!(table.version(), 2);
 }

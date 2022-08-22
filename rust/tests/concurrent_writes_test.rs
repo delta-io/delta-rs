@@ -82,7 +82,7 @@ async fn concurrent_writes_azure() {
     assert_eq!(1, dt.get_min_reader_version());
     assert_eq!(2, dt.get_min_writer_version());
     assert_eq!(0, dt.get_files().len());
-    assert_eq!(table_uri.trim_end_matches('/').to_string(), dt.table_uri);
+    assert_eq!(table_uri.trim_end_matches('/').to_string(), dt.table_uri());
 
     // Act/Assert
     run_test(|name| Worker::new(table_uri, name)).await;

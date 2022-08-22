@@ -140,7 +140,7 @@ impl TestContext {
 
         let backend = self.new_storage();
         let p = self.config.get("URI").unwrap().to_string();
-        let mut dt = DeltaTable::new_with_object_store(&p, backend, DeltaTableConfig::default());
+        let mut dt = DeltaTable::new(backend, DeltaTableConfig::default());
         let mut commit_info = Map::<String, Value>::new();
 
         let protocol = action::Protocol {

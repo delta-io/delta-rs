@@ -496,7 +496,8 @@ mod tests {
             String::from("modified=2021-02-02/id=A"),
             String::from("modified=2021-02-02/id=B"),
         ];
-        let table_dir = Path::new(&table.table_uri);
+        let table_uri = table.table_uri();
+        let table_dir = Path::new(&table_uri);
         for key in expected_keys {
             let partition_dir = table_dir.join(key);
             assert!(partition_dir.exists())

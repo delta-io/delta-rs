@@ -19,7 +19,6 @@ use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::*;
-use object_store::DynObjectStore;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use parquet::errors::ParquetError;
 use regex::Regex;
@@ -409,7 +408,7 @@ pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
     pub state: DeltaTableState,
     /// The URI the DeltaTable was loaded from.
-    pub table_uri: String,
+    // pub table_uri: String,
     /// the load options used during load
     pub config: DeltaTableConfig,
     // metadata
@@ -421,9 +420,28 @@ pub struct DeltaTable {
 }
 
 impl DeltaTable {
+    /// Create a new Delta Table struct without loading any data from backing storage.
+    ///
+    /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
+    /// call one of the `open_table` helper methods instead.
+    pub fn new(storage: Arc<DeltaObjectStore>, config: DeltaTableConfig) -> Self {
+        Self {
+            state: DeltaTableState::with_version(-1),
+            storage,
+            config,
+            last_check_point: None,
+            version_timestamp: HashMap::new(),
+        }
+    }
+
     /// get a shared reference to the delta object store
     pub fn object_store(&self) -> Arc<DeltaObjectStore> {
         self.storage.clone()
+    }
+
+    /// The
+    pub fn table_uri(&self) -> String {
+        self.storage.root_uri()
     }
 
     /// Return the uri of commit version.
@@ -618,7 +636,7 @@ impl DeltaTable {
                             if version < 0 {
                                 let err = format!(
                                     "No snapshot or version 0 found, perhaps {} is an empty dir?",
-                                    self.table_uri
+                                    self.table_uri()
                                 );
                                 return Err(DeltaTableError::NotATable(err));
                             }
@@ -718,7 +736,7 @@ impl DeltaTable {
         if self.version() == -1 {
             let err = format!(
                 "No snapshot or version 0 found, perhaps {} is an empty dir?",
-                self.table_uri
+                self.table_uri()
             );
             return Err(DeltaTableError::NotATable(err));
         }
@@ -824,7 +842,7 @@ impl DeltaTable {
                                 if version == -1 {
                                     let err = format!(
                                         "No snapshot or version 0 found, perhaps {} is an empty dir?",
-                                        self.table_uri
+                                        self.table_uri()
                                     );
                                     return Err(DeltaTableError::NotATable(err));
                                 }
@@ -1057,47 +1075,6 @@ impl DeltaTable {
         Ok(version)
     }
 
-    /// Create a new Delta Table struct without loading any data from backing storage.
-    ///
-    /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
-    /// call one of the `open_table` helper methods instead.
-    pub fn new(
-        table_uri: impl AsRef<str>,
-        storage_backend: Arc<DynObjectStore>,
-        config: DeltaTableConfig,
-    ) -> Result<Self, DeltaTableError> {
-        let storage = DeltaObjectStore::try_new(table_uri.as_ref(), storage_backend)?;
-        let root_uri = storage.root_uri();
-        Ok(Self {
-            state: DeltaTableState::with_version(-1),
-            storage: Arc::new(storage),
-            table_uri: root_uri,
-            config,
-            last_check_point: None,
-            version_timestamp: HashMap::new(),
-        })
-    }
-
-    /// Create a new Delta Table struct without loading any data from backing storage.
-    ///
-    /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
-    /// call one of the `open_table` helper methods instead.
-    pub fn new_with_object_store(
-        _table_uri: impl AsRef<str>,
-        storage: Arc<DeltaObjectStore>,
-        config: DeltaTableConfig,
-    ) -> Self {
-        let root_uri = storage.root_uri();
-        Self {
-            state: DeltaTableState::with_version(-1),
-            storage,
-            table_uri: root_uri,
-            config,
-            last_check_point: None,
-            version_timestamp: HashMap::new(),
-        }
-    }
-
     /// Create a DeltaTable with version 0 given the provided MetaData, Protocol, and CommitInfo
     pub async fn create(
         &mut self,
@@ -1189,7 +1166,7 @@ impl DeltaTable {
 
 impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        writeln!(f, "DeltaTable({})", self.table_uri)?;
+        writeln!(f, "DeltaTable({})", self.table_uri())?;
         writeln!(f, "\tversion: {}", self.version())?;
         match self.state.current_metadata() {
             Some(metadata) => {
@@ -1211,7 +1188,7 @@ impl fmt::Display for DeltaTable {
 
 impl std::fmt::Debug for DeltaTable {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> Result<(), std::fmt::Error> {
-        write!(f, "DeltaTable <{}>", self.table_uri)
+        write!(f, "DeltaTable <{}>", self.table_uri())
     }
 }
 
@@ -1544,7 +1521,8 @@ mod tests {
         assert_eq!(dt.state.files().len(), 0);
 
         // assert new _delta_log file created in tempDir
-        let table_path = Path::new(&dt.table_uri);
+        let table_uri = dt.table_uri();
+        let table_path = Path::new(&table_uri);
         assert!(table_path.exists());
 
         let delta_log = table_path.join("_delta_log");

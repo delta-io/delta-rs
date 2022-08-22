@@ -161,13 +161,12 @@ impl DeltaTableBuilder {
 
     /// Set options used to initialize storage backend
     ///
-    /// Currently, S3 and Azure are the only backends that accept options.
     /// Options may be passed in the HashMap or set as environment variables.
     ///
-    /// [crate::storage::s3::S3StorageOptions] describes the available options for the S3 backend.
-    /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the atomic rename client.
-    ///
-    /// [crate::builder::azure_storage_options] describes the available options for the Azure backend.
+    /// [s3_storage_options] describes the available options for the AWS or S3-compliant backend.
+    /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
+    /// [azure_storage_options] describes the available options for the Azure backend.
+    /// [gcp_storage_options] describes the available options for the Google Cloud Platform backend.
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
         self
@@ -197,12 +196,7 @@ impl DeltaTableBuilder {
             require_files: self.options.require_files,
         };
         let object_store = Arc::new(DeltaObjectStore::new(&prefix, storage));
-
-        Ok(DeltaTable::new_with_object_store(
-            self.options.table_uri,
-            object_store,
-            config,
-        ))
+        Ok(DeltaTable::new(object_store, config))
     }
 
     /// finally load the table
