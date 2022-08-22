@@ -573,7 +573,6 @@ fn apply_stats_conversion(
 mod tests {
     use super::*;
     use lazy_static::lazy_static;
-    use std::sync::Arc;
     use std::time::Duration;
     use uuid::Uuid;
 
@@ -841,8 +840,10 @@ mod tests {
     // Last-Modified for S3 could not be altered by user, hence using system pauses which makes
     // test to run longer but reliable
     async fn cleanup_metadata_test(table_path: &str) {
-        let object_store =
-            Arc::new(DeltaObjectStore::try_new_with_options(table_path, None).unwrap());
+        let object_store = crate::builder::DeltaTableBuilder::try_from_uri(table_path)
+            .unwrap()
+            .build_storage()
+            .unwrap();
 
         let log_path = |version| {
             object_store

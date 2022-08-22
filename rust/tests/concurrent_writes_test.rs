@@ -1,9 +1,9 @@
+mod common;
+#[allow(dead_code)]
+mod fs_common;
 #[cfg(feature = "s3")]
 #[allow(dead_code)]
 mod s3_common;
-
-#[allow(dead_code)]
-mod fs_common;
 
 use deltalake::{action, DeltaTable};
 use std::collections::HashMap;
@@ -34,33 +34,24 @@ async fn concurrent_writes_s3() {
 #[tokio::test]
 #[cfg(feature = "azure")]
 async fn concurrent_writes_azure() {
-    use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
-    use azure_storage_datalake::clients::DataLakeClient;
     use chrono::Utc;
-    use deltalake::DeltaTableConfig;
-    use deltalake::{DeltaTableMetaData, Schema, SchemaDataType, SchemaField};
+    use common::az_cli;
+    use deltalake::{DeltaTableBuilder, DeltaTableMetaData, Schema, SchemaDataType, SchemaField};
     use std::env;
 
     // Arrange
     let storage_account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
     let storage_account_key = env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
 
-    let data_lake_client = DataLakeClient::new(
-        StorageSharedKeyCredential::new(
-            storage_account_name.to_owned(),
-            storage_account_key.to_owned(),
-        ),
-        None,
-    );
-
     // Create a new file system for test isolation
-    let file_system_name = format!("test-delta-table-{}", Utc::now().timestamp());
-    let file_system_client = data_lake_client.into_file_system_client(file_system_name.to_owned());
-    file_system_client.create().into_future().await.unwrap();
+    let container_name = format!("test-delta-table-{}", Utc::now().timestamp());
+    az_cli::create_container(&container_name);
 
-    let table_uri = &format!("adls2://{}/{}/", storage_account_name, file_system_name);
-    let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
-    let mut dt = DeltaTable::new(table_uri, backend, DeltaTableConfig::default()).unwrap();
+    let table_uri = &format!("azure://{}/", container_name);
+    let mut dt = DeltaTableBuilder::try_from_uri(table_uri)
+        .unwrap()
+        .build()
+        .unwrap();
 
     let schema = Schema::new(vec![SchemaField::new(
         "Id".to_string(),
@@ -97,7 +88,7 @@ async fn concurrent_writes_azure() {
     run_test(|name| Worker::new(table_uri, name)).await;
 
     // Cleanup
-    file_system_client.delete().into_future().await.unwrap();
+    az_cli::delete_container(&container_name);
 }
 
 #[tokio::test]

@@ -287,8 +287,8 @@ mod datafusion {
     mod s3 {
         use super::*;
         use crate::s3_common::setup;
+        use deltalake::builder;
         use deltalake::s3_storage_options;
-        use deltalake::storage;
         use dynamodb_lock::dynamo_lock_options;
         use maplit::hashmap;
         use serial_test::serial;
@@ -298,23 +298,11 @@ mod datafusion {
         async fn test_datafusion_simple_query() -> Result<()> {
             setup();
 
-            // Use the manual options API so we have some basic integrationcoverage.
             let table_uri = "s3://deltars/simple";
-            let storage = storage::get_backend_for_uri_with_options(
-                table_uri,
-                hashmap! {
-                    s3_storage_options::AWS_REGION.to_string() => "us-east-2".to_string(),
-                    dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "s3::deltars/simple".to_string(),
-                },
-            )
-            .unwrap();
-            let mut table = deltalake::DeltaTable::new(
-                table_uri,
-                storage,
-                deltalake::DeltaTableConfig::default(),
-            )
-            .unwrap();
-            table.load().await.unwrap();
+            let mut table = builder::DeltaTableBuilder::try_from_uri(table_uri).unwrap().with_storage_options(hashmap! {
+                s3_storage_options::AWS_REGION.to_string() => "us-east-2".to_string(),
+                dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "s3::deltars/simple".to_string(),
+            }).load().await.unwrap();
 
             let ctx = SessionContext::new();
             ctx.register_table("demo", Arc::new(table))?;

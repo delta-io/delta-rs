@@ -5,20 +5,13 @@ mod s3_common;
 #[cfg(feature = "s3")]
 mod s3 {
     use crate::s3_common::setup;
+    use deltalake::builder;
     use deltalake::s3_storage_options;
-    use deltalake::storage;
+    use deltalake::StorageError;
     use dynamodb_lock::dynamo_lock_options;
     use maplit::hashmap;
     use object_store::path::Path;
     use serial_test::serial;
-
-    /*
-     * The S3 bucket used below resides in @rtyler's personal AWS account
-     *
-     * Should there be test failures, or if you need more files uploaded into this account, let him
-     * know
-     */
-    use deltalake::StorageError;
 
     #[tokio::test]
     #[serial]
@@ -27,18 +20,10 @@ mod s3 {
 
         // Use the manual options API so we have some basic integrationcoverage.
         let table_uri = "s3://deltars/simple";
-        let storage = storage::get_backend_for_uri_with_options(
-            table_uri,
-            hashmap! {
-                s3_storage_options::AWS_REGION.to_string() => "us-east-2".to_string(),
-                dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "s3::deltars/simple".to_string(),
-            },
-        )
-        .unwrap();
-        let mut table =
-            deltalake::DeltaTable::new(table_uri, storage, deltalake::DeltaTableConfig::default())
-                .unwrap();
-        table.load().await.unwrap();
+        let table = builder::DeltaTableBuilder::try_from_uri(table_uri).unwrap().with_storage_options(hashmap! {
+            s3_storage_options::AWS_REGION.to_string() => "us-east-2".to_string(),
+            dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "s3::deltars/simple".to_string(),
+        }).load().await.unwrap();
         println!("{}", table);
 
         assert_eq!(table.version(), 4);

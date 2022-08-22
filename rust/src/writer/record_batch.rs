@@ -34,6 +34,7 @@ use super::{
     },
     DeltaWriter, DeltaWriterError,
 };
+use crate::builder::DeltaTableBuilder;
 use crate::writer::stats::apply_null_counts;
 use crate::writer::utils::ShareableBuffer;
 use crate::{action::Add, object_store::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
@@ -75,7 +76,9 @@ impl RecordBatchWriter {
         partition_columns: Option<Vec<String>>,
         storage_options: Option<HashMap<String, String>>,
     ) -> Result<Self, DeltaWriterError> {
-        let storage = DeltaObjectStore::try_new_with_options(&table_uri, storage_options)?;
+        let storage = DeltaTableBuilder::try_from_uri(&table_uri)?
+            .with_storage_options(storage_options.unwrap_or_default())
+            .build_storage()?;
 
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = WriterProperties::builder()
@@ -84,7 +87,7 @@ impl RecordBatchWriter {
             .build();
 
         Ok(Self {
-            storage: Arc::new(storage),
+            storage,
             arrow_schema_ref: schema,
             writer_properties,
             partition_columns: partition_columns.unwrap_or_default(),

@@ -3,12 +3,23 @@
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 //
 
+use super::action;
+use super::action::{Action, DeltaOperation};
+use super::partitions::{DeltaTablePartition, PartitionFilter};
+use super::schema::*;
+use super::storage::StorageError;
+use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
+pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
+use crate::delta_config::DeltaConfigError;
+use crate::object_store::DeltaObjectStore;
+use crate::vacuum::{Vacuum, VacuumError};
 use arrow::error::ArrowError;
-use chrono::{DateTime, Duration, FixedOffset, Utc};
+use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::*;
+use object_store::DynObjectStore;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use parquet::errors::ParquetError;
 use regex::Regex;
@@ -21,17 +32,6 @@ use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 use uuid::Uuid;
-
-use super::action;
-use super::action::{Action, DeltaOperation};
-use super::partitions::{DeltaTablePartition, PartitionFilter};
-use super::schema::*;
-use super::storage;
-use super::storage::{StorageBackend, StorageError, UriError};
-use super::table_state::DeltaTableState;
-use crate::delta_config::DeltaConfigError;
-use crate::object_store::DeltaObjectStore;
-use crate::vacuum::{Vacuum, VacuumError};
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
@@ -109,13 +109,6 @@ pub enum DeltaTableError {
         /// Arrow error details returned when converting the schema in Arrow format failed
         #[from]
         source: ArrowError,
-    },
-    /// Error returned when the table has an invalid path.
-    #[error("Invalid table path: {}", .source)]
-    UriError {
-        /// Uri error details returned when the table has an invalid path.
-        #[from]
-        source: UriError,
     },
     /// Error returned when the log record has an invalid JSON.
     #[error("Invalid JSON in log record: {}", .source)]
@@ -397,164 +390,6 @@ impl From<ObjectStoreError> for LoadCheckpointError {
             ObjectStoreError::NotFound { .. } => LoadCheckpointError::NotFound,
             _ => LoadCheckpointError::Storage { source: error },
         }
-    }
-}
-
-/// possible version specifications for loading a delta table
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum DeltaVersion {
-    /// load the newest version
-    Newest,
-    /// specify the version to load
-    Version(DeltaDataTypeVersion),
-    /// specify the timestamp in UTC
-    Timestamp(DateTime<Utc>),
-}
-
-impl Default for DeltaVersion {
-    fn default() -> Self {
-        DeltaVersion::Newest
-    }
-}
-
-/// Configuration options for delta table
-#[derive(Debug)]
-pub struct DeltaTableConfig {
-    /// Indicates whether our use case requires tracking tombstones.
-    /// This defaults to `true`
-    ///
-    /// Read-only applications never require tombstones. Tombstones
-    /// are only required when writing checkpoints, so even many writers
-    /// may want to skip them.
-    pub require_tombstones: bool,
-
-    /// Indicates whether DeltaTable should track files.
-    /// This defaults to `true`
-    ///
-    /// Some append-only applications might have no need of tracking any files.
-    /// Hence, DeltaTable will be loaded with significant memory reduction.
-    pub require_files: bool,
-}
-
-impl Default for DeltaTableConfig {
-    fn default() -> Self {
-        Self {
-            require_tombstones: true,
-            require_files: true,
-        }
-    }
-}
-
-/// Load-time delta table configuration options
-#[derive(Debug)]
-pub struct DeltaTableLoadOptions {
-    /// table root uri
-    pub table_uri: String,
-    /// backend to access storage system
-    pub storage_backend: Option<Arc<dyn StorageBackend>>,
-    /// specify the version we are going to load: a time stamp, a version, or just the newest
-    /// available version
-    pub version: DeltaVersion,
-    /// Indicates whether our use case requires tracking tombstones.
-    /// This defaults to `true`
-    ///
-    /// Read-only applications never require tombstones. Tombstones
-    /// are only required when writing checkpoints, so even many writers
-    /// may want to skip them.
-    pub require_tombstones: bool,
-    /// Indicates whether DeltaTable should track files.
-    /// This defaults to `true`
-    ///
-    /// Some append-only applications might have no need of tracking any files.
-    /// Hence, DeltaTable will be loaded with significant memory reduction.
-    pub require_files: bool,
-}
-
-impl DeltaTableLoadOptions {
-    /// create default table load options for a table uri
-    pub fn new(table_uri: &str) -> Result<Self, DeltaTableError> {
-        Ok(Self {
-            table_uri: table_uri.to_string(),
-            storage_backend: None,
-            require_tombstones: true,
-            require_files: true,
-            version: DeltaVersion::default(),
-        })
-    }
-}
-
-/// builder for configuring a delta table load.
-#[derive(Debug)]
-pub struct DeltaTableBuilder {
-    options: DeltaTableLoadOptions,
-}
-
-impl DeltaTableBuilder {
-    /// Creates `DeltaTableBuilder` from table uri
-    pub fn from_uri(table_uri: &str) -> Result<Self, DeltaTableError> {
-        Ok(DeltaTableBuilder {
-            options: DeltaTableLoadOptions::new(table_uri)?,
-        })
-    }
-
-    /// Sets `require_tombstones=false` to the builder
-    pub fn without_tombstones(mut self) -> Self {
-        self.options.require_tombstones = false;
-        self
-    }
-
-    /// Sets `require_files=false` to the builder
-    pub fn without_files(mut self) -> Self {
-        self.options.require_files = false;
-        self
-    }
-
-    /// Sets `version` to the builder
-    pub fn with_version(mut self, version: DeltaDataTypeVersion) -> Self {
-        self.options.version = DeltaVersion::Version(version);
-        self
-    }
-
-    /// specify the timestamp given as ISO-8601/RFC-3339 timestamp
-    pub fn with_datestring(self, date_string: &str) -> Result<Self, DeltaTableError> {
-        let datetime =
-            DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(date_string)?);
-        Ok(self.with_timestamp(datetime))
-    }
-
-    /// specify a timestamp
-    pub fn with_timestamp(mut self, timestamp: DateTime<Utc>) -> Self {
-        self.options.version = DeltaVersion::Timestamp(timestamp);
-        self
-    }
-
-    /// Set the storage backend. If a backend is not provided then it is derived from `table_uri` when `load` is called.
-    pub fn with_storage_backend(mut self, storage: Arc<dyn StorageBackend>) -> Self {
-        self.options.storage_backend = Some(storage);
-        self
-    }
-
-    /// finally load the table
-    pub async fn load(self) -> Result<DeltaTable, DeltaTableError> {
-        let storage = match self.options.storage_backend {
-            Some(storage) => storage,
-            None => storage::get_backend_for_uri(&self.options.table_uri)?,
-        };
-
-        let config = DeltaTableConfig {
-            require_tombstones: self.options.require_tombstones,
-            require_files: self.options.require_files,
-        };
-
-        let mut table = DeltaTable::new(self.options.table_uri, storage, config)?;
-
-        match self.options.version {
-            DeltaVersion::Newest => table.load().await?,
-            DeltaVersion::Version(v) => table.load_version(v).await?,
-            DeltaVersion::Timestamp(ts) => table.load_with_datetime(ts).await?,
-        }
-
-        Ok(table)
     }
 }
 
@@ -1229,10 +1064,10 @@ impl DeltaTable {
     /// call one of the `open_table` helper methods instead.
     pub fn new(
         table_uri: impl AsRef<str>,
-        storage_backend: Arc<dyn StorageBackend>,
+        storage_backend: Arc<DynObjectStore>,
         config: DeltaTableConfig,
     ) -> Result<Self, DeltaTableError> {
-        let storage = DeltaObjectStore::try_new(table_uri.as_ref(), storage_backend).unwrap();
+        let storage = DeltaObjectStore::try_new(table_uri.as_ref(), storage_backend)?;
         let root_uri = storage.root_uri();
         Ok(Self {
             state: DeltaTableState::with_version(-1),
@@ -1242,6 +1077,26 @@ impl DeltaTable {
             last_check_point: None,
             version_timestamp: HashMap::new(),
         })
+    }
+
+    /// Create a new Delta Table struct without loading any data from backing storage.
+    ///
+    /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
+    /// call one of the `open_table` helper methods instead.
+    pub fn new_with_object_store(
+        _table_uri: impl AsRef<str>,
+        storage: Arc<DeltaObjectStore>,
+        config: DeltaTableConfig,
+    ) -> Self {
+        let root_uri = storage.root_uri();
+        Self {
+            state: DeltaTableState::with_version(-1),
+            storage,
+            table_uri: root_uri,
+            config,
+            last_check_point: None,
+            version_timestamp: HashMap::new(),
+        }
     }
 
     /// Create a DeltaTable with version 0 given the provided MetaData, Protocol, and CommitInfo
@@ -1570,8 +1425,7 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Erro
 /// Creates and loads a DeltaTable from the given path with current metadata.
 /// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table(table_uri: &str) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)?.load().await?;
-
+    let table = DeltaTableBuilder::try_from_uri(table_uri)?.load().await?;
     Ok(table)
 }
 
@@ -1581,7 +1435,7 @@ pub async fn open_table_with_version(
     table_uri: &str,
     version: DeltaDataTypeVersion,
 ) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)?
+    let table = DeltaTableBuilder::try_from_uri(table_uri)?
         .with_version(version)
         .load()
         .await?;
@@ -1592,7 +1446,7 @@ pub async fn open_table_with_version(
 /// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
 /// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table_with_ds(table_uri: &str, ds: &str) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)?
+    let table = DeltaTableBuilder::try_from_uri(table_uri)?
         .with_datestring(ds)?
         .load()
         .await?;
@@ -1607,6 +1461,7 @@ pub fn crate_version() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::builder::DeltaTableBuilder;
     use pretty_assertions::assert_eq;
     use std::io::{BufRead, BufReader};
     use std::{collections::HashMap, fs::File, path::Path};
@@ -1621,8 +1476,10 @@ mod tests {
         ]
         .iter()
         {
-            let be = storage::get_backend_for_uri(table_uri).unwrap();
-            let table = DeltaTable::new(table_uri, be, DeltaTableConfig::default()).unwrap();
+            let table = DeltaTableBuilder::try_from_uri(table_uri)
+                .unwrap()
+                .build()
+                .unwrap();
             assert_eq!(table.table_uri, "s3://tests/data/delta-0.8.0");
         }
     }
@@ -1663,11 +1520,10 @@ mod tests {
         let table_dir = tmp_dir.path().join("test_create");
         std::fs::create_dir(&table_dir).unwrap();
 
-        let path = table_dir.to_str().unwrap();
-        let backend = Arc::new(storage::file::FileStorageBackend::new(
-            tmp_dir.path().to_str().unwrap(),
-        ));
-        let mut dt = DeltaTable::new(path, backend, DeltaTableConfig::default()).unwrap();
+        let mut dt = DeltaTableBuilder::try_from_uri(table_dir.to_str().unwrap())
+            .unwrap()
+            .build()
+            .unwrap();
 
         let mut commit_info = Map::<String, Value>::new();
         commit_info.insert(

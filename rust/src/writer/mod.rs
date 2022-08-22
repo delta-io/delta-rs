@@ -12,7 +12,7 @@ pub mod utils;
 use crate::{
     action::{Action, Add, ColumnCountStat, Stats},
     delta::DeltaTable,
-    DeltaDataTypeVersion, DeltaTableError, StorageError, UriError,
+    DeltaDataTypeVersion, DeltaTableError, StorageError,
 };
 use arrow::{datatypes::SchemaRef, datatypes::*, error::ArrowError};
 use async_trait::async_trait;
@@ -62,14 +62,6 @@ pub enum DeltaWriterError {
     StatsSerializationFailed {
         /// The stats object that failed serialization.
         stats: Stats,
-    },
-
-    /// Invalid table paths was specified for the delta table.
-    #[error("Invalid table path: {}", .source)]
-    UriError {
-        /// The wrapped [`UriError`].
-        #[from]
-        source: UriError,
     },
 
     /// deltalake storage backend returned an error.

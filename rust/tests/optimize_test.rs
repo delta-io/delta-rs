@@ -12,10 +12,10 @@ mod optimize {
     use deltalake::{
         action,
         action::Remove,
-        get_backend_for_uri_with_options,
+        builder::DeltaTableBuilder,
         optimize::{create_merge_plan, Optimize},
         writer::{DeltaWriter, RecordBatchWriter},
-        DeltaTableConfig, DeltaTableMetaData, PartitionFilter,
+        DeltaTableMetaData, PartitionFilter,
     };
     use deltalake::{DeltaTable, Schema, SchemaDataType, SchemaField};
     use rand::prelude::*;
@@ -69,9 +69,8 @@ mod optimize {
 
         let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
         let p = tmp_dir.path().to_str().to_owned().unwrap();
+        let mut dt = DeltaTableBuilder::try_from_uri(p)?.build()?;
 
-        let backend = get_backend_for_uri_with_options(&p, HashMap::new())?;
-        let mut dt = DeltaTable::new(&p, backend, DeltaTableConfig::default())?;
         let mut commit_info = Map::<String, Value>::new();
 
         let protocol = action::Protocol {

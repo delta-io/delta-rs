@@ -148,8 +148,10 @@ async fn do_transaction(
     app_metadata: Option<serde_json::Map<String, serde_json::Value>>,
     context: Arc<TaskContext>,
 ) -> DataFusionResult<SendableRecordBatchStream> {
-    let mut table =
-        get_table_from_uri_without_update(table_uri.clone()).map_err(to_datafusion_err)?;
+    let mut table = DeltaTableBuilder::try_from_uri(table_uri)
+        .map_err(to_datafusion_err)?
+        .build()
+        .map_err(to_datafusion_err)?;
     let schema = input.schema().clone();
 
     let data = collect(input, context.clone()).await?;

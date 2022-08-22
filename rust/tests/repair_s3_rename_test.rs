@@ -7,7 +7,9 @@ mod s3 {
 
     use crate::s3_common;
     use deltalake::storage::s3::{S3StorageBackend, S3StorageOptions};
-    use deltalake::{StorageBackend, StorageError};
+    use deltalake::{ObjectStore, StorageBackend, StorageError};
+    use object_store::path::Path;
+    use object_store::Error as ObjectStoreError;
     use rusoto_core::credential::ChainProvider;
     use rusoto_core::request::DispatchSignedRequestFuture;
     use rusoto_core::signature::SignedRequest;
@@ -101,10 +103,12 @@ mod s3 {
         s3: S3StorageBackend,
         src: String,
         dst: String,
-    ) -> JoinHandle<Result<(), StorageError>> {
+    ) -> JoinHandle<Result<(), ObjectStoreError>> {
         tokio::spawn(async move {
             println!("rename({}, {}) started", &src, &dst);
-            let result = s3.rename_obj_noreplace(&src, &dst).await;
+            let result = s3
+                .rename_if_not_exists(&Path::from(src), &Path::from(dst))
+                .await;
             println!("rename({}, {}) finished", &src, &dst);
             result
         })

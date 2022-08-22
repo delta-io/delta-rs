@@ -1,40 +1,27 @@
 //! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
 
+use super::{str_option, StorageError};
+use bytes::Bytes;
+use dynamodb_lock::{LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};
+use futures::stream::BoxStream;
+use object_store::aws::AmazonS3;
+use object_store::path::Path;
+use object_store::{
+    Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
+    Result as ObjectStoreResult,
+};
+use rusoto_core::{HttpClient, Region};
+use rusoto_credential::AutoRefreshingProvider;
+use rusoto_sts::WebIdentityProvider;
+use serde::Deserialize;
+use serde::Serialize;
 use std::collections::HashMap;
 use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
-
-use chrono::{DateTime, FixedOffset, Utc};
-use futures::stream::BoxStream;
-
-use log::debug;
-use rusoto_core::{HttpClient, HttpConfig, Region, RusotoError};
-use rusoto_credential::AutoRefreshingProvider;
-use rusoto_s3::{
-    CopyObjectRequest, Delete, DeleteObjectRequest, DeleteObjectsRequest, GetObjectError,
-    GetObjectOutput, GetObjectRequest, HeadObjectRequest, ListObjectsV2Request, ObjectIdentifier,
-    PutObjectRequest, S3Client, S3,
-};
-use rusoto_sts::{StsAssumeRoleSessionCredentialsProvider, StsClient, WebIdentityProvider};
-use tokio::io::AsyncReadExt;
-
-use super::{parse_uri, str_option, ObjectMeta, StorageBackend, StorageError};
-use rusoto_core::credential::{
-    AwsCredentials, CredentialsError, DefaultCredentialsProvider, ProvideAwsCredentials,
-};
-use serde::Deserialize;
-use serde::Serialize;
+use std::sync::Arc;
 use std::time::Duration;
-use uuid::Uuid;
-
-use dynamodb_lock::{LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};
-
-use hyper::client::HttpConnector;
-use hyper_proxy::{Intercept, Proxy, ProxyConnector};
-use hyper_rustls::{HttpsConnector, HttpsConnectorBuilder};
-
-use std::env;
+use tokio::io::AsyncWrite;
 
 /// Lock data which stores an attempt to rename `source` into `destination`
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -68,14 +55,17 @@ impl S3LockClient {
     async fn rename_with_lock(
         &self,
         s3: &S3StorageBackend,
-        src: &str,
-        dst: &str,
-    ) -> Result<(), StorageError> {
-        let mut lock = self.acquire_lock_loop(src, dst).await?;
+        src: &Path,
+        dst: &Path,
+    ) -> Result<(), ObjectStoreError> {
+        let mut lock = self.acquire_lock_loop(src.as_ref(), dst.as_ref()).await?;
 
         if let Some(ref data) = lock.data {
-            let data: LockData = serde_json::from_str(data)
-                .map_err(|_| StorageError::S3Generic("Lock data deserialize error".to_string()))?;
+            let data: LockData =
+                serde_json::from_str(data).map_err(|err| ObjectStoreError::Generic {
+                    store: "DeltaS3Store",
+                    source: Box::new(err),
+                })?;
 
             if lock.acquired_expired_lock {
                 log::info!(
@@ -85,21 +75,28 @@ impl S3LockClient {
                 );
             }
 
-            let mut rename_result = s3.unsafe_rename_obj(&data.source, &data.destination).await;
+            let mut rename_result = s3
+                .rename(&Path::from(data.source), &Path::from(data.destination))
+                .await;
 
             if lock.acquired_expired_lock {
                 match rename_result {
                     // AlreadyExists when the stale rename is done, but the lock not released
                     // NotFound when the source file of rename is missing
-                    Err(StorageError::AlreadyExists(_)) | Err(StorageError::NotFound) => (),
+                    Err(ObjectStoreError::AlreadyExists { .. })
+                    | Err(ObjectStoreError::NotFound { .. }) => (),
                     _ => rename_result?,
                 }
 
                 // If we acquired expired lock then the rename done above is
                 // a repair of expired one. So on this time we try the intended rename.
-                lock.data = Some(LockData::json(src, dst)?);
-                lock = self.lock_client.update_data(&lock).await?;
-                rename_result = s3.unsafe_rename_obj(src, dst).await;
+                lock.data = Some(LockData::json(src.as_ref(), dst.as_ref())?);
+                lock = self
+                    .lock_client
+                    .update_data(&lock)
+                    .await
+                    .map_err(|_| ObjectStoreError::NotImplemented)?;
+                rename_result = s3.rename(src, dst).await;
             }
 
             let release_result = self.lock_client.release_lock(&lock).await;
@@ -108,16 +105,15 @@ impl S3LockClient {
             // no longer hold the lock
             rename_result?;
 
-            if !release_result? {
+            // TODO implement form DynamoErr
+            if !release_result.map_err(|_| ObjectStoreError::NotImplemented)? {
                 log::error!("Could not release lock {:?}", &lock);
-                return Err(StorageError::S3Generic("Lock is not released".to_string()));
+                return Err(ObjectStoreError::NotImplemented);
             }
 
             Ok(())
         } else {
-            Err(StorageError::S3Generic(
-                "Acquired lock with no lock data".to_string(),
-            ))
+            Err(ObjectStoreError::NotImplemented)
         }
     }
 
@@ -336,198 +332,10 @@ impl Default for S3StorageOptions {
     }
 }
 
-impl From<RusotoError<rusoto_s3::GetObjectError>> for StorageError {
-    fn from(error: RusotoError<rusoto_s3::GetObjectError>) -> Self {
-        match error {
-            RusotoError::Service(rusoto_s3::GetObjectError::NoSuchKey(_)) => StorageError::NotFound,
-            _ => StorageError::S3Get { source: error },
-        }
-    }
-}
-
-impl From<RusotoError<rusoto_s3::HeadObjectError>> for StorageError {
-    fn from(error: RusotoError<rusoto_s3::HeadObjectError>) -> Self {
-        match error {
-            RusotoError::Service(rusoto_s3::HeadObjectError::NoSuchKey(_)) => {
-                StorageError::NotFound
-            }
-            // rusoto tries to parse response body which is missing in HEAD request
-            // see https://github.com/rusoto/rusoto/issues/716
-            RusotoError::Unknown(r) if r.status == 404 => StorageError::NotFound,
-            _ => StorageError::S3Head { source: error },
-        }
-    }
-}
-
-impl From<RusotoError<rusoto_s3::PutObjectError>> for StorageError {
-    fn from(error: RusotoError<rusoto_s3::PutObjectError>) -> Self {
-        StorageError::S3Put { source: error }
-    }
-}
-
-impl From<RusotoError<rusoto_s3::ListObjectsV2Error>> for StorageError {
-    fn from(error: RusotoError<rusoto_s3::ListObjectsV2Error>) -> Self {
-        match error {
-            RusotoError::Service(rusoto_s3::ListObjectsV2Error::NoSuchBucket(_)) => {
-                StorageError::NotFound
-            }
-            _ => StorageError::S3List { source: error },
-        }
-    }
-}
-
-impl From<RusotoError<rusoto_s3::CopyObjectError>> for StorageError {
-    fn from(error: RusotoError<rusoto_s3::CopyObjectError>) -> Self {
-        match error {
-            RusotoError::Unknown(response) if response.status == 404 => StorageError::NotFound,
-            _ => StorageError::S3Copy { source: error },
-        }
-    }
-}
-
-/// The extension of StsAssumeRoleSessionCredentialsProvider in order to provide new session_name
-/// on each credentials refresh.
-struct AssumeRoleCredentialsProvider {
-    sts_client: StsClient,
-    assume_role_arn: String,
-    session_name: Option<String>,
-}
-
-#[async_trait::async_trait]
-impl ProvideAwsCredentials for AssumeRoleCredentialsProvider {
-    async fn credentials(&self) -> Result<AwsCredentials, CredentialsError> {
-        let session_name = self.session_name.as_deref().unwrap_or("delta-rs");
-        let session_name = format!("{}-{}", session_name, Uuid::new_v4());
-        let provider = StsAssumeRoleSessionCredentialsProvider::new(
-            self.sts_client.clone(),
-            self.assume_role_arn.clone(),
-            session_name,
-            None,
-            None,
-            None,
-            None,
-        );
-        provider.credentials().await
-    }
-}
-
-fn get_sts_assume_role_provider(
-    assume_role_arn: String,
-    options: &S3StorageOptions,
-) -> Result<AutoRefreshingProvider<AssumeRoleCredentialsProvider>, StorageError> {
-    let sts_client = StsClient::new_with(
-        create_http_client(options.sts_pool_idle_timeout)?,
-        DefaultCredentialsProvider::new()?,
-        options.region.clone(),
-    );
-
-    let provider = AssumeRoleCredentialsProvider {
-        sts_client,
-        assume_role_arn,
-        session_name: options.assume_role_session_name.clone(),
-    };
-
-    Ok(AutoRefreshingProvider::new(provider)?)
-}
-
-fn create_http_client(
-    pool_idle_timeout: Duration,
-) -> Result<HttpClient<ProxyConnector<HttpsConnector<HttpConnector>>>, StorageError> {
-    let mut config = HttpConfig::new();
-    config.pool_idle_timeout(pool_idle_timeout);
-    let https_connector = HttpsConnectorBuilder::new()
-        .with_native_roots()
-        .https_or_http()
-        .enable_http2()
-        .build();
-    match env::var("HTTPS_PROXY") {
-        Ok(proxy_uri) => {
-            let proxy = Proxy::new(Intercept::All, proxy_uri.parse()?);
-            let proxy_connector = ProxyConnector::from_proxy(https_connector, proxy)?;
-            Ok(HttpClient::<ProxyConnector<HttpsConnector<HttpConnector>>>::from_connector_with_config(
-                proxy_connector,
-                config,
-            ))
-        }
-        Err(_) => Ok(
-            HttpClient::<ProxyConnector<HttpsConnector<HttpConnector>>>::from_connector_with_config(
-                ProxyConnector::new(https_connector)?,
-                config,
-            ),
-        ),
-    }
-}
-
 fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvider>, StorageError>
 {
     let provider = WebIdentityProvider::from_k8s_env();
     Ok(AutoRefreshingProvider::new(provider)?)
-}
-
-fn create_s3_client(options: &S3StorageOptions) -> Result<S3Client, StorageError> {
-    let http_client = create_http_client(options.s3_pool_idle_timeout)?;
-    let region = options.region.clone();
-    if options.use_web_identity {
-        let provider = get_web_identity_provider()?;
-        Ok(S3Client::new_with(http_client, provider, region))
-    } else if let Some(assume_role_arn) = &options.assume_role_arn {
-        let provider = get_sts_assume_role_provider(assume_role_arn.to_owned(), options)?;
-        Ok(S3Client::new_with(http_client, provider, region))
-    } else {
-        Ok(S3Client::new_with(
-            http_client,
-            DefaultCredentialsProvider::new()?,
-            region,
-        ))
-    }
-}
-
-fn parse_obj_last_modified_time(
-    last_modified: &Option<String>,
-) -> Result<DateTime<Utc>, StorageError> {
-    let dt_str = last_modified.as_ref().ok_or_else(|| {
-        StorageError::S3Generic("S3 Object missing last modified attribute".to_string())
-    })?;
-    // last modified time in object is returned in rfc3339 format
-    // https://docs.aws.amazon.com/AmazonS3/latest/API/API_Object.html
-    let dt = DateTime::<FixedOffset>::parse_from_rfc3339(dt_str).map_err(|e| {
-        StorageError::S3Generic(format!(
-            "Failed to parse S3 modified time as rfc3339: {}, got: {:?}",
-            e, last_modified,
-        ))
-    })?;
-
-    Ok(DateTime::<Utc>::from(dt))
-}
-
-fn parse_head_obj_last_modified_time(
-    last_modified: &Option<String>,
-) -> Result<DateTime<Utc>, StorageError> {
-    let dt_str = last_modified.as_ref().ok_or_else(|| {
-        StorageError::S3Generic("S3 Object missing last modified attribute".to_string())
-    })?;
-    // head object response sets last-modified time in rfc2822 format:
-    // https://docs.aws.amazon.com/AmazonS3/latest/API/API_HeadObject.html#API_HeadObject_ResponseSyntax
-    let dt = DateTime::<FixedOffset>::parse_from_rfc2822(dt_str).map_err(|e| {
-        StorageError::S3Generic(format!(
-            "Failed to parse S3 modified time as rfc2822: {}, got: {:?}",
-            e, last_modified,
-        ))
-    })?;
-
-    Ok(DateTime::<Utc>::from(dt))
-}
-
-fn try_object_meta_from(bucket: &str, obj: rusoto_s3::Object) -> Result<ObjectMeta, StorageError> {
-    let key = obj
-        .key
-        .ok_or_else(|| StorageError::S3Generic("S3 Object missing key attribute".to_string()))?;
-
-    Ok(ObjectMeta {
-        path: format!("s3://{}/{}", bucket, key),
-        modified: parse_obj_last_modified_time(&obj.last_modified)?,
-        size: obj.size,
-    })
 }
 
 /// Struct describing an object stored in S3.
@@ -545,7 +353,7 @@ impl<'a> fmt::Display for S3Object<'a> {
     }
 }
 
-/// An S3 implementation of the [StorageBackend] trait
+/// An S3 implementation of the [ObjectStore] trait
 ///
 /// The backend can optionally use [dynamodb_lock] to better support concurrent
 /// writers. To do so, either pass in a [dynamodb_lock::LockClient] to [S3StorageBackend::new_with]
@@ -568,85 +376,51 @@ impl<'a> fmt::Display for S3Object<'a> {
 /// let backend = S3StorageBackend::new_from_options(options);
 /// ```
 pub struct S3StorageBackend {
-    client: rusoto_s3::S3Client,
+    inner: Arc<AmazonS3>,
     s3_lock_client: Option<S3LockClient>,
-    options: S3StorageOptions,
+}
+
+impl std::fmt::Display for S3StorageBackend {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "S3StorageBackend")
+    }
 }
 
 impl S3StorageBackend {
     /// Creates a new S3StorageBackend.
     pub fn new() -> Result<Self, StorageError> {
         let options = S3StorageOptions::default();
-        let client = create_s3_client(&options)?;
-        let s3_lock_client = try_create_lock_client(&options)?;
+        let _s3_lock_client = try_create_lock_client(&options)?;
 
-        Ok(Self {
-            client,
-            s3_lock_client,
-            options,
-        })
+        todo!()
     }
 
     /// Creates a new S3StorageBackend from the provided options.
     ///
     /// Options are described in [s3_storage_options].
-    pub fn new_from_options(options: S3StorageOptions) -> Result<Self, StorageError> {
-        let client = create_s3_client(&options)?;
+    pub fn new_from_options(
+        storage: Arc<AmazonS3>,
+        options: S3StorageOptions,
+    ) -> Result<Self, StorageError> {
         let s3_lock_client = try_create_lock_client(&options)?;
 
         Ok(Self {
-            client,
+            inner: storage,
             s3_lock_client,
-            options,
         })
     }
 
     /// Creates a new S3StorageBackend with given options, s3 client and lock client.
     pub fn new_with(
-        client: rusoto_s3::S3Client,
+        storage: Arc<AmazonS3>,
         lock_client: Option<Box<dyn LockClient>>,
-        options: S3StorageOptions,
+        _options: S3StorageOptions,
     ) -> Self {
         let s3_lock_client = lock_client.map(|lc| S3LockClient { lock_client: lc });
         Self {
-            client,
+            inner: storage,
             s3_lock_client,
-            options,
         }
-    }
-
-    async fn unsafe_rename_obj(
-        self: &S3StorageBackend,
-        src: &str,
-        dst: &str,
-    ) -> Result<(), StorageError> {
-        match self.head_obj(dst).await {
-            Ok(_) => return Err(StorageError::AlreadyExists(dst.to_string())),
-            Err(StorageError::NotFound) => (),
-            Err(e) => return Err(e),
-        }
-
-        let src = parse_uri(src)?.into_s3object()?;
-        let dst = parse_uri(dst)?.into_s3object()?;
-
-        self.client
-            .copy_object(CopyObjectRequest {
-                bucket: dst.bucket.to_string(),
-                key: dst.key.to_string(),
-                copy_source: format!("{}/{}", src.bucket, src.key),
-                ..Default::default()
-            })
-            .await?;
-
-        self.client
-            .delete_object(DeleteObjectRequest {
-                bucket: src.bucket.to_string(),
-                key: src.key.to_string(),
-                ..Default::default()
-            })
-            .await?;
-
-        Ok(())
     }
 }
 
@@ -663,248 +437,70 @@ impl std::fmt::Debug for S3StorageBackend {
 }
 
 #[async_trait::async_trait]
-impl StorageBackend for S3StorageBackend {
-    async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
-        let uri = parse_uri(path)?.into_s3object()?;
-
-        let result = self
-            .client
-            .head_object(HeadObjectRequest {
-                bucket: uri.bucket.to_string(),
-                key: uri.key.to_string(),
-                ..Default::default()
-            })
-            .await?;
-
-        Ok(ObjectMeta {
-            path: path.to_string(),
-            modified: parse_head_obj_last_modified_time(&result.last_modified)?,
-            size: result.content_length,
-        })
+impl ObjectStore for S3StorageBackend {
+    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
+        self.inner.put(location, bytes).await
     }
 
-    async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError> {
-        debug!("fetching s3 object: {}...", path);
-
-        let uri = parse_uri(path)?.into_s3object()?;
-        let result = get_object_with_retries(
-            &self.client,
-            uri.bucket,
-            uri.key,
-            self.options.s3_get_internal_server_error_retries,
-            None,
-        )
-        .await?;
-
-        debug!("streaming data from {}...", path);
-        let mut buf = Vec::new();
-        let stream = result
-            .body
-            .ok_or_else(|| StorageError::S3MissingObjectBody(path.to_string()))?;
-        stream
-            .into_async_read()
-            .read_to_end(&mut buf)
-            .await
-            .map_err(|e| {
-                StorageError::S3Generic(format!("Failed to read object content: {}", e))
-            })?;
-
-        debug!("s3 object fetched: {}", path);
-        Ok(buf)
+    async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
+        self.inner.get(location).await
     }
 
-    async fn get_range(&self, path: &str, range: Range<usize>) -> Result<Vec<u8>, StorageError> {
-        debug!("fetching s3 object: {}...", path);
-
-        let uri = parse_uri(path)?.into_s3object()?;
-        let result = get_object_with_retries(
-            &self.client,
-            uri.bucket,
-            uri.key,
-            self.options.s3_get_internal_server_error_retries,
-            Some(range),
-        )
-        .await?;
-
-        debug!("streaming data from {}...", path);
-        let mut buf = Vec::new();
-        let stream = result
-            .body
-            .ok_or_else(|| StorageError::S3MissingObjectBody(path.to_string()))?;
-        stream
-            .into_async_read()
-            .read_to_end(&mut buf)
-            .await
-            .map_err(|e| {
-                StorageError::S3Generic(format!("Failed to read object content: {}", e))
-            })?;
-
-        debug!("s3 object fetched: {}", path);
-        Ok(buf)
+    async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
+        self.inner.get_range(location, range).await
     }
 
-    async fn list_objs<'a>(
-        &'a self,
-        path: &'a str,
-    ) -> Result<BoxStream<'_, Result<ObjectMeta, StorageError>>, StorageError> {
-        let uri = parse_uri(path)?.into_s3object()?;
-
-        /// This enum is used to represent 3 states in our object metadata streaming logic:
-        /// * Value(None): the initial state, prior to performing any s3 list call.
-        /// * Value(Some(String)): s3 list call returned us a continuation token to be used in
-        /// subsequent list call after we got through the current page.
-        /// * End: previous s3 list call reached end of page, we should not perform more s3 list
-        /// call going forward.
-        enum ContinuationToken {
-            Value(Option<String>),
-            End,
-        }
-
-        struct ListContext {
-            client: rusoto_s3::S3Client,
-            obj_iter: std::vec::IntoIter<rusoto_s3::Object>,
-            continuation_token: ContinuationToken,
-            bucket: String,
-            key: String,
-        }
-        let ctx = ListContext {
-            obj_iter: Vec::new().into_iter(),
-            continuation_token: ContinuationToken::Value(None),
-            bucket: uri.bucket.to_string(),
-            key: uri.key.to_string(),
-            client: self.client.clone(),
-        };
-
-        async fn next_meta(
-            mut ctx: ListContext,
-        ) -> Option<(Result<ObjectMeta, StorageError>, ListContext)> {
-            match ctx.obj_iter.next() {
-                Some(obj) => Some((try_object_meta_from(&ctx.bucket, obj), ctx)),
-                None => match &ctx.continuation_token {
-                    ContinuationToken::End => None,
-                    ContinuationToken::Value(v) => {
-                        let list_req = ListObjectsV2Request {
-                            bucket: ctx.bucket.clone(),
-                            prefix: Some(ctx.key.clone()),
-                            continuation_token: v.clone(),
-                            ..Default::default()
-                        };
-                        let result = match ctx.client.list_objects_v2(list_req).await {
-                            Ok(res) => res,
-                            Err(e) => {
-                                return Some((Err(e.into()), ctx));
-                            }
-                        };
-                        ctx.continuation_token = result
-                            .next_continuation_token
-                            .map(|t| ContinuationToken::Value(Some(t)))
-                            .unwrap_or(ContinuationToken::End);
-                        ctx.obj_iter = result.contents.unwrap_or_default().into_iter();
-                        ctx.obj_iter
-                            .next()
-                            .map(|obj| (try_object_meta_from(&ctx.bucket, obj), ctx))
-                    }
-                },
-            }
-        }
-
-        Ok(Box::pin(futures::stream::unfold(ctx, next_meta)))
+    async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
+        self.inner.head(location).await
     }
 
-    async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
-        debug!("put s3 object: {}...", path);
-
-        let uri = parse_uri(path)?.into_s3object()?;
-        let put_req = PutObjectRequest {
-            bucket: uri.bucket.to_string(),
-            key: uri.key.to_string(),
-            body: Some(obj_bytes.to_vec().into()),
-            ..Default::default()
-        };
-
-        self.client.put_object(put_req).await?;
-
-        Ok(())
+    async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
+        self.inner.delete(location).await
     }
 
-    async fn rename_obj_noreplace(&self, src: &str, dst: &str) -> Result<(), StorageError> {
-        debug!("rename s3 object: {} -> {}...", src, dst);
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
+        self.inner.list(prefix).await
+    }
 
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
+        self.inner.list_with_delimiter(prefix).await
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
+        self.inner.copy(from, to).await
+    }
+
+    async fn copy_if_not_exists(&self, _from: &Path, _to: &Path) -> ObjectStoreResult<()> {
+        todo!()
+    }
+
+    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
         let lock_client = match self.s3_lock_client {
             Some(ref lock_client) => lock_client,
-            None => {
-                return Err(StorageError::S3Generic(
-                    "dynamodb locking is not enabled".to_string(),
-                ))
-            }
+            None => return Err(ObjectStoreError::NotImplemented),
         };
 
-        lock_client.rename_with_lock(self, src, dst).await?;
+        lock_client.rename_with_lock(self, from, to).await?;
 
         Ok(())
     }
 
-    async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
-        debug!("delete s3 object: {}...", path);
-
-        let uri = parse_uri(path)?.into_s3object()?;
-        let delete_req = DeleteObjectRequest {
-            bucket: uri.bucket.to_string(),
-            key: uri.key.to_string(),
-            ..Default::default()
-        };
-
-        self.client.delete_object(delete_req).await?;
-
-        Ok(())
+    async fn put_multipart(
+        &self,
+        location: &Path,
+    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+        self.inner.put_multipart(location).await
     }
 
-    async fn delete_objs(&self, paths: &[String]) -> Result<(), StorageError> {
-        debug!("delete s3 objects: {:?}...", paths);
-        if paths.is_empty() {
-            return Ok(());
-        }
-
-        let s3_objects = paths
-            .iter()
-            .map(|path| Ok(parse_uri(path)?.into_s3object()?))
-            .collect::<Result<Vec<_>, StorageError>>()?;
-
-        // Check whether all buckets are equal
-        let bucket = s3_objects[0].bucket;
-        s3_objects.iter().skip(1).try_for_each(|object| {
-            let other_bucket = object.bucket;
-            if other_bucket != bucket {
-                Err(StorageError::S3Generic(
-                    format!("All buckets of the paths in `S3StorageBackend::delete_objs` should be the same. Expected '{}', got '{}'", bucket, other_bucket)
-                ))
-            } else {
-                Ok(())
-            }
-        })?;
-
-        // S3 has a maximum of 1000 files to delete
-        let chunks = s3_objects.chunks(1000);
-        for chunk in chunks {
-            let delete = Delete {
-                objects: chunk
-                    .iter()
-                    .map(|obj| ObjectIdentifier {
-                        key: obj.key.to_string(),
-                        ..Default::default()
-                    })
-                    .collect(),
-                ..Default::default()
-            };
-            let delete_req = DeleteObjectsRequest {
-                bucket: bucket.to_string(),
-                delete,
-                ..Default::default()
-            };
-            self.client.delete_objects(delete_req).await?;
-        }
-
-        Ok(())
+    async fn abort_multipart(
+        &self,
+        location: &Path,
+        multipart_id: &MultipartId,
+    ) -> ObjectStoreResult<()> {
+        self.inner.abort_multipart(location, multipart_id).await
     }
 }
 
@@ -935,59 +531,12 @@ fn try_create_lock_client(
     }
 }
 
-async fn get_object_with_retries(
-    client: &S3Client,
-    bucket: &str,
-    key: &str,
-    retries: usize,
-    range: Option<Range<usize>>,
-) -> Result<GetObjectOutput, RusotoError<GetObjectError>> {
-    let mut tries = 0;
-    loop {
-        let result = client
-            .get_object(GetObjectRequest {
-                bucket: bucket.to_string(),
-                key: key.to_string(),
-                range: range.as_ref().map(format_http_range),
-                ..Default::default()
-            })
-            .await;
-        match result {
-            Err(RusotoError::Unknown(e)) if e.status.is_server_error() && tries < retries => {
-                log::warn!("Got {:?}, retrying", e);
-                tries += 1;
-                continue;
-            }
-            _ => {
-                return result;
-            }
-        }
-    }
-}
-
-fn format_http_range(range: &std::ops::Range<usize>) -> String {
-    format!("bytes={}-{}", range.start, range.end.saturating_sub(1))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     use maplit::hashmap;
     use serial_test::serial;
-
-    #[test]
-    fn parse_s3_object_uri() {
-        let uri = parse_uri("s3://foo/bar/baz").unwrap();
-        assert_eq!(uri.path(), "bar/baz");
-        assert_eq!(
-            uri.into_s3object().unwrap(),
-            S3Object {
-                bucket: "foo",
-                key: "bar/baz",
-            }
-        );
-    }
 
     #[test]
     #[serial]

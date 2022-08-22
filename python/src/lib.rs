@@ -5,19 +5,18 @@ extern crate pyo3;
 pub mod schema;
 
 use chrono::{DateTime, FixedOffset, Utc};
-use deltalake::action;
-use deltalake::action::Action;
-use deltalake::action::{ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats};
-use deltalake::arrow::datatypes::Schema as ArrowSchema;
-use deltalake::get_backend_for_uri;
+use deltalake::action::{
+    self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
+};
+use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
+use deltalake::builder::DeltaTableBuilder;
 use deltalake::partitions::PartitionFilter;
 use deltalake::storage;
 use deltalake::DeltaDataTypeLong;
 use deltalake::DeltaDataTypeTimestamp;
 use deltalake::DeltaTableMetaData;
 use deltalake::DeltaTransactionOptions;
-use deltalake::Schema;
-use deltalake::{arrow, StorageBackend};
+use deltalake::{DeltaTableError, ObjectMeta, ObjectStore, Path, Schema};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::exceptions::PyValueError;
@@ -104,18 +103,16 @@ impl RawDeltaTable {
         version: Option<deltalake::DeltaDataTypeLong>,
         storage_options: Option<HashMap<String, String>>,
     ) -> PyResult<Self> {
-        let mut table = deltalake::DeltaTableBuilder::from_uri(table_uri)
+        let mut builder = deltalake::DeltaTableBuilder::try_from_uri(table_uri)
             .map_err(PyDeltaTableError::from_raw)?;
         if let Some(storage_options) = storage_options {
-            let backend = deltalake::get_backend_for_uri_with_options(table_uri, storage_options)
-                .map_err(PyDeltaTableError::from_storage)?;
-            table = table.with_storage_backend(backend)
+            builder = builder.with_storage_options(storage_options)
         }
         if let Some(version) = version {
-            table = table.with_version(version)
+            builder = builder.with_version(version)
         }
         let table = rt()?
-            .block_on(table.load())
+            .block_on(builder.load())
             .map_err(PyDeltaTableError::from_raw)?;
         Ok(RawDeltaTable { _table: table })
     }
@@ -479,15 +476,29 @@ fn filestats_to_expression<'py>(
 
 #[pyclass]
 pub struct DeltaStorageFsBackend {
-    _storage: Arc<dyn StorageBackend>,
+    _storage: Arc<dyn ObjectStore>,
+}
+
+impl DeltaStorageFsBackend {
+    async fn get_object(&self, location: &Path) -> Result<Vec<u8>, DeltaTableError> {
+        let result = self._storage.get(location).await?.bytes().await?;
+        Ok(result.into())
+    }
+
+    async fn head_object(&self, location: &Path) -> Result<ObjectMeta, DeltaTableError> {
+        self._storage.head(location).await
+    }
 }
 
 #[pymethods]
 impl DeltaStorageFsBackend {
     #[new]
     fn new(table_uri: &str) -> PyResult<Self> {
-        let storage =
-            storage::get_backend_for_uri(table_uri).map_err(PyDeltaTableError::from_storage)?;
+        let storage = DeltaTableBuilder::try_from_uri(table_uri)
+            .map_err(PyDeltaTableError::from_raw(err))?
+            .build_storage()
+            .map_err(PyDeltaTableError::from_raw(err))?
+            .storage_backend();
         Ok(Self { _storage: storage })
     }
 
@@ -496,23 +507,25 @@ impl DeltaStorageFsBackend {
     }
 
     fn head_obj<'py>(&mut self, py: Python<'py>, path: &str) -> PyResult<&'py PyTuple> {
+        let path = Path::from(path);
         let obj = rt()?
-            .block_on(self._storage.head_obj(path))
-            .map_err(PyDeltaTableError::from_storage)?;
+            .block_on(self.head_object(&path))
+            .map_err(PyDeltaTableError::from_raw)?;
         Ok(PyTuple::new(
             py,
             &[
-                obj.path.into_py(py),
-                obj.modified.timestamp().to_string().into_py(py),
+                obj.location.to_string().into_py(py),
+                obj.last_modified.timestamp().to_string().into_py(py),
                 obj.size.into_py(py),
             ],
         ))
     }
 
     fn get_obj<'py>(&mut self, py: Python<'py>, path: &str) -> PyResult<&'py PyBytes> {
+        let path = Path::from(path);
         let obj = rt()?
-            .block_on(self._storage.get_obj(path))
-            .map_err(PyDeltaTableError::from_storage)?;
+            .block_on(self.get_object(&path))
+            .map_err(PyDeltaTableError::from_raw)?;
         Ok(PyBytes::new(py, &obj))
     }
 }
@@ -578,12 +591,10 @@ fn write_new_deltalake(
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
 ) -> PyResult<()> {
-    let mut table = deltalake::DeltaTable::new(
-        &table_uri,
-        get_backend_for_uri(&table_uri).map_err(PyDeltaTableError::from_storage)?,
-        deltalake::DeltaTableConfig::default(),
-    )
-    .map_err(PyDeltaTableError::from_raw)?;
+    let mut table = DeltaTableBuilder::try_from_uri(table_uri)
+        .map_err(PyDeltaTableError::from_raw)?
+        .build()
+        .map_err(PyDeltaTableError::from_raw)?;
 
     let metadata = DeltaTableMetaData::new(
         name,

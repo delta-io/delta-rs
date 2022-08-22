@@ -7,15 +7,16 @@
 /// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
 /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
 mod adls_gen2_table {
-    use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
-    use azure_storage_datalake::prelude::DataLakeClient;
     use chrono::Utc;
-    use deltalake::storage::azure::azure_storage_options;
+    use deltalake::builder::azure_storage_options;
     use deltalake::{
-        action, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema, SchemaDataType,
-        SchemaField,
+        action, DeltaTable, DeltaTableBuilder, DeltaTableConfig, DeltaTableMetaData, Schema,
+        SchemaDataType, SchemaField,
     };
+    use futures::{StreamExt, TryStreamExt};
+    use object_store::local::LocalFileSystem;
     use object_store::path::Path;
+    use object_store::ObjectStore;
     use serial_test::serial;
     use std::collections::HashMap;
     use std::env;
@@ -29,8 +30,14 @@ mod adls_gen2_table {
     #[tokio::test]
     #[serial]
     async fn read_simple_table() {
+        dotenv::dotenv().ok();
+
         let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
-        let table = deltalake::open_table(format!("adls2://{}/simple/", account).as_str())
+        let table_uri = "azure://deltars/simple_table/";
+
+        let table = DeltaTableBuilder::try_from_uri(table_uri)
+            .unwrap()
+            .load()
             .await
             .unwrap();
 
@@ -64,29 +71,31 @@ mod adls_gen2_table {
     #[serial]
     async fn read_simple_table_with_service_principal() {
         let account = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
-        let client_id = std::env::var("AZURE_CLIENT_ID").unwrap();
-        let client_secret = std::env::var("AZURE_CLIENT_SECRET").unwrap();
-        let tenant_id = std::env::var("AZURE_TENANT_ID").unwrap();
+        let client_id = std::env::var("AZURE_STORAGE_CLIENT_ID").unwrap();
+        let client_secret = std::env::var("AZURE_STORAGE_CLIENT_SECRET").unwrap();
+        let tenant_id = std::env::var("AZURE_STORAGE_TENANT_ID").unwrap();
         let mut options = std::collections::HashMap::new();
         options.insert(
-            azure_storage_options::AZURE_CLIENT_ID.to_string(),
+            azure_storage_options::AZURE_STORAGE_CLIENT_ID.to_string(),
             client_id,
         );
         options.insert(
-            azure_storage_options::AZURE_CLIENT_SECRET.to_string(),
+            azure_storage_options::AZURE_STORAGE_CLIENT_SECRET.to_string(),
             client_secret,
         );
         options.insert(
-            azure_storage_options::AZURE_TENANT_ID.to_string(),
+            azure_storage_options::AZURE_STORAGE_TENANT_ID.to_string(),
             tenant_id,
         );
 
-        let table_uri = format!("adls2://{}/simple/", account);
-        let mut builder = deltalake::DeltaTableBuilder::from_uri(&table_uri).unwrap();
-        let backend = deltalake::get_backend_for_uri_with_options(&table_uri, options).unwrap();
-        builder = builder.with_storage_backend(backend);
-
-        let table = builder.load().await.unwrap();
+        // TODO get container here ...
+        let table_uri = "azure://simple/";
+        let table = DeltaTableBuilder::try_from_uri(&table_uri)
+            .unwrap()
+            .with_storage_options(options)
+            .load()
+            .await
+            .unwrap();
 
         assert_eq!(table.version(), 4);
         assert_eq!(table.get_min_writer_version(), 2);
@@ -116,58 +125,58 @@ mod adls_gen2_table {
     /*
      * This test has no prerequisites.
      */
-    #[ignore]
-    #[tokio::test]
-    #[serial]
-    async fn create_table_and_commit() {
-        // Arrange
-        let storage_account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
-        let storage_account_key = env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
-
-        let data_lake_client = DataLakeClient::new(
-            StorageSharedKeyCredential::new(
-                storage_account_name.to_owned(),
-                storage_account_key.to_owned(),
-            ),
-            None,
-        );
-
-        // Create a new file system for test isolation
-        let file_system_name = format!("test-delta-table-{}", Utc::now().timestamp());
-        let file_system_client =
-            data_lake_client.into_file_system_client(file_system_name.to_owned());
-        file_system_client.create().into_future().await.unwrap();
-
-        let table_uri = &format!("adls2://{}/{}/", storage_account_name, file_system_name);
-        let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
-        let mut dt = DeltaTable::new(table_uri, backend, DeltaTableConfig::default()).unwrap();
-        let (metadata, protocol) = table_info();
-
-        // Act 1
-        dt.create(metadata.clone(), protocol.clone(), None, None)
-            .await
-            .unwrap();
-
-        // Assert 1
-        assert_eq!(0, dt.version());
-        assert_eq!(1, dt.get_min_reader_version());
-        assert_eq!(2, dt.get_min_writer_version());
-        assert_eq!(0, dt.get_files().len());
-        assert_eq!(table_uri.trim_end_matches('/').to_string(), dt.table_uri);
-
-        // Act 2
-        let mut tx = dt.create_transaction(None);
-        tx.add_actions(tx_actions());
-        let version = tx.commit(None, None).await.unwrap();
-
-        // Assert 2
-        assert_eq!(1, version);
-        assert_eq!(version, dt.version());
-        assert_eq!(2, dt.get_files().len());
-
-        // Cleanup
-        file_system_client.delete().into_future().await.unwrap();
-    }
+    // #[ignore]
+    // #[tokio::test]
+    // #[serial]
+    // async fn create_table_and_commit() {
+    //     // Arrange
+    //     let storage_account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
+    //     let storage_account_key = env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
+    //
+    //     let data_lake_client = DataLakeClient::new(
+    //         StorageSharedKeyCredential::new(
+    //             storage_account_name.to_owned(),
+    //             storage_account_key.to_owned(),
+    //         ),
+    //         None,
+    //     );
+    //
+    //     // Create a new file system for test isolation
+    //     let file_system_name = format!("test-delta-table-{}", Utc::now().timestamp());
+    //     let file_system_client =
+    //         data_lake_client.into_file_system_client(file_system_name.to_owned());
+    //     file_system_client.create().into_future().await.unwrap();
+    //
+    //     let table_uri = &format!("adls2://{}/{}/", storage_account_name, file_system_name);
+    //     let backend = deltalake::get_backend_for_uri(table_uri).unwrap();
+    //     let mut dt = DeltaTable::new(table_uri, backend, DeltaTableConfig::default()).unwrap();
+    //     let (metadata, protocol) = table_info();
+    //
+    //     // Act 1
+    //     dt.create(metadata.clone(), protocol.clone(), None, None)
+    //         .await
+    //         .unwrap();
+    //
+    //     // Assert 1
+    //     assert_eq!(0, dt.version());
+    //     assert_eq!(1, dt.get_min_reader_version());
+    //     assert_eq!(2, dt.get_min_writer_version());
+    //     assert_eq!(0, dt.get_files().len());
+    //     assert_eq!(table_uri.trim_end_matches('/').to_string(), dt.table_uri);
+    //
+    //     // Act 2
+    //     let mut tx = dt.create_transaction(None);
+    //     tx.add_actions(tx_actions());
+    //     let version = tx.commit(None, None).await.unwrap();
+    //
+    //     // Assert 2
+    //     assert_eq!(1, version);
+    //     assert_eq!(version, dt.version());
+    //     assert_eq!(2, dt.get_files().len());
+    //
+    //     // Cleanup
+    //     file_system_client.delete().into_future().await.unwrap();
+    // }
 
     fn table_info() -> (DeltaTableMetaData, action::Protocol) {
         let schema = Schema::new(vec![SchemaField::new(

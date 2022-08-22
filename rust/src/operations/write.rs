@@ -177,8 +177,10 @@ async fn do_write(
     mode: SaveMode,
     context: Arc<TaskContext>,
 ) -> DataFusionResult<SendableRecordBatchStream> {
-    let mut table =
-        get_table_from_uri_without_update(table_uri.clone()).map_err(to_datafusion_err)?;
+    let mut table = DeltaTableBuilder::try_from_uri(&table_uri)
+        .map_err(to_datafusion_err)?
+        .build()
+        .map_err(to_datafusion_err)?;
     let metrics = ExecutionPlanMetricsSet::new();
     let tracking_metrics = MemTrackingMetrics::new(&metrics, partition_id);
 

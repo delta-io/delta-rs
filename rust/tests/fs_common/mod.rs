@@ -1,7 +1,7 @@
 use chrono::Utc;
 use deltalake::action::{Action, Add, Protocol, Remove};
 use deltalake::{
-    storage, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
+    builder::DeltaTableBuilder, DeltaTable, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
 };
 use parquet::file::reader::{FileReader, SerializedFileReader};
 use parquet::schema::types::Type;
@@ -46,8 +46,10 @@ pub async fn create_test_table(
     partition_columns: Vec<&str>,
     config: HashMap<String, Option<String>>,
 ) -> DeltaTable {
-    let backend = storage::get_backend_for_uri(path).unwrap();
-    let mut table = DeltaTable::new(path, backend, DeltaTableConfig::default()).unwrap();
+    let mut table = DeltaTableBuilder::try_from_uri(path)
+        .unwrap()
+        .build()
+        .unwrap();
     let partition_columns = partition_columns.iter().map(|s| s.to_string()).collect();
     let md = DeltaTableMetaData::new(None, None, None, schema, partition_columns, config);
     let protocol = Protocol {

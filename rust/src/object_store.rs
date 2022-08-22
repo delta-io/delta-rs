@@ -2,22 +2,17 @@
 //!
 //! The object store abstracts all interactions with the underlying storage system.
 //! Currently local filesystem, S3, Azure, and GCS are supported.
-use crate::{
-    get_backend_for_uri_with_options,
-    storage::{ObjectMeta as StorageObjectMeta, StorageBackend, StorageError},
-};
+use crate::storage::StorageError;
 use bytes::Bytes;
 #[cfg(feature = "datafusion-ext")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
-use futures::stream::BoxStream;
-use futures::StreamExt;
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
 use object_store::{
     path::{Path, DELIMITER},
-    Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
-    Result as ObjectStoreResult,
+    DynObjectStore, Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Result as ObjectStoreResult,
 };
-use std::collections::HashMap;
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
@@ -46,6 +41,35 @@ impl From<StorageError> for ObjectStoreError {
     }
 }
 
+/// Configuration for a DeltaObjectStore
+#[derive(Debug, Clone)]
+pub struct DeltaObjectStoreConfig {
+    table_root: Path,
+}
+
+impl DeltaObjectStoreConfig {
+    /// Create a new [DeltaObjectStoreConfig]
+    pub fn new(table_root: impl Into<Path>) -> Self {
+        Self {
+            table_root: table_root.into(),
+        }
+    }
+
+    /// Prefix a path with the table root path
+    fn full_path(&self, location: &Path) -> Path {
+        Path::from_iter(self.table_root.parts().chain(location.parts()))
+    }
+
+    fn strip_prefix(&self, path: &Path) -> Option<Path> {
+        let path: &str = path.as_ref();
+        let stripped = match self.table_root.as_ref() {
+            "" => path,
+            p => path.strip_prefix(p)?.strip_prefix(DELIMITER)?,
+        };
+        Some(Path::from_iter(stripped.split(DELIMITER)))
+    }
+}
+
 /// Object Store implementation for DeltaTable.
 ///
 /// The [DeltaObjectStore] implements the [object_store::ObjectStore] trait to facilitate
@@ -58,7 +82,8 @@ impl From<StorageError> for ObjectStoreError {
 pub struct DeltaObjectStore {
     scheme: String,
     root: Path,
-    storage: Arc<dyn StorageBackend>,
+    storage: Arc<DynObjectStore>,
+    config: DeltaObjectStoreConfig,
 }
 
 impl std::fmt::Display for DeltaObjectStore {
@@ -68,26 +93,21 @@ impl std::fmt::Display for DeltaObjectStore {
 }
 
 impl DeltaObjectStore {
-    /// Try creating a new instance of DeltaObjectStore from table uri and storage options
-    pub fn try_new_with_options(
-        table_uri: impl AsRef<str>,
-        storage_options: Option<HashMap<String, String>>,
-    ) -> ObjectStoreResult<Self> {
-        let storage = get_backend_for_uri_with_options(
-            table_uri.as_ref(),
-            storage_options.unwrap_or_default(),
-        )
-        .map_err(|err| ObjectStoreError::Generic {
-            store: "DeltaObjectStore",
-            source: Box::new(err),
-        })?;
-        Self::try_new(table_uri, storage)
+    /// Create new DeltaObjectStore
+    pub fn new(table_root: &Path, storage: Arc<DynObjectStore>) -> Self {
+        let config = DeltaObjectStoreConfig::new(table_root.clone());
+        Self {
+            scheme: String::from("file"),
+            root: table_root.clone(),
+            storage,
+            config,
+        }
     }
 
     /// Try creating a new instance of DeltaObjectStore with specified storage
     pub fn try_new(
         table_uri: impl AsRef<str>,
-        storage: Arc<dyn StorageBackend>,
+        storage: Arc<DynObjectStore>,
     ) -> ObjectStoreResult<Self> {
         let (scheme, root) = match Url::parse(table_uri.as_ref()) {
             Ok(result) => {
@@ -118,16 +138,17 @@ impl DeltaObjectStore {
                 source: Box::new(err),
             }),
         }?;
+        let config = DeltaObjectStoreConfig::new(root.clone());
         Ok(Self {
             scheme,
             root,
             storage,
+            config,
         })
     }
 
     /// Get a reference to the underlying storage backend
-    // TODO we should eventually be able to remove this
-    pub fn storage_backend(&self) -> Arc<dyn StorageBackend> {
+    pub fn storage_backend(&self) -> Arc<DynObjectStore> {
         self.storage.clone()
     }
 
@@ -188,39 +209,40 @@ impl DeltaObjectStore {
 impl ObjectStore for DeltaObjectStore {
     /// Save the provided bytes to the specified location.
     async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
-        Ok(self
-            .storage
-            .put_obj(&self.to_uri(location), bytes.as_ref())
-            .await?)
+        let full_path = self.config.full_path(location);
+        self.storage.put(&full_path, bytes).await
     }
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
-        let data = self.storage.get_obj(&self.to_uri(location)).await?;
-        Ok(GetResult::Stream(
-            futures::stream::once(async move { Ok(data.into()) }).boxed(),
-        ))
+        let full_path = self.config.full_path(location);
+        self.storage.get(&full_path).await
     }
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte range
     async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
-        let data = self
-            .storage
-            .get_range(&self.to_uri(location), range)
-            .await?;
-        Ok(data.into())
+        let full_path = self.config.full_path(location);
+        object_store::ObjectStore::get_range(self.storage.as_ref(), &full_path, range).await
     }
 
     /// Return the metadata for the specified location
     async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
-        let meta = self.storage.head_obj(&self.to_uri(location)).await?;
-        convert_object_meta(self.root_uri(), meta)
+        let full_path = self.config.full_path(location);
+        self.storage.head(&full_path).await.map(|meta| ObjectMeta {
+            last_modified: meta.last_modified,
+            size: meta.size,
+            location: self
+                .config
+                .strip_prefix(&meta.location)
+                .unwrap_or(meta.location),
+        })
     }
 
     /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
-        Ok(self.storage.delete_obj(&self.to_uri(location)).await?)
+        let full_path = self.config.full_path(location);
+        self.storage.delete(&full_path).await
     }
 
     /// List all the objects with the given prefix.
@@ -231,22 +253,20 @@ impl ObjectStore for DeltaObjectStore {
         &self,
         prefix: Option<&Path>,
     ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
-        let path = match prefix {
-            Some(pre) => self.to_uri(pre),
-            None => self.root_uri(),
-        };
-        let root_uri = self.root_uri();
-        let stream = self
+        let prefix = prefix.map(|p| self.config.full_path(p));
+        Ok(self
             .storage
-            .list_objs(&path)
+            .list(Some(&prefix.unwrap_or(self.root.clone())))
             .await?
-            .map(|obj| match obj {
-                Ok(meta) => convert_object_meta(root_uri.clone(), meta),
-                Err(err) => Err(ObjectStoreError::from(err)),
+            .map_ok(|meta| ObjectMeta {
+                last_modified: meta.last_modified,
+                size: meta.size,
+                location: self
+                    .config
+                    .strip_prefix(&meta.location)
+                    .unwrap_or(meta.location),
             })
-            .collect::<Vec<_>>()
-            .await;
-        Ok(Box::pin(futures::stream::iter(stream)))
+            .boxed())
     }
 
     /// List objects with the given prefix and an implementation specific
@@ -255,79 +275,77 @@ impl ObjectStore for DeltaObjectStore {
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`.
-    async fn list_with_delimiter(&self, _prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
-        todo!()
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
+        let prefix = prefix.map(|p| self.config.full_path(p));
+        self.storage
+            .list_with_delimiter(Some(&prefix.unwrap_or(self.root.clone())))
+            .await
+            .map(|lst| ListResult {
+                common_prefixes: lst
+                    .common_prefixes
+                    .iter()
+                    .map(|p| self.config.strip_prefix(p).unwrap_or(p.clone()))
+                    .collect(),
+                objects: lst
+                    .objects
+                    .iter()
+                    .map(|meta| ObjectMeta {
+                        last_modified: meta.last_modified,
+                        size: meta.size,
+                        location: self
+                            .config
+                            .strip_prefix(&meta.location)
+                            .unwrap_or(meta.location.clone()),
+                    })
+                    .collect(),
+            })
     }
 
     /// Copy an object from one path to another in the same object store.
     ///
     /// If there exists an object at the destination, it will be overwritten.
-    async fn copy(&self, _from: &Path, _to: &Path) -> ObjectStoreResult<()> {
-        todo!()
+    async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
+        let full_from = self.config.full_path(from);
+        let full_to = self.config.full_path(to);
+        self.storage.copy(&full_from, &full_to).await
     }
 
     /// Copy an object from one path to another, only if destination is empty.
     ///
     /// Will return an error if the destination already has an object.
-    async fn copy_if_not_exists(&self, _from: &Path, _to: &Path) -> ObjectStoreResult<()> {
-        todo!()
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
+        let full_from = self.config.full_path(from);
+        let full_to = self.config.full_path(to);
+        self.storage.copy_if_not_exists(&full_from, &full_to).await
     }
 
     /// Move an object from one path to another in the same object store.
     ///
     /// Will return an error if the destination already has an object.
     async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        Ok(self
-            .storage
-            .rename_obj_noreplace(&self.to_uri(from), &self.to_uri(to))
-            .await?)
+        let full_from = self.config.full_path(from);
+        let full_to = self.config.full_path(to);
+        self.storage
+            .rename_if_not_exists(&full_from, &full_to)
+            .await
     }
 
     async fn put_multipart(
         &self,
-        _location: &Path,
+        location: &Path,
     ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        todo!()
+        let full_path = self.config.full_path(location);
+        self.storage.put_multipart(&full_path).await
     }
 
     async fn abort_multipart(
         &self,
-        _location: &Path,
-        _multipart_id: &MultipartId,
+        location: &Path,
+        multipart_id: &MultipartId,
     ) -> ObjectStoreResult<()> {
-        todo!()
+        let full_path = self.config.full_path(location);
+        self.storage.abort_multipart(&full_path, multipart_id).await
     }
-}
-
-#[inline]
-/// Return path relative to parent_path
-fn extract_rel_path<'a, 'b>(
-    parent_path: &'b str,
-    path: &'a str,
-) -> Result<&'a str, ObjectStoreError> {
-    if path.starts_with(&parent_path) {
-        Ok(&path[parent_path.len()..])
-    } else {
-        Err(ObjectStoreError::Generic {
-            store: "DeltaObjectStore",
-            source: Box::new(StorageError::NotFound),
-        })
-    }
-}
-
-fn convert_object_meta(
-    root_uri: String,
-    storage_meta: StorageObjectMeta,
-) -> ObjectStoreResult<ObjectMeta> {
-    Ok(ObjectMeta {
-        location: Path::from(extract_rel_path(
-            root_uri.as_ref(),
-            // HACK hopefully this will hold over until we have switched to object_store
-            storage_meta.path.as_str().replace('\\', DELIMITER).as_ref(),
-        )?),
-        last_modified: storage_meta.modified,
-        size: storage_meta.size.unwrap_or_default() as usize,
-    })
 }
 
 #[cfg(test)]
@@ -336,11 +354,19 @@ mod tests {
     use futures::TryStreamExt;
     use tokio::fs;
 
+    fn create_local_test_store() -> (Arc<DeltaObjectStore>, tempdir::TempDir) {
+        let tmp_dir = tempdir::TempDir::new("").unwrap();
+        let store =
+            crate::builder::DeltaTableBuilder::try_from_uri(tmp_dir.path().to_str().unwrap())
+                .unwrap()
+                .build_storage()
+                .unwrap();
+        (store, tmp_dir)
+    }
+
     #[tokio::test]
     async fn test_put() {
-        let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let object_store =
-            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
+        let (object_store, tmp_dir) = create_local_test_store();
 
         // put object
         let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
@@ -356,9 +382,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_head() {
-        let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let object_store =
-            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
+        let (object_store, _tmp_dir) = create_local_test_store();
 
         // existing file
         let path1 = Path::from("tmp_file1");
@@ -374,9 +398,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_get() {
-        let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let object_store =
-            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
+        let (object_store, _tmp_dir) = create_local_test_store();
 
         // existing file
         let path1 = Path::from("tmp_file1");
@@ -394,9 +416,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete() {
-        let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let object_store =
-            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
+        let (object_store, tmp_dir) = create_local_test_store();
 
         let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
 
@@ -412,9 +432,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_delete_batch() {
-        let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let object_store =
-            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
+        let (object_store, tmp_dir) = create_local_test_store();
 
         let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
         let tmp_file_path2 = tmp_dir.path().join("tmp_file2");
@@ -435,9 +453,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list() {
-        let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let object_store =
-            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
+        let (object_store, _tmp_dir) = create_local_test_store();
 
         let path1 = Path::from("tmp_file1");
         let path2 = Path::from("tmp_file2");
@@ -479,9 +495,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_list_prefix() {
-        let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let object_store =
-            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
+        let (object_store, _tmp_dir) = create_local_test_store();
 
         let path1 = Path::from("_delta_log/tmp_file1");
         object_store.put(&path1, bytes::Bytes::new()).await.unwrap();
@@ -498,9 +512,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_rename_if_not_exists() {
-        let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let object_store =
-            DeltaObjectStore::try_new_with_options(tmp_dir.path().to_str().unwrap(), None).unwrap();
+        let (object_store, tmp_dir) = create_local_test_store();
 
         let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
         let tmp_file_path2 = tmp_dir.path().join("tmp_file2");

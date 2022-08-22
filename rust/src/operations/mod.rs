@@ -3,11 +3,12 @@
 // - rename to delta operations
 use crate::{
     action::{DeltaOperation, Protocol, SaveMode},
-    get_backend_for_uri_with_options, open_table,
+    builder::DeltaTableBuilder,
+    open_table,
     operations::{create::CreateCommand, transaction::DeltaTransactionPlan, write::WriteCommand},
     storage::StorageError,
     writer::{record_batch::divide_by_partition_values, utils::PartitionPath, DeltaWriterError},
-    DeltaTable, DeltaTableConfig, DeltaTableError, DeltaTableMetaData,
+    DeltaTable, DeltaTableError, DeltaTableMetaData,
 };
 use arrow::{datatypes::SchemaRef as ArrowSchemaRef, error::ArrowError, record_batch::RecordBatch};
 use datafusion::{
@@ -83,12 +84,21 @@ pub enum DeltaCommandError {
         /// Raw internal DataFusionError
         source: DataFusionError,
     },
+
+    /// Error returned for errors internal to Datafusion
+    #[error("ObjectStore error: {} ({:?})", source, source)]
+    ObjectStore {
+        /// Raw internal DataFusionError
+        #[from]
+        source: object_store::Error,
+    },
 }
 
 impl From<DataFusionError> for DeltaCommandError {
     fn from(err: DataFusionError) -> Self {
         match err {
             DataFusionError::ArrowError(source) => DeltaCommandError::Arrow { source },
+            DataFusionError::ObjectStore(source) => DeltaCommandError::ObjectStore { source },
             source => DeltaCommandError::DataFusion { source },
         }
     }
@@ -113,7 +123,7 @@ impl DeltaCommands {
         let table = if let Ok(tbl) = open_table(&table_uri).await {
             Ok(tbl)
         } else {
-            get_table_from_uri_without_update(table_uri)
+            DeltaTableBuilder::try_from_uri(table_uri)?.build()
         }?;
         Ok(Self { table })
     }
@@ -230,13 +240,6 @@ impl DeltaCommands {
         )?);
         self.execute(operation, plan).await
     }
-}
-
-fn get_table_from_uri_without_update(table_uri: String) -> DeltaCommandResult<DeltaTable> {
-    let backend = get_backend_for_uri_with_options(&table_uri, HashMap::new())?;
-    let table = DeltaTable::new(&table_uri, backend, DeltaTableConfig::default())?;
-
-    Ok(table)
 }
 
 impl From<DeltaTable> for DeltaCommands {
