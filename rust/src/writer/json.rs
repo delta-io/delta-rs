@@ -446,6 +446,7 @@ mod tests {
     use arrow::datatypes::Schema as ArrowSchema;
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
+    use serde_json::json;
     use std::fs::File;
     use std::sync::Arc;
 
