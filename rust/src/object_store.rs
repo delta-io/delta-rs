@@ -256,7 +256,7 @@ impl ObjectStore for DeltaObjectStore {
         let prefix = prefix.map(|p| self.config.full_path(p));
         Ok(self
             .storage
-            .list(Some(&prefix.unwrap_or(self.root.clone())))
+            .list(Some(&prefix.unwrap_or_else(|| self.root.clone())))
             .await?
             .map_ok(|meta| ObjectMeta {
                 last_modified: meta.last_modified,
@@ -278,13 +278,13 @@ impl ObjectStore for DeltaObjectStore {
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
         let prefix = prefix.map(|p| self.config.full_path(p));
         self.storage
-            .list_with_delimiter(Some(&prefix.unwrap_or(self.root.clone())))
+            .list_with_delimiter(Some(&prefix.unwrap_or_else(|| self.root.clone())))
             .await
             .map(|lst| ListResult {
                 common_prefixes: lst
                     .common_prefixes
                     .iter()
-                    .map(|p| self.config.strip_prefix(p).unwrap_or(p.clone()))
+                    .map(|p| self.config.strip_prefix(p).unwrap_or_else(|| p.clone()))
                     .collect(),
                 objects: lst
                     .objects
@@ -295,7 +295,7 @@ impl ObjectStore for DeltaObjectStore {
                         location: self
                             .config
                             .strip_prefix(&meta.location)
-                            .unwrap_or(meta.location.clone()),
+                            .unwrap_or_else(|| meta.location.clone()),
                     })
                     .collect(),
             })

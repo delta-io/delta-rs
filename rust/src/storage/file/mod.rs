@@ -28,7 +28,7 @@ mod rename;
 /// * Darwin is supported but not fully tested.
 /// Patches welcome.
 /// * Support for other platforms are not implemented at the moment.
-#[derive(Debug)]
+#[derive(Debug, Default)]
 pub struct FileStorageBackend {
     inner: Arc<LocalFileSystem>,
 }
