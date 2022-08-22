@@ -570,12 +570,40 @@ mod tests {
         assert_eq!(table.version(), 4)
     }
 
-    #[cfg(feature = "azure")]
+    #[cfg(all(feature = "azure", feature = "integration_test"))]
     #[tokio::test]
     async fn test_load_simple_azure() {
         dotenv::dotenv().ok();
 
         let table = DeltaTableBuilder::try_from_uri("az://deltars/simple_table")
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 4)
+    }
+
+    #[cfg(all(feature = "s3", feature = "integration_test"))]
+    #[tokio::test]
+    async fn test_load_simple_aws() {
+        dotenv::dotenv().ok();
+
+        let table = DeltaTableBuilder::try_from_uri("s3://deltars/simple_table")
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 4)
+    }
+
+    #[cfg(all(feature = "gcs", feature = "integration_test"))]
+    #[tokio::test]
+    async fn test_load_simple_gcp() {
+        dotenv::dotenv().ok();
+
+        let table = DeltaTableBuilder::try_from_uri("gs://deltars/simple_table")
             .unwrap()
             .load()
             .await

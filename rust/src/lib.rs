@@ -119,6 +119,3 @@ pub use self::partitions::*;
 pub use self::schema::*;
 pub use self::storage::StorageError;
 pub use ::object_store::{path::Path, ObjectMeta, ObjectStore};
-
-#[cfg(feature = "s3")]
-pub use self::storage::s3::s3_storage_options;

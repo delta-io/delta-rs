@@ -15,7 +15,7 @@ thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
-tokio-stream = { version = "0", features = ["fs"] }
+# tokio-stream = { version = "0", features = ["fs"] }
 futures = "0.3"
 bytes = "1"
 log = "0"
@@ -30,10 +30,10 @@ object_store = "0.4.0"
 url = "2.2"
 
 # HTTP Client
-reqwest = { version = "0.11", default-features = false, features = [
-    "rustls-tls",
-    "stream",
-], optional = true }
+# reqwest = { version = "0.11", default-features = false, features = [
+#     "rustls-tls",
+#     "stream",
+# ], optional = true }
 
 # S3
 rusoto_core = { version = "0.48", default-features = false, optional = true }
@@ -72,7 +72,7 @@ default = ["azure"]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion"]
 azure = ["object_store/azure"]
-
+gcs = ["object_store/gcp"]
 s3 = [
     "rusoto_core/native-tls",
     "rusoto_credential",
@@ -95,9 +95,10 @@ s3-rustls = [
     "hyper",
     "object_store/aws",
 ]
-gcs = ["object_store/gcp"]
 glue = ["s3", "rusoto_glue"]
 python = ["arrow/pyarrow"]
+# used only for integration testing
+integration_test = []
 
 [build-dependencies]
 glibc_version = "0"
