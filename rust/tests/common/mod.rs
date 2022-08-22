@@ -1,7 +1,7 @@
 use bytes::Bytes;
 use deltalake::action::{self, Add, Remove};
 use deltalake::builder::DeltaTableBuilder;
-use deltalake::object_store::DeltaObjectStore;
+use deltalake::storage::DeltaObjectStore;
 use deltalake::{DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema};
 use object_store::{path::Path, ObjectStore};
 use serde_json::{Map, Value};
