@@ -183,7 +183,9 @@ pub async fn setup_local_context() -> TestContext {
     }
 }
 
-mod az_cli {
+pub mod az_cli {
+    use std::process::Command;
+
     pub fn create_container(container_name: impl AsRef<str>) {
         let mut child = Command::new("az")
             .args([

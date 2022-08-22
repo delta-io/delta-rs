@@ -29,11 +29,11 @@ pub async fn setup_azure_gen2_context() -> TestContext {
         std::env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or("deltars".to_string());
 
     let rand: u16 = rand::thread_rng().gen();
-    let table_folder = format!("delta-rs-test-{}-{}", Utc::now().timestamp(), rand);
+    let file_system_name = format!("delta-rs-test-{}-{}", Utc::now().timestamp(), rand);
 
-    az_cli::create_container(file_system_name);
+    az_cli::create_container(&file_system_name);
 
-    let table_uri = format!("azure://{}/", table_folder);
+    let table_uri = format!("azure://{}/", file_system_name);
 
     config.insert("URI".to_string(), table_uri);
     config.insert(
