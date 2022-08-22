@@ -4,7 +4,7 @@ use rusoto_s3::{DeleteObjectRequest, ListObjectsV2Request, S3Client, S3};
 pub const ENDPOINT: &str = "http://localhost:4566";
 
 pub fn setup() {
-    std::env::set_var("AWS_REGION", "us-east-2");
+    std::env::set_var("AWS_REGION", "us-east-1");
     std::env::set_var("AWS_ACCESS_KEY_ID", "test");
     std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
     std::env::set_var("AWS_ENDPOINT_URL", ENDPOINT);
@@ -28,13 +28,13 @@ pub fn setup_dynamodb(key: &str) {
 pub async fn cleanup_dir_except(path: &str, ignore_files: Vec<String>) {
     setup();
     let client = S3Client::new(region());
-    let (bucket, key) = parse_uri(path).unwrap().into_s3object().unwrap();
+    let (bucket, key) = parse_uri(path);
 
     for obj in list_objects(&client, &bucket, &key).await {
         let name = obj.split("/").last().unwrap().to_string();
         if !ignore_files.contains(&name) && !name.starts_with(".") {
             let req = DeleteObjectRequest {
-                bucket,
+                bucket: bucket.clone(),
                 key: obj,
                 ..Default::default()
             };
@@ -66,27 +66,13 @@ async fn list_objects(client: &S3Client, bucket: &str, prefix: &str) -> Vec<Stri
 pub fn parse_uri<'a>(path: &'a str) -> (String, String) {
     let parts: Vec<&'a str> = path.split("://").collect();
 
-    if parts.len() == 1 {
-        return Ok(Uri::LocalPath(parts[0]));
-    }
-
     match parts[0] {
         "s3" => {
             let mut path_parts = parts[1].splitn(2, '/');
-            let bucket = match path_parts.next() {
-                Some(x) => x,
-                None => {
-                    return Err(UriError::MissingObjectBucket);
-                }
-            };
-            let key = match path_parts.next() {
-                Some(x) => x,
-                None => {
-                    return Err(UriError::MissingObjectKey);
-                }
-            };
+            let bucket = path_parts.next().unwrap();
+            let key = path_parts.next().unwrap();
 
-            Ok((bucket.into(), key.into()))
+            (bucket.into(), key.into())
         }
         _ => todo!(),
     }

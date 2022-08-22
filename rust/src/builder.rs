@@ -105,6 +105,7 @@ impl DeltaTableLoadOptions {
 pub struct DeltaTableBuilder {
     options: DeltaTableLoadOptions,
     storage_options: Option<HashMap<String, String>>,
+    allow_http: Option<bool>,
 }
 
 impl DeltaTableBuilder {
@@ -113,6 +114,7 @@ impl DeltaTableBuilder {
         DeltaTableBuilder {
             options: DeltaTableLoadOptions::new(table_uri.as_ref()),
             storage_options: None,
+            allow_http: None,
         }
     }
 
@@ -172,11 +174,23 @@ impl DeltaTableBuilder {
         self
     }
 
+    /// Allows unsecure connections via http.
+    ///
+    /// This setting is most useful for testing / development when connecting to emulated services.
+    pub fn with_allow_http(mut self, allow_http: bool) -> Self {
+        self.allow_http = Some(allow_http);
+        self
+    }
+
     /// Build a delta storage backend for the given config
     pub fn build_storage(self) -> Result<Arc<DeltaObjectStore>, DeltaTableError> {
         let (storage, prefix) = match self.options.storage_backend {
             Some(storage) => storage,
-            None => get_storage_backend(&self.options.table_uri, self.storage_options)?,
+            None => get_storage_backend(
+                &self.options.table_uri,
+                self.storage_options,
+                self.allow_http,
+            )?,
         };
         let object_store = Arc::new(DeltaObjectStore::new(&prefix, storage));
         Ok(object_store)
@@ -189,7 +203,11 @@ impl DeltaTableBuilder {
     pub fn build(self) -> Result<DeltaTable, DeltaTableError> {
         let (storage, prefix) = match self.options.storage_backend {
             Some(storage) => storage,
-            None => get_storage_backend(&self.options.table_uri, self.storage_options)?,
+            None => get_storage_backend(
+                &self.options.table_uri,
+                self.storage_options,
+                self.allow_http,
+            )?,
         };
         let config = DeltaTableConfig {
             require_tombstones: self.options.require_tombstones,
@@ -343,9 +361,10 @@ impl std::fmt::Display for StorageUrl {
 }
 
 /// Create a new storage backend used in Delta table
-pub fn get_storage_backend(
+fn get_storage_backend(
     table_uri: impl AsRef<str>,
     _options: Option<HashMap<String, String>>,
+    allow_http: Option<bool>,
 ) -> ObjectStoreResult<(Arc<DynObjectStore>, Path)> {
     let storage_url = StorageUrl::parse(table_uri)?;
     match storage_url.service_type() {
@@ -354,8 +373,11 @@ pub fn get_storage_backend(
         StorageService::S3 => {
             let url: &Url = storage_url.as_ref();
             let bucket_name = url.host_str().ok_or(ObjectStoreError::NotImplemented)?;
-            let builder = get_s3_builder_from_options(_options.unwrap_or_default())
+            let mut builder = get_s3_builder_from_options(_options.unwrap_or_default())
                 .with_bucket_name(bucket_name);
+            if let Some(allow) = allow_http {
+                builder = builder.with_allow_http(allow);
+            }
             Ok((Arc::new(builder.build()?), storage_url.prefix))
         }
         #[cfg(feature = "azure")]
@@ -363,16 +385,22 @@ pub fn get_storage_backend(
             let url: &Url = storage_url.as_ref();
             // TODO we have to differentiate ...
             let container_name = url.host_str().ok_or(ObjectStoreError::NotImplemented)?;
-            let builder = get_azure_builder_from_options(_options.unwrap_or_default())
+            let mut builder = get_azure_builder_from_options(_options.unwrap_or_default())
                 .with_container_name(container_name);
+            if let Some(allow) = allow_http {
+                builder = builder.with_allow_http(allow);
+            }
             Ok((Arc::new(builder.build()?), storage_url.prefix))
         }
         #[cfg(feature = "gcs")]
         StorageService::GCS => {
             let url: &Url = storage_url.as_ref();
             let bucket_name = url.host_str().ok_or(ObjectStoreError::NotImplemented)?;
-            let builder = get_gcp_builder_from_options(_options.unwrap_or_default())
+            let mut builder = get_gcp_builder_from_options(_options.unwrap_or_default())
                 .with_bucket_name(bucket_name);
+            if let Some(allow) = allow_http {
+                builder = builder.with_allow_http(allow);
+            }
             Ok((Arc::new(builder.build()?), storage_url.prefix))
         }
         _ => todo!(),

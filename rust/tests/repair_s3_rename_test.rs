@@ -6,8 +6,9 @@ mod s3_common;
 mod s3 {
 
     use crate::s3_common;
+    use bytes::Bytes;
     use deltalake::storage::s3::{S3StorageBackend, S3StorageOptions};
-    use deltalake::{ObjectStore, StorageBackend, StorageError};
+    use deltalake::{ObjectStore, StorageError};
     use object_store::path::Path;
     use object_store::Error as ObjectStoreError;
     use rusoto_core::credential::ChainProvider;
@@ -44,31 +45,40 @@ mod s3 {
         assert_eq!(format!("{:?}", err), "S3Generic(\"Lock is not released\")");
     }
 
-    async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), StorageError> {
+    async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), ObjectStoreError> {
         std::env::set_var("DYNAMO_LOCK_LEASE_DURATION", "2");
         s3_common::setup_dynamodb(path);
         s3_common::cleanup_dir_except(path, Vec::new()).await;
 
-        let src1 = format!("{}/src1", path);
-        let dst1 = format!("{}/dst1", path);
+        let root_path = Path::from(path);
+        let src1 = root_path.child("src1");
+        let dst1 = root_path.child("dst1");
 
-        let src2 = format!("{}/src2", path);
-        let dst2 = format!("{}/dst2", path);
+        let src2 = root_path.child("src2");
+        let dst2 = root_path.child("dst2");
 
         let (s3_1, w1_pause) = {
-            let copy = if pause_copy { Some(dst1.clone()) } else { None };
-            let del = if pause_copy { None } else { Some(src1.clone()) };
+            let copy = if pause_copy {
+                Some(to_string.clone())
+            } else {
+                None
+            };
+            let del = if pause_copy {
+                None
+            } else {
+                Some(src1.to_string())
+            };
             create_s3_backend("w1", copy, del)
         };
         let (s3_2, _) = create_s3_backend("w2", None, None);
 
-        s3_1.put_obj(&src1, b"test1").await.unwrap();
-        s3_2.put_obj(&src2, b"test2").await.unwrap();
+        s3_1.put(&src1, Bytes::from("test1")).await.unwrap();
+        s3_2.put(&src2, Bytes::from("test2")).await.unwrap();
 
-        let rename1 = rename(s3_1, src1.clone(), dst1.clone());
+        let rename1 = rename(s3_1, &src1, &dst1);
         // to ensure that first one is started actually first
         std::thread::sleep(Duration::from_secs(1));
-        let rename2 = rename(s3_2, src2.clone(), dst2.clone());
+        let rename2 = rename(s3_2, &src2, &dst2);
 
         rename2.await.unwrap().unwrap(); // ensure that worker 2 is ok
         resume(&w1_pause); // resume worker 1
@@ -76,8 +86,8 @@ mod s3 {
 
         let s3 = S3StorageBackend::new().unwrap();
         // but first we check that the rename is successful and not overwritten
-        async fn get_text(s3: &S3StorageBackend, path: &str) -> String {
-            std::str::from_utf8(&s3.get_obj(path).await.unwrap())
+        async fn get_text(s3: &S3StorageBackend, path: &Path) -> String {
+            std::str::from_utf8(&s3.get(path).await.unwrap().bytes().await.unwrap())
                 .unwrap()
                 .to_string()
         }
@@ -85,8 +95,8 @@ mod s3 {
         assert_eq!(get_text(&s3, &dst1).await, "test1");
         assert_eq!(get_text(&s3, &dst2).await, "test2");
 
-        async fn not_exists(s3: &S3StorageBackend, path: &str) -> bool {
-            if let Err(StorageError::NotFound) = s3.head_obj(path).await {
+        async fn not_exists(s3: &S3StorageBackend, path: &Path) -> bool {
+            if let Err(ObjectStoreError::NotFound { .. }) = s3.head(path).await {
                 true
             } else {
                 false
@@ -101,15 +111,13 @@ mod s3 {
 
     fn rename(
         s3: S3StorageBackend,
-        src: String,
-        dst: String,
+        src: &Path,
+        dst: &Path,
     ) -> JoinHandle<Result<(), ObjectStoreError>> {
         tokio::spawn(async move {
-            println!("rename({}, {}) started", &src, &dst);
-            let result = s3
-                .rename_if_not_exists(&Path::from(src), &Path::from(dst))
-                .await;
-            println!("rename({}, {}) finished", &src, &dst);
+            println!("rename({}, {}) started", src, dst);
+            let result = s3.rename_if_not_exists(src, dst).await;
+            println!("rename({}, {}) finished", src, dst);
             result
         })
     }
