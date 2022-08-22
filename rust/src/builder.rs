@@ -265,7 +265,7 @@ impl StorageUrl {
     ///
     /// ## Azure
     ///   * az://<container>/<path>
-    ///   * abfs[s]://<container>/<path>
+    ///   * abfs(s)://<container>/<path>
     pub fn parse(s: impl AsRef<str>) -> ObjectStoreResult<Self> {
         let s = s.as_ref();
 
