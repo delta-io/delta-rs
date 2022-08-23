@@ -288,185 +288,419 @@ impl ObjectStore for DeltaObjectStore {
 
 #[cfg(test)]
 mod tests {
+    use super::test_utils::{
+        copy_if_not_exists, list_with_delimiter, put_get_delete_list, rename_and_copy,
+        rename_if_not_exists,
+    };
+    use crate::test_utils::{IntegrationContext, StorageIntegration, TestResult};
+    use object_store::DynObjectStore;
+
+    #[cfg(feature = "azure", feature = "integration_test")]
+    #[tokio::test]
+    async fn test_object_store_azure() -> TestResult {
+        let integration = IntegrationContext::new(StorageIntegration::Microsoft)?;
+        test_object_store(integration.object_store().as_ref()).await?;
+        Ok(())
+    }
+
+    #[cfg(feature = "s3", feature = "integration_test")]
+    #[tokio::test]
+    async fn test_object_store_aws() -> TestResult {
+        let integration = IntegrationContext::new(StorageIntegration::Amazon)?;
+        test_object_store(integration.object_store().as_ref()).await?;
+        Ok(())
+    }
+
+    async fn test_object_store(storage: &DynObjectStore) -> TestResult {
+        put_get_delete_list(storage).await?;
+        list_with_delimiter(storage).await?;
+        rename_and_copy(storage).await?;
+        copy_if_not_exists(storage).await?;
+        rename_if_not_exists(storage).await?;
+        // get_nonexistent_object(storage, None).await?;
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod test_utils {
     use super::*;
-    use futures::TryStreamExt;
-    use tokio::fs;
+    use crate::test_utils::TestResult;
+    use object_store::{path::Path, Error as ObjectStoreError, Result as ObjectStoreResult};
 
-    fn create_local_test_store() -> (Arc<DeltaObjectStore>, tempdir::TempDir) {
-        let tmp_dir = tempdir::TempDir::new("").unwrap();
-        let store = crate::builder::DeltaTableBuilder::from_uri(tmp_dir.path().to_str().unwrap())
-            .build_storage()
-            .unwrap();
-        (store, tmp_dir)
+    pub(crate) async fn put_get_delete_list(storage: &DynObjectStore) -> TestResult {
+        let store_str = storage.to_string();
+
+        delete_fixtures(storage).await?;
+
+        let content_list = flatten_list_stream(storage, None).await?;
+        assert!(
+            content_list.is_empty(),
+            "Expected list to be empty; found: {:?}",
+            content_list
+        );
+
+        let location = Path::from("test_dir/test_file.json");
+
+        let data = Bytes::from("arbitrary data");
+        let expected_data = data.clone();
+        storage.put(&location, data).await?;
+
+        let root = Path::from("/");
+
+        // List everything
+        let content_list = flatten_list_stream(storage, None).await?;
+        assert_eq!(content_list, &[location.clone()]);
+
+        // Should behave the same as no prefix
+        let content_list = flatten_list_stream(storage, Some(&root)).await?;
+        assert_eq!(content_list, &[location.clone()]);
+
+        // List with delimiter
+        let result = storage.list_with_delimiter(None).await?;
+        assert_eq!(&result.objects, &[]);
+        assert_eq!(result.common_prefixes.len(), 1);
+        assert_eq!(result.common_prefixes[0], Path::from("test_dir"));
+
+        // Should behave the same as no prefix
+        let result = storage.list_with_delimiter(Some(&root)).await?;
+        assert!(result.objects.is_empty());
+        assert_eq!(result.common_prefixes.len(), 1);
+        assert_eq!(result.common_prefixes[0], Path::from("test_dir"));
+
+        // List everything starting with a prefix that should return results
+        let prefix = Path::from("test_dir");
+        let content_list = flatten_list_stream(storage, Some(&prefix)).await?;
+        assert_eq!(content_list, &[location.clone()]);
+
+        // List everything starting with a prefix that shouldn't return results
+        let prefix = Path::from("something");
+        let content_list = flatten_list_stream(storage, Some(&prefix)).await?;
+        assert!(content_list.is_empty());
+
+        let read_data = storage.get(&location).await?.bytes().await?;
+        assert_eq!(&*read_data, expected_data);
+
+        // Test range request
+        let range = 3..7;
+        let range_result = storage.get_range(&location, range.clone()).await;
+
+        let out_of_range = 200..300;
+        let out_of_range_result = storage.get_range(&location, out_of_range).await;
+
+        if store_str.starts_with("MicrosoftAzureEmulator") {
+            // Azurite doesn't support x-ms-range-get-content-crc64 set by Azure SDK
+            // https://github.com/Azure/Azurite/issues/444
+            let err = range_result.unwrap_err().to_string();
+            assert!(err.contains("x-ms-range-get-content-crc64 header or parameter is not supported in Azurite strict mode"), "{}", err);
+
+            let err = out_of_range_result.unwrap_err().to_string();
+            assert!(err.contains("x-ms-range-get-content-crc64 header or parameter is not supported in Azurite strict mode"), "{}", err);
+        } else {
+            let bytes = range_result?;
+            assert_eq!(bytes, expected_data.slice(range));
+
+            // Should be a non-fatal error
+            out_of_range_result.unwrap_err();
+
+            let ranges = vec![0..1, 2..3, 0..5];
+            let bytes = storage.get_ranges(&location, &ranges).await?;
+            for (range, bytes) in ranges.iter().zip(bytes) {
+                assert_eq!(bytes, expected_data.slice(range.clone()))
+            }
+        }
+
+        let head = storage.head(&location).await?;
+        assert_eq!(head.size, expected_data.len());
+
+        storage.delete(&location).await?;
+
+        let content_list = flatten_list_stream(storage, None).await?;
+        assert!(content_list.is_empty());
+
+        let err = storage.get(&location).await.unwrap_err();
+        assert!(matches!(err, ObjectStoreError::NotFound { .. }), "{}", err);
+
+        let err = storage.head(&location).await.unwrap_err();
+        assert!(matches!(err, ObjectStoreError::NotFound { .. }), "{}", err);
+
+        // Test handling of paths containing an encoded delimiter
+
+        let file_with_delimiter = Path::from_iter(["a", "b/c", "foo.file"]);
+        storage
+            .put(&file_with_delimiter, Bytes::from("arbitrary"))
+            .await?;
+
+        let files = flatten_list_stream(storage, None).await?;
+        assert_eq!(files, vec![file_with_delimiter.clone()]);
+
+        let files = flatten_list_stream(storage, Some(&Path::from("a/b"))).await?;
+        assert!(files.is_empty());
+
+        let files = storage
+            .list_with_delimiter(Some(&Path::from("a/b")))
+            .await?;
+        assert!(files.common_prefixes.is_empty());
+        assert!(files.objects.is_empty());
+
+        let files = storage.list_with_delimiter(Some(&Path::from("a"))).await?;
+        assert_eq!(files.common_prefixes, vec![Path::from_iter(["a", "b/c"])]);
+        assert!(files.objects.is_empty());
+
+        let files = storage
+            .list_with_delimiter(Some(&Path::from_iter(["a", "b/c"])))
+            .await?;
+        assert!(files.common_prefixes.is_empty());
+        assert_eq!(files.objects.len(), 1);
+        assert_eq!(files.objects[0].location, file_with_delimiter);
+
+        storage.delete(&file_with_delimiter).await?;
+
+        // Test handling of paths containing non-ASCII characters, e.g. emoji
+
+        let emoji_prefix = Path::from("🙀");
+        let emoji_file = Path::from("🙀/😀.parquet");
+        storage.put(&emoji_file, Bytes::from("arbitrary")).await?;
+
+        storage.head(&emoji_file).await?;
+        storage.get(&emoji_file).await?.bytes().await?;
+
+        let files = flatten_list_stream(storage, Some(&emoji_prefix)).await?;
+
+        assert_eq!(files, vec![emoji_file.clone()]);
+
+        let dst = Path::from("foo.parquet");
+        storage.copy(&emoji_file, &dst).await?;
+        let mut files = flatten_list_stream(storage, None).await?;
+        files.sort_unstable();
+        assert_eq!(files, vec![emoji_file.clone(), dst.clone()]);
+
+        storage.delete(&emoji_file).await?;
+        storage.delete(&dst).await?;
+        let files = flatten_list_stream(storage, Some(&emoji_prefix)).await?;
+        assert!(files.is_empty());
+
+        // Test handling of paths containing percent-encoded sequences
+
+        // "HELLO" percent encoded
+        let hello_prefix = Path::parse("%48%45%4C%4C%4F")?;
+        let path = hello_prefix.child("foo.parquet");
+
+        storage.put(&path, Bytes::from(vec![0, 1])).await?;
+        let files = flatten_list_stream(storage, Some(&hello_prefix)).await?;
+        assert_eq!(files, vec![path.clone()]);
+
+        // Cannot list by decoded representation
+        let files = flatten_list_stream(storage, Some(&Path::from("HELLO"))).await?;
+        assert!(files.is_empty());
+
+        // Cannot access by decoded representation
+        let err = storage
+            .head(&Path::from("HELLO/foo.parquet"))
+            .await
+            .unwrap_err();
+        assert!(matches!(err, ObjectStoreError::NotFound { .. }), "{}", err);
+
+        storage.delete(&path).await?;
+
+        // Can also write non-percent encoded sequences
+        let path = Path::parse("%Q.parquet")?;
+        storage.put(&path, Bytes::from(vec![0, 1])).await?;
+
+        let files = flatten_list_stream(storage, None).await?;
+        assert_eq!(files, vec![path.clone()]);
+
+        storage.delete(&path).await?;
+        Ok(())
     }
 
-    #[tokio::test]
-    async fn test_put() {
-        let (object_store, tmp_dir) = create_local_test_store();
+    pub(crate) async fn list_with_delimiter(storage: &DynObjectStore) -> TestResult {
+        delete_fixtures(storage).await?;
 
-        // put object
-        let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
-        let path1 = Path::from("tmp_file1");
-        object_store.put(&path1, bytes::Bytes::new()).await.unwrap();
-        assert!(fs::metadata(tmp_file_path1).await.is_ok());
+        // ==================== check: store is empty ====================
+        let content_list = flatten_list_stream(storage, None).await?;
+        assert!(content_list.is_empty());
 
-        let tmp_file_path2 = tmp_dir.path().join("tmp_dir1").join("file");
-        let path2 = Path::from("tmp_dir1/file");
-        object_store.put(&path2, bytes::Bytes::new()).await.unwrap();
-        assert!(fs::metadata(tmp_file_path2).await.is_ok())
+        // ==================== do: create files ====================
+        let data = Bytes::from("arbitrary data");
+
+        let files: Vec<_> = [
+            "test_file",
+            "mydb/wb/000/000/000.segment",
+            "mydb/wb/000/000/001.segment",
+            "mydb/wb/000/000/002.segment",
+            "mydb/wb/001/001/000.segment",
+            "mydb/wb/foo.json",
+            "mydb/wbwbwb/111/222/333.segment",
+            "mydb/data/whatevs",
+        ]
+        .iter()
+        .map(|&s| Path::from(s))
+        .collect();
+
+        for f in &files {
+            let data = data.clone();
+            storage.put(f, data).await?;
+        }
+
+        // ==================== check: prefix-list `mydb/wb` (directory) ====================
+        let prefix = Path::from("mydb/wb");
+
+        let expected_000 = Path::from("mydb/wb/000");
+        let expected_001 = Path::from("mydb/wb/001");
+        let expected_location = Path::from("mydb/wb/foo.json");
+
+        let result = storage.list_with_delimiter(Some(&prefix)).await?;
+
+        assert_eq!(result.common_prefixes, vec![expected_000, expected_001]);
+        assert_eq!(result.objects.len(), 1);
+
+        let object = &result.objects[0];
+
+        assert_eq!(object.location, expected_location);
+        assert_eq!(object.size, data.len());
+
+        // ==================== check: prefix-list `mydb/wb/000/000/001` (partial filename doesn't match) ====================
+        let prefix = Path::from("mydb/wb/000/000/001");
+
+        let result = storage.list_with_delimiter(Some(&prefix)).await?;
+        assert!(result.common_prefixes.is_empty());
+        assert_eq!(result.objects.len(), 0);
+
+        // ==================== check: prefix-list `not_there` (non-existing prefix) ====================
+        let prefix = Path::from("not_there");
+
+        let result = storage.list_with_delimiter(Some(&prefix)).await?;
+        assert!(result.common_prefixes.is_empty());
+        assert!(result.objects.is_empty());
+
+        // ==================== do: remove all files ====================
+        for f in &files {
+            storage.delete(f).await?;
+        }
+
+        // ==================== check: store is empty ====================
+        let content_list = flatten_list_stream(storage, None).await?;
+        assert!(content_list.is_empty());
+        Ok(())
     }
 
-    #[tokio::test]
-    async fn test_head() {
-        let (object_store, _tmp_dir) = create_local_test_store();
+    pub(crate) async fn rename_and_copy(storage: &DynObjectStore) -> TestResult {
+        // Create two objects
+        let path1 = Path::from("test1");
+        let path2 = Path::from("test2");
+        let contents1 = Bytes::from("cats");
+        let contents2 = Bytes::from("dogs");
 
-        // existing file
-        let path1 = Path::from("tmp_file1");
-        object_store.put(&path1, bytes::Bytes::new()).await.unwrap();
-        let meta = object_store.head(&path1).await;
-        assert!(meta.is_ok());
+        // copy() make both objects identical
+        storage.put(&path1, contents1.clone()).await?;
+        storage.put(&path2, contents2.clone()).await?;
+        storage.copy(&path1, &path2).await?;
+        let new_contents = storage.get(&path2).await?.bytes().await?;
+        assert_eq!(&new_contents, &contents1);
 
-        // nonexistent file
-        let path2 = Path::from("nonexistent");
-        let meta = object_store.head(&path2).await;
-        assert!(meta.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_get() {
-        let (object_store, _tmp_dir) = create_local_test_store();
-
-        // existing file
-        let path1 = Path::from("tmp_file1");
-        let data = bytes::Bytes::from("random data");
-        object_store.put(&path1, data.clone()).await.unwrap();
-        let data_get = object_store
-            .get(&path1)
-            .await
-            .unwrap()
-            .bytes()
-            .await
-            .unwrap();
-        assert_eq!(data, data_get);
-    }
-
-    #[tokio::test]
-    async fn test_delete() {
-        let (object_store, tmp_dir) = create_local_test_store();
-
-        let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
-
-        // put object
-        let path1 = Path::from("tmp_file1");
-        object_store.put(&path1, bytes::Bytes::new()).await.unwrap();
-        assert!(fs::metadata(tmp_file_path1.clone()).await.is_ok());
-
-        // delete object
-        object_store.delete(&path1).await.unwrap();
-        assert!(fs::metadata(tmp_file_path1).await.is_err());
-    }
-
-    #[tokio::test]
-    async fn test_delete_batch() {
-        let (object_store, tmp_dir) = create_local_test_store();
-
-        let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
-        let tmp_file_path2 = tmp_dir.path().join("tmp_file2");
-
-        // put object
-        let path1 = Path::from("tmp_file1");
-        let path2 = Path::from("tmp_file2");
-        object_store.put(&path1, bytes::Bytes::new()).await.unwrap();
-        object_store.put(&path2, bytes::Bytes::new()).await.unwrap();
-        assert!(fs::metadata(tmp_file_path1.clone()).await.is_ok());
-        assert!(fs::metadata(tmp_file_path2.clone()).await.is_ok());
-
-        // delete objects
-        object_store.delete_batch(&[path1, path2]).await.unwrap();
-        assert!(fs::metadata(tmp_file_path1).await.is_err());
-        assert!(fs::metadata(tmp_file_path2).await.is_err())
-    }
-
-    #[tokio::test]
-    async fn test_list() {
-        let (object_store, _tmp_dir) = create_local_test_store();
-
-        let path1 = Path::from("tmp_file1");
-        let path2 = Path::from("tmp_file2");
-        object_store.put(&path1, bytes::Bytes::new()).await.unwrap();
-        object_store.put(&path2, bytes::Bytes::new()).await.unwrap();
-
-        let objs = object_store
-            .list(None)
-            .await
-            .unwrap()
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-        assert_eq!(objs.len(), 2);
-
-        let path1 = Path::from("prefix/tmp_file1");
-        let path2 = Path::from("prefix/tmp_file2");
-        object_store.put(&path1, bytes::Bytes::new()).await.unwrap();
-        object_store.put(&path2, bytes::Bytes::new()).await.unwrap();
-
-        let objs = object_store
-            .list(None)
-            .await
-            .unwrap()
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-        assert_eq!(objs.len(), 4);
-
-        let objs = object_store
-            .list(Some(&Path::from("prefix")))
-            .await
-            .unwrap()
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-        assert_eq!(objs.len(), 2)
-    }
-
-    #[tokio::test]
-    async fn test_list_prefix() {
-        let (object_store, _tmp_dir) = create_local_test_store();
-
-        let path1 = Path::from("_delta_log/tmp_file1");
-        object_store.put(&path1, bytes::Bytes::new()).await.unwrap();
-
-        let objs = object_store
-            .list(None)
-            .await
-            .unwrap()
-            .try_collect::<Vec<_>>()
-            .await
-            .unwrap();
-        assert_eq!(objs[0].location, path1)
-    }
-
-    #[tokio::test]
-    async fn test_rename_if_not_exists() {
-        let (object_store, tmp_dir) = create_local_test_store();
-
-        let tmp_file_path1 = tmp_dir.path().join("tmp_file1");
-        let tmp_file_path2 = tmp_dir.path().join("tmp_file2");
-
-        let path1 = Path::from("tmp_file1");
-        let path2 = Path::from("tmp_file2");
-        object_store.put(&path1, bytes::Bytes::new()).await.unwrap();
-
-        // delete objects
-        let result = object_store.rename_if_not_exists(&path1, &path2).await;
-        assert!(result.is_ok());
-        assert!(fs::metadata(tmp_file_path1.clone()).await.is_err());
-        assert!(fs::metadata(tmp_file_path2.clone()).await.is_ok());
-
-        object_store.put(&path1, bytes::Bytes::new()).await.unwrap();
-        let result = object_store.rename_if_not_exists(&path1, &path2).await;
+        // rename() copies contents and deletes original
+        storage.put(&path1, contents1.clone()).await?;
+        storage.put(&path2, contents2.clone()).await?;
+        storage.rename(&path1, &path2).await?;
+        let new_contents = storage.get(&path2).await?.bytes().await?;
+        assert_eq!(&new_contents, &contents1);
+        let result = storage.get(&path1).await;
         assert!(result.is_err());
-        assert!(fs::metadata(tmp_file_path1).await.is_ok());
-        assert!(fs::metadata(tmp_file_path2).await.is_ok());
+        assert!(matches!(
+            result.unwrap_err(),
+            ObjectStoreError::NotFound { .. }
+        ));
+
+        // Clean up
+        storage.delete(&path2).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn copy_if_not_exists(storage: &DynObjectStore) -> TestResult {
+        // Create two objects
+        let path1 = Path::from("test1");
+        let path2 = Path::from("test2");
+        let contents1 = Bytes::from("cats");
+        let contents2 = Bytes::from("dogs");
+
+        // copy_if_not_exists() errors if destination already exists
+        storage.put(&path1, contents1.clone()).await?;
+        storage.put(&path2, contents2.clone()).await?;
+        let result = storage.copy_if_not_exists(&path1, &path2).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ObjectStoreError::AlreadyExists { .. }
+        ));
+
+        // copy_if_not_exists() copies contents and allows deleting original
+        storage.delete(&path2).await?;
+        storage.copy_if_not_exists(&path1, &path2).await?;
+        storage.delete(&path1).await?;
+        let new_contents = storage.get(&path2).await?.bytes().await?;
+        assert_eq!(&new_contents, &contents1);
+        let result = storage.get(&path1).await;
+        assert!(result.is_err());
+        assert!(matches!(
+            result.unwrap_err(),
+            ObjectStoreError::NotFound { .. }
+        ));
+
+        // Clean up
+        storage.delete(&path2).await?;
+        Ok(())
+    }
+
+    pub(crate) async fn rename_if_not_exists(storage: &DynObjectStore) -> TestResult {
+        let path1 = Path::from("tmp_file1");
+        let path2 = Path::from("tmp_file2");
+        storage.put(&path1, bytes::Bytes::new()).await?;
+
+        // delete objects
+        let result = storage.rename_if_not_exists(&path1, &path2).await;
+        assert!(result.is_ok());
+        assert!(storage.head(&path1).await.is_err());
+        assert!(storage.head(&path2).await.is_ok());
+
+        storage.put(&path1, bytes::Bytes::new()).await?;
+        let result = storage.rename_if_not_exists(&path1, &path2).await;
+        assert!(result.is_err());
+        assert!(storage.head(&path1).await.is_ok());
+        assert!(storage.head(&path2).await.is_ok());
+        Ok(())
+    }
+
+    // pub(crate) async fn get_nonexistent_object(
+    //     storage: &DynObjectStore,
+    //     location: Option<Path>,
+    // ) -> ObjectStoreResult<Bytes> {
+    //     let location = location.unwrap_or_else(|| Path::from("this_file_should_not_exist"));
+
+    //     let err = storage.head(&location).await.unwrap_err();
+    //     assert!(matches!(err, ObjectStoreError::NotFound { .. }));
+
+    //     storage.get(&location).await?.bytes().await
+    // }
+
+    async fn delete_fixtures(storage: &DynObjectStore) -> TestResult {
+        let paths = flatten_list_stream(storage, None).await?;
+
+        for f in &paths {
+            let _ = storage.delete(f).await?;
+        }
+        Ok(())
+    }
+
+    async fn flatten_list_stream(
+        storage: &DynObjectStore,
+        prefix: Option<&Path>,
+    ) -> ObjectStoreResult<Vec<Path>> {
+        storage
+            .list(prefix)
+            .await?
+            .map_ok(|meta| meta.location)
+            .try_collect::<Vec<Path>>()
+            .await
     }
 }

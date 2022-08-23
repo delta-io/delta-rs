@@ -171,10 +171,10 @@ impl ObjectStore for FileStorageBackend {
 
     async fn copy_if_not_exists(
         &self,
-        _from: &ObjectStorePath,
-        _to: &ObjectStorePath,
+        from: &ObjectStorePath,
+        to: &ObjectStorePath,
     ) -> ObjectStoreResult<()> {
-        todo!()
+        self.inner.copy_if_not_exists(from, to).await
     }
 
     async fn rename_if_not_exists(
@@ -242,7 +242,10 @@ mod imp {
                 }
             })?;
 
-            std::fs::remove_file(from_path)?;
+            std::fs::remove_file(from_path).map_err(|err| LocalFileSystemError::Generic {
+                store: STORE_NAME,
+                source: Box::new(err),
+            })?;
 
             Ok(())
         })

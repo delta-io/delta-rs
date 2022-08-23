@@ -12,13 +12,13 @@ use maplit::hashmap;
 use object_store::path::Path;
 use serial_test::serial;
 
-#[cfg(feature = "azure")]
+#[cfg(feature = "azure", feature = "integration_test")]
 #[serial]
 async fn test_read_tables_azure() -> TestResult {
     Ok(read_tables(StorageIntegration::Microsoft).await?)
 }
 
-#[cfg(feature = "s3")]
+#[cfg(feature = "s3", feature = "integration_test")]
 #[tokio::test]
 #[serial]
 async fn test_read_tables_aws() -> TestResult {
@@ -117,76 +117,4 @@ async fn read_golden(integration: &IntegrationContext) -> TestResult {
     assert_eq!(table.get_min_reader_version(), 1);
 
     Ok(())
-}
-
-#[tokio::test]
-#[serial]
-async fn test_s3_head_obj() {
-    setup();
-
-    let key = "s3://deltars/";
-    let backend = DeltaTableBuilder::from_uri(key)
-        .with_allow_http(true)
-        .build_storage()
-        .unwrap()
-        .storage_backend();
-    let err = backend.head(&Path::from("missing")).await.err().unwrap();
-
-    assert!(matches!(err, ObjectStoreError::NotFound { .. }));
-
-    let path = Path::from("head_test");
-    let data = Bytes::from("Hello world!");
-    backend.put(&path, data.clone()).await.unwrap();
-    let head_data = backend.head(&path).await.unwrap();
-    assert_eq!(head_data.size, data.len());
-    assert_eq!(head_data.location, path);
-    assert!(head_data.last_modified > (chrono::offset::Utc::now() - chrono::Duration::seconds(30)));
-}
-
-#[tokio::test]
-#[serial]
-async fn test_s3_delete_obj() {
-    setup();
-
-    let root = "s3://deltars/";
-    let path = Path::from("delete.snappy.parquet");
-    let backend = DeltaTableBuilder::from_uri(root)
-        .with_allow_http(true)
-        .build_storage()
-        .unwrap()
-        .storage_backend();
-    backend.put(&path, Bytes::from("")).await.unwrap();
-    backend.delete(&path).await.unwrap();
-    let err = backend.head(&path).await.err().unwrap();
-
-    assert!(matches!(err, ObjectStoreError::NotFound { .. }));
-}
-
-// TODO batch delete not yet supported in object store.
-#[ignore]
-#[tokio::test]
-#[serial]
-async fn test_s3_delete_objs() {
-    setup();
-
-    let root = "s3://deltars/";
-    let path1 = Path::from("delete1.snappy.parquet");
-    let path2 = Path::from("delete2.snappy.parquet");
-    let backend = DeltaTableBuilder::from_uri(root)
-        .with_allow_http(true)
-        .build_storage()
-        .unwrap()
-        .storage_backend();
-
-    backend.put(&path1, Bytes::from("")).await.unwrap();
-    backend.put(&path2, Bytes::from("")).await.unwrap();
-    // backend
-    //     .delete_batch(&[path1.to_string(), path2.to_string()])
-    //     .await
-    //     .unwrap();
-    // let err1 = backend.head_obj(path1).await.err().unwrap();
-    // let err2 = backend.head_obj(path2).await.err().unwrap();
-    //
-    // assert!(matches!(err1, StorageError::NotFound));
-    // assert!(matches!(err2, StorageError::NotFound));
 }
