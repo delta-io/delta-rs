@@ -833,9 +833,14 @@ impl StorageBackend for S3StorageBackend {
         let lock_client = match self.s3_lock_client {
             Some(ref lock_client) => lock_client,
             None => {
-                return Err(StorageError::S3Generic(
-                    "dynamodb locking is not enabled".to_string(),
-                ))
+                /// instead of throw exception, rename in unsafe way. The concurrency control should be done in app side.
+                log::info!(
+                            "Rename from `{}` to {} without s3 lock",
+                            name,
+                            record,
+                        );
+                self.unsafe_rename_obj(src, dst).await?;
+                return Ok(());
             }
         };
 
