@@ -568,62 +568,7 @@ pub fn get_gcp_builder_from_options(options: HashMap<String, String>) -> GoogleC
     builder
 }
 
-#[cfg(any(feature = "azure", feature = "gcs", feature = "s3"))]
 pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
     map.get(key)
         .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn test_load_simple_local() {
-        let table = DeltaTableBuilder::from_uri("./tests/data/simple_table")
-            .load()
-            .await
-            .unwrap();
-
-        assert_eq!(table.version(), 4)
-    }
-
-    #[cfg(all(feature = "azure", feature = "integration_test"))]
-    #[tokio::test]
-    async fn test_load_simple_azure() {
-        dotenv::dotenv().ok();
-
-        let table = DeltaTableBuilder::from_uri("az://deltars/simple_table")
-            .load()
-            .await
-            .unwrap();
-
-        assert_eq!(table.version(), 4)
-    }
-
-    #[cfg(all(feature = "s3", feature = "integration_test"))]
-    #[tokio::test]
-    async fn test_load_simple_aws() {
-        dotenv::dotenv().ok();
-
-        let table = DeltaTableBuilder::from_uri("s3://deltars/simple_table")
-            .load()
-            .await
-            .unwrap();
-
-        assert_eq!(table.version(), 4)
-    }
-
-    #[cfg(all(feature = "gcs", feature = "integration_test"))]
-    #[tokio::test]
-    async fn test_load_simple_gcp() {
-        dotenv::dotenv().ok();
-
-        let table = DeltaTableBuilder::from_uri("gs://deltars/simple_table")
-            .load()
-            .await
-            .unwrap();
-
-        assert_eq!(table.version(), 4)
-    }
 }
