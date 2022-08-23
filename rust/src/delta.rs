@@ -7,7 +7,6 @@ use super::action;
 use super::action::{Action, DeltaOperation};
 use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
-use super::storage::StorageError;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
 pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
@@ -80,13 +79,6 @@ pub enum DeltaTableError {
         /// Load checkpoint error details returned when loading checkpoint failed.
         #[from]
         source: LoadCheckpointError,
-    },
-    /// Error returned when reading the delta log object failed.
-    #[error("Failed to read delta log object: {}", .source)]
-    StorageError {
-        /// Storage error details when reading the delta log object failed.
-        #[from]
-        source: StorageError,
     },
     /// Error returned when reading the delta log object failed.
     #[error("Failed to read delta log object: {}", .source)]

@@ -396,11 +396,8 @@ fn get_storage_backend(
         StorageService::GCS => {
             let url: &Url = storage_url.as_ref();
             let bucket_name = url.host_str().ok_or(ObjectStoreError::NotImplemented)?;
-            let mut builder = get_gcp_builder_from_options(_options.unwrap_or_default())
+            let builder = get_gcp_builder_from_options(_options.unwrap_or_default())
                 .with_bucket_name(bucket_name);
-            if let Some(allow) = allow_http {
-                builder = builder.with_allow_http(allow);
-            }
             Ok((Arc::new(builder.build()?), storage_url.prefix))
         }
         _ => todo!(),

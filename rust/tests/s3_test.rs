@@ -12,12 +12,13 @@ use maplit::hashmap;
 use object_store::path::Path;
 use serial_test::serial;
 
-#[tokio::test]
+#[cfg(feature = "azure")]
 #[serial]
 async fn test_read_tables_azure() -> TestResult {
     Ok(read_tables(StorageIntegration::Microsoft).await?)
 }
 
+#[cfg(feature = "s3")]
 #[tokio::test]
 #[serial]
 async fn test_read_tables_aws() -> TestResult {

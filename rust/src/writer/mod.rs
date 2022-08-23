@@ -12,7 +12,7 @@ pub mod utils;
 use crate::{
     action::{Action, Add, ColumnCountStat, Stats},
     delta::DeltaTable,
-    DeltaDataTypeVersion, DeltaTableError, StorageError,
+    DeltaDataTypeVersion, DeltaTableError,
 };
 use arrow::{datatypes::SchemaRef, datatypes::*, error::ArrowError};
 use async_trait::async_trait;
@@ -62,14 +62,6 @@ pub enum DeltaWriterError {
     StatsSerializationFailed {
         /// The stats object that failed serialization.
         stats: Stats,
-    },
-
-    /// deltalake storage backend returned an error.
-    #[error("Storage interaction failed: {source}")]
-    Storage {
-        /// The wrapped [`StorageError`]
-        #[from]
-        source: StorageError,
     },
 
     /// underlying object store returned an error.

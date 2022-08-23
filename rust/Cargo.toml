@@ -9,31 +9,26 @@ description = "Native Delta Lake implementation in Rust"
 edition = "2021"
 
 [dependencies]
-libc = ">=0.2.90, <1"
-errno = "0.2"
-thiserror = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
-# tokio-stream = { version = "0", features = ["fs"] }
-futures = "0.3"
+async-trait = "0.1"
 bytes = "1"
-log = "0"
-regex = "1"
 chrono = "0.4.22"
-uuid = { version = "1", features = ["serde", "v4"] }
+cfg-if = "1"
+errno = "0.2"
+futures = "0.3"
 lazy_static = "1"
-percent-encoding = "2"
+log = "0"
+libc = ">=0.2.90, <1"
 num-bigint = "0.4"
 num-traits = "0.2.15"
 object_store = "0.4.0"
+percent-encoding = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
+regex = "1"
+uuid = { version = "1", features = ["serde", "v4"] }
 url = "2.2"
-
-# HTTP Client
-# reqwest = { version = "0.11", default-features = false, features = [
-#     "rustls-tls",
-#     "stream",
-# ], optional = true }
 
 # S3
 rusoto_core = { version = "0.48", default-features = false, optional = true }
@@ -48,13 +43,9 @@ rusoto_glue = { version = "0.48", default-features = false, optional = true }
 
 # High-level writer
 parquet-format = "~4.0.0"
-
 arrow = "20"
 parquet = "20"
 
-cfg-if = "1"
-async-trait = "0.1"
-walkdir = "2"
 
 # NOTE: disable rust-dataframe integration since it currently doesn't have a
 # version published in crates.io

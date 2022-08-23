@@ -8,7 +8,7 @@ mod s3 {
     use crate::s3_common;
     use bytes::Bytes;
     use deltalake::storage::s3::{S3StorageBackend, S3StorageOptions};
-    use deltalake::{ObjectStore, StorageError};
+    use deltalake::ObjectStore;
     use object_store::path::Path;
     use object_store::Error as ObjectStoreError;
     use rusoto_core::credential::ChainProvider;

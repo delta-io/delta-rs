@@ -6,7 +6,6 @@ use crate::{
     builder::DeltaTableBuilder,
     open_table,
     operations::{create::CreateCommand, transaction::DeltaTransactionPlan, write::WriteCommand},
-    storage::StorageError,
     writer::{record_batch::divide_by_partition_values, utils::PartitionPath, DeltaWriterError},
     DeltaTable, DeltaTableError, DeltaTableMetaData,
 };
@@ -60,14 +59,6 @@ pub enum DeltaCommandError {
         /// Raw internal DeltaWriterError
         #[from]
         source: DeltaWriterError,
-    },
-
-    /// Error returned when errors occur in underlying storage instance
-    #[error("Storage error: {} ({:?})", source, source)]
-    Storage {
-        /// Raw internal StorageError
-        #[from]
-        source: StorageError,
     },
 
     /// Error returned when errors occur in Arrow
