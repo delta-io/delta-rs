@@ -287,6 +287,7 @@ impl ObjectStore for DeltaObjectStore {
 }
 
 #[cfg(test)]
+#[cfg(feature = "integration_test")]
 mod tests {
     use super::test_utils::{
         copy_if_not_exists, list_with_delimiter, put_get_delete_list, rename_and_copy,
@@ -295,7 +296,6 @@ mod tests {
     use crate::test_utils::{IntegrationContext, StorageIntegration, TestResult};
     use object_store::DynObjectStore;
 
-    #[cfg(feature = "integration_test")]
     #[tokio::test]
     async fn test_object_store_local() -> TestResult {
         let integration = IntegrationContext::new(StorageIntegration::Local)?;
@@ -331,6 +331,7 @@ mod tests {
 }
 
 #[cfg(test)]
+#[cfg(feature = "integration_test")]
 mod test_utils {
     use super::*;
     use crate::test_utils::TestResult;

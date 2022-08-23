@@ -105,6 +105,7 @@ impl DeltaTableLoadOptions {
 pub struct DeltaTableBuilder {
     options: DeltaTableLoadOptions,
     storage_options: Option<HashMap<String, String>>,
+    #[allow(unused_variables)]
     allow_http: Option<bool>,
 }
 

@@ -231,7 +231,7 @@ mod imp {
                     }
                 } else if err.kind() == std::io::ErrorKind::NotFound {
                     LocalFileSystemError::NotFound {
-                        path: from_path.into(),
+                        path: from_path.clone().into(),
                         source: Box::new(err),
                     }
                 } else {
