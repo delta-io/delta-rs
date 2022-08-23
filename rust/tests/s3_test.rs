@@ -1,9 +1,10 @@
+#![cfg(feature = "integration_test")]
 #![cfg(feature = "s3")]
 mod s3_common;
 
 use crate::s3_common::setup;
 use bytes::Bytes;
-use deltalake::s3_storage_options;
+use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
 use deltalake::DeltaTableBuilder;
 use deltalake::ObjectStoreError;
 use dynamodb_lock::dynamo_lock_options;
@@ -13,15 +14,33 @@ use serial_test::serial;
 
 #[tokio::test]
 #[serial]
-async fn test_s3_simple() {
-    setup();
+async fn test_read_tables_azure() -> TestResult {
+    Ok(read_tables(StorageIntegration::Microsoft).await?)
+}
 
-    // Use the manual options API so we have some basic integrationcoverage.
-    let table_uri = "s3://deltars/simple";
+#[tokio::test]
+#[serial]
+async fn test_read_tables_aws() -> TestResult {
+    Ok(read_tables(StorageIntegration::Amazon).await?)
+}
+
+async fn read_tables(storage: StorageIntegration) -> TestResult {
+    let context =
+        IntegrationContext::new_with_tables(storage, [TestTables::Simple, TestTables::Golden])?;
+
+    read_simple_table(&context).await?;
+    read_simple_table_with_version(&context).await?;
+    read_golden(&context).await?;
+
+    Ok(())
+}
+
+async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
+    let table_uri = integration.uri_for_table(TestTables::Simple);
+    // the s3 options don't hurt us for other integrations ...
     let table = DeltaTableBuilder::from_uri(table_uri).with_allow_http(true).with_storage_options(hashmap! {
-        s3_storage_options::AWS_REGION.to_string() => "us-east-1".to_string(),
         dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "s3::deltars/simple".to_string(),
-    }).load().await.unwrap();
+    }).load().await?;
 
     assert_eq!(table.version(), 4);
     assert_eq!(table.get_min_writer_version(), 2);
@@ -44,19 +63,18 @@ async fn test_s3_simple() {
         data_change: true,
         ..Default::default()
     }));
+
+    Ok(())
 }
 
-#[tokio::test]
-#[serial]
-async fn test_s3_simple_with_version() {
-    setup();
+async fn read_simple_table_with_version(integration: &IntegrationContext) -> TestResult {
+    let table_uri = integration.uri_for_table(TestTables::Simple);
 
-    let table = DeltaTableBuilder::from_uri("s3://deltars/simple/")
+    let table = DeltaTableBuilder::from_uri(table_uri)
         .with_allow_http(true)
         .with_version(3)
         .load()
-        .await
-        .unwrap();
+        .await?;
 
     assert_eq!(table.version(), 3);
     assert_eq!(table.get_min_writer_version(), 2);
@@ -80,30 +98,14 @@ async fn test_s3_simple_with_version() {
         data_change: true,
         ..Default::default()
     }));
+
+    Ok(())
 }
 
-#[tokio::test]
-#[serial]
-async fn test_s3_simple_with_trailing_slash() {
-    setup();
+async fn read_golden(integration: &IntegrationContext) -> TestResult {
+    let table_uri = integration.uri_for_table(TestTables::Golden);
 
-    let table = DeltaTableBuilder::from_uri("s3://deltars/simple/")
-        .with_allow_http(true)
-        .load()
-        .await
-        .unwrap();
-
-    assert_eq!(table.version(), 4);
-    assert_eq!(table.get_min_writer_version(), 2);
-    assert_eq!(table.get_min_reader_version(), 1);
-}
-
-#[tokio::test]
-#[serial]
-async fn test_s3_simple_golden() {
-    setup();
-
-    let table = DeltaTableBuilder::from_uri("s3://deltars/golden/data-reader-array-primitives")
+    let table = DeltaTableBuilder::from_uri(table_uri)
         .with_allow_http(true)
         .load()
         .await
@@ -112,6 +114,8 @@ async fn test_s3_simple_golden() {
     assert_eq!(table.version(), 0);
     assert_eq!(table.get_min_writer_version(), 2);
     assert_eq!(table.get_min_reader_version(), 1);
+
+    Ok(())
 }
 
 #[tokio::test]

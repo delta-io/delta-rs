@@ -548,7 +548,7 @@ pub fn get_azure_builder_from_options(options: HashMap<String, String>) -> Micro
     }
     if let Some(_emulator) = str_option(&options, azure_storage_options::AZURE_STORAGE_USE_EMULATOR)
     {
-        builder = builder.with_use_emulator(true);
+        builder = builder.with_use_emulator(true).with_allow_http(true);
     }
     builder
 }

@@ -112,3 +112,6 @@ pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, Object
 pub use arrow;
 #[cfg(feature = "datafusion-ext")]
 pub use datafusion;
+
+#[cfg(feature = "integration_test")]
+pub mod test_utils;

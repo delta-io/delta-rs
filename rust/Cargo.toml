@@ -65,7 +65,7 @@ version = "11"
 optional = true
 
 [features]
-default = ["azure", "s3"]
+default = ["azure", "s3", "integration_test"]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion"]
 azure = ["object_store/azure"]
