@@ -569,6 +569,7 @@ pub fn get_gcp_builder_from_options(options: HashMap<String, String>) -> GoogleC
     builder
 }
 
+#[allow(dead_code)]
 pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
     map.get(key)
         .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))

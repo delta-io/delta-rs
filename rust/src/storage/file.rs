@@ -17,6 +17,7 @@ const STORE_NAME: &str = "DeltaLocalObjectStore";
 
 /// Error raised by storage lock client
 #[derive(thiserror::Error, Debug)]
+#[allow(dead_code)]
 pub(self) enum LocalFileSystemError {
     #[error("Object exists already at path: {} ({:?})", path, source)]
     AlreadyExists {
@@ -218,7 +219,7 @@ async fn rename_noreplace(from: &str, to: &str) -> Result<(), LocalFileSystemErr
 mod imp {
     use super::*;
 
-    pub async fn rename_noreplace(from: &str, to: &str) -> Result<(), LocalFileSystemError> {
+    pub(super) async fn rename_noreplace(from: &str, to: &str) -> Result<(), LocalFileSystemError> {
         let from_path = String::from(from);
         let to_path = String::from(to);
 
@@ -226,12 +227,12 @@ mod imp {
             std::fs::hard_link(&from_path, &to_path).map_err(|err| {
                 if err.kind() == std::io::ErrorKind::AlreadyExists {
                     LocalFileSystemError::AlreadyExists {
-                        path: to_path.into(),
+                        path: to_path,
                         source: Box::new(err),
                     }
                 } else if err.kind() == std::io::ErrorKind::NotFound {
                     LocalFileSystemError::NotFound {
-                        path: from_path.clone().into(),
+                        path: from_path.clone(),
                         source: Box::new(err),
                     }
                 } else {

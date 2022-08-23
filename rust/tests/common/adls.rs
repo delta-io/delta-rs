@@ -1,6 +1,5 @@
 use super::TestContext;
 use chrono::Utc;
-use deltalake::test_utils::az_cli;
 use rand::Rng;
 use std::collections::HashMap;
 use std::process::Command;
@@ -53,5 +52,63 @@ pub async fn setup_azure_gen2_context() -> TestContext {
         })),
         config,
         ..TestContext::default()
+    }
+}
+
+pub mod az_cli {
+    use super::set_env_if_not_set;
+    use crate::builder::azure_storage_options;
+    use std::process::{Command, ExitStatus};
+
+    /// Create a new bucket
+    pub fn create_container(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
+        let mut child = Command::new("az")
+            .args([
+                "storage",
+                "container",
+                "create",
+                "-n",
+                container_name.as_ref(),
+            ])
+            .spawn()
+            .expect("az command is installed");
+        child.wait()
+    }
+
+    /// delete bucket
+    pub fn delete_container(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
+        let mut child = Command::new("az")
+            .args([
+                "storage",
+                "container",
+                "delete",
+                "-n",
+                container_name.as_ref(),
+            ])
+            .spawn()
+            .expect("az command is installed");
+        child.wait()
+    }
+
+    /// prepare_env
+    pub fn prepare_env() {
+        set_env_if_not_set(azure_storage_options::AZURE_STORAGE_USE_EMULATOR, "1");
+        set_env_if_not_set(
+            azure_storage_options::AZURE_STORAGE_ACCOUNT_NAME,
+            "devstoreaccount1",
+        );
+        set_env_if_not_set(azure_storage_options::AZURE_STORAGE_ACCOUNT_KEY, "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==");
+        set_env_if_not_set(
+            "AZURE_STORAGE_CONNECTION_STRING",
+            "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;"
+        );
+    }
+
+    pub fn upload_table(src: &str, dst: &str) -> std::io::Result<ExitStatus> {
+        let mut child = Command::new("az")
+            .args(["storage", "blob", "upload-batch", "-d", dst, "-s", src])
+            .spawn()
+            .expect("az command is installed");
+        child.wait()
     }
 }
