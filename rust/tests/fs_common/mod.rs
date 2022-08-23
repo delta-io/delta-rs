@@ -3,6 +3,9 @@ use deltalake::action::{Action, Add, Protocol, Remove};
 use deltalake::{
     storage, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
 };
+use parquet::file::reader::{FileReader, SerializedFileReader};
+use parquet::schema::types::Type;
+use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
@@ -21,19 +24,36 @@ pub fn cleanup_dir_except<P: AsRef<Path>>(path: P, ignore_files: Vec<String>) {
     }
 }
 
+pub async fn create_table_from_json(
+    path: &str,
+    schema: Value,
+    partition_columns: Vec<&str>,
+    config: Value,
+) -> DeltaTable {
+    assert!(path.starts_with("./tests/data"));
+    std::fs::create_dir_all(path).unwrap();
+    std::fs::remove_dir_all(path).unwrap();
+    std::fs::create_dir_all(path).unwrap();
+    let schema: Schema = serde_json::from_value(schema).unwrap();
+    let config: HashMap<String, Option<String>> = serde_json::from_value(config).unwrap();
+    create_test_table(path, schema, partition_columns, config).await
+}
+
 pub async fn create_test_table(
     path: &str,
     schema: Schema,
+    partition_columns: Vec<&str>,
     config: HashMap<String, Option<String>>,
 ) -> DeltaTable {
     let backend = storage::get_backend_for_uri(path).unwrap();
     let mut table = DeltaTable::new(path, backend, DeltaTableConfig::default()).unwrap();
-    let md = DeltaTableMetaData::new(None, None, None, schema, Vec::new(), config);
+    let partition_columns = partition_columns.iter().map(|s| s.to_string()).collect();
+    let md = DeltaTableMetaData::new(None, None, None, schema, partition_columns, config);
     let protocol = Protocol {
         min_reader_version: 1,
         min_writer_version: 2,
     };
-    table.create(md, protocol, None).await.unwrap();
+    table.create(md, protocol, None, None).await.unwrap();
     table
 }
 
@@ -52,7 +72,7 @@ pub async fn create_table(
         HashMap::new(),
     )]);
 
-    create_test_table(path, schema, config.unwrap_or(HashMap::new())).await
+    create_test_table(path, schema, Vec::new(), config.unwrap_or(HashMap::new())).await
 }
 
 pub fn add(offset_millis: i64) -> Add {
@@ -84,5 +104,5 @@ pub async fn commit_removes(table: &mut DeltaTable, removes: Vec<&Remove>) -> i6
 pub async fn commit_actions(table: &mut DeltaTable, actions: Vec<Action>) -> i64 {
     let mut tx = table.create_transaction(None);
     tx.add_actions(actions);
-    tx.commit(None).await.unwrap()
+    tx.commit(None, None).await.unwrap()
 }

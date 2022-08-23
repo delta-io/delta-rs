@@ -6,13 +6,11 @@ homepage = "https://github.com/delta-io/delta.rs"
 license = "Apache-2.0"
 keywords = ["deltalake", "delta", "datalake"]
 description = "Native Delta Lake implementation in Rust"
-edition = "2018"
+edition = "2021"
 
 [dependencies]
-libc = ">=0.2.90,<1"
+libc = ">=0.2.90, <1"
 errno = "0.2"
-clap = { version = ">=3.0.0-beta.2,<4", features = ["color"] }
-anyhow = "1"
 thiserror = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
@@ -21,32 +19,47 @@ tokio-stream = { version = "0", features = ["fs"] }
 futures = "0.3"
 bytes = "1"
 log = "0"
-env_logger = "0"
 regex = "1"
-chrono = "0"
-uuid = { version = "0.8", features = ["serde", "v4"] }
+chrono = "0.4.22"
+uuid = { version = "1", features = ["serde", "v4"] }
 lazy_static = "1"
 percent-encoding = "2"
+num-bigint = "0.4"
+num-traits = "0.2.15"
+object_store = "0.3.0"
+url = "2.2"
 
 # HTTP Client
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "stream"], optional = true}
+reqwest = { version = "0.11", default-features = false, features = [
+    "rustls-tls",
+    "stream",
+], optional = true }
 
 # Azure
-azure_core = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "2f1ca2e57801c81143b871fc5bf0df8e7250a56c" }
-azure_storage = { git = "https://github.com/Azure/azure-sdk-for-rust", optional = true, rev = "2f1ca2e57801c81143b871fc5bf0df8e7250a56c", features = ["blob", "account", "data_lake"] }
-# added to avoid cyclic dependecy caused by transient dependencies of azure crates
-indexmap = { version = "~1.6.2", optional = true}
+azure_core = { version = "0.3", optional = true }
+azure_storage = { version = "0.4", optional = true }
+azure_storage_datalake = { version = "0.4", optional = true }
+azure_identity = { version = "0.4", optional = true }
 
 # S3
-rusoto_core = { version = "0.46", default-features = false, optional = true }
-rusoto_credential = { version = "0.46", optional = true }
-rusoto_s3 = { version = "0.46", default-features = false, optional = true }
-rusoto_sts = { version = "0.46", default-features = false, optional = true }
-rusoto_dynamodb = { version = "0.46", default-features = false, optional = true }
+rusoto_core = { version = "0.48", default-features = false, optional = true }
+rusoto_credential = { version = "0.48", optional = true }
+rusoto_s3 = { version = "0.48", default-features = false, optional = true }
+rusoto_sts = { version = "0.48", default-features = false, optional = true }
+rusoto_dynamodb = { version = "0.48", default-features = false, optional = true }
 maplit = { version = "1", optional = true }
+hyper = { version = "0.14.20", default-features = false, optional = true }
+hyper-rustls = { version = "0.23.0", default-features = false, optional = true, features = [
+    "http2",
+    "rustls-native-certs",
+    "tokio-runtime",
+] }
+hyper-proxy = { version = "0.9.1", default-features = false, optional = true, features = [
+    "rustls",
+] }
 
 # Glue
-rusoto_glue = { version = "0.46", default-features = false, optional = true }
+rusoto_glue = { version = "0.48", default-features = false, optional = true }
 
 # GCS
 tame-gcs = { version = "0.10.0", optional = true }
@@ -54,40 +67,83 @@ tame-oauth = { version = "0.4.0", features = ["gcp"], optional = true }
 async-stream = { version = "0.3.2", default-features = true, optional = true }
 
 # High-level writer
-parquet-format = "~2.6.1"
+parquet-format = "~4.0.0"
 
-arrow  = { git = "https://github.com/apache/arrow-rs", rev = "615d7830fdaf994ebd32ca1e349daf68b18c99b0", optional = true }
-parquet = {  git = "https://github.com/apache/arrow-rs", rev = "615d7830fdaf994ebd32ca1e349daf68b18c99b0", optional = true }
-datafusion = { git = "https://github.com/houqp/arrow-datafusion", rev = "af34cec956c8d67b2520a266e74683d7bdcb3099", optional = true }
+arrow = { version = "18", optional = true }
+parquet = { version = "18", optional = true }
 
-arrow2 = { version = "0", optional = true }
-parquet2 = { version = "0", optional = true}
+arrow2 = { version = "0.10", optional = true }
+parquet2 = { version = "0.11", optional = true}
 
 crossbeam = { version = "0", optional = true }
 
 cfg-if = "1"
 async-trait = "0.1"
+walkdir = "2"
 
 # NOTE: disable rust-dataframe integration since it currently doesn't have a
 # version published in crates.io
 # rust-dataframe = {version = "0.*", optional = true }
 
+[dependencies.datafusion]
+version = "10"
+optional = true
+
 [features]
 default = ["arrow", "parquet"]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion"]
-azure = ["azure_core", "azure_storage", "reqwest", "indexmap"]
-s3 = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_s3/native-tls", "rusoto_sts/native-tls", "rusoto_dynamodb/native-tls", "maplit"]
-s3-rustls = ["rusoto_core/rustls", "rusoto_credential", "rusoto_s3/rustls", "rusoto_sts/rustls", "rusoto_dynamodb/rustls", "maplit"]
+azure = [
+    "azure_core",
+    "azure_storage",
+    "azure_storage_datalake",
+    "azure_identity",
+    "reqwest",
+]
+
+s3 = [
+    "rusoto_core/native-tls",
+    "rusoto_credential",
+    "rusoto_s3/native-tls",
+    "rusoto_sts/native-tls",
+    "rusoto_dynamodb/native-tls",
+    "maplit",
+    "dynamodb_lock/native-tls",
+    "hyper",
+    "hyper-rustls",
+    "hyper-proxy",
+]
+s3-rustls = [
+    "rusoto_core/rustls",
+    "rusoto_credential",
+    "rusoto_s3/rustls",
+    "rusoto_sts/rustls",
+    "rusoto_dynamodb/rustls",
+    "maplit",
+    "dynamodb_lock/rustls",
+    "hyper",
+    "hyper-rustls",
+    "hyper-proxy",
+]
 gcs = ["async-stream", "tame-gcs", "tame-oauth", "reqwest"]
 glue = ["s3", "rusoto_glue"]
+python = ["arrow/pyarrow"]
 
 [build-dependencies]
 glibc_version = "0"
 
+[dependencies.dynamodb_lock]
+path = "../dynamodb_lock"
+version = "0"
+default-features = false
+optional = true
+
 [dev-dependencies]
 utime = "0.3"
 serial_test = "0"
-pretty_assertions = "0"
+pretty_assertions = "1"
 tempdir = "0"
+tempfile = "3"
 maplit = { version = "1" }
+anyhow = "1"
+rand = "0.8"

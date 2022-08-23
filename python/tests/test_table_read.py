@@ -1,11 +1,40 @@
 import os
+from datetime import datetime
+from pathlib import Path
 from threading import Barrier, Thread
 
-import pandas as pd
+from packaging import version
+
+try:
+    import pandas as pd
+except ModuleNotFoundError:
+    _has_pandas = False
+else:
+    _has_pandas = True
+
+import pyarrow as pa
+import pyarrow.dataset as ds
 import pytest
+from pyarrow.dataset import ParquetReadOptions
 from pyarrow.fs import LocalFileSystem
 
-from deltalake import DeltaTable, Metadata
+from deltalake import DeltaTable
+
+
+def test_read_table_with_edge_timestamps():
+    table_path = "../rust/tests/data/table_with_edge_timestamps"
+    dt = DeltaTable(table_path)
+    dataset = dt.to_pyarrow_dataset(
+        parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit="ms")
+    )
+    assert dataset.to_table().to_pydict() == {
+        "BIG_DATE": [datetime(9999, 12, 31, 0, 0, 0), datetime(9999, 12, 30, 0, 0, 0)],
+        "NORMAL_DATE": [datetime(2022, 1, 1, 0, 0, 0), datetime(2022, 2, 1, 0, 0, 0)],
+        "SOME_VALUE": [1, 2],
+    }
+    # Can push down filters to these timestamps.
+    predicate = ds.field("BIG_DATE") == datetime(9999, 12, 31, 0, 0, 0)
+    assert len(list(dataset.get_fragments(predicate))) == 1
 
 
 def test_read_simple_table_to_dict():
@@ -17,6 +46,12 @@ def test_read_simple_table_to_dict():
 def test_read_simple_table_by_version_to_dict():
     table_path = "../rust/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2)
+    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
+
+
+def test_read_simple_table_using_options_to_dict():
+    table_path = "../rust/tests/data/delta-0.2.0"
+    dt = DeltaTable(table_path, version=2, storage_options={})
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"value": [1, 2, 3]}
 
 
@@ -121,31 +156,47 @@ def test_read_table_with_column_subset():
     )
 
 
-def test_vacuum_dry_run_simple_table():
-    table_path = "../rust/tests/data/delta-0.2.0"
+def test_read_table_with_filter():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
-    retention_periods = 169
-    tombstones = dt.vacuum(retention_periods)
-    tombstones.sort()
-    assert tombstones == [
-        "../rust/tests/data/delta-0.2.0/part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet",
-        "../rust/tests/data/delta-0.2.0/part-00000-b44fcdb0-8b06-4f3a-8606-f8311a96f6dc-c000.snappy.parquet",
-        "../rust/tests/data/delta-0.2.0/part-00001-185eca06-e017-4dea-ae49-fc48b973e37e-c000.snappy.parquet",
-        "../rust/tests/data/delta-0.2.0/part-00001-4327c977-2734-4477-9507-7ccf67924649-c000.snappy.parquet",
-    ]
+    expected = {
+        "value": ["6", "7", "5"],
+        "year": ["2021", "2021", "2021"],
+        "month": ["12", "12", "12"],
+        "day": ["20", "20", "4"],
+    }
+    filter_expr = (ds.field("year") == "2021") & (ds.field("month") == "12")
 
-    retention_periods = -1
-    with pytest.raises(Exception) as exception:
-        dt.vacuum(retention_periods)
-    assert str(exception.value) == "The retention periods should be positive."
+    dataset = dt.to_pyarrow_dataset()
 
-    retention_periods = 167
-    with pytest.raises(Exception) as exception:
-        dt.vacuum(retention_periods)
-    assert (
-        str(exception.value)
-        == "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
-    )
+    assert len(list(dataset.get_fragments(filter=filter_expr))) == 2
+    assert dataset.to_table(filter=filter_expr).to_pydict() == expected
+
+
+def test_read_table_with_stats():
+    table_path = "../rust/tests/data/COVID-19_NYT"
+    dt = DeltaTable(table_path)
+    dataset = dt.to_pyarrow_dataset()
+
+    filter_expr = ds.field("date") > "2021-02-20"
+    assert len(list(dataset.get_fragments(filter=filter_expr))) == 2
+
+    data = dataset.to_table(filter=filter_expr)
+    assert data.num_rows < 147181 + 47559
+
+    filter_expr = ds.field("cases") < 0
+    assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
+
+    data = dataset.to_table(filter=filter_expr)
+    assert data.num_rows == 0
+
+    # PyArrow added support for is_null and is_valid simplification in 8.0.0
+    if version.parse(pa.__version__).major >= 8:
+        filter_expr = ds.field("cases").is_null()
+        assert len(list(dataset.get_fragments(filter=filter_expr))) == 0
+
+        data = dataset.to_table(filter=filter_expr)
+        assert data.num_rows == 0
 
 
 def test_read_partitioned_table_metadata():
@@ -158,6 +209,14 @@ def test_read_partitioned_table_metadata():
     assert metadata.partition_columns == ["year", "month", "day"]
     assert metadata.created_time == 1615555644515
     assert metadata.configuration == {}
+
+
+def test_read_partitioned_table_protocol():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    protocol = dt.protocol()
+    assert protocol.min_reader_version == 1
+    assert protocol.min_writer_version == 2
 
 
 def test_history_partitioned_table_metadata():
@@ -186,6 +245,9 @@ def test_history_partitioned_table_metadata():
 def test_get_files_partitioned_table():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
+    table_path = (
+        Path.cwd().parent / "rust/tests/data/delta-0.8.0-partitioned"
+    ).as_posix()
     partition_filters = [("day", "=", "3")]
     assert dt.files_by_partitions(partition_filters=partition_filters) == [
         f"{table_path}/year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet"
@@ -248,17 +310,25 @@ def test_get_files_partitioned_table():
     )
 
 
+@pytest.mark.pandas
 def test_delta_table_to_pandas():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
     assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 
+@pytest.mark.pandas
 def test_delta_table_with_filesystem():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
     filesystem = LocalFileSystem()
     assert dt.to_pandas(filesystem=filesystem).equals(pd.DataFrame({"id": [5, 7, 9]}))
+
+
+def test_import_delta_table_error():
+    from deltalake import PyDeltaTableError
+
+    PyDeltaTableError()
 
 
 class ExcPassThroughThread(Thread):

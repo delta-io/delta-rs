@@ -18,10 +18,18 @@ lazy_static! {
     ///  still needs to read old files.
     pub static ref TOMBSTONE_RETENTION: DeltaConfig =
         DeltaConfig::new("deletedFileRetentionDuration", "interval 1 week");
+
+    /// The shortest duration we have to keep delta files around before deleting them. We can only
+    /// delete delta files that are before a compaction. We may keep files beyond this duration until
+    /// the next calendar day.
+    pub static ref LOG_RETENTION: DeltaConfig = DeltaConfig::new("logRetentionDuration", "interval 30 day");
+
+    /// Whether to clean up expired checkpoints and delta logs.
+    pub static ref ENABLE_EXPIRED_LOG_CLEANUP: DeltaConfig = DeltaConfig::new("enableExpiredLogCleanup", "true");
 }
 
 /// Delta configuration error
-#[derive(thiserror::Error, Debug, PartialEq)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum DeltaConfigError {
     /// Error returned when configuration validation failed.
     #[error("Validation failed - {0}")]
@@ -76,12 +84,21 @@ impl DeltaConfig {
         parse_interval(&self.get_raw_from_metadata(metadata))
     }
 
+    /// Returns the value from `metadata.configuration` for `self.key` as bool.
+    /// If it's missing in metadata then the `self.default` is used.
+    pub fn get_boolean_from_metadata(
+        &self,
+        metadata: &DeltaTableMetaData,
+    ) -> Result<bool, DeltaConfigError> {
+        parse_bool(&self.get_raw_from_metadata(metadata))
+    }
+
     fn get_raw_from_metadata(&self, metadata: &DeltaTableMetaData) -> String {
         metadata
             .configuration
             .get(&self.key)
             .and_then(|opt| opt.as_deref())
-            .unwrap_or_else(|| self.default.as_str())
+            .unwrap_or(self.default.as_str())
             .to_string()
     }
 }
@@ -132,6 +149,12 @@ fn parse_interval(value: &str) -> Result<Duration, DeltaConfigError> {
 fn parse_int(value: &str) -> Result<i64, DeltaConfigError> {
     value.parse().map_err(|e| {
         DeltaConfigError::Validation(format!("Cannot parse '{}' as integer: {}", value, e))
+    })
+}
+
+fn parse_bool(value: &str) -> Result<bool, DeltaConfigError> {
+    value.parse().map_err(|e| {
+        DeltaConfigError::Validation(format!("Cannot parse '{}' as bool: {}", value, e))
     })
 }
 

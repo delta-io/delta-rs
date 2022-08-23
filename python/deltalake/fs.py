@@ -46,8 +46,10 @@ class DeltaStorageHandler(FileSystemHandler):
         """
         infos = []
         for path in paths:
-            path, secs = self._storage.head_obj(path)
-            infos.append(FileInfo(path, type=FileType.File, mtime=float(secs)))
+            path, secs, size = self._storage.head_obj(path)
+            infos.append(
+                FileInfo(path, type=FileType.File, mtime=float(secs), size=size)
+            )
         return infos
 
     def get_file_info_selector(self, selector: FileSelector) -> List[FileInfo]:
@@ -64,7 +66,7 @@ class DeltaStorageHandler(FileSystemHandler):
         Create a directory and subdirectories.
 
         This function succeeds if the directory already exists.
-        
+
         :param path: The path of the new directory.
         :param recursive: Create nested directories as well.
         """

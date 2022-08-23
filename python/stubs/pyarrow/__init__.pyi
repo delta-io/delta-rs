@@ -1,9 +1,14 @@
 from typing import Any, Callable
 
+__version__: str
 Schema: Any
 Table: Any
+RecordBatch: Any
 Field: Any
 DataType: Any
+ListType: Any
+StructType: Any
+MapType: Any
 schema: Any
 map_: Any
 list_: Any

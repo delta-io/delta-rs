@@ -31,18 +31,15 @@ mod simple_commit_s3 {
     #[tokio::test]
     #[serial]
     async fn test_two_commits_s3_fails_with_no_lock() {
-        use deltalake::StorageError;
-
         let path = "s3://deltars/simple_commit_rw2";
         prepare_s3(path).await;
         std::env::set_var("AWS_S3_LOCKING_PROVIDER", "none  ");
 
         let result = test_two_commits(path).await;
-        if let Err(DeltaTableError::StorageError { ref source }) = result {
-            if let StorageError::S3Generic(err) = source {
-                assert_eq!(err, "dynamodb locking is not enabled");
-                return;
-            }
+        if let Err(DeltaTableError::ObjectStore { source: inner }) = result {
+            let msg = inner.to_string();
+            assert!(msg.contains("dynamodb"));
+            return;
         }
 
         result.unwrap();
@@ -78,16 +75,16 @@ mod simple_commit_fs {
         let table_path = "./tests/data/simple_commit";
         let mut table = deltalake::open_table(table_path).await.unwrap();
 
-        assert_eq!(0, table.version);
+        assert_eq!(0, table.version());
         assert_eq!(0, table.get_files().len());
 
         let mut tx1 = table.create_transaction(None);
         tx1.add_actions(tx1_actions());
-        let commit = tx1.prepare_commit(None).await.unwrap();
+        let commit = tx1.prepare_commit(None, None).await.unwrap();
         let result = table.try_commit_transaction(&commit, 1).await.unwrap();
 
         assert_eq!(1, result);
-        assert_eq!(1, table.version);
+        assert_eq!(1, table.version());
         assert_eq!(2, table.get_files().len());
     }
 
@@ -99,18 +96,18 @@ mod simple_commit_fs {
         let table_path = "./tests/data/simple_commit";
         let mut table = deltalake::open_table(table_path).await.unwrap();
 
-        assert_eq!(0, table.version);
+        assert_eq!(0, table.version());
         assert_eq!(0, table.get_files().len());
 
         let mut tx1 = table.create_transaction(None);
         tx1.add_actions(tx1_actions());
-        let commit = tx1.prepare_commit(None).await.unwrap();
+        let commit = tx1.prepare_commit(None, None).await.unwrap();
         let _ = table.try_commit_transaction(&commit, 1).await.unwrap();
 
         let mut tx2 = table.create_transaction(None);
         tx2.add_actions(tx2_actions());
         // we already committed version 1 - this should fail and return error for caller to handle.
-        let commit = tx2.prepare_commit(None).await.unwrap();
+        let commit = tx2.prepare_commit(None, None).await.unwrap();
         let result = table.try_commit_transaction(&commit, 1).await;
 
         match result {
@@ -123,7 +120,7 @@ mod simple_commit_fs {
         }
 
         assert!(result.is_err());
-        assert_eq!(1, table.version);
+        assert_eq!(1, table.version());
         assert_eq!(2, table.get_files().len());
     }
 
@@ -137,20 +134,20 @@ mod simple_commit_fs {
         let table_path = "./tests/data/simple_commit";
         let mut table = deltalake::open_table(table_path).await.unwrap();
 
-        assert_eq!(0, table.version);
+        assert_eq!(0, table.version());
         assert_eq!(0, table.get_files().len());
 
         let mut attempt = 0;
         let prepared_commit = {
             let mut tx = table.create_transaction(None);
             tx.add_actions(tx1_actions());
-            tx.prepare_commit(None).await.unwrap()
+            tx.prepare_commit(None, None).await.unwrap()
         };
 
         loop {
             table.update().await.unwrap();
 
-            let version = table.version + 1;
+            let version = table.version() + 1;
             match table
                 .try_commit_transaction(&prepared_commit, version)
                 .await
@@ -168,7 +165,7 @@ mod simple_commit_fs {
         }
 
         assert_eq!(0, attempt);
-        assert_eq!(1, table.version);
+        assert_eq!(1, table.version());
         assert_eq!(2, table.get_files().len());
     }
 
@@ -183,23 +180,23 @@ mod simple_commit_fs {
 async fn test_two_commits(table_path: &str) -> Result<(), DeltaTableError> {
     let mut table = deltalake::open_table(table_path).await?;
 
-    assert_eq!(0, table.version);
+    assert_eq!(0, table.version());
     assert_eq!(0, table.get_files().len());
 
     let mut tx1 = table.create_transaction(None);
     tx1.add_actions(tx1_actions());
-    let version = tx1.commit(None).await?;
+    let version = tx1.commit(None, None).await?;
 
     assert_eq!(1, version);
-    assert_eq!(version, table.version);
+    assert_eq!(version, table.version());
     assert_eq!(2, table.get_files().len());
 
     let mut tx2 = table.create_transaction(None);
     tx2.add_actions(tx2_actions());
-    let version = tx2.commit(None).await.unwrap();
+    let version = tx2.commit(None, None).await.unwrap();
 
     assert_eq!(2, version);
-    assert_eq!(version, table.version);
+    assert_eq!(version, table.version());
     assert_eq!(4, table.get_files().len());
     Ok(())
 }

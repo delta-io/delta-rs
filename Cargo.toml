@@ -5,7 +5,9 @@ members = [
     "python",
     "glibc_version",
     "aws/delta-checkpoint",
+    "dynamodb_lock",
 ]
+exclude = ["proofs", "delta-inspect"]
 
 [profile.dev]
 split-debuginfo = "unpacked"

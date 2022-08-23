@@ -3,36 +3,39 @@
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 //
 
-use chrono::{DateTime, FixedOffset, Utc};
+use crate::action::{Add, Stats};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::debug;
+use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{cmp::Ordering, collections::HashSet};
+use std::io::{BufRead, BufReader, Cursor};
+use std::sync::Arc;
+use std::{cmp::max, cmp::Ordering, collections::HashSet};
 use uuid::Uuid;
-
-use crate::action::Stats;
 
 use super::action;
 use super::action::{Action, DeltaOperation};
 use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::storage;
-use super::storage::{parse_uri, StorageBackend, StorageError, UriError};
+use super::storage::{StorageBackend, StorageError, UriError};
 use super::table_state::DeltaTableState;
 use crate::delta_config::DeltaConfigError;
+use crate::object_store::DeltaObjectStore;
+use crate::vacuum::{Vacuum, VacuumError};
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
 pub struct CheckPoint {
     /// Delta table version
-    version: DeltaDataTypeVersion, // 20 digits decimals
+    pub(crate) version: DeltaDataTypeVersion, // 20 digits decimals
     size: DeltaDataTypeLong,
     parts: Option<u32>, // 10 digits decimals
 }
@@ -79,6 +82,13 @@ pub enum DeltaTableError {
         /// Storage error details when reading the delta log object failed.
         #[from]
         source: StorageError,
+    },
+    /// Error returned when reading the delta log object failed.
+    #[error("Failed to read delta log object: {}", .source)]
+    ObjectStore {
+        /// Storage error details when reading the delta log object failed.
+        #[from]
+        source: ObjectStoreError,
     },
     /// Error returned when reading the checkpoint failed.
     #[cfg(feature = "parquet")]
@@ -177,21 +187,26 @@ pub enum DeltaTableError {
         /// The invalid partition filter used.
         partition_filter: String,
     },
-    /// Error returned when Vacuum retention period is below the safe threshold
-    #[error(
-        "Invalid retention period, retention for Vacuum must be greater than 1 week (168 hours)"
-    )]
-    InvalidVacuumRetentionPeriod,
+    /// Error returned when a line from log record is invalid.
+    #[error("Failed to read line from log record")]
+    Io {
+        /// Source error details returned while reading the log record.
+        #[from]
+        source: std::io::Error,
+    },
     /// Error returned when transaction is failed to be committed because given version already exists.
     #[error("Delta transaction failed, version {0} already exists.")]
     VersionAlreadyExists(DeltaDataTypeVersion),
+    /// Error returned when user attempts to commit actions that don't belong to the next version.
+    #[error("Delta transaction failed, version {0} does not follow {1}")]
+    VersionMismatch(DeltaDataTypeVersion, DeltaDataTypeVersion),
     /// Generic Delta Table error
     #[error("Generic DeltaTable error: {0}")]
     Generic(String),
 }
 
 /// Delta table metadata
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct DeltaTableMetaData {
     /// Unique identifier for this table
     pub id: Guid,
@@ -334,7 +349,7 @@ pub enum ApplyLogError {
     #[error("Failed to read log content")]
     Storage {
         /// Storage error details returned while reading the log content.
-        source: StorageError,
+        source: ObjectStoreError,
     },
     /// Error returned when reading delta config failed.
     #[error("Failed to read delta config: {}", .source)]
@@ -359,10 +374,10 @@ pub enum ApplyLogError {
     },
 }
 
-impl From<StorageError> for ApplyLogError {
-    fn from(error: StorageError) -> Self {
+impl From<ObjectStoreError> for ApplyLogError {
+    fn from(error: ObjectStoreError) -> Self {
         match error {
-            StorageError::NotFound => ApplyLogError::EndOfLog,
+            ObjectStoreError::NotFound { .. } => ApplyLogError::EndOfLog,
             _ => ApplyLogError::Storage { source: error },
         }
     }
@@ -385,33 +400,16 @@ pub enum LoadCheckpointError {
     #[error("Failed to read checkpoint content: {source}")]
     Storage {
         /// Storage error details returned while reading the checkpoint content.
-        source: StorageError,
+        source: ObjectStoreError,
     },
 }
 
-impl From<StorageError> for LoadCheckpointError {
-    fn from(error: StorageError) -> Self {
+impl From<ObjectStoreError> for LoadCheckpointError {
+    fn from(error: ObjectStoreError) -> Self {
         match error {
-            StorageError::NotFound => LoadCheckpointError::NotFound,
+            ObjectStoreError::NotFound { .. } => LoadCheckpointError::NotFound,
             _ => LoadCheckpointError::Storage { source: error },
         }
-    }
-}
-
-#[inline]
-/// Return path relative to parent_path
-fn extract_rel_path<'a, 'b>(
-    parent_path: &'b str,
-    path: &'a str,
-) -> Result<&'a str, DeltaTableError> {
-    if path.starts_with(&parent_path) {
-        // plus one to account for path separator
-        Ok(&path[parent_path.len() + 1..])
-    } else {
-        Err(DeltaTableError::Generic(format!(
-            "Parent path `{}` is not a prefix of path `{}`",
-            parent_path, path
-        )))
     }
 }
 
@@ -420,7 +418,7 @@ fn extract_rel_path<'a, 'b>(
 pub enum DeltaVersion {
     /// load the newest version
     Newest,
-    /// specify the version to laod
+    /// specify the version to load
     Version(DeltaDataTypeVersion),
     /// specify the timestamp in UTC
     Timestamp(DateTime<Utc>),
@@ -432,21 +430,30 @@ impl Default for DeltaVersion {
     }
 }
 
-/// configuration options for delta table
+/// Configuration options for delta table
 #[derive(Debug)]
 pub struct DeltaTableConfig {
-    /// indicates whether our use case requires tracking tombstones.
-    /// read-only applications never require tombstones. Tombstones
+    /// Indicates whether our use case requires tracking tombstones.
+    /// This defaults to `true`
+    ///
+    /// Read-only applications never require tombstones. Tombstones
     /// are only required when writing checkpoints, so even many writers
     /// may want to skip them.
-    /// defaults to true as a safe default.
     pub require_tombstones: bool,
+
+    /// Indicates whether DeltaTable should track files.
+    /// This defaults to `true`
+    ///
+    /// Some append-only applications might have no need of tracking any files.
+    /// Hence, DeltaTable will be loaded with significant memory reduction.
+    pub require_files: bool,
 }
 
 impl Default for DeltaTableConfig {
     fn default() -> Self {
         Self {
             require_tombstones: true,
+            require_files: true,
         }
     }
 }
@@ -457,16 +464,23 @@ pub struct DeltaTableLoadOptions {
     /// table root uri
     pub table_uri: String,
     /// backend to access storage system
-    pub storage_backend: Box<dyn StorageBackend>,
-    /// indicates whether our use case requires tracking tombstones.
-    /// read-only applications never require tombstones. Tombstones
-    /// are only required when writing checkpoints, so even many writers
-    /// may want to skip them.
-    /// defaults to true as a safe default.
-    pub require_tombstones: bool,
+    pub storage_backend: Option<Arc<dyn StorageBackend>>,
     /// specify the version we are going to load: a time stamp, a version, or just the newest
     /// available version
     pub version: DeltaVersion,
+    /// Indicates whether our use case requires tracking tombstones.
+    /// This defaults to `true`
+    ///
+    /// Read-only applications never require tombstones. Tombstones
+    /// are only required when writing checkpoints, so even many writers
+    /// may want to skip them.
+    pub require_tombstones: bool,
+    /// Indicates whether DeltaTable should track files.
+    /// This defaults to `true`
+    ///
+    /// Some append-only applications might have no need of tracking any files.
+    /// Hence, DeltaTable will be loaded with significant memory reduction.
+    pub require_files: bool,
 }
 
 impl DeltaTableLoadOptions {
@@ -474,8 +488,9 @@ impl DeltaTableLoadOptions {
     pub fn new(table_uri: &str) -> Result<Self, DeltaTableError> {
         Ok(Self {
             table_uri: table_uri.to_string(),
-            storage_backend: storage::get_backend_for_uri(table_uri)?,
+            storage_backend: None,
             require_tombstones: true,
+            require_files: true,
             version: DeltaVersion::default(),
         })
     }
@@ -488,20 +503,26 @@ pub struct DeltaTableBuilder {
 }
 
 impl DeltaTableBuilder {
-    /// TODO
+    /// Creates `DeltaTableBuilder` from table uri
     pub fn from_uri(table_uri: &str) -> Result<Self, DeltaTableError> {
         Ok(DeltaTableBuilder {
             options: DeltaTableLoadOptions::new(table_uri)?,
         })
     }
 
-    /// TODO
+    /// Sets `require_tombstones=false` to the builder
     pub fn without_tombstones(mut self) -> Self {
         self.options.require_tombstones = false;
         self
     }
 
-    /// TODO
+    /// Sets `require_files=false` to the builder
+    pub fn without_files(mut self) -> Self {
+        self.options.require_files = false;
+        self
+    }
+
+    /// Sets `version` to the builder
     pub fn with_version(mut self, version: DeltaDataTypeVersion) -> Self {
         self.options.version = DeltaVersion::Version(version);
         self
@@ -520,23 +541,25 @@ impl DeltaTableBuilder {
         self
     }
 
-    /// explicitely set a backend (override backend derived from `table_uri`)
-    pub fn with_storage_backend(mut self, storage: Box<dyn StorageBackend>) -> Self {
-        self.options.storage_backend = storage;
+    /// Set the storage backend. If a backend is not provided then it is derived from `table_uri` when `load` is called.
+    pub fn with_storage_backend(mut self, storage: Arc<dyn StorageBackend>) -> Self {
+        self.options.storage_backend = Some(storage);
         self
     }
 
     /// finally load the table
     pub async fn load(self) -> Result<DeltaTable, DeltaTableError> {
-        let config = DeltaTableConfig {
-            require_tombstones: self.options.require_tombstones,
+        let storage = match self.options.storage_backend {
+            Some(storage) => storage,
+            None => storage::get_backend_for_uri(&self.options.table_uri)?,
         };
 
-        let mut table = DeltaTable::new(
-            &self.options.table_uri,
-            self.options.storage_backend,
-            config,
-        )?;
+        let config = DeltaTableConfig {
+            require_tombstones: self.options.require_tombstones,
+            require_files: self.options.require_files,
+        };
+
+        let mut table = DeltaTable::new(self.options.table_uri, storage, config)?;
 
         match self.options.version {
             DeltaVersion::Newest => table.load().await?,
@@ -548,53 +571,65 @@ impl DeltaTableBuilder {
     }
 }
 
+/// The next commit that's available from underlying storage
+/// TODO: Maybe remove this and replace it with Some/None and create a `Commit` struct to contain the next commit
+///
+#[derive(Debug)]
+pub enum PeekCommit {
+    /// The next commit version and associated actions
+    New(DeltaDataTypeVersion, Vec<Action>),
+    /// Provided DeltaVersion is up to date
+    UpToDate,
+}
+
 /// In memory representation of a Delta Table
 pub struct DeltaTable {
-    /// The version of the table as of the most recent loaded Delta log entry.
-    pub version: DeltaDataTypeVersion,
+    /// The state of the table as of the most recent loaded Delta log entry.
+    pub state: DeltaTableState,
     /// The URI the DeltaTable was loaded from.
     pub table_uri: String,
     /// the load options used during load
     pub config: DeltaTableConfig,
-
-    state: DeltaTableState,
-
     // metadata
     // application_transactions
-    pub(crate) storage: Box<dyn StorageBackend>,
+    pub(crate) storage: Arc<DeltaObjectStore>,
 
     last_check_point: Option<CheckPoint>,
-    log_uri: String,
     version_timestamp: HashMap<DeltaDataTypeVersion, i64>,
 }
 
 impl DeltaTable {
+    /// get a shared reference to the delta object store
+    pub fn object_store(&self) -> Arc<DeltaObjectStore> {
+        self.storage.clone()
+    }
+
     /// Return the uri of commit version.
-    pub fn commit_uri_from_version(&self, version: DeltaDataTypeVersion) -> String {
+    pub fn commit_uri_from_version(&self, version: DeltaDataTypeVersion) -> Path {
         let version = format!("{:020}.json", version);
-        self.storage.join_path(&self.log_uri, &version)
+        Path::from_iter(["_delta_log", &version])
     }
 
     /// Return the list of paths of given checkpoint.
-    pub fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<String> {
-        let checkpoint_prefix_pattern = format!("{:020}", check_point.version);
-        let checkpoint_prefix = self
-            .storage
-            .join_path(&self.log_uri, &checkpoint_prefix_pattern);
+    pub fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<Path> {
+        let checkpoint_prefix = format!("{:020}", check_point.version);
+        let log_path = self.storage.log_path();
         let mut checkpoint_data_paths = Vec::new();
 
         match check_point.parts {
             None => {
-                checkpoint_data_paths.push(format!("{}.checkpoint.parquet", checkpoint_prefix));
+                let path = log_path.child(&*format!("{}.checkpoint.parquet", checkpoint_prefix));
+                checkpoint_data_paths.push(path);
             }
             Some(parts) => {
                 for i in 0..parts {
-                    checkpoint_data_paths.push(format!(
+                    let path = log_path.child(&*format!(
                         "{}.checkpoint.{:010}.{:010}.parquet",
                         checkpoint_prefix,
                         i + 1,
                         parts
                     ));
+                    checkpoint_data_paths.push(path);
                 }
             }
         }
@@ -602,11 +637,49 @@ impl DeltaTable {
         checkpoint_data_paths
     }
 
-    async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
-        let last_checkpoint_path = self.storage.join_path(&self.log_uri, "_last_checkpoint");
-        let data = self.storage.get_obj(&last_checkpoint_path).await?;
+    /// This method scans delta logs to find the earliest delta log version
+    async fn get_earliest_delta_log_version(
+        &self,
+    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
+        // TODO check if regex matches against path
+        lazy_static! {
+            static ref DELTA_LOG_REGEX: Regex =
+                Regex::new(r#"^_delta_log/(\d{20})\.(json|checkpoint)*$"#).unwrap();
+        }
 
-        Ok(serde_json::from_slice(&data)?)
+        let mut current_delta_log_ver = DeltaDataTypeVersion::MAX;
+
+        // Get file objects from table.
+        let mut stream = self.storage.list(Some(self.storage.log_path())).await?;
+        while let Some(obj_meta) = stream.next().await {
+            let obj_meta = obj_meta?;
+
+            if let Some(captures) = DELTA_LOG_REGEX.captures(obj_meta.location.as_ref()) {
+                let log_ver_str = captures.get(1).unwrap().as_str();
+                let log_ver: DeltaDataTypeVersion = log_ver_str.parse().unwrap();
+                if log_ver < current_delta_log_ver {
+                    current_delta_log_ver = log_ver;
+                }
+            }
+        }
+        Ok(current_delta_log_ver)
+    }
+
+    async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
+        let last_checkpoint_path = Path::from_iter(["_delta_log", "_last_checkpoint"]);
+        match self.storage.get(&last_checkpoint_path).await {
+            Ok(data) => Ok(serde_json::from_slice(&data.bytes().await?)?),
+            Err(ObjectStoreError::NotFound { .. }) => {
+                match self
+                    .find_latest_check_point_for_version(DeltaDataTypeVersion::MAX)
+                    .await
+                {
+                    Ok(Some(cp)) => Ok(cp),
+                    _ => Err(LoadCheckpointError::NotFound),
+                }
+            }
+            Err(err) => Err(LoadCheckpointError::Storage { source: err }),
+        }
     }
 
     async fn find_latest_check_point_for_version(
@@ -615,20 +688,26 @@ impl DeltaTable {
     ) -> Result<Option<CheckPoint>, DeltaTableError> {
         lazy_static! {
             static ref CHECKPOINT_REGEX: Regex =
-                Regex::new(r#"^*[/\\]_delta_log[/\\](\d{20})\.checkpoint\.parquet$"#).unwrap();
-            static ref CHECKPOINT_PARTS_REGEX: Regex = Regex::new(
-                r#"^*[/\\]_delta_log[/\\](\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$"#
-            )
-            .unwrap();
+                Regex::new(r#"^_delta_log/(\d{20})\.checkpoint\.parquet$"#).unwrap();
+            static ref CHECKPOINT_PARTS_REGEX: Regex =
+                Regex::new(r#"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$"#)
+                    .unwrap();
         }
 
         let mut cp: Option<CheckPoint> = None;
-        let mut stream = self.storage.list_objs(&self.log_uri).await?;
+        let mut stream = self.storage.list(Some(self.storage.log_path())).await?;
 
         while let Some(obj_meta) = stream.next().await {
             // Exit early if any objects can't be listed.
-            let obj_meta = obj_meta?;
-            if let Some(captures) = CHECKPOINT_REGEX.captures(&obj_meta.path) {
+            // We exclude the special case of a not found error on some of the list entities.
+            // This error mainly occurs for local stores when a temporary file has been deleted by
+            // concurrent writers or if the table is vacuumed by another client.
+            let obj_meta = match obj_meta {
+                Ok(meta) => Ok(meta),
+                Err(ObjectStoreError::NotFound { .. }) => continue,
+                Err(err) => Err(err),
+            }?;
+            if let Some(captures) = CHECKPOINT_REGEX.captures(obj_meta.location.as_ref()) {
                 let curr_ver_str = captures.get(1).unwrap().as_str();
                 let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
                 if curr_ver > version {
@@ -645,7 +724,7 @@ impl DeltaTable {
                 continue;
             }
 
-            if let Some(captures) = CHECKPOINT_PARTS_REGEX.captures(&obj_meta.path) {
+            if let Some(captures) = CHECKPOINT_PARTS_REGEX.captures(obj_meta.location.as_ref()) {
                 let curr_ver_str = captures.get(1).unwrap().as_str();
                 let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
                 if curr_ver > version {
@@ -670,15 +749,18 @@ impl DeltaTable {
 
     async fn apply_log(&mut self, version: DeltaDataTypeVersion) -> Result<(), ApplyLogError> {
         let new_state = DeltaTableState::from_commit(self, version).await?;
-        self.state.merge(new_state, self.config.require_tombstones);
+        self.state.merge(
+            new_state,
+            self.config.require_tombstones,
+            self.config.require_files,
+        );
 
         Ok(())
     }
 
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
-        self.state =
-            DeltaTableState::from_checkpoint(self, &check_point, self.config.require_tombstones)
-                .await?;
+        self.state = DeltaTableState::from_checkpoint(self, &check_point).await?;
+
         Ok(())
     }
 
@@ -698,18 +780,18 @@ impl DeltaTable {
         loop {
             match self
                 .storage
-                .head_obj(&self.commit_uri_from_version(version))
+                .head(&self.commit_uri_from_version(version))
                 .await
             {
                 Ok(meta) => {
                     // also cache timestamp for version
                     self.version_timestamp
-                        .insert(version, meta.modified.timestamp());
+                        .insert(version, meta.last_modified.timestamp());
                     version += 1;
                 }
                 Err(e) => {
                     match e {
-                        StorageError::NotFound => {
+                        ObjectStoreError::NotFound { .. } => {
                             version -= 1;
                             if version < 0 {
                                 let err = format!(
@@ -729,12 +811,60 @@ impl DeltaTable {
         Ok(version)
     }
 
+    /// Currently loaded evrsion of the table
+    pub fn version(&self) -> DeltaDataTypeVersion {
+        self.state.version
+    }
+
     /// Load DeltaTable with data from latest checkpoint
     pub async fn load(&mut self) -> Result<(), DeltaTableError> {
         self.last_check_point = None;
-        self.version = -1;
-        self.state = DeltaTableState::default();
+        self.state = DeltaTableState::with_version(-1);
         self.update().await
+    }
+
+    /// Get the list of actions for the next commit
+    pub async fn peek_next_commit(
+        &self,
+        current_version: DeltaDataTypeVersion,
+    ) -> Result<PeekCommit, DeltaTableError> {
+        let next_version = current_version + 1;
+        let commit_uri = self.commit_uri_from_version(next_version);
+        let commit_log_bytes = self.storage.get(&commit_uri).await;
+        let commit_log_bytes = match commit_log_bytes {
+            Err(ObjectStoreError::NotFound { .. }) => return Ok(PeekCommit::UpToDate),
+            Err(err) => Err(err),
+            Ok(result) => result.bytes().await,
+        }?;
+
+        let reader = BufReader::new(Cursor::new(commit_log_bytes));
+
+        let mut actions = Vec::new();
+        for line in reader.lines() {
+            let action: action::Action = serde_json::from_str(line?.as_str())?;
+            actions.push(action);
+        }
+        Ok(PeekCommit::New(next_version, actions))
+    }
+
+    ///Apply any actions associated with the PeekCommit to the DeltaTable
+    pub fn apply_actions(
+        &mut self,
+        new_version: DeltaDataTypeVersion,
+        actions: Vec<Action>,
+    ) -> Result<(), DeltaTableError> {
+        if self.version() + 1 != new_version {
+            return Err(DeltaTableError::VersionMismatch(
+                new_version,
+                self.version(),
+            ));
+        }
+
+        let s = DeltaTableState::from_actions(actions, new_version)?;
+        self.state
+            .merge(s, self.config.require_tombstones, self.config.require_files);
+
+        Ok(())
     }
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
@@ -747,7 +877,7 @@ impl DeltaTable {
                 } else {
                     self.last_check_point = Some(last_check_point);
                     self.restore_checkpoint(last_check_point).await?;
-                    self.version = last_check_point.version;
+                    self.state.version = last_check_point.version;
                     self.update_incremental().await
                 }
             }
@@ -759,33 +889,19 @@ impl DeltaTable {
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
     pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
-        self.version += 1;
-
-        loop {
-            match self.apply_log(self.version).await {
-                Ok(_) => {
-                    self.version += 1;
-                }
-                Err(e) => {
-                    match e {
-                        ApplyLogError::EndOfLog => {
-                            self.version -= 1;
-                            if self.version == -1 {
-                                let err = format!(
-                                    "No snapshot or version 0 found, perhaps {} is an empty dir?",
-                                    self.table_uri
-                                );
-                                return Err(DeltaTableError::NotATable(err));
-                            }
-                        }
-                        _ => {
-                            return Err(DeltaTableError::from(e));
-                        }
-                    }
-                    return Ok(());
-                }
-            }
+        while let PeekCommit::New(version, actions) = self.peek_next_commit(self.version()).await? {
+            self.apply_actions(version, actions)?;
         }
+
+        if self.version() == -1 {
+            let err = format!(
+                "No snapshot or version 0 found, perhaps {} is an empty dir?",
+                self.table_uri
+            );
+            return Err(DeltaTableError::NotATable(err));
+        }
+
+        Ok(())
     }
 
     /// Loads the DeltaTable state for the given version.
@@ -795,16 +911,15 @@ impl DeltaTable {
     ) -> Result<(), DeltaTableError> {
         // check if version is valid
         let commit_uri = self.commit_uri_from_version(version);
-        match self.storage.head_obj(&commit_uri).await {
+        match self.storage.head(&commit_uri).await {
             Ok(_) => {}
-            Err(StorageError::NotFound) => {
+            Err(ObjectStoreError::NotFound { .. }) => {
                 return Err(DeltaTableError::InvalidVersion(version));
             }
             Err(e) => {
                 return Err(DeltaTableError::from(e));
             }
         }
-        self.version = version;
 
         let mut next_version;
         // 1. find latest checkpoint below version
@@ -815,13 +930,13 @@ impl DeltaTable {
             }
             None => {
                 // no checkpoint found, clear table state and start from the beginning
-                self.state = DeltaTableState::default();
+                self.state = DeltaTableState::with_version(0);
                 next_version = 0;
             }
         }
 
         // 2. apply all logs starting from checkpoint
-        while next_version <= self.version {
+        while next_version <= version {
             self.apply_log(next_version).await?;
             next_version += 1;
         }
@@ -829,7 +944,7 @@ impl DeltaTable {
         Ok(())
     }
 
-    async fn get_version_timestamp(
+    pub(crate) async fn get_version_timestamp(
         &mut self,
         version: DeltaDataTypeVersion,
     ) -> Result<i64, DeltaTableError> {
@@ -838,9 +953,9 @@ impl DeltaTable {
             None => {
                 let meta = self
                     .storage
-                    .head_obj(&self.commit_uri_from_version(version))
+                    .head(&self.commit_uri_from_version(version))
                     .await?;
-                let ts = meta.modified.timestamp();
+                let ts = meta.last_modified.timestamp();
                 // also cache timestamp for version
                 self.version_timestamp.insert(version, ts);
 
@@ -851,23 +966,63 @@ impl DeltaTable {
 
     /// Returns provenance information, including the operation, user, and so on, for each write to a table.
     /// The table history retention is based on the `logRetentionDuration` property of the Delta Table, 30 days by default.
-    pub fn history(
+    /// If `limit` is given, this returns the information of the latest `limit` commits made to this table. Otherwise,
+    /// it returns all commits from the earliest commit.
+    pub async fn history(
         &mut self,
         limit: Option<usize>,
     ) -> Result<Vec<Map<String, Value>>, DeltaTableError> {
-        let commit_infos_list = self.state.commit_infos().iter().rev().map(Map::clone);
-        match limit {
-            Some(l) => Ok(commit_infos_list.take(l).collect()),
-            None => Ok(commit_infos_list.collect()),
+        let mut version = match limit {
+            Some(l) => max(self.version() - l as i64 + 1, 0),
+            None => self.get_earliest_delta_log_version().await?,
+        };
+        let mut commit_infos_list = vec![];
+        let mut earliest_commit: Option<DeltaDataTypeVersion> = None;
+
+        loop {
+            match DeltaTableState::from_commit(self, version).await {
+                Ok(state) => {
+                    commit_infos_list.append(state.commit_infos().clone().as_mut());
+                    version += 1;
+                }
+                Err(e) => {
+                    match e {
+                        ApplyLogError::EndOfLog => {
+                            if earliest_commit.is_none() {
+                                earliest_commit =
+                                    Some(self.get_earliest_delta_log_version().await?);
+                            };
+                            if let Some(earliest) = earliest_commit {
+                                if version < earliest {
+                                    version = earliest;
+                                    continue;
+                                }
+                            } else {
+                                version -= 1;
+                                if version == -1 {
+                                    let err = format!(
+                                        "No snapshot or version 0 found, perhaps {} is an empty dir?",
+                                        self.table_uri
+                                    );
+                                    return Err(DeltaTableError::NotATable(err));
+                                }
+                            }
+                        }
+                        _ => {
+                            return Err(DeltaTableError::from(e));
+                        }
+                    }
+                    return Ok(commit_infos_list);
+                }
+            }
         }
     }
 
-    /// Returns the file list tracked in current table state filtered by provided
-    /// `PartitionFilter`s.
-    pub fn get_files_by_partitions(
-        &self,
-        filters: &[PartitionFilter<&str>],
-    ) -> Result<Vec<String>, DeltaTableError> {
+    /// Obtain Add actions for files that match the filter
+    pub fn get_active_add_actions_by_partitions<'a>(
+        &'a self,
+        filters: &'a [PartitionFilter<'a, &'a str>],
+    ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
         let current_metadata = self
             .state
             .current_metadata()
@@ -886,37 +1041,29 @@ impl DeltaTable {
             .into_iter()
             .collect();
 
-        let files = self
-            .state
-            .files()
-            .iter()
-            .filter(|add| {
-                let partitions = add
-                    .partition_values
-                    .iter()
-                    .map(|p| DeltaTablePartition::from_partition_value(p, ""))
-                    .collect::<Vec<DeltaTablePartition>>();
-
-                filters
-                    .iter()
-                    .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
-            })
-            .map(|add| add.path.clone())
-            .collect();
-
-        Ok(files)
+        let actions = self.state.files().iter().filter(move |add| {
+            let partitions = add
+                .partition_values
+                .iter()
+                .map(|p| DeltaTablePartition::from_partition_value(p, ""))
+                .collect::<Vec<DeltaTablePartition>>();
+            filters
+                .iter()
+                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
+        });
+        Ok(actions)
     }
 
-    /// Return the file uris as strings for the partition(s)
-    #[deprecated(
-        since = "0.4.0",
-        note = "Please use the get_file_uris_by_partitions function instead"
-    )]
-    pub fn get_file_paths_by_partitions(
+    /// Returns the file list tracked in current table state filtered by provided
+    /// `PartitionFilter`s.
+    pub fn get_files_by_partitions(
         &self,
         filters: &[PartitionFilter<&str>],
-    ) -> Result<Vec<String>, DeltaTableError> {
-        self.get_file_uris_by_partitions(filters)
+    ) -> Result<Vec<Path>, DeltaTableError> {
+        Ok(self
+            .get_active_add_actions_by_partitions(filters)?
+            .map(|add| Path::from(add.path.as_ref()))
+            .collect())
     }
 
     /// Return the file uris as strings for the partition(s)
@@ -927,61 +1074,55 @@ impl DeltaTable {
         let files = self.get_files_by_partitions(filters)?;
         Ok(files
             .iter()
-            .map(|fname| self.storage.join_path(&self.table_uri, fname))
+            .map(|fname| self.storage.to_uri(fname))
             .collect())
-    }
-
-    /// Return a refernece to all active "add" actions present in the loaded state
-    pub fn get_active_add_actions(&self) -> &Vec<action::Add> {
-        self.state.files()
     }
 
     /// Returns an iterator of file names present in the loaded state
     #[inline]
-    pub fn get_files_iter(&self) -> impl Iterator<Item = &str> {
-        self.state.files().iter().map(|add| add.path.as_str())
+    pub fn get_files_iter(&self) -> impl Iterator<Item = Path> + '_ {
+        self.state
+            .files()
+            .iter()
+            .map(|add| Path::from(add.path.as_ref()))
     }
 
     /// Returns a collection of file names present in the loaded state
     #[inline]
-    pub fn get_files(&self) -> Vec<&str> {
+    pub fn get_files(&self) -> Vec<Path> {
         self.get_files_iter().collect()
     }
 
     /// Returns file names present in the loaded state in HashSet
-    pub fn get_file_set(&self) -> HashSet<&str> {
+    pub fn get_file_set(&self) -> HashSet<Path> {
         self.state
             .files()
             .iter()
-            .map(|add| add.path.as_str())
+            .map(|add| Path::from(add.path.as_ref()))
             .collect()
     }
 
     /// Returns a URIs for all active files present in the current table version.
-    #[deprecated(
-        since = "0.4.0",
-        note = "Please use the get_file_uris function instead"
-    )]
-    pub fn get_file_paths(&self) -> Vec<String> {
-        self.get_file_uris()
-    }
-
-    /// Returns a URIs for all active files present in the current table version.
-    pub fn get_file_uris(&self) -> Vec<String> {
+    pub fn get_file_uris(&self) -> impl Iterator<Item = String> + '_ {
         self.state
             .files()
             .iter()
-            .map(|add| self.storage.join_path(&self.table_uri, &add.path))
-            .collect()
+            .map(|add| self.storage.to_uri(&Path::from(add.path.as_ref())))
     }
 
     /// Returns statistics for files, in order
-    pub fn get_stats(&self) -> Vec<Result<Option<Stats>, DeltaTableError>> {
+    pub fn get_stats(&self) -> impl Iterator<Item = Result<Option<Stats>, DeltaTableError>> + '_ {
         self.state
             .files()
             .iter()
             .map(|add| add.get_stats().map_err(DeltaTableError::from))
-            .collect()
+    }
+
+    /// Returns partition values for files, in order
+    pub fn get_partition_values(
+        &self,
+    ) -> impl Iterator<Item = &HashMap<String, Option<String>>> + '_ {
+        self.state.files().iter().map(|add| &add.partition_values)
     }
 
     /// Returns the currently loaded state snapshot.
@@ -1018,102 +1159,22 @@ impl DeltaTable {
         self.state.min_writer_version()
     }
 
-    /// List files no longer referenced by a Delta table and are older than the retention threshold.
-    fn get_stale_files(
-        &self,
-        retention_hours: Option<u64>,
-    ) -> Result<HashSet<&str>, DeltaTableError> {
-        let retention_millis = retention_hours
-            .map(|hours| 3600000 * hours as i64)
-            .unwrap_or_else(|| self.state.tombstone_retention_millis());
-
-        if retention_millis < self.state.tombstone_retention_millis() {
-            return Err(DeltaTableError::InvalidVacuumRetentionPeriod);
-        }
-
-        let tombstone_retention_timestamp = Utc::now().timestamp_millis() - retention_millis;
-
-        Ok(self
-            .state
-            .all_tombstones()
-            .iter()
-            .filter(|tombstone| {
-                // if the file has a creation time before the `tombstone_retention_timestamp`
-                // then it's considered as a stale file
-                tombstone.deletion_timestamp.unwrap_or(0) < tombstone_retention_timestamp
-            })
-            .map(|tombstone| tombstone.path.as_str())
-            .collect::<HashSet<_>>())
-    }
-
-    /// Whether a path should be hidden for delta-related file operations, such as Vacuum.
-    /// Names of the form partitionCol=[value] are partition directories, and should be
-    /// deleted even if they'd normally be hidden. The _db_index directory contains (bloom filter)
-    /// indexes and these must be deleted when the data they are tied to is deleted.
-    fn is_hidden_directory(&self, path_name: &str) -> Result<bool, DeltaTableError> {
-        Ok((path_name.starts_with('.') || path_name.starts_with('_'))
-            && !path_name.starts_with("_delta_index")
-            && !path_name.starts_with("_change_data")
-            && !self
-                .state
-                .current_metadata()
-                .ok_or(DeltaTableError::NoMetadata)?
-                .partition_columns
-                .iter()
-                .any(|partition_column| path_name.starts_with(partition_column)))
-    }
-
-    /// Run the Vacuum command on the Delta Table: delete files no longer referenced by a Delta table and are older than the retention threshold.
-    /// We do not recommend that you set a retention interval shorter than 7 days, because old snapshots
-    /// and uncommitted files can still be in use by concurrent readers or writers to the table.
-    /// If vacuum cleans up active files, concurrent readers can fail or, worse, tables can be
-    /// corrupted when vacuum deletes files that have not yet been committed.
-    /// If `retention_hours` is not set then the `configuration.deletedFileRetentionDuration` of
-    /// delta table is used or if that's missing too, then the default value of 7 days otherwise.
+    /// Vacuum the delta table seee [`Vacuum`] for more info
     pub async fn vacuum(
         &mut self,
         retention_hours: Option<u64>,
         dry_run: bool,
-    ) -> Result<Vec<String>, DeltaTableError> {
-        let expired_tombstones = self.get_stale_files(retention_hours)?;
-        let valid_files = self.get_file_set();
-
-        let mut files_to_delete = vec![];
-        let mut all_files = self.storage.list_objs(&self.table_uri).await?;
-
-        // TODO: table_path is currently only used in vacuum, consider precalcualte it during table
-        // struct initialization if it ends up being used in other hot paths
-        let table_path = parse_uri(&self.table_uri)?.path();
-
-        while let Some(obj_meta) = all_files.next().await {
-            let obj_meta = obj_meta?;
-            // We can't use self.table_uri as the prefix to extract relative path because
-            // obj_meta.path is not a URI. For example, for S3 objects, obj_meta.path is just the
-            // object key without `s3://` and bucket name.
-            let rel_path = extract_rel_path(&table_path, &obj_meta.path)?;
-
-            if valid_files.contains(rel_path) // file is still being tracked in table
-                || !expired_tombstones.contains(rel_path) // file is not an expired tombstone
-                || self.is_hidden_directory(rel_path)?
-            {
-                continue;
-            }
-
-            files_to_delete.push(obj_meta.path);
+        enforce_retention_duration: bool,
+    ) -> Result<Vec<String>, VacuumError> {
+        let mut plan = Vacuum::default()
+            .dry_run(dry_run)
+            .enforce_retention_duration(enforce_retention_duration);
+        if let Some(hours) = retention_hours {
+            plan = plan.with_retention_period(Duration::hours(hours as i64));
         }
 
-        if dry_run {
-            return Ok(files_to_delete);
-        }
-
-        let paths = &files_to_delete
-            .iter()
-            .map(|rel_path| self.storage.join_path(&self.table_uri, rel_path))
-            .collect::<Vec<_>>();
-        match self.storage.delete_objs(paths).await {
-            Ok(_) => Ok(files_to_delete),
-            Err(err) => Err(DeltaTableError::StorageError { source: err }),
-        }
+        let res = plan.execute(self).await?;
+        Ok(res.files_deleted)
     }
 
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
@@ -1160,10 +1221,12 @@ impl DeltaTable {
         // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
         self.storage
-            .rename_obj_noreplace(&commit.uri, &self.commit_uri_from_version(version))
+            .rename_if_not_exists(&commit.uri, &self.commit_uri_from_version(version))
             .await
             .map_err(|e| match e {
-                StorageError::AlreadyExists(_) => DeltaTableError::VersionAlreadyExists(version),
+                ObjectStoreError::AlreadyExists { .. } => {
+                    DeltaTableError::VersionAlreadyExists(version)
+                }
                 _ => DeltaTableError::from(e),
             })?;
 
@@ -1177,20 +1240,18 @@ impl DeltaTable {
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
     /// call one of the `open_table` helper methods instead.
     pub fn new(
-        table_uri: &str,
-        storage_backend: Box<dyn StorageBackend>,
+        table_uri: impl AsRef<str>,
+        storage_backend: Arc<dyn StorageBackend>,
         config: DeltaTableConfig,
     ) -> Result<Self, DeltaTableError> {
-        let table_uri = storage_backend.trim_path(table_uri);
-        let log_uri_normalized = storage_backend.join_path(&table_uri, "_delta_log");
+        let storage = DeltaObjectStore::try_new(table_uri.as_ref(), storage_backend).unwrap();
+        let root_uri = storage.root_uri();
         Ok(Self {
-            version: 0,
-            state: DeltaTableState::default(),
-            storage: storage_backend,
-            table_uri,
+            state: DeltaTableState::with_version(-1),
+            storage: Arc::new(storage),
+            table_uri: root_uri,
             config,
             last_check_point: None,
-            log_uri: log_uri_normalized,
             version_timestamp: HashMap::new(),
         })
     }
@@ -1201,6 +1262,7 @@ impl DeltaTable {
         metadata: DeltaTableMetaData,
         protocol: action::Protocol,
         commit_info: Option<Map<String, Value>>,
+        add_actions: Option<Vec<action::Add>>,
     ) -> Result<(), DeltaTableError> {
         let meta = action::MetaData::try_from(metadata)?;
 
@@ -1215,20 +1277,29 @@ impl DeltaTable {
             Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
         );
 
-        let actions = vec![
+        let mut actions = vec![
             Action::commitInfo(enriched_commit_info),
             Action::protocol(protocol),
             Action::metaData(meta),
         ];
+        if let Some(add_actions) = add_actions {
+            for add_action in add_actions {
+                actions.push(Action::add(add_action));
+            }
+        };
 
         let mut transaction = self.create_transaction(None);
         transaction.add_actions(actions.clone());
 
-        let prepared_commit = transaction.prepare_commit(None).await?;
+        let prepared_commit = transaction.prepare_commit(None, None).await?;
         let committed_version = self.try_commit_transaction(&prepared_commit, 0).await?;
 
         let new_state = DeltaTableState::from_commit(self, committed_version).await?;
-        self.state.merge(new_state, self.config.require_tombstones);
+        self.state.merge(
+            new_state,
+            self.config.require_tombstones,
+            self.config.require_files,
+        );
 
         Ok(())
     }
@@ -1277,7 +1348,7 @@ impl DeltaTable {
 impl fmt::Display for DeltaTable {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         writeln!(f, "DeltaTable({})", self.table_uri)?;
-        writeln!(f, "\tversion: {}", self.version)?;
+        writeln!(f, "\tversion: {}", self.version())?;
         match self.state.current_metadata() {
             Some(metadata) => {
                 writeln!(f, "\tmetadata: {}", metadata)?;
@@ -1370,91 +1441,16 @@ impl<'a> DeltaTransaction<'a> {
         }
     }
 
-    /// Create a new add action and write the given bytes to the storage backend as a fully formed
-    /// Parquet file
-    ///
-    /// add_file accepts two optional parameters:
-    ///
-    /// partitions: an ordered vec of WritablePartitionValues for the file to be added
-    /// actions: an ordered list of Actions to be inserted into the log file _ahead_ of the Add
-    ///     action for the file added. This should typically be used for txn type actions
-    pub async fn add_file(
-        &mut self,
-        bytes: &[u8],
-        partitions: Option<Vec<(String, String)>>,
-    ) -> Result<(), DeltaTableError> {
-        let path = self.generate_parquet_filename(&partitions);
-
-        let partition_values = {
-            let mut partition_values = HashMap::new();
-            if let Some(partitions) = &partitions {
-                for (key, value) in partitions {
-                    partition_values.insert(key.clone(), Some(value.clone()));
-                }
-            }
-            partition_values
-        };
-
-        let parquet_uri = self
-            .delta_table
-            .storage
-            .join_path(&self.delta_table.table_uri, &path);
-
-        debug!("Writing a parquet file to {}", &parquet_uri);
-        self.delta_table
-            .storage
-            .put_obj(&parquet_uri, bytes)
-            .await?;
-
-        // Determine the modification timestamp to include in the add action - milliseconds since epoch
-        // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
-        let modification_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        let modification_time = modification_time.as_millis() as i64;
-
-        self.actions.push(Action::add(action::Add {
-            path,
-            partition_values,
-            modification_time,
-            size: bytes.len() as i64,
-            partition_values_parsed: None,
-            data_change: true,
-            stats: None,
-            stats_parsed: None,
-            tags: None,
-        }));
-
-        Ok(())
-    }
-
-    fn generate_parquet_filename(&self, partitions: &Option<Vec<(String, String)>>) -> String {
-        /*
-         * The specific file naming for parquet is not well documented including the preceding five
-         * zeros and the trailing c000 string
-         *
-         */
-        let mut path_parts = vec![];
-
-        if let Some(partitions) = partitions {
-            for partition in partitions {
-                path_parts.push(format!("{}={}", partition.0, partition.1));
-            }
-        }
-
-        path_parts.push(format!("part-00000-{}-c000.snappy.parquet", Uuid::new_v4()));
-
-        self.delta_table
-            .storage
-            .join_paths(&path_parts.iter().map(|s| s.as_str()).collect::<Vec<&str>>())
-    }
-
     /// Commits the given actions to the delta log.
     /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
     pub async fn commit(
         &mut self,
-        _operation: Option<DeltaOperation>,
+        operation: Option<DeltaOperation>,
+        app_metadata: Option<Map<String, Value>>,
     ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
-        // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action), but leaving it unused for now.
-        // `CommitInfo` is a fairly dynamic data structure so we should work out the data structure approach separately.
+        // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action),
+        // but leaving it unused for now. `CommitInfo` is a fairly dynamic data structure so we should work
+        // out the data structure approach separately.
 
         // TODO: calculate isolation level to use when checking for conflicts.
         // Leaving conflict checking unimplemented for now to get the "single writer" implementation off the ground.
@@ -1471,7 +1467,7 @@ impl<'a> DeltaTransaction<'a> {
         //     IsolationLevel::Serializable
         // };
 
-        let prepared_commit = self.prepare_commit(_operation).await?;
+        let prepared_commit = self.prepare_commit(operation, app_metadata).await?;
 
         // try to commit in a loop in case other writers write the next version first
         let version = self.try_commit_loop(&prepared_commit).await?;
@@ -1483,27 +1479,46 @@ impl<'a> DeltaTransaction<'a> {
     /// the transaction object could be dropped and the actual commit could be executed
     /// with `DeltaTable.try_commit_transaction`.
     pub async fn prepare_commit(
-        &self,
-        _operation: Option<DeltaOperation>,
+        &mut self,
+        operation: Option<DeltaOperation>,
+        app_metadata: Option<Map<String, Value>>,
     ) -> Result<PreparedCommit, DeltaTableError> {
-        let token = Uuid::new_v4().to_string();
+        if !self
+            .actions
+            .iter()
+            .any(|a| matches!(a, action::Action::commitInfo(..)))
+        {
+            let mut commit_info = Map::<String, Value>::new();
+            commit_info.insert(
+                "timestamp".to_string(),
+                Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
+            );
+            commit_info.insert(
+                "clientVersion".to_string(),
+                Value::String(format!("delta-rs.{}", crate_version())),
+            );
 
-        // TODO: create a CommitInfo action and prepend it to actions.
+            if let Some(op) = &operation {
+                commit_info.append(&mut op.get_commit_info())
+            }
+            if let Some(mut meta) = app_metadata {
+                commit_info.append(&mut meta)
+            }
+            self.add_action(action::Action::commitInfo(commit_info));
+        }
+
         // Serialize all actions that are part of this log entry.
-        let log_entry = log_entry_from_actions(&self.actions)?;
+        let log_entry = bytes::Bytes::from(log_entry_from_actions(&self.actions)?);
 
+        // Write delta log entry as temporary file to storage. For the actual commit,
+        // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
+        let token = Uuid::new_v4().to_string();
         let file_name = format!("_commit_{}.json.tmp", token);
-        let uri = self
-            .delta_table
-            .storage
-            .join_path(&self.delta_table.log_uri, &file_name);
+        let path = Path::from_iter(["_delta_log", &file_name]);
 
-        self.delta_table
-            .storage
-            .put_obj(&uri, log_entry.as_bytes())
-            .await?;
+        self.delta_table.storage.put(&path, log_entry).await?;
 
-        Ok(PreparedCommit { uri })
+        Ok(PreparedCommit { uri: path })
     }
 
     async fn try_commit_loop(
@@ -1514,7 +1529,7 @@ impl<'a> DeltaTransaction<'a> {
         loop {
             self.delta_table.update().await?;
 
-            let version = self.delta_table.version + 1;
+            let version = self.delta_table.version() + 1;
 
             match self
                 .delta_table
@@ -1550,7 +1565,7 @@ impl<'a> DeltaTransaction<'a> {
 /// Once created, the actual commit could be executed with `DeltaTransaction.try_commit`.
 #[derive(Debug)]
 pub struct PreparedCommit {
-    uri: String,
+    uri: Path,
 }
 
 fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Error> {
@@ -1613,7 +1628,7 @@ mod tests {
     fn normalize_table_uri() {
         for table_uri in [
             "s3://tests/data/delta-0.8.0/",
-            "s3://tests/data/delta-0.8.0//",
+            // "s3://tests/data/delta-0.8.0//",
             "s3://tests/data/delta-0.8.0",
         ]
         .iter()
@@ -1621,46 +1636,6 @@ mod tests {
             let be = storage::get_backend_for_uri(table_uri).unwrap();
             let table = DeltaTable::new(table_uri, be, DeltaTableConfig::default()).unwrap();
             assert_eq!(table.table_uri, "s3://tests/data/delta-0.8.0");
-        }
-    }
-
-    #[test]
-    fn rel_path() {
-        assert!(matches!(
-            extract_rel_path("data/delta-0.8.0", "data/delta-0.8.0/abc/123"),
-            Ok("abc/123"),
-        ));
-
-        assert!(matches!(
-            extract_rel_path("data/delta-0.8.0", "data/delta-0.8.0/abc.json"),
-            Ok("abc.json"),
-        ));
-
-        assert!(matches!(
-            extract_rel_path("data/delta-0.8.0", "tests/abc.json"),
-            Err(DeltaTableError::Generic(_)),
-        ));
-    }
-
-    #[tokio::test]
-    async fn parquet_filename() {
-        let mut table = open_table("./tests/data/simple_table").await.unwrap();
-
-        let txn = DeltaTransaction {
-            delta_table: &mut table,
-            actions: vec![],
-            options: DeltaTransactionOptions::default(),
-        };
-
-        let partitions = vec![
-            (String::from("col1"), String::from("a")),
-            (String::from("col2"), String::from("b")),
-        ];
-        let parquet_filename = txn.generate_parquet_filename(&Some(partitions));
-        if cfg!(windows) {
-            assert!(parquet_filename.contains("col1=a\\col2=b\\part-00000-"));
-        } else {
-            assert!(parquet_filename.contains("col1=a/col2=b/part-00000-"));
         }
     }
 
@@ -1693,18 +1668,18 @@ mod tests {
 
         let protocol = action::Protocol {
             min_reader_version: 1,
-            min_writer_version: 2,
+            min_writer_version: 1,
         };
 
         let tmp_dir = tempdir::TempDir::new("create_table_test").unwrap();
         let table_dir = tmp_dir.path().join("test_create");
+        std::fs::create_dir(&table_dir).unwrap();
 
         let path = table_dir.to_str().unwrap();
-        let backend = Box::new(storage::file::FileStorageBackend::new(
+        let backend = Arc::new(storage::file::FileStorageBackend::new(
             tmp_dir.path().to_str().unwrap(),
         ));
         let mut dt = DeltaTable::new(path, backend, DeltaTableConfig::default()).unwrap();
-        // let mut dt = DeltaTable::new(path, backend, DeltaTableLoadOptions::default()).unwrap();
 
         let mut commit_info = Map::<String, Value>::new();
         commit_info.insert(
@@ -1716,13 +1691,13 @@ mod tests {
             serde_json::Value::String("test user".to_string()),
         );
         // Action
-        dt.create(delta_md.clone(), protocol.clone(), Some(commit_info))
+        dt.create(delta_md.clone(), protocol.clone(), Some(commit_info), None)
             .await
             .unwrap();
 
         // Validation
         // assert DeltaTable version is now 0 and no data files have been added
-        assert_eq!(dt.version, 0);
+        assert_eq!(dt.version(), 0);
         assert_eq!(dt.state.files().len(), 0);
 
         // assert new _delta_log file created in tempDir

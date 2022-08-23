@@ -4,45 +4,79 @@
 //!
 //! ```rust
 //! use std::sync::Arc;
-//! use datafusion::execution::context::ExecutionContext;
+//! use datafusion::execution::context::SessionContext;
 //!
 //! async {
-//!   let mut ctx = ExecutionContext::new();
+//!   let mut ctx = SessionContext::new();
 //!   let table = deltalake::open_table("./tests/data/simple_table")
 //!       .await
 //!       .unwrap();
 //!   ctx.register_table("demo", Arc::new(table)).unwrap();
 //!
 //!   let batches = ctx
-//!       .sql("SELECT * FROM demo").unwrap()
+//!       .sql("SELECT * FROM demo").await.unwrap()
 //!       .collect()
 //!       .await.unwrap();
 //! };
 //! ```
 
 use std::any::Any;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
-use datafusion::datasource::{PartitionedFile, TableProvider};
-use datafusion::logical_plan::{combine_filters, Expr};
-use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::metrics::ExecutionPlanMetricsSet;
-use datafusion::physical_plan::parquet::{ParquetExec, ParquetPartition};
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::{ColumnStatistics, Statistics};
+use async_trait::async_trait;
+use chrono::{DateTime, NaiveDateTime, Utc};
+use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::{TableProvider, TableType};
+use datafusion::error::{DataFusionError, Result as DataFusionResult};
+use datafusion::execution::context::SessionState;
+use datafusion::logical_plan::{combine_filters, Column, Expr};
+use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_plan::file_format::FileScanConfig;
+use datafusion::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use datafusion::scalar::ScalarValue;
+use object_store::{path::Path, ObjectMeta};
+use url::Url;
 
 use crate::action;
 use crate::delta;
 use crate::schema;
+use crate::DeltaTableError;
+
+impl From<DeltaTableError> for DataFusionError {
+    fn from(err: DeltaTableError) -> Self {
+        match err {
+            DeltaTableError::ArrowError { source } => DataFusionError::ArrowError(source),
+            DeltaTableError::Io { source } => DataFusionError::IoError(source),
+            DeltaTableError::ObjectStore { source } => DataFusionError::ObjectStore(source),
+            DeltaTableError::ParquetError { source } => DataFusionError::ParquetError(source),
+            _ => DataFusionError::External(Box::new(err)),
+        }
+    }
+}
+
+impl From<DataFusionError> for crate::DeltaTableError {
+    fn from(err: DataFusionError) -> Self {
+        match err {
+            DataFusionError::ArrowError(source) => DeltaTableError::ArrowError { source },
+            DataFusionError::IoError(source) => DeltaTableError::Io { source },
+            DataFusionError::ObjectStore(source) => DeltaTableError::ObjectStore { source },
+            DataFusionError::ParquetError(source) => DeltaTableError::ParquetError { source },
+            _ => DeltaTableError::Generic(err.to_string()),
+        }
+    }
+}
 
 impl delta::DeltaTable {
     /// Return statistics for Datafusion Table
     pub fn datafusion_table_statistics(&self) -> Statistics {
         let stats = self
-            .get_active_add_actions()
+            .get_state()
+            .files()
             .iter()
             .fold(
                 Some(Statistics {
@@ -77,8 +111,8 @@ impl delta::DeltaTable {
                                 .get_fields()
                                 .iter()
                                 .zip(col_stats)
-                                .map(|(field, stats)| ColumnStatistics {
-                                    null_count: new_stats
+                                .map(|(field, stats)| {
+                                    let null_count = new_stats
                                         .null_count
                                         .get(field.get_name())
                                         .and_then(|x| {
@@ -86,8 +120,9 @@ impl delta::DeltaTable {
                                             let null_count = x.as_value()? as usize;
                                             Some(null_count_acc + null_count)
                                         })
-                                        .or(stats.null_count),
-                                    max_value: new_stats
+                                        .or(stats.null_count);
+
+                                    let max_value = new_stats
                                         .max_values
                                         .get(field.get_name())
                                         .and_then(|x| {
@@ -99,7 +134,7 @@ impl delta::DeltaTable {
                                                     if left_larger_than_right(
                                                         old_max_value.clone(),
                                                         max_value.clone(),
-                                                    ) {
+                                                    )? {
                                                         Some(old_max_value)
                                                     } else {
                                                         Some(max_value)
@@ -109,8 +144,9 @@ impl delta::DeltaTable {
                                                 (None, old) => old,
                                             }
                                         })
-                                        .or_else(|| stats.max_value.clone()),
-                                    min_value: new_stats
+                                        .or_else(|| stats.max_value.clone());
+
+                                    let min_value = new_stats
                                         .min_values
                                         .get(field.get_name())
                                         .and_then(|x| {
@@ -122,7 +158,7 @@ impl delta::DeltaTable {
                                                     if left_larger_than_right(
                                                         min_value.clone(),
                                                         old_min_value.clone(),
-                                                    ) {
+                                                    )? {
                                                         Some(old_min_value)
                                                     } else {
                                                         Some(min_value)
@@ -132,8 +168,14 @@ impl delta::DeltaTable {
                                                 (None, old) => old,
                                             }
                                         })
-                                        .or_else(|| stats.min_value.clone()),
-                                    distinct_count: None, // TODO: distinct
+                                        .or_else(|| stats.min_value.clone());
+
+                                    ColumnStatistics {
+                                        null_count,
+                                        max_value,
+                                        min_value,
+                                        distinct_count: None, // TODO: distinct
+                                    }
                                 })
                                 .collect()
                         }),
@@ -142,6 +184,7 @@ impl delta::DeltaTable {
                 },
             )
             .unwrap_or_default();
+
         // Convert column max/min scalar values to correct types based on arrow types.
         Statistics {
             is_exact: true,
@@ -178,6 +221,88 @@ impl delta::DeltaTable {
     }
 }
 
+impl PruningStatistics for delta::DeltaTable {
+    /// return the minimum values for the named column, if known.
+    /// Note: the returned array must contain `num_containers()` rows
+    fn min_values(&self, column: &Column) -> Option<ArrayRef> {
+        let field = self
+            .get_schema()
+            .ok()
+            .map(|s| s.get_field_with_name(&column.name).ok())??;
+        let data_type = field.get_type().try_into().ok()?;
+        let values = self.get_state().files().iter().map(|add| {
+            if let Ok(Some(statistics)) = add.get_stats() {
+                statistics
+                    .min_values
+                    .get(&column.name)
+                    .and_then(|f| {
+                        correct_scalar_value_type(
+                            to_scalar_value(f.as_value()?).unwrap_or(ScalarValue::Null),
+                            &data_type,
+                        )
+                    })
+                    .unwrap_or(ScalarValue::Null)
+            } else {
+                ScalarValue::Null
+            }
+        });
+        ScalarValue::iter_to_array(values).ok()
+    }
+
+    /// return the maximum values for the named column, if known.
+    /// Note: the returned array must contain `num_containers()` rows.
+    fn max_values(&self, column: &Column) -> Option<ArrayRef> {
+        let field = self
+            .get_schema()
+            .ok()
+            .map(|s| s.get_field_with_name(&column.name).ok())??;
+        let data_type = field.get_type().try_into().ok()?;
+        let values = self.get_state().files().iter().map(|add| {
+            if let Ok(Some(statistics)) = add.get_stats() {
+                statistics
+                    .max_values
+                    .get(&column.name)
+                    .and_then(|f| {
+                        correct_scalar_value_type(
+                            to_scalar_value(f.as_value()?).unwrap_or(ScalarValue::Null),
+                            &data_type,
+                        )
+                    })
+                    .unwrap_or(ScalarValue::Null)
+            } else {
+                ScalarValue::Null
+            }
+        });
+        ScalarValue::iter_to_array(values).ok()
+    }
+
+    /// return the number of containers (e.g. row groups) being
+    /// pruned with these statistics
+    fn num_containers(&self) -> usize {
+        self.get_state().files().len()
+    }
+
+    /// return the number of null values for the named column as an
+    /// `Option<UInt64Array>`.
+    ///
+    /// Note: the returned array must contain `num_containers()` rows.
+    fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        let values = self.get_state().files().iter().map(|add| {
+            if let Ok(Some(statistics)) = add.get_stats() {
+                statistics
+                    .null_count
+                    .get(&column.name)
+                    .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
+                    .unwrap_or(ScalarValue::UInt64(None))
+            } else {
+                ScalarValue::UInt64(None)
+            }
+        });
+        ScalarValue::iter_to_array(values).ok()
+    }
+}
+
+#[async_trait]
 impl TableProvider for delta::DeltaTable {
     fn schema(&self) -> Arc<ArrowSchema> {
         Arc::new(
@@ -188,80 +313,84 @@ impl TableProvider for delta::DeltaTable {
         )
     }
 
-    fn scan(
+    fn table_type(&self) -> TableType {
+        TableType::Base
+    }
+
+    async fn scan(
         &self,
+        session: &SessionState,
         projection: &Option<Vec<usize>>,
-        batch_size: usize,
         filters: &[Expr],
         limit: Option<usize>,
-    ) -> datafusion::error::Result<Arc<dyn ExecutionPlan>> {
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(<ArrowSchema as TryFrom<&schema::Schema>>::try_from(
             delta::DeltaTable::schema(self).unwrap(),
         )?);
-        let filenames = self.get_file_uris();
-        let metrics = ExecutionPlanMetricsSet::new();
 
-        let partitions = filenames
-            .into_iter()
-            .zip(self.get_active_add_actions())
-            .enumerate()
-            .map(|(idx, (fname, action))| {
-                let statistics = if let Ok(Some(statistics)) = action.get_stats() {
-                    Statistics {
-                        num_rows: Some(statistics.num_records as usize),
-                        total_byte_size: Some(action.size as usize),
-                        column_statistics: Some(
-                            self.schema()
-                                .unwrap()
-                                .get_fields()
-                                .iter()
-                                .map(|field| ColumnStatistics {
-                                    null_count: statistics
-                                        .null_count
-                                        .get(field.get_name())
-                                        .and_then(|f| f.as_value().map(|v| v as usize)),
-                                    max_value: statistics
-                                        .max_values
-                                        .get(field.get_name())
-                                        .and_then(|f| to_scalar_value(f.as_value()?)),
-                                    min_value: statistics
-                                        .min_values
-                                        .get(field.get_name())
-                                        .and_then(|f| to_scalar_value(f.as_value()?)),
-                                    distinct_count: None, // TODO: distinct
-                                })
-                                .collect(),
-                        ),
-                        is_exact: true,
-                    }
-                } else {
-                    Statistics::default()
-                };
+        // each delta table must register a specific object store, since paths are internally
+        // handled relative to the table root.
+        let object_store_url = self.storage.object_store_url();
+        let url: &Url = object_store_url.as_ref();
+        session.runtime_env.register_object_store(
+            url.scheme(),
+            url.host_str().unwrap_or_default(),
+            self.object_store(),
+        );
 
-                Ok(ParquetPartition::new(
-                    vec![PartitionedFile {
-                        path: fname,
-                        statistics,
-                    }],
-                    idx,
-                    metrics.clone(),
-                ))
-            })
-            .collect::<datafusion::error::Result<_>>()?;
-        let predicate_builder = combine_filters(filters).and_then(|predicate_expr| {
-            PruningPredicate::try_new(&predicate_expr, schema.clone()).ok()
-        });
+        // TODO we group files together by their partition values. If the table is partitioned
+        // and partitions are somewhat evenly distributed, probably not the worst choice ...
+        // However we may want to do some additional balancing in case we are far off from the above.
+        let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
+        if let Some(Some(predicate)) = (!filters.is_empty()).then_some(combine_filters(filters)) {
+            let pruning_predicate = PruningPredicate::try_new(predicate, schema.clone())?;
+            let files_to_prune = pruning_predicate.prune(self)?;
+            self.get_state()
+                .files()
+                .iter()
+                .zip(files_to_prune.into_iter())
+                .for_each(|(action, prune_file)| {
+                    if !prune_file {
+                        let part = partitioned_file_from_action(action, &schema);
+                        file_groups
+                            .entry(part.partition_values.clone())
+                            .or_default()
+                            .push(part);
+                    };
+                });
+        } else {
+            self.get_state().files().iter().for_each(|action| {
+                let part = partitioned_file_from_action(action, &schema);
+                file_groups
+                    .entry(part.partition_values.clone())
+                    .or_default()
+                    .push(part);
+            });
+        };
 
-        Ok(Arc::new(ParquetExec::new(
-            partitions,
-            schema,
-            projection.clone(),
-            self.datafusion_table_statistics(),
-            ExecutionPlanMetricsSet::new(),
-            predicate_builder,
-            batch_size,
-            limit,
-        )))
+        let table_partition_cols = self.get_metadata()?.partition_columns.clone();
+        let file_schema = Arc::new(ArrowSchema::new(
+            schema
+                .fields()
+                .iter()
+                .filter(|f| !table_partition_cols.contains(f.name()))
+                .cloned()
+                .collect(),
+        ));
+        ParquetFormat::default()
+            .create_physical_plan(
+                FileScanConfig {
+                    object_store_url,
+                    file_schema,
+                    file_groups: file_groups.into_values().collect(),
+                    statistics: self.datafusion_table_statistics(),
+                    projection: projection.clone(),
+                    limit,
+                    table_partition_cols,
+                },
+                filters,
+            )
+            .await
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -269,17 +398,54 @@ impl TableProvider for delta::DeltaTable {
     }
 }
 
+fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> PartitionedFile {
+    let partition_values = schema
+        .fields()
+        .iter()
+        .filter_map(|f| {
+            action.partition_values.get(f.name()).map(|val| match val {
+                Some(value) => {
+                    match to_scalar_value(&serde_json::Value::String(value.to_string())) {
+                        Some(parsed) => correct_scalar_value_type(parsed, f.data_type())
+                            .unwrap_or(ScalarValue::Null),
+                        None => ScalarValue::Null,
+                    }
+                }
+                None => ScalarValue::Null,
+            })
+        })
+        .collect::<Vec<_>>();
+    let ts_secs = action.modification_time / 1000;
+    let ts_ns = (action.modification_time % 1000) * 1_000_000;
+    let last_modified =
+        DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(ts_secs, ts_ns as u32), Utc);
+    PartitionedFile {
+        object_meta: ObjectMeta {
+            location: Path::from(action.path.clone()),
+            last_modified,
+            size: action.size as usize,
+        },
+        partition_values,
+        range: None,
+    }
+}
+
 fn to_scalar_value(stat_val: &serde_json::Value) -> Option<datafusion::scalar::ScalarValue> {
-    if stat_val.is_number() {
-        if let Some(val) = stat_val.as_i64() {
-            Some(ScalarValue::from(val))
-        } else if let Some(val) = stat_val.as_u64() {
-            Some(ScalarValue::from(val))
-        } else {
-            stat_val.as_f64().map(ScalarValue::from)
+    match stat_val {
+        serde_json::Value::Bool(val) => Some(ScalarValue::from(*val)),
+        serde_json::Value::Number(num) => {
+            if let Some(val) = num.as_i64() {
+                Some(ScalarValue::from(val))
+            } else if let Some(val) = num.as_u64() {
+                Some(ScalarValue::from(val))
+            } else {
+                num.as_f64().map(ScalarValue::from)
+            }
         }
-    } else {
-        None
+        serde_json::Value::String(s) => Some(ScalarValue::from(s.as_str())),
+        serde_json::Value::Array(_) => None,
+        serde_json::Value::Object(_) => None,
+        serde_json::Value::Null => None,
     }
 }
 
@@ -289,52 +455,64 @@ fn correct_scalar_value_type(
 ) -> Option<datafusion::scalar::ScalarValue> {
     match field_dt {
         ArrowDataType::Int64 => {
-            let raw_value = i64::try_from(value).unwrap();
+            let raw_value = i64::try_from(value).ok()?;
             Some(ScalarValue::from(raw_value))
         }
         ArrowDataType::Int32 => {
-            let raw_value = i64::try_from(value).unwrap() as i32;
+            let raw_value = i64::try_from(value).ok()? as i32;
             Some(ScalarValue::from(raw_value))
         }
         ArrowDataType::Int16 => {
-            let raw_value = i64::try_from(value).unwrap() as i16;
+            let raw_value = i64::try_from(value).ok()? as i16;
             Some(ScalarValue::from(raw_value))
         }
         ArrowDataType::Int8 => {
-            let raw_value = i64::try_from(value).unwrap() as i8;
+            let raw_value = i64::try_from(value).ok()? as i8;
             Some(ScalarValue::from(raw_value))
         }
         ArrowDataType::Float32 => {
-            let raw_value = f64::try_from(value).unwrap() as f32;
+            let raw_value = f64::try_from(value).ok()? as f32;
             Some(ScalarValue::from(raw_value))
         }
         ArrowDataType::Float64 => {
-            let raw_value = f64::try_from(value).unwrap();
+            let raw_value = f64::try_from(value).ok()?;
+            Some(ScalarValue::from(raw_value))
+        }
+        ArrowDataType::Utf8 => match value {
+            ScalarValue::Utf8(val) => Some(ScalarValue::Utf8(val)),
+            _ => None,
+        },
+        ArrowDataType::LargeUtf8 => match value {
+            ScalarValue::Utf8(val) => Some(ScalarValue::LargeUtf8(val)),
+            _ => None,
+        },
+        ArrowDataType::Boolean => {
+            let raw_value = bool::try_from(value).ok()?;
             Some(ScalarValue::from(raw_value))
         }
         ArrowDataType::Decimal(_, _) => {
-            let raw_value = f64::try_from(value).unwrap();
+            let raw_value = f64::try_from(value).ok()?;
             Some(ScalarValue::from(raw_value))
         }
         ArrowDataType::Date32 => {
-            let raw_value = i64::try_from(value).unwrap() as i32;
+            let raw_value = i64::try_from(value).ok()? as i32;
             Some(ScalarValue::Date32(Some(raw_value)))
         }
         ArrowDataType::Date64 => {
-            let raw_value = i64::try_from(value).unwrap();
+            let raw_value = i64::try_from(value).ok()?;
             Some(ScalarValue::Date64(Some(raw_value)))
         }
         ArrowDataType::Timestamp(TimeUnit::Nanosecond, None) => {
-            let raw_value = i64::try_from(value).unwrap();
-            Some(ScalarValue::TimestampNanosecond(Some(raw_value)))
+            let raw_value = i64::try_from(value).ok()?;
+            Some(ScalarValue::TimestampNanosecond(Some(raw_value), None))
         }
         ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
-            let raw_value = i64::try_from(value).unwrap();
-            Some(ScalarValue::TimestampMicrosecond(Some(raw_value)))
+            let raw_value = i64::try_from(value).ok()?;
+            Some(ScalarValue::TimestampMicrosecond(Some(raw_value), None))
         }
         ArrowDataType::Timestamp(TimeUnit::Millisecond, None) => {
-            let raw_value = i64::try_from(value).unwrap();
-            Some(ScalarValue::TimestampMillisecond(Some(raw_value)))
+            let raw_value = i64::try_from(value).ok()?;
+            Some(ScalarValue::TimestampMillisecond(Some(raw_value), None))
         }
         _ => {
             log::error!(
@@ -350,36 +528,47 @@ fn correct_scalar_value_type(
 fn left_larger_than_right(
     left: datafusion::scalar::ScalarValue,
     right: datafusion::scalar::ScalarValue,
-) -> bool {
+) -> Option<bool> {
     match left {
         ScalarValue::Float64(Some(v)) => {
-            let f_right = f64::try_from(right).unwrap();
-            v > f_right
+            let f_right = f64::try_from(right).ok()?;
+            Some(v > f_right)
         }
         ScalarValue::Float32(Some(v)) => {
-            let f_right = f32::try_from(right).unwrap();
-            v > f_right
+            let f_right = f32::try_from(right).ok()?;
+            Some(v > f_right)
         }
         ScalarValue::Int8(Some(v)) => {
-            let i_right = i8::try_from(right).unwrap();
-            v > i_right
+            let i_right = i8::try_from(right).ok()?;
+            Some(v > i_right)
         }
         ScalarValue::Int16(Some(v)) => {
-            let i_right = i16::try_from(right).unwrap();
-            v > i_right
+            let i_right = i16::try_from(right).ok()?;
+            Some(v > i_right)
         }
         ScalarValue::Int32(Some(v)) => {
-            let i_right = i32::try_from(right).unwrap();
-            v > i_right
+            let i_right = i32::try_from(right).ok()?;
+            Some(v > i_right)
         }
         ScalarValue::Int64(Some(v)) => {
-            let i_right = i64::try_from(right).unwrap();
-            v > i_right
+            let i_right = i64::try_from(right).ok()?;
+            Some(v > i_right)
         }
-        _ => unimplemented!(
-            "Scalar value comparison unimplemented for {:?} and {:?}",
-            left,
-            right
-        ),
+        ScalarValue::Boolean(Some(v)) => {
+            let b_right = bool::try_from(right).ok()?;
+            Some(v & !b_right)
+        }
+        ScalarValue::Utf8(Some(v)) => match right {
+            ScalarValue::Utf8(Some(s_right)) => Some(v > s_right),
+            _ => None,
+        },
+        _ => {
+            log::error!(
+                "Scalar value comparison unimplemented for {:?} and {:?}",
+                left,
+                right
+            );
+            None
+        }
     }
 }

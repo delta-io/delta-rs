@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin==0.11.4"]
+requires = ["maturin==0.12.19"]
 build-backend = "maturin"
 
 [project]
@@ -15,7 +15,7 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only"
 ]
 dependencies = [
-    "pyarrow>=4",
+    "pyarrow>=7",
     'numpy<1.20.0;python_version<="3.6"',
     'dataclasses;python_version<="3.6"',
 ]
@@ -29,14 +29,19 @@ devel = [
     "mypy",
     "black",
     "isort",
+    "packaging>=20",
     "pytest",
     "pytest-mock",
     "pytest-cov",
     "pytest-timeout",
-    "sphinx",
+    "sphinx<=4.5",
     "sphinx-rtd-theme",
     "toml",
-    "pandas"
+    "typing-extensions"
+]
+pyspark = [
+    "pyspark",
+    "delta-spark"
 ]
 
 [project.urls]
@@ -58,7 +63,7 @@ no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_return_any = false
-implicit_reexport = false
+implicit_reexport = true
 strict_equality = true
 
 [tool.isort]
@@ -73,4 +78,10 @@ exclude = "venv"
 addopts = "--cov=deltalake -v -m 'not integration'"
 testpaths = [
     "tests",
+]
+markers = [
+    "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
+    "s3: marks tests as integration tests with S3 (deselect with '-m \"not s3\"')",
+    "pandas: marks tests that require pandas",
+    "pyspark: marks tests that require pyspark",
 ]

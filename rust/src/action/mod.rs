@@ -1,6 +1,6 @@
 //! Actions included in Delta table transaction logs
 
-#![allow(non_snake_case, non_camel_case_types)]
+#![allow(non_camel_case_types)]
 
 #[cfg(feature = "parquet")]
 use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
@@ -8,15 +8,18 @@ use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
 #[cfg(feature = "parquet2")]
 pub mod parquet2_read;
 
+use crate::{schema::*, DeltaTableMetaData};
+use chrono::{SecondsFormat, TimeZone, Utc};
+#[cfg(feature = "parquet")]
+use num_bigint::BigInt;
+#[cfg(feature = "parquet")]
+use num_traits::cast::ToPrimitive;
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
-use serde_json::Map;
-use serde_json::Value;
+use serde_json::{json, Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
-
-use super::schema::*;
 
 /// Error returned when an invalid Delta log action is encountered.
 #[derive(thiserror::Error, Debug)]
@@ -53,12 +56,7 @@ fn populate_hashmap_with_option_from_parquet_map(
                 .map_err(|_| "key for HashMap in parquet has to be a string")?
                 .clone(),
         )
-        .or_insert(Some(
-            values
-                .get_string(j)
-                .map_err(|_| "value for HashMap in parquet has to be a string")?
-                .clone(),
-        ));
+        .or_insert_with(|| values.get_string(j).ok().cloned());
     }
 
     Ok(())
@@ -136,7 +134,7 @@ impl ColumnCountStat {
 }
 
 /// Statistics associated with Add actions contained in the Delta log.
-#[derive(Serialize, Deserialize, Debug, Default)]
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
     /// Number of records in the file associated with the log action.
@@ -266,12 +264,12 @@ impl Add {
                         .map_err(|_| gen_action_type_error("add", "dataChange", "bool"))?;
                 }
                 "partitionValues" => {
-                    let parquetMap = record
+                    let parquet_map = record
                         .get_map(i)
                         .map_err(|_| gen_action_type_error("add", "partitionValues", "map"))?;
                     populate_hashmap_with_option_from_parquet_map(
                         &mut re.partition_values,
-                        parquetMap,
+                        parquet_map,
                     )
                     .map_err(|estr| {
                         ActionError::InvalidField(format!(
@@ -340,9 +338,24 @@ impl Add {
         decode_path(&self.path).map(|path| Self { path, ..self })
     }
 
+    /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
+    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+        match self.get_stats_parsed() {
+            Ok(Some(stats)) => Ok(Some(stats)),
+            Ok(None) => self.get_json_stats(),
+            Err(e) => {
+                log::error!(
+                    "Error when reading parquet stats {:?} {e}. Attempting to read json stats",
+                    self.stats_parsed
+                );
+                self.get_json_stats()
+            }
+        }
+    }
+
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+    pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         self.stats
             .as_ref()
             .map_or(Ok(None), |s| serde_json::from_str(s))
@@ -350,75 +363,160 @@ impl Add {
 
     /// Returns the composite HashMap representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    #[cfg(feature = "parquet")]
-    pub fn get_stats_parsed(&self) -> Result<Option<StatsParsed>, parquet::errors::ParquetError> {
-        self.stats_parsed.as_ref().map_or(Ok(None), |record| {
-            let mut stats = StatsParsed::default();
+    pub fn get_stats_parsed(&self) -> Result<Option<Stats>, parquet::errors::ParquetError> {
+        #[cfg(feature = "parquet")]
+        {
+            self.stats_parsed.as_ref().map_or(Ok(None), |record| {
+                let mut stats = Stats::default();
 
-            for (i, (name, _)) in record.get_column_iter().enumerate() {
-                match name.as_str() {
-                    "numRecords" => match record.get_long(i) {
-                        Ok(v) => {
-                            stats.num_records = v;
-                        }
-                        _ => {
-                            log::error!("Expect type of stats_parsed field numRecords to be long, got: {}", record);
-                        }
-                    }
-                    "minValues" => match record.get_group(i) {
-                        Ok(row) => {
-                            for (name, field) in row.get_column_iter() {
-                                stats.min_values.insert(name.clone(), field.clone());
+                for (i, (name, _)) in record.get_column_iter().enumerate() {
+                    match name.as_str() {
+                        "numRecords" => match record.get_long(i) {
+                            Ok(v) => {
+                                stats.num_records = v;
+                            }
+                            _ => {
+                                log::error!("Expect type of stats_parsed field numRecords to be long, got: {}", record);
                             }
                         }
-                        _ => {
-                            log::error!("Expect type of stats_parsed field minRecords to be struct, got: {}", record);
-                        }
-                    }
-                    "maxValues" => match record.get_group(i) {
-                        Ok(row) => {
-                            for (name, field) in row.get_column_iter() {
-                                stats.max_values.insert(name.clone(), field.clone());
-                            }
-                        }
-                        _ => {
-                            log::error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
-                        }
-                    }
-                    "nullCount" => match record.get_group(i) {
-                        Ok(row) => {
-                            for (i, (name, _)) in row.get_column_iter().enumerate() {
-                                match row.get_long(i) {
-                                    Ok(v) => {
-                                        stats.null_count.insert(name.clone(), v);
-                                    }
-                                    _ => {
-                                        log::error!("Expect type of stats_parsed.nullRecords value to be struct, got: {}", row);
-                                    }
+                        "minValues" => match record.get_group(i) {
+                            Ok(row) => {
+                                for (name, field) in row.get_column_iter() {
+                                    stats.min_values.insert(name.clone(), field.into());
                                 }
                             }
+                            _ => {
+                                log::error!("Expect type of stats_parsed field minRecords to be struct, got: {}", record);
+                            }
+                        }
+                        "maxValues" => match record.get_group(i) {
+                            Ok(row) => {
+                                for (name, field) in row.get_column_iter() {
+                                    stats.max_values.insert(name.clone(), field.into());
+                                }
+                            }
+                            _ => {
+                                log::error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
+                            }
+                        }
+                        "nullCount" => match record.get_group(i) {
+                            Ok(row) => {
+                                for (name, field) in row.get_column_iter() {
+                                    match field.try_into() {
+                                        Ok(count) => {
+                                            stats.null_count.insert(name.clone(), count);
+                                        },
+                                        _ => {
+                                            log::warn!("Expect type of nullCount field to be struct or int64, got: {}", field);
+                                        },
+                                    };
+                                }
+                            }
+                            _ => {
+                                log::error!("Expect type of stats_parsed field nullCount to be struct, got: {}", record);
+                            }
                         }
                         _ => {
-                            log::error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
+                            log::warn!(
+                                "Unexpected field name `{}` for stats_parsed: {:?}",
+                                name,
+                                record,
+                            );
                         }
                     }
-                    _ => {
-                        log::warn!(
-                            "Unexpected field name `{}` for stats_parsed: {:?}",
-                            name,
-                            record,
-                        );
-                    }
                 }
-            }
 
-            Ok(Some(stats))
-        })
+                Ok(Some(stats))
+            })
+        }
+        #[cfg(feature = "parquet2")]
+        {
+            None
+        }
     }
 }
 
+#[cfg(feature = "parquet")]
+impl From<&Field> for ColumnValueStat {
+    fn from(field: &Field) -> Self {
+        match field {
+            Field::Group(group) => ColumnValueStat::Column(HashMap::from_iter(
+                group
+                    .get_column_iter()
+                    .map(|(field_name, field)| (field_name.clone(), field.into())),
+            )),
+            _ => ColumnValueStat::Value(primitive_parquet_field_to_json_value(field)),
+        }
+    }
+}
+
+#[cfg(feature = "parquet")]
+impl TryFrom<&Field> for ColumnCountStat {
+    type Error = &'static str;
+
+    fn try_from(field: &Field) -> Result<Self, Self::Error> {
+        match field {
+            Field::Group(group) => Ok(ColumnCountStat::Column(HashMap::from_iter(
+                group
+                    .get_column_iter()
+                    .filter_map(|(field_name, field)| match field.try_into() {
+                        Ok(value) => Some((field_name.clone(), value)),
+                        _ => {
+                            log::warn!(
+                                "Unexpected type when parsing nullCounts for {}. Found {}",
+                                field_name,
+                                field
+                            );
+                            None
+                        }
+                    }),
+            ))),
+            Field::Long(value) => Ok(ColumnCountStat::Value(*value)),
+            _ => Err("Invalid type for nullCounts"),
+        }
+    }
+}
+
+#[cfg(feature = "parquet")]
+fn primitive_parquet_field_to_json_value(field: &Field) -> serde_json::Value {
+    match field {
+        Field::Null => serde_json::Value::Null,
+        Field::Bool(value) => json!(value),
+        Field::Byte(value) => json!(value),
+        Field::Short(value) => json!(value),
+        Field::Int(value) => json!(value),
+        Field::Long(value) => json!(value),
+        Field::Float(value) => json!(value),
+        Field::Double(value) => json!(value),
+        Field::Str(value) => json!(value),
+        Field::Decimal(decimal) => match BigInt::from_signed_bytes_be(decimal.data()).to_f64() {
+            Some(int) => json!(int / (10_i64.pow((decimal.scale()).try_into().unwrap()) as f64)),
+            _ => serde_json::Value::Null,
+        },
+        Field::TimestampMillis(timestamp) => {
+            serde_json::Value::String(convert_timestamp_millis_to_string(*timestamp))
+        }
+        Field::Date(date) => serde_json::Value::String(convert_date_to_string(*date)),
+        _ => {
+            log::warn!("Unexpected field type {:?}", field,);
+            serde_json::Value::Null
+        }
+    }
+}
+
+fn convert_timestamp_millis_to_string(value: u64) -> String {
+    let dt = Utc.timestamp((value / 1000) as i64, ((value % 1000) * 1000000) as u32);
+    dt.to_rfc3339_opts(SecondsFormat::Millis, true)
+}
+
+fn convert_date_to_string(value: u32) -> String {
+    static NUM_SECONDS_IN_DAY: i64 = 60 * 60 * 24;
+    let dt = Utc.timestamp(value as i64 * NUM_SECONDS_IN_DAY, 0).date();
+    format!("{}", dt.format("%Y-%m-%d"))
+}
+
 /// Describes the data format of files in the table.
-#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq, Eq)]
 pub struct Format {
     /// Name of the encoding for files in this table.
     provider: String,
@@ -685,13 +783,13 @@ impl Remove {
                 }
                 "partitionValues" => match record.get_map(i) {
                     Ok(_) => {
-                        let parquetMap = record.get_map(i).map_err(|_| {
+                        let parquet_map = record.get_map(i).map_err(|_| {
                             gen_action_type_error("remove", "partitionValues", "map")
                         })?;
-                        let mut partitionValues = HashMap::new();
+                        let mut partition_values = HashMap::new();
                         populate_hashmap_with_option_from_parquet_map(
-                            &mut partitionValues,
-                            parquetMap,
+                            &mut partition_values,
+                            parquet_map,
                         )
                         .map_err(|estr| {
                             ActionError::InvalidField(format!(
@@ -699,7 +797,7 @@ impl Remove {
                                 estr,
                             ))
                         })?;
-                        re.partition_values = Some(partitionValues);
+                        re.partition_values = Some(partition_values);
                     }
                     _ => re.partition_values = None,
                 },
@@ -722,6 +820,7 @@ impl Remove {
                 "size" => {
                     re.size = record.get_long(i).map(Some).unwrap_or(None);
                 }
+                "numRecords" => {}
                 _ => {
                     log::warn!(
                         "Unexpected field name `{}` for remove action: {:?}",
@@ -793,7 +892,7 @@ impl Txn {
 
 /// Action used to increase the version of the Delta protocol required to read or write to the
 /// table.
-#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq)]
+#[derive(Serialize, Deserialize, Debug, Default, Clone, PartialEq, Eq)]
 #[serde(rename_all = "camelCase")]
 pub struct Protocol {
     /// Minimum version of the Delta read protocol a client must implement to correctly read the
@@ -914,32 +1013,85 @@ impl Action {
 
 /// Operation performed when creating a new log entry with one or more actions.
 /// This is a key element of the `CommitInfo` action.
-#[derive(Serialize, Deserialize, Debug)]
+#[allow(clippy::large_enum_variant)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
 pub enum DeltaOperation {
+    /// Represents a Delta `Create` operation.
+    /// Would usually only create the table, if also data is written,
+    /// a `Write` operations is more appropriate
+    Create {
+        /// The save mode used during the create.
+        mode: SaveMode,
+        /// The storage location of the new table
+        location: String,
+        /// The min reader and writer protocol versions of the table
+        protocol: Protocol,
+        /// Metadata associated with the new table
+        metadata: DeltaTableMetaData,
+    },
+
     /// Represents a Delta `Write` operation.
     /// Write operations will typically only include `Add` actions.
+    #[serde(rename_all = "camelCase")]
     Write {
         /// The save mode used during the write.
         mode: SaveMode,
         /// The columns the write is partitioned by.
-        partitionBy: Option<Vec<String>>,
+        partition_by: Option<Vec<String>>,
         /// The predicate used during the write.
         predicate: Option<String>,
     },
     /// Represents a Delta `StreamingUpdate` operation.
+    #[serde(rename_all = "camelCase")]
     StreamingUpdate {
         /// The output mode the streaming writer is using.
-        outputMode: OutputMode,
+        output_mode: OutputMode,
         /// The query id of the streaming writer.
-        queryId: String,
+        query_id: String,
         /// The epoch id of the written micro-batch.
-        epochId: i64,
+        epoch_id: i64,
     },
-    // TODO: Add more operations
+
+    #[serde(rename_all = "camelCase")]
+    /// Represents a `Optimize` operation
+    Optimize {
+        // TODO: Create a string representation of the filter passed to optimize
+        /// The filter used to determine which partitions to filter
+        predicate: Option<String>,
+        /// Target optimize size
+        target_size: DeltaDataTypeLong,
+    }, // TODO: Add more operations
+}
+
+impl DeltaOperation {
+    /// Retrieve basic commit information to be added to Delta commits
+    pub fn get_commit_info(&self) -> Map<String, Value> {
+        let mut commit_info = Map::<String, Value>::new();
+        let operation = match &self {
+            DeltaOperation::Create { .. } => "delta-rs.Create",
+            DeltaOperation::Write { .. } => "delta-rs.Write",
+            DeltaOperation::StreamingUpdate { .. } => "delta-rs.StreamingUpdate",
+            DeltaOperation::Optimize { .. } => "delta-rs.Optimize",
+        };
+        commit_info.insert(
+            "operation".to_string(),
+            serde_json::Value::String(operation.into()),
+        );
+
+        if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(self) {
+            commit_info.insert(
+                "operationParameters".to_string(),
+                map.values().next().unwrap().clone(),
+            );
+        };
+
+        commit_info
+    }
 }
 
 /// The SaveMode used when performing a DeltaOperation
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum SaveMode {
     /// Files will be appended to the target location.
     Append,
@@ -952,7 +1104,7 @@ pub enum SaveMode {
 }
 
 /// The OutputMode used in streaming operations.
-#[derive(Serialize, Deserialize, Debug)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
 pub enum OutputMode {
     /// Only new rows will be written when new data is available.
     Append,

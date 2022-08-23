@@ -14,9 +14,9 @@ pub(crate) use client::GCSStorageBackend;
 pub(crate) use error::GCSClientError;
 pub(crate) use object::GCSObject;
 
-use futures::Stream;
+use futures::stream::BoxStream;
 use std::convert::TryInto;
-use std::pin::Pin;
+use std::ops::Range;
 
 use log::debug;
 
@@ -41,6 +41,7 @@ impl From<tame_gcs::objects::Metadata> for ObjectMeta {
         ObjectMeta {
             path: metadata.name.unwrap(),
             modified: metadata.updated.unwrap(),
+            size: metadata.size.map(|s| s.try_into().unwrap()),
         }
     }
 }
@@ -65,14 +66,15 @@ impl StorageBackend for GCSStorageBackend {
         }
     }
 
+    async fn get_range(&self, _path: &str, _range: Range<usize>) -> Result<Vec<u8>, StorageError> {
+        todo!("get range not implemented for gcs")
+    }
+
     /// Return a list of objects by `path` prefix in an async stream.
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
-        StorageError,
-    > {
+    ) -> Result<BoxStream<'a, Result<ObjectMeta, StorageError>>, StorageError> {
         let prefix = parse_uri(path)?.into_gcs_object()?;
         let obj_meta_stream = async_stream::stream! {
             for await meta in self.list(prefix) {

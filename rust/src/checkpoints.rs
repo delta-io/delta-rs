@@ -2,25 +2,30 @@
 
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
-use arrow::json::reader::Decoder;
-use chrono::Datelike;
+use arrow::json::reader::{Decoder, DecoderOptions};
+use chrono::{DateTime, Datelike, Duration, Utc};
+use futures::StreamExt;
+use lazy_static::lazy_static;
 use log::*;
+use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
-use parquet::file::writer::InMemoryWriteableCursor;
+use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::iter::Iterator;
+use std::ops::Add;
 
 use super::action;
 use super::delta_arrow::delta_log_schema_for_table;
+use super::object_store::DeltaObjectStore;
 use super::open_table_with_version;
 use super::schema::*;
-use super::storage::{StorageBackend, StorageError};
 use super::table_state::DeltaTableState;
-use super::writer::time_utils;
+use super::time_utils;
+use super::DeltaTable;
 use super::{CheckPoint, DeltaTableError};
-use crate::DeltaTable;
 
 /// Error returned when there is an error during creating a checkpoint.
 #[derive(thiserror::Error, Debug)]
@@ -53,12 +58,12 @@ pub enum CheckpointError {
         #[from]
         source: ArrowError,
     },
-    /// Passthrough error returned when calling StorageBackend.
-    #[error("StorageError: {source}")]
-    Storage {
-        /// The source StorageError.
+    /// Passthrough error returned when calling ObjectStore.
+    #[error("ObjectStoreError: {source}")]
+    ObjectStore {
+        /// The source ObjectStoreError.
         #[from]
-        source: StorageError,
+        source: ObjectStoreError,
     },
     /// Passthrough error returned by serde_json.
     #[error("serde_json::Error: {source}")]
@@ -69,78 +74,231 @@ pub enum CheckpointError {
     },
 }
 
+/// The record batch size for checkpoint parquet file
+pub const CHECKPOINT_RECORD_BATCH_SIZE: usize = 5000;
+
 impl From<CheckpointError> for ArrowError {
     fn from(error: CheckpointError) -> Self {
         ArrowError::from_external_error(Box::new(error))
     }
 }
 
-/// Loads table from given `table_uri` at given `version` and creates checkpoints for it.
-pub async fn create_checkpoint_from_table_uri(
+/// Creates checkpoint at current table version
+pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), CheckpointError> {
+    create_checkpoint_for(table.version(), table.get_state(), table.storage.as_ref()).await?;
+
+    Ok(())
+}
+
+/// Delete expires log files before given version from table. The table log retention is based on
+/// the `logRetentionDuration` property of the Delta Table, 30 days by default.
+pub async fn cleanup_metadata(table: &DeltaTable) -> Result<i32, DeltaTableError> {
+    let log_retention_timestamp =
+        Utc::now().timestamp_millis() - table.get_state().log_retention_millis();
+    cleanup_expired_logs_for(
+        table.version() + 1,
+        table.storage.as_ref(),
+        log_retention_timestamp,
+    )
+    .await
+}
+
+/// Loads table from given `table_uri` at given `version` and creates checkpoint for it.
+/// The `cleanup` param decides whether to run metadata cleanup of obsolete logs.
+/// If it's empty then the table's `enableExpiredLogCleanup` is used.
+pub async fn create_checkpoint_from_table_uri_and_cleanup(
     table_uri: &str,
     version: DeltaDataTypeVersion,
+    cleanup: Option<bool>,
 ) -> Result<(), CheckpointError> {
     let table = open_table_with_version(table_uri, version).await?;
-    create_checkpoint(
-        version,
-        table.get_state(),
-        table.storage.as_ref(),
-        table_uri,
-    )
-    .await?;
+    create_checkpoint_for(version, table.get_state(), table.storage.as_ref()).await?;
+
+    let enable_expired_log_cleanup =
+        cleanup.unwrap_or_else(|| table.get_state().enable_expired_log_cleanup());
+
+    if table.version() >= 0 && enable_expired_log_cleanup {
+        let deleted_log_num = cleanup_metadata(&table).await?;
+        debug!("Deleted {:?} log files.", deleted_log_num);
+    }
+
     Ok(())
 }
 
-/// Creates checkpoint at `table.version` for given `table`.
-pub async fn create_checkpoint_from_table(table: &DeltaTable) -> Result<(), CheckpointError> {
-    create_checkpoint(
-        table.version,
-        table.get_state(),
-        table.storage.as_ref(),
-        &table.table_uri,
-    )
-    .await?;
-    Ok(())
-}
-
-async fn create_checkpoint(
+async fn create_checkpoint_for(
     version: DeltaDataTypeVersion,
     state: &DeltaTableState,
-    storage: &dyn StorageBackend,
-    table_uri: &str,
+    storage: &DeltaObjectStore,
 ) -> Result<(), CheckpointError> {
     // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
     // an appropriate split point yet though so only writing a single part currently.
     // See https://github.com/delta-io/delta-rs/issues/288
-
-    let delta_log_uri = storage.join_path(table_uri, "_delta_log");
-    let last_checkpoint_uri = storage.join_path(&delta_log_uri, "_last_checkpoint");
+    let last_checkpoint_path = storage.log_path().child("_last_checkpoint");
 
     debug!("Writing parquet bytes to checkpoint buffer.");
     let parquet_bytes = parquet_bytes_from_state(state)?;
-
     let size = parquet_bytes.len() as i64;
-
     let checkpoint = CheckPoint::new(version, size, None);
 
     let file_name = format!("{:020}.checkpoint.parquet", version);
-    let checkpoint_uri = storage.join_path(&delta_log_uri, &file_name);
+    let checkpoint_path = storage.log_path().child(file_name);
 
-    debug!("Writing checkpoint to {:?}.", checkpoint_uri);
-    storage.put_obj(&checkpoint_uri, &parquet_bytes).await?;
+    debug!("Writing checkpoint to {:?}.", checkpoint_path);
+    storage.put(&checkpoint_path, parquet_bytes).await?;
 
     let last_checkpoint_content: Value = serde_json::to_value(&checkpoint)?;
-    let last_checkpoint_content = serde_json::to_string(&last_checkpoint_content)?;
+    let last_checkpoint_content = bytes::Bytes::from(serde_json::to_vec(&last_checkpoint_content)?);
 
-    debug!("Writing _last_checkpoint to {:?}.", last_checkpoint_uri);
+    debug!("Writing _last_checkpoint to {:?}.", last_checkpoint_path);
     storage
-        .put_obj(&last_checkpoint_uri, last_checkpoint_content.as_bytes())
+        .put(&last_checkpoint_path, last_checkpoint_content)
         .await?;
 
     Ok(())
 }
 
-fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, CheckpointError> {
+async fn flush_delete_files<T: Fn(&(DeltaDataTypeVersion, ObjectMeta)) -> bool>(
+    storage: &DeltaObjectStore,
+    maybe_delete_files: &mut Vec<(DeltaDataTypeVersion, ObjectMeta)>,
+    files_to_delete: &mut Vec<(DeltaDataTypeVersion, ObjectMeta)>,
+    should_delete_file: T,
+) -> Result<i32, DeltaTableError> {
+    if !maybe_delete_files.is_empty() && should_delete_file(maybe_delete_files.last().unwrap()) {
+        files_to_delete.append(maybe_delete_files);
+    }
+
+    let deleted = files_to_delete
+        .iter_mut()
+        .map(|file| async move {
+            match storage.delete(&file.1.location).await {
+                Ok(_) => Ok(1),
+                Err(e) => Err(DeltaTableError::from(e)),
+            }
+        })
+        .collect::<Vec<_>>();
+
+    let mut deleted_num = 0;
+    for x in deleted {
+        match x.await {
+            Ok(_) => deleted_num += 1,
+            Err(e) => return Err(e),
+        }
+    }
+
+    files_to_delete.clear();
+
+    Ok(deleted_num)
+}
+
+async fn cleanup_expired_logs_for(
+    until_version: DeltaDataTypeVersion,
+    storage: &DeltaObjectStore,
+    log_retention_timestamp: i64,
+) -> Result<i32, DeltaTableError> {
+    lazy_static! {
+        static ref DELTA_LOG_REGEX: Regex =
+            Regex::new(r#"_delta_log/(\d{20})\.(json|checkpoint)*$"#).unwrap();
+    }
+
+    let mut deleted_log_num = 0;
+
+    // Get file objects from table.
+    let mut candidates: Vec<(DeltaDataTypeVersion, ObjectMeta)> = Vec::new();
+    let mut stream = storage.list(Some(storage.log_path())).await?;
+    while let Some(obj_meta) = stream.next().await {
+        let obj_meta = obj_meta?;
+
+        let ts = obj_meta.last_modified.timestamp_millis();
+
+        if let Some(captures) = DELTA_LOG_REGEX.captures(obj_meta.location.as_ref()) {
+            let log_ver_str = captures.get(1).unwrap().as_str();
+            let log_ver: DeltaDataTypeVersion = log_ver_str.parse().unwrap();
+            if log_ver < until_version && ts <= log_retention_timestamp {
+                candidates.push((log_ver, obj_meta));
+            }
+        }
+    }
+
+    // Sort files by file object version.
+    candidates.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let mut last_file: (i64, ObjectMeta) = (
+        0,
+        ObjectMeta {
+            location: Path::from(""),
+            last_modified: DateTime::<Utc>::MIN_UTC,
+            size: 0,
+        },
+    );
+    let file_needs_time_adjustment =
+        |current_file: &(i64, ObjectMeta), last_file: &(i64, ObjectMeta)| {
+            last_file.0 < current_file.0
+                && last_file.1.last_modified.timestamp() >= current_file.1.last_modified.timestamp()
+        };
+
+    let should_delete_file = |file: &(i64, ObjectMeta)| {
+        file.1.last_modified.timestamp() <= log_retention_timestamp && file.0 < until_version
+    };
+
+    let mut maybe_delete_files: Vec<(DeltaDataTypeVersion, ObjectMeta)> = Vec::new();
+    let mut files_to_delete: Vec<(DeltaDataTypeVersion, ObjectMeta)> = Vec::new();
+
+    // Init
+    if !candidates.is_empty() {
+        let removed = candidates.remove(0);
+        last_file = (removed.0, removed.1.clone());
+        maybe_delete_files.push(removed);
+    }
+
+    let mut current_file: (DeltaDataTypeVersion, ObjectMeta);
+    loop {
+        if candidates.is_empty() {
+            deleted_log_num += flush_delete_files(
+                storage,
+                &mut maybe_delete_files,
+                &mut files_to_delete,
+                should_delete_file,
+            )
+            .await?;
+
+            return Ok(deleted_log_num);
+        }
+        current_file = candidates.remove(0);
+
+        if file_needs_time_adjustment(&current_file, &last_file) {
+            let updated = (
+                current_file.0,
+                ObjectMeta {
+                    location: current_file.1.location.clone(),
+                    last_modified: last_file.1.last_modified.add(Duration::seconds(1)),
+                    size: 0,
+                },
+            );
+            maybe_delete_files.push(updated);
+            last_file = (
+                maybe_delete_files.last().unwrap().0,
+                maybe_delete_files.last().unwrap().1.clone(),
+            );
+        } else {
+            let deleted = flush_delete_files(
+                storage,
+                &mut maybe_delete_files,
+                &mut files_to_delete,
+                should_delete_file,
+            )
+            .await?;
+            if deleted == 0 {
+                return Ok(deleted_log_num);
+            }
+            deleted_log_num += deleted;
+
+            maybe_delete_files.push(current_file.clone());
+            last_file = current_file;
+        }
+    }
+}
+
+fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, CheckpointError> {
     let current_metadata = state
         .current_metadata()
         .ok_or(CheckpointError::MissingMetaData)?;
@@ -221,18 +379,17 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<Vec<u8>, Checkpoi
 
     debug!("Writing to checkpoint parquet buffer...");
     // Write the Checkpoint parquet file.
-    let writeable_cursor = InMemoryWriteableCursor::default();
-    let mut writer = ArrowWriter::try_new(writeable_cursor.clone(), arrow_schema.clone(), None)?;
-    let batch_size =
-        state.app_transaction_version().len() + tombstones.len() + state.files().len() + 2; // 1 (protocol) + 1 (metadata)
-    let decoder = Decoder::new(arrow_schema, batch_size, None);
+    let mut bytes = vec![];
+    let mut writer = ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), None)?;
+    let options = DecoderOptions::new().with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE);
+    let decoder = Decoder::new(arrow_schema, options);
     while let Some(batch) = decoder.next_batch(&mut jsons)? {
         writer.write(&batch)?;
     }
     let _ = writer.close()?;
     debug!("Finished writing checkpoint parquet buffer.");
 
-    Ok(writeable_cursor.data())
+    Ok(bytes::Bytes::from(bytes))
 }
 
 fn checkpoint_add_from_state(
@@ -417,6 +574,9 @@ mod tests {
     use super::*;
     use lazy_static::lazy_static;
     use serde_json::json;
+    use std::sync::Arc;
+    use std::time::Duration;
+    use uuid::Uuid;
 
     #[test]
     fn typed_partition_value_from_string_test() {
@@ -677,5 +837,88 @@ mod tests {
                 "some_timestamp": "2021-07-30T18:11:25.594Z"
             }
         });
+    }
+
+    // Last-Modified for S3 could not be altered by user, hence using system pauses which makes
+    // test to run longer but reliable
+    async fn cleanup_metadata_test(table_path: &str) {
+        let object_store =
+            Arc::new(DeltaObjectStore::try_new_with_options(table_path, None).unwrap());
+
+        let log_path = |version| {
+            object_store
+                .log_path()
+                .child(format!("{:020}.json", version))
+        };
+
+        // we don't need to actually populate files with content as cleanup works only with file's metadata
+        object_store
+            .put(&log_path(0), bytes::Bytes::from(""))
+            .await
+            .unwrap();
+
+        // since we cannot alter s3 object metadata, we mimic it with pauses
+        // also we forced to use 2 seconds since Last-Modified is stored in seconds
+        std::thread::sleep(Duration::from_secs(2));
+        object_store
+            .put(&log_path(1), bytes::Bytes::from(""))
+            .await
+            .unwrap();
+
+        std::thread::sleep(Duration::from_secs(3));
+        object_store
+            .put(&log_path(2), bytes::Bytes::from(""))
+            .await
+            .unwrap();
+
+        let v0time = object_store.head(&log_path(0)).await.unwrap().last_modified;
+        let v1time = object_store.head(&log_path(1)).await.unwrap().last_modified;
+        let v2time = object_store.head(&log_path(2)).await.unwrap().last_modified;
+
+        // we choose the retention timestamp to be between v1 and v2 so v2 will be kept but other removed.
+        let retention_timestamp =
+            v1time.timestamp_millis() + (v2time.timestamp_millis() - v1time.timestamp_millis()) / 2;
+
+        assert!(retention_timestamp > v0time.timestamp_millis());
+        assert!(retention_timestamp > v1time.timestamp_millis());
+        assert!(retention_timestamp < v2time.timestamp_millis());
+
+        let removed = crate::checkpoints::cleanup_expired_logs_for(
+            3,
+            object_store.as_ref(),
+            retention_timestamp,
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(removed, 2);
+        assert!(object_store.head(&log_path(0)).await.is_err());
+        assert!(object_store.head(&log_path(1)).await.is_err());
+        assert!(object_store.head(&log_path(2)).await.is_ok());
+
+        // after test cleanup
+        object_store.delete(&log_path(2)).await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn cleanup_metadata_fs_test() {
+        let table_path = format!("./tests/data/md_cleanup/{}", Uuid::new_v4());
+        std::fs::create_dir_all(&table_path).unwrap();
+        cleanup_metadata_test(&table_path).await;
+        std::fs::remove_dir_all(&table_path).unwrap();
+    }
+
+    #[cfg(feature = "s3")]
+    mod cleanup_metadata_s3_test {
+        use super::*;
+
+        #[tokio::test]
+        async fn cleanup_metadata_s3_test() {
+            std::env::set_var("AWS_ACCESS_KEY_ID", "test");
+            std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
+            std::env::set_var("AWS_ENDPOINT_URL", "http://localhost:4566");
+            let table_path = format!("s3://deltars/md_cleanup/{}", Uuid::new_v4());
+            cleanup_metadata_test(&table_path).await;
+        }
     }
 }

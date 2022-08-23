@@ -1,20 +1,17 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
-use std::fmt::Debug;
-use std::pin::Pin;
-
+#[cfg(feature = "azure")]
+use azure_core::error::{Error as AzureError, ErrorKind as AzureErrorKind};
 use chrono::{DateTime, Utc};
-use futures::Stream;
-
-#[cfg(feature = "azure")]
-use azure_core::HttpError as AzureError;
-#[cfg(feature = "azure")]
-use azure_storage::Error as AzureStorageError;
-#[cfg(feature = "azure")]
-use std::error::Error;
-
+use futures::stream::BoxStream;
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-use self::s3::S3StorageOptions;
+use hyper::http::uri::InvalidUri;
+use object_store::Error as ObjectStoreError;
+use std::collections::HashMap;
+use std::fmt::Debug;
+use std::ops::Range;
+use std::sync::Arc;
+use walkdir::Error as WalkDirError;
 
 #[cfg(feature = "azure")]
 pub mod azure;
@@ -25,7 +22,7 @@ pub mod gcs;
 pub mod s3;
 
 /// Error enum that represents an invalid URI.
-#[derive(thiserror::Error, Debug, PartialEq)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum UriError {
     /// Error returned when the URI contains a scheme that is not handled.
     #[error("Invalid URI scheme: {0}")]
@@ -52,8 +49,7 @@ pub enum UriError {
     #[error("Expected GCS URI, found: {0}")]
     ExpectedGCSUri(String),
 
-    /// Error returned when an Azure URI is expected, but the URI is not an Azure file system
-    /// (abfs\[s\]) URI.
+    /// Error returned when an Azure URI is expected, but the URI is not an Azure URI.
     #[cfg(feature = "azure")]
     #[error("Expected Azure URI, found: {0}")]
     ExpectedAzureUri(String),
@@ -66,7 +62,7 @@ pub enum UriError {
     /// path.
     #[cfg(feature = "azure")]
     #[error("Object URI missing account name and path")]
-    MissingObjectAccountAndPath,
+    MissingObjectAccount,
     /// Error returned when an Azure URI is expected, but the URI is missing the account name.
     #[cfg(feature = "azure")]
     #[error("Object URI missing account name")]
@@ -234,17 +230,28 @@ pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
         }
 
         "file" => Ok(Uri::LocalPath(parts[1])),
-        "abfss" => {
+
+        // Azure Data Lake Storage Gen2
+        // This URI syntax is an invention of delta-rs.
+        // ABFS URIs should not be used since delta-rs doesn't use the Hadoop ABFS driver.
+        "adls2" => {
             cfg_if::cfg_if! {
                 if #[cfg(feature = "azure")] {
-                    // URI scheme: abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>/<file_name>
-                    let mut parts = parts[1].splitn(2, '@');
-                    let file_system = parts.next().ok_or(UriError::MissingObjectFileSystem)?;
-                    let mut parts = parts.next().map(|x| x.splitn(2, '.')).ok_or(UriError::MissingObjectAccountAndPath)?;
-                    let account_name = parts.next().ok_or(UriError::MissingObjectAccountName)?;
-                    let mut paths = parts.next().map(|x| x.splitn(2, '/')).ok_or(UriError::MissingObjectPath)?;
-                    // assume root when uri ends without `/`
-                    let path = paths.nth(1).unwrap_or("");
+                    let mut path_parts = parts[1].splitn(3, '/');
+                    let account_name = match path_parts.next() {
+                        Some(x) => x,
+                        None => {
+                            return Err(UriError::MissingObjectAccount);
+                        }
+                    };
+                    let file_system = match path_parts.next() {
+                        Some(x) => x,
+                        None => {
+                            return Err(UriError::MissingObjectFileSystem);
+                        }
+                    };
+                    let path = path_parts.next().unwrap_or("/");
+
                     Ok(Uri::AdlsGen2Object(azure::AdlsGen2Object { account_name, file_system, path }))
                 } else {
                     Err(UriError::InvalidScheme(String::from(parts[0])))
@@ -272,6 +279,14 @@ pub enum StorageError {
     Io {
         /// The raw error returned when trying to read the local file.
         source: std::io::Error,
+    },
+
+    #[error("Failed to walk directory: {source}")]
+    /// Error raised when failing to traverse a directory
+    WalkDir {
+        /// The raw error returned when trying to read the local file.
+        #[from]
+        source: WalkDirError,
     },
     /// The file system represented by the scheme is not known.
     #[error("File system not supported")]
@@ -345,7 +360,7 @@ pub enum StorageError {
     DynamoDb {
         /// Wrapped DynamoDB error
         #[from]
-        source: s3::dynamodb_lock::DynamoError,
+        source: dynamodb_lock::DynamoError,
     },
     /// Error representing a failure to retrieve AWS credentials.
     #[cfg(any(feature = "s3", feature = "s3-rustls"))]
@@ -371,24 +386,17 @@ pub enum StorageError {
         /// Azure error reason
         source: AzureError,
     },
-    /// Azure Storage error
-    #[cfg(feature = "azure")]
-    #[error("Error interacting with AzureStorage: {source}")]
-    AzureStorage {
-        /// Azure error reason
-        source: AzureStorageError,
-    },
-    /// Generic Azure error
-    #[cfg(feature = "azure")]
-    #[error("Generic error: {source}")]
-    AzureGeneric {
-        /// Generic Azure error reason
-        source: Box<dyn Error + Sync + std::marker::Send>,
-    },
     /// Azure config error
     #[cfg(feature = "azure")]
     #[error("Azure config error: {0}")]
     AzureConfig(String),
+    /// Azure credentials error
+    #[cfg(feature = "azure")]
+    #[error("Azure credentials error: {source}")]
+    AzureCredentials {
+        /// Azure error reason
+        source: AzureError,
+    },
 
     /// GCS config error
     #[cfg(feature = "gcs")]
@@ -411,6 +419,23 @@ pub enum StorageError {
         #[from]
         /// Uri error details when the URI is invalid.
         source: UriError,
+    },
+
+    /// Error returned when the URI is invalid.
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    #[error("Invalid URI parsing")]
+    ParsingUri {
+        #[from]
+        /// Uri error details when the URI parsing is invalid.
+        source: InvalidUri,
+    },
+
+    /// underlying object store returned an error.
+    #[error("ObjectStore interaction failed: {source}")]
+    ObjectStore {
+        /// The wrapped [`ObjectStoreError`]
+        #[from]
+        source: ObjectStoreError,
     },
 }
 
@@ -435,25 +460,18 @@ impl From<std::io::Error> for StorageError {
 #[cfg(feature = "azure")]
 impl From<AzureError> for StorageError {
     fn from(error: AzureError) -> Self {
-        match error {
-            AzureError::UnexpectedStatusCode {
-                expected: _,
-                received,
-                body: _,
-            } if received.as_u16() == 404 => StorageError::NotFound,
+        match error.kind() {
+            AzureErrorKind::HttpResponse { status, .. } if *status == 404 => StorageError::NotFound,
+            AzureErrorKind::HttpResponse { status, .. } if *status == 401 || *status == 403 => {
+                StorageError::AzureCredentials { source: error }
+            }
             _ => StorageError::Azure { source: error },
         }
     }
 }
 
-#[cfg(feature = "azure")]
-impl From<AzureStorageError> for StorageError {
-    fn from(error: AzureStorageError) -> Self {
-        StorageError::AzureStorage { source: error }
-    }
-}
-
 /// Describes metadata of a storage object.
+#[derive(Debug)]
 pub struct ObjectMeta {
     /// The path where the object is stored. This is the path component of the object URI.
     ///
@@ -467,50 +485,38 @@ pub struct ObjectMeta {
     // The timestamp of a commit comes from the remote storage `lastModifiedTime`, and can be
     // adjusted for clock skew.
     pub modified: DateTime<Utc>,
+    /// Size of the object in bytes
+    pub size: Option<i64>,
+}
+
+impl Clone for ObjectMeta {
+    fn clone(&self) -> Self {
+        Self {
+            path: self.path.clone(),
+            modified: self.modified,
+            size: self.size,
+        }
+    }
 }
 
 /// Abstractions for underlying blob storages hosting the Delta table. To add support for new cloud
 /// or local storage systems, simply implement this trait.
 #[async_trait::async_trait]
 pub trait StorageBackend: Send + Sync + Debug {
-    /// Create a new path by appending `path_to_join` as a new component to `path`.
-    #[inline]
-    fn join_path(&self, path: &str, path_to_join: &str) -> String {
-        let normalized_path = path.trim_end_matches('/');
-        format!("{}/{}", normalized_path, path_to_join)
-    }
-
-    /// More efficient path join for multiple path components. Use this method if you need to
-    /// combine more than two path components.
-    #[inline]
-    fn join_paths(&self, paths: &[&str]) -> String {
-        paths
-            .iter()
-            .map(|s| s.trim_end_matches('/'))
-            .collect::<Vec<_>>()
-            .join("/")
-    }
-
-    /// Returns trimed path with trailing path separator removed.
-    #[inline]
-    fn trim_path(&self, path: &str) -> String {
-        path.trim_end_matches('/').to_string()
-    }
-
     /// Fetch object metadata without reading the actual content
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError>;
 
     /// Fetch object content
     async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
 
+    /// Fetch a range from object content
+    async fn get_range(&self, path: &str, range: Range<usize>) -> Result<Vec<u8>, StorageError>;
+
     /// Return a list of objects by `path` prefix in an async stream.
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
-        StorageError,
-    >;
+    ) -> Result<BoxStream<'a, Result<ObjectMeta, StorageError>>, StorageError>;
 
     /// Create new object with `obj_bytes` as content.
     ///
@@ -547,36 +553,48 @@ pub trait StorageBackend: Send + Sync + Debug {
 }
 
 /// Dynamically construct a Storage backend trait object based on scheme for provided URI
-pub fn get_backend_for_uri(uri: &str) -> Result<Box<dyn StorageBackend>, StorageError> {
+pub fn get_backend_for_uri(uri: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
     match parse_uri(uri)? {
-        Uri::LocalPath(root) => Ok(Box::new(file::FileStorageBackend::new(root))),
+        Uri::LocalPath(root) => Ok(Arc::new(file::FileStorageBackend::new(root))),
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-        Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new()?)),
+        Uri::S3Object(_) => Ok(Arc::new(s3::S3StorageBackend::new()?)),
         #[cfg(feature = "azure")]
-        Uri::AdlsGen2Object(obj) => Ok(Box::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
+        Uri::AdlsGen2Object(obj) => Ok(Arc::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
         #[cfg(feature = "gcs")]
-        Uri::GCSObject(_) => Ok(Box::new(gcs::GCSStorageBackend::new()?)),
+        Uri::GCSObject(_) => Ok(Arc::new(gcs::GCSStorageBackend::new()?)),
     }
 }
 
 /// Returns a StorageBackend appropriate for the protocol and configured with the given options
 /// Options must be passed as a hashmap. Hashmap keys correspond to env variables that are used if options are not set.
 ///
-/// Currently, S3 is the only backend that accepts options.
+/// Currently, S3 and Azure are the only backends that accept options.
 /// Options may be passed in the HashMap or set as environment variables.
 ///
-/// [S3StorageOptions] describes the available options for the S3 backend.
-/// [s3::dynamodb_lock::DynamoDbLockClient] describes additional options for the atomic rename client.
+/// [s3::S3StorageOptions] describes the available options for the S3 backend.
+/// [dynamodb_lock::DynamoDbLockClient] describes additional options for the atomic rename client.
+///
+/// [azure::AzureStorageOptions] describes the available options for the Azure backend.
 pub fn get_backend_for_uri_with_options(
     uri: &str,
-    // NOTE: prefixing options with "_" to avoid deny warnings error since usage is conditional on s3 and the only usage is with s3 so far
-    _options: std::collections::HashMap<String, String>,
-) -> Result<Box<dyn StorageBackend>, StorageError> {
+    #[allow(unused)] options: HashMap<String, String>,
+) -> Result<Arc<dyn StorageBackend>, StorageError> {
     match parse_uri(uri)? {
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-        Uri::S3Object(_) => Ok(Box::new(s3::S3StorageBackend::new_from_options(
-            S3StorageOptions::from_map(_options),
+        Uri::S3Object(_) => Ok(Arc::new(s3::S3StorageBackend::new_from_options(
+            s3::S3StorageOptions::from_map(options),
+        )?)),
+        #[cfg(feature = "azure")]
+        Uri::AdlsGen2Object(obj) => Ok(Arc::new(azure::AdlsGen2Backend::new_from_options(
+            obj.file_system,
+            azure::AzureStorageOptions::from_map(options),
         )?)),
         _ => get_backend_for_uri(uri),
     }
+}
+
+#[cfg(any(feature = "s3", feature = "s3-rustls", feature = "azure"))]
+pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
+    map.get(key)
+        .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
 }

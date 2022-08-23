@@ -1,4 +1,5 @@
 /target
+**/target
 *.sw*
 tlaplus/*.toolbox/*_SnapShot_*/
 tlaplus/*.toolbox/*_SnapShot_*.launch
@@ -10,3 +11,7 @@ tlaplus/*.toolbox/*/[0-9]*-[0-9]*-[0-9]*-[0-9]*-[0-9]*-[0-9]*/
 /.idea
 .vscode
 .env
+**/.DS_Store
+**/.python-version
+.coverage
+*.env

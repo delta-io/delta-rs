@@ -2,6 +2,7 @@
 #![allow(non_snake_case, non_camel_case_types)]
 
 use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
@@ -17,6 +18,9 @@ pub type DeltaDataTypeTimestamp = DeltaDataTypeLong;
 pub type DeltaDataTypeInt = i32;
 
 static STRUCT_TAG: &str = "struct";
+static ARRAY_TAG: &str = "array";
+static MAP_TAG: &str = "map";
+
 /// Represents a struct field defined in the Delta table schema.
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
 #[derive(Serialize, Deserialize, PartialEq, Debug, Default, Clone)]
@@ -39,6 +43,25 @@ impl SchemaTypeStruct {
     pub fn get_fields(&self) -> &Vec<SchemaField> {
         &self.fields
     }
+
+    /// Returns an immutable reference of a specific `Field` instance selected by name.
+    pub fn get_field_with_name(&self, name: &str) -> Result<&SchemaField, crate::DeltaTableError> {
+        Ok(&self.fields[self.index_of(name)?])
+    }
+
+    /// Find the index of the column with the given name.
+    pub fn index_of(&self, name: &str) -> Result<usize, crate::DeltaTableError> {
+        for i in 0..self.fields.len() {
+            if self.fields[i].get_name() == name {
+                return Ok(i);
+            }
+        }
+        let valid_fields: Vec<String> = self.fields.iter().map(|f| f.name.clone()).collect();
+        Err(crate::DeltaTableError::Generic(format!(
+            "Unable to get field named \"{}\". Valid fields: {:?}",
+            name, valid_fields
+        )))
+    }
 }
 
 /// Describes a specific field of the Delta table schema.
@@ -51,7 +74,7 @@ pub struct SchemaField {
     nullable: bool,
     // A JSON map containing information about this column. Keys prefixed with Delta are reserved
     // for the implementation.
-    metadata: HashMap<String, String>,
+    metadata: HashMap<String, Value>,
 }
 
 impl SchemaField {
@@ -60,7 +83,7 @@ impl SchemaField {
         name: String,
         r#type: SchemaDataType,
         nullable: bool,
-        metadata: HashMap<String, String>,
+        metadata: HashMap<String, Value>,
     ) -> Self {
         Self {
             name,
@@ -86,7 +109,7 @@ impl SchemaField {
     }
 
     /// Additional metadata about the column/field.
-    pub fn get_metadata(&self) -> &HashMap<String, String> {
+    pub fn get_metadata(&self) -> &HashMap<String, Value> {
         &self.metadata
     }
 }
@@ -104,6 +127,15 @@ pub struct SchemaTypeArray {
 }
 
 impl SchemaTypeArray {
+    /// Create a new SchemaTypeArray
+    pub fn new(elementType: Box<SchemaDataType>, containsNull: bool) -> Self {
+        Self {
+            r#type: String::from(ARRAY_TAG),
+            elementType,
+            containsNull,
+        }
+    }
+
     /// The data type of each element contained in the array.
     pub fn get_element_type(&self) -> &SchemaDataType {
         &self.elementType
@@ -125,6 +157,20 @@ pub struct SchemaTypeMap {
 }
 
 impl SchemaTypeMap {
+    /// Create a new SchemaTypeMap
+    pub fn new(
+        keyType: Box<SchemaDataType>,
+        valueType: Box<SchemaDataType>,
+        valueContainsNull: bool,
+    ) -> Self {
+        Self {
+            r#type: String::from(MAP_TAG),
+            keyType,
+            valueType,
+            valueContainsNull,
+        }
+    }
+
     /// The type of element used for the key of this map, represented as a string containing the
     /// name of a primitive type, a struct definition, an array definition or a map definition
     pub fn get_key_type(&self) -> &SchemaDataType {

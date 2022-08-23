@@ -1,12 +1,11 @@
 import json
 import warnings
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, Any, Dict, List, Optional, Tuple, Union
-from urllib.parse import urlparse
+from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import pyarrow
 import pyarrow.fs as pa_fs
-from pyarrow.dataset import dataset, partitioning
+from pyarrow.dataset import FileSystemDataset, ParquetFileFormat, ParquetReadOptions
 
 if TYPE_CHECKING:
     import pandas
@@ -14,7 +13,7 @@ if TYPE_CHECKING:
 from .data_catalog import DataCatalog
 from .deltalake import RawDeltaTable
 from .fs import DeltaStorageHandler
-from .schema import Schema, pyarrow_schema_from_json
+from .schema import Schema
 
 
 @dataclass(init=False)
@@ -52,7 +51,7 @@ class Metadata:
         return self._metadata.created_time
 
     @property
-    def configuration(self) -> List[str]:
+    def configuration(self) -> Dict[str, str]:
         """Return the DeltaTable properties."""
         return self._metadata.configuration
 
@@ -64,19 +63,33 @@ class Metadata:
         )
 
 
+class ProtocolVersions(NamedTuple):
+    min_reader_version: int
+    min_writer_version: int
+
+
 @dataclass(init=False)
 class DeltaTable:
     """Create a DeltaTable instance."""
 
-    def __init__(self, table_uri: str, version: Optional[int] = None):
+    def __init__(
+        self,
+        table_uri: str,
+        version: Optional[int] = None,
+        storage_options: Optional[Dict[str, str]] = None,
+    ):
         """
         Create the Delta Table from a path with an optional version.
         Multiple StorageBackends are currently supported: AWS S3, Azure Data Lake Storage Gen2, Google Cloud Storage (GCS) and local URI.
+        Depending on the storage backend used, you could provide options values using the ``storage_options`` parameter.
 
         :param table_uri: the path of the DeltaTable
         :param version: version of the DeltaTable
+        :param storage_options: a dictionary of the options to use for the storage backend
         """
-        self._table = RawDeltaTable(table_uri, version=version)
+        self._table = RawDeltaTable(
+            table_uri, version=version, storage_options=storage_options
+        )
         self._metadata = Metadata(self._table)
 
     @classmethod
@@ -201,7 +214,7 @@ class DeltaTable:
 
         :return: the current Schema registered in the transaction log
         """
-        return Schema.from_json(self._table.schema_json())
+        return self._table.schema
 
     def metadata(self) -> Metadata:
         """
@@ -210,6 +223,9 @@ class DeltaTable:
         :return: the current Metadata registered in the transaction log
         """
         return self._metadata
+
+    def protocol(self) -> ProtocolVersions:
+        return ProtocolVersions(*self._table.protocol_versions())
 
     def history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
         """
@@ -225,66 +241,75 @@ class DeltaTable:
         ]
 
     def vacuum(
-        self, retention_hours: Optional[int] = None, dry_run: bool = True
+        self,
+        retention_hours: Optional[int] = None,
+        dry_run: bool = True,
+        enforce_retention_duration: bool = True,
     ) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
 
         :param retention_hours: the retention threshold in hours, if none then the value from `configuration.deletedFileRetentionDuration` is used or default of 1 week otherwise.
         :param dry_run: when activated, list only the files, delete otherwise
+        :param enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `configuration.deletedFileRetentionDuration`.
         :return: the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
         if retention_hours:
             if retention_hours < 0:
                 raise ValueError("The retention periods should be positive.")
 
-        return self._table.vacuum(dry_run, retention_hours)
+        return self._table.vacuum(dry_run, retention_hours, enforce_retention_duration)
 
     def pyarrow_schema(self) -> pyarrow.Schema:
         """
         Get the current schema of the DeltaTable with the Parquet PyArrow format.
 
+        DEPRECATED: use DeltaTable.schema().to_pyarrow() instead.
+
         :return: the current Schema with the Parquet PyArrow format
         """
-        return pyarrow_schema_from_json(self._table.arrow_schema_json())
+        warnings.warn(
+            "DeltaTable.pyarrow_schema() is deprecated. Use DeltaTable.schema().to_pyarrow() instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+        return self.schema().to_pyarrow()
 
     def to_pyarrow_dataset(
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
+        parquet_read_options: Optional[ParquetReadOptions] = None,
     ) -> pyarrow.dataset.Dataset:
         """
         Build a PyArrow Dataset using data from the DeltaTable.
 
         :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
         :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
+        :param parquet_read_options: Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
+         More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html
         :return: the PyArrow dataset in PyArrow
         """
-        if not partitions:
-            file_paths = self._table.file_uris()
-        else:
-            file_paths = self._table.files_by_partitions(partitions)
-
-        empty_delta_table = len(file_paths) == 0
-        if empty_delta_table:
-            return dataset(
-                [],
-                schema=self.pyarrow_schema(),
-                partitioning=partitioning(flavor="hive"),
-            )
-
-        parsed = urlparse(file_paths[0])
-        if not filesystem and parsed.netloc:
+        if not filesystem:
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler(self._table.table_uri())
             )
 
-        return dataset(
-            file_paths,
-            schema=self.pyarrow_schema(),
-            format="parquet",
-            filesystem=filesystem,
-            partitioning=partitioning(flavor="hive"),
+        format = ParquetFileFormat(read_options=parquet_read_options)
+
+        fragments = [
+            format.make_fragment(
+                file,
+                filesystem=filesystem,
+                partition_expression=part_expression,
+            )
+            for file, part_expression in self._table.dataset_partitions(
+                partitions, self.schema().to_pyarrow()
+            )
+        ]
+
+        return FileSystemDataset(
+            fragments, self.schema().to_pyarrow(), format, filesystem
         )
 
     def to_pyarrow_table(

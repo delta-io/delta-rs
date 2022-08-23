@@ -32,6 +32,11 @@ install: build ## Install Python binding of delta-rs
 	$(eval TARGET_WHEEL := $(shell ls ../target/wheels/deltalake-${PACKAGE_VERSION}-*.whl))
 	pip install $(TARGET_WHEEL)[devel,pandas]
 
+.PHONY: develop-pyspark
+develop-pyspark: setup
+	$(info --- Develop with Python binding ---)
+	maturin develop --extras=devel,pandas,pyspark $(MATURIN_EXTRA_ARGS)
+
 .PHONY: format
 format: ## Format the code
 	$(info --- Rust format ---)
@@ -52,7 +57,7 @@ check-python: ## Run check on Python
 	$(info Check Python isort)
 	isort --diff --check-only .
 	$(info Check Python black)
-	black --check
+	black --check .
 	$(info Check Python mypy)
 	mypy
 
@@ -61,15 +66,14 @@ unit-test: ## Run unit test
 	$(info --- Run Python unit-test ---)
 	python -m pytest
 
+.PHONY: test-pyspark
+test-pyspark:
+	python -m pytest -m 'pyspark and integration'
+
 .PHONY: build-documentation
 build-documentation: ## Build documentation with Sphinx
 	$(info --- Run build of the Sphinx documentation ---)
 	sphinx-build -Wn -b html -d ./docs/build/doctrees ./docs/source ./docs/build/html
-
-.PHONY: publish
-publish: ## Publish Python binding version in Pypi
-	$(info --- Run publish of the Python binding ---)
-	maturin publish -b pyo3 --target $(TARGET) $(EXTRA_ARGS)
 
 .PHONY: clean
 clean: ## Run clean

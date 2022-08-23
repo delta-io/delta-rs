@@ -2,17 +2,18 @@
 //!
 //! The local file storage backend is multi-writer safe.
 
-use std::path::{Path, PathBuf};
-use std::pin::Pin;
-
-use chrono::DateTime;
-use futures::{Stream, TryStreamExt};
-use tokio::fs;
-use tokio::io::AsyncWriteExt;
-use tokio_stream::wrappers::ReadDirStream;
-
 use super::{ObjectMeta, StorageBackend, StorageError};
+use chrono::DateTime;
+use futures::{stream::BoxStream, StreamExt};
+use std::collections::VecDeque;
+use std::io;
+use std::io::SeekFrom;
+use std::ops::Range;
+use std::path::Path;
+use tokio::fs;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use uuid::Uuid;
+use walkdir::WalkDir;
 
 mod rename;
 
@@ -26,12 +27,12 @@ mod rename;
 ///   *  xfs requires >= Linux 4.0
 ///   *  ext2, minix, reiserfs, jfs, vfat, and bpf requires >= Linux 4.9
 /// * Darwin is supported but not fully tested.
-/// * Windows is not supported because we are not using native atomic file rename system call.
 /// Patches welcome.
 /// * Support for other platforms are not implemented at the moment.
 #[derive(Default, Debug)]
 #[allow(dead_code)]
 pub struct FileStorageBackend {
+    #[allow(dead_code)]
     root: String,
 }
 
@@ -46,35 +47,13 @@ impl FileStorageBackend {
 
 #[async_trait::async_trait]
 impl StorageBackend for FileStorageBackend {
-    #[inline]
-    fn join_path(&self, path: &str, path_to_join: &str) -> String {
-        let new_path = Path::new(path);
-        new_path
-            .join(path_to_join)
-            .into_os_string()
-            .into_string()
-            .unwrap()
-    }
-
-    #[inline]
-    fn join_paths(&self, paths: &[&str]) -> String {
-        let mut iter = paths.iter();
-        let mut path = PathBuf::from(iter.next().unwrap_or(&""));
-        iter.for_each(|s| path.push(s));
-        path.into_os_string().into_string().unwrap()
-    }
-
-    #[inline]
-    fn trim_path(&self, path: &str) -> String {
-        path.trim_end_matches(std::path::MAIN_SEPARATOR).to_string()
-    }
-
     async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError> {
         let attr = fs::metadata(path).await?;
 
         Ok(ObjectMeta {
             path: path.to_string(),
             modified: DateTime::from(attr.modified().unwrap()),
+            size: Some(attr.len().try_into().unwrap()),
         })
     }
 
@@ -82,21 +61,98 @@ impl StorageBackend for FileStorageBackend {
         fs::read(path).await.map_err(StorageError::from)
     }
 
+    async fn get_range(&self, path: &str, range: Range<usize>) -> Result<Vec<u8>, StorageError> {
+        let mut file = fs::File::open(path).await.map_err(|e| {
+            if e.kind() == std::io::ErrorKind::NotFound {
+                StorageError::NotFound
+            } else {
+                StorageError::Generic(e.to_string())
+            }
+        })?;
+        let to_read = range.end - range.start;
+        file.seek(SeekFrom::Start(range.start as u64))
+            .await
+            .map_err(|e| StorageError::Generic(e.to_string()))?;
+
+        let mut buf = Vec::with_capacity(to_read);
+        let _read = file
+            .take(to_read as u64)
+            .read_to_end(&mut buf)
+            .await
+            .map_err(|e| StorageError::Generic(e.to_string()))?;
+
+        Ok(buf)
+    }
+
     async fn list_objs<'a>(
         &'a self,
         path: &'a str,
-    ) -> Result<
-        Pin<Box<dyn Stream<Item = Result<ObjectMeta, StorageError>> + Send + 'a>>,
-        StorageError,
-    > {
-        let readdir = ReadDirStream::new(fs::read_dir(path).await?);
+    ) -> Result<BoxStream<'a, Result<ObjectMeta, StorageError>>, StorageError> {
+        let walkdir = WalkDir::new(path)
+            // Don't include the root directory itself
+            .min_depth(1);
 
-        Ok(Box::pin(readdir.err_into().and_then(|entry| async move {
-            Ok(ObjectMeta {
-                path: String::from(entry.path().to_str().unwrap()),
-                modified: DateTime::from(entry.metadata().await.unwrap().modified().unwrap()),
-            })
-        })))
+        let meta_iter = walkdir.into_iter().filter_map(move |result_dir_entry| {
+            match convert_walkdir_result(result_dir_entry) {
+                Err(e) => Some(Err(e)),
+                Ok(None) => None,
+                Ok(entry @ Some(_)) => entry
+                    .filter(|dir_entry| dir_entry.file_type().is_file())
+                    .map(|entry| {
+                        let file_path =
+                            String::from(entry.path().to_str().ok_or_else(|| {
+                                StorageError::Generic("invalid path".to_string())
+                            })?);
+                        match entry.metadata() {
+                            Ok(meta) => Ok(ObjectMeta {
+                                path: file_path,
+                                modified: meta.modified()?.into(),
+                                size: Some(meta.len().try_into().map_err(|_| {
+                                    StorageError::Generic("cannot convert to i64".to_string())
+                                })?),
+                            }),
+                            Err(err)
+                                if err.io_error().map(|e| e.kind())
+                                    == Some(io::ErrorKind::NotFound) =>
+                            {
+                                Err(StorageError::NotFound)
+                            }
+                            Err(err) => Err(StorageError::WalkDir { source: err }),
+                        }
+                    }),
+            }
+        });
+
+        // list in batches of CHUNK_SIZE
+        const CHUNK_SIZE: usize = 1024;
+
+        let buffer = VecDeque::with_capacity(CHUNK_SIZE);
+        let stream = futures::stream::try_unfold(
+            (meta_iter, buffer),
+            |(mut meta_iter, mut buffer)| async move {
+                if buffer.is_empty() {
+                    (meta_iter, buffer) = tokio::task::spawn_blocking(move || {
+                        for _ in 0..CHUNK_SIZE {
+                            match meta_iter.next() {
+                                Some(r) => buffer.push_back(r),
+                                None => break,
+                            }
+                        }
+                        (meta_iter, buffer)
+                    })
+                    .await
+                    .map_err(|err| StorageError::Generic(err.to_string()))?;
+                }
+
+                match buffer.pop_front() {
+                    Some(Err(e)) => Err(e),
+                    Some(Ok(meta)) => Ok(Some((meta, (meta_iter, buffer)))),
+                    None => Ok(None),
+                }
+            },
+        );
+
+        Ok(stream.boxed())
     }
 
     async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError> {
@@ -132,6 +188,22 @@ impl StorageBackend for FileStorageBackend {
 
     async fn delete_obj(&self, path: &str) -> Result<(), StorageError> {
         fs::remove_file(path).await.map_err(StorageError::from)
+    }
+}
+
+/// Convert walkdir results and converts not-found errors into `None`.
+fn convert_walkdir_result(
+    res: std::result::Result<walkdir::DirEntry, walkdir::Error>,
+) -> Result<Option<walkdir::DirEntry>, StorageError> {
+    match res {
+        Ok(entry) => Ok(Some(entry)),
+        Err(walkdir_err) => match walkdir_err.io_error() {
+            Some(io_err) => match io_err.kind() {
+                io::ErrorKind::NotFound => Ok(None),
+                _ => Err(StorageError::Generic(io_err.to_string())),
+            },
+            None => Err(StorageError::Generic(walkdir_err.to_string())),
+        },
     }
 }
 
@@ -203,41 +275,6 @@ mod tests {
             .unwrap();
         assert_eq!(fs::metadata(path1).await.is_ok(), false);
         assert_eq!(fs::metadata(path2).await.is_ok(), false)
-    }
-
-    #[test]
-    fn join_multiple_paths() {
-        let backend = FileStorageBackend::new("./");
-        assert_eq!(
-            Path::new(&backend.join_paths(&["abc", "efg/", "123"])),
-            Path::new("abc").join("efg").join("123"),
-        );
-        assert_eq!(
-            &backend.join_paths(&["abc", "efg"]),
-            &backend.join_path("abc", "efg"),
-        );
-        assert_eq!(&backend.join_paths(&["foo"]), "foo",);
-        assert_eq!(&backend.join_paths(&[]), "",);
-    }
-
-    #[test]
-    fn trim_path() {
-        let be = FileStorageBackend::new("root");
-        let path = be.join_paths(&["foo", "bar"]);
-        assert_eq!(be.trim_path(&path), path);
-        assert_eq!(
-            be.trim_path(&format!("{}{}", path, std::path::MAIN_SEPARATOR)),
-            path,
-        );
-        assert_eq!(
-            be.trim_path(&format!(
-                "{}{}{}",
-                path,
-                std::path::MAIN_SEPARATOR,
-                std::path::MAIN_SEPARATOR
-            )),
-            path,
-        );
     }
 
     #[test]
