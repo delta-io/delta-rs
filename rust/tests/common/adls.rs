@@ -1,6 +1,6 @@
-use super::az_cli;
 use super::TestContext;
 use chrono::Utc;
+use deltalake::test_utils::az_cli;
 use rand::Rng;
 use std::collections::HashMap;
 use std::process::Command;

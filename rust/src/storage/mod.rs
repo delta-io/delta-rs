@@ -295,7 +295,15 @@ mod tests {
     use crate::test_utils::{IntegrationContext, StorageIntegration, TestResult};
     use object_store::DynObjectStore;
 
-    #[cfg(feature = "azure", feature = "integration_test")]
+    #[cfg(feature = "integration_test")]
+    #[tokio::test]
+    async fn test_object_store_local() -> TestResult {
+        let integration = IntegrationContext::new(StorageIntegration::Local)?;
+        test_object_store(integration.object_store().as_ref()).await?;
+        Ok(())
+    }
+
+    #[cfg(all(feature = "azure", feature = "integration_test"))]
     #[tokio::test]
     async fn test_object_store_azure() -> TestResult {
         let integration = IntegrationContext::new(StorageIntegration::Microsoft)?;
@@ -303,7 +311,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(feature = "s3", feature = "integration_test")]
+    #[cfg(all(feature = "s3", feature = "integration_test"))]
     #[tokio::test]
     async fn test_object_store_aws() -> TestResult {
         let integration = IntegrationContext::new(StorageIntegration::Amazon)?;

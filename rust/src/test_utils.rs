@@ -1,9 +1,10 @@
 #![allow(dead_code, missing_docs)]
 use crate::DeltaTableBuilder;
 use chrono::Utc;
+use fs_extra::dir::{copy, CopyOptions};
 use object_store::DynObjectStore;
-use std::process::ExitStatus;
 use std::sync::Arc;
+use tempdir::TempDir;
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
@@ -12,6 +13,7 @@ pub struct IntegrationContext {
     integration: StorageIntegration,
     bucket: String,
     store: Arc<DynObjectStore>,
+    tmp_dir: TempDir,
 }
 
 impl IntegrationContext {
@@ -25,26 +27,37 @@ impl IntegrationContext {
 
         integration.prepare_env();
 
+        let tmp_dir = TempDir::new("")?;
         // create a fresh bucket in every context. THis is done via CLI...
-        let bucket = format!("test-delta-table-{}", Utc::now().timestamp());
+        let bucket = match integration {
+            StorageIntegration::Local => tmp_dir.as_ref().to_str().unwrap().to_owned(),
+            _ => (format!("test-delta-table-{}", Utc::now().timestamp())),
+        };
         integration.crate_bucket(&bucket)?;
         let store_uri = match integration {
             StorageIntegration::Amazon => format!("s3://{}", &bucket),
             StorageIntegration::Microsoft => format!("az://{}", &bucket),
             StorageIntegration::Google => format!("gs://{}", &bucket),
+            StorageIntegration::Local => format!("file://{}", &bucket),
         };
 
         // the "storage_backend" will always point to the root ofg the object store.
         // TODO should we provide the store via object_Store builders?
-        let store = DeltaTableBuilder::from_uri(store_uri)
-            .with_allow_http(true)
-            .build_storage()?
-            .storage_backend();
+        let store = match integration {
+            StorageIntegration::Local => Arc::new(
+                object_store::local::LocalFileSystem::new_with_prefix(tmp_dir.path())?,
+            ),
+            _ => DeltaTableBuilder::from_uri(store_uri)
+                .with_allow_http(true)
+                .build_storage()?
+                .storage_backend(),
+        };
 
         Ok(Self {
             integration,
             bucket,
             store,
+            tmp_dir,
         })
     }
 
@@ -70,6 +83,7 @@ impl IntegrationContext {
             StorageIntegration::Amazon => format!("s3://{}", &self.bucket),
             StorageIntegration::Microsoft => format!("az://{}", &self.bucket),
             StorageIntegration::Google => format!("gs://{}", &self.bucket),
+            StorageIntegration::Local => format!("file://{}", &self.bucket),
         }
     }
 
@@ -86,6 +100,13 @@ impl IntegrationContext {
                 let uri = format!("{}/{}", self.bucket, table.as_name());
                 az_cli::upload_table(&table.as_path(), &uri)?;
             }
+            StorageIntegration::Local => {
+                let mut options = CopyOptions::new();
+                options.content_only = true;
+                let dest_path = self.tmp_dir.path().join(&table.as_name());
+                std::fs::create_dir_all(&dest_path)?;
+                copy(&table.as_path(), &dest_path, &options)?;
+            }
             StorageIntegration::Google => todo!(),
         };
         Ok(())
@@ -95,8 +116,13 @@ impl IntegrationContext {
 impl Drop for IntegrationContext {
     fn drop(&mut self) {
         match self.integration {
-            StorageIntegration::Amazon => s3_cli::delete_bucket(&self.root_uri()).unwrap(),
-            StorageIntegration::Microsoft => az_cli::delete_container(&self.bucket).unwrap(),
+            StorageIntegration::Amazon => {
+                s3_cli::delete_bucket(&self.root_uri()).unwrap();
+            }
+            StorageIntegration::Microsoft => {
+                az_cli::delete_container(&self.bucket).unwrap();
+            }
+            StorageIntegration::Local => (),
             _ => todo!(),
         };
     }
@@ -107,6 +133,7 @@ pub enum StorageIntegration {
     Amazon,
     Microsoft,
     Google,
+    Local,
 }
 
 impl StorageIntegration {
@@ -114,14 +141,22 @@ impl StorageIntegration {
         match self {
             Self::Microsoft => az_cli::prepare_env(),
             Self::Amazon => s3_cli::prepare_env(),
+            Self::Local => (),
             _ => todo!(),
         }
     }
 
-    fn crate_bucket(&self, name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
+    fn crate_bucket(&self, name: impl AsRef<str>) -> std::io::Result<()> {
         match self {
-            Self::Microsoft => az_cli::create_container(name),
-            Self::Amazon => s3_cli::create_bucket(name),
+            Self::Microsoft => {
+                az_cli::create_container(name)?;
+                Ok(())
+            }
+            Self::Amazon => {
+                s3_cli::create_bucket(name)?;
+                Ok(())
+            }
+            Self::Local => Ok(()),
             _ => todo!(),
         }
     }

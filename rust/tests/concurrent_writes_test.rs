@@ -12,7 +12,7 @@ use std::iter::FromIterator;
 use std::time::Duration;
 
 #[tokio::test]
-#[cfg(feature = "s3")]
+#[cfg(all(feature = "s3", feature = "integration_test"))]
 async fn concurrent_writes_s3() {
     s3_common::setup_dynamodb("concurrent_writes");
     s3_common::cleanup_dir_except(
@@ -32,10 +32,10 @@ async fn concurrent_writes_s3() {
 /// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
 #[ignore]
 #[tokio::test]
-#[cfg(feature = "azure")]
+#[cfg(all(feature = "azure", feature = "integration_test"))]
 async fn concurrent_writes_azure() {
     use chrono::Utc;
-    use common::az_cli;
+    use deltalake::test_utils::az_cli;
     use deltalake::{DeltaTableBuilder, DeltaTableMetaData, Schema, SchemaDataType, SchemaField};
     use std::env;
 
