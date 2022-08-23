@@ -1,9 +1,8 @@
 //! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
 
-use super::{str_option, StorageError};
-use crate::builder::s3_storage_options;
+use crate::builder::{s3_storage_options, str_option};
 use bytes::Bytes;
-use dynamodb_lock::{LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};
+use dynamodb_lock::{DynamoError, LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};
 use futures::stream::BoxStream;
 use object_store::aws::AmazonS3;
 use object_store::path::Path;
@@ -24,6 +23,72 @@ use std::sync::Arc;
 use std::time::Duration;
 use tokio::io::AsyncWrite;
 
+const STORE_NAME: &str = "DeltaS3ObjectStore";
+
+/// Error raised by storage lock client
+#[derive(thiserror::Error, Debug)]
+enum S3LockError {
+    /// Error raised when (de)serializing data.
+    #[error("Error serializing lock data: {source}")]
+    Serde {
+        /// raw error
+        source: serde_json::Error,
+    },
+
+    /// Error raised for failed lock acquisition
+    #[error("Failed acquiring lock after {attempts} attempts.")]
+    AcquireLock {
+        /// number of attempts
+        attempts: u32,
+    },
+
+    /// Error raised for failed lock release
+    #[error("Failed releasing lock for item: {:?}", item)]
+    ReleaseLock {
+        /// related lock item
+        item: LockItem,
+    },
+
+    /// Error interacting with dynamo lock client
+    #[error("Dynamo Error: {} ({:?}).", source, source)]
+    Dynamo {
+        /// raw error
+        source: DynamoError,
+    },
+
+    /// Error raised when required lock data si missing
+    #[error("Missing lock data for item: {:?}.", item)]
+    MissingData {
+        /// related lock item
+        item: LockItem,
+    },
+
+    /// Error raised getting credentials
+    #[error("Failed to retrieve AWS credentials: {source}")]
+    Credentials {
+        /// The underlying Rusoto CredentialsError
+        #[from]
+        source: rusoto_credential::CredentialsError,
+    },
+
+    /// Error raised creating http client
+    #[error("Failed to create request dispatcher: {source}")]
+    HttpClient {
+        /// The underlying Rusoto TlsError
+        #[from]
+        source: rusoto_core::request::TlsError,
+    },
+}
+
+impl From<S3LockError> for ObjectStoreError {
+    fn from(e: S3LockError) -> Self {
+        ObjectStoreError::Generic {
+            store: STORE_NAME,
+            source: Box::new(e),
+        }
+    }
+}
+
 /// Lock data which stores an attempt to rename `source` into `destination`
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct LockData {
@@ -35,20 +100,17 @@ pub struct LockData {
 
 impl LockData {
     /// Builds new `LockData` instance and then creates json string from it.
-    pub fn json(src: &str, dst: &str) -> Result<String, StorageError> {
+    pub fn json(src: &str, dst: &str) -> Result<String, serde_json::Error> {
         let data = LockData {
             source: src.to_string(),
             destination: dst.to_string(),
         };
-        let json = serde_json::to_string(&data)
-            .map_err(|_| StorageError::S3Generic("Lock data serialize error".to_string()))?;
-
-        Ok(json)
+        serde_json::to_string(&data)
     }
 }
 
 /// Uses a `LockClient` to support additional features required by S3 Storage.
-pub struct S3LockClient {
+struct S3LockClient {
     lock_client: Box<dyn LockClient>,
 }
 
@@ -63,10 +125,7 @@ impl S3LockClient {
 
         if let Some(ref data) = lock.data {
             let data: LockData =
-                serde_json::from_str(data).map_err(|err| ObjectStoreError::Generic {
-                    store: "DeltaS3Store",
-                    source: Box::new(err),
-                })?;
+                serde_json::from_str(data).map_err(|err| S3LockError::Serde { source: err })?;
 
             if lock.acquired_expired_lock {
                 log::info!(
@@ -91,41 +150,47 @@ impl S3LockClient {
 
                 // If we acquired expired lock then the rename done above is
                 // a repair of expired one. So on this time we try the intended rename.
-                lock.data = Some(LockData::json(src.as_ref(), dst.as_ref())?);
+                lock.data = Some(
+                    LockData::json(src.as_ref(), dst.as_ref())
+                        .map_err(|err| S3LockError::Serde { source: err })?,
+                );
                 lock = self
                     .lock_client
                     .update_data(&lock)
                     .await
-                    .map_err(|_| ObjectStoreError::NotImplemented)?;
+                    .map_err(|err| S3LockError::Dynamo { source: err })?;
                 rename_result = s3.rename(src, dst).await;
             }
 
             let release_result = self.lock_client.release_lock(&lock).await;
 
-            // before unwrapping `rename_result` the `release_result` is called to ensure that we
-            // no longer hold the lock
+            // before unwrapping `rename_result` the `release_result` is called
+            // to ensure that we no longer hold the lock
             rename_result?;
 
-            // TODO implement form DynamoErr
-            if !release_result.map_err(|_| ObjectStoreError::NotImplemented)? {
-                log::error!("Could not release lock {:?}", &lock);
-                return Err(ObjectStoreError::NotImplemented);
+            if !release_result.map_err(|err| S3LockError::Dynamo { source: err })? {
+                return Err(S3LockError::ReleaseLock { item: lock }.into());
             }
 
             Ok(())
         } else {
-            Err(ObjectStoreError::NotImplemented)
+            Err(S3LockError::MissingData { item: lock }.into())
         }
     }
 
-    async fn acquire_lock_loop(&self, src: &str, dst: &str) -> Result<LockItem, StorageError> {
-        let data = LockData::json(src, dst)?;
+    async fn acquire_lock_loop(&self, src: &str, dst: &str) -> Result<LockItem, S3LockError> {
+        let data = LockData::json(src, dst).map_err(|err| S3LockError::Serde { source: err })?;
 
         let lock;
         let mut retries = 0;
 
         loop {
-            match self.lock_client.try_acquire_lock(data.as_str()).await? {
+            match self
+                .lock_client
+                .try_acquire_lock(data.as_str())
+                .await
+                .map_err(|err| S3LockError::Dynamo { source: err })?
+            {
                 Some(l) => {
                     lock = l;
                     break;
@@ -133,7 +198,9 @@ impl S3LockClient {
                 None => {
                     retries += 1;
                     if retries > DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS {
-                        return Err(StorageError::S3Generic("Cannot acquire lock".to_string()));
+                        return Err(S3LockError::AcquireLock {
+                            attempts: DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS,
+                        });
                     }
                 }
             }
@@ -260,8 +327,7 @@ impl Default for S3StorageOptions {
     }
 }
 
-fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvider>, StorageError>
-{
+fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvider>, S3LockError> {
     let provider = WebIdentityProvider::from_k8s_env();
     Ok(AutoRefreshingProvider::new(provider)?)
 }
@@ -316,7 +382,7 @@ impl std::fmt::Display for S3StorageBackend {
 
 impl S3StorageBackend {
     /// Creates a new S3StorageBackend.
-    pub fn new() -> Result<Self, StorageError> {
+    pub fn new() -> ObjectStoreResult<Self> {
         let options = S3StorageOptions::default();
         let _s3_lock_client = try_create_lock_client(&options)?;
 
@@ -329,7 +395,7 @@ impl S3StorageBackend {
     pub fn new_from_options(
         storage: Arc<AmazonS3>,
         options: S3StorageOptions,
-    ) -> Result<Self, StorageError> {
+    ) -> ObjectStoreResult<Self> {
         let s3_lock_client = try_create_lock_client(&options)?;
 
         Ok(Self {
@@ -432,9 +498,7 @@ impl ObjectStore for S3StorageBackend {
     }
 }
 
-fn try_create_lock_client(
-    options: &S3StorageOptions,
-) -> Result<Option<S3LockClient>, StorageError> {
+fn try_create_lock_client(options: &S3StorageOptions) -> Result<Option<S3LockClient>, S3LockError> {
     let dispatcher = HttpClient::new()?;
 
     match &options.locking_provider {

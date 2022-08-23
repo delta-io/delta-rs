@@ -2,8 +2,8 @@
 
 use crate::delta::{DeltaTable, DeltaTableError};
 use crate::schema::DeltaDataTypeVersion;
-use crate::storage::delta::DeltaObjectStore;
 use crate::storage::file::FileStorageBackend;
+use crate::storage::DeltaObjectStore;
 use chrono::{DateTime, FixedOffset, Utc};
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 use object_store::aws::AmazonS3Builder;
@@ -568,8 +568,8 @@ pub fn get_gcp_builder_from_options(options: HashMap<String, String>) -> GoogleC
     builder
 }
 
-#[cfg(any(feature = "azure", feature = "gcs"))]
-fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
+#[cfg(any(feature = "azure", feature = "gcs", feature = "s3"))]
+pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
     map.get(key)
         .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
 }

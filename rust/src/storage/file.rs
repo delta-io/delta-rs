@@ -13,7 +13,7 @@ use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
 
-const STORE_NAME: &str = "DeltaLocalFileSystem";
+const STORE_NAME: &str = "DeltaLocalObjectStore";
 
 /// Error raised by storage lock client
 #[derive(thiserror::Error, Debug)]
@@ -23,25 +23,32 @@ pub(self) enum LocalFileSystemError {
         path: String,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+
     #[error("Object not found at path: {} ({:?})", path, source)]
     NotFound {
         path: String,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+
     #[error("Invalid argument in OS call for path: {} ({:?})", path, source)]
-    InvalidArgument {
-        path: String,
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
-    },
+    InvalidArgument { path: String, source: errno::Errno },
+
     #[error("Null error in FFI for path: {} ({:?})", path, source)]
     NullError {
         path: String,
-        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+        source: std::ffi::NulError,
     },
+
     #[error("Generic error in store: {} ({:?})", store, source)]
     Generic {
         store: &'static str,
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    #[error("Error executing async task for path: {} ({:?})", path, source)]
+    Tokio {
+        path: String,
+        source: tokio::task::JoinError,
     },
 }
 
@@ -56,11 +63,15 @@ impl From<LocalFileSystemError> for ObjectStoreError {
             }
             LocalFileSystemError::InvalidArgument { source, .. } => ObjectStoreError::Generic {
                 store: STORE_NAME,
-                source,
+                source: Box::new(source),
             },
             LocalFileSystemError::NullError { source, .. } => ObjectStoreError::Generic {
                 store: STORE_NAME,
-                source,
+                source: Box::new(source),
+            },
+            LocalFileSystemError::Tokio { source, .. } => ObjectStoreError::Generic {
+                store: STORE_NAME,
+                source: Box::new(source),
             },
             LocalFileSystemError::Generic { store, source } => {
                 ObjectStoreError::Generic { store, source }
@@ -250,9 +261,9 @@ mod imp {
     use std::ffi::CString;
 
     fn to_c_string(p: &str) -> Result<CString, LocalFileSystemError> {
-        CString::new(p).map_err(|e| LocalFileSystemError::NullError {
+        CString::new(p).map_err(|err| LocalFileSystemError::NullError {
             path: p.into(),
-            source: Box::new(e),
+            source: err,
         })
     }
 
@@ -270,7 +281,10 @@ mod imp {
                 }
             })
             .await
-            .unwrap()
+            .map_err(|err| LocalFileSystemError::Tokio {
+                path: from.into(),
+                source: err,
+            })?
         };
 
         match ret {
@@ -284,7 +298,7 @@ mod imp {
             }),
             Err(e) if e.0 == libc::EINVAL => Err(LocalFileSystemError::InvalidArgument {
                 path: to.into(),
-                source: Box::new(e),
+                source: e,
             }),
             Err(e) => Err(LocalFileSystemError::Generic {
                 store: STORE_NAME,
@@ -333,11 +347,11 @@ mod tests {
         assert!(a.exists());
         assert!(!c.exists());
         match rename_noreplace(a.to_str().unwrap(), c.to_str().unwrap()).await {
-        Err(LocalFileSystemError::InvalidArgument {source, ..}) =>
-            panic!("expected success, got: {:?}. Note: atomically renaming Windows files from WSL2 is not supported.", source),
-        Err(e) => panic!("expected success, got: {:?}", e),
-        _ => {}
-    }
+            Err(LocalFileSystemError::InvalidArgument {source, ..}) =>
+                panic!("expected success, got: {:?}. Note: atomically renaming Windows files from WSL2 is not supported.", source),
+            Err(e) => panic!("expected success, got: {:?}", e),
+            _ => {}
+        }
         assert!(!a.exists());
         assert!(c.exists());
 
