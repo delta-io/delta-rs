@@ -1,62 +1,54 @@
-mod common;
-#[allow(dead_code)]
-mod fs_common;
-#[cfg(feature = "s3")]
-#[allow(dead_code)]
-mod s3_common;
+#![cfg(feature = "integration_test")]
 
-use deltalake::{action, DeltaTable};
+use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
+use deltalake::{
+    action, DeltaTable, DeltaTableBuilder, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
+};
 use std::collections::HashMap;
 use std::future::Future;
 use std::iter::FromIterator;
 use std::time::Duration;
 
+#[cfg(feature = "s3")]
+mod s3_common;
+
 #[tokio::test]
-#[cfg(all(feature = "s3", feature = "integration_test"))]
-async fn concurrent_writes_s3() {
-    s3_common::setup_dynamodb("concurrent_writes");
-    s3_common::cleanup_dir_except(
-        "s3://deltars/concurrent_workers/_delta_log",
-        vec!["00000000000000000000.json".to_string()],
-    )
-    .await;
-    run_test(|name| Worker::new("s3://deltars/concurrent_workers", name)).await;
+async fn test_concurrent_writes_local() -> TestResult {
+    test_concurrent_writes(StorageIntegration::Local).await?;
+    Ok(())
 }
 
-/// An Azure Data Lake Gen2 Storage Account is required to run this test and must be provided by
-/// the developer. Because of this requirement, the test cannot run in CI and is therefore marked
-/// #[ignore]. As a result, the developer must execute these tests on their machine.
-/// In order to execute tests, remove the #[ignore] below and execute via:
-/// 'cargo test concurrent_writes_azure --features azure --test concurrent_writes_test -- --nocapture --exact'
-/// `AZURE_STORAGE_ACCOUNT_NAME` is required to be set in the environment.
-/// `AZURE_STORAGE_ACCOUNT_KEY` is required to be set in the environment.
-#[ignore]
+#[cfg(all(feature = "s3"))]
 #[tokio::test]
-#[cfg(all(feature = "azure", feature = "integration_test"))]
-async fn concurrent_writes_azure() {
-    use chrono::Utc;
-    use deltalake::test_utils::az_cli;
-    use deltalake::{DeltaTableBuilder, DeltaTableMetaData, Schema, SchemaDataType, SchemaField};
-    use std::env;
+async fn concurrent_writes_s3() -> TestResult {
+    s3_common::setup_dynamodb("concurrent_writes");
+    test_concurrent_writes(StorageIntegration::Amazon).await?;
+    Ok(())
+}
 
-    // Arrange
-    let storage_account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
-    let storage_account_key = env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
+#[cfg(all(feature = "azure"))]
+#[tokio::test]
+async fn test_concurrent_writes_azure() -> TestResult {
+    test_concurrent_writes(StorageIntegration::Microsoft).await?;
+    Ok(())
+}
 
-    // Create a new file system for test isolation
-    let container_name = format!("test-delta-table-{}", Utc::now().timestamp());
-    az_cli::create_container(&container_name);
+async fn test_concurrent_writes(integration: StorageIntegration) -> TestResult {
+    let context = IntegrationContext::new(integration)?;
+    let (_table, table_uri) = prepare_table(&context).await?;
+    run_test(|name| Worker::new(&table_uri, name)).await;
+    Ok(())
+}
 
-    let table_uri = &format!("azure://{}/", container_name);
-    let mut dt = DeltaTableBuilder::from_uri(table_uri).build().unwrap();
-
+async fn prepare_table(
+    context: &IntegrationContext,
+) -> Result<(DeltaTable, String), Box<dyn std::error::Error + 'static>> {
     let schema = Schema::new(vec![SchemaField::new(
         "Id".to_string(),
         SchemaDataType::primitive("integer".to_string()),
         true,
         HashMap::new(),
     )]);
-
     let metadata = DeltaTableMetaData::new(
         Some("Azure Test Table".to_string()),
         None,
@@ -65,33 +57,21 @@ async fn concurrent_writes_azure() {
         vec![],
         HashMap::new(),
     );
-
     let protocol = action::Protocol {
         min_reader_version: 1,
         min_writer_version: 2,
     };
 
-    dt.create(metadata.clone(), protocol.clone(), None, None)
-        .await
-        .unwrap();
+    let table_uri = context.uri_for_table(TestTables::Custom("concurrent_workers".into()));
+    let mut table = DeltaTableBuilder::from_uri(&table_uri).build()?;
+    table.create(metadata, protocol, None, None).await?;
 
-    assert_eq!(0, dt.version());
-    assert_eq!(1, dt.get_min_reader_version());
-    assert_eq!(2, dt.get_min_writer_version());
-    assert_eq!(0, dt.get_files().len());
-    assert_eq!(table_uri.trim_end_matches('/').to_string(), dt.table_uri());
+    assert_eq!(0, table.version());
+    assert_eq!(1, table.get_min_reader_version());
+    assert_eq!(2, table.get_min_writer_version());
+    assert_eq!(0, table.get_files().len());
 
-    // Act/Assert
-    run_test(|name| Worker::new(table_uri, name)).await;
-
-    // Cleanup
-    az_cli::delete_container(&container_name);
-}
-
-#[tokio::test]
-async fn concurrent_writes_fs() {
-    prepare_fs();
-    run_test(|name| Worker::new("./tests/data/concurrent_workers", name)).await;
+    Ok((table, table_uri))
 }
 
 const WORKERS: i64 = 5;
@@ -177,11 +157,4 @@ impl Worker {
         }));
         tx.commit(None, None).await.unwrap()
     }
-}
-
-fn prepare_fs() {
-    fs_common::cleanup_dir_except(
-        "./tests/data/concurrent_workers/_delta_log",
-        vec!["00000000000000000000.json".to_string()],
-    );
 }

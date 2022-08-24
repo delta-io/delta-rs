@@ -303,7 +303,7 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "azure", feature = "integration_test"))]
+    #[cfg(all(feature = "azure"))]
     #[tokio::test]
     async fn test_object_store_azure() -> TestResult {
         let integration = IntegrationContext::new(StorageIntegration::Microsoft)?;
@@ -311,10 +311,20 @@ mod tests {
         Ok(())
     }
 
-    #[cfg(all(feature = "s3", feature = "integration_test"))]
+    #[cfg(all(feature = "s3"))]
     #[tokio::test]
     async fn test_object_store_aws() -> TestResult {
         let integration = IntegrationContext::new(StorageIntegration::Amazon)?;
+        test_object_store(integration.object_store().as_ref()).await?;
+        Ok(())
+    }
+
+    // TODO pending emulator support in object store crate
+    #[ignore]
+    #[cfg(all(feature = "gcs"))]
+    #[tokio::test]
+    async fn test_object_store_google() -> TestResult {
+        let integration = IntegrationContext::new(StorageIntegration::Google)?;
         test_object_store(integration.object_store().as_ref()).await?;
         Ok(())
     }

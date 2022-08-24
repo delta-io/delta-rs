@@ -1,8 +1,10 @@
 #![allow(dead_code, missing_docs)]
+use crate::builder::gcp_storage_options;
 use crate::DeltaTableBuilder;
 use chrono::Utc;
 use fs_extra::dir::{copy, CopyOptions};
 use object_store::DynObjectStore;
+use serde_json::json;
 use std::sync::Arc;
 use tempdir::TempDir;
 
@@ -33,6 +35,21 @@ impl IntegrationContext {
             StorageIntegration::Local => tmp_dir.as_ref().to_str().unwrap().to_owned(),
             _ => (format!("test-delta-table-{}", Utc::now().timestamp())),
         };
+        if let StorageIntegration::Google = integration {
+            gs_cli::prepare_env();
+            let base_url = std::env::var("GOOGLE_BASE_URL")?;
+            let token = json!({"gcs_base_url": base_url, "disable_oauth": true, "client_email": "", "private_key": ""});
+            let account_path = tmp_dir.path().join("gcs.json");
+            std::fs::write(&account_path, serde_json::to_vec(&token)?)?;
+            set_env_if_not_set(
+                gcp_storage_options::SERVICE_ACCOUNT,
+                account_path.as_path().to_str().unwrap(),
+            );
+            set_env_if_not_set(
+                gcp_storage_options::GOOGLE_SERVICE_ACCOUNT,
+                account_path.as_path().to_str().unwrap(),
+            );
+        }
         integration.crate_bucket(&bucket)?;
         let store_uri = match integration {
             StorageIntegration::Amazon => format!("s3://{}", &bucket),
@@ -122,8 +139,10 @@ impl Drop for IntegrationContext {
             StorageIntegration::Microsoft => {
                 az_cli::delete_container(&self.bucket).unwrap();
             }
+            StorageIntegration::Google => {
+                gs_cli::delete_bucket(&self.bucket).unwrap();
+            }
             StorageIntegration::Local => (),
-            _ => todo!(),
         };
     }
 }
@@ -141,8 +160,8 @@ impl StorageIntegration {
         match self {
             Self::Microsoft => az_cli::prepare_env(),
             Self::Amazon => s3_cli::prepare_env(),
+            Self::Google => gs_cli::prepare_env(),
             Self::Local => (),
-            _ => todo!(),
         }
     }
 
@@ -156,8 +175,11 @@ impl StorageIntegration {
                 s3_cli::create_bucket(name)?;
                 Ok(())
             }
+            Self::Google => {
+                gs_cli::create_bucket(name)?;
+                Ok(())
+            }
             Self::Local => Ok(()),
-            _ => todo!(),
         }
     }
 }
@@ -166,6 +188,7 @@ impl StorageIntegration {
 pub enum TestTables {
     Simple,
     Golden,
+    Custom(String),
 }
 
 impl TestTables {
@@ -182,6 +205,8 @@ impl TestTables {
                 .to_str()
                 .unwrap()
                 .to_owned(),
+            // the data path for upload does not apply to custom tables.
+            Self::Custom(_) => todo!(),
         }
     }
 
@@ -189,6 +214,7 @@ impl TestTables {
         match self {
             Self::Simple => "simple".into(),
             Self::Golden => "golden".into(),
+            Self::Custom(name) => name.to_owned(),
         }
     }
 }
@@ -260,7 +286,7 @@ pub mod az_cli {
 }
 
 /// small wrapper around s3 cli
-mod s3_cli {
+pub mod s3_cli {
     use super::set_env_if_not_set;
     use crate::builder::s3_storage_options;
     use std::process::{Command, ExitStatus};
@@ -316,7 +342,7 @@ mod s3_cli {
 
     pub fn upload_table(src: &str, dst: &str) -> std::io::Result<ExitStatus> {
         let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
-            .expect("variable ENDPOINT must be set to connect to S3");
+            .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
         let mut child = Command::new("aws")
             .args([
                 "s3",
@@ -330,5 +356,67 @@ mod s3_cli {
             .spawn()
             .expect("aws command is installed");
         child.wait()
+    }
+}
+
+/// small wrapper around google api
+pub mod gs_cli {
+    use crate::gcp_storage_options;
+
+    use super::set_env_if_not_set;
+    use serde_json::json;
+    use std::process::{Command, ExitStatus};
+
+    pub fn create_bucket(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
+        let endpoint = std::env::var("GOOGLE_ENDPOINT_URL")
+            .expect("variable GOOGLE_ENDPOINT_URL must be set to connect to GCS Emulator");
+        let payload = json!({ "name": container_name.as_ref() });
+        let mut child = Command::new("curl")
+            .args([
+                "--insecure",
+                "-v",
+                "-X",
+                "POST",
+                "--data-binary",
+                &format!("'{}'", &serde_json::to_string(&payload)?),
+                "-H",
+                "Content-Type: application/json",
+                &endpoint,
+            ])
+            .spawn()
+            .expect("az command is installed");
+        child.wait()
+    }
+
+    pub fn delete_bucket(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
+        let endpoint = std::env::var("GOOGLE_ENDPOINT_URL")
+            .expect("variable GOOGLE_ENDPOINT_URL must be set to connect to GCS Emulator");
+        let payload = json!({ "name": container_name.as_ref() });
+        let mut child = Command::new("curl")
+            .args([
+                "--insecure",
+                "-v",
+                "-X",
+                "DELETE",
+                "--data-binary",
+                &serde_json::to_string(&payload)?,
+                "-H",
+                "Content-Type: application/json",
+                &endpoint,
+            ])
+            .spawn()
+            .expect("az command is installed");
+        child.wait()
+    }
+
+    pub fn upload_table(_src: &str, _dst: &str) -> std::io::Result<ExitStatus> {
+        todo!()
+    }
+
+    /// prepare_env
+    pub fn prepare_env() {
+        set_env_if_not_set(gcp_storage_options::GOOGLE_USE_EMULATOR, "1");
+        set_env_if_not_set("GOOGLE_BASE_URL", "https://localhost:4443");
+        set_env_if_not_set("GOOGLE_ENDPOINT_URL", "https://localhost:4443/storage/v1/b");
     }
 }

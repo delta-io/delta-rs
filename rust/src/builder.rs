@@ -555,8 +555,12 @@ pub fn get_azure_builder_from_options(options: HashMap<String, String>) -> Micro
 /// Storage option keys to use when creating gcp storage backend.
 /// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
 pub mod gcp_storage_options {
-    ///Path to the service account json file
+    /// Path to the service account json file
     pub const SERVICE_ACCOUNT: &str = "SERVICE_ACCOUNT";
+    /// Path to the service account json file
+    pub const GOOGLE_SERVICE_ACCOUNT: &str = "GOOGLE_SERVICE_ACCOUNT";
+    /// Configure google backend to ignore certificate errors for use with emulator.
+    pub const GOOGLE_USE_EMULATOR: &str = "GOOGLE_USE_EMULATOR";
 }
 
 /// Generate a new GoogleCloudStorageBuilder instance from a map of options
@@ -567,6 +571,21 @@ pub fn get_gcp_builder_from_options(options: HashMap<String, String>) -> GoogleC
     if let Some(account) = str_option(&options, gcp_storage_options::SERVICE_ACCOUNT) {
         builder = builder.with_service_account_path(account);
     }
+
+    // TODO (roeap) We need either the option to insecure requests, or allow http connections
+    // to fake gcs, neither option is exposed by object store right now.
+    // #[cfg(test)]
+    // if let Ok(use_emulator) = std::env::var("GOOGLE_USE_EMULATOR") {
+    //     use reqwest::Client;
+    //     builder = builder.with_client(
+    //         // ignore HTTPS errors in tests so we can use fake-gcs server
+    //         Client::builder()
+    //             .danger_accept_invalid_certs(true)
+    //             .build()
+    //             .expect("Error creating http client for testing"),
+    //     );
+    // }
+
     builder
 }
 

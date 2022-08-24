@@ -77,17 +77,10 @@ jobs:
       #   image: fsouza/fake-gcs-server
       #   ports:
       #     - 4443:4443
-      # localstack:
-      #   image: localstack/localstack:0.14.4
-      #   ports:
-      #     - 4566:4566
-      # ec2-metadata:
-      #   image: amazon/amazon-ec2-metadata-mock:v1.9.2
-      #   ports:
-      #     - 1338:1338
-      #   env:
-      #     # Only allow IMDSv2
-      #     AEMM_IMDSV2: "1"
+      localstack:
+        image: localstack/localstack:0.14.4
+        ports:
+          - 4566:4566
       azurite:
         image: mcr.microsoft.com/azure-storage/azurite
         ports:
@@ -107,12 +100,12 @@ jobs:
         AWS_DEFAULT_REGION: "us-east-1"
         AWS_ACCESS_KEY_ID: test
         AWS_SECRET_ACCESS_KEY: test
-        AWS_ENDPOINT: http://localstack:4566
+        AWS_ENDPOINT_URL: http://localstack:4566
         EC2_METADATA_ENDPOINT: http://ec2-metadata:1338
+        GOOGLE_ENDPOINT_URL: https://fake-gcs:4443/storage/v1/b
+        GOOGLE_USE_EMULATOR: "1"
         AZURE_USE_EMULATOR: "1"
         AZURITE_BLOB_STORAGE_URL: "http://azurite:10000"
-        GOOGLE_SERVICE_ACCOUNT: "/tmp/gcs.json"
-        SERVICE_ACCOUNT: "/tmp/gcs.json"
         OBJECT_STORE_BUCKET: test-bucket
         AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;"
 
@@ -123,13 +116,12 @@ jobs:
       #   run: |
       #     curl --insecure -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "https://fake-gcs:4443/storage/v1/b"
       #     echo '{"gcs_base_url": "https://fake-gcs:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > "$GOOGLE_SERVICE_ACCOUNT"
-      # - name: Setup LocalStack (AWS emulation)
-      #   run: |
-      #     cd /tmp
-      #     curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-      #     unzip awscliv2.zip
-      #     ./aws/install
-      #     aws --endpoint-url=http://localstack:4566 s3 mb s3://test-bucket
+      - name: Setup LocalStack (AWS emulation)
+        run: |
+          cd /tmp
+          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
+          unzip awscliv2.zip
+          ./aws/install
       - name: Configure Azurite (Azure emulation)
         # the magical connection string is from
         # https://docs.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#http-connection-strings
@@ -147,4 +139,4 @@ jobs:
 
       - name: Run tests
         run: |
-          cargo test --features integration_test,azure
+          cargo test --features integration_test,azure,s3,datafusion-ext

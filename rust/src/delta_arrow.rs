@@ -695,4 +695,33 @@ mod tests {
             assert!(expected_fields.contains(&f.name().as_str()));
         }
     }
+
+    #[test]
+    fn test_arrow_from_delta_decimal_type() {
+        let precision = 20;
+        let scale = 2;
+        let decimal_type = String::from(format!["decimal({p},{s})", p = precision, s = scale]);
+        let decimal_field = crate::SchemaDataType::primitive(decimal_type);
+        assert_eq!(
+            <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&decimal_field).unwrap(),
+            ArrowDataType::Decimal128(precision, scale)
+        );
+    }
+
+    #[test]
+    fn test_arrow_from_delta_wrong_decimal_type() {
+        let precision = 20;
+        let scale = "wrong";
+        let decimal_type = String::from(format!["decimal({p},{s})", p = precision, s = scale]);
+        let _error = format!(
+            "Invalid precision or scale decimal type for Arrow: {}",
+            scale
+        );
+        let decimal_field = crate::SchemaDataType::primitive(decimal_type);
+        assert!(matches!(
+            <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&decimal_field)
+                .unwrap_err(),
+            arrow::error::ArrowError::SchemaError(_error),
+        ));
+    }
 }

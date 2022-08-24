@@ -17,4 +17,4 @@ inherits = "test"
 default = ["azure", "integration_test", "datafusion-ext"]
 
 [patch.crates-io]
-object_store = { git = "https://github.com/roeap/arrow-rs", rev = "b970d4ecc8c5ed208e26bcde61695f5ef196c2f7" }
+object_store = { git = "https://github.com/apache/arrow-rs", rev = "b34adcce427c6cb74fde2d99bc95b8731b7ceda7" }
