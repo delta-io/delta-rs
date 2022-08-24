@@ -364,8 +364,9 @@ impl std::fmt::Display for StorageUrl {
 /// Create a new storage backend used in Delta table
 fn get_storage_backend(
     table_uri: impl AsRef<str>,
-    _options: Option<HashMap<String, String>>,
-    allow_http: Option<bool>,
+    // annotation needed for some feature builds
+    #[allow(unused_variables)] options: Option<HashMap<String, String>>,
+    #[allow(unused_variables)] allow_http: Option<bool>,
 ) -> ObjectStoreResult<(Arc<DynObjectStore>, Path)> {
     let storage_url = StorageUrl::parse(table_uri)?;
     match storage_url.service_type() {
@@ -374,7 +375,7 @@ fn get_storage_backend(
         StorageService::S3 => {
             let url: &Url = storage_url.as_ref();
             let bucket_name = url.host_str().ok_or(ObjectStoreError::NotImplemented)?;
-            let mut builder = get_s3_builder_from_options(_options.unwrap_or_default())
+            let mut builder = get_s3_builder_from_options(options.unwrap_or_default())
                 .with_bucket_name(bucket_name);
             if let Some(allow) = allow_http {
                 builder = builder.with_allow_http(allow);
@@ -386,7 +387,7 @@ fn get_storage_backend(
             let url: &Url = storage_url.as_ref();
             // TODO we have to differentiate ...
             let container_name = url.host_str().ok_or(ObjectStoreError::NotImplemented)?;
-            let mut builder = get_azure_builder_from_options(_options.unwrap_or_default())
+            let mut builder = get_azure_builder_from_options(options.unwrap_or_default())
                 .with_container_name(container_name);
             if let Some(allow) = allow_http {
                 builder = builder.with_allow_http(allow);
@@ -397,7 +398,7 @@ fn get_storage_backend(
         StorageService::GCS => {
             let url: &Url = storage_url.as_ref();
             let bucket_name = url.host_str().ok_or(ObjectStoreError::NotImplemented)?;
-            let builder = get_gcp_builder_from_options(_options.unwrap_or_default())
+            let builder = get_gcp_builder_from_options(options.unwrap_or_default())
                 .with_bucket_name(bucket_name);
             Ok((Arc::new(builder.build()?), storage_url.prefix))
         }
