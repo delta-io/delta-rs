@@ -98,4 +98,3 @@ tempfile = "3"
 maplit = { version = "1" }
 rand = "0.8"
 dotenv = "*"
-rusoto_s3 = { version = "0.48", default-features = false }
