@@ -1,21 +1,20 @@
 #![cfg(all(feature = "s3", feature = "integration_test"))]
-use crate::s3_common;
 use bytes::Bytes;
-use deltalake::storage::s3::{S3StorageBackend, S3StorageOptions};
+use deltalake::storage::s3::S3StorageBackend;
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestTables};
 use deltalake::{DeltaTableBuilder, ObjectStore};
+use futures::stream::BoxStream;
 use object_store::path::Path;
-use object_store::ObjectStore;
 use object_store::{
-    DynObjectStore, Error as ObjectStoreError, MultipartId, Result as ObjectStoreResult,
+    DynObjectStore, Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta,
+    Result as ObjectStoreResult,
 };
 use serial_test::serial;
+use std::ops::Range;
 use std::sync::{Arc, Mutex};
+use tokio::io::AsyncWrite;
 use tokio::task::JoinHandle;
 use tokio::time::Duration;
-
-#[allow(dead_code)]
-mod s3_common;
 
 #[tokio::test(flavor = "multi_thread")]
 #[serial]
@@ -70,7 +69,7 @@ async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), Object
 
     let s3 = context.object_store();
     // but first we check that the rename is successful and not overwritten
-    async fn get_text(s3: &S3StorageBackend, path: &Path) -> String {
+    async fn get_text(s3: &Arc<DynObjectStore>, path: &Path) -> String {
         std::str::from_utf8(&s3.get(path).await.unwrap().bytes().await.unwrap())
             .unwrap()
             .to_string()
@@ -79,7 +78,7 @@ async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), Object
     assert_eq!(get_text(&s3, &dst1).await, "test1");
     assert_eq!(get_text(&s3, &dst2).await, "test2");
 
-    async fn not_exists(s3: &S3StorageBackend, path: &Path) -> bool {
+    async fn not_exists(s3: &Arc<DynObjectStore>, path: &Path) -> bool {
         if let Err(ObjectStoreError::NotFound { .. }) = s3.head(path).await {
             true
         } else {
@@ -94,14 +93,16 @@ async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), Object
 }
 
 fn rename(
-    s3: S3StorageBackend,
+    s3: Arc<DynObjectStore>,
     src: &Path,
     dst: &Path,
 ) -> JoinHandle<Result<(), ObjectStoreError>> {
+    let lsrc = src.clone();
+    let ldst = dst.clone();
     tokio::spawn(async move {
-        println!("rename({}, {}) started", src, dst);
-        let result = s3.rename_if_not_exists(src, dst).await;
-        println!("rename({}, {}) finished", src, dst);
+        println!("rename({}, {}) started", &lsrc, &ldst);
+        let result = s3.rename_if_not_exists(&lsrc, &ldst).await;
+        println!("rename({}, {}) finished", &lsrc, &ldst);
         result
     })
 }
@@ -109,9 +110,9 @@ fn rename(
 fn create_s3_backend(
     context: &IntegrationContext,
     name: &str,
-    pause_copy: Option<String>,
-    pause_del: Option<String>,
-) -> (DelayedObjectStore, Arc<Mutex<bool>>) {
+    pause_copy: Option<Path>,
+    pause_del: Option<Path>,
+) -> (Arc<DelayedObjectStore>, Arc<Mutex<bool>>) {
     let pause_until_true = Arc::new(Mutex::new(false));
     let store = DeltaTableBuilder::from_uri(&context.root_uri())
         .build_storage()
@@ -128,12 +129,13 @@ fn create_s3_backend(
         name: name.to_string(),
         pause_before_copy_path: pause_copy,
         pause_before_delete_path: pause_del,
-        pause_until_true,
+        pause_until_true: pause_until_true.clone(),
     };
 
-    (delayed_store, pause_until_true)
+    (Arc::new(delayed_store), pause_until_true)
 }
 
+#[derive(Debug)]
 struct DelayedObjectStore {
     inner: Arc<DynObjectStore>,
     name: String,
@@ -195,17 +197,12 @@ impl ObjectStore for DelayedObjectStore {
         self.inner.copy(from, to).await
     }
 
-    async fn copy_if_not_exists(&self, _from: &Path, _to: &Path) -> ObjectStoreResult<()> {
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
         self.inner.copy_if_not_exists(from, to).await
     }
 
     async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        let lock_client = match self.s3_lock_client {
-            Some(ref lock_client) => lock_client,
-            None => return Err(S3LockError::LockClientRequired.into()),
-        };
-        lock_client.rename_with_lock(self, from, to).await?;
-        Ok(())
+        self.inner.rename_if_not_exists(from, to).await
     }
 
     async fn put_multipart(
