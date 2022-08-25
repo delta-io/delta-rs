@@ -257,7 +257,7 @@ impl TestTables {
 }
 
 fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
-    if let Err(_) = std::env::var(key.as_ref()) {
+    if std::env::var(key.as_ref()).is_err() {
         std::env::set_var(key.as_ref(), value.as_ref())
     };
 }
