@@ -340,25 +340,6 @@ fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvi
 /// An S3 implementation of the [ObjectStore] trait
 ///
 /// The backend can optionally use [dynamodb_lock] to better support concurrent
-/// writers. To do so, either pass in a [dynamodb_lock::LockClient] to [S3StorageBackend::new_with]
-/// or configure the locking client within [S3StorageOptions]. For example:
-///
-/// ```rust
-/// use std::collections::HashMap;
-/// use deltalake::storage::s3::{S3StorageOptions, S3StorageBackend, s3_storage_options};
-///
-/// let options = S3StorageOptions::from_map([
-///     (s3_storage_options::AWS_S3_LOCKING_PROVIDER, "dynamodb"),
-///     // Options passed down to dynamodb_lock::DynamoDbOptions (default values shown below)
-///     ("table_name", "delta_rs_lock_table"),
-///     ("partition_key_value", "delta-rs"),
-///     ("owner_name", "<some UUID>"), // Should be unique across writers
-///     ("lease_duration", "20"), // seconds
-///     ("refresh_period", "1000"), // milliseconds
-///     ("additional_time_to_wait_for_lock", "1000"), // milliseconds
-/// ].iter().map(|(k, v)| (k.to_string(), v.to_string())).collect());
-/// let backend = S3StorageBackend::new_from_options(options);
-/// ```
 pub struct S3StorageBackend {
     inner: Arc<DynObjectStore>,
     s3_lock_client: Option<S3LockClient>,
@@ -386,7 +367,7 @@ impl S3StorageBackend {
     }
 
     /// Creates a new S3StorageBackend with given options, s3 client and lock client.
-    pub fn new_with_lock_client(
+    pub fn with_lock_client(
         storage: Arc<DynObjectStore>,
         lock_client: Option<Box<dyn LockClient>>,
     ) -> Self {

@@ -1,5 +1,3 @@
-extern crate deltalake;
-
 use chrono::Utc;
 use deltalake::DeltaTableBuilder;
 use deltalake::PeekCommit;
@@ -566,7 +564,7 @@ async fn test_read_vacuumed_log_history() {
 
 #[tokio::test]
 async fn read_empty_folder() {
-    let dir = env::temp_dir();
+    let dir = std::env::temp_dir();
     let result = deltalake::open_table(&dir.into_os_string().into_string().unwrap()).await;
 
     assert!(matches!(
@@ -574,7 +572,7 @@ async fn read_empty_folder() {
         deltalake::DeltaTableError::NotATable(_),
     ));
 
-    let dir = env::temp_dir();
+    let dir = std::env::temp_dir();
     let result = deltalake::open_table_with_ds(
         &dir.into_os_string().into_string().unwrap(),
         "2021-08-09T13:18:31+08:00",
