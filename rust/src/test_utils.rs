@@ -257,9 +257,8 @@ impl TestTables {
 }
 
 fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
-    match std::env::var(key.as_ref()) {
-        Err(_) => std::env::set_var(key.as_ref(), value.as_ref()),
-        Ok(_) => (),
+    if let Err(_) = std::env::var(key.as_ref()) {
+        std::env::set_var(key.as_ref(), value.as_ref())
     };
 }
 
@@ -405,7 +404,8 @@ pub mod s3_cli {
     pub fn create_lock_table() -> std::io::Result<ExitStatus> {
         let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
             .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
-        let table_name = std::env::var("DYNAMO_LOCK_TABLE_NAME").unwrap_or("test_table".into());
+        let table_name =
+            std::env::var("DYNAMO_LOCK_TABLE_NAME").unwrap_or_else(|_| "test_table".into());
         let mut child = Command::new("aws")
             .args([
                 "dynamodb",
@@ -430,7 +430,8 @@ pub mod s3_cli {
     pub fn delete_lock_table() -> std::io::Result<ExitStatus> {
         let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
             .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
-        let table_name = std::env::var("DYNAMO_LOCK_TABLE_NAME").unwrap_or("test_table".into());
+        let table_name =
+            std::env::var("DYNAMO_LOCK_TABLE_NAME").unwrap_or_else(|_| "test_table".into());
         let mut child = Command::new("aws")
             .args([
                 "dynamodb",
