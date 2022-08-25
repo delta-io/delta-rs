@@ -15,14 +15,14 @@ async fn test_read_tables_local() -> TestResult {
     Ok(read_tables(StorageIntegration::Local).await?)
 }
 
-#[cfg(all(feature = "azure", feature = "integration_test"))]
+#[cfg(all(feature = "azure"))]
 #[tokio::test]
 #[serial]
 async fn test_read_tables_azure() -> TestResult {
     Ok(read_tables(StorageIntegration::Microsoft).await?)
 }
 
-#[cfg(all(feature = "s3", feature = "integration_test"))]
+#[cfg(all(feature = "s3"))]
 #[tokio::test]
 #[serial]
 async fn test_read_tables_aws() -> TestResult {

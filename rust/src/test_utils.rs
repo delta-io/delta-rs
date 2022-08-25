@@ -128,6 +128,30 @@ impl IntegrationContext {
         };
         Ok(())
     }
+
+    pub fn load_table_with_name(&self, table: TestTables, name: impl AsRef<str>) -> TestResult {
+        match self.integration {
+            StorageIntegration::Amazon => {
+                s3_cli::upload_table(
+                    table.as_path().as_str(),
+                    &format!("{}/{}", self.root_uri(), name.as_ref()),
+                )?;
+            }
+            StorageIntegration::Microsoft => {
+                let uri = format!("{}/{}", self.bucket, name.as_ref());
+                az_cli::upload_table(&table.as_path(), &uri)?;
+            }
+            StorageIntegration::Local => {
+                let mut options = CopyOptions::new();
+                options.content_only = true;
+                let dest_path = self.tmp_dir.path().join(name.as_ref());
+                std::fs::create_dir_all(&dest_path)?;
+                copy(&table.as_path(), &dest_path, &options)?;
+            }
+            StorageIntegration::Google => todo!(),
+        };
+        Ok(())
+    }
 }
 
 impl Drop for IntegrationContext {
@@ -135,6 +159,7 @@ impl Drop for IntegrationContext {
         match self.integration {
             StorageIntegration::Amazon => {
                 s3_cli::delete_bucket(&self.root_uri()).unwrap();
+                s3_cli::delete_lock_table().unwrap();
             }
             StorageIntegration::Microsoft => {
                 az_cli::delete_container(&self.bucket).unwrap();
@@ -172,7 +197,16 @@ impl StorageIntegration {
                 Ok(())
             }
             Self::Amazon => {
-                s3_cli::create_bucket(name)?;
+                s3_cli::create_bucket(&name)?;
+                set_env_if_not_set(
+                    "DYNAMO_LOCK_TABLE_NAME",
+                    format!("lock_table_{}", name.as_ref()),
+                );
+                set_env_if_not_set(
+                    "DYNAMO_LOCK_PARTITION_KEY_VALUE",
+                    format!("s3://{}", name.as_ref()),
+                );
+                s3_cli::create_lock_table()?;
                 Ok(())
             }
             Self::Google => {
@@ -187,6 +221,7 @@ impl StorageIntegration {
 /// Reference tables from the test data folder
 pub enum TestTables {
     Simple,
+    SimpleCommit,
     Golden,
     Custom(String),
 }
@@ -200,6 +235,7 @@ impl TestTables {
         let data_path = std::path::Path::new(dir).join("tests/data");
         match self {
             Self::Simple => data_path.join("simple_table").to_str().unwrap().to_owned(),
+            Self::SimpleCommit => data_path.join("simple_commit").to_str().unwrap().to_owned(),
             Self::Golden => data_path
                 .join("golden/data-reader-array-primitives")
                 .to_str()
@@ -213,6 +249,7 @@ impl TestTables {
     pub fn as_name(&self) -> String {
         match self {
             Self::Simple => "simple".into(),
+            Self::SimpleCommit => "simple_commit".into(),
             Self::Golden => "golden".into(),
             Self::Custom(name) => name.to_owned(),
         }
@@ -230,7 +267,7 @@ fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
 pub mod az_cli {
     use super::set_env_if_not_set;
     use crate::builder::azure_storage_options;
-    use std::process::{Command, ExitStatus};
+    use std::process::{Command, ExitStatus, Stdio};
 
     /// Create a new bucket
     pub fn create_container(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
@@ -279,6 +316,7 @@ pub mod az_cli {
     pub fn upload_table(src: &str, dst: &str) -> std::io::Result<ExitStatus> {
         let mut child = Command::new("az")
             .args(["storage", "blob", "upload-batch", "-d", dst, "-s", src])
+            .stdout(Stdio::null())
             .spawn()
             .expect("az command is installed");
         child.wait()
@@ -289,7 +327,7 @@ pub mod az_cli {
 pub mod s3_cli {
     use super::set_env_if_not_set;
     use crate::builder::s3_storage_options;
-    use std::process::{Command, ExitStatus};
+    use std::process::{Command, ExitStatus, Stdio};
 
     /// Create a new bucket
     pub fn create_bucket(bucket_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
@@ -338,6 +376,11 @@ pub mod s3_cli {
         set_env_if_not_set("AWS_DEFAULT_REGION", "us-east-1");
         set_env_if_not_set(s3_storage_options::AWS_REGION, "us-east-1");
         set_env_if_not_set(s3_storage_options::AWS_S3_LOCKING_PROVIDER, "dynamodb");
+
+        set_env_if_not_set("AWS_S3_LOCKING_PROVIDER", "dynamodb");
+        set_env_if_not_set("DYNAMO_LOCK_TABLE_NAME", "test_table");
+        set_env_if_not_set("DYNAMO_LOCK_REFRESH_PERIOD_MILLIS", "100");
+        set_env_if_not_set("DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS", "100");
     }
 
     pub fn upload_table(src: &str, dst: &str) -> std::io::Result<ExitStatus> {
@@ -353,6 +396,51 @@ pub mod s3_cli {
                 "--endpoint-url",
                 &endpoint,
             ])
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("aws command is installed");
+        child.wait()
+    }
+
+    pub fn create_lock_table() -> std::io::Result<ExitStatus> {
+        let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
+            .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
+        let table_name = std::env::var("DYNAMO_LOCK_TABLE_NAME").unwrap_or("test_table".into());
+        let mut child = Command::new("aws")
+            .args([
+                "dynamodb",
+                "create-table",
+                "--table-name",
+                &table_name,
+                "--endpoint-url",
+                &endpoint,
+                "--attribute-definitions",
+                "AttributeName=key,AttributeType=S",
+                "--key-schema",
+                "AttributeName=key,KeyType=HASH",
+                "--provisioned-throughput",
+                "ReadCapacityUnits=10,WriteCapacityUnits=10",
+            ])
+            .stdout(Stdio::null())
+            .spawn()
+            .expect("aws command is installed");
+        child.wait()
+    }
+
+    pub fn delete_lock_table() -> std::io::Result<ExitStatus> {
+        let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
+            .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
+        let table_name = std::env::var("DYNAMO_LOCK_TABLE_NAME").unwrap_or("test_table".into());
+        let mut child = Command::new("aws")
+            .args([
+                "dynamodb",
+                "delete-table",
+                "--table-name",
+                &table_name,
+                "--endpoint-url",
+                &endpoint,
+            ])
+            .stdout(Stdio::null())
             .spawn()
             .expect("aws command is installed");
         child.wait()

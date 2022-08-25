@@ -562,7 +562,6 @@ dependencies = [
  "fs_extra",
  "futures",
  "glibc_version 0.1.2 (registry+https://github.com/rust-lang/crates.io-index)",
- "hyper",
  "lazy_static",
  "libc",
  "log",
@@ -1588,7 +1587,7 @@ dependencies = [
 [[package]]
 name = "object_store"
 version = "0.4.0"
-source = "git+https://github.com/roeap/arrow-rs?rev=365543f22d2616277239f4a8fec5da82a4c10c59#365543f22d2616277239f4a8fec5da82a4c10c59"
+source = "git+https://github.com/apache/arrow-rs?rev=b34adcce427c6cb74fde2d99bc95b8731b7ceda7#b34adcce427c6cb74fde2d99bc95b8731b7ceda7"
 dependencies = [
  "async-trait",
  "base64",

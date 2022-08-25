@@ -4,11 +4,10 @@ use crate::builder::{s3_storage_options, str_option};
 use bytes::Bytes;
 use dynamodb_lock::{DynamoError, LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};
 use futures::stream::BoxStream;
-use object_store::aws::AmazonS3;
 use object_store::path::Path;
 use object_store::{
-    Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore,
-    Result as ObjectStoreResult,
+    DynObjectStore, Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Result as ObjectStoreResult,
 };
 use rusoto_core::{HttpClient, Region};
 use rusoto_credential::AutoRefreshingProvider;
@@ -16,7 +15,6 @@ use rusoto_sts::WebIdentityProvider;
 use serde::Deserialize;
 use serde::Serialize;
 use std::collections::HashMap;
-use std::fmt;
 use std::fmt::Debug;
 use std::ops::Range;
 use std::sync::Arc;
@@ -78,6 +76,12 @@ enum S3LockError {
         #[from]
         source: rusoto_core::request::TlsError,
     },
+
+    #[error("Rename target already exists")]
+    AlreadyExists,
+
+    #[error("Atomic rename requires a LockClient for S3 backends.")]
+    LockClientRequired,
 }
 
 impl From<S3LockError> for ObjectStoreError {
@@ -136,7 +140,7 @@ impl S3LockClient {
             }
 
             let mut rename_result = s3
-                .rename(&Path::from(data.source), &Path::from(data.destination))
+                .rename_no_replace(&Path::from(data.source), &Path::from(data.destination))
                 .await;
 
             if lock.acquired_expired_lock {
@@ -159,7 +163,7 @@ impl S3LockClient {
                     .update_data(&lock)
                     .await
                     .map_err(|err| S3LockError::Dynamo { source: err })?;
-                rename_result = s3.rename(src, dst).await;
+                rename_result = s3.rename_no_replace(src, dst).await;
             }
 
             let release_result = self.lock_client.release_lock(&lock).await;
@@ -214,20 +218,21 @@ impl S3LockClient {
 ///
 /// Available options are described in [s3_storage_options].
 #[derive(Clone, Debug, PartialEq, Eq)]
+#[allow(missing_docs)]
 pub struct S3StorageOptions {
-    _endpoint_url: Option<String>,
-    region: Region,
-    aws_access_key_id: Option<String>,
-    aws_secret_access_key: Option<String>,
-    aws_session_token: Option<String>,
-    locking_provider: Option<String>,
-    assume_role_arn: Option<String>,
-    assume_role_session_name: Option<String>,
-    use_web_identity: bool,
-    s3_pool_idle_timeout: Duration,
-    sts_pool_idle_timeout: Duration,
-    s3_get_internal_server_error_retries: usize,
-    extra_opts: HashMap<String, String>,
+    pub endpoint_url: Option<String>,
+    pub region: Region,
+    pub aws_access_key_id: Option<String>,
+    pub aws_secret_access_key: Option<String>,
+    pub aws_session_token: Option<String>,
+    pub locking_provider: Option<String>,
+    pub assume_role_arn: Option<String>,
+    pub assume_role_session_name: Option<String>,
+    pub use_web_identity: bool,
+    pub s3_pool_idle_timeout: Duration,
+    pub sts_pool_idle_timeout: Duration,
+    pub s3_get_internal_server_error_retries: usize,
+    pub extra_opts: HashMap<String, String>,
 }
 
 impl S3StorageOptions {
@@ -281,7 +286,7 @@ impl S3StorageOptions {
         ) as usize;
 
         Self {
-            _endpoint_url: endpoint_url,
+            endpoint_url,
             region,
             aws_access_key_id: str_option(&options, s3_storage_options::AWS_ACCESS_KEY_ID),
             aws_secret_access_key: str_option(&options, s3_storage_options::AWS_SECRET_ACCESS_KEY),
@@ -332,21 +337,6 @@ fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvi
     Ok(AutoRefreshingProvider::new(provider)?)
 }
 
-/// Struct describing an object stored in S3.
-#[derive(Debug, PartialEq, Eq)]
-pub struct S3Object<'a> {
-    /// The bucket where the object is stored.
-    pub bucket: &'a str,
-    /// The key of the object within the bucket.
-    pub key: &'a str,
-}
-
-impl<'a> fmt::Display for S3Object<'a> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        write!(f, "s3://{}/{}", self.bucket, self.key)
-    }
-}
-
 /// An S3 implementation of the [ObjectStore] trait
 ///
 /// The backend can optionally use [dynamodb_lock] to better support concurrent
@@ -370,7 +360,7 @@ impl<'a> fmt::Display for S3Object<'a> {
 /// let backend = S3StorageBackend::new_from_options(options);
 /// ```
 pub struct S3StorageBackend {
-    inner: Arc<AmazonS3>,
+    inner: Arc<DynObjectStore>,
     s3_lock_client: Option<S3LockClient>,
 }
 
@@ -381,23 +371,14 @@ impl std::fmt::Display for S3StorageBackend {
 }
 
 impl S3StorageBackend {
-    /// Creates a new S3StorageBackend.
-    pub fn new() -> ObjectStoreResult<Self> {
-        let options = S3StorageOptions::default();
-        let _s3_lock_client = try_create_lock_client(&options)?;
-
-        todo!()
-    }
-
-    /// Creates a new S3StorageBackend from the provided options.
+    /// Creates a new S3StorageBackend Trying to create lock client from options.
     ///
     /// Options are described in [s3_storage_options].
-    pub fn new_from_options(
-        storage: Arc<AmazonS3>,
+    pub fn try_new(
+        storage: Arc<DynObjectStore>,
         options: S3StorageOptions,
     ) -> ObjectStoreResult<Self> {
         let s3_lock_client = try_create_lock_client(&options)?;
-
         Ok(Self {
             inner: storage,
             s3_lock_client,
@@ -405,10 +386,9 @@ impl S3StorageBackend {
     }
 
     /// Creates a new S3StorageBackend with given options, s3 client and lock client.
-    pub fn new_with(
-        storage: Arc<AmazonS3>,
+    pub fn new_with_lock_client(
+        storage: Arc<DynObjectStore>,
         lock_client: Option<Box<dyn LockClient>>,
-        _options: S3StorageOptions,
     ) -> Self {
         let s3_lock_client = lock_client.map(|lc| S3LockClient { lock_client: lc });
         Self {
@@ -416,11 +396,19 @@ impl S3StorageBackend {
             s3_lock_client,
         }
     }
-}
 
-impl Default for S3StorageBackend {
-    fn default() -> Self {
-        Self::new().unwrap()
+    pub(self) async fn rename_no_replace(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
+        match self.head(to).await {
+            Ok(_) => {
+                return Err(ObjectStoreError::AlreadyExists {
+                    path: to.to_string(),
+                    source: Box::new(S3LockError::AlreadyExists),
+                })
+            }
+            Err(ObjectStoreError::NotFound { .. }) => (),
+            Err(e) => return Err(e),
+        }
+        self.inner.rename(from, to).await
     }
 }
 
@@ -474,11 +462,9 @@ impl ObjectStore for S3StorageBackend {
     async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
         let lock_client = match self.s3_lock_client {
             Some(ref lock_client) => lock_client,
-            None => return Err(ObjectStoreError::NotImplemented),
+            None => return Err(S3LockError::LockClientRequired.into()),
         };
-
         lock_client.rename_with_lock(self, from, to).await?;
-
         Ok(())
     }
 
@@ -553,7 +539,7 @@ mod tests {
 
         assert_eq!(
             S3StorageOptions {
-                _endpoint_url: Some("http://localhost".to_string()),
+                endpoint_url: Some("http://localhost".to_string()),
                 region: Region::Custom {
                     name: "us-west-1".to_string(),
                     endpoint: "http://localhost".to_string()
@@ -586,7 +572,7 @@ mod tests {
 
         assert_eq!(
             S3StorageOptions {
-                _endpoint_url: None,
+                endpoint_url: None,
                 region: Region::default(),
                 aws_access_key_id: Some("test".to_string()),
                 aws_secret_access_key: Some("test".to_string()),
@@ -613,7 +599,7 @@ mod tests {
 
         assert_eq!(
             S3StorageOptions {
-                _endpoint_url: Some("http://localhost:1234".to_string()),
+                endpoint_url: Some("http://localhost:1234".to_string()),
                 region: Region::Custom {
                     name: "us-west-2".to_string(),
                     endpoint: "http://localhost:1234".to_string()
@@ -664,7 +650,7 @@ mod tests {
 
         assert_eq!(
             S3StorageOptions {
-                _endpoint_url: Some("http://localhost".to_string()),
+                endpoint_url: Some("http://localhost".to_string()),
                 region: Region::Custom {
                     name: "us-west-2".to_string(),
                     endpoint: "http://localhost".to_string()

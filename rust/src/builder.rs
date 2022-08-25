@@ -3,6 +3,8 @@
 use crate::delta::{DeltaTable, DeltaTableError};
 use crate::schema::DeltaDataTypeVersion;
 use crate::storage::file::FileStorageBackend;
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+use crate::storage::s3::{S3StorageBackend, S3StorageOptions};
 use crate::storage::DeltaObjectStore;
 use chrono::{DateTime, FixedOffset, Utc};
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
@@ -375,12 +377,19 @@ fn get_storage_backend(
         StorageService::S3 => {
             let url: &Url = storage_url.as_ref();
             let bucket_name = url.host_str().ok_or(ObjectStoreError::NotImplemented)?;
-            let mut builder = get_s3_builder_from_options(options.unwrap_or_default())
-                .with_bucket_name(bucket_name);
+            let (mut builder, s3_options) =
+                get_s3_builder_from_options(options.unwrap_or_default());
+            builder = builder.with_bucket_name(bucket_name);
             if let Some(allow) = allow_http {
                 builder = builder.with_allow_http(allow);
             }
-            Ok((Arc::new(builder.build()?), storage_url.prefix))
+            Ok((
+                Arc::new(S3StorageBackend::try_new(
+                    Arc::new(builder.build()?),
+                    s3_options,
+                )?),
+                storage_url.prefix,
+            ))
         }
         #[cfg(feature = "azure")]
         StorageService::Azure => {
@@ -481,29 +490,31 @@ pub mod s3_storage_options {
 
 /// Generate a new AmazonS3Builder instance from a map of options
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-pub fn get_s3_builder_from_options(options: HashMap<String, String>) -> AmazonS3Builder {
+pub fn get_s3_builder_from_options(
+    options: HashMap<String, String>,
+) -> (AmazonS3Builder, S3StorageOptions) {
+    let s3_options = S3StorageOptions::from_map(options);
+
     let mut builder = AmazonS3Builder::new();
 
-    if let Some(endpoint) = str_option(&options, s3_storage_options::AWS_ENDPOINT_URL) {
+    if let Some(endpoint) = &s3_options.endpoint_url {
         builder = builder.with_endpoint(endpoint);
     }
-    if let Some(region) = str_option(&options, s3_storage_options::AWS_REGION) {
-        builder = builder.with_region(region);
-    }
-    if let Some(access_key_id) = str_option(&options, s3_storage_options::AWS_ACCESS_KEY_ID) {
+    builder = builder.with_region(s3_options.region.name());
+
+    if let Some(access_key_id) = &s3_options.aws_access_key_id {
         builder = builder.with_access_key_id(access_key_id);
     }
-    if let Some(secret_access_key) = str_option(&options, s3_storage_options::AWS_SECRET_ACCESS_KEY)
-    {
+    if let Some(secret_access_key) = &s3_options.aws_secret_access_key {
         builder = builder.with_secret_access_key(secret_access_key);
     }
-    if let Some(session_token) = str_option(&options, s3_storage_options::AWS_SESSION_TOKEN) {
+    if let Some(session_token) = &s3_options.aws_session_token {
         builder = builder.with_token(session_token);
     }
     // TODO AWS_WEB_IDENTITY_TOKEN_FILE and AWS_ROLE_ARN are not configurable on the builder, but picked
     // up by the build function if set on the environment. If we have them in the map, should we set them in the env?
     // In the default case, always instance credentials are used.
-    builder
+    (builder, s3_options)
 }
 
 /// Storage option keys to use when creating azure storage backend.

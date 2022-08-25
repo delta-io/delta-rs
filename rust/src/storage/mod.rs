@@ -299,7 +299,7 @@ mod tests {
     #[tokio::test]
     async fn test_object_store_local() -> TestResult {
         let integration = IntegrationContext::new(StorageIntegration::Local)?;
-        test_object_store(integration.object_store().as_ref()).await?;
+        test_object_store(integration.object_store().as_ref(), false).await?;
         Ok(())
     }
 
@@ -307,7 +307,7 @@ mod tests {
     #[tokio::test]
     async fn test_object_store_azure() -> TestResult {
         let integration = IntegrationContext::new(StorageIntegration::Microsoft)?;
-        test_object_store(integration.object_store().as_ref()).await?;
+        test_object_store(integration.object_store().as_ref(), false).await?;
         Ok(())
     }
 
@@ -315,7 +315,7 @@ mod tests {
     #[tokio::test]
     async fn test_object_store_aws() -> TestResult {
         let integration = IntegrationContext::new(StorageIntegration::Amazon)?;
-        test_object_store(integration.object_store().as_ref()).await?;
+        test_object_store(integration.object_store().as_ref(), true).await?;
         Ok(())
     }
 
@@ -325,15 +325,17 @@ mod tests {
     #[tokio::test]
     async fn test_object_store_google() -> TestResult {
         let integration = IntegrationContext::new(StorageIntegration::Google)?;
-        test_object_store(integration.object_store().as_ref()).await?;
+        test_object_store(integration.object_store().as_ref(), false).await?;
         Ok(())
     }
 
-    async fn test_object_store(storage: &DynObjectStore) -> TestResult {
+    async fn test_object_store(storage: &DynObjectStore, skip_copy: bool) -> TestResult {
         put_get_delete_list(storage).await?;
         list_with_delimiter(storage).await?;
         rename_and_copy(storage).await?;
-        copy_if_not_exists(storage).await?;
+        if !skip_copy {
+            copy_if_not_exists(storage).await?;
+        }
         rename_if_not_exists(storage).await?;
         // get_nonexistent_object(storage, None).await?;
         Ok(())
