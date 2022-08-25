@@ -1,7 +1,6 @@
 #![cfg(all(feature = "s3", feature = "integration_test"))]
 use bytes::Bytes;
-use deltalake::storage::s3::S3StorageBackend;
-use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestTables};
+use deltalake::test_utils::{IntegrationContext, StorageIntegration};
 use deltalake::{DeltaTableBuilder, ObjectStore};
 use futures::stream::BoxStream;
 use object_store::path::Path;
