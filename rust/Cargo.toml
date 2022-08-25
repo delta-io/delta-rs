@@ -38,6 +38,7 @@ rusoto_core = { version = "0.48", default-features = false, optional = true }
 rusoto_credential = { version = "0.48", optional = true }
 rusoto_sts = { version = "0.48", default-features = false, optional = true }
 rusoto_dynamodb = { version = "0.48", default-features = false, optional = true }
+hyper = { version = "0.14.20", default-features = false, optional = true }
 
 # Glue
 rusoto_glue = { version = "0.48", default-features = false, optional = true }
@@ -66,6 +67,7 @@ s3 = [
     "rusoto_sts/native-tls",
     "rusoto_dynamodb/native-tls",
     "dynamodb_lock/native-tls",
+    "hyper",
     "object_store/aws",
 ]
 s3-rustls = [
@@ -74,6 +76,7 @@ s3-rustls = [
     "rusoto_sts/rustls",
     "rusoto_dynamodb/rustls",
     "dynamodb_lock/rustls",
+    "hyper",
     "object_store/aws",
 ]
 glue = ["s3", "rusoto_glue"]
@@ -99,3 +102,4 @@ tempfile = "3"
 maplit = { version = "1" }
 rand = "0.8"
 dotenv = "*"
+rusoto_s3 = { version = "0.48", default-features = false }
