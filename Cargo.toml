@@ -12,9 +12,5 @@ exclude = ["proofs", "delta-inspect"]
 [profile.dev]
 split-debuginfo = "unpacked"
 
-[profile.integration]
-inherits = "test"
-default = ["azure", "integration_test", "datafusion-ext"]
-
 [patch.crates-io]
 object_store = { git = "https://github.com/apache/arrow-rs", rev = "b34adcce427c6cb74fde2d99bc95b8731b7ceda7" }
