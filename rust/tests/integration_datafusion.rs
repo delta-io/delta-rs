@@ -1,12 +1,10 @@
 #![cfg(all(feature = "integration_test", feature = "datafusion-ext"))]
 
 use datafusion::arrow::array::Int64Array;
-use datafusion::datasource::TableProvider;
-use datafusion::execution::context::{SessionContext, TaskContext};
+use datafusion::execution::context::SessionContext;
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
-use deltalake::{action::SaveMode, operations::DeltaCommands, DeltaTableBuilder};
-#[cfg(feature = "s3")]
-use dynamodb_lock::dynamo_lock_options;
+use deltalake::DeltaTableBuilder;
+use maplit::hashmap;
 use serial_test::serial;
 use std::sync::Arc;
 
@@ -19,14 +17,14 @@ async fn test_datafusion_local() -> TestResult {
 #[cfg(feature = "s3")]
 #[tokio::test]
 #[serial]
-async fn test_datafusion_local() -> TestResult {
+async fn test_datafusion_aws() -> TestResult {
     Ok(test_datafusion(StorageIntegration::Amazon).await?)
 }
 
 #[cfg(feature = "azure")]
 #[tokio::test]
 #[serial]
-async fn test_datafusion_local() -> TestResult {
+async fn test_datafusion_azure() -> TestResult {
     Ok(test_datafusion(StorageIntegration::Microsoft).await?)
 }
 
@@ -41,13 +39,11 @@ async fn test_datafusion(storage: StorageIntegration) -> TestResult {
 async fn simple_query(context: &IntegrationContext) -> TestResult {
     let table_uri = context.uri_for_table(TestTables::Simple);
 
-    #[cfg(feature = "s3")]
-    let table = DeltaTableBuilder::from_uri(table_uri).with_allow_http(true).with_storage_options(hashmap! {
-        dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "s3::deltars/simple".to_string(),
-    }).load().await?;
-    #[cfg(not(feature = "s3"))]
     let table = DeltaTableBuilder::from_uri(table_uri)
         .with_allow_http(true)
+        .with_storage_options(hashmap! {
+            "DYNAMO_LOCK_OWNER_NAME".to_string() => "s3::deltars/simple".to_string(),
+        })
         .load()
         .await?;
 
