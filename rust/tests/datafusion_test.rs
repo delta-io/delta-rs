@@ -1,9 +1,4 @@
 #![cfg(feature = "datafusion-ext")]
-#[cfg(feature = "s3")]
-#[allow(dead_code)]
-mod s3_common;
-
-use std::{collections::HashSet, sync::Arc};
 
 use arrow::{
     array::*,
@@ -25,6 +20,7 @@ use datafusion::physical_plan::{
 use datafusion::scalar::ScalarValue;
 use deltalake::{action::SaveMode, operations::DeltaCommands, DeltaTable, DeltaTableMetaData};
 use std::collections::HashMap;
+use std::{collections::HashSet, sync::Arc};
 
 fn get_scanned_files(node: &dyn ExecutionPlan) -> HashSet<Label> {
     node.metrics()
@@ -87,31 +83,6 @@ async fn prepare_table(
     }
 
     (table_dir, Arc::new(commands.into()))
-}
-
-#[tokio::test]
-async fn test_datafusion_simple_query() -> Result<()> {
-    let ctx = SessionContext::new();
-    let table = deltalake::open_table("./tests/data/simple_table")
-        .await
-        .unwrap();
-    ctx.register_table("demo", Arc::new(table))?;
-
-    let batches = ctx
-        .sql("SELECT id FROM demo WHERE id > 5 ORDER BY id ASC")
-        .await?
-        .collect()
-        .await?;
-
-    assert_eq!(batches.len(), 1);
-    let batch = &batches[0];
-
-    assert_eq!(
-        batch.column(0).as_ref(),
-        Arc::new(Int64Array::from(vec![7, 9])).as_ref(),
-    );
-
-    Ok(())
 }
 
 #[tokio::test]
@@ -274,46 +245,4 @@ async fn test_files_scanned() -> Result<()> {
     assert!(metrics.num_scanned_files() == 1);
 
     Ok(())
-}
-
-#[cfg(feature = "s3")]
-mod s3 {
-    use super::*;
-    use crate::s3_common::setup;
-    use deltalake::builder;
-    use deltalake::s3_storage_options;
-    use dynamodb_lock::dynamo_lock_options;
-    use maplit::hashmap;
-    use serial_test::serial;
-
-    #[tokio::test]
-    #[serial]
-    async fn test_datafusion_simple_query() -> Result<()> {
-        setup();
-
-        let table_uri = "s3://deltars/simple";
-        let table = builder::DeltaTableBuilder::from_uri(table_uri).with_storage_options(hashmap! {
-                s3_storage_options::AWS_REGION.to_string() => "us-east-1".to_string(),
-                dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "s3::deltars/simple".to_string(),
-            }).load().await.unwrap();
-
-        let ctx = SessionContext::new();
-        ctx.register_table("demo", Arc::new(table))?;
-
-        let batches = ctx
-            .sql("SELECT id FROM demo WHERE id > 5 ORDER BY id ASC")
-            .await?
-            .collect()
-            .await?;
-
-        assert_eq!(batches.len(), 1);
-        let batch = &batches[0];
-
-        assert_eq!(
-            batch.column(0).as_ref(),
-            Arc::new(Int64Array::from(vec![7, 9])).as_ref(),
-        );
-
-        Ok(())
-    }
 }

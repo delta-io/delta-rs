@@ -9,9 +9,6 @@ use std::future::Future;
 use std::iter::FromIterator;
 use std::time::Duration;
 
-#[cfg(feature = "s3")]
-mod s3_common;
-
 #[tokio::test]
 async fn test_concurrent_writes_local() -> TestResult {
     test_concurrent_writes(StorageIntegration::Local).await?;
@@ -21,7 +18,7 @@ async fn test_concurrent_writes_local() -> TestResult {
 #[cfg(all(feature = "s3"))]
 #[tokio::test]
 async fn concurrent_writes_s3() -> TestResult {
-    s3_common::setup_dynamodb("concurrent_writes");
+    setup_dynamodb("concurrent_writes");
     test_concurrent_writes(StorageIntegration::Amazon).await?;
     Ok(())
 }
@@ -157,4 +154,12 @@ impl Worker {
         }));
         tx.commit(None, None).await.unwrap()
     }
+}
+
+fn setup_dynamodb(key: &str) {
+    std::env::set_var("AWS_S3_LOCKING_PROVIDER", "dynamodb");
+    std::env::set_var("DYNAMO_LOCK_TABLE_NAME", "test_table");
+    std::env::set_var("DYNAMO_LOCK_PARTITION_KEY_VALUE", key);
+    std::env::set_var("DYNAMO_LOCK_REFRESH_PERIOD_MILLIS", "100");
+    std::env::set_var("DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS", "100");
 }
