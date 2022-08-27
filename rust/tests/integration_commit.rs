@@ -1,9 +1,5 @@
 #![cfg(feature = "integration_test")]
 
-#[cfg(feature = "s3")]
-#[allow(dead_code)]
-mod s3_common;
-
 #[allow(dead_code)]
 mod fs_common;
 
