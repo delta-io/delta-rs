@@ -2,7 +2,7 @@ extern crate chrono;
 extern crate deltalake;
 extern crate utime;
 
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 #[allow(dead_code)]
 mod s3_common;
 
@@ -14,7 +14,7 @@ use std::collections::HashMap;
 
 use serial_test::serial;
 
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 mod simple_commit_s3 {
     use super::*;
 

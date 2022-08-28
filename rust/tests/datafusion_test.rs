@@ -1,4 +1,4 @@
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 #[allow(dead_code)]
 mod s3_common;
 
@@ -283,7 +283,7 @@ mod datafusion {
         Ok(())
     }
 
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     mod s3 {
         use super::*;
         use crate::s3_common::setup;

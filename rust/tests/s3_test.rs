@@ -1,8 +1,8 @@
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 #[allow(dead_code)]
 mod s3_common;
 
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 mod s3 {
     use crate::s3_common::setup;
     use deltalake::s3_storage_options;
@@ -22,7 +22,7 @@ mod s3 {
 
     #[tokio::test]
     #[serial]
-    async fn test_s3_simple() {
+    async fn test_s3_simple_latest() {
         setup();
 
         // Use the manual options API so we have some basic integrationcoverage.
@@ -88,7 +88,6 @@ mod s3 {
         );
         let tombstones = table.get_state().all_tombstones();
         assert_eq!(tombstones.len(), 29);
-        dbg!(table.get_state().all_tombstones());
         assert!(tombstones.contains(&deltalake::action::Remove {
             path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
             deletion_timestamp: Some(1587968596250),

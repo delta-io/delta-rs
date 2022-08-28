@@ -908,7 +908,7 @@ mod tests {
         std::fs::remove_dir_all(&table_path).unwrap();
     }
 
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     mod cleanup_metadata_s3_test {
         use super::*;
 

@@ -1614,7 +1614,7 @@ mod tests {
     use std::io::{BufRead, BufReader};
     use std::{collections::HashMap, fs::File, path::Path};
 
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[test]
     fn normalize_table_uri() {
         for table_uri in [

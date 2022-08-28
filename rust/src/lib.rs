@@ -141,5 +141,5 @@ pub use self::storage::{
     Uri, UriError,
 };
 
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 pub use self::storage::s3::s3_storage_options;
