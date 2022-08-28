@@ -5,12 +5,13 @@ use std::collections::HashMap;
 use log::warn;
 use parquet2::encoding::hybrid_rle;
 use parquet2::metadata::ColumnDescriptor;
-use parquet2::page::DataPage;
+use parquet2::page::{DataPage, DictPage, Page};
 use parquet2::read::decompress;
 use parquet2::read::get_page_iterator;
 use parquet2::read::levels::get_bit_width;
 
 mod boolean;
+mod dictionary;
 mod map;
 mod primitive;
 mod string;
@@ -39,7 +40,7 @@ pub enum ParseError {
     ParquetError {
         /// Parquet error details returned when parsing the checkpoint parquet
         #[from]
-        source: parquet2::error::ParquetError,
+        source: parquet2::error::Error,
     },
 }
 
@@ -66,45 +67,49 @@ where
 fn split_page<'a>(
     page: &'a DataPage,
     descriptor: &'a ColumnDescriptor,
-) -> (i16, hybrid_rle::HybridRleDecoder<'a>, &'a [u8]) {
-    let (_rep_levels, def_levels_buf, values_buf) = parquet2::page::split_buffer(page, descriptor);
+) -> Result<(i16, hybrid_rle::HybridRleDecoder<'a>, &'a [u8]), ParseError> {
+    let (_rep_levels, def_levels_buf, values_buf) = parquet2::page::split_buffer(page)?;
 
-    let max_def_level = descriptor.max_def_level();
+    let max_def_level = descriptor.descriptor.max_def_level;
     let def_bit_width = get_bit_width(max_def_level);
     let validity_iter =
-        hybrid_rle::HybridRleDecoder::new(def_levels_buf, def_bit_width, page.num_values());
+        hybrid_rle::HybridRleDecoder::try_new(def_levels_buf, def_bit_width, page.num_values())?;
 
-    (max_def_level, validity_iter, values_buf)
+    Ok((max_def_level, validity_iter, values_buf))
 }
 
 fn split_page_nested<'a>(
     page: &'a DataPage,
     descriptor: &'a ColumnDescriptor,
-) -> (
-    i16,
-    hybrid_rle::HybridRleDecoder<'a>,
-    i16,
-    hybrid_rle::HybridRleDecoder<'a>,
-    &'a [u8],
-) {
-    let (rep_levels, def_levels_buf, values_buf) = parquet2::page::split_buffer(page, descriptor);
+) -> Result<
+    (
+        i16,
+        hybrid_rle::HybridRleDecoder<'a>,
+        i16,
+        hybrid_rle::HybridRleDecoder<'a>,
+        &'a [u8],
+    ),
+    ParseError,
+> {
+    let (rep_levels, def_levels_buf, values_buf) = parquet2::page::split_buffer(page)?;
 
-    let max_rep_level = descriptor.max_rep_level();
+    let max_rep_level = descriptor.descriptor.max_rep_level;
     let rep_bit_width = get_bit_width(max_rep_level);
-    let rep_iter = hybrid_rle::HybridRleDecoder::new(rep_levels, rep_bit_width, page.num_values());
+    let rep_iter =
+        hybrid_rle::HybridRleDecoder::try_new(rep_levels, rep_bit_width, page.num_values())?;
 
-    let max_def_level = descriptor.max_def_level();
+    let max_def_level = descriptor.descriptor.max_def_level;
     let def_bit_width = get_bit_width(max_def_level);
     let validity_iter =
-        hybrid_rle::HybridRleDecoder::new(def_levels_buf, def_bit_width, page.num_values());
+        hybrid_rle::HybridRleDecoder::try_new(def_levels_buf, def_bit_width, page.num_values())?;
 
-    (
+    Ok((
         max_rep_level,
         rep_iter,
         max_def_level,
         validity_iter,
         values_buf,
-    )
+    ))
 }
 
 /// Trait for conversion between concrete action struct and Action enum variant
@@ -231,6 +236,7 @@ fn deserialize_txn_column_page(
     field: &[String],
     actions: &mut Vec<Option<Action>>,
     page: &DataPage,
+    dict: &Option<DictPage>,
     descriptor: &ColumnDescriptor,
     _state: &mut DeserState,
 ) -> Result<(), ParseError> {
@@ -240,6 +246,7 @@ fn deserialize_txn_column_page(
             for_each_primitive_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut Txn, v: DeltaDataTypeVersion| action.version = v,
             )?;
@@ -248,6 +255,7 @@ fn deserialize_txn_column_page(
             for_each_string_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut Txn, v: String| action.app_id = v,
             )?;
@@ -256,6 +264,7 @@ fn deserialize_txn_column_page(
             for_each_primitive_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut Txn, v: DeltaDataTypeTimestamp| action.last_updated = Some(v),
             )?;
@@ -274,6 +283,7 @@ fn deserialize_add_column_page(
     field: &[String],
     actions: &mut Vec<Option<Action>>,
     page: &DataPage,
+    dict: &Option<DictPage>,
     descriptor: &ColumnDescriptor,
     state: &mut DeserState,
 ) -> Result<(), ParseError> {
@@ -283,6 +293,7 @@ fn deserialize_add_column_page(
             for_each_string_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut Add, v: String| action.path = v,
             )?;
@@ -291,6 +302,7 @@ fn deserialize_add_column_page(
             for_each_primitive_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut Add, v: DeltaDataTypeLong| action.size = v,
             )?;
@@ -300,6 +312,7 @@ fn deserialize_add_column_page(
                 &field[1..],
                 actions,
                 page,
+                dict,
                 descriptor,
                 &mut state.add_partition_values,
                 |action: &mut Add, v: (Vec<String>, Vec<Option<String>>)| {
@@ -321,6 +334,7 @@ fn deserialize_add_column_page(
                 &field[1..],
                 actions,
                 page,
+                dict,
                 descriptor,
                 &mut state.add_tags,
                 |action: &mut Add, v: (Vec<String>, Vec<Option<String>>)| {
@@ -333,6 +347,7 @@ fn deserialize_add_column_page(
             for_each_string_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut Add, v: String| action.stats = Some(v),
             )?;
@@ -341,6 +356,7 @@ fn deserialize_add_column_page(
             for_each_primitive_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut Add, v: DeltaDataTypeTimestamp| action.modification_time = v,
             )?;
@@ -356,6 +372,7 @@ fn deserialize_remove_column_page(
     field: &[String],
     actions: &mut Vec<Option<Action>>,
     page: &DataPage,
+    dict: &Option<DictPage>,
     descriptor: &ColumnDescriptor,
     state: &mut DeserState,
 ) -> Result<(), ParseError> {
@@ -365,6 +382,7 @@ fn deserialize_remove_column_page(
             for_each_string_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut Remove, v: String| action.path = v,
             )?;
@@ -373,6 +391,7 @@ fn deserialize_remove_column_page(
             for_each_primitive_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut Remove, v: DeltaDataTypeTimestamp| {
                     action.deletion_timestamp = Some(v)
@@ -383,6 +402,7 @@ fn deserialize_remove_column_page(
             for_each_primitive_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut Remove, v: DeltaDataTypeLong| action.size = Some(v),
             )?;
@@ -393,6 +413,7 @@ fn deserialize_remove_column_page(
                 &field[1..],
                 actions,
                 page,
+                dict,
                 descriptor,
                 &mut state.remove_partition_values,
                 |action: &mut Remove, v: (Vec<String>, Vec<Option<String>>)| {
@@ -421,6 +442,7 @@ fn deserialize_remove_column_page(
                 &field[1..],
                 actions,
                 page,
+                dict,
                 descriptor,
                 &mut state.remove_tags,
                 |action: &mut Remove, v: (Vec<String>, Vec<Option<String>>)| {
@@ -439,6 +461,7 @@ fn deserialize_metadata_column_page(
     field: &[String],
     actions: &mut Vec<Option<Action>>,
     page: &DataPage,
+    dict: &Option<DictPage>,
     descriptor: &ColumnDescriptor,
     state: &mut DeserState,
 ) -> Result<(), ParseError> {
@@ -448,6 +471,7 @@ fn deserialize_metadata_column_page(
             for_each_string_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut MetaData, v: Guid| action.id = v,
             )?;
@@ -456,6 +480,7 @@ fn deserialize_metadata_column_page(
             for_each_string_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut MetaData, v: String| action.name = Some(v),
             )?;
@@ -464,6 +489,7 @@ fn deserialize_metadata_column_page(
             for_each_string_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut MetaData, v: String| action.description = Some(v),
             )?;
@@ -475,6 +501,7 @@ fn deserialize_metadata_column_page(
                     for_each_string_field_value(
                         actions,
                         page,
+                        dict,
                         descriptor,
                         |action: &mut MetaData, v: String| action.format.provider = v,
                     )?;
@@ -484,6 +511,7 @@ fn deserialize_metadata_column_page(
                         &field[2..],
                         actions,
                         page,
+                        dict,
                         descriptor,
                         &mut state.metadata_fromat_options,
                         |action: &mut MetaData, v: (Vec<String>, Vec<Option<String>>)| {
@@ -503,6 +531,7 @@ fn deserialize_metadata_column_page(
             for_each_string_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut MetaData, v: String| action.schema_string = v,
             )?;
@@ -511,6 +540,7 @@ fn deserialize_metadata_column_page(
             for_each_repeated_string_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut MetaData, v: Vec<String>| action.partition_columns = v,
             )?;
@@ -519,6 +549,7 @@ fn deserialize_metadata_column_page(
             for_each_primitive_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut MetaData, v: DeltaDataTypeTimestamp| action.created_time = Some(v),
             )?;
@@ -528,6 +559,7 @@ fn deserialize_metadata_column_page(
                 &field[1..],
                 actions,
                 page,
+                dict,
                 descriptor,
                 &mut state.metadata_configuration,
                 |action: &mut MetaData, v: (Vec<String>, Vec<Option<String>>)| {
@@ -546,6 +578,7 @@ fn deserialize_protocol_column_page(
     field: &[String],
     actions: &mut Vec<Option<Action>>,
     page: &DataPage,
+    dict: &Option<DictPage>,
     descriptor: &ColumnDescriptor,
     _state: &mut DeserState,
 ) -> Result<(), ParseError> {
@@ -555,6 +588,7 @@ fn deserialize_protocol_column_page(
             for_each_primitive_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut Protocol, v: DeltaDataTypeInt| action.min_reader_version = v,
             )?;
@@ -563,6 +597,7 @@ fn deserialize_protocol_column_page(
             for_each_primitive_field_value(
                 actions,
                 page,
+                dict,
                 descriptor,
                 |action: &mut Protocol, v: DeltaDataTypeInt| action.min_writer_version = v,
             )?;
@@ -578,6 +613,7 @@ fn deserialize_commit_info_column_page(
     _obj_keys: &[String],
     _actions: &mut Vec<Option<Action>>,
     _page: &DataPage,
+    _dict: &Option<DictPage>,
     _descriptor: &ColumnDescriptor,
     _state: &mut DeserState,
 ) -> Result<(), ParseError> {
@@ -589,12 +625,17 @@ fn deserialize_cdc_column_page(
     _field: &[String],
     _actions: &mut Vec<Option<Action>>,
     _page: &DataPage,
+    _dict: &Option<DictPage>,
     _descriptor: &ColumnDescriptor,
     _state: &mut DeserState,
 ) -> Result<(), ParseError> {
     // FIXME: support cdc action
     Ok(())
 }
+
+// TODO: find a proper max size to avoid OOM
+// see: https://github.com/jorgecarleitao/parquet2/pull/172
+const MAX_PARQUET_HEADER_SIZE: usize = usize::MAX;
 
 /// Return a vector of action from a given parquet row group
 pub fn actions_from_row_group<R: std::io::Read + std::io::Seek>(
@@ -608,7 +649,7 @@ pub fn actions_from_row_group<R: std::io::Read + std::io::Seek>(
 
     for column_metadata in row_group.columns() {
         let column_desc = column_metadata.descriptor();
-        let schema_path = column_desc.path_in_schema();
+        let schema_path = &column_desc.path_in_schema;
 
         let deserialize_column_page = match schema_path[0].as_ref() {
             "txn" => deserialize_txn_column_page,
@@ -627,16 +668,40 @@ pub fn actions_from_row_group<R: std::io::Read + std::io::Seek>(
         };
         let field = &schema_path[1..];
 
-        // FIXME: reuse buffer between loops
         let buffer = Vec::new();
-        let pages = get_page_iterator(column_metadata, &mut *reader, None, buffer)?;
+        let pages = get_page_iterator(
+            column_metadata,
+            &mut *reader,
+            None,
+            buffer,
+            MAX_PARQUET_HEADER_SIZE,
+        )?;
 
         let mut decompress_buffer = vec![];
+        let mut dict = None;
         for maybe_page in pages {
-            // FIXME: leverage null count and skip page if possible
+            // TODO: leverage null count and skip page if possible
             let page = maybe_page?;
             let page = decompress(page, &mut decompress_buffer)?;
-            deserialize_column_page(field, &mut actions, &page, column_desc, &mut state)?;
+
+            match page {
+                Page::Dict(page) => {
+                    // the first page may be a dictionary page, which needs to be deserialized
+                    // depending on your target in-memory format
+                    dict = Some(page);
+                }
+                Page::Data(page) => {
+                    deserialize_column_page(
+                        field,
+                        &mut actions,
+                        // TODO: pass by value?
+                        &page,
+                        &dict,
+                        column_desc,
+                        &mut state,
+                    )?;
+                }
+            }
         }
     }
 
@@ -655,9 +720,9 @@ mod tests {
 
         let path = "./tests/data/delta-0.2.0/_delta_log/00000000000000000003.checkpoint.parquet";
         let mut reader = File::open(path).unwrap();
-        let metadata = read_metadata(&mut reader).unwrap();
+        let meta_data = read_metadata(&mut reader).unwrap();
 
-        for row_group in metadata.row_groups {
+        for row_group in meta_data.row_groups {
             let actions = actions_from_row_group(row_group, &mut reader).unwrap();
             match &actions[0] {
                 Action::protocol(protocol) => {
@@ -667,18 +732,18 @@ mod tests {
                 _ => panic!("expect protocol action"),
             }
             match &actions[1] {
-                Action::metaData(metaData) => {
-                    assert_eq!(metaData.id, "22ef18ba-191c-4c36-a606-3dad5cdf3830");
-                    assert_eq!(metaData.name, None);
-                    assert_eq!(metaData.description, None);
+                Action::metaData(meta_data) => {
+                    assert_eq!(meta_data.id, "22ef18ba-191c-4c36-a606-3dad5cdf3830");
+                    assert_eq!(meta_data.name, None);
+                    assert_eq!(meta_data.description, None);
                     assert_eq!(
-                        metaData.format,
+                        meta_data.format,
                         crate::action::Format::new("parquet".to_string(), None),
                     );
-                    assert_eq!(metaData.schema_string, "{\"type\":\"struct\",\"fields\":[{\"name\":\"value\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}");
-                    assert_eq!(metaData.partition_columns.len(), 0);
-                    assert_eq!(metaData.created_time, Some(1564524294376));
-                    assert_eq!(metaData.configuration, HashMap::new());
+                    assert_eq!(meta_data.schema_string, "{\"type\":\"struct\",\"fields\":[{\"name\":\"value\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}");
+                    assert_eq!(meta_data.partition_columns.len(), 0);
+                    assert_eq!(meta_data.created_time, Some(1564524294376));
+                    assert_eq!(meta_data.configuration, HashMap::new());
                 }
                 _ => panic!("expect txn action, got: {:?}", &actions[1]),
             }
@@ -742,21 +807,21 @@ mod tests {
                 _ => panic!("expect protocol action"),
             }
             match &actions[1] {
-                Action::metaData(metaData) => {
-                    assert_eq!(metaData.id, "e3501f3e-ca63-4521-84f2-5901b5b66ac1");
-                    assert_eq!(metaData.name, None);
-                    assert_eq!(metaData.description, None);
+                Action::metaData(meta_data) => {
+                    assert_eq!(meta_data.id, "e3501f3e-ca63-4521-84f2-5901b5b66ac1");
+                    assert_eq!(meta_data.name, None);
+                    assert_eq!(meta_data.description, None);
                     assert_eq!(
-                        metaData.format,
+                        meta_data.format,
                         crate::action::Format::new("parquet".to_string(), None),
                     );
                     assert_eq!(
-                        metaData.schema_string,
+                        meta_data.schema_string,
                         r#"{"type":"struct","fields":[{"name":"id","type":"integer","nullable":true,"metadata":{}},{"name":"color","type":"string","nullable":true,"metadata":{}}]}"#
                     );
-                    assert_eq!(metaData.partition_columns, vec!["color"]);
-                    assert_eq!(metaData.created_time, Some(1655607917641));
-                    assert_eq!(metaData.configuration, HashMap::new());
+                    assert_eq!(meta_data.partition_columns, vec!["color"]);
+                    assert_eq!(meta_data.created_time, Some(1655607917641));
+                    assert_eq!(meta_data.configuration, HashMap::new());
                 }
                 _ => panic!("expect txn action, got: {:?}", &actions[1]),
             }

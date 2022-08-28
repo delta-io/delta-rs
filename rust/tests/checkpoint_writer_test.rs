@@ -1,14 +1,3 @@
-use ::object_store::path::Path as ObjectStorePath;
-use chrono::Utc;
-use deltalake::action::*;
-use deltalake::*;
-use maplit::hashmap;
-use std::collections::HashSet;
-use std::fs;
-use std::iter::FromIterator;
-use std::path::{Path, PathBuf};
-use uuid::Uuid;
-
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 mod fs_common;
 
@@ -102,6 +91,11 @@ mod simple_checkpoint {
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 mod delete_expired_delta_log_in_checkpoint {
     use super::*;
+
+    use ::object_store::path::Path as ObjectStorePath;
+    use chrono::Utc;
+    use deltalake::*;
+    use maplit::hashmap;
 
     #[tokio::test]
     async fn test_delete_expired_logs() {
@@ -218,6 +212,7 @@ mod delete_expired_delta_log_in_checkpoint {
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 mod checkpoints_with_tombstones {
     use super::*;
+    use ::object_store::path::Path as ObjectStorePath;
     use chrono::Utc;
     use deltalake::action::*;
     use deltalake::*;

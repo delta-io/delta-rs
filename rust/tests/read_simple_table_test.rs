@@ -6,6 +6,8 @@ extern crate utime;
 use ::object_store::path::Path as ObjectStorePath;
 use std::path::Path;
 
+use chrono::{DateTime, FixedOffset, Utc};
+
 #[tokio::test]
 async fn read_simple_table() {
     let current_dir =

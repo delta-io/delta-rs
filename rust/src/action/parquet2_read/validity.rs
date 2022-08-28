@@ -1,5 +1,6 @@
 //! Parquet deserialization for row validity
 
+use super::ParseError;
 use parquet2::encoding::hybrid_rle::HybridRleDecoder;
 
 /// Iterator that returns row index for rows that are not null
@@ -21,17 +22,22 @@ impl<'a> ValidityRowIndexIter<'a> {
 }
 
 impl<'a> Iterator for ValidityRowIndexIter<'a> {
-    type Item = usize;
+    type Item = Result<usize, ParseError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         for def_lvl in self.validity_iter.by_ref() {
-            if def_lvl == self.max_def_level {
-                let row_idx = self.row_idx;
-                self.row_idx += 1;
-                return Some(row_idx);
-            } else {
-                self.row_idx += 1;
-                continue;
+            match def_lvl {
+                Ok(def_lvl) => {
+                    if def_lvl == self.max_def_level {
+                        let row_idx = self.row_idx;
+                        self.row_idx += 1;
+                        return Some(Ok(row_idx));
+                    } else {
+                        self.row_idx += 1;
+                        continue;
+                    }
+                }
+                Err(e) => return Some(Err(e.into())),
             }
         }
         None
@@ -70,38 +76,48 @@ impl<'a> ValidityRepeatedRowIndexIter<'a> {
 
 impl<'a> Iterator for ValidityRepeatedRowIndexIter<'a> {
     // (index, item_count)
-    type Item = (usize, usize);
+    type Item = Result<(usize, usize), ParseError>;
 
     fn next(&mut self) -> Option<Self::Item> {
         for (rep_lvl, def_lvl) in self.lvl_iter.by_ref() {
-            if def_lvl == self.max_def_level {
-                if rep_lvl == 0 {
-                    match self.repeat_count {
-                        0 => self.repeat_count = 1,
-                        item_count => {
-                            // reached start of next batch
-                            // return current batch
+            match (rep_lvl, def_lvl) {
+                (Ok(rep_lvl), Ok(def_lvl)) => {
+                    if def_lvl == self.max_def_level {
+                        if rep_lvl == 0 {
+                            match self.repeat_count {
+                                0 => self.repeat_count = 1,
+                                item_count => {
+                                    // reached start of next batch
+                                    // return current batch
+                                    let row_idx = self.row_idx;
+                                    self.row_idx += 1;
+                                    self.repeat_count = 1;
+                                    return Some(Ok((row_idx, item_count)));
+                                }
+                            }
+                        } else {
+                            // accumulate count for current batch
+                            self.repeat_count += 1;
+                        }
+                    } else {
+                        if self.repeat_count >= 1 {
                             let row_idx = self.row_idx;
+                            let item_count = self.repeat_count;
                             self.row_idx += 1;
-                            self.repeat_count = 1;
-                            return Some((row_idx, item_count));
+                            // set to 0 becauze def_lvl not at max def level
+                            self.repeat_count = 0;
+                            return Some(Ok((row_idx, item_count)));
+                        } else {
+                            self.row_idx += 1;
+                            continue;
                         }
                     }
-                } else {
-                    // accumulate count for current batch
-                    self.repeat_count += 1;
                 }
-            } else {
-                if self.repeat_count >= 1 {
-                    let row_idx = self.row_idx;
-                    let item_count = self.repeat_count;
-                    self.row_idx += 1;
-                    // set to 0 becauze def_lvl not at max def level
-                    self.repeat_count = 0;
-                    return Some((row_idx, item_count));
-                } else {
-                    self.row_idx += 1;
-                    continue;
+                (_, Err(e)) => {
+                    return Some(Err(e.into()));
+                }
+                (Err(e), _) => {
+                    return Some(Err(e.into()));
                 }
             }
         }
@@ -110,7 +126,7 @@ impl<'a> Iterator for ValidityRepeatedRowIndexIter<'a> {
             let item_count = self.repeat_count;
             // set repeat count to 0 so we can end the iteration
             self.repeat_count = 0;
-            Some((self.row_idx, item_count))
+            Some(Ok((self.row_idx, item_count)))
         } else {
             None
         }

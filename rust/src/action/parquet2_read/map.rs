@@ -1,10 +1,8 @@
 // use std::collections::HashMap;
 
 use parquet2::metadata::ColumnDescriptor;
-use parquet2::page::DataPage;
-use parquet2::schema::types::ParquetType;
+use parquet2::page::{DataPage, DictPage};
 use parquet2::schema::types::PhysicalType;
-use parquet2::schema::types::PrimitiveConvertedType;
 
 use super::string::for_each_repeated_string_field_value_with_idx;
 use super::{ActionVariant, ParseError};
@@ -20,6 +18,7 @@ pub fn for_each_map_field_value<ActType, SetMapFn>(
     field: &[String],
     actions: &mut Vec<Option<Action>>,
     page: &DataPage,
+    dict: &Option<DictPage>,
     descriptor: &ColumnDescriptor,
     state: &mut MapState,
     set_map_fn: SetMapFn,
@@ -28,24 +27,13 @@ where
     ActType: ActionVariant,
     SetMapFn: Fn(&mut ActType, (Vec<String>, Vec<Option<String>>)),
 {
-    assert!(field[0] == "key_value");
-
-    if let ParquetType::PrimitiveType {
-        physical_type,
-        converted_type,
-        logical_type,
-        ..
-    } = descriptor.type_()
-    {
-        match (physical_type, converted_type, logical_type) {
-            (PhysicalType::ByteArray, Some(PrimitiveConvertedType::Utf8), _) => {}
-            _ => {
-                return Err(ParseError::InvalidAction(format!(
-                    "expect parquet utf8 type for map key/value, got physical type: {:?}, converted type: {:?}",
-                    physical_type, converted_type
-                )));
-            }
-        }
+    debug_assert!(field[0] == "key_value");
+    #[cfg(debug_assertions)]
+    if page.descriptor.primitive_type.physical_type != PhysicalType::ByteArray {
+        return Err(ParseError::InvalidAction(format!(
+            "expect parquet utf8 type for map key/value, got primitive type: {:?}",
+            page.descriptor.primitive_type,
+        )));
     }
 
     match field[1].as_str() {
@@ -53,8 +41,10 @@ where
             let mut keys = vec![];
             for_each_repeated_string_field_value_with_idx(
                 page,
+                dict,
                 descriptor,
-                |(row_idx, strings): (usize, Vec<String>)| -> Result<(), ParseError> {
+                |result: Result<(usize, Vec<String>), ParseError>| -> Result<(), ParseError> {
+                    let (row_idx, strings) = result?;
                     keys.push((row_idx, strings));
                     Ok(())
                 },
@@ -65,8 +55,10 @@ where
             let mut values = vec![];
             for_each_repeated_string_field_value_with_idx(
                 page,
+                dict,
                 descriptor,
-                |(row_idx, strings): (usize, Vec<String>)| -> Result<(), ParseError> {
+                |result: Result<(usize, Vec<String>), ParseError>| -> Result<(), ParseError> {
+                    let (row_idx, strings) = result?;
                     values.push((row_idx, strings));
                     Ok(())
                 },

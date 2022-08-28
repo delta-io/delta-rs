@@ -3,8 +3,6 @@ use deltalake::action::{Action, Add, Protocol, Remove};
 use deltalake::{
     storage, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
 };
-use parquet::file::reader::{FileReader, SerializedFileReader};
-use parquet::schema::types::Type;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;

@@ -112,7 +112,7 @@ pub enum DeltaTableError {
     ParquetError {
         /// Parquet error details returned when parsing the checkpoint parquet
         #[from]
-        source: parquet2::error::ParquetError,
+        source: parquet2::error::Error,
     },
     /// Error returned when the table has an invalid path.
     #[error("Invalid table path: {}", .source)]
@@ -330,19 +330,10 @@ pub enum ApplyLogError {
     #[error("End of transaction log")]
     EndOfLog,
     /// Error returned when the JSON of the log record is invalid.
-    #[error("Invalid JSON in log record `{path}`: {source}")]
-    InvalidJsonLog {
-        /// URI for json log file.
-        path: String,
-        /// Line offset for the invalid action JSON
-        line: usize,
+    #[error("Invalid JSON in log record")]
+    InvalidJson {
         /// JSON error details returned when reading the JSON log record.
-        source: serde_json::error::Error,
-    },
-    /// Error returned when the JSON of the metadata schema string is invalid.
-    #[error("Invalid JSON in metadata schema string: {source}")]
-    InvalidJsonSchema {
-        /// JSON error details returned when reading the JSON from metadata schema.
+        #[from]
         source: serde_json::error::Error,
     },
     /// Error returned when the storage failed to read the log content.

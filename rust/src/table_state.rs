@@ -87,10 +87,7 @@ impl DeltaTableState {
             let obj = table.storage.get(f).await?.bytes().await?;
             #[cfg(feature = "parquet")]
             {
-                use parquet::file::{
-                    reader::{FileReader, SerializedFileReader},
-                    serialized_reader::SliceableCursor,
-                };
+                use parquet::file::reader::{FileReader, SerializedFileReader};
 
                 let preader = SerializedFileReader::new(obj)?;
                 let schema = preader.metadata().file_metadata().schema();
@@ -115,7 +112,6 @@ impl DeltaTableState {
 
                 let mut reader = std::io::Cursor::new(obj);
                 let metadata = read_metadata(&mut reader)?;
-                // let schema = &metadata.schema_descr;
 
                 for row_group in metadata.row_groups {
                     for action in actions_from_row_group(row_group, &mut reader)
@@ -286,7 +282,7 @@ impl DeltaTableState {
             }
             action::Action::metaData(v) => {
                 let md = DeltaTableMetaData::try_from(v)
-                    .map_err(|e| ApplyLogError::InvalidJsonSchema { source: e })?;
+                    .map_err(|e| ApplyLogError::InvalidJson { source: e })?;
                 self.tombstone_retention_millis = delta_config::TOMBSTONE_RETENTION
                     .get_interval_from_metadata(&md)?
                     .as_millis() as i64;

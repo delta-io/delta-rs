@@ -3,12 +3,13 @@
 #![allow(non_camel_case_types)]
 
 #[cfg(feature = "parquet")]
-use parquet::record::{ListAccessor, MapAccessor, RowAccessor};
+use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 
 #[cfg(feature = "parquet2")]
 pub mod parquet2_read;
 
 use crate::{schema::*, DeltaTableMetaData};
+#[cfg(feature = "parquet")]
 use chrono::{SecondsFormat, TimeZone, Utc};
 #[cfg(feature = "parquet")]
 use num_bigint::BigInt;
@@ -16,7 +17,9 @@ use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Map, Value};
+#[cfg(feature = "parquet")]
+use serde_json::json;
+use serde_json::{Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
@@ -33,13 +36,21 @@ pub enum ActionError {
     /// A generic action error. The wrapped error string describes the details.
     #[error("Generic action error: {0}")]
     Generic(String),
-    /// Error returned when parsing checkpoint parquet using parquet2 crate.
     #[cfg(feature = "parquet2")]
     #[error("Failed to parse parquet checkpoint: {}", .source)]
+    /// Error returned when parsing checkpoint parquet using the parquet2 crate.
     ParquetParseError {
         /// Parquet error details returned when parsing the checkpoint parquet
         #[from]
         source: parquet2_read::ParseError,
+    },
+    #[cfg(feature = "parquet")]
+    #[error("Failed to parse parquet checkpoint: {}", .source)]
+    /// Error returned when parsing checkpoint parquet using the parquet crate.
+    ParquetParseError {
+        /// Parquet error details returned when parsing the checkpoint parquet
+        #[from]
+        source: parquet::errors::ParquetError,
     },
 }
 
@@ -363,7 +374,7 @@ impl Add {
 
     /// Returns the composite HashMap representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    pub fn get_stats_parsed(&self) -> Result<Option<Stats>, parquet::errors::ParquetError> {
+    pub fn get_stats_parsed(&self) -> Result<Option<Stats>, ActionError> {
         #[cfg(feature = "parquet")]
         {
             self.stats_parsed.as_ref().map_or(Ok(None), |record| {
@@ -431,7 +442,7 @@ impl Add {
         }
         #[cfg(feature = "parquet2")]
         {
-            None
+            Ok(None)
         }
     }
 }
@@ -504,11 +515,13 @@ fn primitive_parquet_field_to_json_value(field: &Field) -> serde_json::Value {
     }
 }
 
+#[cfg(feature = "parquet")]
 fn convert_timestamp_millis_to_string(value: u64) -> String {
     let dt = Utc.timestamp((value / 1000) as i64, ((value % 1000) * 1000000) as u32);
     dt.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 
+#[cfg(feature = "parquet")]
 fn convert_date_to_string(value: u32) -> String {
     static NUM_SECONDS_IN_DAY: i64 = 60 * 60 * 24;
     let dt = Utc.timestamp(value as i64 * NUM_SECONDS_IN_DAY, 0).date();
