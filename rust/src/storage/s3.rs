@@ -491,6 +491,7 @@ fn try_create_lock_client(options: &S3StorageOptions) -> Result<Option<S3LockCli
 }
 
 #[cfg(test)]
+#[cfg(not(feature = "integration_test"))]
 mod tests {
     use super::*;
 

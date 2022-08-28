@@ -190,7 +190,8 @@ async fn flush_delete_files<T: Fn(&(DeltaDataTypeVersion, ObjectMeta)) -> bool>(
     Ok(deleted_num)
 }
 
-async fn cleanup_expired_logs_for(
+/// exposed only for integration testing - DO NOT USE otherwise
+pub async fn cleanup_expired_logs_for(
     until_version: DeltaDataTypeVersion,
     storage: &DeltaObjectStore,
     log_retention_timestamp: i64,

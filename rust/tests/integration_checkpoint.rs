@@ -2,7 +2,7 @@
 
 use deltalake::checkpoints::cleanup_expired_logs_for;
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult};
-use deltalake::DeltaTableBuilder;
+use deltalake::{DeltaTableBuilder, ObjectStore};
 use serial_test::serial;
 use std::time::Duration;
 
