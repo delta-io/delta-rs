@@ -197,11 +197,7 @@ impl StorageIntegration {
                 Ok(())
             }
             Self::Amazon => {
-                s3_cli::create_bucket(&name)?;
-                set_env_if_not_set(
-                    "DYNAMO_LOCK_TABLE_NAME",
-                    format!("lock_table_{}", name.as_ref()),
-                );
+                s3_cli::create_bucket(&format!("s3://{}", name.as_ref()))?;
                 set_env_if_not_set(
                     "DYNAMO_LOCK_PARTITION_KEY_VALUE",
                     format!("s3://{}", name.as_ref()),
@@ -332,14 +328,17 @@ pub mod s3_cli {
     pub fn create_bucket(bucket_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
         let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
             .expect("variable ENDPOINT must be set to connect to S3");
+        let region = std::env::var(s3_storage_options::AWS_REGION)
+            .expect("variable AWS_REGION must be set to connect to S3");
         let mut child = Command::new("aws")
             .args([
-                "s3api",
-                "create-bucket",
-                "--bucket",
+                "s3",
+                "mb",
                 bucket_name.as_ref(),
                 "--endpoint-url",
                 &endpoint,
+                "--region",
+                &region,
             ])
             .spawn()
             .expect("aws command is installed");
@@ -375,8 +374,6 @@ pub mod s3_cli {
         set_env_if_not_set("AWS_DEFAULT_REGION", "us-east-1");
         set_env_if_not_set(s3_storage_options::AWS_REGION, "us-east-1");
         set_env_if_not_set(s3_storage_options::AWS_S3_LOCKING_PROVIDER, "dynamodb");
-
-        set_env_if_not_set("AWS_S3_LOCKING_PROVIDER", "dynamodb");
         set_env_if_not_set("DYNAMO_LOCK_TABLE_NAME", "test_table");
         set_env_if_not_set("DYNAMO_LOCK_REFRESH_PERIOD_MILLIS", "100");
         set_env_if_not_set("DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS", "100");

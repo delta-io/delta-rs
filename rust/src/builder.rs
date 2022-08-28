@@ -187,15 +187,16 @@ impl DeltaTableBuilder {
 
     /// Build a delta storage backend for the given config
     pub fn build_storage(self) -> Result<Arc<DeltaObjectStore>, DeltaTableError> {
-        let (storage, prefix) = match self.options.storage_backend {
-            Some(storage) => storage,
+        let (storage, storage_url) = match self.options.storage_backend {
+            // Some(storage) => storage,
             None => get_storage_backend(
                 &self.options.table_uri,
                 self.storage_options,
                 self.allow_http,
             )?,
+            _ => todo!(),
         };
-        let object_store = Arc::new(DeltaObjectStore::new(&prefix, storage));
+        let object_store = Arc::new(DeltaObjectStore::new(storage_url, storage));
         Ok(object_store)
     }
 
@@ -204,19 +205,20 @@ impl DeltaTableBuilder {
     /// This will not load the log, i.e. the table is not initialized. To get an initialized
     /// table use the `load` function
     pub fn build(self) -> Result<DeltaTable, DeltaTableError> {
-        let (storage, prefix) = match self.options.storage_backend {
-            Some(storage) => storage,
+        let (storage, storage_url) = match self.options.storage_backend {
+            // Some(storage) => storage,
             None => get_storage_backend(
                 &self.options.table_uri,
                 self.storage_options,
                 self.allow_http,
             )?,
+            _ => todo!(),
         };
         let config = DeltaTableConfig {
             require_tombstones: self.options.require_tombstones,
             require_files: self.options.require_files,
         };
-        let object_store = Arc::new(DeltaObjectStore::new(&prefix, storage));
+        let object_store = Arc::new(DeltaObjectStore::new(storage_url, storage));
         Ok(DeltaTable::new(object_store, config))
     }
 
@@ -369,10 +371,10 @@ fn get_storage_backend(
     // annotation needed for some feature builds
     #[allow(unused_variables)] options: Option<HashMap<String, String>>,
     #[allow(unused_variables)] allow_http: Option<bool>,
-) -> ObjectStoreResult<(Arc<DynObjectStore>, Path)> {
+) -> ObjectStoreResult<(Arc<DynObjectStore>, StorageUrl)> {
     let storage_url = StorageUrl::parse(table_uri)?;
     match storage_url.service_type() {
-        StorageService::Local => Ok((Arc::new(FileStorageBackend::new()), storage_url.prefix)),
+        StorageService::Local => Ok((Arc::new(FileStorageBackend::new()), storage_url)),
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
         StorageService::S3 => {
             let url: &Url = storage_url.as_ref();
@@ -388,7 +390,7 @@ fn get_storage_backend(
                     Arc::new(builder.build()?),
                     s3_options,
                 )?),
-                storage_url.prefix,
+                storage_url,
             ))
         }
         #[cfg(feature = "azure")]
@@ -401,7 +403,7 @@ fn get_storage_backend(
             if let Some(allow) = allow_http {
                 builder = builder.with_allow_http(allow);
             }
-            Ok((Arc::new(builder.build()?), storage_url.prefix))
+            Ok((Arc::new(builder.build()?), storage_url))
         }
         #[cfg(feature = "gcs")]
         StorageService::GCS => {
@@ -409,7 +411,7 @@ fn get_storage_backend(
             let bucket_name = url.host_str().ok_or(ObjectStoreError::NotImplemented)?;
             let builder = get_gcp_builder_from_options(options.unwrap_or_default())
                 .with_bucket_name(bucket_name);
-            Ok((Arc::new(builder.build()?), storage_url.prefix))
+            Ok((Arc::new(builder.build()?), storage_url))
         }
         _ => todo!(),
     }

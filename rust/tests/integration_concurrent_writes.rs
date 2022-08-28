@@ -18,7 +18,6 @@ async fn test_concurrent_writes_local() -> TestResult {
 #[cfg(all(feature = "s3"))]
 #[tokio::test]
 async fn concurrent_writes_s3() -> TestResult {
-    setup_dynamodb("concurrent_writes");
     test_concurrent_writes(StorageIntegration::Amazon).await?;
     Ok(())
 }
@@ -60,7 +59,9 @@ async fn prepare_table(
     };
 
     let table_uri = context.uri_for_table(TestTables::Custom("concurrent_workers".into()));
-    let mut table = DeltaTableBuilder::from_uri(&table_uri).build()?;
+    let mut table = DeltaTableBuilder::from_uri(&table_uri)
+        .with_allow_http(true)
+        .build()?;
     table.create(metadata, protocol, None, None).await?;
 
     assert_eq!(0, table.version());
@@ -123,7 +124,10 @@ pub struct Worker {
 impl Worker {
     pub async fn new(path: &str, name: String) -> Self {
         std::env::set_var("DYNAMO_LOCK_OWNER_NAME", &name);
-        let table = deltalake::open_table(path).await.unwrap();
+        let table = DeltaTableBuilder::from_uri(path)
+            .with_allow_http(true)
+            .build()
+            .unwrap();
         Self { table, name }
     }
 
@@ -154,12 +158,4 @@ impl Worker {
         }));
         tx.commit(None, None).await.unwrap()
     }
-}
-
-fn setup_dynamodb(key: &str) {
-    std::env::set_var("AWS_S3_LOCKING_PROVIDER", "dynamodb");
-    std::env::set_var("DYNAMO_LOCK_TABLE_NAME", "test_table");
-    std::env::set_var("DYNAMO_LOCK_PARTITION_KEY_VALUE", key);
-    std::env::set_var("DYNAMO_LOCK_REFRESH_PERIOD_MILLIS", "100");
-    std::env::set_var("DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS", "100");
 }

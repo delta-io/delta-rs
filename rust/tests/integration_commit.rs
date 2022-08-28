@@ -18,6 +18,7 @@ async fn test_commit_tables_local() -> TestResult {
 #[tokio::test]
 #[serial]
 async fn test_commit_tables_aws() -> TestResult {
+    std::env::set_var("AWS_S3_LOCKING_PROVIDER", "dynamodb");
     Ok(commit_tables(StorageIntegration::Amazon).await?)
 }
 
@@ -105,6 +106,8 @@ mod simple_commit_fs {
         assert_eq!(1, result);
         assert_eq!(1, table.version());
         assert_eq!(2, table.get_files().len());
+
+        prepare_fs();
     }
 
     #[tokio::test]
@@ -141,6 +144,8 @@ mod simple_commit_fs {
         assert!(result.is_err());
         assert_eq!(1, table.version());
         assert_eq!(2, table.get_files().len());
+
+        prepare_fs();
     }
 
     // This test shows an example on how to use low-level transaction API with custom optimistic
@@ -186,6 +191,8 @@ mod simple_commit_fs {
         assert_eq!(0, attempt);
         assert_eq!(1, table.version());
         assert_eq!(2, table.get_files().len());
+
+        prepare_fs();
     }
 
     fn prepare_fs() {

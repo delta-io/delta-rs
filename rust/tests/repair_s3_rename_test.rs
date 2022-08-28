@@ -1,7 +1,8 @@
 #![cfg(all(feature = "s3", feature = "integration_test"))]
 use bytes::Bytes;
+use deltalake::storage::s3::S3StorageOptions;
 use deltalake::test_utils::{IntegrationContext, StorageIntegration};
-use deltalake::{DeltaTableBuilder, ObjectStore};
+use deltalake::{storage::s3::S3StorageBackend, DeltaTableBuilder, ObjectStore};
 use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{
@@ -22,7 +23,7 @@ async fn repair_when_worker_pauses_before_rename_test() {
     // here worker is paused before copy,
     // so when it wakes up the source file is already copied and deleted
     // leading into NotFound error
-    assert_eq!(format!("{:?}", err), "NotFound");
+    assert!(matches!(err, ObjectStoreError::NotFound { .. }));
 }
 
 #[tokio::test(flavor = "multi_thread")]
@@ -32,13 +33,13 @@ async fn repair_when_worker_pauses_after_rename_test() {
     // here worker is paused after copy but before delete,
     // so when it wakes up the delete operation will succeed since the file is already deleted,
     // but it'll fail on releasing a lock, since it's expired
-    assert_eq!(format!("{:?}", err), "S3Generic(\"Lock is not released\")");
+    assert!(format!("{:?}", err).contains("ReleaseLock"));
 }
 
 async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), ObjectStoreError> {
-    let context = IntegrationContext::new(StorageIntegration::Amazon).unwrap();
-
+    std::env::set_var("AWS_S3_LOCKING_PROVIDER", "dynamodb");
     std::env::set_var("DYNAMO_LOCK_LEASE_DURATION", "2");
+    let context = IntegrationContext::new(StorageIntegration::Amazon).unwrap();
 
     let root_path = Path::from(path);
     let src1 = root_path.child("src1");
@@ -92,7 +93,7 @@ async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), Object
 }
 
 fn rename(
-    s3: Arc<DynObjectStore>,
+    s3: Arc<S3StorageBackend>,
     src: &Path,
     dst: &Path,
 ) -> JoinHandle<Result<(), ObjectStoreError>> {
@@ -111,9 +112,10 @@ fn create_s3_backend(
     name: &str,
     pause_copy: Option<Path>,
     pause_del: Option<Path>,
-) -> (Arc<DelayedObjectStore>, Arc<Mutex<bool>>) {
+) -> (Arc<S3StorageBackend>, Arc<Mutex<bool>>) {
     let pause_until_true = Arc::new(Mutex::new(false));
     let store = DeltaTableBuilder::from_uri(&context.root_uri())
+        .with_allow_http(true)
         .build_storage()
         .unwrap()
         .storage_backend();
@@ -131,7 +133,10 @@ fn create_s3_backend(
         pause_until_true: pause_until_true.clone(),
     };
 
-    (Arc::new(delayed_store), pause_until_true)
+    let backend =
+        S3StorageBackend::try_new(Arc::new(delayed_store), S3StorageOptions::default()).unwrap();
+
+    (Arc::new(backend), pause_until_true)
 }
 
 #[derive(Debug)]
@@ -151,12 +156,22 @@ impl std::fmt::Display for DelayedObjectStore {
 
 #[async_trait::async_trait]
 impl ObjectStore for DelayedObjectStore {
-    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
+    async fn rename(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
         if let Some(ref path) = self.pause_before_copy_path {
-            if location == path {
+            if path == to {
                 pause(&self.pause_until_true);
             }
         }
+        self.copy(from, to).await?;
+        if let Some(ref path) = self.pause_before_delete_path {
+            if path == from {
+                pause(&self.pause_until_true);
+            }
+        }
+        self.delete(from).await
+    }
+
+    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
         self.inner.put(location, bytes).await
     }
 
@@ -173,11 +188,6 @@ impl ObjectStore for DelayedObjectStore {
     }
 
     async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
-        if let Some(ref path) = self.pause_before_delete_path {
-            if location == path {
-                pause(&self.pause_until_true);
-            }
-        }
         self.inner.delete(location).await
     }
 
