@@ -12,10 +12,8 @@ pub struct AzureGen2 {
 
 impl Drop for AzureGen2 {
     fn drop(&mut self) {
-        let storage_account_name = self.account_name.clone();
-        let storage_account_key = self.account_key.clone();
         let file_system_name = self.file_system_name.clone();
-        az_cli::delete_container(file_system_name);
+        az_cli::delete_container(file_system_name).unwrap();
     }
 }
 
@@ -30,7 +28,7 @@ pub async fn setup_azure_gen2_context() -> TestContext {
     let rand: u16 = rand::thread_rng().gen();
     let file_system_name = format!("delta-rs-test-{}-{}", Utc::now().timestamp(), rand);
 
-    az_cli::create_container(&file_system_name);
+    az_cli::create_container(&file_system_name).unwrap();
 
     let table_uri = format!("azure://{}/", file_system_name);
 
