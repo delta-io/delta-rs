@@ -299,7 +299,7 @@ where
             return Err(ParseError::InvalidAction(format!(
                 "unsupported page encoding type for string column: {:?}",
                 page.encoding()
-            )))
+            )));
         }
     }
 

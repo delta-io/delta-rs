@@ -173,7 +173,13 @@ where
                 set_fn(ActType::try_mut_from_action(a)?, value);
             }
         }
-        _ => todo!(),
+        _ => {
+            return Err(ParseError::InvalidAction(format!(
+                "unsupported page encoding type for primitive column: {:?}",
+                page.encoding()
+            )));
+        }
     }
+
     Ok(())
 }

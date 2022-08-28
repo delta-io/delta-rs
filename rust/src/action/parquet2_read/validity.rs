@@ -101,6 +101,7 @@ impl<'a> Iterator for ValidityRepeatedRowIndexIter<'a> {
                         }
                     } else {
                         if self.repeat_count >= 1 {
+                            // current row is None, emit previous row
                             let row_idx = self.row_idx;
                             let item_count = self.repeat_count;
                             self.row_idx += 1;
@@ -108,6 +109,7 @@ impl<'a> Iterator for ValidityRepeatedRowIndexIter<'a> {
                             self.repeat_count = 0;
                             return Some(Ok((row_idx, item_count)));
                         } else {
+                            // both previous and current row are None, proceed to the next row
                             self.row_idx += 1;
                             continue;
                         }
@@ -122,6 +124,7 @@ impl<'a> Iterator for ValidityRepeatedRowIndexIter<'a> {
             }
         }
 
+        // end of iteration, emit the last row
         if self.repeat_count >= 1 {
             let item_count = self.repeat_count;
             // set repeat count to 0 so we can end the iteration

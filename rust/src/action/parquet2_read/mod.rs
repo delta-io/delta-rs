@@ -808,7 +808,7 @@ mod tests {
             }
             match &actions[1] {
                 Action::metaData(meta_data) => {
-                    assert_eq!(meta_data.id, "e3501f3e-ca63-4521-84f2-5901b5b66ac1");
+                    assert_eq!(meta_data.id, "94ba8468-c676-4468-b326-adde3ab9dcd2");
                     assert_eq!(meta_data.name, None);
                     assert_eq!(meta_data.description, None);
                     assert_eq!(
@@ -820,7 +820,7 @@ mod tests {
                         r#"{"type":"struct","fields":[{"name":"id","type":"integer","nullable":true,"metadata":{}},{"name":"color","type":"string","nullable":true,"metadata":{}}]}"#
                     );
                     assert_eq!(meta_data.partition_columns, vec!["color"]);
-                    assert_eq!(meta_data.created_time, Some(1655607917641));
+                    assert_eq!(meta_data.created_time, Some(1661662807027));
                     assert_eq!(meta_data.configuration, HashMap::new());
                 }
                 _ => panic!("expect txn action, got: {:?}", &actions[1]),
@@ -828,9 +828,9 @@ mod tests {
 
             match &actions[2] {
                 Action::add(add_action) => {
-                    assert_eq!(add_action.path, "9160473b-59b0-4d51-b442-e495f1d9965f");
+                    assert_eq!(add_action.path, "f62d8868-d952-4f9d-8bb2-fd4e011ebf36");
                     assert_eq!(add_action.size, 100);
-                    assert_eq!(add_action.modification_time, 1655607917660);
+                    assert_eq!(add_action.modification_time, 1661662807080);
                     assert_eq!(add_action.partition_values.len(), 1);
                     assert_eq!(
                         add_action.partition_values.get("color").unwrap(),
@@ -844,9 +844,9 @@ mod tests {
             }
             match &actions[3] {
                 Action::add(add_action) => {
-                    assert_eq!(add_action.path, "4cf2c035-9fa7-4d9a-b09f-e13aa7aceb3d");
+                    assert_eq!(add_action.path, "8ac7d8e1-daab-48ef-9d05-ec22fb4b0d2f");
                     assert_eq!(add_action.size, 100);
-                    assert_eq!(add_action.modification_time, 1655607917674);
+                    assert_eq!(add_action.modification_time, 1661662807097);
                     assert_eq!(add_action.partition_values.len(), 1);
                     assert_eq!(add_action.partition_values.get("color").unwrap(), &None);
                     assert_eq!(add_action.data_change, false);
