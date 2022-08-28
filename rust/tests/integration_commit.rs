@@ -26,7 +26,7 @@ async fn test_commit_tables_aws() -> TestResult {
 #[tokio::test]
 #[serial]
 async fn test_commit_tables_azure() -> TestResult {
-    Ok(commit_tables(StorageIntegration::Amazon).await?)
+    Ok(commit_tables(StorageIntegration::Microsoft).await?)
 }
 
 #[cfg(feature = "s3")]
