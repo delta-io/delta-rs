@@ -88,6 +88,7 @@ mod s3 {
         );
         let tombstones = table.get_state().all_tombstones();
         assert_eq!(tombstones.len(), 29);
+        dbg!(table.get_state().all_tombstones());
         assert!(tombstones.contains(&deltalake::action::Remove {
             path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
             deletion_timestamp: Some(1587968596250),
