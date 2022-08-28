@@ -572,11 +572,8 @@ fn apply_stats_conversion(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_utils::{IntegrationContext, StorageIntegration, TestResult};
     use lazy_static::lazy_static;
     use serde_json::json;
-    use serial_test::serial;
-    use std::time::Duration;
 
     #[test]
     fn typed_partition_value_from_string_test() {
@@ -837,86 +834,5 @@ mod tests {
                 "some_timestamp": "2021-07-30T18:11:25.594Z"
             }
         });
-    }
-
-    #[cfg(feature = "integration_test")]
-    #[tokio::test]
-    async fn cleanup_metadata_fs_test() -> TestResult {
-        let context = IntegrationContext::new(StorageIntegration::Local)?;
-        cleanup_metadata_test(&context).await?;
-        Ok(())
-    }
-
-    #[cfg(all(feature = "s3", feature = "integration_test"))]
-    #[tokio::test]
-    #[serial]
-    async fn cleanup_metadata_s3_test() -> TestResult {
-        let context = IntegrationContext::new(StorageIntegration::Amazon)?;
-        cleanup_metadata_test(&context).await?;
-        Ok(())
-    }
-
-    #[cfg(all(feature = "azure", feature = "integration_test"))]
-    #[tokio::test]
-    #[serial]
-    async fn cleanup_metadata_azure_test() -> TestResult {
-        let context = IntegrationContext::new(StorageIntegration::Microsoft)?;
-        cleanup_metadata_test(&context).await?;
-        Ok(())
-    }
-
-    // Last-Modified for S3 could not be altered by user, hence using system pauses which makes
-    // test to run longer but reliable
-    async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
-        let table_uri = context.root_uri();
-        let object_store = crate::builder::DeltaTableBuilder::from_uri(table_uri)
-            .with_allow_http(true)
-            .build_storage()?;
-
-        let log_path = |version| {
-            object_store
-                .log_path()
-                .child(format!("{:020}.json", version))
-        };
-
-        // we don't need to actually populate files with content as cleanup works only with file's metadata
-        object_store.put(&log_path(0), bytes::Bytes::new()).await?;
-
-        // since we cannot alter s3 object metadata, we mimic it with pauses
-        // also we forced to use 2 seconds since Last-Modified is stored in seconds
-        std::thread::sleep(Duration::from_secs(2));
-        object_store.put(&log_path(1), bytes::Bytes::new()).await?;
-
-        std::thread::sleep(Duration::from_secs(3));
-        object_store.put(&log_path(2), bytes::Bytes::new()).await?;
-
-        let v0time = object_store.head(&log_path(0)).await?.last_modified;
-        let v1time = object_store.head(&log_path(1)).await?.last_modified;
-        let v2time = object_store.head(&log_path(2)).await?.last_modified;
-
-        // we choose the retention timestamp to be between v1 and v2 so v2 will be kept but other removed.
-        let retention_timestamp =
-            v1time.timestamp_millis() + (v2time.timestamp_millis() - v1time.timestamp_millis()) / 2;
-
-        assert!(retention_timestamp > v0time.timestamp_millis());
-        assert!(retention_timestamp > v1time.timestamp_millis());
-        assert!(retention_timestamp < v2time.timestamp_millis());
-
-        let removed = crate::checkpoints::cleanup_expired_logs_for(
-            3,
-            object_store.as_ref(),
-            retention_timestamp,
-        )
-        .await?;
-
-        assert_eq!(removed, 2);
-        assert!(object_store.head(&log_path(0)).await.is_err());
-        assert!(object_store.head(&log_path(1)).await.is_err());
-        assert!(object_store.head(&log_path(2)).await.is_ok());
-
-        // after test cleanup
-        object_store.delete(&log_path(2)).await.unwrap();
-
-        Ok(())
     }
 }
