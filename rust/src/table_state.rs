@@ -2,7 +2,7 @@
 
 use super::{
     ApplyLogError, CheckPoint, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable,
-    DeltaTableError, DeltaTableMetaData,
+    DeltaTableConfig, DeltaTableError, DeltaTableMetaData,
 };
 use crate::action::{self, Action};
 use crate::delta_config;
@@ -74,6 +74,56 @@ impl DeltaTableState {
         Ok(new_state)
     }
 
+    /// Update DeltaTableState with checkpoint data.
+    pub fn process_checkpoint_bytes(
+        &mut self,
+        data: bytes::Bytes,
+        table_config: &DeltaTableConfig,
+    ) -> Result<(), DeltaTableError> {
+        #[cfg(feature = "parquet")]
+        {
+            use parquet::file::reader::{FileReader, SerializedFileReader};
+
+            let preader = SerializedFileReader::new(data)?;
+            let schema = preader.metadata().file_metadata().schema();
+            if !schema.is_group() {
+                return Err(DeltaTableError::from(action::ActionError::Generic(
+                    "Action record in checkpoint should be a struct".to_string(),
+                )));
+            }
+            for record in preader.get_row_iter(None)? {
+                self.process_action(
+                    action::Action::from_parquet_record(schema, &record)?,
+                    table_config.require_tombstones,
+                    table_config.require_files,
+                )?;
+            }
+        }
+
+        #[cfg(feature = "parquet2")]
+        {
+            use crate::action::parquet2_read::actions_from_row_group;
+            use parquet2::read::read_metadata;
+
+            let mut reader = std::io::Cursor::new(data);
+            let metadata = read_metadata(&mut reader)?;
+
+            for row_group in metadata.row_groups {
+                for action in actions_from_row_group(row_group, &mut reader)
+                    .map_err(action::ActionError::from)?
+                {
+                    self.process_action(
+                        action,
+                        table_config.require_tombstones,
+                        table_config.require_files,
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Construct a delta table state object from checkpoint.
     pub async fn from_checkpoint(
         table: &DeltaTable,
@@ -81,50 +131,11 @@ impl DeltaTableState {
     ) -> Result<Self, DeltaTableError> {
         let checkpoint_data_paths = table.get_checkpoint_data_paths(check_point);
         // process actions from checkpoint
-        let mut new_state = DeltaTableState::with_version(check_point.version);
+        let mut new_state = Self::with_version(check_point.version);
 
         for f in &checkpoint_data_paths {
             let obj = table.storage.get(f).await?.bytes().await?;
-            #[cfg(feature = "parquet")]
-            {
-                use parquet::file::reader::{FileReader, SerializedFileReader};
-
-                let preader = SerializedFileReader::new(obj)?;
-                let schema = preader.metadata().file_metadata().schema();
-                if !schema.is_group() {
-                    return Err(DeltaTableError::from(action::ActionError::Generic(
-                        "Action record in checkpoint should be a struct".to_string(),
-                    )));
-                }
-                for record in preader.get_row_iter(None)? {
-                    new_state.process_action(
-                        action::Action::from_parquet_record(schema, &record)?,
-                        table.config.require_tombstones,
-                        table.config.require_files,
-                    )?;
-                }
-            }
-
-            #[cfg(feature = "parquet2")]
-            {
-                use crate::action::parquet2_read::actions_from_row_group;
-                use parquet2::read::read_metadata;
-
-                let mut reader = std::io::Cursor::new(obj);
-                let metadata = read_metadata(&mut reader)?;
-
-                for row_group in metadata.row_groups {
-                    for action in actions_from_row_group(row_group, &mut reader)
-                        .map_err(action::ActionError::from)?
-                    {
-                        new_state.process_action(
-                            action,
-                            table.config.require_tombstones,
-                            table.config.require_files,
-                        )?;
-                    }
-                }
-            }
+            new_state.process_checkpoint_bytes(obj, &table.config)?;
         }
 
         Ok(new_state)
