@@ -60,6 +60,7 @@ mod s3 {
             path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
             deletion_timestamp: Some(1587968596250),
             data_change: true,
+            extended_file_metadata: None,
             ..Default::default()
         }));
     }

@@ -764,7 +764,7 @@ mod tests {
                     );
                     assert_eq!(remove.deletion_timestamp, Some(1564524298213));
                     assert_eq!(remove.data_change, false);
-                    assert_eq!(remove.extended_file_metadata, Some(false));
+                    assert_eq!(remove.extended_file_metadata, None);
                     assert_eq!(remove.partition_values, None);
                     assert_eq!(remove.size, None);
                     assert_eq!(remove.tags, None);

@@ -705,7 +705,7 @@ impl MetaData {
 
 /// Represents a tombstone (deleted file) in the Delta log.
 /// This is a top-level action in Delta log entries.
-#[derive(Serialize, Deserialize, Clone, Eq, Debug)]
+#[derive(Serialize, Deserialize, Clone, Eq, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
     /// The path of the file that is removed from the table.
@@ -754,24 +754,14 @@ impl PartialEq for Remove {
     }
 }
 
-impl Default for Remove {
-    fn default() -> Self {
-        Remove {
-            path: String::default(),
-            deletion_timestamp: None,
-            data_change: true,
-            extended_file_metadata: Some(false),
-            partition_values: None,
-            size: None,
-            tags: None,
-        }
-    }
-}
-
 impl Remove {
     #[cfg(feature = "parquet")]
     fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
-        let mut re = Self::default();
+        let mut re = Self {
+            data_change: true,
+            extended_file_metadata: Some(false),
+            ..Default::default()
+        };
 
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
