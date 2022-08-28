@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -138,10 +139,10 @@ def write_deltalake(
 
     if isinstance(table_or_uri, str):
         table = try_get_deltatable(table_or_uri)
-        table_uri = table_or_uri
+        table_uri = str(Path(table_or_uri).absolute())
     else:
         table = table_or_uri
-        table_uri = table_uri = table._table.table_uri()
+        table_uri = table._table.table_uri()
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
