@@ -198,7 +198,7 @@ impl ObjectStore for DeltaObjectStore {
         &self,
         prefix: Option<&Path>,
     ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
-        let prefix = prefix.map(|p| self.config.full_path(p).ok()).flatten();
+        let prefix = prefix.and_then(|p| self.config.full_path(p).ok());
         Ok(self
             .storage
             .list(Some(
@@ -223,7 +223,7 @@ impl ObjectStore for DeltaObjectStore {
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`.
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
-        let prefix = prefix.map(|p| self.config.full_path(p).ok()).flatten();
+        let prefix = prefix.and_then(|p| self.config.full_path(p).ok());
         self.storage
             .list_with_delimiter(Some(
                 &prefix.unwrap_or_else(|| self.config.storage_url.prefix.clone()),
