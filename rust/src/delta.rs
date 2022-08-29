@@ -800,7 +800,7 @@ impl DeltaTable {
 
     /// Currently loaded evrsion of the table
     pub fn version(&self) -> DeltaDataTypeVersion {
-        self.state.version
+        self.state.version()
     }
 
     /// Load DeltaTable with data from latest checkpoint
@@ -864,7 +864,6 @@ impl DeltaTable {
                 } else {
                     self.last_check_point = Some(last_check_point);
                     self.restore_checkpoint(last_check_point).await?;
-                    self.state.version = last_check_point.version;
                     self.update_incremental().await
                 }
             }

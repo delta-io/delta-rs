@@ -16,7 +16,7 @@ classifiers = [
 ]
 dependencies = [
     "pyarrow>=7",
-    'typing-extensions;python_version<="3.9"',
+    'typing-extensions;python_version<"3.8"',
 ]
 
 [project.optional-dependencies]

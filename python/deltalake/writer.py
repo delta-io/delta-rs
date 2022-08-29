@@ -22,11 +22,17 @@ from deltalake.fs import DeltaStorageHandler
 if TYPE_CHECKING:
     import pandas as pd
 
+import sys
+
+if sys.version_info >= (3, 8):
+    from typing import Literal
+else:
+    from typing_extensions import Literal
+
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.lib import RecordBatchReader
-from typing import Literal
 
 from .deltalake import PyDeltaTableError
 from .deltalake import write_new_deltalake as _write_new_deltalake

@@ -21,7 +21,7 @@ jobs:
           python-version: 3.7
       - name: Check Python
         run: |
-          pip install black isort mypy types-dataclasses
+          pip install black isort mypy types-dataclasses typing-extensions
           make check-python
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
