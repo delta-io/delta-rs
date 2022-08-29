@@ -99,4 +99,4 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v1
       - name: Run tests
-        run: cargo test --no-default-features --features=parquet2 --features=arrow2
+        run: cargo test --no-default-features --features=parquet2

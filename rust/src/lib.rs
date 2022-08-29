@@ -78,9 +78,6 @@
 
 extern crate log;
 
-#[cfg(all(feature = "arrow", feature = "arrow2"))]
-compile_error!("Feature arrow and arrow2 are mutually exclusive and cannot be enabled together");
-
 #[cfg(all(feature = "parquet", feature = "parquet2"))]
 compile_error!(
     "Feature parquet and parquet2 are mutually exclusive and cannot be enabled together"
@@ -99,8 +96,6 @@ pub mod writer;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod checkpoints;
 
-#[cfg(feature = "arrow2")]
-pub use arrow2;
 #[cfg(feature = "parquet2")]
 pub use parquet2;
 

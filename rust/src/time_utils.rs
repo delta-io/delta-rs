@@ -1,11 +1,79 @@
 //! Utility functions for converting time formats.
 
+use parquet_format::TimeUnit;
+
 #[cfg(feature = "arrow")]
 use arrow::temporal_conversions;
-#[cfg(feature = "arrow2")]
-use arrow2::temporal_conversions;
 
-use parquet_format::TimeUnit;
+// vendored from arrow-rs and arrow2 so we don't need to depend on arrow2 when the parquet2 feature
+// is enabled.
+#[cfg(not(feature = "arrow"))]
+mod temporal_conversions {
+    use chrono::NaiveDateTime;
+
+    /// Number of milliseconds in a second
+    pub const MILLISECONDS: i64 = 1_000;
+    /// Number of microseconds in a second
+    pub const MICROSECONDS: i64 = 1_000_000;
+    /// Number of nanoseconds in a second
+    pub const NANOSECONDS: i64 = 1_000_000_000;
+
+    /// converts a `i64` representing a `timestamp(ms)` to [`NaiveDateTime`]
+    #[inline]
+    pub fn timestamp_ms_to_datetime(v: i64) -> NaiveDateTime {
+        let (sec, milli_sec) = split_second(v, MILLISECONDS);
+
+        NaiveDateTime::from_timestamp(
+            // extract seconds from milliseconds
+            sec,
+            // discard extracted seconds and convert milliseconds to nanoseconds
+            milli_sec * MICROSECONDS as u32,
+        )
+    }
+
+    /// converts a `i64` representing a `timestamp(us)` to [`NaiveDateTime`]
+    #[inline]
+    pub fn timestamp_us_to_datetime(v: i64) -> NaiveDateTime {
+        let (sec, micro_sec) = split_second(v, MICROSECONDS);
+
+        NaiveDateTime::from_timestamp(
+            // extract seconds from microseconds
+            sec,
+            // discard extracted seconds and convert microseconds to nanoseconds
+            micro_sec * MILLISECONDS as u32,
+        )
+    }
+
+    /// converts a `i64` representing a `timestamp(ns)` to [`NaiveDateTime`]
+    #[inline]
+    pub fn timestamp_ns_to_datetime(v: i64) -> NaiveDateTime {
+        let (sec, nano_sec) = split_second(v, NANOSECONDS);
+
+        NaiveDateTime::from_timestamp(
+            // extract seconds from nanoseconds
+            sec, // discard extracted seconds
+            nano_sec,
+        )
+    }
+
+    ///
+    #[inline]
+    pub(crate) fn split_second(v: i64, base: i64) -> (i64, u32) {
+        if v < 0 {
+            let v = -v;
+            let mut seconds = v / base;
+            let mut part = v % base;
+
+            if part > 0 {
+                seconds += 1;
+                part = base - part;
+            }
+            (-seconds, part as u32)
+        } else {
+            (v / base, (v % base) as u32)
+        }
+    }
+}
 
 /// Convert an ISO-8601/RFC3339 timestamp string to a numeric microsecond epoch representation.
 /// Stats strings are written with millisecond precision as described by the delta protocol.
