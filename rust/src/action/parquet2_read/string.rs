@@ -4,7 +4,6 @@ use parquet2::encoding::hybrid_rle::HybridRleDecoder;
 use parquet2::encoding::Encoding;
 use parquet2::metadata::ColumnDescriptor;
 use parquet2::page::{DataPage, DictPage};
-use parquet2::schema::types::PhysicalType;
 
 use super::dictionary;
 use super::dictionary::binary::BinaryPageDict;
@@ -206,11 +205,14 @@ where
     MapFn: FnMut(Result<(usize, Vec<String>), ParseError>) -> Result<(), ParseError>,
 {
     #[cfg(debug_assertions)]
-    if page.descriptor.primitive_type.physical_type != PhysicalType::ByteArray {
-        return Err(ParseError::InvalidAction(format!(
-            "expect parquet utf8 type, got primitive type: {:?}",
-            page.descriptor.primitive_type,
-        )));
+    {
+        use parquet2::schema::types::PhysicalType;
+        if page.descriptor.primitive_type.physical_type != PhysicalType::ByteArray {
+            return Err(ParseError::InvalidAction(format!(
+                "expect parquet utf8 type, got primitive type: {:?}",
+                page.descriptor.primitive_type,
+            )));
+        }
     }
 
     match page.encoding() {
@@ -271,11 +273,14 @@ where
     SetFn: Fn(&mut ActType, String),
 {
     #[cfg(debug_assertions)]
-    if page.descriptor.primitive_type.physical_type != PhysicalType::ByteArray {
-        return Err(ParseError::InvalidAction(format!(
-            "expect parquet utf8 type, got primitive type: {:?}",
-            page.descriptor.primitive_type,
-        )));
+    {
+        use parquet2::schema::types::PhysicalType;
+        if page.descriptor.primitive_type.physical_type != PhysicalType::ByteArray {
+            return Err(ParseError::InvalidAction(format!(
+                "expect parquet utf8 type, got primitive type: {:?}",
+                page.descriptor.primitive_type,
+            )));
+        }
     }
 
     let map_fn = |entry: Result<(usize, String), ParseError>| -> Result<(), ParseError> {

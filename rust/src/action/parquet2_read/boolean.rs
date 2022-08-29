@@ -1,7 +1,6 @@
 use parquet2::encoding::hybrid_rle::BitmapIter;
 use parquet2::metadata::ColumnDescriptor;
 use parquet2::page::DataPage;
-use parquet2::schema::types::PhysicalType;
 
 use super::validity::ValidityRowIndexIter;
 use super::{split_page, ActionVariant, ParseError};
@@ -56,11 +55,14 @@ where
     SetFn: Fn(&mut ActType, bool),
 {
     #[cfg(debug_assertions)]
-    if page.descriptor.primitive_type.physical_type != PhysicalType::Boolean {
-        return Err(ParseError::InvalidAction(format!(
-            "expect physical parquet type boolean, got {:?}",
-            page.descriptor.primitive_type,
-        )));
+    {
+        use parquet2::schema::types::PhysicalType;
+        if page.descriptor.primitive_type.physical_type != PhysicalType::Boolean {
+            return Err(ParseError::InvalidAction(format!(
+                "expect physical parquet type boolean, got {:?}",
+                page.descriptor.primitive_type,
+            )));
+        }
     }
 
     let some_value_iter = SomeBooleanValueIter::try_new(page, descriptor)?;

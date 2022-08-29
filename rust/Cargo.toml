@@ -147,3 +147,8 @@ tempfile = "3"
 maplit = { version = "1" }
 anyhow = "1"
 rand = "0.8"
+criterion = "0"
+
+[[bench]]
+name = "read_checkpoint"
+harness = false

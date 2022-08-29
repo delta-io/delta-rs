@@ -2,7 +2,6 @@
 
 use parquet2::metadata::ColumnDescriptor;
 use parquet2::page::{DataPage, DictPage};
-use parquet2::schema::types::PhysicalType;
 
 use super::string::for_each_repeated_string_field_value_with_idx;
 use super::{ActionVariant, ParseError};
@@ -29,11 +28,14 @@ where
 {
     debug_assert!(field[0] == "key_value");
     #[cfg(debug_assertions)]
-    if page.descriptor.primitive_type.physical_type != PhysicalType::ByteArray {
-        return Err(ParseError::InvalidAction(format!(
-            "expect parquet utf8 type for map key/value, got primitive type: {:?}",
-            page.descriptor.primitive_type,
-        )));
+    {
+        use parquet2::schema::types::PhysicalType;
+        if page.descriptor.primitive_type.physical_type != PhysicalType::ByteArray {
+            return Err(ParseError::InvalidAction(format!(
+                "expect parquet utf8 type for map key/value, got primitive type: {:?}",
+                page.descriptor.primitive_type,
+            )));
+        }
     }
 
     match field[1].as_str() {
