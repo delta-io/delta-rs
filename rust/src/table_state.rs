@@ -18,7 +18,7 @@ use std::io::{BufRead, BufReader, Cursor};
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Default, Debug, Clone)]
 pub struct DeltaTableState {
-    pub version: DeltaDataTypeVersion,
+    version: DeltaDataTypeVersion,
     // A remove action should remain in the state of the table as a tombstone until it has expired.
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: HashSet<action::Remove>,
@@ -34,12 +34,19 @@ pub struct DeltaTableState {
 }
 
 impl DeltaTableState {
+    /// Create Table state with specified version
     pub fn with_version(version: DeltaDataTypeVersion) -> Self {
         Self {
             version,
             ..Self::default()
         }
     }
+
+    /// Return table version
+    pub fn version(&self) -> DeltaDataTypeVersion {
+        self.version
+    }
+
     /// Construct a delta table state object from commit version.
     pub async fn from_commit(
         table: &DeltaTable,
