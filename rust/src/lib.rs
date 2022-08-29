@@ -107,7 +107,7 @@ extern crate thiserror;
 
 pub mod action;
 pub mod data_catalog;
-mod delta;
+pub mod delta;
 pub mod delta_config;
 pub mod object_store;
 #[cfg(feature = "datafusion-ext")]
@@ -117,7 +117,7 @@ pub mod optimize;
 pub mod partitions;
 pub mod schema;
 pub mod storage;
-mod table_state;
+pub mod table_state;
 pub mod time_utils;
 pub mod vacuum;
 
