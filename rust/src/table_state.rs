@@ -2,13 +2,12 @@
 
 use super::{
     ApplyLogError, CheckPoint, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable,
-    DeltaTableError, DeltaTableMetaData,
+    DeltaTableConfig, DeltaTableError, DeltaTableMetaData,
 };
 use crate::action::{self, Action};
 use crate::delta_config;
 use chrono::Utc;
 use object_store::ObjectStore;
-use parquet::file::reader::{FileReader, SerializedFileReader};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -81,18 +80,17 @@ impl DeltaTableState {
         Ok(new_state)
     }
 
-    /// Construct a delta table state object from checkpoint.
-    pub async fn from_checkpoint(
-        table: &DeltaTable,
-        check_point: &CheckPoint,
-    ) -> Result<Self, DeltaTableError> {
-        let checkpoint_data_paths = table.get_checkpoint_data_paths(check_point);
-        // process actions from checkpoint
-        let mut new_state = DeltaTableState::with_version(check_point.version);
+    /// Update DeltaTableState with checkpoint data.
+    pub fn process_checkpoint_bytes(
+        &mut self,
+        data: bytes::Bytes,
+        table_config: &DeltaTableConfig,
+    ) -> Result<(), DeltaTableError> {
+        #[cfg(feature = "parquet")]
+        {
+            use parquet::file::reader::{FileReader, SerializedFileReader};
 
-        for f in &checkpoint_data_paths {
-            let obj = table.storage.get(f).await?.bytes().await?;
-            let preader = SerializedFileReader::new(obj)?;
+            let preader = SerializedFileReader::new(data)?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
                 return Err(DeltaTableError::from(action::ActionError::Generic(
@@ -100,12 +98,49 @@ impl DeltaTableState {
                 )));
             }
             for record in preader.get_row_iter(None)? {
-                new_state.process_action(
+                self.process_action(
                     action::Action::from_parquet_record(schema, &record)?,
-                    table.config.require_tombstones,
-                    table.config.require_files,
+                    table_config.require_tombstones,
+                    table_config.require_files,
                 )?;
             }
+        }
+
+        #[cfg(feature = "parquet2")]
+        {
+            use crate::action::parquet2_read::actions_from_row_group;
+            use parquet2::read::read_metadata;
+
+            let mut reader = std::io::Cursor::new(data);
+            let metadata = read_metadata(&mut reader)?;
+
+            for row_group in metadata.row_groups {
+                for action in actions_from_row_group(row_group, &mut reader)
+                    .map_err(action::ActionError::from)?
+                {
+                    self.process_action(
+                        action,
+                        table_config.require_tombstones,
+                        table_config.require_files,
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Construct a delta table state object from checkpoint.
+    pub async fn from_checkpoint(
+        table: &DeltaTable,
+        check_point: &CheckPoint,
+    ) -> Result<Self, DeltaTableError> {
+        let checkpoint_data_paths = table.get_checkpoint_data_paths(check_point);
+        let mut new_state = Self::with_version(check_point.version);
+
+        for f in &checkpoint_data_paths {
+            let obj = table.storage.get(f).await?.bytes().await?;
+            new_state.process_checkpoint_bytes(obj, &table.config)?;
         }
 
         Ok(new_state)
@@ -262,7 +297,8 @@ impl DeltaTableState {
                 self.min_writer_version = v.min_writer_version;
             }
             action::Action::metaData(v) => {
-                let md = DeltaTableMetaData::try_from(v)?;
+                let md = DeltaTableMetaData::try_from(v)
+                    .map_err(|e| ApplyLogError::InvalidJson { source: e })?;
                 self.tombstone_retention_millis = delta_config::TOMBSTONE_RETENTION
                     .get_interval_from_metadata(&md)?
                     .as_millis() as i64;

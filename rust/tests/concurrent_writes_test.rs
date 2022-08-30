@@ -1,4 +1,4 @@
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 #[allow(dead_code)]
 mod s3_common;
 
@@ -12,7 +12,7 @@ use std::iter::FromIterator;
 use std::time::Duration;
 
 #[tokio::test]
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 async fn concurrent_writes_s3() {
     s3_common::setup_dynamodb("concurrent_writes");
     s3_common::cleanup_dir_except(
