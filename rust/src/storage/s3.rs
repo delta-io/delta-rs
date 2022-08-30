@@ -339,7 +339,7 @@ fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvi
 
 /// An S3 implementation of the [ObjectStore] trait
 ///
-/// The backend can optionally use [dynamodb_lock] to better support concurrent
+/// The backend can optionally use [dynamodb_lock] to better support concurrent writers.
 pub struct S3StorageBackend {
     inner: Arc<DynObjectStore>,
     s3_lock_client: Option<S3LockClient>,
@@ -352,7 +352,7 @@ impl std::fmt::Display for S3StorageBackend {
 }
 
 impl S3StorageBackend {
-    /// Creates a new S3StorageBackend Trying to create lock client from options.
+    /// Creates a new S3StorageBackend, trying to create lock client from options.
     ///
     /// Options are described in [s3_storage_options].
     ///
