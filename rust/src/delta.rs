@@ -13,7 +13,6 @@ pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
 use crate::delta_config::DeltaConfigError;
 use crate::storage::DeltaObjectStore;
 use crate::vacuum::{Vacuum, VacuumError};
-use arrow::error::ArrowError;
 use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -90,13 +89,21 @@ pub enum DeltaTableError {
         #[from]
         source: parquet::errors::ParquetError,
     },
+    /// Error returned when parsing checkpoint parquet using parquet2 crate.
+    #[cfg(feature = "parquet2")]
+    #[error("Failed to parse parquet: {}", .source)]
+    ParquetError {
+        /// Parquet error details returned when parsing the checkpoint parquet
+        #[from]
+        source: parquet2::error::Error,
+    },
     /// Error returned when converting the schema in Arrow format failed.
     #[cfg(feature = "arrow")]
     #[error("Failed to convert into Arrow schema: {}", .source)]
     ArrowError {
         /// Arrow error details returned when converting the schema in Arrow format failed
         #[from]
-        source: ArrowError,
+        source: arrow::error::ArrowError,
     },
     /// Error returned when the log record has an invalid JSON.
     #[error("Invalid JSON in log record: {}", .source)]
