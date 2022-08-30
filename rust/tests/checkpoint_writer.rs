@@ -1,22 +1,15 @@
-use ::object_store::path::Path as ObjectStorePath;
-use chrono::Utc;
-use deltalake::action::*;
-use deltalake::*;
-use maplit::hashmap;
-use std::collections::HashSet;
-use std::fs;
-use std::iter::FromIterator;
-use std::path::{Path, PathBuf};
-use uuid::Uuid;
-
-#[allow(dead_code)]
+#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod fs_common;
 
 // NOTE: The below is a useful external command for inspecting the written checkpoint schema visually:
 // parquet-tools inspect tests/data/checkpoints/_delta_log/00000000000000000005.checkpoint.parquet
 
+#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod simple_checkpoint {
-    use super::*;
+    use deltalake::*;
+    use pretty_assertions::assert_eq;
+    use std::fs;
+    use std::path::{Path, PathBuf};
 
     #[tokio::test]
     async fn simple_checkpoint_test() {
@@ -95,8 +88,14 @@ mod simple_checkpoint {
     }
 }
 
+#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod delete_expired_delta_log_in_checkpoint {
     use super::*;
+
+    use ::object_store::path::Path as ObjectStorePath;
+    use chrono::Utc;
+    use deltalake::*;
+    use maplit::hashmap;
 
     #[tokio::test]
     async fn test_delete_expired_logs() {
@@ -210,8 +209,33 @@ mod delete_expired_delta_log_in_checkpoint {
     }
 }
 
+#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod checkpoints_with_tombstones {
     use super::*;
+    use ::object_store::path::Path as ObjectStorePath;
+    use chrono::Utc;
+    use deltalake::action::*;
+    use deltalake::*;
+    use maplit::hashmap;
+    use parquet::file::reader::{FileReader, SerializedFileReader};
+    use parquet::schema::types::Type;
+    use pretty_assertions::assert_eq;
+    use std::collections::HashSet;
+    use std::fs::File;
+    use std::iter::FromIterator;
+    use uuid::Uuid;
+
+    async fn read_checkpoint(path: &str) -> (Type, Vec<Action>) {
+        let file = File::open(path).unwrap();
+        let reader = SerializedFileReader::new(file).unwrap();
+        let schema = reader.metadata().file_metadata().schema();
+        let mut row_iter = reader.get_row_iter(None).unwrap();
+        let mut actions = Vec::new();
+        while let Some(record) = row_iter.next() {
+            actions.push(Action::from_parquet_record(schema, &record).unwrap())
+        }
+        (schema.clone(), actions)
+    }
 
     #[tokio::test]
     async fn test_expired_tombstones() {
@@ -300,16 +324,14 @@ mod checkpoints_with_tombstones {
 
         // r1 extended_file_metadata=true, but the size is null.
         // We should fix this by setting extended_file_metadata=false
-        assert_ne!(actions, vec![r1.clone(), r2.clone()]);
         assert!(!schema.contains("size"));
         assert!(!schema.contains("partitionValues"));
         assert!(!schema.contains("tags"));
-        let r1_updated = Remove {
+        assert!(actions.contains(&Remove {
             extended_file_metadata: Some(false),
             size: None,
             ..r1
-        };
-        assert!(actions.contains(&r1_updated));
+        }));
         assert!(actions.contains(&r2));
     }
 
@@ -354,7 +376,7 @@ mod checkpoints_with_tombstones {
             "{}/_delta_log/0000000000000000000{}.checkpoint.parquet",
             path, version
         );
-        let (schema, actions) = fs_common::read_checkpoint(&cp_path).await;
+        let (schema, actions) = read_checkpoint(&cp_path).await;
 
         let fields = schema
             .get_fields()

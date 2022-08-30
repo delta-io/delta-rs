@@ -76,29 +76,37 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 
+#[cfg(all(feature = "parquet", feature = "parquet2"))]
+compile_error!(
+    "Feature parquet and parquet2 are mutually exclusive and cannot be enabled together"
+);
+
 pub mod action;
 pub mod builder;
-pub mod checkpoints;
 pub mod data_catalog;
-mod delta;
-pub mod delta_arrow;
+pub mod delta;
 pub mod delta_config;
-#[cfg(feature = "datafusion-ext")]
-pub mod operations;
-pub mod optimize;
 pub mod partitions;
 pub mod schema;
 pub mod storage;
-mod table_state;
+pub mod table_state;
 pub mod time_utils;
 pub mod vacuum;
-pub mod writer;
 
-#[cfg(feature = "datafusion-ext")]
-pub mod delta_datafusion;
-
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod checkpoints;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod delta_arrow;
 #[cfg(feature = "rust-dataframe-ext")]
 mod delta_dataframe;
+#[cfg(feature = "datafusion-ext")]
+pub mod delta_datafusion;
+#[cfg(feature = "datafusion-ext")]
+pub mod operations;
+#[cfg(feature = "parquet")]
+pub mod optimize;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod writer;
 
 pub use self::builder::*;
 pub use self::data_catalog::{get_data_catalog, DataCatalog, DataCatalogError};
@@ -108,9 +116,16 @@ pub use self::schema::*;
 pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
 
 // convenience exports for consumers to avoid aligning crate versions
+#[cfg(feature = "arrow")]
 pub use arrow;
 #[cfg(feature = "datafusion-ext")]
 pub use datafusion;
+#[cfg(feature = "parquet")]
+pub use parquet;
+#[cfg(feature = "parquet2")]
+pub use parquet2;
 
+// needed only for integration tests
+// TODO can / should we move this into the test crate?
 #[cfg(feature = "integration_test")]
 pub mod test_utils;

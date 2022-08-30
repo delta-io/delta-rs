@@ -2,6 +2,8 @@
 // TODO
 // - consider file size when writing parquet files
 // - handle writer version
+#![cfg(all(feature = "arrow", feature = "parquet"))]
+
 pub mod json;
 pub mod record_batch;
 mod stats;

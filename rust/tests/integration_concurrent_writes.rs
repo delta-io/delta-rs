@@ -15,7 +15,7 @@ async fn test_concurrent_writes_local() -> TestResult {
     Ok(())
 }
 
-#[cfg(all(feature = "s3"))]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 #[tokio::test]
 async fn concurrent_writes_s3() -> TestResult {
     test_concurrent_writes(StorageIntegration::Amazon).await?;

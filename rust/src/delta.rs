@@ -17,9 +17,8 @@ use arrow::error::ArrowError;
 use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
-use log::*;
+use log::debug;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
-use parquet::errors::ParquetError;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -42,11 +41,7 @@ pub struct CheckPoint {
 
 impl CheckPoint {
     /// Creates a new checkpoint from the given parameters.
-    pub(crate) fn new(
-        version: DeltaDataTypeVersion,
-        size: DeltaDataTypeLong,
-        parts: Option<u32>,
-    ) -> Self {
+    pub fn new(version: DeltaDataTypeVersion, size: DeltaDataTypeLong, parts: Option<u32>) -> Self {
         Self {
             version,
             size,
@@ -88,13 +83,15 @@ pub enum DeltaTableError {
         source: ObjectStoreError,
     },
     /// Error returned when reading the checkpoint failed.
+    #[cfg(feature = "parquet")]
     #[error("Failed to read checkpoint: {}", .source)]
     ParquetError {
         /// Parquet error details returned when reading the checkpoint failed.
         #[from]
-        source: ParquetError,
+        source: parquet::errors::ParquetError,
     },
     /// Error returned when converting the schema in Arrow format failed.
+    #[cfg(feature = "arrow")]
     #[error("Failed to convert into Arrow schema: {}", .source)]
     ArrowError {
         /// Arrow error details returned when converting the schema in Arrow format failed
@@ -645,7 +642,7 @@ impl DeltaTable {
 
     /// Currently loaded evrsion of the table
     pub fn version(&self) -> DeltaDataTypeVersion {
-        self.state.version
+        self.state.version()
     }
 
     /// Load DeltaTable with data from latest checkpoint
@@ -709,7 +706,6 @@ impl DeltaTable {
                 } else {
                     self.last_check_point = Some(last_check_point);
                     self.restore_checkpoint(last_check_point).await?;
-                    self.state.version = last_check_point.version;
                     self.update_incremental().await
                 }
             }
@@ -1434,7 +1430,7 @@ mod tests {
     use std::io::{BufRead, BufReader};
     use std::{collections::HashMap, fs::File, path::Path};
 
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[test]
     fn normalize_table_uri() {
         for table_uri in [

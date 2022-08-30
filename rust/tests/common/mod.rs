@@ -14,7 +14,7 @@ use tempdir::TempDir;
 #[cfg(feature = "azure")]
 pub mod adls;
 pub mod clock;
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 pub mod s3;
 pub mod schemas;
 
@@ -41,7 +41,7 @@ impl TestContext {
             Ok("LOCALFS") | Err(std::env::VarError::NotPresent) => setup_local_context().await,
             #[cfg(feature = "azure2")]
             Ok("AZURE_GEN2") => adls::setup_azure_gen2_context().await,
-            #[cfg(feature = "s3")]
+            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
             Ok("S3_LOCAL_STACK") => s3::setup_s3_context().await,
             _ => panic!("Invalid backend for delta-rs tests"),
         };

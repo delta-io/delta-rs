@@ -403,6 +403,8 @@ async fn read_delta_8_0_table_partition_with_compare_op() {
     );
 }
 
+// TODO: enable this for parquet2
+#[cfg(feature = "parquet")]
 #[tokio::test]
 async fn read_delta_1_2_1_struct_stats_table() {
     let table_uri = "./tests/data/delta-1.2.1-only-struct-stats";

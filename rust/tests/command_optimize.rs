@@ -1,3 +1,4 @@
+#[cfg(all(feature = "arrow", feature = "parquet"))]
 mod optimize {
     extern crate deltalake;
 

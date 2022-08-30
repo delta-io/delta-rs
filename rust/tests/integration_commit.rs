@@ -14,7 +14,7 @@ async fn test_commit_tables_local() -> TestResult {
     Ok(commit_tables(StorageIntegration::Local).await?)
 }
 
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 #[tokio::test]
 #[serial]
 async fn test_commit_tables_aws() -> TestResult {
@@ -29,7 +29,7 @@ async fn test_commit_tables_azure() -> TestResult {
     Ok(commit_tables(StorageIntegration::Microsoft).await?)
 }
 
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 #[tokio::test]
 #[serial]
 async fn test_two_commits_s3_fails_with_no_lock() -> TestResult {

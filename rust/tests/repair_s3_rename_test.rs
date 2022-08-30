@@ -1,4 +1,4 @@
-#![cfg(all(feature = "s3", feature = "integration_test"))]
+#![cfg(all(feature = "s3", feature = "integration_test", feature = "s3-rustls"))]
 use bytes::Bytes;
 use deltalake::storage::s3::S3StorageOptions;
 use deltalake::test_utils::{IntegrationContext, StorageIntegration};
@@ -119,11 +119,6 @@ fn create_s3_backend(
         .build_storage()
         .unwrap()
         .storage_backend();
-
-    // let lock_client = dynamodb_lock::DynamoDbLockClient::new(
-    //     rusoto_dynamodb::DynamoDbClient::new(s3_common::region()),
-    //     dynamodb_lock::DynamoDbOptions::default(),
-    // );
 
     let delayed_store = DelayedObjectStore {
         inner: store,

@@ -438,7 +438,6 @@ fn extract_partition_values(
 
 #[cfg(test)]
 mod tests {
-
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::DeltaWriter;
     use crate::writer::JsonWriter;
@@ -465,7 +464,7 @@ mod tests {
         )
         .unwrap();
 
-        let data = json!(
+        let data = serde_json::json!(
             {
                 "id" : "A",
                 "value": "test",

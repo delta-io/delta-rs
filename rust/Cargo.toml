@@ -9,7 +9,7 @@ description = "Native Delta Lake implementation in Rust"
 edition = "2021"
 
 [dependencies]
-arrow = "20"
+arrow = { version = "20", optional = true }
 async-trait = "0.1"
 bytes = "1"
 chrono = "0.4.22"
@@ -22,7 +22,8 @@ libc = ">=0.2.90, <1"
 num-bigint = "0.4"
 num-traits = "0.2.15"
 object_store = "0.4.0"
-parquet = "20"
+parquet = { version = "20", optional = true }
+parquet2 = { version = "0.16", optional = true }
 parquet-format = "~4.0.0"
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"] }
@@ -55,6 +56,7 @@ version = "11"
 optional = true
 
 [features]
+default = ["arrow", "parquet"]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion"]
 azure = ["object_store/azure"]
@@ -97,4 +99,8 @@ tempdir = "0"
 tempfile = "3"
 maplit = { version = "1" }
 rand = "0.8"
-dotenv = "*"
+criterion = "0"
+
+[[bench]]
+name = "read_checkpoint"
+harness = false

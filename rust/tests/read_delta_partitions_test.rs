@@ -1,9 +1,6 @@
 extern crate deltalake;
 
-use deltalake::action::Add;
 use deltalake::schema::SchemaDataType;
-use maplit::hashmap;
-use serde_json::json;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
@@ -122,8 +119,14 @@ fn test_match_filters() {
     );
 }
 
+// FIXME: enable this for parquet2
+#[cfg(all(feature = "arrow", feature = "parquet"))]
 #[tokio::test]
 async fn read_null_partitions_from_checkpoint() {
+    use deltalake::action::Add;
+    use maplit::hashmap;
+    use serde_json::json;
+
     let mut table = fs_common::create_table_from_json(
         "./tests/data/read_null_partitions_from_checkpoint",
         json!({
