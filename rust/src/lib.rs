@@ -85,8 +85,6 @@ compile_error!(
 
 #[cfg(feature = "arrow")]
 pub use arrow;
-#[cfg(feature = "parquet")]
-extern crate parquet;
 #[cfg(feature = "arrow")]
 pub mod delta_arrow;
 

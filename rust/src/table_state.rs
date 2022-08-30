@@ -136,7 +136,6 @@ impl DeltaTableState {
         check_point: &CheckPoint,
     ) -> Result<Self, DeltaTableError> {
         let checkpoint_data_paths = table.get_checkpoint_data_paths(check_point);
-        // process actions from checkpoint
         let mut new_state = Self::with_version(check_point.version);
 
         for f in &checkpoint_data_paths {
