@@ -573,6 +573,7 @@ fn apply_stats_conversion(
 mod tests {
     use super::*;
     use lazy_static::lazy_static;
+    use serde_json::json;
     use std::sync::Arc;
     use std::time::Duration;
     use uuid::Uuid;
@@ -907,7 +908,7 @@ mod tests {
         std::fs::remove_dir_all(&table_path).unwrap();
     }
 
-    #[cfg(feature = "s3")]
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     mod cleanup_metadata_s3_test {
         use super::*;
 

@@ -86,3 +86,17 @@ jobs:
       - name: Run tests
         run: |
           cargo test --features s3,datafusion-ext
+
+  paruqet2_test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: stable
+          override: true
+      - uses: Swatinem/rust-cache@v1
+      - name: Run tests
+        run: cargo test --no-default-features --features=parquet2

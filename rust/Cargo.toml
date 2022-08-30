@@ -69,8 +69,10 @@ async-stream = { version = "0.3.2", default-features = true, optional = true }
 # High-level writer
 parquet-format = "~4.0.0"
 
-arrow = "18"
-parquet = "18"
+arrow = { version = "18", optional = true }
+parquet = { version = "18", optional = true }
+
+parquet2 = { version = "0.16", optional = true}
 
 crossbeam = { version = "0", optional = true }
 
@@ -78,15 +80,12 @@ cfg-if = "1"
 async-trait = "0.1"
 walkdir = "2"
 
-# NOTE: disable rust-dataframe integration since it currently doesn't have a
-# version published in crates.io
-# rust-dataframe = {version = "0.*", optional = true }
-
 [dependencies.datafusion]
 version = "10"
 optional = true
 
 [features]
+default = ["arrow", "parquet"]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion"]
 azure = [
@@ -143,3 +142,8 @@ tempfile = "3"
 maplit = { version = "1" }
 anyhow = "1"
 rand = "0.8"
+criterion = "0"
+
+[[bench]]
+name = "read_checkpoint"
+harness = false

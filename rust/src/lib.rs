@@ -78,26 +78,39 @@
 
 extern crate log;
 
+#[cfg(all(feature = "parquet", feature = "parquet2"))]
+compile_error!(
+    "Feature parquet and parquet2 are mutually exclusive and cannot be enabled together"
+);
+
+#[cfg(feature = "arrow")]
 pub use arrow;
+#[cfg(feature = "arrow")]
+pub mod delta_arrow;
+
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod writer;
+
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod checkpoints;
+
+#[cfg(feature = "parquet2")]
+pub use parquet2;
+
 extern crate chrono;
 extern crate lazy_static;
-extern crate parquet;
 extern crate regex;
 extern crate serde;
-#[cfg(test)]
-#[macro_use]
-extern crate serde_json;
 extern crate thiserror;
 
 pub mod action;
-pub mod checkpoints;
 pub mod data_catalog;
 pub mod delta;
-pub mod delta_arrow;
 pub mod delta_config;
 pub mod object_store;
 #[cfg(feature = "datafusion-ext")]
 pub mod operations;
+#[cfg(feature = "parquet")]
 pub mod optimize;
 pub mod partitions;
 pub mod schema;
@@ -105,7 +118,6 @@ pub mod storage;
 pub mod table_state;
 pub mod time_utils;
 pub mod vacuum;
-pub mod writer;
 
 #[cfg(feature = "datafusion-ext")]
 pub mod delta_datafusion;
@@ -122,5 +134,5 @@ pub use self::storage::{
     Uri, UriError,
 };
 
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 pub use self::storage::s3::s3_storage_options;

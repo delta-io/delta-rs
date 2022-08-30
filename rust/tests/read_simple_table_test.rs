@@ -1,3 +1,4 @@
+use pretty_assertions::assert_eq;
 extern crate chrono;
 extern crate deltalake;
 extern crate utime;
@@ -5,7 +6,7 @@ extern crate utime;
 use ::object_store::path::Path as ObjectStorePath;
 use std::path::Path;
 
-use self::chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, FixedOffset, Utc};
 
 #[tokio::test]
 async fn read_simple_table() {

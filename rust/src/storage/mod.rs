@@ -45,7 +45,7 @@ pub enum UriError {
     ExpectedS3Uri(String),
 
     /// Error returned when an GCS path is expected, but the URI is not an GCS URI.
-    #[cfg(any(feature = "gcs"))]
+    #[cfg(feature = "gcs")]
     #[error("Expected GCS URI, found: {0}")]
     ExpectedGCSUri(String),
 
