@@ -1,10 +1,10 @@
 version: "3.9"
 services:
   localstack:
-    image: localstack/localstack:0.12.11
+    image: localstack/localstack:0.14.4
     ports:
-      - "4566:4566"
-      - "${PORT_WEB_UI-8080}:${PORT_WEB_UI-8080}"
+      - 4566:4566
+      - 8080:8080
     environment:
       - SERVICES=s3,dynamodb
       - DEBUG=1
@@ -15,16 +15,26 @@ services:
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:4566/health" ]
 
-  setup:
-    image: localstack/localstack:0.12.11
-    depends_on:
-      - localstack
-    entrypoint: "/bin/bash"
-    command:
-      - /setup_localstack.sh
-    volumes:
-      - "./build/setup_localstack.sh:/setup_localstack.sh"
-      - "./rust/tests/data/golden:/data/golden"
-      - "./rust/tests/data/simple_table:/data/simple_table"
-      - "./rust/tests/data/simple_commit:/data/simple_commit"
-      - "./rust/tests/data/concurrent_workers:/data/concurrent_workers"
+  fake-gcs:
+    image: fsouza/fake-gcs-server
+    ports:
+      - 4443:4443
+
+  azurite:
+    image: mcr.microsoft.com/azure-storage/azurite
+    ports:
+      - 10000:10000
+
+  # setup-localstack:
+  #   image: localstack/localstack:0.14.4
+  #   depends_on:
+  #     - localstack
+  #   entrypoint: "/bin/bash"
+  #   command:
+  #     - /setup_localstack.sh
+  #   volumes:
+  #     - "./build/setup_localstack.sh:/setup_localstack.sh"
+  #     - "./rust/tests/data/golden:/data/golden"
+  #     - "./rust/tests/data/simple_table:/data/simple_table"
+  #     - "./rust/tests/data/simple_commit:/data/simple_commit"
+  #     - "./rust/tests/data/concurrent_workers:/data/concurrent_workers"

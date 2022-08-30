@@ -76,42 +76,16 @@
 #![deny(warnings)]
 #![deny(missing_docs)]
 
-extern crate log;
-
 #[cfg(all(feature = "parquet", feature = "parquet2"))]
 compile_error!(
     "Feature parquet and parquet2 are mutually exclusive and cannot be enabled together"
 );
 
-#[cfg(feature = "arrow")]
-pub use arrow;
-#[cfg(feature = "arrow")]
-pub mod delta_arrow;
-
-#[cfg(all(feature = "arrow", feature = "parquet"))]
-pub mod writer;
-
-#[cfg(all(feature = "arrow", feature = "parquet"))]
-pub mod checkpoints;
-
-#[cfg(feature = "parquet2")]
-pub use parquet2;
-
-extern crate chrono;
-extern crate lazy_static;
-extern crate regex;
-extern crate serde;
-extern crate thiserror;
-
 pub mod action;
+pub mod builder;
 pub mod data_catalog;
 pub mod delta;
 pub mod delta_config;
-pub mod object_store;
-#[cfg(feature = "datafusion-ext")]
-pub mod operations;
-#[cfg(feature = "parquet")]
-pub mod optimize;
 pub mod partitions;
 pub mod schema;
 pub mod storage;
@@ -119,20 +93,39 @@ pub mod table_state;
 pub mod time_utils;
 pub mod vacuum;
 
-#[cfg(feature = "datafusion-ext")]
-pub mod delta_datafusion;
-
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod checkpoints;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod delta_arrow;
 #[cfg(feature = "rust-dataframe-ext")]
 mod delta_dataframe;
+#[cfg(feature = "datafusion-ext")]
+pub mod delta_datafusion;
+#[cfg(feature = "datafusion-ext")]
+pub mod operations;
+#[cfg(feature = "parquet")]
+pub mod optimize;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod writer;
 
+pub use self::builder::*;
 pub use self::data_catalog::{get_data_catalog, DataCatalog, DataCatalogError};
 pub use self::delta::*;
 pub use self::partitions::*;
 pub use self::schema::*;
-pub use self::storage::{
-    get_backend_for_uri, get_backend_for_uri_with_options, parse_uri, StorageBackend, StorageError,
-    Uri, UriError,
-};
+pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
 
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
-pub use self::storage::s3::s3_storage_options;
+// convenience exports for consumers to avoid aligning crate versions
+#[cfg(feature = "arrow")]
+pub use arrow;
+#[cfg(feature = "datafusion-ext")]
+pub use datafusion;
+#[cfg(feature = "parquet")]
+pub use parquet;
+#[cfg(feature = "parquet2")]
+pub use parquet2;
+
+// needed only for integration tests
+// TODO can / should we move this into the test crate?
+#[cfg(feature = "integration_test")]
+pub mod test_utils;

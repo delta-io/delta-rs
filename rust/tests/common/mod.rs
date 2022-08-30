@@ -1,14 +1,15 @@
-use std::any::Any;
-use tempdir::TempDir;
-
-use deltalake::action;
-use deltalake::action::{Add, Remove};
-use deltalake::get_backend_for_uri_with_options;
-use deltalake::StorageBackend;
+use bytes::Bytes;
+use deltalake::action::{self, Add, Remove};
+use deltalake::builder::DeltaTableBuilder;
+use deltalake::storage::DeltaObjectStore;
 use deltalake::{DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema};
+use object_store::{path::Path, ObjectStore};
 use serde_json::{Map, Value};
+use std::any::Any;
 use std::collections::HashMap;
+use std::process::Command;
 use std::sync::Arc;
+use tempdir::TempDir;
 
 #[cfg(feature = "azure")]
 pub mod adls;
@@ -21,7 +22,7 @@ pub mod schemas;
 pub struct TestContext {
     /// The main table under test
     pub table: Option<DeltaTable>,
-    pub backend: Option<Arc<dyn StorageBackend>>,
+    pub backend: Option<Arc<DeltaObjectStore>>,
     /// The configuration used to create the backend.
     pub config: HashMap<String, String>,
     /// An object when it is dropped will clean up any temporary resources created for the test
@@ -38,7 +39,7 @@ impl TestContext {
         let backend_ref = backend.as_ref().map(|s| s.as_str());
         let context = match backend_ref {
             Ok("LOCALFS") | Err(std::env::VarError::NotPresent) => setup_local_context().await,
-            #[cfg(feature = "azure")]
+            #[cfg(feature = "azure2")]
             Ok("AZURE_GEN2") => adls::setup_azure_gen2_context().await,
             #[cfg(any(feature = "s3", feature = "s3-rustls"))]
             Ok("S3_LOCAL_STACK") => s3::setup_s3_context().await,
@@ -48,7 +49,7 @@ impl TestContext {
         return context;
     }
 
-    pub fn get_storage(&mut self) -> Arc<dyn StorageBackend> {
+    pub fn get_storage(&mut self) -> Arc<DeltaObjectStore> {
         if self.backend.is_none() {
             self.backend = Some(self.new_storage())
         }
@@ -56,25 +57,25 @@ impl TestContext {
         return self.backend.as_ref().unwrap().clone();
     }
 
-    fn new_storage(&self) -> Arc<dyn StorageBackend> {
+    fn new_storage(&self) -> Arc<DeltaObjectStore> {
         let config = self.config.clone();
         let uri = config.get("URI").unwrap().to_string();
-        get_backend_for_uri_with_options(&uri, config).unwrap()
+        DeltaTableBuilder::from_uri(uri)
+            .with_storage_options(config)
+            .build_storage()
+            .unwrap()
     }
 
     pub async fn add_file(
         &mut self,
-        path: &str,
-        data: &[u8],
+        path: &Path,
+        data: Bytes,
         partition_values: &[(&str, Option<&str>)],
         create_time: i64,
         commit_to_log: bool,
     ) {
-        let uri = self.table.as_ref().unwrap().table_uri.clone();
         let backend = self.get_storage();
-        let remote_path = uri + "/" + path;
-
-        backend.put_obj(&remote_path, data).await.unwrap();
+        backend.put(path, data.clone()).await.unwrap();
 
         if commit_to_log {
             let mut part_values = HashMap::new();
@@ -83,7 +84,7 @@ impl TestContext {
             }
 
             let add = Add {
-                path: path.into(),
+                path: path.as_ref().into(),
                 size: data.len() as i64,
                 modification_time: create_time,
                 partition_values: part_values,
@@ -138,7 +139,7 @@ impl TestContext {
 
         let backend = self.new_storage();
         let p = self.config.get("URI").unwrap().to_string();
-        let mut dt = DeltaTable::new(&p, backend, DeltaTableConfig::default()).unwrap();
+        let mut dt = DeltaTable::new(backend, DeltaTableConfig::default());
         let mut commit_info = Map::<String, Value>::new();
 
         let protocol = action::Protocol {

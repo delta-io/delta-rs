@@ -1,5 +1,3 @@
-extern crate deltalake;
-
 use chrono::Utc;
 use deltalake::DeltaTableBuilder;
 use deltalake::PeekCommit;
@@ -56,7 +54,6 @@ async fn read_delta_table_with_update() {
 #[tokio::test]
 async fn read_delta_table_ignoring_tombstones() {
     let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
-        .unwrap()
         .without_tombstones()
         .load()
         .await
@@ -78,7 +75,6 @@ async fn read_delta_table_ignoring_tombstones() {
 #[tokio::test]
 async fn read_delta_table_ignoring_files() {
     let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
-        .unwrap()
         .without_files()
         .load()
         .await
@@ -94,7 +90,6 @@ async fn read_delta_table_ignoring_files() {
 #[tokio::test]
 async fn read_delta_table_with_ignoring_files_on_apply_log() {
     let mut table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
-        .unwrap()
         .with_version(0)
         .without_files()
         .load()
@@ -567,4 +562,27 @@ async fn test_read_vacuumed_log_history() {
         .expect("Cannot get table history");
 
     assert_eq!(history.len(), 8);
+}
+
+#[tokio::test]
+async fn read_empty_folder() {
+    let dir = std::env::temp_dir();
+    let result = deltalake::open_table(&dir.into_os_string().into_string().unwrap()).await;
+
+    assert!(matches!(
+        result.unwrap_err(),
+        deltalake::DeltaTableError::NotATable(_),
+    ));
+
+    let dir = std::env::temp_dir();
+    let result = deltalake::open_table_with_ds(
+        &dir.into_os_string().into_string().unwrap(),
+        "2021-08-09T13:18:31+08:00",
+    )
+    .await;
+
+    assert!(matches!(
+        result.unwrap_err(),
+        deltalake::DeltaTableError::NotATable(_),
+    ));
 }

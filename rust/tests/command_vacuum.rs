@@ -1,7 +1,7 @@
 use chrono::Duration;
-use deltalake::storage::StorageError;
 use deltalake::vacuum::Clock;
 use deltalake::vacuum::Vacuum;
+use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use std::sync::Arc;
 
 use common::clock::TestClock;
@@ -81,13 +81,16 @@ async fn test_non_partitioned_table() {
         .await;
     let clock = TestClock::from_systemtime();
 
-    let paths = ["delete_me.parquet", "dont_delete_me.parquet"];
+    let paths = [
+        Path::from("delete_me.parquet"),
+        Path::from("dont_delete_me.parquet"),
+    ];
 
     for path in paths {
         context
             .add_file(
-                path,
-                "random junk".as_ref(),
+                &path,
+                "random junk".as_bytes().into(),
                 &[],
                 clock.current_timestamp_millis(),
                 true,
@@ -110,8 +113,8 @@ async fn test_non_partitioned_table() {
     };
 
     assert_eq!(res.files_deleted.len(), 1);
-    assert!(is_deleted(&mut context, "delete_me.parquet").await);
-    assert!(!is_deleted(&mut context, "dont_delete_me.parquet").await);
+    assert!(is_deleted(&mut context, &Path::from("delete_me.parquet")).await);
+    assert!(!is_deleted(&mut context, &Path::from("dont_delete_me.parquet")).await);
 }
 
 #[tokio::test]
@@ -124,16 +127,16 @@ async fn test_partitioned_table() {
     let clock = TestClock::from_systemtime();
 
     let paths = [
-        "date=2022-07-03/x=2/delete_me.parquet",
-        "date=2022-07-03/x=2/dont_delete_me.parquet",
+        Path::from("date=2022-07-03/x=2/delete_me.parquet"),
+        Path::from("date=2022-07-03/x=2/dont_delete_me.parquet"),
     ];
     let partition_values = [("date", Some("2022-07-03")), ("x", Some("2"))];
 
     for path in paths {
         context
             .add_file(
-                path,
-                "random junk".as_ref(),
+                &path,
+                "random junk".as_bytes().into(),
                 &partition_values,
                 clock.current_timestamp_millis(),
                 true,
@@ -160,8 +163,20 @@ async fn test_partitioned_table() {
     };
 
     assert_eq!(res.files_deleted.len(), 1);
-    assert!(is_deleted(&mut context, "date=2022-07-03/x=2/delete_me.parquet").await);
-    assert!(!is_deleted(&mut context, "date=2022-07-03/x=2/dont_delete_me.parquet").await);
+    assert!(
+        is_deleted(
+            &mut context,
+            &Path::from("date=2022-07-03/x=2/delete_me.parquet")
+        )
+        .await
+    );
+    assert!(
+        !is_deleted(
+            &mut context,
+            &Path::from("date=2022-07-03/x=2/dont_delete_me.parquet")
+        )
+        .await
+    );
 }
 
 #[tokio::test]
@@ -174,8 +189,8 @@ async fn test_partitions_included() {
     let clock = TestClock::from_systemtime();
 
     let paths = [
-        "_date=2022-07-03/delete_me.parquet",
-        "_date=2022-07-03/dont_delete_me.parquet",
+        Path::from("_date=2022-07-03/delete_me.parquet"),
+        Path::from("_date=2022-07-03/dont_delete_me.parquet"),
     ];
 
     let partition_values = &[("_date", Some("2022-07-03"))];
@@ -183,8 +198,8 @@ async fn test_partitions_included() {
     for path in paths {
         context
             .add_file(
-                path,
-                "random junk".as_ref(),
+                &path,
+                "random junk".as_bytes().into(),
                 partition_values,
                 clock.current_timestamp_millis(),
                 true,
@@ -211,8 +226,20 @@ async fn test_partitions_included() {
     };
 
     assert_eq!(res.files_deleted.len(), 1);
-    assert!(is_deleted(&mut context, "_date=2022-07-03/delete_me.parquet").await);
-    assert!(!is_deleted(&mut context, "_date=2022-07-03/dont_delete_me.parquet").await);
+    assert!(
+        is_deleted(
+            &mut context,
+            &Path::from("_date=2022-07-03/delete_me.parquet")
+        )
+        .await
+    );
+    assert!(
+        !is_deleted(
+            &mut context,
+            &Path::from("_date=2022-07-03/dont_delete_me.parquet")
+        )
+        .await
+    );
 }
 
 #[ignore]
@@ -228,28 +255,28 @@ async fn test_non_managed_files() {
     let clock = TestClock::from_systemtime();
 
     let paths_delete = vec![
-        "garbage_file",
-        "nested/garbage_file",
-        "nested2/really/deep/garbage_file",
+        Path::from("garbage_file"),
+        Path::from("nested/garbage_file"),
+        Path::from("nested2/really/deep/garbage_file"),
     ];
 
     let paths_ignore = vec![
-        ".dotfile",
-        "_underscore",
-        "nested/.dotfile",
-        "nested2/really/deep/_underscore",
+        Path::from(".dotfile"),
+        Path::from("_underscore"),
+        Path::from("nested/.dotfile"),
+        Path::from("nested2/really/deep/_underscore"),
         // Directories
-        "_underscoredir/dont_delete_me",
-        "_dotdir/dont_delete_me",
-        "nested3/_underscoredir/dont_delete_me",
-        "nested4/really/deep/.dotdir/dont_delete_me",
+        Path::from("_underscoredir/dont_delete_me"),
+        Path::from("_dotdir/dont_delete_me"),
+        Path::from("nested3/_underscoredir/dont_delete_me"),
+        Path::from("nested4/really/deep/.dotdir/dont_delete_me"),
     ];
 
     for path in paths_delete.iter().chain(paths_ignore.iter()) {
         context
             .add_file(
                 path,
-                "random junk".as_ref(),
+                "random junk".as_bytes().into(),
                 &[],
                 clock.current_timestamp_millis(),
                 false,
@@ -283,21 +310,19 @@ async fn test_non_managed_files() {
 
     assert_eq!(res.files_deleted.len(), paths_delete.len());
     for path in paths_delete {
-        assert!(is_deleted(&mut context, path).await);
+        assert!(is_deleted(&mut context, &path).await);
     }
 
     for path in paths_ignore {
-        assert!(!is_deleted(&mut context, path).await);
+        assert!(!is_deleted(&mut context, &path).await);
     }
 }
 
-async fn is_deleted(context: &mut TestContext, path: &str) -> bool {
-    let uri = context.table.as_ref().unwrap().table_uri.clone();
+async fn is_deleted(context: &mut TestContext, path: &Path) -> bool {
     let backend = context.get_storage();
-    let path = uri + "/" + path;
-    let res = backend.head_obj(&path).await;
+    let res = backend.head(path).await;
     match res {
-        Err(StorageError::NotFound) => true,
+        Err(ObjectStoreError::NotFound { .. }) => true,
         _ => false,
     }
 }

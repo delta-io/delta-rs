@@ -108,7 +108,7 @@ mod delete_expired_delta_log_in_checkpoint {
         )
         .await;
 
-        let table_path = table.table_uri.clone();
+        let table_path = table.table_uri();
         let set_file_last_modified = |version: usize, last_modified_millis: i64| {
             let last_modified_secs = last_modified_millis / 1000;
             let path = format!("{}/_delta_log/{:020}.json", &table_path, version);
@@ -132,7 +132,7 @@ mod delete_expired_delta_log_in_checkpoint {
         table.load_version(2).await.expect("Cannot load version 2");
 
         checkpoints::create_checkpoint_from_table_uri_and_cleanup(
-            &table.table_uri,
+            &table.table_uri(),
             table.version(),
             None,
         )
@@ -181,7 +181,7 @@ mod delete_expired_delta_log_in_checkpoint {
         table.load_version(1).await.expect("Cannot load version 1");
 
         checkpoints::create_checkpoint_from_table_uri_and_cleanup(
-            &table.table_uri,
+            &table.table_uri(),
             table.version(),
             None,
         )

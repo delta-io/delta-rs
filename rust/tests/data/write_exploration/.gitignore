@@ -1,4 +1,0 @@
-*.parquet
-
-_delta_log/*.json
-!/_delta_log/00000000000000000000.json
