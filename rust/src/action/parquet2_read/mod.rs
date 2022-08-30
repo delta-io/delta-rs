@@ -14,6 +14,7 @@ mod boolean;
 mod dictionary;
 mod map;
 mod primitive;
+mod stats;
 mod string;
 mod validity;
 
@@ -797,7 +798,7 @@ mod tests {
     fn test_add_action_with_partition_values() {
         use parquet2::read::read_metadata;
 
-        let path = "./tests/data/read_null_partitions_from_checkpoint/_delta_log/00000000000000000002.checkpoint.parquet";
+        let path = "./tests/data/checkpoint_with_partitions/_delta_log/00000000000000000002.checkpoint.parquet";
         let mut reader = File::open(path).unwrap();
         let metadata = read_metadata(&mut reader).unwrap();
 
