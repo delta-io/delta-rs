@@ -655,6 +655,7 @@ dependencies = [
  "chrono",
  "criterion",
  "datafusion",
+ "dotenv",
  "dynamodb_lock",
  "errno",
  "fs_extra",
@@ -768,6 +769,12 @@ name = "doc-comment"
 version = "0.3.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "fea41bba32d969b513997752735605054bc0dfa92b4c56bf1189f2e174be7a10"
+
+[[package]]
+name = "dotenv"
+version = "0.15.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "77c90badedccf4105eca100756a0b1289e191f6fcbdadd3cee1d2f614f97da8f"
 
 [[package]]
 name = "dynamodb_lock"

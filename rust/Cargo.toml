@@ -92,14 +92,15 @@ default-features = false
 optional = true
 
 [dev-dependencies]
-utime = "0.3"
+criterion = "0"
+dotenv = "*"
+maplit = "1"
+pretty_assertions = "1.2.1"
+rand = "0.8"
 serial_test = "0"
-pretty_assertions = "1"
 tempdir = "0"
 tempfile = "3"
-maplit = { version = "1" }
-rand = "0.8"
-criterion = "0"
+utime = "0.3"
 
 [[bench]]
 name = "read_checkpoint"
