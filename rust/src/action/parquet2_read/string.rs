@@ -15,7 +15,7 @@ pub trait StringValueIter<'a>: Iterator<Item = Result<String, ParseError>> {
     fn try_from_encoded_values(
         buffer: &'a [u8],
         num_values: usize,
-        _dict: &Option<DictPage>,
+        _dict: &'a Option<DictPage>,
     ) -> Result<Self, ParseError>
     where
         Self: Sized;
@@ -51,14 +51,14 @@ impl<'a> Iterator for PlainStringValueIter<'a> {
 
 pub struct DictionaryStringValueIter<'a> {
     dict_idx_iter: HybridRleDecoder<'a>,
-    dict: BinaryPageDict,
+    dict: BinaryPageDict<'a>,
 }
 
 impl<'a> StringValueIter<'a> for DictionaryStringValueIter<'a> {
     fn try_from_encoded_values(
         values_buf: &'a [u8],
         num_values: usize,
-        dict: &Option<DictPage>,
+        dict: &'a Option<DictPage>,
     ) -> Result<Self, ParseError> {
         let bit_width = values_buf[0];
         let indices_buf = &values_buf[1..];
@@ -107,7 +107,7 @@ where
     /// Create parquet string value reader
     pub fn try_new(
         page: &'a DataPage,
-        dict: &Option<DictPage>,
+        dict: &'a Option<DictPage>,
         descriptor: &'a ColumnDescriptor,
     ) -> Result<Self, ParseError> {
         let (max_def_level, validity_iter, values_buffer) = split_page(page, descriptor)?;
@@ -153,7 +153,7 @@ where
     /// Create parquet string value reader
     pub fn try_new(
         page: &'a DataPage,
-        dict: &Option<DictPage>,
+        dict: &'a Option<DictPage>,
         descriptor: &'a ColumnDescriptor,
     ) -> Result<Self, ParseError> {
         let (max_rep_level, rep_iter, max_def_level, validity_iter, values_buffer) =

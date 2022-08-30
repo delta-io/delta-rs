@@ -1,5 +1,3 @@
-// use std::collections::HashMap;
-
 use parquet2::metadata::ColumnDescriptor;
 use parquet2::page::{DataPage, DictPage};
 
