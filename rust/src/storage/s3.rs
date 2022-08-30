@@ -1,4 +1,4 @@
-//! AWS S3 storage backend. It only supports a single writer and is not multi-writer safe.
+//! AWS S3 storage backend.
 
 use crate::builder::{s3_storage_options, str_option};
 use bytes::Bytes;
@@ -355,6 +355,14 @@ impl S3StorageBackend {
     /// Creates a new S3StorageBackend Trying to create lock client from options.
     ///
     /// Options are described in [s3_storage_options].
+    ///
+    /// ```rust
+    /// use object_store::aws::AmazonS3Builder;
+    /// use deltalake::storage::s3::{S3StorageBackend, S3StorageOptions};
+    ///
+    /// let inner = AmazonS3Builder::new().with_bucket_name("my-bucket").build()?;
+    /// let store = S3StorageBackend::try_new(Arc::new(inner), S3StorageOptions::default())?;
+    /// ```
     pub fn try_new(
         storage: Arc<DynObjectStore>,
         options: S3StorageOptions,

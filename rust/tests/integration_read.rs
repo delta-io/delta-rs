@@ -15,7 +15,7 @@ async fn test_read_tables_local() -> TestResult {
     Ok(read_tables(StorageIntegration::Local).await?)
 }
 
-#[cfg(all(feature = "azure"))]
+#[cfg(feature = "azure")]
 #[tokio::test]
 #[serial]
 async fn test_read_tables_azure() -> TestResult {

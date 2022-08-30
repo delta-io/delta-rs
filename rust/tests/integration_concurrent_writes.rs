@@ -22,7 +22,7 @@ async fn concurrent_writes_s3() -> TestResult {
     Ok(())
 }
 
-#[cfg(all(feature = "azure"))]
+#[cfg(feature = "azure")]
 #[tokio::test]
 async fn test_concurrent_writes_azure() -> TestResult {
     test_concurrent_writes(StorageIntegration::Microsoft).await?;

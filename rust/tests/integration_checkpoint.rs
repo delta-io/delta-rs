@@ -13,7 +13,7 @@ async fn cleanup_metadata_fs_test() -> TestResult {
     Ok(())
 }
 
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 #[tokio::test]
 #[serial]
 async fn cleanup_metadata_aws_test() -> TestResult {
