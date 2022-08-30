@@ -26,7 +26,7 @@ async fn test_object_store_azure() -> TestResult {
     Ok(())
 }
 
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 #[tokio::test]
 #[serial]
 async fn test_object_store_aws() -> TestResult {

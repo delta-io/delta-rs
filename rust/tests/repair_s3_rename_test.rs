@@ -1,4 +1,4 @@
-#![cfg(all(feature = "s3", feature = "integration_test", feature = "s3-rustls"))]
+#![cfg(all(feature = "s3", feature = "s3-rustls", feature = "integration_test"))]
 use bytes::Bytes;
 use deltalake::storage::s3::S3StorageOptions;
 use deltalake::test_utils::{IntegrationContext, StorageIntegration};
