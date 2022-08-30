@@ -359,9 +359,16 @@ impl S3StorageBackend {
     /// ```rust
     /// use object_store::aws::AmazonS3Builder;
     /// use deltalake::storage::s3::{S3StorageBackend, S3StorageOptions};
+    /// use std::sync::Arc;
     ///
-    /// let inner = AmazonS3Builder::new().with_bucket_name("my-bucket").build()?;
-    /// let store = S3StorageBackend::try_new(Arc::new(inner), S3StorageOptions::default())?;
+    /// let inner = AmazonS3Builder::new()
+    ///     .with_region("us-east-1")
+    ///     .with_bucket_name("my-bucket")
+    ///     .with_access_key_id("<access-key-id>")
+    ///     .with_secret_access_key("<secret-access-key>")
+    ///     .build()
+    ///     .unwrap();
+    /// let store = S3StorageBackend::try_new(Arc::new(inner), S3StorageOptions::default()).unwrap();
     /// ```
     pub fn try_new(
         storage: Arc<DynObjectStore>,
