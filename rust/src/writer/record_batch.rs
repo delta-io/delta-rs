@@ -34,9 +34,10 @@ use super::{
     },
     DeltaWriter, DeltaWriterError,
 };
+use crate::builder::DeltaTableBuilder;
 use crate::writer::stats::apply_null_counts;
 use crate::writer::utils::ShareableBuffer;
-use crate::{action::Add, object_store::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
+use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
 use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{Array, UInt32Array},
@@ -75,7 +76,9 @@ impl RecordBatchWriter {
         partition_columns: Option<Vec<String>>,
         storage_options: Option<HashMap<String, String>>,
     ) -> Result<Self, DeltaWriterError> {
-        let storage = DeltaObjectStore::try_new_with_options(&table_uri, storage_options)?;
+        let storage = DeltaTableBuilder::from_uri(&table_uri)
+            .with_storage_options(storage_options.unwrap_or_default())
+            .build_storage()?;
 
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = WriterProperties::builder()
@@ -84,7 +87,7 @@ impl RecordBatchWriter {
             .build();
 
         Ok(Self {
-            storage: Arc::new(storage),
+            storage,
             arrow_schema_ref: schema,
             writer_properties,
             partition_columns: partition_columns.unwrap_or_default(),
@@ -493,7 +496,8 @@ mod tests {
             String::from("modified=2021-02-02/id=A"),
             String::from("modified=2021-02-02/id=B"),
         ];
-        let table_dir = Path::new(&table.table_uri);
+        let table_uri = table.table_uri();
+        let table_dir = Path::new(&table_uri);
         for key in expected_keys {
             let partition_dir = table_dir.join(key);
             assert!(partition_dir.exists())

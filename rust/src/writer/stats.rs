@@ -404,6 +404,7 @@ mod tests {
     use super::{test_utils::get_record_batch, utils::record_batch_from_message};
     use crate::{
         action::{ColumnCountStat, ColumnValueStat},
+        builder::DeltaTableBuilder,
         DeltaTable, DeltaTableError,
     };
     use lazy_static::lazy_static;
@@ -540,10 +541,10 @@ mod tests {
         table_uri: &str,
         options: HashMap<String, String>,
     ) -> Result<DeltaTable, DeltaTableError> {
-        let backend = crate::get_backend_for_uri_with_options(table_uri, options)?;
-        let mut table = DeltaTable::new(table_uri, backend, crate::DeltaTableConfig::default())?;
-        table.load().await?;
-        Ok(table)
+        DeltaTableBuilder::from_uri(table_uri)
+            .with_storage_options(options)
+            .load()
+            .await
     }
 
     fn create_temp_table(table_path: &Path) {

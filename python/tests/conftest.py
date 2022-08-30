@@ -18,7 +18,7 @@ def s3cred() -> None:
 
 @pytest.fixture()
 def s3_localstack(monkeypatch):
-    monkeypatch.setenv("AWS_REGION", "us-east-2")
+    monkeypatch.setenv("AWS_REGION", "us-east-1")
     monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
     monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
     monkeypatch.setenv("AWS_ENDPOINT_URL", "http://localhost:4566")

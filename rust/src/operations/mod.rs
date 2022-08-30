@@ -3,11 +3,11 @@
 // - rename to delta operations
 use crate::{
     action::{DeltaOperation, Protocol, SaveMode},
-    get_backend_for_uri_with_options, open_table,
+    builder::DeltaTableBuilder,
+    open_table,
     operations::{create::CreateCommand, transaction::DeltaTransactionPlan, write::WriteCommand},
-    storage::StorageError,
     writer::{record_batch::divide_by_partition_values, utils::PartitionPath, DeltaWriterError},
-    DeltaTable, DeltaTableConfig, DeltaTableError, DeltaTableMetaData,
+    DeltaTable, DeltaTableError, DeltaTableMetaData,
 };
 use arrow::{datatypes::SchemaRef as ArrowSchemaRef, error::ArrowError, record_batch::RecordBatch};
 use datafusion::{
@@ -46,31 +46,23 @@ pub enum DeltaCommandError {
     TableAlreadyExists(String),
 
     /// Error returned when errors occur in underlying delta table instance
-    #[error("Error in underlying DeltaTable")]
-    DeltaTableError {
+    #[error("DeltaTable error: {} ({:?})", source, source)]
+    DeltaTable {
         /// Raw internal DeltaTableError
         #[from]
         source: DeltaTableError,
     },
 
     /// Errors occurring inside the DeltaWriter modules
-    #[error("Error in underlying DeltaWriter")]
-    DeltaWriter {
+    #[error("Writer error: {} ({:?})", source, source)]
+    Writer {
         /// Raw internal DeltaWriterError
         #[from]
         source: DeltaWriterError,
     },
 
-    /// Error returned when errors occur in underlying storage instance
-    #[error("Error in underlying storage backend")]
-    Storage {
-        /// Raw internal StorageError
-        #[from]
-        source: StorageError,
-    },
-
     /// Error returned when errors occur in Arrow
-    #[error("Error handling arrow data")]
+    #[error("Arrow error: {} ({:?})", source, source)]
     Arrow {
         /// Raw internal ArrowError
         #[from]
@@ -78,12 +70,29 @@ pub enum DeltaCommandError {
     },
 
     /// Error returned for errors internal to Datafusion
-    #[error("Error in Datafusion execution engine")]
+    #[error("Datafusion error: {} ({:?})", source, source)]
     DataFusion {
         /// Raw internal DataFusionError
-        #[from]
         source: DataFusionError,
     },
+
+    /// Error returned for errors internal to Datafusion
+    #[error("ObjectStore error: {} ({:?})", source, source)]
+    ObjectStore {
+        /// Raw internal DataFusionError
+        #[from]
+        source: object_store::Error,
+    },
+}
+
+impl From<DataFusionError> for DeltaCommandError {
+    fn from(err: DataFusionError) -> Self {
+        match err {
+            DataFusionError::ArrowError(source) => DeltaCommandError::Arrow { source },
+            DataFusionError::ObjectStore(source) => DeltaCommandError::ObjectStore { source },
+            source => DeltaCommandError::DataFusion { source },
+        }
+    }
 }
 
 fn to_datafusion_err(e: impl std::error::Error) -> DataFusionError {
@@ -105,7 +114,7 @@ impl DeltaCommands {
         let table = if let Ok(tbl) = open_table(&table_uri).await {
             Ok(tbl)
         } else {
-            get_table_from_uri_without_update(table_uri)
+            DeltaTableBuilder::from_uri(table_uri).build()
         }?;
         Ok(Self { table })
     }
@@ -121,7 +130,7 @@ impl DeltaCommands {
         plan: Arc<dyn ExecutionPlan>,
     ) -> DeltaCommandResult<()> {
         let transaction = Arc::new(DeltaTransactionPlan::new(
-            self.table.table_uri.clone(),
+            self.table.table_uri(),
             self.table.version(),
             plan,
             operation,
@@ -145,7 +154,7 @@ impl DeltaCommands {
         let operation = DeltaOperation::Create {
             mode,
             metadata: metadata.clone(),
-            location: self.table.table_uri.clone(),
+            location: self.table.table_uri(),
             // TODO get the protocol from somewhere central
             protocol: Protocol {
                 min_reader_version: 1,
@@ -153,7 +162,7 @@ impl DeltaCommands {
             },
         };
         let plan = Arc::new(CreateCommand::try_new(
-            &self.table.table_uri,
+            self.table.table_uri(),
             operation.clone(),
         )?);
 
@@ -216,19 +225,12 @@ impl DeltaCommands {
         };
         let data_plan = Arc::new(MemoryExec::try_new(&data, schema, None)?);
         let plan = Arc::new(WriteCommand::try_new(
-            &self.table.table_uri,
+            self.table.table_uri(),
             operation.clone(),
             data_plan,
         )?);
         self.execute(operation, plan).await
     }
-}
-
-fn get_table_from_uri_without_update(table_uri: String) -> DeltaCommandResult<DeltaTable> {
-    let backend = get_backend_for_uri_with_options(&table_uri, HashMap::new())?;
-    let table = DeltaTable::new(&table_uri, backend, DeltaTableConfig::default())?;
-
-    Ok(table)
 }
 
 impl From<DeltaTable> for DeltaCommands {
@@ -284,7 +286,7 @@ mod tests {
         let mut table = create_initialized_table(&partition_cols).await;
         assert_eq!(table.version(), 0);
 
-        let mut commands = DeltaCommands::try_from_uri(table.table_uri.to_string())
+        let mut commands = DeltaCommands::try_from_uri(table.table_uri())
             .await
             .unwrap();
 

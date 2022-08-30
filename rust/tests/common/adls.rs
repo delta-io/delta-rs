@@ -1,11 +1,8 @@
-use chrono::Utc;
-use std::collections::HashMap;
-
-use azure_storage::storage_shared_key_credential::StorageSharedKeyCredential;
-use azure_storage_datalake::clients::DataLakeClient;
-use rand::Rng;
-
 use super::TestContext;
+use chrono::Utc;
+use rand::Rng;
+use std::collections::HashMap;
+use std::process::Command;
 
 pub struct AzureGen2 {
     account_name: String,
@@ -15,27 +12,8 @@ pub struct AzureGen2 {
 
 impl Drop for AzureGen2 {
     fn drop(&mut self) {
-        let storage_account_name = self.account_name.clone();
-        let storage_account_key = self.account_key.clone();
         let file_system_name = self.file_system_name.clone();
-
-        let thread_handle = std::thread::spawn(move || {
-            let runtime = tokio::runtime::Runtime::new().unwrap();
-            let data_lake_client = DataLakeClient::new(
-                StorageSharedKeyCredential::new(
-                    storage_account_name.to_owned(),
-                    storage_account_key.to_owned(),
-                ),
-                None,
-            );
-            let file_system_client =
-                data_lake_client.into_file_system_client(file_system_name.to_owned());
-            runtime
-                .block_on(file_system_client.delete().into_future())
-                .unwrap();
-        });
-
-        thread_handle.join().unwrap();
+        az_cli::delete_container(file_system_name).unwrap();
     }
 }
 
@@ -44,21 +22,15 @@ pub async fn setup_azure_gen2_context() -> TestContext {
 
     let storage_account_name = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
     let storage_account_key = std::env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
+    let storage_container_name =
+        std::env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or("deltars".to_string());
 
-    let data_lake_client = DataLakeClient::new(
-        StorageSharedKeyCredential::new(
-            storage_account_name.to_owned(),
-            storage_account_key.to_owned(),
-        ),
-        None,
-    );
     let rand: u16 = rand::thread_rng().gen();
     let file_system_name = format!("delta-rs-test-{}-{}", Utc::now().timestamp(), rand);
 
-    let file_system_client = data_lake_client.into_file_system_client(file_system_name.to_owned());
-    file_system_client.create().into_future().await.unwrap();
+    az_cli::create_container(&file_system_name).unwrap();
 
-    let table_uri = format!("adls2://{}/{}/", storage_account_name, file_system_name);
+    let table_uri = format!("azure://{}/", file_system_name);
 
     config.insert("URI".to_string(), table_uri);
     config.insert(
@@ -78,5 +50,48 @@ pub async fn setup_azure_gen2_context() -> TestContext {
         })),
         config,
         ..TestContext::default()
+    }
+}
+
+pub mod az_cli {
+    use deltalake::builder::azure_storage_options;
+    use std::process::{Command, ExitStatus};
+
+    /// Create a new bucket
+    pub fn create_container(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
+        let mut child = Command::new("az")
+            .args([
+                "storage",
+                "container",
+                "create",
+                "-n",
+                container_name.as_ref(),
+            ])
+            .spawn()
+            .expect("az command is installed");
+        child.wait()
+    }
+
+    /// delete bucket
+    pub fn delete_container(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
+        let mut child = Command::new("az")
+            .args([
+                "storage",
+                "container",
+                "delete",
+                "-n",
+                container_name.as_ref(),
+            ])
+            .spawn()
+            .expect("az command is installed");
+        child.wait()
+    }
+
+    pub fn upload_table(src: &str, dst: &str) -> std::io::Result<ExitStatus> {
+        let mut child = Command::new("az")
+            .args(["storage", "blob", "upload-batch", "-d", dst, "-s", src])
+            .spawn()
+            .expect("az command is installed");
+        child.wait()
     }
 }

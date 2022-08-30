@@ -1,71 +1,91 @@
-extern crate chrono;
-extern crate deltalake;
-extern crate utime;
-
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
-#[allow(dead_code)]
-mod s3_common;
+#![cfg(feature = "integration_test")]
 
 #[allow(dead_code)]
 mod fs_common;
 
-use deltalake::{action, DeltaTableError};
+use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
+use deltalake::{action, DeltaTableBuilder, DeltaTableError};
+use serial_test::serial;
 use std::collections::HashMap;
 
-use serial_test::serial;
+#[tokio::test]
+#[serial]
+async fn test_commit_tables_local() -> TestResult {
+    Ok(commit_tables(StorageIntegration::Local).await?)
+}
 
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-mod simple_commit_s3 {
-    use super::*;
+#[tokio::test]
+#[serial]
+async fn test_commit_tables_aws() -> TestResult {
+    std::env::set_var("AWS_S3_LOCKING_PROVIDER", "dynamodb");
+    Ok(commit_tables(StorageIntegration::Amazon).await?)
+}
 
-    #[tokio::test]
-    #[serial]
-    async fn test_two_commits_s3() {
-        let path = "s3://deltars/simple_commit_rw1";
-        s3_common::setup_dynamodb("concurrent_writes");
-        prepare_s3(path).await;
+#[cfg(feature = "azure")]
+#[tokio::test]
+#[serial]
+async fn test_commit_tables_azure() -> TestResult {
+    Ok(commit_tables(StorageIntegration::Microsoft).await?)
+}
 
-        test_two_commits(path).await.unwrap();
-    }
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+#[tokio::test]
+#[serial]
+async fn test_two_commits_s3_fails_with_no_lock() -> TestResult {
+    std::env::set_var("AWS_S3_LOCKING_PROVIDER", "none  ");
+    let context = IntegrationContext::new(StorageIntegration::Amazon)?;
+    context.load_table(TestTables::SimpleCommit)?;
+    let table_uri = context.uri_for_table(TestTables::SimpleCommit);
 
-    #[tokio::test]
-    #[serial]
-    async fn test_two_commits_s3_fails_with_no_lock() {
-        let path = "s3://deltars/simple_commit_rw2";
-        prepare_s3(path).await;
-        std::env::set_var("AWS_S3_LOCKING_PROVIDER", "none  ");
+    let result = test_two_commits(&table_uri).await;
+    assert!(result.is_err());
 
-        let result = test_two_commits(path).await;
-        if let Err(DeltaTableError::ObjectStore { source: inner }) = result {
-            let msg = inner.to_string();
-            assert!(msg.contains("dynamodb"));
-            return;
-        }
+    let err_msg = result.err().unwrap().to_string();
+    assert!(err_msg.contains("Atomic rename requires a LockClient for S3 backends."));
 
-        result.unwrap();
+    Ok(())
+}
 
-        panic!("S3 commit without dynamodb locking is expected to fail")
-    }
+async fn commit_tables(storage: StorageIntegration) -> TestResult {
+    let context = IntegrationContext::new(storage)?;
 
-    async fn prepare_s3(path: &str) {
-        let delta_log = format!("{}/_delta_log", path);
-        s3_common::cleanup_dir_except(&delta_log, vec!["00000000000000000000.json".to_string()])
-            .await;
-    }
+    context.load_table_with_name(TestTables::SimpleCommit, "simple_commit_1")?;
+    let table_uri = context.uri_for_table(TestTables::Custom("simple_commit_1".into()));
+    test_two_commits(&table_uri).await?;
+
+    context.load_table_with_name(TestTables::SimpleCommit, "simple_commit_2")?;
+    let table_uri = context.uri_for_table(TestTables::Custom("simple_commit_2".into()));
+    test_commit_version_succeeds_if_version_does_not_exist(&table_uri).await?;
+
+    Ok(())
+}
+
+async fn test_commit_version_succeeds_if_version_does_not_exist(
+    table_path: &str,
+) -> Result<(), DeltaTableError> {
+    let mut table = DeltaTableBuilder::from_uri(table_path)
+        .with_allow_http(true)
+        .load()
+        .await?;
+
+    assert_eq!(0, table.version());
+    assert_eq!(0, table.get_files().len());
+
+    let mut tx1 = table.create_transaction(None);
+    tx1.add_actions(tx1_actions());
+    let commit = tx1.prepare_commit(None, None).await?;
+    let result = table.try_commit_transaction(&commit, 1).await?;
+
+    assert_eq!(1, result);
+    assert_eq!(1, table.version());
+    assert_eq!(2, table.get_files().len());
+
+    Ok(())
 }
 
 mod simple_commit_fs {
     use super::*;
-
-    // Tests are run serially to allow usage of the same local fs directory.
-    #[tokio::test]
-    #[serial]
-    async fn test_two_commits_fs() {
-        prepare_fs();
-        test_two_commits("./tests/data/simple_commit")
-            .await
-            .unwrap();
-    }
 
     #[tokio::test]
     #[serial]
@@ -86,6 +106,8 @@ mod simple_commit_fs {
         assert_eq!(1, result);
         assert_eq!(1, table.version());
         assert_eq!(2, table.get_files().len());
+
+        prepare_fs();
     }
 
     #[tokio::test]
@@ -122,6 +144,8 @@ mod simple_commit_fs {
         assert!(result.is_err());
         assert_eq!(1, table.version());
         assert_eq!(2, table.get_files().len());
+
+        prepare_fs();
     }
 
     // This test shows an example on how to use low-level transaction API with custom optimistic
@@ -167,6 +191,8 @@ mod simple_commit_fs {
         assert_eq!(0, attempt);
         assert_eq!(1, table.version());
         assert_eq!(2, table.get_files().len());
+
+        prepare_fs();
     }
 
     fn prepare_fs() {
@@ -178,7 +204,10 @@ mod simple_commit_fs {
 }
 
 async fn test_two_commits(table_path: &str) -> Result<(), DeltaTableError> {
-    let mut table = deltalake::open_table(table_path).await?;
+    let mut table = DeltaTableBuilder::from_uri(table_path)
+        .with_allow_http(true)
+        .load()
+        .await?;
 
     assert_eq!(0, table.version());
     assert_eq!(0, table.get_files().len());

@@ -19,9 +19,9 @@ use std::ops::Add;
 
 use super::action;
 use super::delta_arrow::delta_log_schema_for_table;
-use super::object_store::DeltaObjectStore;
 use super::open_table_with_version;
 use super::schema::*;
+use super::storage::DeltaObjectStore;
 use super::table_state::DeltaTableState;
 use super::time_utils;
 use super::DeltaTable;
@@ -190,7 +190,8 @@ async fn flush_delete_files<T: Fn(&(DeltaDataTypeVersion, ObjectMeta)) -> bool>(
     Ok(deleted_num)
 }
 
-async fn cleanup_expired_logs_for(
+/// exposed only for integration testing - DO NOT USE otherwise
+pub async fn cleanup_expired_logs_for(
     until_version: DeltaDataTypeVersion,
     storage: &DeltaObjectStore,
     log_retention_timestamp: i64,
@@ -574,9 +575,6 @@ mod tests {
     use super::*;
     use lazy_static::lazy_static;
     use serde_json::json;
-    use std::sync::Arc;
-    use std::time::Duration;
-    use uuid::Uuid;
 
     #[test]
     fn typed_partition_value_from_string_test() {
@@ -837,88 +835,5 @@ mod tests {
                 "some_timestamp": "2021-07-30T18:11:25.594Z"
             }
         });
-    }
-
-    // Last-Modified for S3 could not be altered by user, hence using system pauses which makes
-    // test to run longer but reliable
-    async fn cleanup_metadata_test(table_path: &str) {
-        let object_store =
-            Arc::new(DeltaObjectStore::try_new_with_options(table_path, None).unwrap());
-
-        let log_path = |version| {
-            object_store
-                .log_path()
-                .child(format!("{:020}.json", version))
-        };
-
-        // we don't need to actually populate files with content as cleanup works only with file's metadata
-        object_store
-            .put(&log_path(0), bytes::Bytes::from(""))
-            .await
-            .unwrap();
-
-        // since we cannot alter s3 object metadata, we mimic it with pauses
-        // also we forced to use 2 seconds since Last-Modified is stored in seconds
-        std::thread::sleep(Duration::from_secs(2));
-        object_store
-            .put(&log_path(1), bytes::Bytes::from(""))
-            .await
-            .unwrap();
-
-        std::thread::sleep(Duration::from_secs(3));
-        object_store
-            .put(&log_path(2), bytes::Bytes::from(""))
-            .await
-            .unwrap();
-
-        let v0time = object_store.head(&log_path(0)).await.unwrap().last_modified;
-        let v1time = object_store.head(&log_path(1)).await.unwrap().last_modified;
-        let v2time = object_store.head(&log_path(2)).await.unwrap().last_modified;
-
-        // we choose the retention timestamp to be between v1 and v2 so v2 will be kept but other removed.
-        let retention_timestamp =
-            v1time.timestamp_millis() + (v2time.timestamp_millis() - v1time.timestamp_millis()) / 2;
-
-        assert!(retention_timestamp > v0time.timestamp_millis());
-        assert!(retention_timestamp > v1time.timestamp_millis());
-        assert!(retention_timestamp < v2time.timestamp_millis());
-
-        let removed = crate::checkpoints::cleanup_expired_logs_for(
-            3,
-            object_store.as_ref(),
-            retention_timestamp,
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(removed, 2);
-        assert!(object_store.head(&log_path(0)).await.is_err());
-        assert!(object_store.head(&log_path(1)).await.is_err());
-        assert!(object_store.head(&log_path(2)).await.is_ok());
-
-        // after test cleanup
-        object_store.delete(&log_path(2)).await.unwrap();
-    }
-
-    #[tokio::test]
-    async fn cleanup_metadata_fs_test() {
-        let table_path = format!("./tests/data/md_cleanup/{}", Uuid::new_v4());
-        std::fs::create_dir_all(&table_path).unwrap();
-        cleanup_metadata_test(&table_path).await;
-        std::fs::remove_dir_all(&table_path).unwrap();
-    }
-
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    mod cleanup_metadata_s3_test {
-        use super::*;
-
-        #[tokio::test]
-        async fn cleanup_metadata_s3_test() {
-            std::env::set_var("AWS_ACCESS_KEY_ID", "test");
-            std::env::set_var("AWS_SECRET_ACCESS_KEY", "test");
-            std::env::set_var("AWS_ENDPOINT_URL", "http://localhost:4566");
-            let table_path = format!("s3://deltars/md_cleanup/{}", Uuid::new_v4());
-            cleanup_metadata_test(&table_path).await;
-        }
     }
 }
