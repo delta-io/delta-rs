@@ -97,8 +97,6 @@ pub mod vacuum;
 pub mod checkpoints;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod delta_arrow;
-#[cfg(feature = "rust-dataframe-ext")]
-mod delta_dataframe;
 #[cfg(feature = "datafusion-ext")]
 pub mod delta_datafusion;
 #[cfg(feature = "datafusion-ext")]
