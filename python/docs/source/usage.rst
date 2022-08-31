@@ -29,12 +29,30 @@ To load the current version, use the constructor:
     >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0")
 
 Depending on your storage backend, you could use the ``storage_options`` parameter to provide some configuration.
-Currently only AWS S3 is supported.
+Configuration is defined for specific backends - `s3 options`_, `azure options`_.
 
 .. code-block:: python
 
     >>> storage_options = {"AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY":"THE_AWS_SECRET_ACCESS_KEY"}
     >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0", storage_options=storage_options)
+
+The configuration can also be provided via the environment, and the basic service provider is derived from the URL
+being used. We try to support many of the well-known formats to identify basic service properties.
+
+__S3__:
+
+  * s3://<bucket>/<path>
+  * s3a://<bucket>/<path>
+
+__Azure__:
+
+  * az://<container>/<path>
+  * adl://<container>/<path>
+  * abfs://<container>/<path>
+
+__GCS__:
+
+  * gs://<bucket>/<path>
 
 Alternatively, if you have a data catalog you can load it by reference to a 
 database and table name. Currently only AWS Glue is supported.
@@ -61,6 +79,8 @@ Besides local filesystems, the following backends are supported:
 * Google Cloud Storage, detected by the prefix ``gs://``.
 
 .. _`specific instructions`: https://github.com/delta-io/delta-rs/blob/main/docs/ADLSGen2-HOWTO.md
+.. _`s3 options`: https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L423-L491
+.. _`azure options`: https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L524-L539
 
 
 Time Travel
