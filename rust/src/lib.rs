@@ -38,8 +38,8 @@
 //! # Optional cargo package features
 //!
 //! - `s3`, `gcs`, `azure` - enable the storage backends for AWS S3, Google Cloud Storage (GCS),
-//!   or Azure Data Lake Storage Gen2 (ADLS2). Use `s3-rustls` to use Rust TLS instead of native
-//!   TLS implementation.
+//!   or Azure Blob Storage / Azure Data Lake Storage Gen2 (ADLS2). Use `s3-rustls` to use Rust TLS
+//!   instead of native TLS implementation.
 //! - `glue` - enable the Glue data catalog to work with Delta Tables with AWS Glue.
 //! - `datafusion-ext` - enable the `datafusion::datasource::TableProvider` trait implementation
 //!   for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow-datafusion).
