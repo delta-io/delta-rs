@@ -7,7 +7,6 @@ use object_store::{path::Path, ObjectStore};
 use serde_json::{Map, Value};
 use std::any::Any;
 use std::collections::HashMap;
-use std::process::Command;
 use std::sync::Arc;
 use tempdir::TempDir;
 
@@ -138,7 +137,6 @@ impl TestContext {
         );
 
         let backend = self.new_storage();
-        let p = self.config.get("URI").unwrap().to_string();
         let mut dt = DeltaTable::new(backend, DeltaTableConfig::default());
         let mut commit_info = Map::<String, Value>::new();
 

@@ -3,21 +3,22 @@
 use crate::delta::{DeltaTable, DeltaTableError};
 use crate::schema::DeltaDataTypeVersion;
 use crate::storage::file::FileStorageBackend;
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
-use crate::storage::s3::{S3StorageBackend, S3StorageOptions};
 use crate::storage::DeltaObjectStore;
 use chrono::{DateTime, FixedOffset, Utc};
+use object_store::path::Path;
+use object_store::{DynObjectStore, Error as ObjectStoreError, Result as ObjectStoreResult};
+use std::collections::HashMap;
+use std::sync::Arc;
+use url::Url;
+
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+use crate::storage::s3::{S3StorageBackend, S3StorageOptions};
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 use object_store::aws::AmazonS3Builder;
 #[cfg(feature = "azure")]
 use object_store::azure::MicrosoftAzureBuilder;
 #[cfg(feature = "gcs")]
 use object_store::gcp::GoogleCloudStorageBuilder;
-use object_store::path::Path;
-use object_store::{DynObjectStore, Error as ObjectStoreError, Result as ObjectStoreResult};
-use std::collections::HashMap;
-use std::sync::Arc;
-use url::Url;
 
 /// possible version specifications for loading a delta table
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -280,9 +281,32 @@ impl StorageUrl {
     ///
     /// # Well-known formats
     ///
+    /// The lists below enumerates some well known uris, that are understood by the
+    /// parse function. We parse uris to refer to a specific storage location, which
+    /// is accessed using the internal storage backends.
+    ///
     /// ## Azure
+    ///
+    /// URIs according to <https://github.com/fsspec/adlfs#filesystem-interface-to-azure-datalake-gen1-and-gen2-storage>:
+    ///
     ///   * az://<container>/<path>
+    ///   * adl://<container>/<path>
     ///   * abfs(s)://<container>/<path>
+    ///
+    /// URIs according to <https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri>:
+    ///   
+    ///   * abfs(s)://<file_system>@<account_name>.dfs.core.windows.net/<path>
+    ///
+    /// and a custom one
+    ///
+    ///   * azure://<container>/<path>
+    ///
+    /// ## S3
+    ///   * s3://<bucket>/<path>
+    ///   * s3a://<bucket>/<path>
+    ///
+    /// ## GCS
+    ///   * gs://<bucket>/<path>
     pub fn parse(s: impl AsRef<str>) -> ObjectStoreResult<Self> {
         let s = s.as_ref();
 
@@ -329,6 +353,11 @@ impl StorageUrl {
         self.url.scheme()
     }
 
+    /// Returns the URL host
+    pub fn host(&self) -> Option<&str> {
+        self.url.host_str()
+    }
+
     /// Returns this [`StorageUrl`] as a string
     pub fn as_str(&self) -> &str {
         self.as_ref()
@@ -338,8 +367,7 @@ impl StorageUrl {
     pub fn service_type(&self) -> StorageService {
         match self.url.scheme() {
             "file" => StorageService::Local,
-            "az" | "abfs" | "abfss" | "adls2" | "azure" | "wasb" => StorageService::Azure,
-            // TODO is s3a permissible?
+            "az" | "abfs" | "abfss" | "adls2" | "azure" | "wasb" | "adl" => StorageService::Azure,
             "s3" | "s3a" => StorageService::S3,
             "gs" => StorageService::GCS,
             _ => StorageService::Unknown,
@@ -395,11 +423,53 @@ fn get_storage_backend(
         }
         #[cfg(feature = "azure")]
         StorageService::Azure => {
-            let url: &Url = storage_url.as_ref();
-            // TODO we have to differentiate ...
-            let container_name = url.host_str().ok_or(ObjectStoreError::NotImplemented)?;
+            let (container_name, url_account) = match storage_url.scheme() {
+                "az" | "adl" | "azure" => {
+                    let container = storage_url.host().ok_or(ObjectStoreError::NotImplemented)?;
+                    (container.to_owned(), None)
+                }
+                "adls2" => {
+                    log::warn!("Support for the 'adls2' scheme is deprecated and will be removed in a future version. Use `az://<container>/<path>` instead.");
+                    let account = storage_url.host().ok_or(ObjectStoreError::NotImplemented)?;
+                    let container = storage_url
+                        .prefix
+                        .parts()
+                        .next()
+                        .ok_or(ObjectStoreError::NotImplemented)?
+                        .to_owned();
+                    (container.as_ref().to_string(), Some(account))
+                }
+                "abfs" | "abfss" => {
+                    // abfs(s) might refer to the fsspec convention abfs://<container>/<path>
+                    // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
+                    let url: &Url = storage_url.as_ref();
+                    if url.username().is_empty() {
+                        (
+                            url.host_str()
+                                .ok_or(ObjectStoreError::NotImplemented)?
+                                .to_string(),
+                            None,
+                        )
+                    } else {
+                        let parts: Vec<&str> = url
+                            .host_str()
+                            .ok_or(ObjectStoreError::NotImplemented)?
+                            .splitn(2, '.')
+                            .collect();
+                        if parts.len() != 2 {
+                            Err(ObjectStoreError::NotImplemented)
+                        } else {
+                            Ok((url.username().to_owned(), Some(parts[0])))
+                        }?
+                    }
+                }
+                _ => todo!(),
+            };
             let mut builder = get_azure_builder_from_options(options.unwrap_or_default())
                 .with_container_name(container_name);
+            if let Some(account) = url_account {
+                builder = builder.with_account(account);
+            }
             if let Some(allow) = allow_http {
                 builder = builder.with_allow_http(allow);
             }

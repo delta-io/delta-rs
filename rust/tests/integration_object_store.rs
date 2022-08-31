@@ -62,8 +62,6 @@ async fn test_object_store(integration: StorageIntegration, skip_copy: bool) -> 
 }
 
 async fn put_get_delete_list(storage: &DynObjectStore) -> TestResult {
-    let store_str = storage.to_string();
-
     delete_fixtures(storage).await?;
 
     let content_list = flatten_list_stream(storage, None).await?;
@@ -121,26 +119,16 @@ async fn put_get_delete_list(storage: &DynObjectStore) -> TestResult {
     let out_of_range = 200..300;
     let out_of_range_result = storage.get_range(&location, out_of_range).await;
 
-    if store_str.starts_with("MicrosoftAzureEmulator") {
-        // Azurite doesn't support x-ms-range-get-content-crc64 set by Azure SDK
-        // https://github.com/Azure/Azurite/issues/444
-        let err = range_result.unwrap_err().to_string();
-        assert!(err.contains("x-ms-range-get-content-crc64 header or parameter is not supported in Azurite strict mode"), "{}", err);
+    let bytes = range_result?;
+    assert_eq!(bytes, expected_data.slice(range));
 
-        let err = out_of_range_result.unwrap_err().to_string();
-        assert!(err.contains("x-ms-range-get-content-crc64 header or parameter is not supported in Azurite strict mode"), "{}", err);
-    } else {
-        let bytes = range_result?;
-        assert_eq!(bytes, expected_data.slice(range));
+    // Should be a non-fatal error
+    out_of_range_result.unwrap_err();
 
-        // Should be a non-fatal error
-        out_of_range_result.unwrap_err();
-
-        let ranges = vec![0..1, 2..3, 0..5];
-        let bytes = storage.get_ranges(&location, &ranges).await?;
-        for (range, bytes) in ranges.iter().zip(bytes) {
-            assert_eq!(bytes, expected_data.slice(range.clone()))
-        }
+    let ranges = vec![0..1, 2..3, 0..5];
+    let bytes = storage.get_ranges(&location, &ranges).await?;
+    for (range, bytes) in ranges.iter().zip(bytes) {
+        assert_eq!(bytes, expected_data.slice(range.clone()))
     }
 
     let head = storage.head(&location).await?;
