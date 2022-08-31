@@ -1,13 +1,13 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
 use super::{
-    get_table_from_uri_without_update, to_datafusion_err,
+    to_datafusion_err,
     transaction::{serialize_actions, OPERATION_SCHEMA},
     DeltaCommandError, *,
 };
 use crate::{
     action::{Action, DeltaOperation, MetaData, Protocol, SaveMode},
-    DeltaTableMetaData,
+    DeltaTableBuilder, DeltaTableMetaData,
 };
 use async_trait::async_trait;
 use core::any::Any;
@@ -136,8 +136,9 @@ async fn do_create(
     metadata: DeltaTableMetaData,
     protocol: Protocol,
 ) -> DataFusionResult<SendableRecordBatchStream> {
-    let mut table =
-        get_table_from_uri_without_update(table_uri.clone()).map_err(to_datafusion_err)?;
+    let mut table = DeltaTableBuilder::from_uri(&table_uri)
+        .build()
+        .map_err(to_datafusion_err)?;
 
     let actions = match table.load_version(0).await {
         Err(_) => Ok(vec![

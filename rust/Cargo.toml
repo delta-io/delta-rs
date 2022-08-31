@@ -9,121 +9,74 @@ description = "Native Delta Lake implementation in Rust"
 edition = "2021"
 
 [dependencies]
-libc = ">=0.2.90, <1"
-errno = "0.2"
-thiserror = "1"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
-tokio-stream = { version = "0", features = ["fs"] }
-futures = "0.3"
+arrow = { version = "20", optional = true }
+async-trait = "0.1"
 bytes = "1"
-log = "0"
-regex = "1"
 chrono = "0.4.22"
-uuid = { version = "1", features = ["serde", "v4"] }
+cfg-if = "1"
+errno = "0.2"
+futures = "0.3"
 lazy_static = "1"
-percent-encoding = "2"
+log = "0"
+libc = ">=0.2.90, <1"
 num-bigint = "0.4"
 num-traits = "0.2.15"
-object_store = "0.3.0"
+object_store = "0.4.0"
+parquet = { version = "20", optional = true }
+parquet2 = { version = "0.16", optional = true }
+parquet-format = "~4.0.0"
+percent-encoding = "2"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "1"
+tokio = { version = "1", features = ["macros", "rt"] }
+regex = "1"
+uuid = { version = "1", features = ["serde", "v4"] }
 url = "2.2"
 
-# HTTP Client
-reqwest = { version = "0.11", default-features = false, features = [
-    "rustls-tls",
-    "stream",
-], optional = true }
-
-# Azure
-azure_core = { version = "0.3", optional = true }
-azure_storage = { version = "0.4", optional = true }
-azure_storage_datalake = { version = "0.4", optional = true }
-azure_identity = { version = "0.4", optional = true }
-
-# S3
+# S3 lock client
 rusoto_core = { version = "0.48", default-features = false, optional = true }
 rusoto_credential = { version = "0.48", optional = true }
-rusoto_s3 = { version = "0.48", default-features = false, optional = true }
 rusoto_sts = { version = "0.48", default-features = false, optional = true }
 rusoto_dynamodb = { version = "0.48", default-features = false, optional = true }
-maplit = { version = "1", optional = true }
-hyper = { version = "0.14.20", default-features = false, optional = true }
-hyper-rustls = { version = "0.23.0", default-features = false, optional = true, features = [
-    "http2",
-    "rustls-native-certs",
-    "tokio-runtime",
-] }
-hyper-proxy = { version = "0.9.1", default-features = false, optional = true, features = [
-    "rustls",
-] }
 
 # Glue
 rusoto_glue = { version = "0.48", default-features = false, optional = true }
 
-# GCS
-tame-gcs = { version = "0.10.0", optional = true }
-tame-oauth = { version = "0.4.0", features = ["gcp"], optional = true }
-async-stream = { version = "0.3.2", default-features = true, optional = true }
-
-# High-level writer
-parquet-format = "~4.0.0"
-
-arrow = "18"
-parquet = "18"
-
-crossbeam = { version = "0", optional = true }
-
-cfg-if = "1"
-async-trait = "0.1"
-walkdir = "2"
-
-# NOTE: disable rust-dataframe integration since it currently doesn't have a
-# version published in crates.io
-# rust-dataframe = {version = "0.*", optional = true }
+# NOTE dependencies only for integration tests
+fs_extra = { version = "1.2.0", optional = true }
+tempdir = { version = "0", optional = true }
 
 [dependencies.datafusion]
-version = "10"
+version = "11"
 optional = true
 
 [features]
+default = ["arrow", "parquet"]
 rust-dataframe-ext = []
 datafusion-ext = ["datafusion"]
-azure = [
-    "azure_core",
-    "azure_storage",
-    "azure_storage_datalake",
-    "azure_identity",
-    "reqwest",
-]
-
+azure = ["object_store/azure"]
+gcs = ["object_store/gcp"]
 s3 = [
     "rusoto_core/native-tls",
     "rusoto_credential",
-    "rusoto_s3/native-tls",
     "rusoto_sts/native-tls",
     "rusoto_dynamodb/native-tls",
-    "maplit",
     "dynamodb_lock/native-tls",
-    "hyper",
-    "hyper-rustls",
-    "hyper-proxy",
+    "object_store/aws",
 ]
 s3-rustls = [
     "rusoto_core/rustls",
     "rusoto_credential",
-    "rusoto_s3/rustls",
     "rusoto_sts/rustls",
     "rusoto_dynamodb/rustls",
-    "maplit",
     "dynamodb_lock/rustls",
-    "hyper",
-    "hyper-rustls",
-    "hyper-proxy",
+    "object_store/aws",
 ]
-gcs = ["async-stream", "tame-gcs", "tame-oauth", "reqwest"]
 glue = ["s3", "rusoto_glue"]
 python = ["arrow/pyarrow"]
+# used only for integration testing
+integration_test = ["fs_extra", "tempdir"]
 
 [build-dependencies]
 glibc_version = "0"
@@ -135,11 +88,16 @@ default-features = false
 optional = true
 
 [dev-dependencies]
-utime = "0.3"
+criterion = "0"
+dotenv = "*"
+maplit = "1"
+pretty_assertions = "1.2.1"
+rand = "0.8"
 serial_test = "0"
-pretty_assertions = "1"
 tempdir = "0"
 tempfile = "3"
-maplit = { version = "1" }
-anyhow = "1"
-rand = "0.8"
+utime = "0.3"
+
+[[bench]]
+name = "read_checkpoint"
+harness = false

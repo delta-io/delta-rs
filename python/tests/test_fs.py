@@ -8,7 +8,7 @@ from deltalake.fs import DeltaStorageHandler
 
 
 def test_normalize_path():
-    backend = DeltaStorageFsBackend("")
+    backend = DeltaStorageFsBackend(".")
     assert backend.normalize_path("s3://foo/bar") == "s3://foo/bar"
     assert backend.normalize_path("s3://foo/bar/") == "s3://foo/bar"
     assert backend.normalize_path("/foo/bar//") == "/foo/bar"

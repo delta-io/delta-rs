@@ -1,550 +1,148 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
-#[cfg(feature = "azure")]
-use azure_core::error::{Error as AzureError, ErrorKind as AzureErrorKind};
-use chrono::{DateTime, Utc};
-use futures::stream::BoxStream;
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
-use hyper::http::uri::InvalidUri;
-use object_store::Error as ObjectStoreError;
-use std::collections::HashMap;
-use std::fmt::Debug;
-use std::ops::Range;
-use std::sync::Arc;
-use walkdir::Error as WalkDirError;
-
-#[cfg(feature = "azure")]
-pub mod azure;
 pub mod file;
-#[cfg(any(feature = "gcs"))]
-pub mod gcs;
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 pub mod s3;
 
-/// Error enum that represents an invalid URI.
-#[derive(thiserror::Error, Debug, PartialEq, Eq)]
-pub enum UriError {
-    /// Error returned when the URI contains a scheme that is not handled.
-    #[error("Invalid URI scheme: {0}")]
-    InvalidScheme(String),
-    /// Error returned when a local file system path is expected, but the URI is not a local file system path.
-    #[error("Expected local path URI, found: {0}")]
-    ExpectedSLocalPathUri(String),
+use crate::builder::StorageUrl;
+use bytes::Bytes;
+#[cfg(feature = "datafusion-ext")]
+use datafusion::datasource::object_store::ObjectStoreUrl;
+use futures::{stream::BoxStream, StreamExt, TryStreamExt};
+use lazy_static::lazy_static;
+use object_store::{
+    path::{Path, DELIMITER},
+    DynObjectStore, Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta,
+    ObjectStore, Result as ObjectStoreResult,
+};
+use std::ops::Range;
+use std::sync::Arc;
+use tokio::io::AsyncWrite;
 
-    /// Error returned when the URI is expected to be an object storage path, but does not include a bucket part.
-    #[cfg(any(feature = "gcs", feature = "s3", feature = "s3-rustls"))]
-    #[error("Object URI missing bucket")]
-    MissingObjectBucket,
-    /// Error returned when the URI is expected to be an object storage path, but does not include a key part.
-    #[cfg(any(feature = "gcs", feature = "s3", feature = "s3-rustls"))]
-    #[error("Object URI missing key")]
-    MissingObjectKey,
-    /// Error returned when an S3 path is expected, but the URI is not an S3 URI.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("Expected S3 URI, found: {0}")]
-    ExpectedS3Uri(String),
-
-    /// Error returned when an GCS path is expected, but the URI is not an GCS URI.
-    #[cfg(any(feature = "gcs"))]
-    #[error("Expected GCS URI, found: {0}")]
-    ExpectedGCSUri(String),
-
-    /// Error returned when an Azure URI is expected, but the URI is not an Azure URI.
-    #[cfg(feature = "azure")]
-    #[error("Expected Azure URI, found: {0}")]
-    ExpectedAzureUri(String),
-
-    /// Error returned when an Azure URI is expected, but the URI is missing the scheme.
-    #[cfg(feature = "azure")]
-    #[error("Object URI missing filesystem")]
-    MissingObjectFileSystem,
-    /// Error returned when an Azure URI is expected, but the URI is missing the account name and
-    /// path.
-    #[cfg(feature = "azure")]
-    #[error("Object URI missing account name and path")]
-    MissingObjectAccount,
-    /// Error returned when an Azure URI is expected, but the URI is missing the account name.
-    #[cfg(feature = "azure")]
-    #[error("Object URI missing account name")]
-    MissingObjectAccountName,
-    /// Error returned when an Azure URI is expected, but the URI is missing the path.
-    #[cfg(feature = "azure")]
-    #[error("Object URI missing path")]
-    MissingObjectPath,
-    /// Error returned when container in an Azure URI doesn't match the expected value
-    #[cfg(feature = "azure")]
-    #[error("Container mismatch, expected: {expected}, got: {got}")]
-    ContainerMismatch {
-        /// Expected container value
-        expected: String,
-        /// Actual container value
-        got: String,
-    },
+lazy_static! {
+    static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
 }
 
-/// Enum with variants representing each supported storage backend.
-#[derive(Debug)]
-pub enum Uri<'a> {
-    /// URI for local file system backend.
-    LocalPath(&'a str),
-    /// URI for S3 backend.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    S3Object(s3::S3Object<'a>),
-    /// URI for Azure backend.
-    #[cfg(feature = "azure")]
-    AdlsGen2Object(azure::AdlsGen2Object<'a>),
-    /// URI for GCS backend
-    #[cfg(feature = "gcs")]
-    GCSObject(gcs::GCSObject<'a>),
+/// Configuration for a DeltaObjectStore
+#[derive(Debug, Clone)]
+struct DeltaObjectStoreConfig {
+    storage_url: StorageUrl,
 }
 
-impl<'a> Uri<'a> {
-    /// Converts the URI to an S3Object. Returns UriError if the URI is not valid for the S3
-    /// backend.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    pub fn into_s3object(self) -> Result<s3::S3Object<'a>, UriError> {
-        match self {
-            Uri::S3Object(x) => Ok(x),
-            #[cfg(feature = "azure")]
-            Uri::AdlsGen2Object(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
-            #[cfg(feature = "gcs")]
-            Uri::GCSObject(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
-            Uri::LocalPath(x) => Err(UriError::ExpectedS3Uri(x.to_string())),
-        }
+impl DeltaObjectStoreConfig {
+    /// Create a new [DeltaObjectStoreConfig]
+    pub fn new(storage_url: StorageUrl) -> Self {
+        Self { storage_url }
     }
 
-    /// Converts the URI to an AdlsGen2Object. Returns UriError if the URI is not valid for the
-    /// Azure backend.
-    #[cfg(feature = "azure")]
-    pub fn into_adlsgen2_object(self) -> Result<azure::AdlsGen2Object<'a>, UriError> {
-        match self {
-            Uri::AdlsGen2Object(x) => Ok(x),
-            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-            Uri::S3Object(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
-            #[cfg(feature = "gcs")]
-            Uri::GCSObject(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
-            Uri::LocalPath(x) => Err(UriError::ExpectedAzureUri(x.to_string())),
-        }
+    /// Prefix a path with the table root path
+    fn full_path(&self, location: &Path) -> ObjectStoreResult<Path> {
+        let path: &str = location.as_ref();
+        let stripped = match self.storage_url.prefix.as_ref() {
+            "" => path.to_string(),
+            p => format!("{}/{}", p, path),
+        };
+        Ok(Path::parse(stripped.trim_end_matches(DELIMITER))?)
     }
 
-    /// Converts the URI to an GCSObject. Returns UriError if the URI is not valid for the
-    /// Google Cloud Storage backend.
-    #[cfg(feature = "gcs")]
-    pub fn into_gcs_object(self) -> Result<gcs::GCSObject<'a>, UriError> {
-        match self {
-            Uri::GCSObject(x) => Ok(x),
-            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-            Uri::S3Object(x) => Err(UriError::ExpectedGCSUri(x.to_string())),
-            #[cfg(feature = "azure")]
-            Uri::AdlsGen2Object(x) => Err(UriError::ExpectedGCSUri(x.to_string())),
-            Uri::LocalPath(x) => Err(UriError::ExpectedGCSUri(x.to_string())),
-        }
+    fn strip_prefix(&self, path: &Path) -> Option<Path> {
+        let path: &str = path.as_ref();
+        let stripped = match self.storage_url.prefix.as_ref() {
+            "" => path,
+            p => path.strip_prefix(p)?.strip_prefix(DELIMITER)?,
+        };
+        Path::parse(stripped).ok()
     }
 
-    /// Converts the URI to an str representing a local file system path. Returns UriError if the
-    /// URI is not valid for the file storage backend.
-    pub fn into_localpath(self) -> Result<&'a str, UriError> {
-        match self {
-            Uri::LocalPath(x) => Ok(x),
-            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-            Uri::S3Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
-            #[cfg(feature = "azure")]
-            Uri::AdlsGen2Object(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
-            #[cfg(feature = "gcs")]
-            Uri::GCSObject(x) => Err(UriError::ExpectedSLocalPathUri(format!("{}", x))),
-        }
-    }
-
-    /// Return URI path component as String
-    #[inline]
-    pub fn path(&self) -> String {
-        match self {
-            Uri::LocalPath(x) => x.to_string(),
-            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-            Uri::S3Object(x) => x.key.to_string(),
-            #[cfg(feature = "azure")]
-            Uri::AdlsGen2Object(x) => x.path.to_string(),
-            #[cfg(feature = "gcs")]
-            Uri::GCSObject(x) => x.path.to_string(),
-        }
-    }
-}
-
-/// Parses the URI and returns a variant of the Uri enum for the appropriate storage backend based
-/// on scheme.
-pub fn parse_uri<'a>(path: &'a str) -> Result<Uri<'a>, UriError> {
-    let parts: Vec<&'a str> = path.split("://").collect();
-
-    if parts.len() == 1 {
-        return Ok(Uri::LocalPath(parts[0]));
-    }
-
-    match parts[0] {
-        "s3" => {
-            cfg_if::cfg_if! {
-                if #[cfg(any(feature = "s3", feature = "s3-rustls"))] {
-                    let mut path_parts = parts[1].splitn(2, '/');
-                    let bucket = match path_parts.next() {
-                        Some(x) => x,
-                        None => {
-                            return Err(UriError::MissingObjectBucket);
-                        }
-                    };
-                    let key = match path_parts.next() {
-                        Some(x) => x,
-                        None => {
-                            return Err(UriError::MissingObjectKey);
-                        }
-                    };
-
-                    Ok(Uri::S3Object(s3::S3Object { bucket, key }))
-                } else {
-                    Err(UriError::InvalidScheme(String::from(parts[0])))
-                }
+    /// convert a table [Path] to a fully qualified uri
+    pub fn to_uri(&self, location: &Path) -> String {
+        let uri = match self.storage_url.scheme() {
+            "file" | "" => {
+                // On windows the drive (e.g. 'c:') is part of root and must not be prefixed.
+                #[cfg(windows)]
+                let os_uri = format!("{}/{}", self.storage_url.prefix, location.as_ref());
+                #[cfg(unix)]
+                let os_uri = format!("/{}/{}", self.storage_url.prefix, location.as_ref());
+                os_uri
             }
-        }
-
-        // This can probably be refactored into the above match arm
-        "gs" => {
-            cfg_if::cfg_if! {
-                if #[cfg(any(feature = "gcs"))] {
-                    let mut path_parts = parts[1].splitn(2, '/');
-                    let bucket = match path_parts.next() {
-                        Some(x) => x,
-                        None => {
-                            return Err(UriError::MissingObjectBucket);
-                        }
-                    };
-                    let path = match path_parts.next() {
-                        Some(x) => x,
-                        None => {
-                            return Err(UriError::MissingObjectKey);
-                        }
-                    };
-
-                    Ok(Uri::GCSObject(gcs::GCSObject::new(bucket, path)))
-                } else {
-                    Err(UriError::InvalidScheme(String::from(parts[0])))
-                }
-            }
-        }
-
-        "file" => Ok(Uri::LocalPath(parts[1])),
-
-        // Azure Data Lake Storage Gen2
-        // This URI syntax is an invention of delta-rs.
-        // ABFS URIs should not be used since delta-rs doesn't use the Hadoop ABFS driver.
-        "adls2" => {
-            cfg_if::cfg_if! {
-                if #[cfg(feature = "azure")] {
-                    let mut path_parts = parts[1].splitn(3, '/');
-                    let account_name = match path_parts.next() {
-                        Some(x) => x,
-                        None => {
-                            return Err(UriError::MissingObjectAccount);
-                        }
-                    };
-                    let file_system = match path_parts.next() {
-                        Some(x) => x,
-                        None => {
-                            return Err(UriError::MissingObjectFileSystem);
-                        }
-                    };
-                    let path = path_parts.next().unwrap_or("/");
-
-                    Ok(Uri::AdlsGen2Object(azure::AdlsGen2Object { account_name, file_system, path }))
-                } else {
-                    Err(UriError::InvalidScheme(String::from(parts[0])))
-                }
-            }
-        }
-        _ => Err(UriError::InvalidScheme(String::from(parts[0]))),
+            _ => format!("{}/{}", self.storage_url.as_str(), location.as_ref()),
+        };
+        uri.trim_end_matches('/').into()
     }
 }
 
-/// Error enum returned when storage backend interaction fails.
-#[derive(thiserror::Error, Debug)]
-pub enum StorageError {
-    /// The requested object does not exist.
-    #[error("Object not found")]
-    NotFound,
-    /// The object written to the storage backend already exists.
-    /// This error is expected in some cases.
-    /// For example, optimistic concurrency writes between multiple processes expect to compete
-    /// for the same URI when writing to _delta_log.
-    #[error("Object exists already at path: {0}")]
-    AlreadyExists(String),
-    /// An IO error occurred while reading from the local file system.
-    #[error("Failed to read local object content: {source}")]
-    Io {
-        /// The raw error returned when trying to read the local file.
-        source: std::io::Error,
-    },
-
-    #[error("Failed to walk directory: {source}")]
-    /// Error raised when failing to traverse a directory
-    WalkDir {
-        /// The raw error returned when trying to read the local file.
-        #[from]
-        source: WalkDirError,
-    },
-    /// The file system represented by the scheme is not known.
-    #[error("File system not supported")]
-    FileSystemNotSupported,
-    /// Wraps a generic storage backend error. The wrapped string contains the details.
-    #[error("Generic error: {0}")]
-    Generic(String),
-
-    /// Error representing an S3 GET failure.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("Failed to read S3 object content: {source}")]
-    S3Get {
-        /// The underlying Rusoto S3 error.
-        source: rusoto_core::RusotoError<rusoto_s3::GetObjectError>,
-    },
-    /// Error representing a failure when executing an S3 HEAD request.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("Failed to read S3 object metadata: {source}")]
-    S3Head {
-        /// The underlying Rusoto S3 error.
-        source: rusoto_core::RusotoError<rusoto_s3::HeadObjectError>,
-    },
-    /// Error representing a failure when executing an S3 list operation.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("Failed to list S3 objects: {source}")]
-    S3List {
-        /// The underlying Rusoto S3 error.
-        source: rusoto_core::RusotoError<rusoto_s3::ListObjectsV2Error>,
-    },
-    /// Error representing a failure when executing an S3 PUT request.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("Failed to put S3 object: {source}")]
-    S3Put {
-        /// The underlying Rusoto S3 error.
-        source: rusoto_core::RusotoError<rusoto_s3::PutObjectError>,
-    },
-    /// Error representing a failure when executing an S3 DeleteObject request.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("Failed to delete S3 object: {source}")]
-    S3Delete {
-        /// The underlying Rusoto S3 error.
-        #[from]
-        source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectError>,
-    },
-    /// Error representing a failure when executing an S3 DeleteObjects request.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("Failed to delete S3 object: {source}")]
-    S3BatchDelete {
-        /// The underlying Rusoto S3 error.
-        #[from]
-        source: rusoto_core::RusotoError<rusoto_s3::DeleteObjectsError>,
-    },
-    /// Error representing a failure when copying a S3 object
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("Failed to copy S3 object: {source}")]
-    S3Copy {
-        /// The underlying Rusoto S3 error.
-        source: rusoto_core::RusotoError<rusoto_s3::CopyObjectError>,
-    },
-    /// Error returned when S3 object get response contains empty body
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("S3 Object missing body content: {0}")]
-    S3MissingObjectBody(String),
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    /// Represents a generic S3 error. The wrapped error string describes the details.
-    #[error("S3 error: {0}")]
-    S3Generic(String),
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    /// Wraps the DynamoDB error
-    #[error("DynamoDB error: {source}")]
-    DynamoDb {
-        /// Wrapped DynamoDB error
-        #[from]
-        source: dynamodb_lock::DynamoError,
-    },
-    /// Error representing a failure to retrieve AWS credentials.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("Failed to retrieve AWS credentials: {source}")]
-    AWSCredentials {
-        /// The underlying Rusoto CredentialsError
-        #[from]
-        source: rusoto_credential::CredentialsError,
-    },
-    /// Error caused by the http request dispatcher not being able to be created.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("Failed to create request dispatcher: {source}")]
-    AWSHttpClient {
-        /// The underlying Rusoto TlsError
-        #[from]
-        source: rusoto_core::request::TlsError,
-    },
-
-    /// Azure error
-    #[cfg(feature = "azure")]
-    #[error("Error interacting with Azure: {source}")]
-    Azure {
-        /// Azure error reason
-        source: AzureError,
-    },
-    /// Azure config error
-    #[cfg(feature = "azure")]
-    #[error("Azure config error: {0}")]
-    AzureConfig(String),
-    /// Azure credentials error
-    #[cfg(feature = "azure")]
-    #[error("Azure credentials error: {source}")]
-    AzureCredentials {
-        /// Azure error reason
-        source: AzureError,
-    },
-
-    /// GCS config error
-    #[cfg(feature = "gcs")]
-    #[error("GCS config error: {0}")]
-    GCSConfig(String),
-
-    /// GCS client error
-    #[cfg(feature = "gcs")]
-    #[error("GCS error: {source}")]
-    GCSError {
-        /// The underlying Google Cloud Error
-        #[from]
-        source: gcs::GCSClientError,
-    },
-
-    /// Error returned when the URI is invalid.
-    /// The wrapped UriError contains additional details.
-    #[error("Invalid object URI")]
-    Uri {
-        #[from]
-        /// Uri error details when the URI is invalid.
-        source: UriError,
-    },
-
-    /// Error returned when the URI is invalid.
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    #[error("Invalid URI parsing")]
-    ParsingUri {
-        #[from]
-        /// Uri error details when the URI parsing is invalid.
-        source: InvalidUri,
-    },
-
-    /// underlying object store returned an error.
-    #[error("ObjectStore interaction failed: {source}")]
-    ObjectStore {
-        /// The wrapped [`ObjectStoreError`]
-        #[from]
-        source: ObjectStoreError,
-    },
+/// Object Store implementation for DeltaTable.
+///
+/// The [DeltaObjectStore] implements the [object_store::ObjectStore] trait to facilitate
+/// interoperability with the larger rust / arrow ecosystem. Specifically it can directly
+/// be registered as store within datafusion.
+///
+/// The table root is treated as the root of the object store.
+/// All [Path] are reported relative to the table root.
+#[derive(Debug, Clone)]
+pub struct DeltaObjectStore {
+    storage: Arc<DynObjectStore>,
+    config: DeltaObjectStoreConfig,
 }
 
-impl StorageError {
-    /// Creates a StorageError::Io error wrapping the provided error string.
-    pub fn other_std_io_err(desc: String) -> Self {
-        Self::Io {
-            source: std::io::Error::new(std::io::ErrorKind::Other, desc),
-        }
+impl std::fmt::Display for DeltaObjectStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "DeltaObjectStore({})", self.config.storage_url.as_str())
     }
 }
 
-impl From<std::io::Error> for StorageError {
-    fn from(error: std::io::Error) -> Self {
-        match error.kind() {
-            std::io::ErrorKind::NotFound => StorageError::NotFound,
-            _ => StorageError::Io { source: error },
-        }
+impl DeltaObjectStore {
+    /// Create new DeltaObjectStore
+    pub fn new(storage_url: StorageUrl, storage: Arc<DynObjectStore>) -> Self {
+        let config = DeltaObjectStoreConfig::new(storage_url);
+        Self { storage, config }
     }
-}
 
-#[cfg(feature = "azure")]
-impl From<AzureError> for StorageError {
-    fn from(error: AzureError) -> Self {
-        match error.kind() {
-            AzureErrorKind::HttpResponse { status, .. } if *status == 404 => StorageError::NotFound,
-            AzureErrorKind::HttpResponse { status, .. } if *status == 401 || *status == 403 => {
-                StorageError::AzureCredentials { source: error }
-            }
-            _ => StorageError::Azure { source: error },
-        }
+    /// Get a reference to the underlying storage backend
+    pub fn storage_backend(&self) -> Arc<DynObjectStore> {
+        self.storage.clone()
     }
-}
 
-/// Describes metadata of a storage object.
-#[derive(Debug)]
-pub struct ObjectMeta {
-    /// The path where the object is stored. This is the path component of the object URI.
-    ///
-    /// For example:
-    ///   * path for `s3://bucket/foo/bar` should be `foo/bar`.
-    ///   * path for `dir/foo/bar` should be `dir/foo/bar`.
-    ///
-    /// Given a table URI, object URI can be constructed by joining table URI with object path.
-    pub path: String,
-    /// The last time the object was modified in the storage backend.
-    // The timestamp of a commit comes from the remote storage `lastModifiedTime`, and can be
-    // adjusted for clock skew.
-    pub modified: DateTime<Utc>,
-    /// Size of the object in bytes
-    pub size: Option<i64>,
-}
-
-impl Clone for ObjectMeta {
-    fn clone(&self) -> Self {
-        Self {
-            path: self.path.clone(),
-            modified: self.modified,
-            size: self.size,
-        }
+    /// Get fully qualified uri for table root
+    pub fn root_uri(&self) -> String {
+        self.config.to_uri(&Path::from(""))
     }
-}
 
-/// Abstractions for underlying blob storages hosting the Delta table. To add support for new cloud
-/// or local storage systems, simply implement this trait.
-#[async_trait::async_trait]
-pub trait StorageBackend: Send + Sync + Debug {
-    /// Fetch object metadata without reading the actual content
-    async fn head_obj(&self, path: &str) -> Result<ObjectMeta, StorageError>;
+    #[cfg(feature = "datafusion-ext")]
+    /// generate a unique enough url to identify the store in datafusion.
+    pub(crate) fn object_store_url(&self) -> ObjectStoreUrl {
+        // we are certain, that the URL can be parsed, since
+        // we make sure when we are parsing the table uri
+        ObjectStoreUrl::parse(format!(
+            "delta-rs://{}",
+            // NOTE We need to also replace colons, but its fine, since it just needs
+            // to be a unique-ish identifier for the object store in datafusion
+            self.config
+                .storage_url
+                .prefix
+                .as_ref()
+                .replace(DELIMITER, "-")
+                .replace(':', "-")
+        ))
+        .expect("Invalid object store url.")
+    }
 
-    /// Fetch object content
-    async fn get_obj(&self, path: &str) -> Result<Vec<u8>, StorageError>;
+    /// [Path] to Delta log
+    pub fn log_path(&self) -> &Path {
+        &DELTA_LOG_PATH
+    }
 
-    /// Fetch a range from object content
-    async fn get_range(&self, path: &str, range: Range<usize>) -> Result<Vec<u8>, StorageError>;
-
-    /// Return a list of objects by `path` prefix in an async stream.
-    async fn list_objs<'a>(
-        &'a self,
-        path: &'a str,
-    ) -> Result<BoxStream<'a, Result<ObjectMeta, StorageError>>, StorageError>;
-
-    /// Create new object with `obj_bytes` as content.
-    ///
-    /// Implementation note:
-    ///
-    /// To support safe concurrent read, if `path` already exists, `put_obj` needs to update object
-    /// content in backing store atomically, i.e. reader of the object should never read a partial
-    /// write.
-    async fn put_obj(&self, path: &str, obj_bytes: &[u8]) -> Result<(), StorageError>;
-
-    /// Moves object from `src` to `dst`.
-    ///
-    /// Implementation note:
-    ///
-    /// For a multi-writer safe backend, `rename_obj_noreplace` needs to implement rename if not exists semantic.
-    /// In other words, if the destination path already exists, rename should return a
-    /// [StorageError::AlreadyExists] error.
-    async fn rename_obj_noreplace(&self, src: &str, dst: &str) -> Result<(), StorageError>;
-
-    /// Deletes object by `path`.
-    async fn delete_obj(&self, path: &str) -> Result<(), StorageError>;
+    /// [Path] to Delta log
+    pub fn to_uri(&self, location: &Path) -> String {
+        self.config.to_uri(location)
+    }
 
     /// Deletes object by `paths`.
-    async fn delete_objs(&self, paths: &[String]) -> Result<(), StorageError> {
+    pub async fn delete_batch(&self, paths: &[Path]) -> ObjectStoreResult<()> {
         for path in paths {
-            match self.delete_obj(path).await {
+            match self.delete(path).await {
                 Ok(_) => continue,
-                Err(StorageError::NotFound) => continue,
+                Err(ObjectStoreError::NotFound { .. }) => continue,
                 Err(e) => return Err(e),
             }
         }
@@ -552,49 +150,163 @@ pub trait StorageBackend: Send + Sync + Debug {
     }
 }
 
-/// Dynamically construct a Storage backend trait object based on scheme for provided URI
-pub fn get_backend_for_uri(uri: &str) -> Result<Arc<dyn StorageBackend>, StorageError> {
-    match parse_uri(uri)? {
-        Uri::LocalPath(root) => Ok(Arc::new(file::FileStorageBackend::new(root))),
-        #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-        Uri::S3Object(_) => Ok(Arc::new(s3::S3StorageBackend::new()?)),
-        #[cfg(feature = "azure")]
-        Uri::AdlsGen2Object(obj) => Ok(Arc::new(azure::AdlsGen2Backend::new(obj.file_system)?)),
-        #[cfg(feature = "gcs")]
-        Uri::GCSObject(_) => Ok(Arc::new(gcs::GCSStorageBackend::new()?)),
+#[async_trait::async_trait]
+impl ObjectStore for DeltaObjectStore {
+    /// Save the provided bytes to the specified location.
+    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
+        let full_path = self.config.full_path(location)?;
+        self.storage.put(&full_path, bytes).await
+    }
+
+    /// Return the bytes that are stored at the specified location.
+    async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
+        let full_path = self.config.full_path(location)?;
+        self.storage.get(&full_path).await
+    }
+
+    /// Return the bytes that are stored at the specified location
+    /// in the given byte range
+    async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
+        let full_path = self.config.full_path(location)?;
+        object_store::ObjectStore::get_range(self.storage.as_ref(), &full_path, range).await
+    }
+
+    /// Return the metadata for the specified location
+    async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
+        let full_path = self.config.full_path(location)?;
+        self.storage.head(&full_path).await.map(|meta| ObjectMeta {
+            last_modified: meta.last_modified,
+            size: meta.size,
+            location: self
+                .config
+                .strip_prefix(&meta.location)
+                .unwrap_or(meta.location),
+        })
+    }
+
+    /// Delete the object at the specified location.
+    async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
+        let full_path = self.config.full_path(location)?;
+        self.storage.delete(&full_path).await
+    }
+
+    /// List all the objects with the given prefix.
+    ///
+    /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
+    /// `foo/bar_baz/x`.
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
+        let prefix = prefix.and_then(|p| self.config.full_path(p).ok());
+        Ok(self
+            .storage
+            .list(Some(
+                &prefix.unwrap_or_else(|| self.config.storage_url.prefix.clone()),
+            ))
+            .await?
+            .map_ok(|meta| ObjectMeta {
+                last_modified: meta.last_modified,
+                size: meta.size,
+                location: self
+                    .config
+                    .strip_prefix(&meta.location)
+                    .unwrap_or(meta.location),
+            })
+            .boxed())
+    }
+
+    /// List objects with the given prefix and an implementation specific
+    /// delimiter. Returns common prefixes (directories) in addition to object
+    /// metadata.
+    ///
+    /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
+    /// `foo/bar_baz/x`.
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
+        let prefix = prefix.and_then(|p| self.config.full_path(p).ok());
+        self.storage
+            .list_with_delimiter(Some(
+                &prefix.unwrap_or_else(|| self.config.storage_url.prefix.clone()),
+            ))
+            .await
+            .map(|lst| ListResult {
+                common_prefixes: lst
+                    .common_prefixes
+                    .iter()
+                    .map(|p| self.config.strip_prefix(p).unwrap_or_else(|| p.clone()))
+                    .collect(),
+                objects: lst
+                    .objects
+                    .iter()
+                    .map(|meta| ObjectMeta {
+                        last_modified: meta.last_modified,
+                        size: meta.size,
+                        location: self
+                            .config
+                            .strip_prefix(&meta.location)
+                            .unwrap_or_else(|| meta.location.clone()),
+                    })
+                    .collect(),
+            })
+    }
+
+    /// Copy an object from one path to another in the same object store.
+    ///
+    /// If there exists an object at the destination, it will be overwritten.
+    async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
+        let full_from = self.config.full_path(from)?;
+        let full_to = self.config.full_path(to)?;
+        self.storage.copy(&full_from, &full_to).await
+    }
+
+    /// Copy an object from one path to another, only if destination is empty.
+    ///
+    /// Will return an error if the destination already has an object.
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
+        let full_from = self.config.full_path(from)?;
+        let full_to = self.config.full_path(to)?;
+        self.storage.copy_if_not_exists(&full_from, &full_to).await
+    }
+
+    /// Move an object from one path to another in the same object store.
+    ///
+    /// Will return an error if the destination already has an object.
+    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
+        let full_from = self.config.full_path(from)?;
+        let full_to = self.config.full_path(to)?;
+        self.storage
+            .rename_if_not_exists(&full_from, &full_to)
+            .await
+    }
+
+    async fn put_multipart(
+        &self,
+        location: &Path,
+    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+        let full_path = self.config.full_path(location)?;
+        self.storage.put_multipart(&full_path).await
+    }
+
+    async fn abort_multipart(
+        &self,
+        location: &Path,
+        multipart_id: &MultipartId,
+    ) -> ObjectStoreResult<()> {
+        let full_path = self.config.full_path(location)?;
+        self.storage.abort_multipart(&full_path, multipart_id).await
     }
 }
 
-/// Returns a StorageBackend appropriate for the protocol and configured with the given options
-/// Options must be passed as a hashmap. Hashmap keys correspond to env variables that are used if options are not set.
-///
-/// Currently, S3 and Azure are the only backends that accept options.
-/// Options may be passed in the HashMap or set as environment variables.
-///
-/// [s3::S3StorageOptions] describes the available options for the S3 backend.
-/// [dynamodb_lock::DynamoDbLockClient] describes additional options for the atomic rename client.
-///
-/// [azure::AzureStorageOptions] describes the available options for the Azure backend.
-pub fn get_backend_for_uri_with_options(
-    uri: &str,
-    #[allow(unused)] options: HashMap<String, String>,
-) -> Result<Arc<dyn StorageBackend>, StorageError> {
-    match parse_uri(uri)? {
-        #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-        Uri::S3Object(_) => Ok(Arc::new(s3::S3StorageBackend::new_from_options(
-            s3::S3StorageOptions::from_map(options),
-        )?)),
-        #[cfg(feature = "azure")]
-        Uri::AdlsGen2Object(obj) => Ok(Arc::new(azure::AdlsGen2Backend::new_from_options(
-            obj.file_system,
-            azure::AzureStorageOptions::from_map(options),
-        )?)),
-        _ => get_backend_for_uri(uri),
-    }
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-#[cfg(any(feature = "s3", feature = "s3-rustls", feature = "azure"))]
-pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
-    map.get(key)
-        .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
+    #[test]
+    fn path_handling() {
+        let storage_url = StorageUrl::parse("s3://bucket").unwrap();
+        let file_with_delimiter = Path::from_iter(["a", "b/c", "foo.file"]);
+        let config = DeltaObjectStoreConfig::new(storage_url);
+        let added = config.full_path(&file_with_delimiter).unwrap();
+        assert_eq!(file_with_delimiter, added)
+    }
 }

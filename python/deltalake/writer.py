@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -22,11 +23,17 @@ from deltalake.fs import DeltaStorageHandler
 if TYPE_CHECKING:
     import pandas as pd
 
+import sys
+
+if sys.version_info >= (3, 8):
+    from typing import Literal
+else:
+    from typing_extensions import Literal
+
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.lib import RecordBatchReader
-from typing_extensions import Literal
 
 from .deltalake import PyDeltaTableError
 from .deltalake import write_new_deltalake as _write_new_deltalake
@@ -138,10 +145,10 @@ def write_deltalake(
 
     if isinstance(table_or_uri, str):
         table = try_get_deltatable(table_or_uri)
-        table_uri = table_or_uri
+        table_uri = str(Path(table_or_uri).absolute())
     else:
         table = table_or_uri
-        table_uri = table_uri = table._table.table_uri()
+        table_uri = table._table.table_uri()
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
 

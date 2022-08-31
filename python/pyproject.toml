@@ -7,7 +7,7 @@ name = "deltalake"
 description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
 license = {file = "LICENSE.txt"}
-requires-python = ">=3.6"
+requires-python = ">=3.7"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -16,13 +16,11 @@ classifiers = [
 ]
 dependencies = [
     "pyarrow>=7",
-    'numpy<1.20.0;python_version<="3.6"',
-    'dataclasses;python_version<="3.6"',
+    'typing-extensions;python_version<"3.8"',
 ]
 
 [project.optional-dependencies]
 pandas = [
-    'types-dataclasses;python_version<="3.6"',
     "pandas"
 ]
 devel = [
@@ -36,8 +34,7 @@ devel = [
     "pytest-timeout",
     "sphinx<=4.5",
     "sphinx-rtd-theme",
-    "toml",
-    "typing-extensions"
+    "toml"
 ]
 pyspark = [
     "pyspark",

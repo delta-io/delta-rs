@@ -67,7 +67,7 @@ impl S3Cli {
             ])
             .spawn()
             .expect("aws command is installed");
-        child.wait();
+        child.wait().unwrap();
     }
 
     pub fn rm_recurive(&self, prefix: &str, endpoint: &str) {
@@ -82,7 +82,7 @@ impl S3Cli {
             ])
             .spawn()
             .expect("aws command is installed");
-        child.wait();
+        child.wait().unwrap();
     }
 
     pub fn delete_table(&self, table_name: &str, endpoint: &str) {
@@ -97,7 +97,7 @@ impl S3Cli {
             ])
             .spawn()
             .expect("aws command is installed");
-        child.wait();
+        child.wait().unwrap();
     }
 
     pub fn create_table(
@@ -125,7 +125,7 @@ impl S3Cli {
             ])
             .spawn()
             .expect("aws command is installed");
-        child.wait();
+        child.wait().unwrap();
     }
 }
 

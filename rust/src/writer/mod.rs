@@ -2,6 +2,8 @@
 // TODO
 // - consider file size when writing parquet files
 // - handle writer version
+#![cfg(all(feature = "arrow", feature = "parquet"))]
+
 pub mod json;
 pub mod record_batch;
 mod stats;
@@ -12,7 +14,7 @@ pub mod utils;
 use crate::{
     action::{Action, Add, ColumnCountStat, Stats},
     delta::DeltaTable,
-    DeltaDataTypeVersion, DeltaTableError, StorageError, UriError,
+    DeltaDataTypeVersion, DeltaTableError,
 };
 use arrow::{datatypes::SchemaRef, datatypes::*, error::ArrowError};
 use async_trait::async_trait;
@@ -62,22 +64,6 @@ pub enum DeltaWriterError {
     StatsSerializationFailed {
         /// The stats object that failed serialization.
         stats: Stats,
-    },
-
-    /// Invalid table paths was specified for the delta table.
-    #[error("Invalid table path: {}", .source)]
-    UriError {
-        /// The wrapped [`UriError`].
-        #[from]
-        source: UriError,
-    },
-
-    /// deltalake storage backend returned an error.
-    #[error("Storage interaction failed: {source}")]
-    Storage {
-        /// The wrapped [`StorageError`]
-        #[from]
-        source: StorageError,
     },
 
     /// underlying object store returned an error.

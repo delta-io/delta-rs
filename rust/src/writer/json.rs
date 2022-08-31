@@ -7,8 +7,9 @@ use super::{
     },
     DeltaWriter, DeltaWriterError,
 };
+use crate::builder::DeltaTableBuilder;
 use crate::{action::Add, DeltaTable, DeltaTableMetaData, Schema};
-use crate::{object_store::DeltaObjectStore, writer::utils::ShareableBuffer};
+use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
 use arrow::{
     datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
     record_batch::*,
@@ -184,7 +185,9 @@ impl JsonWriter {
         partition_columns: Option<Vec<String>>,
         storage_options: Option<HashMap<String, String>>,
     ) -> Result<Self, DeltaWriterError> {
-        let storage = DeltaObjectStore::try_new_with_options(&table_uri, storage_options)?;
+        let storage = DeltaTableBuilder::from_uri(&table_uri)
+            .with_storage_options(storage_options.unwrap_or_default())
+            .build_storage()?;
 
         // Initialize writer properties for the underlying arrow writer
         let writer_properties = WriterProperties::builder()
@@ -193,7 +196,7 @@ impl JsonWriter {
             .build();
 
         Ok(Self {
-            storage: Arc::new(storage),
+            storage,
             arrow_schema_ref: schema,
             writer_properties,
             partition_columns: partition_columns.unwrap_or_default(),
@@ -435,7 +438,6 @@ fn extract_partition_values(
 
 #[cfg(test)]
 mod tests {
-
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::DeltaWriter;
     use crate::writer::JsonWriter;
@@ -461,7 +463,7 @@ mod tests {
         )
         .unwrap();
 
-        let data = json!(
+        let data = serde_json::json!(
             {
                 "id" : "A",
                 "value": "test",
