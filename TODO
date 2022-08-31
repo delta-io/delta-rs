@@ -1,3 +1,0 @@
-* handle commitInfo action
-* use list api to find transaction logs to apply
-* prefetch log content in parallel
