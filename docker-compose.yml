@@ -24,17 +24,3 @@ services:
     image: mcr.microsoft.com/azure-storage/azurite
     ports:
       - 10000:10000
-
-  # setup-localstack:
-  #   image: localstack/localstack:0.14.4
-  #   depends_on:
-  #     - localstack
-  #   entrypoint: "/bin/bash"
-  #   command:
-  #     - /setup_localstack.sh
-  #   volumes:
-  #     - "./build/setup_localstack.sh:/setup_localstack.sh"
-  #     - "./rust/tests/data/golden:/data/golden"
-  #     - "./rust/tests/data/simple_table:/data/simple_table"
-  #     - "./rust/tests/data/simple_commit:/data/simple_commit"
-  #     - "./rust/tests/data/concurrent_workers:/data/concurrent_workers"
