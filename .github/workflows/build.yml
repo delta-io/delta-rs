@@ -103,11 +103,13 @@ jobs:
         AWS_ACCESS_KEY_ID: test
         AWS_SECRET_ACCESS_KEY: test
         AWS_ENDPOINT_URL: http://localstack:4566
+        AWS_STORAGE_ALLOW_HTTP: "1"
         EC2_METADATA_ENDPOINT: http://ec2-metadata:1338
         GOOGLE_BASE_URL: https://fake-gcs:4443
         GOOGLE_ENDPOINT_URL: https://fake-gcs:4443/storage/v1/b
         GOOGLE_USE_EMULATOR: "1"
         AZURE_USE_EMULATOR: "1"
+        AZURE_STORAGE_ALLOW_HTTP: "1"
         AZURITE_BLOB_STORAGE_URL: "http://azurite:10000"
         OBJECT_STORE_BUCKET: test-bucket
         AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;"

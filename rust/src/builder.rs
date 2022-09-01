@@ -537,6 +537,8 @@ pub mod s3_storage_options {
     /// creating an instance of [crate::storage::s3::S3StorageOptions].
     /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
     pub const AWS_ROLE_SESSION_NAME: &str = "AWS_ROLE_SESSION_NAME";
+    /// Allow http connections - mainly useful for integration tests
+    pub const AWS_STORAGE_ALLOW_HTTP: &str = "AWS_STORAGE_ALLOW_HTTP";
 
     /// The list of option keys owned by the S3 module.
     /// Option keys not contained in this list will be added to the `extra_opts`
@@ -565,10 +567,12 @@ pub mod s3_storage_options {
 pub fn get_s3_builder_from_options(
     options: HashMap<String, String>,
 ) -> (AmazonS3Builder, S3StorageOptions) {
-    let s3_options = S3StorageOptions::from_map(options);
-
     let mut builder = AmazonS3Builder::new();
+    if let Some(_emulator) = str_option(&options, s3_storage_options::AWS_STORAGE_ALLOW_HTTP) {
+        builder = builder.with_allow_http(true);
+    }
 
+    let s3_options = S3StorageOptions::from_map(options);
     if let Some(endpoint) = &s3_options.endpoint_url {
         builder = builder.with_endpoint(endpoint);
     }
@@ -606,6 +610,8 @@ pub mod azure_storage_options {
     pub const AZURE_STORAGE_TENANT_ID: &str = "AZURE_STORAGE_TENANT_ID";
     /// Connect to a Azurite storage emulator instance
     pub const AZURE_STORAGE_USE_EMULATOR: &str = "AZURE_STORAGE_USE_EMULATOR";
+    /// Allow http connections - mainly useful for integration tests
+    pub const AZURE_STORAGE_ALLOW_HTTP: &str = "AZURE_STORAGE_ALLOW_HTTP";
 }
 
 /// Generate a new MicrosoftAzureBuilder instance from a map of options
@@ -631,6 +637,9 @@ pub fn get_azure_builder_from_options(options: HashMap<String, String>) -> Micro
     if let Some(_emulator) = str_option(&options, azure_storage_options::AZURE_STORAGE_USE_EMULATOR)
     {
         builder = builder.with_use_emulator(true).with_allow_http(true);
+    }
+    if let Some(_emulator) = str_option(&options, azure_storage_options::AZURE_STORAGE_ALLOW_HTTP) {
+        builder = builder.with_allow_http(true);
     }
     builder
 }

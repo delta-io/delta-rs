@@ -99,28 +99,8 @@ impl IntegrationContext {
     }
 
     pub async fn load_table(&self, table: TestTables) -> TestResult {
-        match self.integration {
-            StorageIntegration::Amazon => {
-                s3_cli::upload_table(table.as_path().as_str(), &self.uri_for_table(table))?;
-            }
-            StorageIntegration::Microsoft => {
-                let uri = format!("{}/{}", self.bucket, table.as_name());
-                az_cli::upload_table(&table.as_path(), &uri)?;
-            }
-            StorageIntegration::Local => {
-                let mut options = CopyOptions::new();
-                options.content_only = true;
-                let dest_path = self.tmp_dir.path().join(&table.as_name());
-                std::fs::create_dir_all(&dest_path)?;
-                copy(&table.as_path(), &dest_path, &options)?;
-            }
-            StorageIntegration::Google => {
-                let from = table.as_path().as_str().to_owned();
-                let to = self.uri_for_table(table);
-                copy_table(from, None, to, None).await?;
-            }
-        };
-        Ok(())
+        let name = table.as_name();
+        self.load_table_with_name(table, name).await
     }
 
     pub async fn load_table_with_name(
@@ -129,16 +109,6 @@ impl IntegrationContext {
         name: impl AsRef<str>,
     ) -> TestResult {
         match self.integration {
-            StorageIntegration::Amazon => {
-                s3_cli::upload_table(
-                    table.as_path().as_str(),
-                    &format!("{}/{}", self.root_uri(), name.as_ref()),
-                )?;
-            }
-            StorageIntegration::Microsoft => {
-                let uri = format!("{}/{}", self.bucket, name.as_ref());
-                az_cli::upload_table(&table.as_path(), &uri)?;
-            }
             StorageIntegration::Local => {
                 let mut options = CopyOptions::new();
                 options.content_only = true;
@@ -146,7 +116,7 @@ impl IntegrationContext {
                 std::fs::create_dir_all(&dest_path)?;
                 copy(&table.as_path(), &dest_path, &options)?;
             }
-            StorageIntegration::Google => {
+            _ => {
                 let from = table.as_path().as_str().to_owned();
                 let to = format!("{}/{}", self.root_uri(), name.as_ref());
                 copy_table(from, None, to, None).await?;
@@ -264,7 +234,7 @@ fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
 pub mod az_cli {
     use super::set_env_if_not_set;
     use crate::builder::azure_storage_options;
-    use std::process::{Command, ExitStatus, Stdio};
+    use std::process::{Command, ExitStatus};
 
     /// Create a new bucket
     pub fn create_container(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
@@ -308,15 +278,6 @@ pub mod az_cli {
             "AZURE_STORAGE_CONNECTION_STRING",
             "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;"
         );
-    }
-
-    pub fn upload_table(src: &str, dst: &str) -> std::io::Result<ExitStatus> {
-        let mut child = Command::new("az")
-            .args(["storage", "blob", "upload-batch", "-d", dst, "-s", src])
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("az command is installed");
-        child.wait()
     }
 }
 
@@ -379,25 +340,6 @@ pub mod s3_cli {
         set_env_if_not_set("DYNAMO_LOCK_TABLE_NAME", "test_table");
         set_env_if_not_set("DYNAMO_LOCK_REFRESH_PERIOD_MILLIS", "100");
         set_env_if_not_set("DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS", "100");
-    }
-
-    pub fn upload_table(src: &str, dst: &str) -> std::io::Result<ExitStatus> {
-        let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
-            .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
-        let mut child = Command::new("aws")
-            .args([
-                "s3",
-                "sync",
-                src,
-                dst,
-                "--delete",
-                "--endpoint-url",
-                &endpoint,
-            ])
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("aws command is installed");
-        child.wait()
     }
 
     pub fn create_lock_table() -> std::io::Result<ExitStatus> {
