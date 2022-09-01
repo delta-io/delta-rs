@@ -29,13 +29,20 @@ async fn test_commit_tables_azure() -> TestResult {
     Ok(commit_tables(StorageIntegration::Microsoft).await?)
 }
 
+#[cfg(feature = "gcs")]
+#[tokio::test]
+#[serial]
+async fn test_commit_tables_gcp() -> TestResult {
+    Ok(commit_tables(StorageIntegration::Google).await?)
+}
+
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 #[tokio::test]
 #[serial]
 async fn test_two_commits_s3_fails_with_no_lock() -> TestResult {
     std::env::set_var("AWS_S3_LOCKING_PROVIDER", "none  ");
     let context = IntegrationContext::new(StorageIntegration::Amazon)?;
-    context.load_table(TestTables::SimpleCommit)?;
+    context.load_table(TestTables::SimpleCommit).await?;
     let table_uri = context.uri_for_table(TestTables::SimpleCommit);
 
     let result = test_two_commits(&table_uri).await;
@@ -50,11 +57,15 @@ async fn test_two_commits_s3_fails_with_no_lock() -> TestResult {
 async fn commit_tables(storage: StorageIntegration) -> TestResult {
     let context = IntegrationContext::new(storage)?;
 
-    context.load_table_with_name(TestTables::SimpleCommit, "simple_commit_1")?;
+    context
+        .load_table_with_name(TestTables::SimpleCommit, "simple_commit_1")
+        .await?;
     let table_uri = context.uri_for_table(TestTables::Custom("simple_commit_1".into()));
     test_two_commits(&table_uri).await?;
 
-    context.load_table_with_name(TestTables::SimpleCommit, "simple_commit_2")?;
+    context
+        .load_table_with_name(TestTables::SimpleCommit, "simple_commit_2")
+        .await?;
     let table_uri = context.uri_for_table(TestTables::Custom("simple_commit_2".into()));
     test_commit_version_succeeds_if_version_does_not_exist(&table_uri).await?;
 
