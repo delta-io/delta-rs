@@ -30,8 +30,9 @@ async fn test_read_tables_aws() -> TestResult {
 }
 
 async fn read_tables(storage: StorageIntegration) -> TestResult {
-    let context =
-        IntegrationContext::new_with_tables(storage, [TestTables::Simple, TestTables::Golden])?;
+    let context = IntegrationContext::new(storage)?;
+    context.load_table(TestTables::Simple).await?;
+    context.load_table(TestTables::Golden).await?;
 
     read_simple_table(&context).await?;
     read_simple_table_with_version(&context).await?;

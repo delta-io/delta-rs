@@ -75,10 +75,10 @@ jobs:
   integration_test:
     runs-on: ubuntu-latest
     services:
-      # fake-gcs:
-      #   image: fsouza/fake-gcs-server
-      #   ports:
-      #     - 4443:4443
+      fake-gcs:
+        image: fsouza/fake-gcs-server
+        ports:
+          - 4443:4443
       localstack:
         image: localstack/localstack:0.14.4
         ports:
@@ -104,6 +104,7 @@ jobs:
         AWS_SECRET_ACCESS_KEY: test
         AWS_ENDPOINT_URL: http://localstack:4566
         EC2_METADATA_ENDPOINT: http://ec2-metadata:1338
+        GOOGLE_BASE_URL: https://fake-gcs:4443
         GOOGLE_ENDPOINT_URL: https://fake-gcs:4443/storage/v1/b
         GOOGLE_USE_EMULATOR: "1"
         AZURE_USE_EMULATOR: "1"
@@ -114,17 +115,13 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
-      # - name: Configure Fake GCS Server (GCP emulation)
-      #   run: |
-      #     curl --insecure -v -X POST --data-binary '{"name":"test-bucket"}' -H "Content-Type: application/json" "https://fake-gcs:4443/storage/v1/b"
-      #     echo '{"gcs_base_url": "https://fake-gcs:4443", "disable_oauth": true, "client_email": "", "private_key": ""}' > "$GOOGLE_SERVICE_ACCOUNT"
-      - name: Setup LocalStack (AWS emulation)
+      - name: Install AWS cli
         run: |
           cd /tmp
           curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
           unzip awscliv2.zip
           ./aws/install
-      - name: Configure Azurite (Azure emulation)
+      - name: Install Azure cli
         # the magical connection string is from
         # https://docs.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#http-connection-strings
         run: |
@@ -141,7 +138,7 @@ jobs:
 
       - name: Run tests
         run: |
-          cargo test --features integration_test,azure,s3,datafusion-ext
+          cargo test --features integration_test,azure,s3,gcs,datafusion-ext
 
   paruqet2_test:
     runs-on: ubuntu-latest

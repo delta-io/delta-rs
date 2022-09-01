@@ -28,8 +28,16 @@ async fn test_datafusion_azure() -> TestResult {
     Ok(test_datafusion(StorageIntegration::Microsoft).await?)
 }
 
+#[cfg(feature = "gcs")]
+#[tokio::test]
+#[serial]
+async fn test_datafusion_gcp() -> TestResult {
+    Ok(test_datafusion(StorageIntegration::Google).await?)
+}
+
 async fn test_datafusion(storage: StorageIntegration) -> TestResult {
-    let context = IntegrationContext::new_with_tables(storage, [TestTables::Simple])?;
+    let context = IntegrationContext::new(storage)?;
+    context.load_table(TestTables::Simple).await?;
 
     simple_query(&context).await?;
 

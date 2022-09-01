@@ -650,24 +650,15 @@ pub mod gcp_storage_options {
 #[cfg(feature = "gcs")]
 pub fn get_gcp_builder_from_options(options: HashMap<String, String>) -> GoogleCloudStorageBuilder {
     let mut builder = GoogleCloudStorageBuilder::new();
-
-    if let Some(account) = str_option(&options, gcp_storage_options::SERVICE_ACCOUNT) {
+    if let Some(account) = str_option(&options, gcp_storage_options::GOOGLE_SERVICE_ACCOUNT) {
+        builder = builder.with_service_account_path(account);
+    } else if let Some(account) = str_option(&options, gcp_storage_options::SERVICE_ACCOUNT) {
         builder = builder.with_service_account_path(account);
     }
 
-    // TODO (roeap) We need either the option to insecure requests, or allow http connections
-    // to fake gcs, neither option is exposed by object store right now.
-    // #[cfg(test)]
-    // if let Ok(use_emulator) = std::env::var("GOOGLE_USE_EMULATOR") {
-    //     use reqwest::Client;
-    //     builder = builder.with_client(
-    //         // ignore HTTPS errors in tests so we can use fake-gcs server
-    //         Client::builder()
-    //             .danger_accept_invalid_certs(true)
-    //             .build()
-    //             .expect("Error creating http client for testing"),
-    //     );
-    // }
+    if std::env::var("GOOGLE_USE_EMULATOR").is_ok() {
+        builder = builder.with_use_emulator(true);
+    }
 
     builder
 }

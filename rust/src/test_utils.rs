@@ -1,5 +1,6 @@
 #![allow(dead_code, missing_docs)]
 use crate::builder::gcp_storage_options;
+use crate::storage::utils::copy_table;
 use crate::DeltaTableBuilder;
 use chrono::Utc;
 use fs_extra::dir::{copy, CopyOptions};
@@ -78,17 +79,6 @@ impl IntegrationContext {
         })
     }
 
-    pub fn new_with_tables(
-        integration: StorageIntegration,
-        tables: impl IntoIterator<Item = TestTables>,
-    ) -> Result<Self, Box<dyn std::error::Error + 'static>> {
-        let context = Self::new(integration)?;
-        for table in tables {
-            context.load_table(table)?;
-        }
-        Ok(context)
-    }
-
     /// Get a a reference to the root object store
     pub fn object_store(&self) -> Arc<DynObjectStore> {
         self.store.clone()
@@ -108,7 +98,7 @@ impl IntegrationContext {
         format!("{}/{}", self.root_uri(), table.as_name())
     }
 
-    pub fn load_table(&self, table: TestTables) -> TestResult {
+    pub async fn load_table(&self, table: TestTables) -> TestResult {
         match self.integration {
             StorageIntegration::Amazon => {
                 s3_cli::upload_table(table.as_path().as_str(), &self.uri_for_table(table))?;
@@ -124,12 +114,20 @@ impl IntegrationContext {
                 std::fs::create_dir_all(&dest_path)?;
                 copy(&table.as_path(), &dest_path, &options)?;
             }
-            StorageIntegration::Google => todo!(),
+            StorageIntegration::Google => {
+                let from = table.as_path().as_str().to_owned();
+                let to = self.uri_for_table(table);
+                copy_table(from, None, to, None).await?;
+            }
         };
         Ok(())
     }
 
-    pub fn load_table_with_name(&self, table: TestTables, name: impl AsRef<str>) -> TestResult {
+    pub async fn load_table_with_name(
+        &self,
+        table: TestTables,
+        name: impl AsRef<str>,
+    ) -> TestResult {
         match self.integration {
             StorageIntegration::Amazon => {
                 s3_cli::upload_table(
@@ -148,7 +146,11 @@ impl IntegrationContext {
                 std::fs::create_dir_all(&dest_path)?;
                 copy(&table.as_path(), &dest_path, &options)?;
             }
-            StorageIntegration::Google => todo!(),
+            StorageIntegration::Google => {
+                let from = table.as_path().as_str().to_owned();
+                let to = format!("{}/{}", self.root_uri(), name.as_ref());
+                copy_table(from, None, to, None).await?;
+            }
         };
         Ok(())
     }
@@ -464,13 +466,13 @@ pub mod gs_cli {
                 "-X",
                 "POST",
                 "--data-binary",
-                &format!("'{}'", &serde_json::to_string(&payload)?),
+                &serde_json::to_string(&payload)?,
                 "-H",
                 "Content-Type: application/json",
                 &endpoint,
             ])
             .spawn()
-            .expect("az command is installed");
+            .expect("curl command is installed");
         child.wait()
     }
 
@@ -491,7 +493,7 @@ pub mod gs_cli {
                 &endpoint,
             ])
             .spawn()
-            .expect("az command is installed");
+            .expect("curl command is installed");
         child.wait()
     }
 

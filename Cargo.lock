@@ -1707,7 +1707,7 @@ dependencies = [
 [[package]]
 name = "object_store"
 version = "0.4.0"
-source = "git+https://github.com/apache/arrow-rs?rev=86446ea88b6fc3e11b47aeedb9eb24f4d69b2f13#86446ea88b6fc3e11b47aeedb9eb24f4d69b2f13"
+source = "git+https://github.com/roeap/arrow-rs?rev=5f5675417e9c690140bed2b8d601bf32dd11e9cd#5f5675417e9c690140bed2b8d601bf32dd11e9cd"
 dependencies = [
  "async-trait",
  "base64",
