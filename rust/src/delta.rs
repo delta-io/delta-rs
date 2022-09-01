@@ -1395,7 +1395,7 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Erro
 
 /// Creates and loads a DeltaTable from the given path with current metadata.
 /// Infers the storage backend to use from the scheme in the given table path.
-pub async fn open_table(table_uri: &str) -> Result<DeltaTable, DeltaTableError> {
+pub async fn open_table(table_uri: impl AsRef<str>) -> Result<DeltaTable, DeltaTableError> {
     let table = DeltaTableBuilder::from_uri(table_uri).load().await?;
     Ok(table)
 }
@@ -1403,7 +1403,7 @@ pub async fn open_table(table_uri: &str) -> Result<DeltaTable, DeltaTableError> 
 /// Creates a DeltaTable from the given path and loads it with the metadata from the given version.
 /// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table_with_version(
-    table_uri: &str,
+    table_uri: impl AsRef<str>,
     version: DeltaDataTypeVersion,
 ) -> Result<DeltaTable, DeltaTableError> {
     let table = DeltaTableBuilder::from_uri(table_uri)
@@ -1416,7 +1416,10 @@ pub async fn open_table_with_version(
 /// Creates a DeltaTable from the given path.
 /// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
 /// Infers the storage backend to use from the scheme in the given table path.
-pub async fn open_table_with_ds(table_uri: &str, ds: &str) -> Result<DeltaTable, DeltaTableError> {
+pub async fn open_table_with_ds(
+    table_uri: impl AsRef<str>,
+    ds: impl AsRef<str>,
+) -> Result<DeltaTable, DeltaTableError> {
     let table = DeltaTableBuilder::from_uri(table_uri)
         .with_datestring(ds)?
         .load()
