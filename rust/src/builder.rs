@@ -20,6 +20,14 @@ use object_store::azure::MicrosoftAzureBuilder;
 #[cfg(feature = "gcs")]
 use object_store::gcp::GoogleCloudStorageBuilder;
 
+#[cfg(any(
+    feature = "azure",
+    feature = "s3",
+    feature = "s3-rustls",
+    feature = "gcs"
+))]
+const TRUTHY: [&str; 3] = ["TRUE", "1", "OK"];
+
 /// possible version specifications for loading a delta table
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeltaVersion {
@@ -568,8 +576,10 @@ pub fn get_s3_builder_from_options(
     options: HashMap<String, String>,
 ) -> (AmazonS3Builder, S3StorageOptions) {
     let mut builder = AmazonS3Builder::new();
-    if let Some(_emulator) = str_option(&options, s3_storage_options::AWS_STORAGE_ALLOW_HTTP) {
-        builder = builder.with_allow_http(true);
+    if let Some(val) = str_option(&options, s3_storage_options::AWS_STORAGE_ALLOW_HTTP) {
+        if TRUTHY.contains(&val.to_uppercase().as_str()) {
+            builder = builder.with_allow_http(true);
+        }
     }
 
     let s3_options = S3StorageOptions::from_map(options);
@@ -634,12 +644,15 @@ pub fn get_azure_builder_from_options(options: HashMap<String, String>) -> Micro
     ) {
         builder = builder.with_client_secret_authorization(client_id, client_secret, tenant_id);
     }
-    if let Some(_emulator) = str_option(&options, azure_storage_options::AZURE_STORAGE_USE_EMULATOR)
-    {
-        builder = builder.with_use_emulator(true).with_allow_http(true);
+    if let Some(val) = str_option(&options, azure_storage_options::AZURE_STORAGE_USE_EMULATOR) {
+        if TRUTHY.contains(&val.to_uppercase().as_str()) {
+            builder = builder.with_use_emulator(true).with_allow_http(true);
+        }
     }
-    if let Some(_emulator) = str_option(&options, azure_storage_options::AZURE_STORAGE_ALLOW_HTTP) {
-        builder = builder.with_allow_http(true);
+    if let Some(val) = str_option(&options, azure_storage_options::AZURE_STORAGE_ALLOW_HTTP) {
+        if TRUTHY.contains(&val.to_uppercase().as_str()) {
+            builder = builder.with_allow_http(true);
+        }
     }
     builder
 }
@@ -665,8 +678,10 @@ pub fn get_gcp_builder_from_options(options: HashMap<String, String>) -> GoogleC
         builder = builder.with_service_account_path(account);
     }
 
-    if std::env::var("GOOGLE_USE_EMULATOR").is_ok() {
-        builder = builder.with_use_emulator(true);
+    if let Ok(val) = std::env::var("GOOGLE_USE_EMULATOR") {
+        if TRUTHY.contains(&val.to_uppercase().as_str()) {
+            builder = builder.with_use_emulator(true);
+        }
     }
 
     builder
