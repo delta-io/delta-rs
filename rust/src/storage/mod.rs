@@ -1,13 +1,13 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
 pub mod file;
+pub mod utils;
+
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 pub mod s3;
 
 use crate::builder::StorageUrl;
 use bytes::Bytes;
-#[cfg(feature = "datafusion-ext")]
-use datafusion::datasource::object_store::ObjectStoreUrl;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
 use object_store::{
@@ -18,6 +18,9 @@ use object_store::{
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
+
+#[cfg(feature = "datafusion-ext")]
+use datafusion::datasource::object_store::ObjectStoreUrl;
 
 lazy_static! {
     static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");

@@ -1,5 +1,6 @@
 #![allow(dead_code, missing_docs)]
 use crate::builder::gcp_storage_options;
+use crate::storage::utils::copy_table;
 use crate::DeltaTableBuilder;
 use chrono::Utc;
 use fs_extra::dir::{copy, CopyOptions};
@@ -78,17 +79,6 @@ impl IntegrationContext {
         })
     }
 
-    pub fn new_with_tables(
-        integration: StorageIntegration,
-        tables: impl IntoIterator<Item = TestTables>,
-    ) -> Result<Self, Box<dyn std::error::Error + 'static>> {
-        let context = Self::new(integration)?;
-        for table in tables {
-            context.load_table(table)?;
-        }
-        Ok(context)
-    }
-
     /// Get a a reference to the root object store
     pub fn object_store(&self) -> Arc<DynObjectStore> {
         self.store.clone()
@@ -108,39 +98,17 @@ impl IntegrationContext {
         format!("{}/{}", self.root_uri(), table.as_name())
     }
 
-    pub fn load_table(&self, table: TestTables) -> TestResult {
-        match self.integration {
-            StorageIntegration::Amazon => {
-                s3_cli::upload_table(table.as_path().as_str(), &self.uri_for_table(table))?;
-            }
-            StorageIntegration::Microsoft => {
-                let uri = format!("{}/{}", self.bucket, table.as_name());
-                az_cli::upload_table(&table.as_path(), &uri)?;
-            }
-            StorageIntegration::Local => {
-                let mut options = CopyOptions::new();
-                options.content_only = true;
-                let dest_path = self.tmp_dir.path().join(&table.as_name());
-                std::fs::create_dir_all(&dest_path)?;
-                copy(&table.as_path(), &dest_path, &options)?;
-            }
-            StorageIntegration::Google => todo!(),
-        };
-        Ok(())
+    pub async fn load_table(&self, table: TestTables) -> TestResult {
+        let name = table.as_name();
+        self.load_table_with_name(table, name).await
     }
 
-    pub fn load_table_with_name(&self, table: TestTables, name: impl AsRef<str>) -> TestResult {
+    pub async fn load_table_with_name(
+        &self,
+        table: TestTables,
+        name: impl AsRef<str>,
+    ) -> TestResult {
         match self.integration {
-            StorageIntegration::Amazon => {
-                s3_cli::upload_table(
-                    table.as_path().as_str(),
-                    &format!("{}/{}", self.root_uri(), name.as_ref()),
-                )?;
-            }
-            StorageIntegration::Microsoft => {
-                let uri = format!("{}/{}", self.bucket, name.as_ref());
-                az_cli::upload_table(&table.as_path(), &uri)?;
-            }
             StorageIntegration::Local => {
                 let mut options = CopyOptions::new();
                 options.content_only = true;
@@ -148,7 +116,11 @@ impl IntegrationContext {
                 std::fs::create_dir_all(&dest_path)?;
                 copy(&table.as_path(), &dest_path, &options)?;
             }
-            StorageIntegration::Google => todo!(),
+            _ => {
+                let from = table.as_path().as_str().to_owned();
+                let to = format!("{}/{}", self.root_uri(), name.as_ref());
+                copy_table(from, None, to, None).await?;
+            }
         };
         Ok(())
     }
@@ -262,7 +234,7 @@ fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
 pub mod az_cli {
     use super::set_env_if_not_set;
     use crate::builder::azure_storage_options;
-    use std::process::{Command, ExitStatus, Stdio};
+    use std::process::{Command, ExitStatus};
 
     /// Create a new bucket
     pub fn create_container(container_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
@@ -306,15 +278,6 @@ pub mod az_cli {
             "AZURE_STORAGE_CONNECTION_STRING",
             "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;"
         );
-    }
-
-    pub fn upload_table(src: &str, dst: &str) -> std::io::Result<ExitStatus> {
-        let mut child = Command::new("az")
-            .args(["storage", "blob", "upload-batch", "-d", dst, "-s", src])
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("az command is installed");
-        child.wait()
     }
 }
 
@@ -377,25 +340,6 @@ pub mod s3_cli {
         set_env_if_not_set("DYNAMO_LOCK_TABLE_NAME", "test_table");
         set_env_if_not_set("DYNAMO_LOCK_REFRESH_PERIOD_MILLIS", "100");
         set_env_if_not_set("DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS", "100");
-    }
-
-    pub fn upload_table(src: &str, dst: &str) -> std::io::Result<ExitStatus> {
-        let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
-            .expect("variable AWS_ENDPOINT_URL must be set to connect to S3 emulator");
-        let mut child = Command::new("aws")
-            .args([
-                "s3",
-                "sync",
-                src,
-                dst,
-                "--delete",
-                "--endpoint-url",
-                &endpoint,
-            ])
-            .stdout(Stdio::null())
-            .spawn()
-            .expect("aws command is installed");
-        child.wait()
     }
 
     pub fn create_lock_table() -> std::io::Result<ExitStatus> {
@@ -464,13 +408,13 @@ pub mod gs_cli {
                 "-X",
                 "POST",
                 "--data-binary",
-                &format!("'{}'", &serde_json::to_string(&payload)?),
+                &serde_json::to_string(&payload)?,
                 "-H",
                 "Content-Type: application/json",
                 &endpoint,
             ])
             .spawn()
-            .expect("az command is installed");
+            .expect("curl command is installed");
         child.wait()
     }
 
@@ -491,7 +435,7 @@ pub mod gs_cli {
                 &endpoint,
             ])
             .spawn()
-            .expect("az command is installed");
+            .expect("curl command is installed");
         child.wait()
     }
 

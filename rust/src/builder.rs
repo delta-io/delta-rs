@@ -20,6 +20,14 @@ use object_store::azure::MicrosoftAzureBuilder;
 #[cfg(feature = "gcs")]
 use object_store::gcp::GoogleCloudStorageBuilder;
 
+#[cfg(any(
+    feature = "azure",
+    feature = "s3",
+    feature = "s3-rustls",
+    feature = "gcs"
+))]
+const TRUTHY: [&str; 3] = ["TRUE", "1", "OK"];
+
 /// possible version specifications for loading a delta table
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum DeltaVersion {
@@ -537,6 +545,8 @@ pub mod s3_storage_options {
     /// creating an instance of [crate::storage::s3::S3StorageOptions].
     /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
     pub const AWS_ROLE_SESSION_NAME: &str = "AWS_ROLE_SESSION_NAME";
+    /// Allow http connections - mainly useful for integration tests
+    pub const AWS_STORAGE_ALLOW_HTTP: &str = "AWS_STORAGE_ALLOW_HTTP";
 
     /// The list of option keys owned by the S3 module.
     /// Option keys not contained in this list will be added to the `extra_opts`
@@ -565,10 +575,14 @@ pub mod s3_storage_options {
 pub fn get_s3_builder_from_options(
     options: HashMap<String, String>,
 ) -> (AmazonS3Builder, S3StorageOptions) {
-    let s3_options = S3StorageOptions::from_map(options);
-
     let mut builder = AmazonS3Builder::new();
+    if let Some(val) = str_option(&options, s3_storage_options::AWS_STORAGE_ALLOW_HTTP) {
+        if TRUTHY.contains(&val.to_uppercase().as_str()) {
+            builder = builder.with_allow_http(true);
+        }
+    }
 
+    let s3_options = S3StorageOptions::from_map(options);
     if let Some(endpoint) = &s3_options.endpoint_url {
         builder = builder.with_endpoint(endpoint);
     }
@@ -606,6 +620,8 @@ pub mod azure_storage_options {
     pub const AZURE_STORAGE_TENANT_ID: &str = "AZURE_STORAGE_TENANT_ID";
     /// Connect to a Azurite storage emulator instance
     pub const AZURE_STORAGE_USE_EMULATOR: &str = "AZURE_STORAGE_USE_EMULATOR";
+    /// Allow http connections - mainly useful for integration tests
+    pub const AZURE_STORAGE_ALLOW_HTTP: &str = "AZURE_STORAGE_ALLOW_HTTP";
 }
 
 /// Generate a new MicrosoftAzureBuilder instance from a map of options
@@ -628,9 +644,15 @@ pub fn get_azure_builder_from_options(options: HashMap<String, String>) -> Micro
     ) {
         builder = builder.with_client_secret_authorization(client_id, client_secret, tenant_id);
     }
-    if let Some(_emulator) = str_option(&options, azure_storage_options::AZURE_STORAGE_USE_EMULATOR)
-    {
-        builder = builder.with_use_emulator(true).with_allow_http(true);
+    if let Some(val) = str_option(&options, azure_storage_options::AZURE_STORAGE_USE_EMULATOR) {
+        if TRUTHY.contains(&val.to_uppercase().as_str()) {
+            builder = builder.with_use_emulator(true).with_allow_http(true);
+        }
+    }
+    if let Some(val) = str_option(&options, azure_storage_options::AZURE_STORAGE_ALLOW_HTTP) {
+        if TRUTHY.contains(&val.to_uppercase().as_str()) {
+            builder = builder.with_allow_http(true);
+        }
     }
     builder
 }
@@ -650,24 +672,17 @@ pub mod gcp_storage_options {
 #[cfg(feature = "gcs")]
 pub fn get_gcp_builder_from_options(options: HashMap<String, String>) -> GoogleCloudStorageBuilder {
     let mut builder = GoogleCloudStorageBuilder::new();
-
-    if let Some(account) = str_option(&options, gcp_storage_options::SERVICE_ACCOUNT) {
+    if let Some(account) = str_option(&options, gcp_storage_options::GOOGLE_SERVICE_ACCOUNT) {
+        builder = builder.with_service_account_path(account);
+    } else if let Some(account) = str_option(&options, gcp_storage_options::SERVICE_ACCOUNT) {
         builder = builder.with_service_account_path(account);
     }
 
-    // TODO (roeap) We need either the option to insecure requests, or allow http connections
-    // to fake gcs, neither option is exposed by object store right now.
-    // #[cfg(test)]
-    // if let Ok(use_emulator) = std::env::var("GOOGLE_USE_EMULATOR") {
-    //     use reqwest::Client;
-    //     builder = builder.with_client(
-    //         // ignore HTTPS errors in tests so we can use fake-gcs server
-    //         Client::builder()
-    //             .danger_accept_invalid_certs(true)
-    //             .build()
-    //             .expect("Error creating http client for testing"),
-    //     );
-    // }
+    if let Ok(val) = std::env::var("GOOGLE_USE_EMULATOR") {
+        if TRUTHY.contains(&val.to_uppercase().as_str()) {
+            builder = builder.with_use_emulator(true);
+        }
+    }
 
     builder
 }

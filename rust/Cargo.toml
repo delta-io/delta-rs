@@ -53,7 +53,6 @@ optional = true
 
 [features]
 default = ["arrow", "parquet"]
-rust-dataframe-ext = []
 datafusion-ext = ["datafusion"]
 azure = ["object_store/azure"]
 gcs = ["object_store/gcp"]
