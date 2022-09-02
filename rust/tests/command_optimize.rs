@@ -1,7 +1,5 @@
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 mod optimize {
-    extern crate deltalake;
-
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow::{
         array::{Int32Array, StringArray},
@@ -9,7 +7,7 @@ mod optimize {
         record_batch::RecordBatch,
     };
     use deltalake::optimize::{MetricDetails, Metrics};
-    use deltalake::writer::DeltaWriterError;
+    use deltalake::DeltaTableError;
     use deltalake::{
         action,
         action::Remove,
@@ -216,7 +214,7 @@ mod optimize {
         writer: &mut RecordBatchWriter,
         mut table: &mut DeltaTable,
         batch: RecordBatch,
-    ) -> Result<(), DeltaWriterError> {
+    ) -> Result<(), DeltaTableError> {
         writer.write(batch).await?;
         writer.flush_and_commit(&mut table).await?;
         Ok(())

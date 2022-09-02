@@ -8,6 +8,7 @@ use super::{
     DeltaWriter, DeltaWriterError,
 };
 use crate::builder::DeltaTableBuilder;
+use crate::DeltaTableError;
 use crate::{action::Add, DeltaTable, DeltaTableMetaData, Schema};
 use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
 use arrow::{
@@ -184,7 +185,7 @@ impl JsonWriter {
         schema: ArrowSchemaRef,
         partition_columns: Option<Vec<String>>,
         storage_options: Option<HashMap<String, String>>,
-    ) -> Result<Self, DeltaWriterError> {
+    ) -> Result<Self, DeltaTableError> {
         let storage = DeltaTableBuilder::from_uri(&table_uri)
             .with_storage_options(storage_options.unwrap_or_default())
             .build_storage()?;
@@ -205,7 +206,7 @@ impl JsonWriter {
     }
 
     /// Creates a JsonWriter to write to the given table
-    pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaWriterError> {
+    pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.get_metadata()?;
         let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
@@ -233,7 +234,7 @@ impl JsonWriter {
     pub fn update_schema(
         &mut self,
         metadata: &DeltaTableMetaData,
-    ) -> Result<bool, DeltaWriterError> {
+    ) -> Result<bool, DeltaTableError> {
         let schema: ArrowSchema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
 
         let schema_updated = self.arrow_schema_ref.as_ref() != &schema
@@ -311,7 +312,7 @@ impl JsonWriter {
 #[async_trait::async_trait]
 impl DeltaWriter<Vec<Value>> for JsonWriter {
     /// Writes the given values to internal parquet buffers for each represented partition.
-    async fn write(&mut self, values: Vec<Value>) -> Result<(), DeltaWriterError> {
+    async fn write(&mut self, values: Vec<Value>) -> Result<(), DeltaTableError> {
         let mut partial_writes: Vec<(Value, ParquetError)> = Vec::new();
         let arrow_schema = self.arrow_schema();
 
@@ -346,7 +347,8 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
                 return Err(DeltaWriterError::PartialParquetWrite {
                     skipped_values: partial_writes,
                     sample_error: e,
-                });
+                }
+                .into());
             } else {
                 unreachable!()
             }
@@ -356,7 +358,7 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
     }
 
     /// Writes the existing parquet bytes to storage and resets internal state to handle another file.
-    async fn flush(&mut self) -> Result<Vec<Add>, DeltaWriterError> {
+    async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError> {
         let writers = std::mem::take(&mut self.arrow_writers);
         let mut actions = Vec::new();
 

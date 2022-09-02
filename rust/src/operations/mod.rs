@@ -6,7 +6,7 @@ use crate::{
     builder::DeltaTableBuilder,
     open_table,
     operations::{create::CreateCommand, transaction::DeltaTransactionPlan, write::WriteCommand},
-    writer::{record_batch::divide_by_partition_values, utils::PartitionPath, DeltaWriterError},
+    writer::{record_batch::divide_by_partition_values, utils::PartitionPath},
     DeltaTable, DeltaTableError, DeltaTableMetaData,
 };
 use arrow::{datatypes::SchemaRef as ArrowSchemaRef, error::ArrowError, record_batch::RecordBatch};
@@ -51,14 +51,6 @@ pub enum DeltaCommandError {
         /// Raw internal DeltaTableError
         #[from]
         source: DeltaTableError,
-    },
-
-    /// Errors occurring inside the DeltaWriter modules
-    #[error("Writer error: {} ({:?})", source, source)]
-    Writer {
-        /// Raw internal DeltaWriterError
-        #[from]
-        source: DeltaWriterError,
     },
 
     /// Error returned when errors occur in Arrow
@@ -202,7 +194,9 @@ impl DeltaCommands {
                 let divided =
                     divide_by_partition_values(schema.clone(), cols.clone(), &batch).unwrap();
                 for part in divided {
-                    let key = PartitionPath::from_hashmap(cols, &part.partition_values)?.into();
+                    let key = PartitionPath::from_hashmap(cols, &part.partition_values)
+                        .map_err(DeltaTableError::from)?
+                        .into();
                     match partitions.get_mut(&key) {
                         Some(batches) => {
                             batches.push(part.record_batch);

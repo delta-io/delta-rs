@@ -84,7 +84,7 @@ pub enum DeltaTableError {
     /// Error returned when reading the checkpoint failed.
     #[cfg(feature = "parquet")]
     #[error("Failed to read checkpoint: {}", .source)]
-    ParquetError {
+    Parquet {
         /// Parquet error details returned when reading the checkpoint failed.
         #[from]
         source: parquet::errors::ParquetError,
@@ -92,7 +92,7 @@ pub enum DeltaTableError {
     /// Error returned when parsing checkpoint parquet using parquet2 crate.
     #[cfg(feature = "parquet2")]
     #[error("Failed to parse parquet: {}", .source)]
-    ParquetError {
+    Parquet {
         /// Parquet error details returned when parsing the checkpoint parquet
         #[from]
         source: parquet2::error::Error,
@@ -100,7 +100,7 @@ pub enum DeltaTableError {
     /// Error returned when converting the schema in Arrow format failed.
     #[cfg(feature = "arrow")]
     #[error("Failed to convert into Arrow schema: {}", .source)]
-    ArrowError {
+    Arrow {
         /// Arrow error details returned when converting the schema in Arrow format failed
         #[from]
         source: arrow::error::ArrowError,

@@ -51,10 +51,10 @@ use crate::DeltaTableError;
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
         match err {
-            DeltaTableError::ArrowError { source } => DataFusionError::ArrowError(source),
+            DeltaTableError::Arrow { source } => DataFusionError::ArrowError(source),
             DeltaTableError::Io { source } => DataFusionError::IoError(source),
             DeltaTableError::ObjectStore { source } => DataFusionError::ObjectStore(source),
-            DeltaTableError::ParquetError { source } => DataFusionError::ParquetError(source),
+            DeltaTableError::Parquet { source } => DataFusionError::ParquetError(source),
             _ => DataFusionError::External(Box::new(err)),
         }
     }
@@ -63,10 +63,10 @@ impl From<DeltaTableError> for DataFusionError {
 impl From<DataFusionError> for crate::DeltaTableError {
     fn from(err: DataFusionError) -> Self {
         match err {
-            DataFusionError::ArrowError(source) => DeltaTableError::ArrowError { source },
+            DataFusionError::ArrowError(source) => DeltaTableError::Arrow { source },
             DataFusionError::IoError(source) => DeltaTableError::Io { source },
             DataFusionError::ObjectStore(source) => DeltaTableError::ObjectStore { source },
-            DataFusionError::ParquetError(source) => DeltaTableError::ParquetError { source },
+            DataFusionError::ParquetError(source) => DeltaTableError::Parquet { source },
             _ => DeltaTableError::Generic(err.to_string()),
         }
     }

@@ -38,7 +38,7 @@ pub enum ParseError {
     InvalidAction(String),
     /// Error returned when parsing checkpoint parquet using parquet2 crate.
     #[error("Failed to parse parquet: {}", .source)]
-    ParquetError {
+    Parquet {
         /// Parquet error details returned when parsing the checkpoint parquet
         #[from]
         source: parquet2::error::Error,
