@@ -20,6 +20,19 @@ dependencies = [
 ]
 
 [[package]]
+name = "ahash"
+version = "0.8.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "57e6e951cfbb2db8de1828d49073a113a29fd7117b1596caa781a258c7e38d72"
+dependencies = [
+ "cfg-if",
+ "const-random",
+ "getrandom",
+ "once_cell",
+ "version_check",
+]
+
+[[package]]
 name = "aho-corasick"
 version = "0.7.18"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -85,7 +98,7 @@ version = "20.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c72a69495f06c8abb65b76a87be192a26fa724380d1f292d4e558a32afed9989"
 dependencies = [
- "ahash",
+ "ahash 0.7.6",
  "bitflags",
  "chrono",
  "comfy-table",
@@ -100,6 +113,31 @@ dependencies = [
  "multiversion",
  "num",
  "pyo3",
+ "regex",
+ "regex-syntax",
+ "serde",
+ "serde_derive",
+ "serde_json",
+]
+
+[[package]]
+name = "arrow"
+version = "21.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "1fbd23619f19fc6f214b9667eb2e2782f4a7edc407899e3511e634e55662d906"
+dependencies = [
+ "ahash 0.8.0",
+ "bitflags",
+ "chrono",
+ "flatbuffers",
+ "half 2.1.0",
+ "hashbrown",
+ "hex",
+ "indexmap",
+ "lazy_static",
+ "lexical-core",
+ "multiversion",
+ "num",
  "regex",
  "regex-syntax",
  "serde",
@@ -320,6 +358,28 @@ dependencies = [
 ]
 
 [[package]]
+name = "const-random"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "f590d95d011aa80b063ffe3253422ed5aa462af4e9867d43ce8337562bac77c4"
+dependencies = [
+ "const-random-macro",
+ "proc-macro-hack",
+]
+
+[[package]]
+name = "const-random-macro"
+version = "0.1.13"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "615f6e27d000a2bffbc7f2f6a8669179378fa27ee4d0a509e985dfc0a7defb40"
+dependencies = [
+ "getrandom",
+ "lazy_static",
+ "proc-macro-hack",
+ "tiny-keccak",
+]
+
+[[package]]
 name = "constant_time_eq"
 version = "0.1.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -516,8 +576,8 @@ version = "11.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "430b3983c7164cb113f297f45b68a69893c212cb4b80a8aeb6a8069eb93f745e"
 dependencies = [
- "ahash",
- "arrow",
+ "ahash 0.7.6",
+ "arrow 20.0.0",
  "async-trait",
  "bytes",
  "chrono",
@@ -537,7 +597,7 @@ dependencies = [
  "object_store",
  "ordered-float 3.0.0",
  "parking_lot",
- "parquet",
+ "parquet 20.0.0",
  "paste",
  "pin-project-lite",
  "rand 0.8.5",
@@ -556,10 +616,10 @@ version = "11.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "594210b4819cc786d1a3dc7b17ff4f9b0c6ee522bcd0a4a52f80a41fd38d53c4"
 dependencies = [
- "arrow",
+ "arrow 20.0.0",
  "object_store",
  "ordered-float 3.0.0",
- "parquet",
+ "parquet 20.0.0",
  "serde_json",
  "sqlparser",
 ]
@@ -570,8 +630,8 @@ version = "11.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "b91d4a86776ce8f7fe5df34955481d6fe77876dd278bf13098d6a1bdd3c24fb8"
 dependencies = [
- "ahash",
- "arrow",
+ "ahash 0.7.6",
+ "arrow 20.0.0",
  "datafusion-common",
  "sqlparser",
 ]
@@ -582,7 +642,7 @@ version = "11.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "360f86f7dc943ca8e0da39982febac0a0fc0329d7ee58ea046438c9fed6dfec8"
 dependencies = [
- "arrow",
+ "arrow 20.0.0",
  "async-trait",
  "chrono",
  "datafusion-common",
@@ -598,8 +658,8 @@ version = "11.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "a465299f2eeb2741b33777b42f607fe56458e137d0d7b80f69be72e771a48b81"
 dependencies = [
- "ahash",
- "arrow",
+ "ahash 0.7.6",
+ "arrow 20.0.0",
  "blake2",
  "blake3",
  "chrono",
@@ -623,7 +683,7 @@ version = "11.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "959a42a1f35c8fa1b47698df6995ab5ae8477e81c9c42852476666aeac4f80b7"
 dependencies = [
- "arrow",
+ "arrow 20.0.0",
  "datafusion-common",
  "paste",
  "rand 0.8.5",
@@ -635,8 +695,8 @@ version = "11.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c69404e8774fe2c7d64998e94d856f32d3a908f9dc7215ce01e09895f13b4b62"
 dependencies = [
- "ahash",
- "arrow",
+ "ahash 0.7.6",
+ "arrow 20.0.0",
  "datafusion-common",
  "datafusion-expr",
  "hashbrown",
@@ -648,7 +708,7 @@ dependencies = [
 name = "deltalake"
 version = "0.4.1"
 dependencies = [
- "arrow",
+ "arrow 20.0.0",
  "async-trait",
  "bytes",
  "cfg-if",
@@ -668,7 +728,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "object_store",
- "parquet",
+ "parquet 21.0.0",
  "parquet-format",
  "parquet2",
  "percent-encoding",
@@ -1090,7 +1150,7 @@ version = "0.12.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "8a9ee70c43aaf417c914396645a0fa852624801b24ebb7ae78fe8272889ac888"
 dependencies = [
- "ahash",
+ "ahash 0.7.6",
 ]
 
 [[package]]
@@ -1841,8 +1901,8 @@ version = "20.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d0f0af698fcf8d1d9f2971766ebef25821ffe8c39c91837c276dcd97e075d950"
 dependencies = [
- "ahash",
- "arrow",
+ "ahash 0.7.6",
+ "arrow 20.0.0",
  "base64",
  "brotli",
  "byteorder",
@@ -1860,6 +1920,31 @@ dependencies = [
  "snap",
  "thrift",
  "tokio",
+ "zstd",
+]
+
+[[package]]
+name = "parquet"
+version = "21.0.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "48622d42a8d44b030001b9a34e7772c65d44c97ba4522736eaa3ed6479502672"
+dependencies = [
+ "ahash 0.8.0",
+ "arrow 21.0.0",
+ "base64",
+ "brotli",
+ "bytes",
+ "chrono",
+ "flate2",
+ "hashbrown",
+ "lz4",
+ "num",
+ "num-bigint",
+ "parquet-format",
+ "rand 0.8.5",
+ "seq-macro",
+ "snap",
+ "thrift",
  "zstd",
 ]
 
@@ -2024,6 +2109,12 @@ dependencies = [
  "quote",
  "version_check",
 ]
+
+[[package]]
+name = "proc-macro-hack"
+version = "0.5.19"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "dbf0c48bc1d91375ae5c3cd81e3722dff1abcf81a30960240640d223f59fe0e5"
 
 [[package]]
 name = "proc-macro2"
@@ -2915,6 +3006,15 @@ dependencies = [
  "libc",
  "wasi 0.10.0+wasi-snapshot-preview1",
  "winapi",
+]
+
+[[package]]
+name = "tiny-keccak"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "2c9d3793400a45f954c52e73d068316d76b6f4e36977e3fcebb13a2721e80237"
+dependencies = [
+ "crunchy",
 ]
 
 [[package]]
