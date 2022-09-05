@@ -87,6 +87,7 @@ class DeltaTable:
         :param version: version of the DeltaTable
         :param storage_options: a dictionary of the options to use for the storage backend
         """
+        self._storage_options = storage_options
         self._table = RawDeltaTable(
             table_uri, version=version, storage_options=storage_options
         )
@@ -292,7 +293,11 @@ class DeltaTable:
         """
         if not filesystem:
             filesystem = pa_fs.PyFileSystem(
-                DeltaStorageHandler(self._table.table_uri())
+                DeltaStorageHandler(
+                    self._table.table_uri(),
+                    self._storage_options,
+                    self._table.get_py_storage_backend(),
+                )
             )
 
         format = ParquetFileFormat(read_options=parquet_read_options)

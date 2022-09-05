@@ -24,11 +24,12 @@ def get_spark():
             "org.apache.spark.sql.delta.catalog.DeltaCatalog",
         )
     )
-    return delta.configure_spark_with_delta_pip(builder).getOrCreate()
+    return delta.pip_utils.configure_spark_with_delta_pip(builder).getOrCreate()
 
 
 try:
     import delta
+    import delta.pip_utils
     import delta.tables
     import pyspark
 

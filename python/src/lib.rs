@@ -16,7 +16,7 @@ use deltalake::DeltaDataTypeLong;
 use deltalake::DeltaDataTypeTimestamp;
 use deltalake::DeltaTableMetaData;
 use deltalake::DeltaTransactionOptions;
-use deltalake::{ObjectStore, Path, Schema};
+use deltalake::{ObjectStore, Path, Schema, StorageUrl};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::exceptions::PyValueError;
@@ -377,6 +377,13 @@ impl RawDeltaTable {
 
         Ok(())
     }
+
+    pub fn get_py_storage_backend(&self) -> DeltaStorageFsBackend {
+        let object_store = self._table.object_store().storage_backend();
+        DeltaStorageFsBackend {
+            _storage: object_store,
+        }
+    }
 }
 
 fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
@@ -498,8 +505,9 @@ impl DeltaStorageFsBackend {
 #[pymethods]
 impl DeltaStorageFsBackend {
     #[new]
-    fn new(table_uri: &str) -> PyResult<Self> {
+    fn new(table_uri: &str, options: Option<HashMap<String, String>>) -> PyResult<Self> {
         let storage = DeltaTableBuilder::from_uri(table_uri)
+            .with_storage_options(options.unwrap_or_default())
             .build_storage()
             .map_err(PyDeltaTableError::from_raw)?
             .storage_backend();
@@ -511,7 +519,8 @@ impl DeltaStorageFsBackend {
     }
 
     fn head_obj<'py>(&mut self, py: Python<'py>, path: &str) -> PyResult<&'py PyTuple> {
-        let path = Path::from(path);
+        let storage_url = StorageUrl::parse(path).map_err(PyDeltaTableError::from_object_store)?;
+        let path = storage_url.prefix();
         let obj = rt()?
             .block_on(self._storage.head(&path))
             .map_err(PyDeltaTableError::from_object_store)?;
@@ -526,7 +535,8 @@ impl DeltaStorageFsBackend {
     }
 
     fn get_obj<'py>(&mut self, py: Python<'py>, path: &str) -> PyResult<&'py PyBytes> {
-        let path = Path::from(path);
+        let storage_url = StorageUrl::parse(path).map_err(PyDeltaTableError::from_object_store)?;
+        let path = storage_url.prefix();
         let obj = rt()?
             .block_on(self.get_object(&path))
             .map_err(PyDeltaTableError::from_object_store)?;
