@@ -11,8 +11,13 @@ class DeltaStorageHandler(FileSystemHandler):
     DeltaStorageHander is a concrete implementations of a PyArrow FileSystemHandler.
     """
 
-    def __init__(self, table_uri: str) -> None:
-        self._storage = DeltaStorageFsBackend(table_uri)
+    def __init__(
+        self,
+        table_uri: str,
+        options: Optional[Dict[str, str]] = None,
+        backend: Any = None,
+    ) -> None:
+        self._storage = backend or DeltaStorageFsBackend(table_uri, options)
 
     def __eq__(self, other: Any) -> bool:
         return NotImplemented
