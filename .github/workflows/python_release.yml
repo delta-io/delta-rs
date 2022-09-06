@@ -2,7 +2,7 @@ name: Release to PyPI
 
 on:
   push:
-    tags: [ 'python-v*' ]
+    tags: ["python-v*"]
 
 defaults:
   run:
@@ -30,12 +30,11 @@ jobs:
       fail-fast: false
       matrix:
         os:
-          - macOS-10.15
           - macOS-11
           - windows-2019
         include:
           - target: x86_64-apple-darwin
-            os: macOS-10.15
+            os: macOS-11
           - target: aarch64-apple-darwin
             os: macOS-11
           - target: x86_64-pc-windows-msvc
@@ -58,64 +57,65 @@ jobs:
     name: PyPI release manylinux
     runs-on: ubuntu-latest
     steps:
-        - uses: actions/checkout@v3
+      - uses: actions/checkout@v3
 
-        - name: Publish manylinux to pypi x86_64 (with sdist)
-          uses: messense/maturin-action@main
-          env:
-            MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-          with:
-            target: x86_64-unknown-linux-gnu
-            command: publish
-            args: -m python/Cargo.toml
+      - name: Publish manylinux to pypi x86_64 (with sdist)
+        uses: messense/maturin-action@main
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        with:
+          target: x86_64-unknown-linux-gnu
+          command: publish
+          args: -m python/Cargo.toml
 
-        - name: Publish manylinux to pypi aarch64 (without sdist)
-          uses: messense/maturin-action@main
-          env:
-            MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
-          with:
-            target: aarch64-unknown-linux-gnu
-            command: publish
-            args: -m python/Cargo.toml --no-sdist
+      - name: Publish manylinux to pypi aarch64 (without sdist)
+        uses: messense/maturin-action@main
+        env:
+          MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+        with:
+          target: aarch64-unknown-linux-gnu
+          command: publish
+          args: -m python/Cargo.toml --no-sdist
 
   release-docs:
-    needs: [validate-release-tag, release-pypi-manylinux, release-pypi-mac-windows]
+    needs:
+      [validate-release-tag, release-pypi-manylinux, release-pypi-mac-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
     steps:
-    - uses: actions/checkout@v2
-      with:
-        fetch-depth: 0  # fetch full history for gh-pages branch checkout
-    - name: Install minimal stable with clippy and rustfmt
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: default
-        toolchain: stable
-        override: true
+      - uses: actions/checkout@v2
+        with:
+          fetch-depth: 0 # fetch full history for gh-pages branch checkout
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: stable
+          override: true
 
-    - name: Build and install deltalake
-      run: |
-        make install MATURIN_EXTRA_ARGS="--manylinux off"
+      - name: Build and install deltalake
+        run: |
+          make install MATURIN_EXTRA_ARGS="--manylinux off"
 
-    - name: Build Sphinx documentation
-      run: |
-        make build-documentation
-        mv docs/build ~/build
+      - name: Build Sphinx documentation
+        run: |
+          make build-documentation
+          mv docs/build ~/build
 
-        echo "Configuring git..."
-        git config --global user.name 'Github Action'
-        git config --global user.email 'deltars@users.noreply.github.com'
-        git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GITHUB_REPOSITORY
+          echo "Configuring git..."
+          git config --global user.name 'Github Action'
+          git config --global user.email 'deltars@users.noreply.github.com'
+          git remote set-url origin https://x-access-token:${{ secrets.GITHUB_TOKEN }}@github.com/$GITHUB_REPOSITORY
 
-        echo "Commit to gh-pages branch..."
-        git reset --hard HEAD
-        git clean -d -fx .
-        git checkout gh-pages
-        cd ..
-        cp -avr ~/build/html/.  ./python
-        PUSHED_TAG=${GITHUB_REF##*/}
-        git status
-        git add ./python
-        git commit -m "doc update for tag `${PUSHED_TAG}`"
-        git push origin gh-pages
+          echo "Commit to gh-pages branch..."
+          git reset --hard HEAD
+          git clean -d -fx .
+          git checkout gh-pages
+          cd ..
+          cp -avr ~/build/html/.  ./python
+          PUSHED_TAG=${GITHUB_REF##*/}
+          git status
+          git add ./python
+          git commit -m "doc update for tag `${PUSHED_TAG}`"
+          git push origin gh-pages
