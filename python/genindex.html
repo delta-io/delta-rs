@@ -27,7 +27,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.5.8
+                0.6.1
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -73,10 +73,13 @@
  <a href="#A"><strong>A</strong></a>
  | <a href="#C"><strong>C</strong></a>
  | <a href="#D"><strong>D</strong></a>
+ | <a href="#E"><strong>E</strong></a>
  | <a href="#F"><strong>F</strong></a>
  | <a href="#G"><strong>G</strong></a>
  | <a href="#H"><strong>H</strong></a>
  | <a href="#I"><strong>I</strong></a>
+ | <a href="#J"><strong>J</strong></a>
+ | <a href="#K"><strong>K</strong></a>
  | <a href="#L"><strong>L</strong></a>
  | <a href="#M"><strong>M</strong></a>
  | <a href="#N"><strong>N</strong></a>
@@ -102,10 +105,12 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api_reference.html#deltalake.table.Metadata.configuration">configuration (deltalake.table.Metadata property)</a>
 </li>
-      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.copy_file">copy_file() (deltalake.fs.DeltaStorageHandler method)</a>
+      <li><a href="api_reference.html#deltalake.schema.ArrayType.contains_null">contains_null (deltalake.schema.ArrayType attribute)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.copy_file">copy_file() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
       <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.create_dir">create_dir() (deltalake.fs.DeltaStorageHandler method)</a>
 </li>
       <li><a href="api_reference.html#deltalake.table.Metadata.created_time">created_time (deltalake.table.Metadata property)</a>
@@ -117,8 +122,6 @@
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api_reference.html#deltalake.data_catalog.DataCatalog">DataCatalog (class in deltalake.data_catalog)</a>
-</li>
-      <li><a href="api_reference.html#deltalake.schema.DataType">DataType (class in deltalake.schema)</a>
 </li>
       <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.delete_dir">delete_dir() (deltalake.fs.DeltaStorageHandler method)</a>
 </li>
@@ -145,13 +148,6 @@
 </li>
       </ul></li>
       <li>
-    deltalake.schema
-
-      <ul>
-        <li><a href="api_reference.html#module-deltalake.schema">module</a>
-</li>
-      </ul></li>
-      <li>
     deltalake.table
 
       <ul>
@@ -167,10 +163,20 @@
   </ul></td>
 </tr></table>
 
+<h2 id="E">E</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.schema.ArrayType.element_type">element_type (deltalake.schema.ArrayType attribute)</a>
+</li>
+  </ul></td>
+</tr></table>
+
 <h2 id="F">F</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api_reference.html#deltalake.schema.Field">Field (class in deltalake.schema)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.schema.StructType.fields">fields (deltalake.schema.StructType attribute)</a>
 </li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.file_paths">file_paths() (deltalake.table.DeltaTable method)</a>
 </li>
@@ -178,16 +184,40 @@
 </li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.files">files() (deltalake.table.DeltaTable method)</a>
 </li>
-  </ul></td>
-  <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.files_by_partitions">files_by_partitions() (deltalake.table.DeltaTable method)</a>
 </li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.from_data_catalog">from_data_catalog() (deltalake.table.DeltaTable class method)</a>
 </li>
-      <li><a href="api_reference.html#deltalake.schema.DataType.from_dict">from_dict() (deltalake.schema.DataType class method)</a>
+      <li><a href="api_reference.html#deltalake.schema.ArrayType.from_json">from_json() (deltalake.schema.ArrayType static method)</a>
+
+      <ul>
+        <li><a href="api_reference.html#deltalake.schema.Field.from_json">(deltalake.schema.Field static method)</a>
 </li>
-      <li><a href="api_reference.html#deltalake.schema.Schema.from_json">from_json() (deltalake.schema.Schema class method)</a>
+        <li><a href="api_reference.html#deltalake.schema.MapType.from_json">(deltalake.schema.MapType static method)</a>
 </li>
+        <li><a href="api_reference.html#deltalake.schema.PrimitiveType.from_json">(deltalake.schema.PrimitiveType static method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.Schema.from_json">(deltalake.schema.Schema static method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.StructType.from_json">(deltalake.schema.StructType static method)</a>
+</li>
+      </ul></li>
+  </ul></td>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.schema.ArrayType.from_pyarrow">from_pyarrow() (deltalake.schema.ArrayType static method)</a>
+
+      <ul>
+        <li><a href="api_reference.html#deltalake.schema.Field.from_pyarrow">(deltalake.schema.Field static method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.MapType.from_pyarrow">(deltalake.schema.MapType static method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.PrimitiveType.from_pyarrow">(deltalake.schema.PrimitiveType static method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.Schema.from_pyarrow">(deltalake.schema.Schema static method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.StructType.from_pyarrow">(deltalake.schema.StructType static method)</a>
+</li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
@@ -221,6 +251,22 @@
   </ul></td>
 </tr></table>
 
+<h2 id="J">J</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.schema.Schema.json">json() (deltalake.schema.Schema method)</a>
+</li>
+  </ul></td>
+</tr></table>
+
+<h2 id="K">K</h2>
+<table style="width: 100%" class="indextable genindextable"><tr>
+  <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.schema.MapType.key_type">key_type (deltalake.schema.MapType attribute)</a>
+</li>
+  </ul></td>
+</tr></table>
+
 <h2 id="L">L</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
@@ -240,14 +286,16 @@
 </li>
       <li><a href="api_reference.html#deltalake.table.Metadata">Metadata (class in deltalake.table)</a>
 </li>
+      <li><a href="api_reference.html#deltalake.schema.Field.metadata">metadata (deltalake.schema.Field attribute)</a>
+</li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.metadata">metadata() (deltalake.table.DeltaTable method)</a>
 </li>
       <li><a href="api_reference.html#deltalake.table.ProtocolVersions.min_reader_version">min_reader_version (deltalake.table.ProtocolVersions attribute)</a>
 </li>
-      <li><a href="api_reference.html#deltalake.table.ProtocolVersions.min_writer_version">min_writer_version (deltalake.table.ProtocolVersions attribute)</a>
-</li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.table.ProtocolVersions.min_writer_version">min_writer_version (deltalake.table.ProtocolVersions attribute)</a>
+</li>
       <li>
     module
 
@@ -255,8 +303,6 @@
         <li><a href="api_reference.html#module-deltalake.data_catalog">deltalake.data_catalog</a>
 </li>
         <li><a href="api_reference.html#module-deltalake.fs">deltalake.fs</a>
-</li>
-        <li><a href="api_reference.html#module-deltalake.schema">deltalake.schema</a>
 </li>
         <li><a href="api_reference.html#module-deltalake.table">deltalake.table</a>
 </li>
@@ -269,11 +315,17 @@
 <h2 id="N">N</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="api_reference.html#deltalake.table.Metadata.name">name (deltalake.table.Metadata property)</a>
+      <li><a href="api_reference.html#deltalake.schema.Field.name">name (deltalake.schema.Field attribute)</a>
+
+      <ul>
+        <li><a href="api_reference.html#deltalake.table.Metadata.name">(deltalake.table.Metadata property)</a>
 </li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api_reference.html#deltalake.fs.DeltaStorageHandler.normalize_path">normalize_path() (deltalake.fs.DeltaStorageHandler method)</a>
+</li>
+      <li><a href="api_reference.html#deltalake.schema.Field.nullable">nullable (deltalake.schema.Field attribute)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -299,17 +351,13 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api_reference.html#deltalake.table.Metadata.partition_columns">partition_columns (deltalake.table.Metadata property)</a>
 </li>
-      <li><a href="api_reference.html#deltalake.table.ProtocolVersions">ProtocolVersions (class in deltalake.table)</a>
-</li>
-      <li><a href="api_reference.html#deltalake.schema.pyarrow_datatype_from_dict">pyarrow_datatype_from_dict() (in module deltalake.schema)</a>
+      <li><a href="api_reference.html#deltalake.schema.PrimitiveType">PrimitiveType (class in deltalake.schema)</a>
 </li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
-      <li><a href="api_reference.html#deltalake.schema.pyarrow_field_from_dict">pyarrow_field_from_dict() (in module deltalake.schema)</a>
+      <li><a href="api_reference.html#deltalake.table.ProtocolVersions">ProtocolVersions (class in deltalake.table)</a>
 </li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.pyarrow_schema">pyarrow_schema() (deltalake.table.DeltaTable method)</a>
-</li>
-      <li><a href="api_reference.html#deltalake.schema.pyarrow_schema_from_json">pyarrow_schema_from_json() (in module deltalake.schema)</a>
 </li>
   </ul></td>
 </tr></table>
@@ -331,14 +379,54 @@
 <h2 id="T">T</h2>
 <table style="width: 100%" class="indextable genindextable"><tr>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.schema.ArrayType.to_json">to_json() (deltalake.schema.ArrayType method)</a>
+
+      <ul>
+        <li><a href="api_reference.html#deltalake.schema.Field.to_json">(deltalake.schema.Field method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.MapType.to_json">(deltalake.schema.MapType method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.PrimitiveType.to_json">(deltalake.schema.PrimitiveType method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.Schema.to_json">(deltalake.schema.Schema method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.StructType.to_json">(deltalake.schema.StructType method)</a>
+</li>
+      </ul></li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.to_pandas">to_pandas() (deltalake.table.DeltaTable method)</a>
 </li>
+      <li><a href="api_reference.html#deltalake.schema.ArrayType.to_pyarrow">to_pyarrow() (deltalake.schema.ArrayType method)</a>
+
+      <ul>
+        <li><a href="api_reference.html#deltalake.schema.Field.to_pyarrow">(deltalake.schema.Field method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.MapType.to_pyarrow">(deltalake.schema.MapType method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.PrimitiveType.to_pyarrow">(deltalake.schema.PrimitiveType method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.Schema.to_pyarrow">(deltalake.schema.Schema method)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.StructType.to_pyarrow">(deltalake.schema.StructType method)</a>
+</li>
+      </ul></li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.to_pyarrow_dataset">to_pyarrow_dataset() (deltalake.table.DeltaTable method)</a>
 </li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.to_pyarrow_table">to_pyarrow_table() (deltalake.table.DeltaTable method)</a>
 </li>
+      <li><a href="api_reference.html#deltalake.schema.ArrayType.type">type (deltalake.schema.ArrayType attribute)</a>
+
+      <ul>
+        <li><a href="api_reference.html#deltalake.schema.Field.type">(deltalake.schema.Field attribute)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.MapType.type">(deltalake.schema.MapType attribute)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.PrimitiveType.type">(deltalake.schema.PrimitiveType attribute)</a>
+</li>
+        <li><a href="api_reference.html#deltalake.schema.StructType.type">(deltalake.schema.StructType attribute)</a>
+</li>
+      </ul></li>
   </ul></td>
 </tr></table>
 
@@ -355,8 +443,12 @@
   <td style="width: 33%; vertical-align: top;"><ul>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.vacuum">vacuum() (deltalake.table.DeltaTable method)</a>
 </li>
+      <li><a href="api_reference.html#deltalake.schema.MapType.value_contains_null">value_contains_null (deltalake.schema.MapType attribute)</a>
+</li>
   </ul></td>
   <td style="width: 33%; vertical-align: top;"><ul>
+      <li><a href="api_reference.html#deltalake.schema.MapType.value_type">value_type (deltalake.schema.MapType attribute)</a>
+</li>
       <li><a href="api_reference.html#deltalake.table.DeltaTable.version">version() (deltalake.table.DeltaTable method)</a>
 </li>
   </ul></td>

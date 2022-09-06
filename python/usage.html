@@ -30,7 +30,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.5.8
+                0.6.1
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -111,11 +111,34 @@ of the table, and other metadata such as creation time.</p>
 </pre></div>
 </div>
 <p>Depending on your storage backend, you could use the <code class="docutils literal notranslate"><span class="pre">storage_options</span></code> parameter to provide some configuration.
-Currently only AWS S3 is supported.</p>
+Configuration is defined for specific backends - <a class="reference external" href="https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L423-L491">s3 options</a>, <a class="reference external" href="https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L524-L539">azure options</a>.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;AWS_ACCESS_KEY_ID&quot;</span><span class="p">:</span> <span class="s2">&quot;THE_AWS_ACCESS_KEY_ID&quot;</span><span class="p">,</span> <span class="s2">&quot;AWS_SECRET_ACCESS_KEY&quot;</span><span class="p">:</span><span class="s2">&quot;THE_AWS_SECRET_ACCESS_KEY&quot;</span><span class="p">}</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.2.0&quot;</span><span class="p">,</span> <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">)</span>
 </pre></div>
 </div>
+<p>The configuration can also be provided via the environment, and the basic service provider is derived from the URL
+being used. We try to support many of the well-known formats to identify basic service properties.</p>
+<p><strong>S3</strong>:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>s3://&lt;bucket&gt;/&lt;path&gt;</p></li>
+<li><p>s3a://&lt;bucket&gt;/&lt;path&gt;</p></li>
+</ul>
+</div></blockquote>
+<p><strong>Azure</strong>:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>az://&lt;container&gt;/&lt;path&gt;</p></li>
+<li><p>adl://&lt;container&gt;/&lt;path&gt;</p></li>
+<li><p>abfs://&lt;container&gt;/&lt;path&gt;</p></li>
+</ul>
+</div></blockquote>
+<p><strong>GCS</strong>:</p>
+<blockquote>
+<div><ul class="simple">
+<li><p>gs://&lt;bucket&gt;/&lt;path&gt;</p></li>
+</ul>
+</div></blockquote>
 <p>Alternatively, if you have a data catalog you can load it by reference to a
 database and table name. Currently only AWS Glue is supported.</p>
 <p>For AWS Glue catalog, use AWS environment variables to authenticate.</p>
@@ -129,14 +152,6 @@ database and table name. Currently only AWS Glue is supported.</p>
 <span class="go">{&#39;id&#39;: [5, 7, 9, 5, 6, 7, 8, 9]}</span>
 </pre></div>
 </div>
-<p>Besides local filesystems, the following backends are supported:</p>
-<ul class="simple">
-<li><p>AWS S3, detected by the prefix <code class="docutils literal notranslate"><span class="pre">s3://</span></code>. AWS credentials can be specified using
-environment variables in the same way as the CLI.</p></li>
-<li><p>Azure Data Lake Storage Gen 2, detected by the prefix <code class="docutils literal notranslate"><span class="pre">adls2://</span></code>. Note that
-<a class="reference external" href="https://github.com/delta-io/delta-rs/blob/main/docs/ADLSGen2-HOWTO.md">specific instructions</a> must be followed to setup the Azure Storage Account.</p></li>
-<li><p>Google Cloud Storage, detected by the prefix <code class="docutils literal notranslate"><span class="pre">gs://</span></code>.</p></li>
-</ul>
 <section id="time-travel">
 <h3>Time Travel<a class="headerlink" href="#time-travel" title="Permalink to this headline"></a></h3>
 <p>To load previous table states, you can provide the version number you wish to
@@ -147,7 +162,7 @@ load:</p>
 <p>Once you’ve loaded a table, you can also change versions using either a version
 number or datetime string:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">load_version</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">load_with_timestamp</span><span class="p">(</span><span class="s2">&quot;2021-11-04 00:05:23.283+00:00&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">load_with_datetime</span><span class="p">(</span><span class="s2">&quot;2021-11-04 00:05:23.283+00:00&quot;</span><span class="p">)</span>
 </pre></div>
 </div>
 <div class="admonition warning">
@@ -189,17 +204,17 @@ the schema, while the latter represents the schema the table will be loaded into
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">schema</span><span class="p">()</span>
-<span class="go">Schema(Field(id: DataType(long) nullable(True) metadata({})))</span>
+<span class="go">Schema([Field(id, PrimitiveType(&quot;long&quot;), nullable=True)])</span>
 </pre></div>
 </div>
 <p>These schemas have a JSON representation that can be retrieved. To reconstruct
 from json, use <a class="reference internal" href="api_reference.html#deltalake.schema.Schema.from_json" title="deltalake.schema.Schema.from_json"><code class="xref py py-meth docutils literal notranslate"><span class="pre">deltalake.schema.Schema.from_json()</span></code></a>.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">schema</span><span class="p">()</span><span class="o">.</span><span class="n">json</span><span class="p">()</span>
-<span class="go">{&#39;type&#39;: &#39;struct&#39;, &#39;fields&#39;: [{&#39;name&#39;: &#39;id&#39;, &#39;type&#39;: &#39;long&#39;, &#39;nullable&#39;: True, &#39;metadata&#39;: {}}]}</span>
+<span class="go">&#39;{&quot;type&quot;:&quot;struct&quot;,&quot;fields&quot;:[{&quot;name&quot;:&quot;id&quot;,&quot;type&quot;:&quot;long&quot;,&quot;nullable&quot;:true,&quot;metadata&quot;:{}}]}&#39;</span>
 </pre></div>
 </div>
-<p>Use <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.pyarrow_schema" title="deltalake.table.DeltaTable.pyarrow_schema"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.pyarrow_schema()</span></code></a> to retrieve the PyArrow schema:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">pyarrow_schema</span><span class="p">()</span>
+<p>Use <a class="reference internal" href="api_reference.html#deltalake.schema.Schema.to_pyarrow" title="deltalake.schema.Schema.to_pyarrow"><code class="xref py py-meth docutils literal notranslate"><span class="pre">deltalake.schema.Schema.to_pyarrow()</span></code></a> to retrieve the PyArrow schema:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">schema</span><span class="p">()</span><span class="o">.</span><span class="n">to_pyarrow</span><span class="p">()</span>
 <span class="go">id: int64</span>
 </pre></div>
 </div>
@@ -245,7 +260,7 @@ having a portion loaded at any given time.</p>
 support filtering partitions and selecting particular columns.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.8.0-partitioned&quot;</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">dt</span><span class="o">.</span><span class="n">pyarrow_schema</span><span class="p">()</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">schema</span><span class="p">()</span><span class="o">.</span><span class="n">to_pyarrow</span><span class="p">()</span>
 <span class="go">value: string</span>
 <span class="go">year: string</span>
 <span class="go">month: string</span>
@@ -382,7 +397,7 @@ DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p><a class="reference internal" href="api_reference.html#deltalake.write_deltalake" title="deltalake.write_deltalake"><code class="xref py py-func docutils literal notranslate"><span class="pre">write_deltalake()</span></code></a> accepts a Pandas DataFrame, but will convert it to
-a Arrow table before writing. See caveats in <a class="reference external" href="https://arrow.apache.org/docs/python/pandas.html" title="(in Apache Arrow v8.0.0)"><span>Pandas Integration</span></a>.</p>
+a Arrow table before writing. See caveats in <a class="reference external" href="https://arrow.apache.org/docs/python/pandas.html" title="(in Apache Arrow v9.0.0)"><span>Pandas Integration</span></a>.</p>
 </div>
 <p>By default, writes create a new table and error if it already exists. This is
 controlled by the <code class="docutils literal notranslate"><span class="pre">mode</span></code> parameter, which mirrors the behavior of Spark’s
