@@ -31,7 +31,6 @@ jobs:
         os:
           - ubuntu-latest
           - macos-11
-          - macOS-10.15
           - windows-latest
     runs-on: ${{ matrix.os }}
     steps:
@@ -57,7 +56,6 @@ jobs:
         os:
           - ubuntu-latest
           - macos-11
-          - macOS-10.15
           - windows-latest
     runs-on: ${{ matrix.os }}
     steps:
