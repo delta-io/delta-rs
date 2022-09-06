@@ -39,18 +39,18 @@ Configuration is defined for specific backends - `s3 options`_, `azure options`_
 The configuration can also be provided via the environment, and the basic service provider is derived from the URL
 being used. We try to support many of the well-known formats to identify basic service properties.
 
-__S3__:
+**S3**:
 
   * s3://<bucket>/<path>
   * s3a://<bucket>/<path>
 
-__Azure__:
+**Azure**:
 
   * az://<container>/<path>
   * adl://<container>/<path>
   * abfs://<container>/<path>
 
-__GCS__:
+**GCS**:
 
   * gs://<bucket>/<path>
 
@@ -70,18 +70,8 @@ For AWS Glue catalog, use AWS environment variables to authenticate.
     >>> dt.to_pyarrow_table().to_pydict()
     {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
 
-Besides local filesystems, the following backends are supported:
-
-* AWS S3, detected by the prefix ``s3://``. AWS credentials can be specified using
-  environment variables in the same way as the CLI.
-* Azure Data Lake Storage Gen 2, detected by the prefix ``adls2://``. Note that
-  `specific instructions`_ must be followed to setup the Azure Storage Account.
-* Google Cloud Storage, detected by the prefix ``gs://``.
-
-.. _`specific instructions`: https://github.com/delta-io/delta-rs/blob/main/docs/ADLSGen2-HOWTO.md
 .. _`s3 options`: https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L423-L491
 .. _`azure options`: https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L524-L539
-
 
 Time Travel
 ~~~~~~~~~~~
