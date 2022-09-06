@@ -366,6 +366,11 @@ impl StorageUrl {
         self.url.host_str()
     }
 
+    /// Returns the path prefix relative to location root
+    pub fn prefix(&self) -> Path {
+        self.prefix.clone()
+    }
+
     /// Returns this [`StorageUrl`] as a string
     pub fn as_str(&self) -> &str {
         self.as_ref()
