@@ -161,7 +161,7 @@ class DeltaFileSystemHandler:
         """Delete a directory and its contents, recursively."""
     def delete_file(self, path: str) -> None:
         """Delete a file."""
-    def equals(self, other) -> bool: ...
+    def equals(self, other: Any) -> bool: ...
     def delete_dir_contents(
         self, path: str, *, accept_root_dir: bool = False, missing_dir_ok: bool = False
     ) -> None:

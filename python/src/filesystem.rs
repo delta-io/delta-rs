@@ -36,7 +36,7 @@ impl DeltaFileSystemHandler {
     fn normalize_path(&self, path: String) -> PyResult<String> {
         let suffix = if path.ends_with('/') { "/" } else { "" };
         let path = Path::parse(path).unwrap();
-        Ok(format!("{}{}", path.to_string(), suffix))
+        Ok(format!("{}{}", path, suffix))
     }
 
     fn copy_file(&self, src: String, dest: String, py: Python) -> PyResult<()> {

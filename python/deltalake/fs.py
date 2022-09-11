@@ -15,7 +15,7 @@ class DeltaStorageHandler(FileSystemHandler):
         self,
         table_uri: str,
         options: Optional[Dict[str, str]] = None,
-        backend: Optional[DeltaFileSystemHandler] = None,
+        backend: Optional[Any] = None,
     ) -> None:
         self._storage = backend or DeltaFileSystemHandler(table_uri, options)
 
@@ -71,7 +71,7 @@ class DeltaStorageHandler(FileSystemHandler):
         :param path: The path of the new directory.
         :param recursive: Create nested directories as well.
         """
-        return self._storage.create_dir(path, recursive)
+        self._storage.create_dir(path, recursive)
 
     def delete_dir(self, path: str) -> None:
         """
@@ -79,7 +79,7 @@ class DeltaStorageHandler(FileSystemHandler):
 
         :param path: The path of the directory to be deleted.
         """
-        return self._storage.delete_dir(path)
+        self._storage.delete_dir(path)
 
     def delete_dir_contents(self, path: str) -> None:
         """
@@ -89,7 +89,7 @@ class DeltaStorageHandler(FileSystemHandler):
 
         :param path: The path of the directory to be deleted.
         """
-        return self._storage.delete_dir_contents(path)
+        self._storage.delete_dir_contents(path)
 
     def delete_root_dir_contents(self) -> None:
         """
@@ -97,7 +97,7 @@ class DeltaStorageHandler(FileSystemHandler):
 
         Like delete_dir_contents, but for the root directory (path is empty or “/”)
         """
-        return self._storage.delete_root_dir_contents()
+        self._storage.delete_root_dir_contents()
 
     def delete_file(self, path: str) -> None:
         """
@@ -105,7 +105,7 @@ class DeltaStorageHandler(FileSystemHandler):
 
         :param path: The path of the file to be deleted.
         """
-        return self._storage.delete_file(path)
+        self._storage.delete_file(path)
 
     def move(self, src: str, dest: str) -> None:
         """
@@ -118,7 +118,7 @@ class DeltaStorageHandler(FileSystemHandler):
         :param src: The path of the file or the directory to be moved.
         :param dest: The destination path where the file or directory is moved to.
         """
-        return self._storage.move_file(src, dest)
+        self._storage.move_file(src, dest)
 
     def copy_file(self, src: str, dest: str) -> None:
         """
@@ -130,7 +130,7 @@ class DeltaStorageHandler(FileSystemHandler):
         :param src: The path of the file to be copied from.
         :param dest: The destination path where the file is copied to.
         """
-        return self._storage.copy_file(src, dest)
+        self._storage.copy_file(src, dest)
 
     def open_input_stream(self, path: str) -> pa.NativeFile:
         """
