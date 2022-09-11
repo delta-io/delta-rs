@@ -1,9 +1,9 @@
 from typing import Any, Dict, List, Optional
 
 import pyarrow as pa
-from pyarrow.fs import FileInfo, FileSelector, FileSystemHandler, FileType
+from pyarrow.fs import FileInfo, FileSelector, FileSystemHandler
 
-from .deltalake import DeltaStorageFsBackend
+from .deltalake import DeltaFileSystemHandler
 
 
 class DeltaStorageHandler(FileSystemHandler):
@@ -15,9 +15,9 @@ class DeltaStorageHandler(FileSystemHandler):
         self,
         table_uri: str,
         options: Optional[Dict[str, str]] = None,
-        backend: Any = None,
+        backend: Optional[DeltaFileSystemHandler] = None,
     ) -> None:
-        self._storage = backend or DeltaStorageFsBackend(table_uri, options)
+        self._storage = backend or DeltaFileSystemHandler(table_uri, options)
 
     def __eq__(self, other: Any) -> bool:
         return NotImplemented
@@ -31,7 +31,7 @@ class DeltaStorageHandler(FileSystemHandler):
 
         :return: The filesystem’s type name.
         """
-        return NotImplemented
+        return self._storage.get_type_name()
 
     def normalize_path(self, path: str) -> str:
         """
@@ -49,13 +49,7 @@ class DeltaStorageHandler(FileSystemHandler):
         :param paths: List of file paths
         :return: list of file info objects
         """
-        infos = []
-        for path in paths:
-            path, secs, size = self._storage.head_obj(path)
-            infos.append(
-                FileInfo(path, type=FileType.File, mtime=float(secs), size=size)
-            )
-        return infos
+        return self._storage.get_file_info(paths)
 
     def get_file_info_selector(self, selector: FileSelector) -> List[FileInfo]:
         """
@@ -64,9 +58,11 @@ class DeltaStorageHandler(FileSystemHandler):
         :param selector: FileSelector object
         :return: list of file info objects
         """
-        raise NotImplementedError
+        return self._storage.get_file_info_selector(
+            selector.base_dir, selector.allow_not_found, selector.recursive
+        )
 
-    def create_dir(self, path: str, *, recursive: bool = True) -> None:
+    def create_dir(self, path: str, recursive: bool = True) -> None:
         """
         Create a directory and subdirectories.
 
@@ -75,7 +71,7 @@ class DeltaStorageHandler(FileSystemHandler):
         :param path: The path of the new directory.
         :param recursive: Create nested directories as well.
         """
-        raise NotImplementedError
+        return self._storage.create_dir(path, recursive)
 
     def delete_dir(self, path: str) -> None:
         """
@@ -83,7 +79,7 @@ class DeltaStorageHandler(FileSystemHandler):
 
         :param path: The path of the directory to be deleted.
         """
-        raise NotImplementedError
+        return self._storage.delete_dir(path)
 
     def delete_dir_contents(self, path: str) -> None:
         """
@@ -93,15 +89,15 @@ class DeltaStorageHandler(FileSystemHandler):
 
         :param path: The path of the directory to be deleted.
         """
-        raise NotImplementedError
+        return self._storage.delete_dir_contents(path)
 
     def delete_root_dir_contents(self) -> None:
         """
-        Delete a directory’s contents, recursively.
+        Delete a directory's contents, recursively.
 
         Like delete_dir_contents, but for the root directory (path is empty or “/”)
         """
-        raise NotImplementedError
+        return self._storage.delete_root_dir_contents()
 
     def delete_file(self, path: str) -> None:
         """
@@ -109,7 +105,7 @@ class DeltaStorageHandler(FileSystemHandler):
 
         :param path: The path of the file to be deleted.
         """
-        raise NotImplementedError
+        return self._storage.delete_file(path)
 
     def move(self, src: str, dest: str) -> None:
         """
@@ -122,7 +118,7 @@ class DeltaStorageHandler(FileSystemHandler):
         :param src: The path of the file or the directory to be moved.
         :param dest: The destination path where the file or directory is moved to.
         """
-        raise NotImplementedError
+        return self._storage.move_file(src, dest)
 
     def copy_file(self, src: str, dest: str) -> None:
         """
@@ -134,7 +130,7 @@ class DeltaStorageHandler(FileSystemHandler):
         :param src: The path of the file to be copied from.
         :param dest: The destination path where the file is copied to.
         """
-        raise NotImplementedError
+        return self._storage.copy_file(src, dest)
 
     def open_input_stream(self, path: str) -> pa.NativeFile:
         """
@@ -143,8 +139,7 @@ class DeltaStorageHandler(FileSystemHandler):
         :param source: The source to open for reading.
         :return:  NativeFile
         """
-        raw = self._storage.get_obj(path)
-        return pa.BufferReader(pa.py_buffer(raw))
+        return pa.PythonFile(self._storage.open_input_file(path))
 
     def open_input_file(self, path: str) -> pa.NativeFile:
         """
@@ -153,8 +148,7 @@ class DeltaStorageHandler(FileSystemHandler):
         :param source: The source to open for reading.
         :return:  NativeFile
         """
-        raw = self._storage.get_obj(path)
-        return pa.BufferReader(pa.py_buffer(raw))
+        return pa.PythonFile(self._storage.open_input_file(path))
 
     def open_output_stream(
         self, path: str, metadata: Optional[Dict[str, Any]] = None
@@ -168,7 +162,7 @@ class DeltaStorageHandler(FileSystemHandler):
         :param metadata: If not None, a mapping of string keys to string values.
         :return:  NativeFile
         """
-        raise NotImplementedError
+        return pa.PythonFile(self._storage.open_output_stream(path, metadata))
 
     def open_append_stream(
         self, path: str, metadata: Optional[Dict[str, Any]] = None

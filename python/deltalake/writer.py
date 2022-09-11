@@ -86,6 +86,7 @@ def write_deltalake(
     description: Optional[str] = None,
     configuration: Optional[Mapping[str, Optional[str]]] = None,
     overwrite_schema: bool = False,
+    storage_options: Optional[Dict[str, str]] = None,
 ) -> None:
     """Write to a Delta Lake table (Experimental)
 
@@ -103,7 +104,8 @@ def write_deltalake(
     :param partition_by: List of columns to partition the table by. Only required
         when creating a new table.
     :param filesystem: Optional filesystem to pass to PyArrow. If not provided will
-        be inferred from uri.
+        be inferred from uri. The file system has to be rooted in the table root.
+        Use the pyarrow.fs.SubTreeFileSystem, to adopt the root of pyarrow file systems.
     :param mode: How to handle existing data. Default is to error if table already exists.
         If 'append', will add new data.
         If 'overwrite', will replace table with new data.
@@ -131,6 +133,7 @@ def write_deltalake(
     :param description: User-provided description for this table.
     :param configuration: A map containing configuration options for the metadata action.
     :param overwrite_schema: If True, allows updating the schema of the table.
+    :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
     """
     if _has_pandas and isinstance(data, pd.DataFrame):
         data = pa.Table.from_pandas(data)
@@ -152,10 +155,8 @@ def write_deltalake(
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
-    # TODO: Pass through filesystem once it is complete
-    # if filesystem is None:
-    #    filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri))
-    fs = DeltaStorageHandler(table_uri)
+    if filesystem is None:
+        filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
     if table:  # already exists
         if schema != table.schema().to_pyarrow() and not (
@@ -198,14 +199,14 @@ def write_deltalake(
     add_actions: List[AddAction] = []
 
     def visitor(written_file: Any) -> None:
-        path, partition_values = get_partitions_from_path(table_uri, written_file.path)
+        path, partition_values = get_partitions_from_path(written_file.path)
         stats = get_file_stats_from_metadata(written_file.metadata)
 
         # PyArrow added support for written_file.size in 9.0.0
         if PYARROW_MAJOR_VERSION >= 9:
             size = written_file.size
         else:
-            size = fs.get_file_info([os.path.join(table_uri, path)])[0].size
+            size = filesystem.get_file_info([path])[0].size
 
         add_actions.append(
             AddAction(
@@ -220,7 +221,7 @@ def write_deltalake(
 
     ds.write_dataset(
         data,
-        base_dir=table_uri,
+        base_dir="/",
         basename_template=f"{current_version + 1}-{uuid.uuid4()}-{{i}}.parquet",
         format="parquet",
         partitioning=partitioning,
@@ -233,6 +234,7 @@ def write_deltalake(
         max_rows_per_file=max_rows_per_file,
         min_rows_per_group=min_rows_per_group,
         max_rows_per_group=max_rows_per_group,
+        filesystem=filesystem,
     )
 
     if table is None:
@@ -295,10 +297,7 @@ def try_get_deltatable(table_uri: str) -> Optional[DeltaTable]:
         return None
 
 
-def get_partitions_from_path(
-    base_path: str, path: str
-) -> Tuple[str, Dict[str, Optional[str]]]:
-    path = path.split(base_path, maxsplit=1)[1]
+def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
     if path[0] == "/":
         path = path[1:]
     parts = path.split("/")
