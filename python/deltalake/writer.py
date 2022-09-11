@@ -156,7 +156,18 @@ def write_deltalake(
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
     if filesystem is None:
-        filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+        if table is not None:
+            filesystem = pa_fs.PyFileSystem(
+                DeltaStorageHandler(
+                    table._table.table_uri(),
+                    table._storage_options,
+                    table._table.get_py_storage_backend(),
+                )
+            )
+        else:
+            filesystem = pa_fs.PyFileSystem(
+                DeltaStorageHandler(table_uri, storage_options)
+            )
 
     if table:  # already exists
         if schema != table.schema().to_pyarrow() and not (
