@@ -22,7 +22,7 @@
 use crate::action::DeltaOperation;
 use crate::action::{self, Action};
 use crate::writer::utils::PartitionPath;
-use crate::writer::{DeltaWriter, DeltaWriterError, RecordBatchWriter};
+use crate::writer::{DeltaWriter, RecordBatchWriter};
 use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter};
 use log::debug;
 use log::error;
@@ -113,7 +113,7 @@ impl<'a> Optimize<'a> {
     }
 
     /// Perform the optimization. On completion, a summary of how many files were added and removed is returned
-    pub async fn execute(&self, table: &mut DeltaTable) -> Result<Metrics, DeltaWriterError> {
+    pub async fn execute(&self, table: &mut DeltaTable) -> Result<Metrics, DeltaTableError> {
         let plan = create_merge_plan(table, self.filters, (&self.target_size).to_owned())?;
         let metrics = plan.execute(table).await?;
         Ok(metrics)
@@ -198,7 +198,7 @@ pub struct MergePlan {
 
 impl MergePlan {
     /// Peform the operations outlined in the plan.
-    pub async fn execute(self, table: &mut DeltaTable) -> Result<Metrics, DeltaWriterError> {
+    pub async fn execute(self, table: &mut DeltaTable) -> Result<Metrics, DeltaTableError> {
         // Read files into memory and write into memory. Once a file is complete write to underlying storage.
         let mut actions = vec![];
         let mut metrics = self.metrics;
@@ -243,8 +243,7 @@ impl MergePlan {
                     // Ensure we don't deviate from the merge plan which may result in idempotency being violated
                     return Err(DeltaTableError::Generic(
                         "Expected writer to return only one add action".to_owned(),
-                    )
-                    .into());
+                    ));
                 }
                 for mut add in add_actions {
                     add.data_change = false;
@@ -324,7 +323,7 @@ pub fn create_merge_plan<'a>(
     table: &mut DeltaTable,
     filters: &[PartitionFilter<'a, &str>],
     target_size: Option<DeltaDataTypeLong>,
-) -> Result<MergePlan, DeltaWriterError> {
+) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| get_target_file_size(table));
     let mut candidates = HashMap::new();
     let mut operations: HashMap<PartitionPath, PartitionMergePlan> = HashMap::new();

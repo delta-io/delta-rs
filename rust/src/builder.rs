@@ -123,7 +123,7 @@ pub struct DeltaTableBuilder {
 impl DeltaTableBuilder {
     /// Creates `DeltaTableBuilder` from table uri
     pub fn from_uri(table_uri: impl AsRef<str>) -> Self {
-        DeltaTableBuilder {
+        Self {
             options: DeltaTableLoadOptions::new(table_uri.as_ref()),
             storage_options: None,
             allow_http: None,
@@ -149,9 +149,10 @@ impl DeltaTableBuilder {
     }
 
     /// specify the timestamp given as ISO-8601/RFC-3339 timestamp
-    pub fn with_datestring(self, date_string: &str) -> Result<Self, DeltaTableError> {
-        let datetime =
-            DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(date_string)?);
+    pub fn with_datestring(self, date_string: impl AsRef<str>) -> Result<Self, DeltaTableError> {
+        let datetime = DateTime::<Utc>::from(DateTime::<FixedOffset>::parse_from_rfc3339(
+            date_string.as_ref(),
+        )?);
         Ok(self.with_timestamp(datetime))
     }
 

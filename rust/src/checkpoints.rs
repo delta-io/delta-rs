@@ -46,14 +46,14 @@ pub enum CheckpointError {
     },
     /// Error returned when the parquet writer fails while writing the checkpoint.
     #[error("Failed to write parquet: {}", .source)]
-    ParquetError {
+    Parquet {
         /// Parquet error details returned when writing the checkpoint failed.
         #[from]
         source: ParquetError,
     },
     /// Error returned when converting the schema to Arrow format failed.
     #[error("Failed to convert into Arrow schema: {}", .source)]
-    ArrowError {
+    Arrow {
         /// Arrow error details returned when converting the schema in Arrow format failed
         #[from]
         source: ArrowError,
