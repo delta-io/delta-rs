@@ -27,7 +27,7 @@ use std::sync::Arc;
 
 /// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]
-pub enum DeltaWriterError {
+pub(crate) enum DeltaWriterError {
     /// Partition column is missing in a record written to delta.
     #[error("Missing partition column: {0}")]
     MissingPartitionColumn(String),
@@ -103,22 +103,34 @@ pub enum DeltaWriterError {
     DeltaTable(#[from] DeltaTableError),
 }
 
+impl From<DeltaWriterError> for DeltaTableError {
+    fn from(err: DeltaWriterError) -> Self {
+        match err {
+            DeltaWriterError::Arrow { source } => DeltaTableError::Arrow { source },
+            DeltaWriterError::Io { source } => DeltaTableError::Io { source },
+            DeltaWriterError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
+            DeltaWriterError::Parquet { source } => DeltaTableError::Parquet { source },
+            _ => DeltaTableError::Generic(err.to_string()),
+        }
+    }
+}
+
 #[async_trait]
 /// Trait for writing data to Delta tables
 pub trait DeltaWriter<T> {
     /// write a chunk of values into the internal write buffers.
-    async fn write(&mut self, values: T) -> Result<(), DeltaWriterError>;
+    async fn write(&mut self, values: T) -> Result<(), DeltaTableError>;
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// The corresponding delta [`Add`] actions are returned and should be committed via a transaction.
-    async fn flush(&mut self) -> Result<Vec<Add>, DeltaWriterError>;
+    async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError>;
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// and commit the changes to the Delta log, creating a new table version.
     async fn flush_and_commit(
         &mut self,
         table: &mut DeltaTable,
-    ) -> Result<DeltaDataTypeVersion, DeltaWriterError> {
+    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         let mut adds = self.flush().await?;
         let mut tx = table.create_transaction(None);
         tx.add_actions(adds.drain(..).map(Action::add).collect());
