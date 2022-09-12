@@ -1334,12 +1334,13 @@ dependencies = [
 
 [[package]]
 name = "lambda_runtime"
-version = "0.6.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "76cf2e2a435d327806e7c8d46d341d624a6a2e3b35b253eee44d1c89980451be"
+checksum = "37a81840726d481d20b99a9ce87430f644e9590cb77715e1e66c5f4432c9b586"
 dependencies = [
  "async-stream",
  "bytes",
+ "futures",
  "http",
  "hyper",
  "lambda_runtime_api_client",
