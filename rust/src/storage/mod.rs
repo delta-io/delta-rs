@@ -10,7 +10,7 @@ use crate::builder::StorageUrl;
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
-use object_store::{
+pub use object_store::{
     path::{Path, DELIMITER},
     DynObjectStore, Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Result as ObjectStoreResult,

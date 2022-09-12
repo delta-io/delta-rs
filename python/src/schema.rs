@@ -1,6 +1,5 @@
 extern crate pyo3;
 
-use crate::pyo3::types::IntoPyDict;
 use deltalake::arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
 };
@@ -11,6 +10,7 @@ use deltalake::schema::{
 use lazy_static::lazy_static;
 use pyo3::exceptions::{PyException, PyNotImplementedError, PyTypeError, PyValueError};
 use pyo3::prelude::*;
+use pyo3::types::IntoPyDict;
 use pyo3::{PyRef, PyResult};
 use regex::Regex;
 use std::collections::HashMap;

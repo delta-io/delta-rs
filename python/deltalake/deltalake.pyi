@@ -7,12 +7,12 @@ else:
     from typing_extensions import Literal
 
 import pyarrow as pa
+import pyarrow.fs as fs
 
 from deltalake.writer import AddAction
 
 RawDeltaTable: Any
 rust_core_version: Callable[[], str]
-DeltaStorageFsBackend: Any
 
 class PyDeltaTableError(BaseException): ...
 
@@ -113,3 +113,90 @@ class Schema:
     def to_pyarrow(self) -> pa.Schema: ...
     @staticmethod
     def from_pyarrow(type: pa.Schema) -> "Schema": ...
+
+class ObjectInputFile:
+    @property
+    def closed(self) -> bool: ...
+    @property
+    def mode(self) -> str: ...
+    def isatty(self) -> bool: ...
+    def readable(self) -> bool: ...
+    def seekable(self) -> bool: ...
+    def tell(self) -> int: ...
+    def size(self) -> int: ...
+    def seek(self, position: int, whence: int = 0) -> int: ...
+    def read(self, nbytes: int) -> bytes: ...
+
+class ObjectOutputStream:
+    @property
+    def closed(self) -> bool: ...
+    @property
+    def mode(self) -> str: ...
+    def isatty(self) -> bool: ...
+    def readable(self) -> bool: ...
+    def seekable(self) -> bool: ...
+    def writable(self) -> bool: ...
+    def tell(self) -> int: ...
+    def size(self) -> int: ...
+    def seek(self, position: int, whence: int = 0) -> int: ...
+    def read(self, nbytes: int) -> bytes: ...
+    def write(self, data: bytes) -> int: ...
+
+class DeltaFileSystemHandler:
+    """Implementation of pyarrow.fs.FileSystemHandler for use with pyarrow.fs.PyFileSystem"""
+
+    def __init__(self, root: str, options: dict[str, str] | None = None) -> None: ...
+    def get_type_name(self) -> str: ...
+    def copy_file(self, src: str, dst: str) -> None:
+        """Copy a file.
+
+        If the destination exists and is a directory, an error is returned. Otherwise, it is replaced.
+        """
+    def create_dir(self, path: str, recursive: bool = True) -> None:
+        """Create a directory and subdirectories.
+
+        This function succeeds if the directory already exists.
+        """
+    def delete_dir(self, path: str) -> None:
+        """Delete a directory and its contents, recursively."""
+    def delete_file(self, path: str) -> None:
+        """Delete a file."""
+    def equals(self, other: Any) -> bool: ...
+    def delete_dir_contents(
+        self, path: str, *, accept_root_dir: bool = False, missing_dir_ok: bool = False
+    ) -> None:
+        """Delete a directory's contents, recursively.
+
+        Like delete_dir, but doesn't delete the directory itself.
+        """
+    def delete_root_dir_contents(self) -> None:
+        """Delete the root directory contents, recursively."""
+    def get_file_info(self, paths: list[str]) -> list[fs.FileInfo]:
+        """Get info for the given files.
+
+        A non-existing or unreachable file returns a FileStat object and has a FileType of value NotFound.
+        An exception indicates a truly exceptional condition (low-level I/O error, etc.).
+        """
+    def get_file_info_selector(
+        self, base_dir: str, allow_not_found: bool = False, recursive: bool = False
+    ) -> list[fs.FileInfo]:
+        """Get info for the given files.
+
+        A non-existing or unreachable file returns a FileStat object and has a FileType of value NotFound.
+        An exception indicates a truly exceptional condition (low-level I/O error, etc.).
+        """
+    def move_file(self, src: str, dest: str) -> None:
+        """Move / rename a file or directory.
+
+        If the destination exists: - if it is a non-empty directory, an error is returned - otherwise,
+        if it has the same type as the source, it is replaced - otherwise, behavior is
+        unspecified (implementation-dependent).
+        """
+    def normalize_path(self, path: str) -> str:
+        """Normalize filesystem path."""
+    def open_input_file(self, path: str) -> ObjectInputFile:
+        """Open an input file for random access reading."""
+    def open_output_stream(
+        self, path: str, metadata: dict[str, str] | None = None
+    ) -> ObjectOutputStream:
+        """Open an output stream for sequential writing."""
