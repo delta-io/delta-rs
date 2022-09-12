@@ -25,3 +25,4 @@ float64: Any
 py_buffer: Callable[[bytes], Any]
 NativeFile: Any
 BufferReader: Any
+PythonFile: Any

@@ -733,6 +733,7 @@ dependencies = [
  "chrono",
  "deltalake",
  "env_logger",
+ "futures",
  "lazy_static",
  "pyo3",
  "regex",
