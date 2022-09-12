@@ -32,7 +32,7 @@ thiserror = "1"
 tokio = { version = "1", features = ["macros", "rt"] }
 regex = "1"
 uuid = { version = "1", features = ["serde", "v4"] }
-url = "2.2"
+url = "2.3"
 
 # S3 lock client
 rusoto_core = { version = "0.48", default-features = false, optional = true }
