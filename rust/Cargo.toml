@@ -21,7 +21,7 @@ log = "0"
 libc = ">=0.2.90, <1"
 num-bigint = "0.4"
 num-traits = "0.2.15"
-object_store = "0.4.0"
+object_store = "0.5.0"
 parquet = { version = "20", optional = true }
 parquet2 = { version = "0.16", optional = true }
 parquet-format = "~4.0.0"
