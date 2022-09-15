@@ -40,6 +40,9 @@ def test_handle_existing(tmp_path: pathlib.Path, sample_data: pa.Table):
 
 
 def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
+    # Check we can create the subdirectory
+    tmp_path = tmp_path / "path" / "to" / "table"
+
     write_deltalake(str(tmp_path), sample_data)
 
     assert ("0" * 20 + ".json") in os.listdir(tmp_path / "_delta_log")
