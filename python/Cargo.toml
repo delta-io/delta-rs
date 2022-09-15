@@ -27,7 +27,7 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 reqwest = { version = "*", features = ["native-tls-vendored"] }
 
 [dependencies.pyo3]
-version = "0.16"
+version = "0.17"
 features = ["extension-module", "abi3", "abi3-py37"]
 
 [dependencies.deltalake]

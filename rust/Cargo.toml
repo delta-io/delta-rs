@@ -9,7 +9,7 @@ description = "Native Delta Lake implementation in Rust"
 edition = "2021"
 
 [dependencies]
-arrow = { version = "20", optional = true }
+arrow = { version = "22", optional = true }
 async-trait = "0.1"
 bytes = "1"
 chrono = "0.4.22"
@@ -21,8 +21,8 @@ log = "0"
 libc = ">=0.2.90, <1"
 num-bigint = "0.4"
 num-traits = "0.2.15"
-object_store = "0.4.0"
-parquet = { version = "20", optional = true }
+object_store = "0.5.0"
+parquet = { version = "22", features = ["async"], optional = true }
 parquet2 = { version = "0.16", optional = true }
 parquet-format = "~4.0.0"
 percent-encoding = "2"
@@ -48,7 +48,7 @@ fs_extra = { version = "1.2.0", optional = true }
 tempdir = { version = "0", optional = true }
 
 [dependencies.datafusion]
-version = "11"
+version = "12"
 optional = true
 
 [features]

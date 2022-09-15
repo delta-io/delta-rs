@@ -11,6 +11,3 @@ exclude = ["proofs", "delta-inspect"]
 
 [profile.dev]
 split-debuginfo = "unpacked"
-
-[patch.crates-io]
-object_store = { git = "https://github.com/roeap/arrow-rs", rev = "5f5675417e9c690140bed2b8d601bf32dd11e9cd" }

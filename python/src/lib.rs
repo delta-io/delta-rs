@@ -1,5 +1,4 @@
 #![deny(warnings)]
-#![allow(clippy::borrow_deref_ref)]
 
 mod filesystem;
 mod schema;
