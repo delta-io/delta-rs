@@ -63,6 +63,19 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
         assert actual_size == action["size"]
 
 
+def test_roundtrip_nulls(tmp_path: pathlib.Path):
+    data = pa.table({"x": pa.array([1, 2, None, None])})
+    # One row group will have values, one will be all nulls.
+    # The second will have None in min and max stats, so we need to handle that.
+    write_deltalake(str(tmp_path), data, min_rows_per_group=2, max_rows_per_group=2)
+
+    delta_table = DeltaTable(str(tmp_path))
+    assert delta_table.schema().to_pyarrow() == data.schema
+
+    table = delta_table.to_pyarrow_table()
+    assert table == data
+
+
 @pytest.mark.parametrize("mode", ["append", "overwrite"])
 def test_enforce_schema(existing_table: DeltaTable, mode: str):
     bad_data = pa.table({"x": pa.array([1, 2, 3])})

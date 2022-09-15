@@ -380,12 +380,19 @@ def get_file_stats_from_metadata(
                 ]:
                     continue
 
-                stats["minValues"][name] = min(
+                minimums = (
                     group.column(column_idx).statistics.min
                     for group in iter_groups(metadata)
                 )
-                stats["maxValues"][name] = max(
+                # If some row groups have all null values, their min and max will be null too.
+                stats["minValues"][name] = min(
+                    minimum for minimum in minimums if minimum is not None
+                )
+                maximums = (
                     group.column(column_idx).statistics.max
                     for group in iter_groups(metadata)
+                )
+                stats["maxValues"][name] = max(
+                    maximum for maximum in maximums if maximum is not None
                 )
     return stats
