@@ -13,6 +13,9 @@ keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 name = "deltalake"
 crate-type = ["cdylib"]
 
+[package.metadata.maturin]
+name = "deltalake._internal"
+
 [dependencies]
 chrono = "0"
 env_logger = "0"

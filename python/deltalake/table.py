@@ -10,8 +10,8 @@ from pyarrow.dataset import FileSystemDataset, ParquetFileFormat, ParquetReadOpt
 if TYPE_CHECKING:
     import pandas
 
+from ._internal import RawDeltaTable
 from .data_catalog import DataCatalog
-from .deltalake import RawDeltaTable
 from .fs import DeltaStorageHandler
 from .schema import Schema
 

@@ -3,7 +3,7 @@ from typing import Any, Dict, List, Optional
 import pyarrow as pa
 from pyarrow.fs import FileInfo, FileSelector, FileSystemHandler
 
-from .deltalake import DeltaFileSystemHandler
+from ._internal import DeltaFileSystemHandler
 
 
 class DeltaStorageHandler(FileSystemHandler):

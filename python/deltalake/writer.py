@@ -35,8 +35,8 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.lib import RecordBatchReader
 
-from .deltalake import PyDeltaTableError
-from .deltalake import write_new_deltalake as _write_new_deltalake
+from ._internal import PyDeltaTableError
+from ._internal import write_new_deltalake as _write_new_deltalake
 from .table import DeltaTable
 
 try:
