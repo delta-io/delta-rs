@@ -147,8 +147,12 @@ def write_deltalake(
             schema = data.schema
 
     if isinstance(table_or_uri, str):
+        if "://" in table_or_uri:
+            table_uri = table_or_uri
+        else:
+            # Non-existant local paths are only accepted as fully-qualified URIs
+            table_uri = "file://" + str(Path(table_or_uri).absolute())
         table = try_get_deltatable(table_or_uri)
-        table_uri = str(Path(table_or_uri).absolute())
     else:
         table = table_or_uri
         table_uri = table._table.table_uri()
@@ -303,9 +307,15 @@ def try_get_deltatable(table_uri: str) -> Optional[DeltaTable]:
     try:
         return DeltaTable(table_uri)
     except PyDeltaTableError as err:
-        if "Not a Delta table" not in str(err):
+        # TODO: There has got to be a better way...
+        if "Not a Delta table" in str(err):
+            return None
+        elif "cannot find" in str(err):
+            return None
+        elif "No such file or directory" in str(err):
+            return None
+        else:
             raise
-        return None
 
 
 def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
