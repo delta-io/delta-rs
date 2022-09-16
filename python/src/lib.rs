@@ -1,5 +1,4 @@
 #![deny(warnings)]
-#![allow(clippy::borrow_deref_ref)]
 
 mod filesystem;
 mod schema;
@@ -588,7 +587,7 @@ fn write_new_deltalake(
 
 #[pymodule]
 // module name need to match project name
-fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
+fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;

@@ -94,7 +94,7 @@ async fn test_datafusion_simple_query_partitioned() -> Result<()> {
     ctx.register_table("demo", Arc::new(table))?;
 
     let batches = ctx
-            .sql("SELECT CAST( day as int ) FROM demo WHERE CAST( year as int ) > 2020 ORDER BY CAST( day as int ) ASC")
+            .sql("SELECT CAST( day as int ) as my_day FROM demo WHERE CAST( year as int ) > 2020 ORDER BY CAST( day as int ) ASC")
             .await?
             .collect()
             .await?;

@@ -17,6 +17,7 @@ services:
 
   fake-gcs:
     image: fsouza/fake-gcs-server
+    command: ["-scheme", "http", "-port", "4443", "-external-url", "http://[::]:4443", "-backend", "memory"]
     ports:
       - 4443:4443
 

@@ -20,12 +20,7 @@ use object_store::azure::MicrosoftAzureBuilder;
 #[cfg(feature = "gcs")]
 use object_store::gcp::GoogleCloudStorageBuilder;
 
-#[cfg(any(
-    feature = "azure",
-    feature = "s3",
-    feature = "s3-rustls",
-    feature = "gcs"
-))]
+#[cfg(any(feature = "azure", feature = "s3", feature = "s3-rustls"))]
 const TRUTHY: [&str; 3] = ["TRUE", "1", "OK"];
 
 /// possible version specifications for loading a delta table
@@ -670,8 +665,6 @@ pub mod gcp_storage_options {
     pub const SERVICE_ACCOUNT: &str = "SERVICE_ACCOUNT";
     /// Path to the service account json file
     pub const GOOGLE_SERVICE_ACCOUNT: &str = "GOOGLE_SERVICE_ACCOUNT";
-    /// Configure google backend to ignore certificate errors for use with emulator.
-    pub const GOOGLE_USE_EMULATOR: &str = "GOOGLE_USE_EMULATOR";
 }
 
 /// Generate a new GoogleCloudStorageBuilder instance from a map of options
@@ -682,12 +675,6 @@ pub fn get_gcp_builder_from_options(options: HashMap<String, String>) -> GoogleC
         builder = builder.with_service_account_path(account);
     } else if let Some(account) = str_option(&options, gcp_storage_options::SERVICE_ACCOUNT) {
         builder = builder.with_service_account_path(account);
-    }
-
-    if let Ok(val) = std::env::var("GOOGLE_USE_EMULATOR") {
-        if TRUTHY.contains(&val.to_uppercase().as_str()) {
-            builder = builder.with_use_emulator(true);
-        }
     }
 
     builder

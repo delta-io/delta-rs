@@ -18,6 +18,7 @@
 //! let table = open_table("../path/to/table")?;
 //! let metrics = Optimize::default().execute(table).await?;
 //! ````
+#![allow(deprecated)]
 
 use crate::action::DeltaOperation;
 use crate::action::{self, Action};
