@@ -431,6 +431,7 @@ def test_writer_with_max_rows(
         data,
         file_options=ParquetFileFormat().make_write_options(),
         max_rows_per_file=rows_per_file,
+        min_rows_per_group=rows_per_file,
         max_rows_per_group=rows_per_file,
     )
 
