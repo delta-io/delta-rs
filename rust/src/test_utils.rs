@@ -391,8 +391,6 @@ pub mod s3_cli {
 
 /// small wrapper around google api
 pub mod gs_cli {
-    use crate::gcp_storage_options;
-
     use super::set_env_if_not_set;
     use serde_json::json;
     use std::process::{Command, ExitStatus};
@@ -445,8 +443,7 @@ pub mod gs_cli {
 
     /// prepare_env
     pub fn prepare_env() {
-        set_env_if_not_set(gcp_storage_options::GOOGLE_USE_EMULATOR, "1");
-        set_env_if_not_set("GOOGLE_BASE_URL", "https://localhost:4443");
-        set_env_if_not_set("GOOGLE_ENDPOINT_URL", "https://localhost:4443/storage/v1/b");
+        set_env_if_not_set("GOOGLE_BASE_URL", "http://localhost:4443");
+        set_env_if_not_set("GOOGLE_ENDPOINT_URL", "http://localhost:4443/storage/v1/b");
     }
 }

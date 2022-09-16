@@ -71,61 +71,27 @@ jobs:
         run: cargo test --verbose --features datafusion-ext,azure
 
   integration_test:
+    name: Integration Tests
     runs-on: ubuntu-latest
-    services:
-      fake-gcs:
-        image: fsouza/fake-gcs-server
-        ports:
-          - 4443:4443
-      localstack:
-        image: localstack/localstack:0.14.4
-        ports:
-          - 4566:4566
-      azurite:
-        image: mcr.microsoft.com/azure-storage/azurite
-        ports:
-          - 10000:10000
-
-    container:
-      image: amd64/rust
-      env:
-        # Disable full debug symbol generation to speed up CI build and keep memory down
-        # "1" means line tables only, which is useful for panic tracebacks.
-        RUSTFLAGS: "-C debuginfo=1"
-        # https://github.com/rust-lang/cargo/issues/10280
-        CARGO_NET_GIT_FETCH_WITH_CLI: "true"
-        RUST_BACKTRACE: "1"
-        # Run integration tests
-        TEST_INTEGRATION: 1
-        AWS_DEFAULT_REGION: "us-east-1"
-        AWS_ACCESS_KEY_ID: test
-        AWS_SECRET_ACCESS_KEY: test
-        AWS_ENDPOINT_URL: http://localstack:4566
-        AWS_STORAGE_ALLOW_HTTP: "1"
-        EC2_METADATA_ENDPOINT: http://ec2-metadata:1338
-        GOOGLE_BASE_URL: https://fake-gcs:4443
-        GOOGLE_ENDPOINT_URL: https://fake-gcs:4443/storage/v1/b
-        GOOGLE_USE_EMULATOR: "1"
-        AZURE_USE_EMULATOR: "1"
-        AZURE_STORAGE_ALLOW_HTTP: "1"
-        AZURITE_BLOB_STORAGE_URL: "http://azurite:10000"
-        OBJECT_STORE_BUCKET: test-bucket
-        AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://azurite:10000/devstoreaccount1;QueueEndpoint=http://azurite:10001/devstoreaccount1;"
+    env:
+      # Disable full debug symbol generation to speed up CI build and keep memory down
+      # "1" means line tables only, which is useful for panic tracebacks.
+      RUSTFLAGS: "-C debuginfo=1"
+      # https://github.com/rust-lang/cargo/issues/10280
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      RUST_BACKTRACE: "1"
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
+      AWS_ENDPOINT_URL: http://localhost:4566
+      AWS_STORAGE_ALLOW_HTTP: "1"
+      AZURE_USE_EMULATOR: "1"
+      AZURE_STORAGE_ALLOW_HTTP: "1"
+      AZURITE_BLOB_STORAGE_URL: "http://localhost:10000"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;"
 
     steps:
       - uses: actions/checkout@v3
-
-      - name: Install AWS cli
-        run: |
-          cd /tmp
-          curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip"
-          unzip awscliv2.zip
-          ./aws/install
-      - name: Install Azure cli
-        # the magical connection string is from
-        # https://docs.microsoft.com/en-us/azure/storage/common/storage-use-azurite?tabs=visual-studio#http-connection-strings
-        run: |
-          curl -sL https://aka.ms/InstallAzureCLIDeb | bash
 
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
@@ -135,6 +101,9 @@ jobs:
           override: true
 
       - uses: Swatinem/rust-cache@v1
+
+      - name: Start emulated services
+        run: docker-compose up -d
 
       - name: Run tests
         run: |

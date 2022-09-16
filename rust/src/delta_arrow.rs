@@ -110,12 +110,8 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                                 decimal
                             ))
                         })?;
-                        let precision = extract
-                            .get(1)
-                            .and_then(|v| v.as_str().parse::<usize>().ok());
-                        let scale = extract
-                            .get(2)
-                            .and_then(|v| v.as_str().parse::<usize>().ok());
+                        let precision = extract.get(1).and_then(|v| v.as_str().parse::<u8>().ok());
+                        let scale = extract.get(2).and_then(|v| v.as_str().parse::<u8>().ok());
                         match (precision, scale) {
                             // TODO how do we decide which variant (128 / 256) to use?
                             (Some(p), Some(s)) => Ok(ArrowDataType::Decimal128(p, s)),
