@@ -80,9 +80,9 @@ While delta always needs its internal storage backend to work and be properly co
 it may sometime be advantageous - and is common practice in the arrow world - to customize the storage interface used for
 reading the bulk data. 
 
-`deltalake` will work with any storage compliant with `pyarrow.fs.FileSystem`, however the root of the filesystem has
+``deltalake`` will work with any storage compliant with :class:`pyarrow.fs.FileSystem`, however the root of the filesystem has
 to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into
-a `pyarrow.fs.SubTreeFileSystem`.
+a :class:`pyarrow.fs.SubTreeFileSystem`.
 
 .. code-block:: python
 
@@ -96,7 +96,7 @@ a `pyarrow.fs.SubTreeFileSystem`.
     ds = dt.to_pyarrow_dataset(filesystem=filesystem)
 
 When using the pyarrow factory method for file systems, the normalized path is provided
-on creation. In case of S3 this would look something like.
+on creation. In case of S3 this would look something like:
 
 .. code-block:: python
 
