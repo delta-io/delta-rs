@@ -26,10 +26,9 @@ use crate::{
     writer::{DeltaWriter, RecordBatchWriter},
     Schema,
 };
+use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use core::any::Any;
 use datafusion::{
-    arrow::datatypes::SchemaRef as ArrowSchemaRef,
-    error::Result as DataFusionResult,
     execution::context::TaskContext,
     physical_plan::{
         common::{
@@ -42,6 +41,7 @@ use datafusion::{
         SendableRecordBatchStream, Statistics,
     },
 };
+use datafusion_common::Result as DataFusionResult;
 use futures::{TryFutureExt, TryStreamExt};
 use std::collections::HashMap;
 use std::sync::Arc;

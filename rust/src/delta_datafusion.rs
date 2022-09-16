@@ -33,13 +33,12 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::{TableProvider, TableType};
-use datafusion::error::{DataFusionError, Result as DataFusionResult};
 use datafusion::execution::context::SessionState;
-use datafusion::logical_plan::{combine_filters, Column, Expr};
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
-use datafusion::scalar::ScalarValue;
+use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ScalarValue};
+use datafusion_expr::{combine_filters, Expr};
 use object_store::{path::Path, ObjectMeta};
 use url::Url;
 

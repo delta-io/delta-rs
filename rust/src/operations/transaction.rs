@@ -2,16 +2,15 @@
 use super::*;
 use crate::action::Action;
 use crate::schema::DeltaDataTypeVersion;
+use arrow::{
+    array::StringArray,
+    datatypes::{
+        DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+    },
+    record_batch::RecordBatch,
+};
 use core::any::Any;
 use datafusion::{
-    arrow::{
-        array::StringArray,
-        datatypes::{
-            DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
-        },
-        record_batch::RecordBatch,
-    },
-    error::Result as DataFusionResult,
     execution::context::TaskContext,
     physical_plan::{
         coalesce_partitions::CoalescePartitionsExec, common::compute_record_batch_statistics,
@@ -19,6 +18,7 @@ use datafusion::{
         Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
     },
 };
+use datafusion_common::Result as DataFusionResult;
 use futures::{TryFutureExt, TryStreamExt};
 use lazy_static::lazy_static;
 use std::sync::Arc;

@@ -722,6 +722,8 @@ dependencies = [
  "chrono",
  "criterion",
  "datafusion",
+ "datafusion-common",
+ "datafusion-expr",
  "dotenv",
  "dynamodb_lock",
  "errno",

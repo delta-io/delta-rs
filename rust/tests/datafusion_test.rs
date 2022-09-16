@@ -9,15 +9,13 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use datafusion::datasource::TableProvider;
-use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::{SessionContext, TaskContext};
-use datafusion::logical_expr::Expr;
-use datafusion::logical_plan::Column;
 use datafusion::physical_plan::{
     coalesce_partitions::CoalescePartitionsExec, common, file_format::ParquetExec, metrics::Label,
     visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor,
 };
-use datafusion::scalar::ScalarValue;
+use datafusion_common::{Column, DataFusionError, Result, ScalarValue};
+use datafusion_expr::Expr;
 use deltalake::{action::SaveMode, operations::DeltaCommands, DeltaTable, DeltaTableMetaData};
 use std::collections::HashMap;
 use std::{collections::HashSet, sync::Arc};

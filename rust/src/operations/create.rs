@@ -9,20 +9,18 @@ use crate::{
     action::{Action, DeltaOperation, MetaData, Protocol, SaveMode},
     DeltaTableBuilder, DeltaTableMetaData,
 };
+use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use core::any::Any;
-use datafusion::{
-    arrow::datatypes::SchemaRef,
-    error::{DataFusionError, Result as DataFusionResult},
-    execution::context::TaskContext,
-    physical_plan::{
-        common::{compute_record_batch_statistics, SizedRecordBatchStream},
-        expressions::PhysicalSortExpr,
-        metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics},
-        stream::RecordBatchStreamAdapter,
-        Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
-    },
+use datafusion::execution::context::TaskContext;
+use datafusion::physical_plan::{
+    common::{compute_record_batch_statistics, SizedRecordBatchStream},
+    expressions::PhysicalSortExpr,
+    metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics},
+    stream::RecordBatchStreamAdapter,
+    Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
+use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use futures::{TryFutureExt, TryStreamExt};
 use std::sync::Arc;
 

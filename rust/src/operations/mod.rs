@@ -11,10 +11,10 @@ use crate::{
 };
 use arrow::{datatypes::SchemaRef as ArrowSchemaRef, error::ArrowError, record_batch::RecordBatch};
 use datafusion::{
-    error::DataFusionError,
     physical_plan::{collect, memory::MemoryExec, ExecutionPlan},
     prelude::SessionContext,
 };
+use datafusion_common::DataFusionError;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::Debug;
