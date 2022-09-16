@@ -360,9 +360,11 @@ def get_file_stats_from_metadata(
                 for group in iter_groups(metadata)
             )
 
-            # I assume for now this is based on data type, and thus is
-            # consistent between groups
-            if metadata.row_group(0).column(column_idx).statistics.has_min_max:
+            # Min / max may not exist for some column types, or if all values are null
+            if any(
+                group.column(column_idx).statistics.has_min_max
+                for group in iter_groups(metadata)
+            ):
                 # Min and Max are recorded in physical type, not logical type
                 # https://stackoverflow.com/questions/66753485/decoding-parquet-min-max-statistics-for-decimal-type
                 # TODO: Add logic to decode physical type for DATE, DECIMAL
