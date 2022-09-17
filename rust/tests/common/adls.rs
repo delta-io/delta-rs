@@ -37,7 +37,7 @@ pub async fn setup_azure_gen2_context() -> TestContext {
         storage_account_name.clone(),
     );
     config.insert(
-        "AZRUE_STORAGE_ACCOUNT_KEY".to_string(),
+        "AZURE_STORAGE_ACCOUNT_KEY".to_string(),
         storage_account_key.clone(),
     );
 

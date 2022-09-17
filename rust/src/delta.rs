@@ -2,6 +2,11 @@
 
 // Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
 //
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::fmt;
+use std::io::{BufRead, BufReader, Cursor};
+use std::{cmp::max, cmp::Ordering, collections::HashSet};
 
 use super::action;
 use super::action::{Action, DeltaOperation};
@@ -9,25 +14,21 @@ use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
-pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
 use crate::delta_config::DeltaConfigError;
-use crate::storage::DeltaObjectStore;
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 use crate::vacuum::{Vacuum, VacuumError};
+
 use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::debug;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use object_store::{path::Path, Error as ObjectStoreError};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::fmt;
-use std::io::{BufRead, BufReader, Cursor};
-use std::sync::Arc;
-use std::{cmp::max, cmp::Ordering, collections::HashSet};
 use uuid::Uuid;
+
+pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
@@ -412,7 +413,7 @@ pub struct DeltaTable {
     pub config: DeltaTableConfig,
     // metadata
     // application_transactions
-    pub(crate) storage: Arc<DeltaObjectStore>,
+    pub(crate) storage: ObjectStoreRef,
 
     last_check_point: Option<CheckPoint>,
     version_timestamp: HashMap<DeltaDataTypeVersion, i64>,
@@ -423,7 +424,7 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method, please
     /// call one of the `open_table` helper methods instead.
-    pub fn new(storage: Arc<DeltaObjectStore>, config: DeltaTableConfig) -> Self {
+    pub fn new(storage: ObjectStoreRef, config: DeltaTableConfig) -> Self {
         Self {
             state: DeltaTableState::with_version(-1),
             storage,
@@ -434,7 +435,7 @@ impl DeltaTable {
     }
 
     /// get a shared reference to the delta object store
-    pub fn object_store(&self) -> Arc<DeltaObjectStore> {
+    pub fn object_store(&self) -> ObjectStoreRef {
         self.storage.clone()
     }
 
@@ -997,7 +998,7 @@ impl DeltaTable {
         self.state.min_writer_version()
     }
 
-    /// Vacuum the delta table seee [`Vacuum`] for more info
+    /// Vacuum the delta table see [`Vacuum`] for more info
     pub async fn vacuum(
         &mut self,
         retention_hours: Option<u64>,
@@ -1271,7 +1272,7 @@ impl<'a> DeltaTransaction<'a> {
 
         // TODO: calculate isolation level to use when checking for conflicts.
         // Leaving conflict checking unimplemented for now to get the "single writer" implementation off the ground.
-        // Leaving some commmented code in place as a guidepost for the future.
+        // Leaving some commented code in place as a guidepost for the future.
 
         // let no_data_changed = actions.iter().all(|a| match a {
         //     Action::add(x) => !x.dataChange,

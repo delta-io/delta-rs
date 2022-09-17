@@ -6,7 +6,7 @@ use std::sync::Arc;
 use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
 use crate::schema::DeltaDataTypeVersion;
 use crate::storage::file::FileStorageBackend;
-use crate::storage::DeltaObjectStore;
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 
 use chrono::{DateTime, FixedOffset, Utc};
 use object_store::memory::InMemory;
@@ -210,7 +210,7 @@ impl DeltaTableBuilder {
     }
 
     /// Build a delta storage backend for the given config
-    pub fn build_storage(self) -> Result<Arc<DeltaObjectStore>, DeltaTableError> {
+    pub fn build_storage(self) -> Result<ObjectStoreRef, DeltaTableError> {
         let (storage, storage_url) = match self.options.storage_backend {
             // Some(storage) => storage,
             None => get_storage_backend(
