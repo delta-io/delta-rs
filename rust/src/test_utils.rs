@@ -233,7 +233,6 @@ fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
 /// small wrapper around az cli
 pub mod az_cli {
     use super::set_env_if_not_set;
-    use crate::builder::azure_storage_options;
     use std::process::{Command, ExitStatus};
 
     /// Create a new bucket
@@ -268,12 +267,9 @@ pub mod az_cli {
 
     /// prepare_env
     pub fn prepare_env() {
-        set_env_if_not_set(azure_storage_options::AZURE_STORAGE_USE_EMULATOR, "1");
-        set_env_if_not_set(
-            azure_storage_options::AZURE_STORAGE_ACCOUNT_NAME,
-            "devstoreaccount1",
-        );
-        set_env_if_not_set(azure_storage_options::AZURE_STORAGE_ACCOUNT_KEY, "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==");
+        set_env_if_not_set("AZURE_STORAGE_USE_EMULATOR", "1");
+        set_env_if_not_set("AZURE_STORAGE_ACCOUNT_NAME", "devstoreaccount1");
+        set_env_if_not_set("AZURE_STORAGE_ACCOUNT_KEY", "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==");
         set_env_if_not_set(
             "AZURE_STORAGE_CONNECTION_STRING",
             "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;"
@@ -435,10 +431,6 @@ pub mod gs_cli {
             .spawn()
             .expect("curl command is installed");
         child.wait()
-    }
-
-    pub fn upload_table(_src: &str, _dst: &str) -> std::io::Result<ExitStatus> {
-        todo!()
     }
 
     /// prepare_env

@@ -1,5 +1,5 @@
 import sys
-from typing import Any, Callable, Dict, List, Optional, Union
+from typing import Any, Callable, Dict, List, Optional, Union, Mapping
 
 if sys.version_info >= (3, 8):
     from typing import Literal
@@ -16,7 +16,19 @@ rust_core_version: Callable[[], str]
 
 class PyDeltaTableError(BaseException): ...
 
-write_new_deltalake: Callable[[str, pa.Schema, List[AddAction], str, List[str]], None]
+write_new_deltalake: Callable[
+    [
+        str,
+        pa.Schema,
+        List[AddAction],
+        str,
+        List[str],
+        Optional[str],
+        Optional[str],
+        Optional[Mapping[str, Optional[str]]],
+    ],
+    None,
+]
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
 # best thing.

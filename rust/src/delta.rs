@@ -57,6 +57,9 @@ impl PartialEq for CheckPoint {
 
 impl Eq for CheckPoint {}
 
+/// A result returned by delta-rs
+pub type DeltaResult<T> = Result<T, DeltaTableError>;
+
 /// Delta Table specific error
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTableError {
