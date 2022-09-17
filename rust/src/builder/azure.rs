@@ -209,14 +209,8 @@ impl AzureConfig {
 
 fn parse_boolean(term: &str) -> Option<bool> {
     match term.to_lowercase().as_str() {
-        "true" => Some(true),
-        "1" => Some(true),
-        "yes" => Some(true),
-        "y" => Some(true),
-        "false" => Some(false),
-        "0" => Some(false),
-        "no" => Some(false),
-        "n" => Some(false),
+        "true" | "1" | "yes" | "y" => Some(true),
+        "false" | "0" | "no" | "n" => Some(false),
         _ => None,
     }
 }

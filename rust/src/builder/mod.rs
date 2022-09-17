@@ -9,6 +9,7 @@ use crate::storage::file::FileStorageBackend;
 use crate::storage::DeltaObjectStore;
 
 use chrono::{DateTime, FixedOffset, Utc};
+use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{DynObjectStore, Error as ObjectStoreError, Result as ObjectStoreResult};
 use url::Url;
@@ -268,6 +269,8 @@ pub enum StorageService {
     Azure,
     /// Google cloud storage
     GCS,
+    /// In-memory table
+    Memory,
     /// Unrecognized service
     Unknown,
 }
@@ -397,6 +400,7 @@ impl StorageUrl {
             "az" | "abfs" | "abfss" | "adls2" | "azure" | "wasb" | "adl" => StorageService::Azure,
             "s3" | "s3a" => StorageService::S3,
             "gs" => StorageService::GCS,
+            "memory" => StorageService::Memory,
             _ => StorageService::Unknown,
         }
     }
@@ -430,6 +434,7 @@ fn get_storage_backend(
     let storage_url = StorageUrl::parse(table_uri)?;
     match storage_url.service_type() {
         StorageService::Local => Ok((Arc::new(FileStorageBackend::new()), storage_url)),
+        StorageService::Memory => Ok((Arc::new(InMemory::new()), storage_url)),
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
         StorageService::S3 => {
             let url: &Url = storage_url.as_ref();
