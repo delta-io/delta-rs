@@ -62,7 +62,7 @@ impl GoogleConfig {
         } else {
             GoogleConfigKey::ServiceAccount
                 .get_from_env()
-                .ok_or_else(|| BuilderError::MissingCredential)?
+                .ok_or(BuilderError::MissingCredential)?
         };
         Ok(GoogleCloudStorageBuilder::default().with_service_account_path(service_account))
     }
