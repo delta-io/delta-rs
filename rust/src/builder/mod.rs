@@ -18,15 +18,16 @@ use url::Url;
 use crate::storage::s3::{S3StorageBackend, S3StorageOptions};
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 use object_store::aws::AmazonS3Builder;
-#[cfg(feature = "gcs")]
-use object_store::gcp::GoogleCloudStorageBuilder;
 
 #[cfg(feature = "azure")]
 mod azure;
+#[cfg(feature = "gcs")]
+mod google;
 
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 const TRUTHY: [&str; 3] = ["TRUE", "1", "OK"];
 
+#[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 enum BuilderError {
     #[error("Store {backend} requires host in storage url, got: {url}")]
@@ -195,7 +196,6 @@ impl DeltaTableBuilder {
     ///
     /// [s3_storage_options] describes the available options for the AWS or S3-compliant backend.
     /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
-    /// [gcp_storage_options] describes the available options for the Google Cloud Platform backend.
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
         self
@@ -527,8 +527,9 @@ fn get_storage_backend(
                 backend: "Google".into(),
                 url: storage_url.to_string(),
             })?;
-            let builder = get_gcp_builder_from_options(options.unwrap_or_default())
-                .with_bucket_name(bucket_name);
+            let options = options.unwrap_or_default();
+            let builder =
+                google::GoogleConfig::get_builder(&options)?.with_bucket_name(bucket_name);
             Ok((Arc::new(builder.build()?), storage_url))
         }
         _ => todo!(),
@@ -641,28 +642,6 @@ pub fn get_s3_builder_from_options(
     // up by the build function if set on the environment. If we have them in the map, should we set them in the env?
     // In the default case, always instance credentials are used.
     (builder, s3_options)
-}
-
-/// Storage option keys to use when creating gcp storage backend.
-/// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
-pub mod gcp_storage_options {
-    /// Path to the service account json file
-    pub const SERVICE_ACCOUNT: &str = "SERVICE_ACCOUNT";
-    /// Path to the service account json file
-    pub const GOOGLE_SERVICE_ACCOUNT: &str = "GOOGLE_SERVICE_ACCOUNT";
-}
-
-/// Generate a new GoogleCloudStorageBuilder instance from a map of options
-#[cfg(feature = "gcs")]
-pub fn get_gcp_builder_from_options(options: HashMap<String, String>) -> GoogleCloudStorageBuilder {
-    let mut builder = GoogleCloudStorageBuilder::new();
-    if let Some(account) = str_option(&options, gcp_storage_options::GOOGLE_SERVICE_ACCOUNT) {
-        builder = builder.with_service_account_path(account);
-    } else if let Some(account) = str_option(&options, gcp_storage_options::SERVICE_ACCOUNT) {
-        builder = builder.with_service_account_path(account);
-    }
-
-    builder
 }
 
 #[allow(dead_code)]

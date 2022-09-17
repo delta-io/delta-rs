@@ -1,5 +1,4 @@
 #![allow(dead_code, missing_docs)]
-use crate::builder::gcp_storage_options;
 use crate::storage::utils::copy_table;
 use crate::DeltaTableBuilder;
 use chrono::Utc;
@@ -43,11 +42,7 @@ impl IntegrationContext {
             let account_path = tmp_dir.path().join("gcs.json");
             std::fs::write(&account_path, serde_json::to_vec(&token)?)?;
             set_env_if_not_set(
-                gcp_storage_options::SERVICE_ACCOUNT,
-                account_path.as_path().to_str().unwrap(),
-            );
-            set_env_if_not_set(
-                gcp_storage_options::GOOGLE_SERVICE_ACCOUNT,
+                "GOOGLE_SERVICE_ACCOUNT",
                 account_path.as_path().to_str().unwrap(),
             );
         }

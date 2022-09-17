@@ -15,14 +15,14 @@ use super::schema::*;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
 use crate::delta_config::DeltaConfigError;
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
+use crate::storage::ObjectStoreRef;
 use crate::vacuum::{Vacuum, VacuumError};
 
 use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::debug;
-use object_store::{path::Path, Error as ObjectStoreError};
+use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
