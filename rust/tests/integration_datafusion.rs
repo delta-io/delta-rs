@@ -1,6 +1,6 @@
 #![cfg(all(feature = "integration_test", feature = "datafusion-ext"))]
 
-use datafusion::arrow::array::Int64Array;
+use arrow::array::Int64Array;
 use datafusion::execution::context::SessionContext;
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
 use deltalake::DeltaTableBuilder;
