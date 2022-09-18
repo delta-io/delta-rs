@@ -16,11 +16,11 @@ use crate::{
 };
 
 use arrow::{datatypes::SchemaRef as ArrowSchemaRef, error::ArrowError, record_batch::RecordBatch};
-use datafusion_common::DataFusionError;
 use datafusion::{
     physical_plan::{collect, memory::MemoryExec, ExecutionPlan},
     prelude::SessionContext,
 };
+use datafusion_common::DataFusionError;
 
 pub mod create;
 pub mod transaction;

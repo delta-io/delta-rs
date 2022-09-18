@@ -12,10 +12,9 @@ use crate::{
     DeltaTableBuilder, DeltaTableMetaData,
 };
 
+use arrow::datatypes::SchemaRef;
 use async_trait::async_trait;
 use core::any::Any;
-use arrow::datatypes::SchemaRef;
-use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use datafusion::{
     execution::context::TaskContext,
     physical_plan::{
@@ -26,6 +25,7 @@ use datafusion::{
         Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
     },
 };
+use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use futures::{TryFutureExt, TryStreamExt};
 
 /// Command for creating new delta table

@@ -481,10 +481,7 @@ fn to_correct_scalar_value(
     }
 }
 
-fn correct_scalar_value_type(
-    value: ScalarValue,
-    field_dt: &ArrowDataType,
-) -> Option<ScalarValue> {
+fn correct_scalar_value_type(value: ScalarValue, field_dt: &ArrowDataType) -> Option<ScalarValue> {
     match field_dt {
         ArrowDataType::Int64 => {
             let raw_value = i64::try_from(value).ok()?;
@@ -561,10 +558,7 @@ fn correct_scalar_value_type(
     }
 }
 
-fn left_larger_than_right(
-    left: ScalarValue,
-    right: ScalarValue,
-) -> Option<bool> {
+fn left_larger_than_right(left: ScalarValue, right: ScalarValue) -> Option<bool> {
     match left {
         ScalarValue::Float64(Some(v)) => {
             let f_right = f64::try_from(right).ok()?;
