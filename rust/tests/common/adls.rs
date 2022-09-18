@@ -2,7 +2,6 @@ use super::TestContext;
 use chrono::Utc;
 use rand::Rng;
 use std::collections::HashMap;
-use std::process::Command;
 
 pub struct AzureGen2 {
     account_name: String,
@@ -38,7 +37,7 @@ pub async fn setup_azure_gen2_context() -> TestContext {
         storage_account_name.clone(),
     );
     config.insert(
-        "AZRUE_STORAGE_ACCOUNT_KEY".to_string(),
+        "AZURE_STORAGE_ACCOUNT_KEY".to_string(),
         storage_account_key.clone(),
     );
 
@@ -54,7 +53,6 @@ pub async fn setup_azure_gen2_context() -> TestContext {
 }
 
 pub mod az_cli {
-    use deltalake::builder::azure_storage_options;
     use std::process::{Command, ExitStatus};
 
     /// Create a new bucket
@@ -82,14 +80,6 @@ pub mod az_cli {
                 "-n",
                 container_name.as_ref(),
             ])
-            .spawn()
-            .expect("az command is installed");
-        child.wait()
-    }
-
-    pub fn upload_table(src: &str, dst: &str) -> std::io::Result<ExitStatus> {
-        let mut child = Command::new("az")
-            .args(["storage", "blob", "upload-batch", "-d", dst, "-s", src])
             .spawn()
             .expect("az command is installed");
         child.wait()

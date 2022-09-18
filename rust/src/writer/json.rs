@@ -1,20 +1,20 @@
 //! Main writer API to write json messages to delta table
-use super::{
-    stats::{apply_null_counts, create_add, NullCounts},
-    utils::{
-        arrow_schema_without_partitions, next_data_path, record_batch_from_message,
-        record_batch_without_partitions, stringified_partition_value,
-    },
-    DeltaWriter, DeltaWriterError,
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::sync::Arc;
+
+use super::stats::{apply_null_counts, create_add, NullCounts};
+use super::utils::{
+    arrow_schema_without_partitions, next_data_path, record_batch_from_message,
+    record_batch_without_partitions, stringified_partition_value,
 };
+use super::{DeltaWriter, DeltaWriterError};
 use crate::builder::DeltaTableBuilder;
-use crate::DeltaTableError;
-use crate::{action::Add, DeltaTable, DeltaTableMetaData, Schema};
+use crate::{action::Add, DeltaTable, DeltaTableError, DeltaTableMetaData, Schema};
 use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
-use arrow::{
-    datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef},
-    record_batch::*,
-};
+
+use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow::record_batch::*;
 use bytes::Bytes;
 use log::{info, warn};
 use object_store::ObjectStore;
@@ -23,9 +23,6 @@ use parquet::{
     file::properties::WriterProperties,
 };
 use serde_json::Value;
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::sync::Arc;
 
 type BadValue = (Value, ParquetError);
 

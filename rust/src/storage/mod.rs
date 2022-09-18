@@ -26,6 +26,9 @@ lazy_static! {
     static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
 }
 
+/// Sharable reference to [`DeltaObjectStore`]
+pub type ObjectStoreRef = Arc<DeltaObjectStore>;
+
 /// Configuration for a DeltaObjectStore
 #[derive(Debug, Clone)]
 struct DeltaObjectStoreConfig {

@@ -735,6 +735,7 @@ dependencies = [
  "num-bigint",
  "num-traits",
  "object_store",
+ "once_cell",
  "parquet",
  "parquet-format",
  "parquet2",

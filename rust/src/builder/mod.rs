@@ -1,27 +1,48 @@
 //! Create or load DeltaTables
 
-use crate::delta::{DeltaTable, DeltaTableError};
-use crate::schema::DeltaDataTypeVersion;
-use crate::storage::file::FileStorageBackend;
-use crate::storage::DeltaObjectStore;
-use chrono::{DateTime, FixedOffset, Utc};
-use object_store::path::Path;
-use object_store::{DynObjectStore, Error as ObjectStoreError, Result as ObjectStoreResult};
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::schema::DeltaDataTypeVersion;
+use crate::storage::file::FileStorageBackend;
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
+
+use chrono::{DateTime, FixedOffset, Utc};
+use object_store::memory::InMemory;
+use object_store::path::Path;
+use object_store::{DynObjectStore, Error as ObjectStoreError, Result as ObjectStoreResult};
 use url::Url;
 
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 use crate::storage::s3::{S3StorageBackend, S3StorageOptions};
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 use object_store::aws::AmazonS3Builder;
-#[cfg(feature = "azure")]
-use object_store::azure::MicrosoftAzureBuilder;
-#[cfg(feature = "gcs")]
-use object_store::gcp::GoogleCloudStorageBuilder;
 
-#[cfg(any(feature = "azure", feature = "s3", feature = "s3-rustls"))]
+#[cfg(feature = "azure")]
+mod azure;
+#[cfg(feature = "gcs")]
+mod google;
+
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 const TRUTHY: [&str; 3] = ["TRUE", "1", "OK"];
+
+#[allow(dead_code)]
+#[derive(Debug, thiserror::Error)]
+enum BuilderError {
+    #[error("Store {backend} requires host in storage url, got: {url}")]
+    MissingHost { backend: String, url: String },
+    #[error("Missing configuration {0}")]
+    Required(String),
+    #[error("Failed to find valid credential.")]
+    MissingCredential,
+}
+
+impl From<BuilderError> for DeltaTableError {
+    fn from(err: BuilderError) -> Self {
+        DeltaTableError::Generic(err.to_string())
+    }
+}
 
 /// possible version specifications for loading a delta table
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -175,8 +196,6 @@ impl DeltaTableBuilder {
     ///
     /// [s3_storage_options] describes the available options for the AWS or S3-compliant backend.
     /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
-    /// [azure_storage_options] describes the available options for the Azure backend.
-    /// [gcp_storage_options] describes the available options for the Google Cloud Platform backend.
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
         self
@@ -191,7 +210,7 @@ impl DeltaTableBuilder {
     }
 
     /// Build a delta storage backend for the given config
-    pub fn build_storage(self) -> Result<Arc<DeltaObjectStore>, DeltaTableError> {
+    pub fn build_storage(self) -> Result<ObjectStoreRef, DeltaTableError> {
         let (storage, storage_url) = match self.options.storage_backend {
             // Some(storage) => storage,
             None => get_storage_backend(
@@ -250,6 +269,8 @@ pub enum StorageService {
     Azure,
     /// Google cloud storage
     GCS,
+    /// In-memory table
+    Memory,
     /// Unrecognized service
     Unknown,
 }
@@ -379,6 +400,7 @@ impl StorageUrl {
             "az" | "abfs" | "abfss" | "adls2" | "azure" | "wasb" | "adl" => StorageService::Azure,
             "s3" | "s3a" => StorageService::S3,
             "gs" => StorageService::GCS,
+            "memory" => StorageService::Memory,
             _ => StorageService::Unknown,
         }
     }
@@ -408,14 +430,18 @@ fn get_storage_backend(
     // annotation needed for some feature builds
     #[allow(unused_variables)] options: Option<HashMap<String, String>>,
     #[allow(unused_variables)] allow_http: Option<bool>,
-) -> ObjectStoreResult<(Arc<DynObjectStore>, StorageUrl)> {
+) -> DeltaResult<(Arc<DynObjectStore>, StorageUrl)> {
     let storage_url = StorageUrl::parse(table_uri)?;
     match storage_url.service_type() {
         StorageService::Local => Ok((Arc::new(FileStorageBackend::new()), storage_url)),
+        StorageService::Memory => Ok((Arc::new(InMemory::new()), storage_url)),
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
         StorageService::S3 => {
             let url: &Url = storage_url.as_ref();
-            let bucket_name = url.host_str().ok_or(ObjectStoreError::NotImplemented)?;
+            let bucket_name = url.host_str().ok_or(BuilderError::MissingHost {
+                backend: "S3".into(),
+                url: storage_url.to_string(),
+            })?;
             let (mut builder, s3_options) =
                 get_s3_builder_from_options(options.unwrap_or_default());
             builder = builder.with_bucket_name(bucket_name);
@@ -434,12 +460,18 @@ fn get_storage_backend(
         StorageService::Azure => {
             let (container_name, url_account) = match storage_url.scheme() {
                 "az" | "adl" | "azure" => {
-                    let container = storage_url.host().ok_or(ObjectStoreError::NotImplemented)?;
+                    let container = storage_url.host().ok_or(BuilderError::MissingHost {
+                        backend: "Azure".into(),
+                        url: storage_url.to_string(),
+                    })?;
                     (container.to_owned(), None)
                 }
                 "adls2" => {
                     log::warn!("Support for the 'adls2' scheme is deprecated and will be removed in a future version. Use `az://<container>/<path>` instead.");
-                    let account = storage_url.host().ok_or(ObjectStoreError::NotImplemented)?;
+                    let account = storage_url.host().ok_or(BuilderError::MissingHost {
+                        backend: "Azure".into(),
+                        url: storage_url.to_string(),
+                    })?;
                     let container = storage_url
                         .prefix
                         .parts()
@@ -455,14 +487,20 @@ fn get_storage_backend(
                     if url.username().is_empty() {
                         (
                             url.host_str()
-                                .ok_or(ObjectStoreError::NotImplemented)?
+                                .ok_or(BuilderError::MissingHost {
+                                    backend: "Azure".into(),
+                                    url: storage_url.to_string(),
+                                })?
                                 .to_string(),
                             None,
                         )
                     } else {
                         let parts: Vec<&str> = url
                             .host_str()
-                            .ok_or(ObjectStoreError::NotImplemented)?
+                            .ok_or(BuilderError::MissingHost {
+                                backend: "Azure".into(),
+                                url: storage_url.to_string(),
+                            })?
                             .splitn(2, '.')
                             .collect();
                         if parts.len() != 2 {
@@ -474,22 +512,24 @@ fn get_storage_backend(
                 }
                 _ => todo!(),
             };
-            let mut builder = get_azure_builder_from_options(options.unwrap_or_default())
-                .with_container_name(container_name);
+            let mut options = options.unwrap_or_default();
             if let Some(account) = url_account {
-                builder = builder.with_account(account);
+                options.insert("account_name".into(), account.into());
             }
-            if let Some(allow) = allow_http {
-                builder = builder.with_allow_http(allow);
-            }
+            let builder =
+                azure::AzureConfig::get_builder(&options)?.with_container_name(container_name);
             Ok((Arc::new(builder.build()?), storage_url))
         }
         #[cfg(feature = "gcs")]
         StorageService::GCS => {
             let url: &Url = storage_url.as_ref();
-            let bucket_name = url.host_str().ok_or(ObjectStoreError::NotImplemented)?;
-            let builder = get_gcp_builder_from_options(options.unwrap_or_default())
-                .with_bucket_name(bucket_name);
+            let bucket_name = url.host_str().ok_or(BuilderError::MissingHost {
+                backend: "Google".into(),
+                url: storage_url.to_string(),
+            })?;
+            let options = options.unwrap_or_default();
+            let builder =
+                google::GoogleConfig::get_builder(&options)?.with_bucket_name(bucket_name);
             Ok((Arc::new(builder.build()?), storage_url))
         }
         _ => todo!(),
@@ -602,82 +642,6 @@ pub fn get_s3_builder_from_options(
     // up by the build function if set on the environment. If we have them in the map, should we set them in the env?
     // In the default case, always instance credentials are used.
     (builder, s3_options)
-}
-
-/// Storage option keys to use when creating azure storage backend.
-/// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
-pub mod azure_storage_options {
-    ///The ADLS Gen2 Access Key
-    pub const AZURE_STORAGE_ACCOUNT_KEY: &str = "AZURE_STORAGE_ACCOUNT_KEY";
-    ///The name of storage account
-    pub const AZURE_STORAGE_ACCOUNT_NAME: &str = "AZURE_STORAGE_ACCOUNT_NAME";
-    /// Connection string for connecting to azure storage account
-    pub const AZURE_STORAGE_CONNECTION_STRING: &str = "AZURE_STORAGE_CONNECTION_STRING";
-    /// Service principal id
-    pub const AZURE_STORAGE_CLIENT_ID: &str = "AZURE_STORAGE_CLIENT_ID";
-    /// Service principal secret
-    pub const AZURE_STORAGE_CLIENT_SECRET: &str = "AZURE_STORAGE_CLIENT_SECRET";
-    /// ID for Azure (AAD) tenant where service principal is registered.
-    pub const AZURE_STORAGE_TENANT_ID: &str = "AZURE_STORAGE_TENANT_ID";
-    /// Connect to a Azurite storage emulator instance
-    pub const AZURE_STORAGE_USE_EMULATOR: &str = "AZURE_STORAGE_USE_EMULATOR";
-    /// Allow http connections - mainly useful for integration tests
-    pub const AZURE_STORAGE_ALLOW_HTTP: &str = "AZURE_STORAGE_ALLOW_HTTP";
-}
-
-/// Generate a new MicrosoftAzureBuilder instance from a map of options
-#[cfg(feature = "azure")]
-pub fn get_azure_builder_from_options(options: HashMap<String, String>) -> MicrosoftAzureBuilder {
-    let mut builder = MicrosoftAzureBuilder::new();
-
-    if let Some(account) = str_option(&options, azure_storage_options::AZURE_STORAGE_ACCOUNT_NAME) {
-        builder = builder.with_account(account);
-    }
-    if let Some(account_key) =
-        str_option(&options, azure_storage_options::AZURE_STORAGE_ACCOUNT_KEY)
-    {
-        builder = builder.with_access_key(account_key);
-    }
-    if let (Some(client_id), Some(client_secret), Some(tenant_id)) = (
-        str_option(&options, azure_storage_options::AZURE_STORAGE_CLIENT_ID),
-        str_option(&options, azure_storage_options::AZURE_STORAGE_CLIENT_SECRET),
-        str_option(&options, azure_storage_options::AZURE_STORAGE_TENANT_ID),
-    ) {
-        builder = builder.with_client_secret_authorization(client_id, client_secret, tenant_id);
-    }
-    if let Some(val) = str_option(&options, azure_storage_options::AZURE_STORAGE_USE_EMULATOR) {
-        if TRUTHY.contains(&val.to_uppercase().as_str()) {
-            builder = builder.with_use_emulator(true).with_allow_http(true);
-        }
-    }
-    if let Some(val) = str_option(&options, azure_storage_options::AZURE_STORAGE_ALLOW_HTTP) {
-        if TRUTHY.contains(&val.to_uppercase().as_str()) {
-            builder = builder.with_allow_http(true);
-        }
-    }
-    builder
-}
-
-/// Storage option keys to use when creating gcp storage backend.
-/// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
-pub mod gcp_storage_options {
-    /// Path to the service account json file
-    pub const SERVICE_ACCOUNT: &str = "SERVICE_ACCOUNT";
-    /// Path to the service account json file
-    pub const GOOGLE_SERVICE_ACCOUNT: &str = "GOOGLE_SERVICE_ACCOUNT";
-}
-
-/// Generate a new GoogleCloudStorageBuilder instance from a map of options
-#[cfg(feature = "gcs")]
-pub fn get_gcp_builder_from_options(options: HashMap<String, String>) -> GoogleCloudStorageBuilder {
-    let mut builder = GoogleCloudStorageBuilder::new();
-    if let Some(account) = str_option(&options, gcp_storage_options::GOOGLE_SERVICE_ACCOUNT) {
-        builder = builder.with_service_account_path(account);
-    } else if let Some(account) = str_option(&options, gcp_storage_options::SERVICE_ACCOUNT) {
-        builder = builder.with_service_account_path(account);
-    }
-
-    builder
 }
 
 #[allow(dead_code)]

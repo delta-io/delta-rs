@@ -38,7 +38,7 @@ impl TestContext {
         let backend_ref = backend.as_ref().map(|s| s.as_str());
         let context = match backend_ref {
             Ok("LOCALFS") | Err(std::env::VarError::NotPresent) => setup_local_context().await,
-            #[cfg(feature = "azure2")]
+            #[cfg(feature = "azure")]
             Ok("AZURE_GEN2") => adls::setup_azure_gen2_context().await,
             #[cfg(any(feature = "s3", feature = "s3-rustls"))]
             Ok("S3_LOCAL_STACK") => s3::setup_s3_context().await,
