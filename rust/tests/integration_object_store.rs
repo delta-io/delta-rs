@@ -1,10 +1,9 @@
 #![cfg(feature = "integration_test")]
 
 use bytes::Bytes;
-use deltalake::{
-    test_utils::{IntegrationContext, StorageIntegration, TestResult},
-    DeltaTableBuilder,
-};
+use deltalake::storage::utils::flatten_list_stream;
+use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult};
+use deltalake::DeltaTableBuilder;
 use futures::TryStreamExt;
 use object_store::{
     path::Path, DynObjectStore, Error as ObjectStoreError, Result as ObjectStoreResult,
@@ -411,16 +410,4 @@ async fn delete_fixtures(storage: &DynObjectStore) -> TestResult {
         let _ = storage.delete(f).await?;
     }
     Ok(())
-}
-
-async fn flatten_list_stream(
-    storage: &DynObjectStore,
-    prefix: Option<&Path>,
-) -> ObjectStoreResult<Vec<Path>> {
-    storage
-        .list(prefix)
-        .await?
-        .map_ok(|meta| meta.location)
-        .try_collect::<Vec<Path>>()
-        .await
 }
