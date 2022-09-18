@@ -25,28 +25,26 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use crate::action;
+use crate::schema;
+use crate::{DeltaTable, DeltaTableError};
+
 use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::{TableProvider, TableType};
-use datafusion::error::{DataFusionError, Result as DataFusionResult};
+use datafusion::datasource::{listing::PartitionedFile, TableProvider, TableType};
 use datafusion::execution::context::SessionState;
-use datafusion::logical_plan::{combine_filters, Column, Expr};
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
-use datafusion::scalar::ScalarValue;
+use datafusion_common::scalar::ScalarValue;
+use datafusion_common::{Column, DataFusionError, Result as DataFusionResult};
+use datafusion_expr::{combine_filters, Expr};
 use object_store::{path::Path, ObjectMeta};
 use url::Url;
-
-use crate::action;
-use crate::delta;
-use crate::schema;
-use crate::DeltaTableError;
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -60,7 +58,7 @@ impl From<DeltaTableError> for DataFusionError {
     }
 }
 
-impl From<DataFusionError> for crate::DeltaTableError {
+impl From<DataFusionError> for DeltaTableError {
     fn from(err: DataFusionError) -> Self {
         match err {
             DataFusionError::ArrowError(source) => DeltaTableError::Arrow { source },
@@ -72,7 +70,7 @@ impl From<DataFusionError> for crate::DeltaTableError {
     }
 }
 
-impl delta::DeltaTable {
+impl DeltaTable {
     /// Return statistics for Datafusion Table
     pub fn datafusion_table_statistics(&self) -> Statistics {
         let stats = self
@@ -222,7 +220,7 @@ impl delta::DeltaTable {
     }
 }
 
-impl PruningStatistics for delta::DeltaTable {
+impl PruningStatistics for DeltaTable {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
@@ -294,13 +292,11 @@ impl PruningStatistics for delta::DeltaTable {
 }
 
 #[async_trait]
-impl TableProvider for delta::DeltaTable {
+impl TableProvider for DeltaTable {
     fn schema(&self) -> Arc<ArrowSchema> {
         Arc::new(
-            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
-                delta::DeltaTable::schema(self).unwrap(),
-            )
-            .unwrap(),
+            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(DeltaTable::schema(self).unwrap())
+                .unwrap(),
         )
     }
 
@@ -316,7 +312,7 @@ impl TableProvider for delta::DeltaTable {
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
         let schema = Arc::new(<ArrowSchema as TryFrom<&schema::Schema>>::try_from(
-            delta::DeltaTable::schema(self).unwrap(),
+            DeltaTable::schema(self).unwrap(),
         )?);
 
         // each delta table must register a specific object store, since paths are internally
@@ -421,7 +417,7 @@ fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> P
     }
 }
 
-fn to_scalar_value(stat_val: &serde_json::Value) -> Option<datafusion::scalar::ScalarValue> {
+fn to_scalar_value(stat_val: &serde_json::Value) -> Option<ScalarValue> {
     match stat_val {
         serde_json::Value::Bool(val) => Some(ScalarValue::from(*val)),
         serde_json::Value::Number(num) => {
@@ -443,7 +439,7 @@ fn to_scalar_value(stat_val: &serde_json::Value) -> Option<datafusion::scalar::S
 fn to_correct_scalar_value(
     stat_val: &serde_json::Value,
     field_dt: &ArrowDataType,
-) -> Option<datafusion::scalar::ScalarValue> {
+) -> Option<ScalarValue> {
     match stat_val {
         serde_json::Value::Array(_) => None,
         serde_json::Value::Object(_) => None,
@@ -486,9 +482,9 @@ fn to_correct_scalar_value(
 }
 
 fn correct_scalar_value_type(
-    value: datafusion::scalar::ScalarValue,
+    value: ScalarValue,
     field_dt: &ArrowDataType,
-) -> Option<datafusion::scalar::ScalarValue> {
+) -> Option<ScalarValue> {
     match field_dt {
         ArrowDataType::Int64 => {
             let raw_value = i64::try_from(value).ok()?;
@@ -566,8 +562,8 @@ fn correct_scalar_value_type(
 }
 
 fn left_larger_than_right(
-    left: datafusion::scalar::ScalarValue,
-    right: datafusion::scalar::ScalarValue,
+    left: ScalarValue,
+    right: ScalarValue,
 ) -> Option<bool> {
     match left {
         ScalarValue::Float64(Some(v)) => {

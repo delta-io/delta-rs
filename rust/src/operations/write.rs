@@ -16,20 +16,22 @@
 //! replace data that matches a predicate.
 
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/WriteIntoDelta.scala
+use core::any::Any;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use super::{
     create::CreateCommand,
     transaction::{serialize_actions, OPERATION_SCHEMA},
     *,
 };
-use crate::{
-    action::{Action, Add, Remove, SaveMode},
-    writer::{DeltaWriter, RecordBatchWriter},
-    Schema,
-};
-use core::any::Any;
+use crate::action::{Action, Add, Remove, SaveMode};
+use crate::writer::{DeltaWriter, RecordBatchWriter};
+use crate::Schema;
+
+use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use datafusion::{
-    arrow::datatypes::SchemaRef as ArrowSchemaRef,
-    error::Result as DataFusionResult,
     execution::context::TaskContext,
     physical_plan::{
         common::{
@@ -42,10 +44,8 @@ use datafusion::{
         SendableRecordBatchStream, Statistics,
     },
 };
+use datafusion_common::Result as DataFusionResult;
 use futures::{TryFutureExt, TryStreamExt};
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 const MAX_SUPPORTED_WRITER_VERSION: i32 = 1;
 

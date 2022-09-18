@@ -1,5 +1,7 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
+use std::sync::Arc;
+
 use super::{
     to_datafusion_err,
     transaction::{serialize_actions, OPERATION_SCHEMA},
@@ -9,11 +11,12 @@ use crate::{
     action::{Action, DeltaOperation, MetaData, Protocol, SaveMode},
     DeltaTableBuilder, DeltaTableMetaData,
 };
+
 use async_trait::async_trait;
 use core::any::Any;
+use arrow::datatypes::SchemaRef;
+use datafusion_common::{DataFusionError, Result as DataFusionResult};
 use datafusion::{
-    arrow::datatypes::SchemaRef,
-    error::{DataFusionError, Result as DataFusionResult},
     execution::context::TaskContext,
     physical_plan::{
         common::{compute_record_batch_statistics, SizedRecordBatchStream},
@@ -24,7 +27,6 @@ use datafusion::{
     },
 };
 use futures::{TryFutureExt, TryStreamExt};
-use std::sync::Arc;
 
 /// Command for creating new delta table
 pub struct CreateCommand {

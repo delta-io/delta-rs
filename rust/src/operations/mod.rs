@@ -1,6 +1,11 @@
 //! High level delta commands that can be executed against a delta table
 // TODO
 // - rename to delta operations
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use crate::{
     action::{DeltaOperation, Protocol, SaveMode},
     builder::DeltaTableBuilder,
@@ -9,16 +14,13 @@ use crate::{
     writer::{record_batch::divide_by_partition_values, utils::PartitionPath},
     DeltaTable, DeltaTableError, DeltaTableMetaData,
 };
+
 use arrow::{datatypes::SchemaRef as ArrowSchemaRef, error::ArrowError, record_batch::RecordBatch};
+use datafusion_common::DataFusionError;
 use datafusion::{
-    error::DataFusionError,
     physical_plan::{collect, memory::MemoryExec, ExecutionPlan},
     prelude::SessionContext,
 };
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::fmt::Debug;
-use std::sync::Arc;
 
 pub mod create;
 pub mod transaction;

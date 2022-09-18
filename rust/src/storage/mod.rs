@@ -154,6 +154,15 @@ impl DeltaObjectStore {
         }
         Ok(())
     }
+
+    /// Check if the location is a delta table location
+    pub async fn is_delta_table_location(&self) -> ObjectStoreResult<bool> {
+        match self.head(self.log_path()).await {
+            Ok(_) => Ok(true),
+            Err(ObjectStoreError::NotFound { .. }) => Ok(false),
+            Err(err) => Err(err),
+        }
+    }
 }
 
 #[async_trait::async_trait]
