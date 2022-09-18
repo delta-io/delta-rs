@@ -11,19 +11,18 @@ mod stats;
 pub mod test_utils;
 pub mod utils;
 
-use crate::{
-    action::{Action, Add, ColumnCountStat, Stats},
-    delta::DeltaTable,
-    DeltaDataTypeVersion, DeltaTableError,
-};
+use crate::action::{Action, Add, ColumnCountStat, Stats};
+use crate::delta::DeltaTable;
+use crate::{DeltaDataTypeVersion, DeltaTableError};
+
 use arrow::{datatypes::SchemaRef, datatypes::*, error::ArrowError};
 use async_trait::async_trait;
-pub use json::JsonWriter;
 use object_store::Error as ObjectStoreError;
 use parquet::{basic::LogicalType, errors::ParquetError};
-pub use record_batch::RecordBatchWriter;
 use serde_json::Value;
-use std::sync::Arc;
+
+pub use json::JsonWriter;
+pub use record_batch::RecordBatchWriter;
 
 /// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]
@@ -38,7 +37,7 @@ pub(crate) enum DeltaWriterError {
         /// The record batch schema.
         record_batch_schema: SchemaRef,
         /// The schema of the target delta table.
-        expected_schema: Arc<arrow::datatypes::Schema>,
+        expected_schema: SchemaRef,
     },
 
     /// An Arrow RecordBatch could not be created from the JSON buffer.
