@@ -1,26 +1,23 @@
 #![cfg(feature = "datafusion-ext")]
 
-use arrow::{
-    array::*,
-    datatypes::{
-        DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
-        SchemaRef as ArrowSchemaRef,
-    },
-    record_batch::RecordBatch,
-};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+use deltalake::action::SaveMode;
+use deltalake::operations::DeltaCommands;
+use deltalake::{DeltaTable, DeltaTableMetaData, Schema};
+
+use arrow::array::*;
+use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
+use arrow::record_batch::RecordBatch;
 use datafusion::datasource::TableProvider;
-use datafusion::error::{DataFusionError, Result};
 use datafusion::execution::context::{SessionContext, TaskContext};
-use datafusion::logical_expr::Expr;
-use datafusion::logical_plan::Column;
-use datafusion::physical_plan::{
-    coalesce_partitions::CoalescePartitionsExec, common, file_format::ParquetExec, metrics::Label,
-    visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor,
-};
-use datafusion::scalar::ScalarValue;
-use deltalake::{action::SaveMode, operations::DeltaCommands, DeltaTable, DeltaTableMetaData};
-use std::collections::HashMap;
-use std::{collections::HashSet, sync::Arc};
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
+use datafusion::physical_plan::{common, file_format::ParquetExec, metrics::Label};
+use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor};
+use datafusion_common::scalar::ScalarValue;
+use datafusion_common::{Column, DataFusionError, Result};
+use datafusion_expr::Expr;
 
 fn get_scanned_files(node: &dyn ExecutionPlan) -> HashSet<Label> {
     node.metrics()
@@ -56,7 +53,6 @@ impl ExecutionPlanVisitor for ExecutionMetricsCollector {
 }
 
 async fn prepare_table(
-    schema: ArrowSchemaRef,
     batches: Vec<RecordBatch>,
     save_mode: SaveMode,
 ) -> (tempfile::TempDir, Arc<DeltaTable>) {
@@ -68,7 +64,7 @@ async fn prepare_table(
         .await
         .unwrap();
 
-    let table_schema = schema.clone().try_into().unwrap();
+    let table_schema: Schema = batches[0].schema().clone().try_into().unwrap();
     let metadata = DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
     let _ = commands
         .create(metadata.clone(), SaveMode::Ignore)
@@ -217,7 +213,7 @@ async fn test_files_scanned() -> Result<()> {
         RecordBatch::try_new(arrow_schema.clone(), columns_1)?,
         RecordBatch::try_new(arrow_schema.clone(), columns_2)?,
     ];
-    let (_temp_dir, table) = prepare_table(arrow_schema.clone(), batches, SaveMode::Append).await;
+    let (_temp_dir, table) = prepare_table(batches, SaveMode::Append).await;
     assert_eq!(table.version(), 2);
 
     let ctx = SessionContext::new();

@@ -4,8 +4,10 @@ use std::collections::HashMap;
 
 use crate::builder::DeltaTableBuilder;
 use crate::DeltaTableError;
-use futures::StreamExt;
-use object_store::ObjectStore;
+use futures::{StreamExt, TryStreamExt};
+use object_store::path::Path;
+use object_store::{DynObjectStore, Result as ObjectStoreResult};
+use std::sync::Arc;
 
 /// Copies the contents from the `from` location into the `to` location
 pub async fn copy_table(
@@ -20,7 +22,14 @@ pub async fn copy_table(
     let to_store = DeltaTableBuilder::from_uri(to)
         .with_storage_options(to_options.unwrap_or_default())
         .build_storage()?;
+    sync_stores(from_store, to_store).await
+}
 
+/// Synchronize the contents of two object stores
+pub async fn sync_stores(
+    from_store: Arc<DynObjectStore>,
+    to_store: Arc<DynObjectStore>,
+) -> Result<(), DeltaTableError> {
     // TODO if a table is copied within the same root store (i.e bucket), using copy would be MUCH more efficient
     let mut meta_stream = from_store.list(None).await?;
     while let Some(file) = meta_stream.next().await {
@@ -29,6 +38,18 @@ pub async fn copy_table(
             to_store.put(&meta.location, bytes).await?;
         }
     }
-
     Ok(())
+}
+
+/// Collect list stream
+pub async fn flatten_list_stream(
+    storage: &DynObjectStore,
+    prefix: Option<&Path>,
+) -> ObjectStoreResult<Vec<Path>> {
+    storage
+        .list(prefix)
+        .await?
+        .map_ok(|meta| meta.location)
+        .try_collect::<Vec<Path>>()
+        .await
 }
