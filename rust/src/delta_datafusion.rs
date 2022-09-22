@@ -603,6 +603,18 @@ fn left_larger_than_right(left: ScalarValue, right: ScalarValue) -> Option<bool>
     }
 }
 
+fn enforce_invariants(
+    record_batch: RecordBatch,
+    invariants: &Vec<(String, String)>,
+) -> Result<(), DeltaTableError> {
+    let ctx = SessionContext::new();
+    // TODO: How does one query a record batch in data fusion??
+    for invariant in invariants.iter() {
+        let sql = format!("SELECT {} FROM data WHERE {} LIMIT 1", name, invariant);
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

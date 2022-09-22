@@ -64,35 +64,66 @@ impl SchemaTypeStruct {
     }
 
     /// Get all invariants in the schemas
-    pub fn get_invariants(&self) -> Result<Vec<String>, crate::DeltaTableError> {
-        let mut remaining_fields: Vec<SchemaField> = self.get_fields().clone();
-        let mut invariants: Vec<String> = Vec::new();
+    pub fn get_invariants(&self) -> Result<Vec<(String, String)>, crate::DeltaTableError> {
+        let mut remaining_fields: Vec<(String, SchemaField)> = self
+            .get_fields()
+            .iter()
+            .map(|field| ("".to_string(), field.clone()))
+            .collect();
+        let mut invariants: Vec<(String, String)> = Vec::new();
 
-        while let Some(field) = remaining_fields.pop() {
+        let add_segment = |prefix: &str, segment: &str| -> String {
+            if prefix.is_empty() {
+                segment.to_owned()
+            } else {
+                format!("{}.{}", prefix, segment)
+            }
+        };
+
+        while let Some((prefix, field)) = remaining_fields.pop() {
             match field.r#type {
                 SchemaDataType::r#struct(inner) => {
-                    remaining_fields.extend(inner.get_fields().clone());
+                    let new_prefix = add_segment(&prefix, &field.name);
+                    remaining_fields.extend(
+                        inner
+                            .get_fields()
+                            .iter()
+                            .map(|field| (new_prefix.clone(), field.clone()))
+                            .collect::<Vec<(String, SchemaField)>>(),
+                    );
                 }
                 SchemaDataType::array(inner) => {
-                    remaining_fields.push(SchemaField::new(
-                        "dummy".to_string(),
-                        *inner.elementType,
-                        false,
-                        HashMap::new(),
+                    let new_prefix = add_segment(&prefix, "elements");
+                    remaining_fields.push((
+                        new_prefix,
+                        SchemaField::new(
+                            "dummy".to_string(),
+                            *inner.elementType,
+                            false,
+                            HashMap::new(),
+                        ),
                     ));
                 }
                 SchemaDataType::map(inner) => {
-                    remaining_fields.push(SchemaField::new(
-                        "dummy".to_string(),
-                        *inner.keyType,
-                        false,
-                        HashMap::new(),
+                    let new_prefix = add_segment(&prefix, "keys");
+                    remaining_fields.push((
+                        new_prefix,
+                        SchemaField::new(
+                            "dummy".to_string(),
+                            *inner.keyType,
+                            false,
+                            HashMap::new(),
+                        ),
                     ));
-                    remaining_fields.push(SchemaField::new(
-                        "dummy".to_string(),
-                        *inner.valueType,
-                        false,
-                        HashMap::new(),
+                    let new_prefix = add_segment(&prefix, "values");
+                    remaining_fields.push((
+                        new_prefix,
+                        SchemaField::new(
+                            "dummy".to_string(),
+                            *inner.valueType,
+                            false,
+                            HashMap::new(),
+                        ),
                     ));
                 }
                 _ => {}
@@ -103,7 +134,8 @@ impl SchemaTypeStruct {
                 if let Value::Object(json) = json {
                     if let Some(Value::Object(expr1)) = json.get("expression") {
                         if let Some(Value::String(sql)) = expr1.get("expression") {
-                            invariants.push(sql.clone());
+                            let full_field_name = add_segment(&prefix,& field.name);
+                            invariants.push((full_field_name, sql.clone()));
                         }
                     }
                 }
@@ -298,8 +330,8 @@ mod tests {
         .unwrap();
         let invariants = schema.get_invariants().unwrap();
         assert_eq!(invariants.len(), 2);
-        assert!(invariants.contains(&"x > 2".to_string()));
-        assert!(invariants.contains(&"y < 4".to_string()));
+        assert!(invariants.contains(&("x".to_string(), "x > 2".to_string())));
+        assert!(invariants.contains(&("y".to_string(), "y < 4".to_string())));
 
         let schema: Schema = serde_json::from_value(json!({
             "type": "struct",
@@ -331,6 +363,12 @@ mod tests {
         })).unwrap();
         let invariants = schema.get_invariants().unwrap();
         assert_eq!(invariants.len(), 1);
-        assert_eq!(invariants[0], "a_map.value.element.d < 4");
+        assert_eq!(
+            invariants[0],
+            (
+                "a_map.value.element.d".to_string(),
+                "a_map.value.element.d < 4".to_string()
+            )
+        );
     }
 }
