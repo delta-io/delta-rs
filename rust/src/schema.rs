@@ -21,6 +21,25 @@ static STRUCT_TAG: &str = "struct";
 static ARRAY_TAG: &str = "array";
 static MAP_TAG: &str = "map";
 
+/// An invariant for a column that is enforced on all writes to a Delta table.
+#[derive(PartialEq, Debug, Default, Clone)]
+pub struct Invariant {
+    /// The full path to the field.
+    pub field_name: String,
+    /// The SQL string that must always evaluate to true.
+    pub invariant_sql: String,
+}
+
+impl Invariant {
+    /// Create a new invariant
+    pub fn new(field_name: &str, invariant_sql: &str) -> Self {
+        Invariant {
+            field_name: field_name.to_string(),
+            invariant_sql: invariant_sql.to_string(),
+        }
+    }
+}
+
 /// Represents a struct field defined in the Delta table schema.
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
 #[derive(Serialize, Deserialize, PartialEq, Debug, Default, Clone)]
@@ -64,13 +83,13 @@ impl SchemaTypeStruct {
     }
 
     /// Get all invariants in the schemas
-    pub fn get_invariants(&self) -> Result<Vec<(String, String)>, crate::DeltaTableError> {
+    pub fn get_invariants(&self) -> Result<Vec<Invariant>, crate::DeltaTableError> {
         let mut remaining_fields: Vec<(String, SchemaField)> = self
             .get_fields()
             .iter()
             .map(|field| (field.name.clone(), field.clone()))
             .collect();
-        let mut invariants: Vec<(String, String)> = Vec::new();
+        let mut invariants: Vec<Invariant> = Vec::new();
 
         let add_segment = |prefix: &str, segment: &str| -> String {
             if prefix.is_empty() {
@@ -121,7 +140,7 @@ impl SchemaTypeStruct {
                 if let Value::Object(json) = json {
                     if let Some(Value::Object(expr1)) = json.get("expression") {
                         if let Some(Value::String(sql)) = expr1.get("expression") {
-                            invariants.push((field_path, sql.clone()));
+                            invariants.push(Invariant::new(&field_path, sql));
                         }
                     }
                 }
@@ -316,8 +335,8 @@ mod tests {
         .unwrap();
         let invariants = schema.get_invariants().unwrap();
         assert_eq!(invariants.len(), 2);
-        assert!(invariants.contains(&("x".to_string(), "x > 2".to_string())));
-        assert!(invariants.contains(&("y".to_string(), "y < 4".to_string())));
+        assert!(invariants.contains(&Invariant::new("x", "x > 2")));
+        assert!(invariants.contains(&Invariant::new("y", "y < 4")));
 
         let schema: Schema = serde_json::from_value(json!({
             "type": "struct",
@@ -351,10 +370,7 @@ mod tests {
         assert_eq!(invariants.len(), 1);
         assert_eq!(
             invariants[0],
-            (
-                "a_map.value.element.d".to_string(),
-                "a_map.value.element.d < 4".to_string()
-            )
+            Invariant::new("a_map.value.element.d", "a_map.value.element.d < 4")
         );
     }
 }

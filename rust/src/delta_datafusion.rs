@@ -47,6 +47,12 @@ use datafusion_expr::{combine_filters, Expr};
 use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
+use crate::action;
+use crate::delta;
+use crate::schema;
+use crate::DeltaTableError;
+use crate::Invariant;
+
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
         match err {
@@ -607,7 +613,7 @@ fn left_larger_than_right(left: ScalarValue, right: ScalarValue) -> Option<bool>
 /// Checks that the record batch adheres to the given invariants.
 pub fn enforce_invariants(
     record_batch: &RecordBatch,
-    invariants: &Vec<(String, String)>,
+    invariants: &Vec<Invariant>,
 ) -> Result<(), DeltaTableError> {
     // Invariants are deprecated, so let's not pay the overhead for any of this
     // if we can avoid it.
@@ -622,8 +628,8 @@ pub fn enforce_invariants(
 
     let mut violations: Vec<String> = Vec::new();
 
-    for (column_name, invariant) in invariants.iter() {
-        if column_name.contains(".") {
+    for invariant in invariants.iter() {
+        if invariant.field_name.contains('.') {
             return Err(DeltaTableError::Generic(
                 "Support for column invariants on nested columns is not supported.".to_string(),
             ));
@@ -631,13 +637,16 @@ pub fn enforce_invariants(
 
         let sql = format!(
             "SELECT {} FROM data WHERE not ({}) LIMIT 1",
-            column_name, invariant
+            invariant.field_name, invariant.invariant_sql
         );
 
         let dfs: Vec<RecordBatch> = rt.block_on(async { ctx.sql(&sql).await?.collect().await })?;
         if !dfs.is_empty() && dfs[0].num_rows() > 0 {
             let value = format!("{:?}", dfs[0].column(0));
-            let msg = format!("Invariant ({}) violated by value {}", invariant, value);
+            let msg = format!(
+                "Invariant ({}) violated by value {}",
+                invariant.invariant_sql, value
+            );
             violations.push(msg);
         }
     }
@@ -782,20 +791,20 @@ mod tests {
         )
         .unwrap();
         // Empty invariants is okay
-        let invariants: Vec<(String, String)> = vec![];
+        let invariants: Vec<Invariant> = vec![];
         assert!(enforce_invariants(&batch, &invariants).is_ok());
 
         // Valid invariants return Ok(())
         let invariants = vec![
-            ("a".to_string(), "a is not null".to_string()),
-            ("b".to_string(), "b < 1000".to_string()),
+            Invariant::new("a", "a is not null"),
+            Invariant::new("b", "b < 1000"),
         ];
         assert!(enforce_invariants(&batch, &invariants).is_ok());
 
         // Violated invariants returns an error with list of violations
         let invariants = vec![
-            ("a".to_string(), "a is null".to_string()),
-            ("b".to_string(), "b < 100".to_string()),
+            Invariant::new("a", "a is null"),
+            Invariant::new("b", "b < 100"),
         ];
         let result = enforce_invariants(&batch, &invariants);
         assert!(result.is_err());
@@ -805,7 +814,7 @@ mod tests {
         }
 
         // Irrelevant invariants return a different error
-        let invariants = vec![("c".to_string(), "c > 2000".to_string())];
+        let invariants = vec![Invariant::new("c", "c > 2000")];
         let result = enforce_invariants(&batch, &invariants);
         assert!(result.is_err());
 
@@ -819,7 +828,7 @@ mod tests {
         let inner = Arc::new(StructArray::from(batch));
         let batch = RecordBatch::try_new(schema, vec![inner]).unwrap();
 
-        let invariants = vec![("x.b".to_string(), "x.b < 1000".to_string())];
+        let invariants = vec![Invariant::new("x.b", "x.b < 1000")];
         let result = enforce_invariants(&batch, &invariants);
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
