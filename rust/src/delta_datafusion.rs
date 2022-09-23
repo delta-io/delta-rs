@@ -32,11 +32,12 @@ use crate::{DeltaTable, DeltaTableError};
 use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
+use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
-use datafusion::datasource::{listing::PartitionedFile, TableProvider, TableType};
-use datafusion::execution::context::SessionState;
+use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
+use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
@@ -603,23 +604,58 @@ fn left_larger_than_right(left: ScalarValue, right: ScalarValue) -> Option<bool>
     }
 }
 
-fn enforce_invariants(
-    record_batch: RecordBatch,
+/// Checks that the record batch adheres to the given invariants.
+pub fn enforce_invariants(
+    record_batch: &RecordBatch,
     invariants: &Vec<(String, String)>,
 ) -> Result<(), DeltaTableError> {
-    let ctx = SessionContext::new();
-    // TODO: How does one query a record batch in data fusion??
-    for invariant in invariants.iter() {
-        let sql = format!("SELECT {} FROM data WHERE {} LIMIT 1", name, invariant);
+    // Invariants are deprecated, so let's not pay the overhead for any of this
+    // if we can avoid it.
+    if invariants.is_empty() {
+        return Ok(());
     }
-    Ok(())
+
+    let ctx = SessionContext::new();
+    let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
+    ctx.register_table("data", Arc::new(table))?;
+    let rt = tokio::runtime::Runtime::new().unwrap();
+
+    let mut violations: Vec<String> = Vec::new();
+
+    for (column_name, invariant) in invariants.iter() {
+        if column_name.contains(".") {
+            return Err(DeltaTableError::Generic(
+                "Support for column invariants on nested columns is not supported.".to_string(),
+            ));
+        }
+
+        let sql = format!(
+            "SELECT {} FROM data WHERE not ({}) LIMIT 1",
+            column_name, invariant
+        );
+
+        let dfs: Vec<RecordBatch> = rt.block_on(async { ctx.sql(&sql).await?.collect().await })?;
+        if !dfs.is_empty() && dfs[0].num_rows() > 0 {
+            let value = format!("{:?}", dfs[0].column(0));
+            let msg = format!("Invariant ({}) violated by value {}", invariant, value);
+            violations.push(msg);
+        }
+    }
+
+    if !violations.is_empty() {
+        Err(DeltaTableError::InvalidData { violations })
+    } else {
+        Ok(())
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use arrow::datatypes::Field;
+    use arrow::array::StructArray;
+    use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
+    use datafusion::from_slice::FromSlice;
     use serde_json::json;
 
     // test deserialization of serialized partition values.
@@ -729,5 +765,63 @@ mod tests {
             extensions: None,
         };
         assert_eq!(file.partition_values, ref_file.partition_values)
+    }
+
+    #[test]
+    fn test_enforce_invariants() {
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from_slice(&["a", "b", "c", "d"])),
+                Arc::new(arrow::array::Int32Array::from_slice(&[1, 10, 10, 100])),
+            ],
+        )
+        .unwrap();
+        // Empty invariants is okay
+        let invariants: Vec<(String, String)> = vec![];
+        assert!(enforce_invariants(&batch, &invariants).is_ok());
+
+        // Valid invariants return Ok(())
+        let invariants = vec![
+            ("a".to_string(), "a is not null".to_string()),
+            ("b".to_string(), "b < 1000".to_string()),
+        ];
+        assert!(enforce_invariants(&batch, &invariants).is_ok());
+
+        // Violated invariants returns an error with list of violations
+        let invariants = vec![
+            ("a".to_string(), "a is null".to_string()),
+            ("b".to_string(), "b < 100".to_string()),
+        ];
+        let result = enforce_invariants(&batch, &invariants);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
+        if let Err(DeltaTableError::InvalidData { violations }) = result {
+            assert_eq!(violations.len(), 2);
+        }
+
+        // Irrelevant invariants return a different error
+        let invariants = vec![("c".to_string(), "c > 2000".to_string())];
+        let result = enforce_invariants(&batch, &invariants);
+        assert!(result.is_err());
+
+        // Nested invariants are unsupported
+        let struct_fields = schema.fields().clone();
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "x",
+            DataType::Struct(struct_fields),
+            false,
+        )]));
+        let inner = Arc::new(StructArray::from(batch));
+        let batch = RecordBatch::try_new(schema, vec![inner]).unwrap();
+
+        let invariants = vec![("x.b".to_string(), "x.b < 1000".to_string())];
+        let result = enforce_invariants(&batch, &invariants);
+        assert!(result.is_err());
+        assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
     }
 }
