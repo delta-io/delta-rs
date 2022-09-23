@@ -33,7 +33,7 @@ pub struct Invariant {
 impl Invariant {
     /// Create a new invariant
     pub fn new(field_name: &str, invariant_sql: &str) -> Self {
-        Invariant {
+        Self {
             field_name: field_name.to_string(),
             invariant_sql: invariant_sql.to_string(),
         }

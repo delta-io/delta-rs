@@ -610,51 +610,74 @@ fn left_larger_than_right(left: ScalarValue, right: ScalarValue) -> Option<bool>
     }
 }
 
-/// Checks that the record batch adheres to the given invariants.
-pub fn enforce_invariants(
-    record_batch: &RecordBatch,
-    invariants: &Vec<Invariant>,
-) -> Result<(), DeltaTableError> {
-    // Invariants are deprecated, so let's not pay the overhead for any of this
-    // if we can avoid it.
-    if invariants.is_empty() {
-        return Ok(());
+/// Responsible for checking batches of data conform to table's invariants.
+pub struct DeltaDataChecker {
+    invariants: Vec<Invariant>,
+    ctx: SessionContext,
+    rt: tokio::runtime::Runtime,
+}
+
+impl DeltaDataChecker {
+    /// Create a new DeltaDataChecker
+    pub fn new(invariants: Vec<Invariant>) -> Self {
+        Self {
+            invariants,
+            ctx: SessionContext::new(),
+            rt: tokio::runtime::Runtime::new().unwrap(),
+        }
     }
 
-    let ctx = SessionContext::new();
-    let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
-    ctx.register_table("data", Arc::new(table))?;
-    let rt = tokio::runtime::Runtime::new().unwrap();
+    /// Check that a record batch conforms to table's invariants.
+    ///
+    /// If it does not, it will return [DeltaTableError::InvalidData] with a list
+    /// of values that violated each invariant.
+    pub fn check_batch(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
+        self.enforce_invariants(record_batch)
+        // TODO: for support for Protocol V3, check constraints
+    }
 
-    let mut violations: Vec<String> = Vec::new();
-
-    for invariant in invariants.iter() {
-        if invariant.field_name.contains('.') {
-            return Err(DeltaTableError::Generic(
-                "Support for column invariants on nested columns is not supported.".to_string(),
-            ));
+    fn enforce_invariants(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
+        // Invariants are deprecated, so let's not pay the overhead for any of this
+        // if we can avoid it.
+        if self.invariants.is_empty() {
+            return Ok(());
         }
 
-        let sql = format!(
-            "SELECT {} FROM data WHERE not ({}) LIMIT 1",
-            invariant.field_name, invariant.invariant_sql
-        );
+        let table = MemTable::try_new(record_batch.schema(), vec![vec![record_batch.clone()]])?;
+        self.ctx.register_table("data", Arc::new(table))?;
 
-        let dfs: Vec<RecordBatch> = rt.block_on(async { ctx.sql(&sql).await?.collect().await })?;
-        if !dfs.is_empty() && dfs[0].num_rows() > 0 {
-            let value = format!("{:?}", dfs[0].column(0));
-            let msg = format!(
-                "Invariant ({}) violated by value {}",
-                invariant.invariant_sql, value
+        let mut violations: Vec<String> = Vec::new();
+
+        for invariant in self.invariants.iter() {
+            if invariant.field_name.contains('.') {
+                return Err(DeltaTableError::Generic(
+                    "Support for column invariants on nested columns is not supported.".to_string(),
+                ));
+            }
+
+            let sql = format!(
+                "SELECT {} FROM data WHERE not ({}) LIMIT 1",
+                invariant.field_name, invariant.invariant_sql
             );
-            violations.push(msg);
-        }
-    }
 
-    if !violations.is_empty() {
-        Err(DeltaTableError::InvalidData { violations })
-    } else {
-        Ok(())
+            let dfs: Vec<RecordBatch> = self
+                .rt
+                .block_on(async { self.ctx.sql(&sql).await?.collect().await })?;
+            if !dfs.is_empty() && dfs[0].num_rows() > 0 {
+                let value = format!("{:?}", dfs[0].column(0));
+                let msg = format!(
+                    "Invariant ({}) violated by value {}",
+                    invariant.invariant_sql, value
+                );
+                violations.push(msg);
+            }
+        }
+
+        if !violations.is_empty() {
+            Err(DeltaTableError::InvalidData { violations })
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -792,21 +815,25 @@ mod tests {
         .unwrap();
         // Empty invariants is okay
         let invariants: Vec<Invariant> = vec![];
-        assert!(enforce_invariants(&batch, &invariants).is_ok());
+        assert!(DeltaDataChecker::new(invariants)
+            .check_batch(&batch)
+            .is_ok());
 
         // Valid invariants return Ok(())
         let invariants = vec![
             Invariant::new("a", "a is not null"),
             Invariant::new("b", "b < 1000"),
         ];
-        assert!(enforce_invariants(&batch, &invariants).is_ok());
+        assert!(DeltaDataChecker::new(invariants)
+            .check_batch(&batch)
+            .is_ok());
 
         // Violated invariants returns an error with list of violations
         let invariants = vec![
             Invariant::new("a", "a is null"),
             Invariant::new("b", "b < 100"),
         ];
-        let result = enforce_invariants(&batch, &invariants);
+        let result = DeltaDataChecker::new(invariants).check_batch(&batch);
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
         if let Err(DeltaTableError::InvalidData { violations }) = result {
@@ -815,7 +842,7 @@ mod tests {
 
         // Irrelevant invariants return a different error
         let invariants = vec![Invariant::new("c", "c > 2000")];
-        let result = enforce_invariants(&batch, &invariants);
+        let result = DeltaDataChecker::new(invariants).check_batch(&batch);
         assert!(result.is_err());
 
         // Nested invariants are unsupported
@@ -829,7 +856,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![inner]).unwrap();
 
         let invariants = vec![Invariant::new("x.b", "x.b < 1000")];
-        let result = enforce_invariants(&batch, &invariants);
+        let result = DeltaDataChecker::new(invariants).check_batch(&batch);
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
     }
