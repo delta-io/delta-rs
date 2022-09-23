@@ -68,7 +68,7 @@ impl SchemaTypeStruct {
         let mut remaining_fields: Vec<(String, SchemaField)> = self
             .get_fields()
             .iter()
-            .map(|field| ("".to_string(), field.clone()))
+            .map(|field| (field.name.clone(), field.clone()))
             .collect();
         let mut invariants: Vec<(String, String)> = Vec::new();
 
@@ -80,50 +80,37 @@ impl SchemaTypeStruct {
             }
         };
 
-        while let Some((prefix, field)) = remaining_fields.pop() {
+        while let Some((field_path, field)) = remaining_fields.pop() {
             match field.r#type {
                 SchemaDataType::r#struct(inner) => {
-                    let new_prefix = add_segment(&prefix, &field.name);
                     remaining_fields.extend(
                         inner
                             .get_fields()
                             .iter()
-                            .map(|field| (new_prefix.clone(), field.clone()))
+                            .map(|field| {
+                                let new_prefix = add_segment(&field_path, &field.name);
+                                (new_prefix, field.clone())
+                            })
                             .collect::<Vec<(String, SchemaField)>>(),
                     );
                 }
                 SchemaDataType::array(inner) => {
-                    let new_prefix = add_segment(&prefix, "elements");
+                    let element_field_name = add_segment(&field_path, "element");
                     remaining_fields.push((
-                        new_prefix,
-                        SchemaField::new(
-                            "dummy".to_string(),
-                            *inner.elementType,
-                            false,
-                            HashMap::new(),
-                        ),
+                        element_field_name,
+                        SchemaField::new("".to_string(), *inner.elementType, false, HashMap::new()),
                     ));
                 }
                 SchemaDataType::map(inner) => {
-                    let new_prefix = add_segment(&prefix, "keys");
+                    let key_field_name = add_segment(&field_path, "key");
                     remaining_fields.push((
-                        new_prefix,
-                        SchemaField::new(
-                            "dummy".to_string(),
-                            *inner.keyType,
-                            false,
-                            HashMap::new(),
-                        ),
+                        key_field_name,
+                        SchemaField::new("".to_string(), *inner.keyType, false, HashMap::new()),
                     ));
-                    let new_prefix = add_segment(&prefix, "values");
+                    let value_field_name = add_segment(&field_path, "value");
                     remaining_fields.push((
-                        new_prefix,
-                        SchemaField::new(
-                            "dummy".to_string(),
-                            *inner.valueType,
-                            false,
-                            HashMap::new(),
-                        ),
+                        value_field_name,
+                        SchemaField::new("".to_string(), *inner.valueType, false, HashMap::new()),
                     ));
                 }
                 _ => {}
@@ -134,8 +121,7 @@ impl SchemaTypeStruct {
                 if let Value::Object(json) = json {
                     if let Some(Value::Object(expr1)) = json.get("expression") {
                         if let Some(Value::String(sql)) = expr1.get("expression") {
-                            let full_field_name = add_segment(&prefix,& field.name);
-                            invariants.push((full_field_name, sql.clone()));
+                            invariants.push((field_path, sql.clone()));
                         }
                     }
                 }
