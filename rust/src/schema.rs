@@ -22,7 +22,7 @@ static ARRAY_TAG: &str = "array";
 static MAP_TAG: &str = "map";
 
 /// An invariant for a column that is enforced on all writes to a Delta table.
-#[derive(PartialEq, Debug, Default, Clone)]
+#[derive(Eq, PartialEq, Debug, Default, Clone)]
 pub struct Invariant {
     /// The full path to the field.
     pub field_name: String,

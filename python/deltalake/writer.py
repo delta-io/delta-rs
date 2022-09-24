@@ -35,6 +35,7 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.lib import RecordBatchReader
 
+from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import PyDeltaTableError
 from ._internal import write_new_deltalake as _write_new_deltalake
 from .table import DeltaTable
@@ -192,11 +193,11 @@ def write_deltalake(
         if partition_by:
             assert partition_by == table.metadata().partition_columns
 
-        if table.protocol().min_writer_version > 1:
+        if table.protocol().min_writer_version > 2:
             raise DeltaTableProtocolError(
                 "This table's min_writer_version is "
                 f"{table.protocol().min_writer_version}, "
-                "but this method only supports version 1."
+                "but this method only supports version 2."
             )
     else:  # creating a new table
         current_version = -1
@@ -232,6 +233,29 @@ def write_deltalake(
                 True,
                 json.dumps(stats, cls=DeltaJSONEncoder),
             )
+        )
+
+    if table is not None:
+        # We don't currently provide a way to set invariants
+        # (and maybe never will), so only enforce if already exist.
+        invariants = table.schema().invariants
+        checker = _DeltaDataChecker(invariants)
+
+        def validate_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
+            checker.check_batch(batch)
+            return batch
+
+        if isinstance(data, RecordBatchReader):
+            batch_iter = data
+        elif isinstance(data, pa.RecordBatch):
+            batch_iter = [data]
+        elif isinstance(data, pa.Table):
+            batch_iter = data.to_batches()
+        else:
+            batch_iter = data
+
+        data = RecordBatchReader.from_batches(
+            schema, (validate_batch(batch) for batch in batch_iter)
         )
 
     ds.write_dataset(

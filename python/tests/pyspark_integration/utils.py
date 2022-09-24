@@ -42,8 +42,8 @@ def assert_spark_read_equal(
     assert_frame_equal(
         df.toPandas()
         .sort_values(sort_by, ignore_index=True)
-        .drop(incompatible_types, axis="columns"),
+        .drop(incompatible_types, axis="columns", errors="ignore"),
         expected.to_pandas()
         .sort_values(sort_by, ignore_index=True)
-        .drop(incompatible_types, axis="columns"),
+        .drop(incompatible_types, axis="columns", errors="ignore"),
     )
