@@ -53,7 +53,7 @@ fn test_match_partition() {
     };
     let string_type = SchemaDataType::primitive(String::from("string"));
 
-    assert!(partition_year_2020_filter.match_partition(&partition_2021, &string_type));
+    assert!(!partition_year_2020_filter.match_partition(&partition_2021, &string_type));
     assert!(partition_year_2020_filter.match_partition(&partition_2020, &string_type));
     assert!(!partition_year_2020_filter.match_partition(&partition_2019, &string_type));
     assert!(!partition_month_12_filter.match_partition(&partition_2019, &string_type));
