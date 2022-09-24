@@ -47,10 +47,6 @@ use datafusion_expr::{combine_filters, Expr};
 use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
-use crate::action;
-use crate::delta;
-use crate::schema;
-use crate::DeltaTableError;
 use crate::Invariant;
 
 impl From<DeltaTableError> for DataFusionError {
