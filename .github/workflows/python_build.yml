@@ -36,7 +36,7 @@ jobs:
     name: Python Build (Python 3.7 PyArrow 7.0.0)
     runs-on: ubuntu-latest
     # use the same environment we have for python release
-    container: quay.io/pypa/manylinux2010_x86_64:2022-03-14-b2cd80b
+    container: quay.io/pypa/manylinux2014_x86_64:latest
     steps:
       # actions/checkout@v2 is a node action, which runs on a fairly new
       # version of node. however, manylinux environment's glibc is too old for
@@ -44,21 +44,18 @@ jobs:
       # docker based action.
       - uses: actions/checkout@v1
 
-      # Require for building openssl-sys
-      - name: Install perl-IPC/Cmd
-        run: yum install -y perl-IPC-Cmd
+      - name: Install latest nightly
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
 
-      # actions-rs/toolchain@v1 is a node action, which runs on a fairly new
-      # version of node. however, manylinux environment's glibc is too old for
-      # that version of the node. so we will have to install rust manually here.
-      - name: Install Rust
-        run: |
-          curl https://sh.rustup.rs -sSf | sh -s -- -y
-          $HOME/.cargo/bin/rustup default stable
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - uses: Swatinem/rust-cache@v1
 
       - name: Enable manylinux Python targets
-        run: echo "/opt/python/cp37-cp37m/bin" >> $GITHUB_PATH
+        run: |
+          echo "/opt/python/cp37-cp37m/bin" >> $GITHUB_PATH
 
       - name: Build and install deltalake
         run: |
@@ -67,9 +64,7 @@ jobs:
           source venv/bin/activate
           make setup
           # Install minimum PyArrow version
-          # pandas and numpy versions are most recent with Python 3.7 wheels.
-          # Otherwise, we have to build those from source.
-          pip install -e .[pandas,devel] pyarrow==7.0.0 pandas==1.2.5 numpy==1.20.3
+          pip install -e .[pandas,devel] pyarrow==7.0.0
 
       - name: Run tests
         run: |
