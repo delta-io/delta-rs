@@ -112,10 +112,10 @@ def test_checks_min_writer_version(tmp_path: pathlib.Path):
     )
 
     # Add a constraint upgrades the minWriterProtocol
-    spark.sql(f"ALTER TABLE delta.{str(tmp_path)} ADD CONSTRAINT x CHECK c1 > 2")
+    spark.sql(f"ALTER TABLE delta.`{str(tmp_path)}` ADD CONSTRAINT x CHECK (c1 > 2)")
 
     with pytest.raises(
-        PyDeltaTableError, match="The table's min_writer_version is 3 but"
+        PyDeltaTableError, match="This table's min_writer_version is 3, but"
     ):
-        valid_data = pa.table({"c1": pa.array([5, 6], type=pa.int32())})
+        valid_data = pa.table({"c1": pa.array([5, 6])})
         write_deltalake(str(tmp_path), valid_data, mode="append")
