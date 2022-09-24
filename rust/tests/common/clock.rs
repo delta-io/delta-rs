@@ -10,7 +10,7 @@ pub struct TestClock {
 impl Clock for TestClock {
     fn current_timestamp_millis(&self) -> i64 {
         let inner = self.now.lock().unwrap();
-        return *inner;
+        *inner
     }
 }
 
@@ -23,6 +23,6 @@ impl TestClock {
 
     pub fn tick(&self, duration: Duration) {
         let mut inner = self.now.lock().unwrap();
-        *inner = *inner + duration.num_milliseconds();
+        *inner += duration.num_milliseconds();
     }
 }

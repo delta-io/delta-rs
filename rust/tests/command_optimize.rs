@@ -81,14 +81,13 @@ async fn setup_test(partitioned: bool) -> Result<Context, Box<dyn Error>> {
         "operation".to_string(),
         serde_json::Value::String("CREATE TABLE".to_string()),
     );
-    let _res = dt
-        .create(
-            table_meta.clone(),
-            protocol.clone(),
-            Some(commit_info),
-            None,
-        )
-        .await?;
+    dt.create(
+        table_meta.clone(),
+        protocol.clone(),
+        Some(commit_info),
+        None,
+    )
+    .await?;
 
     Ok(Context { tmp_dir, table: dt })
 }
@@ -212,11 +211,11 @@ async fn test_optimize_non_partitioned_table() -> Result<(), Box<dyn Error>> {
 
 async fn write(
     writer: &mut RecordBatchWriter,
-    mut table: &mut DeltaTable,
+    table: &mut DeltaTable,
     batch: RecordBatch,
 ) -> Result<(), DeltaTableError> {
     writer.write(batch).await?;
-    writer.flush_and_commit(&mut table).await?;
+    writer.flush_and_commit(table).await?;
     Ok(())
 }
 
@@ -252,8 +251,7 @@ async fn test_optimize_with_partitions() -> Result<(), Box<dyn Error>> {
     .await?;
 
     let version = dt.version();
-    let mut filter = vec![];
-    filter.push(PartitionFilter::try_from(("date", "=", "2022-05-22"))?);
+    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
 
     let optimize = Optimize::default().filter(&filter);
     let metrics = optimize.execute(&mut dt).await?;
@@ -397,8 +395,7 @@ async fn test_idempotent() -> Result<(), Box<dyn Error>> {
 
     let version = dt.version();
 
-    let mut filter = vec![];
-    filter.push(PartitionFilter::try_from(("date", "=", "2022-05-22"))?);
+    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
 
     let optimize = Optimize::default().filter(&filter).target_size(10_000_000);
     let metrics = optimize.execute(&mut dt).await?;
@@ -433,23 +430,25 @@ async fn test_idempotent_metrics() -> Result<(), Box<dyn Error>> {
     let optimize = Optimize::default().target_size(10_000_000);
     let metrics = optimize.execute(&mut dt).await?;
 
-    let mut expected_metric_details = MetricDetails::default();
-    expected_metric_details.min = 0;
-    expected_metric_details.max = 0;
-    expected_metric_details.avg = 0.0;
-    expected_metric_details.total_files = 0;
-    expected_metric_details.total_size = 0;
+    let expected_metric_details = MetricDetails {
+        min: 0,
+        max: 0,
+        avg: 0.0,
+        total_files: 0,
+        total_size: 0,
+    };
 
-    let mut expected = Metrics::default();
-    expected.num_files_added = 0;
-    expected.num_files_removed = 0;
-    expected.partitions_optimized = 0;
-    expected.num_batches = 0;
-    expected.total_considered_files = 1;
-    expected.total_files_skipped = 1;
-    expected.preserve_insertion_order = true;
-    expected.files_added = expected_metric_details.clone();
-    expected.files_removed = expected_metric_details.clone();
+    let expected = Metrics {
+        num_files_added: 0,
+        num_files_removed: 0,
+        partitions_optimized: 0,
+        num_batches: 0,
+        total_considered_files: 1,
+        total_files_skipped: 1,
+        preserve_insertion_order: true,
+        files_added: expected_metric_details.clone(),
+        files_removed: expected_metric_details,
+    };
 
     assert_eq!(expected, metrics);
     assert_eq!(version, dt.version());

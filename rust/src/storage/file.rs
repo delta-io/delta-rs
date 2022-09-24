@@ -336,8 +336,8 @@ mod tests {
     #[tokio::test()]
     async fn test_rename_noreplace() {
         let tmp_dir = tempdir::TempDir::new_in(".", "test_rename_noreplace").unwrap();
-        let a = create_file(&tmp_dir.path(), "a");
-        let b = create_file(&tmp_dir.path(), "b");
+        let a = create_file(tmp_dir.path(), "a");
+        let b = create_file(tmp_dir.path(), "b");
         let c = &tmp_dir.path().join("c");
 
         // unsuccessful move not_exists to C, not_exists is missing

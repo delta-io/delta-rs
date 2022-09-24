@@ -232,22 +232,20 @@ mod tests {
     ) -> Arc<DeltaTransactionPlan> {
         let op = DeltaOperation::Create {
             location: table_uri.clone(),
-            metadata: metadata.clone(),
-            mode: mode.clone(),
+            metadata,
+            mode,
             protocol: Protocol {
                 min_reader_version: 1,
                 min_writer_version: 1,
             },
         };
 
-        let transaction = Arc::new(DeltaTransactionPlan::new(
+        Arc::new(DeltaTransactionPlan::new(
             table_uri.clone(),
             table_version,
-            Arc::new(CreateCommand::try_new(table_uri.clone(), op.clone()).unwrap()),
+            Arc::new(CreateCommand::try_new(table_uri, op.clone()).unwrap()),
             op,
             None,
-        ));
-
-        transaction
+        ))
     }
 }

@@ -10,18 +10,18 @@ use std::path::Path;
 use uuid::Uuid;
 
 pub fn cleanup_dir_except<P: AsRef<Path>>(path: P, ignore_files: Vec<String>) {
-    for p in fs::read_dir(path).unwrap() {
-        if let Ok(d) = p {
-            let path = d.path();
-            let name = d.path().file_name().unwrap().to_str().unwrap().to_string();
+    for d in fs::read_dir(path).unwrap().flatten() {
+        let path = d.path();
+        let name = d.path().file_name().unwrap().to_str().unwrap().to_string();
 
-            if !ignore_files.contains(&name) && !name.starts_with(".") {
-                fs::remove_file(&path).unwrap();
-            }
+        if !ignore_files.contains(&name) && !name.starts_with('.') {
+            fs::remove_file(&path).unwrap();
         }
     }
 }
 
+// TODO: should we drop this
+#[allow(dead_code)]
 pub async fn create_table_from_json(
     path: &str,
     schema: Value,
@@ -69,7 +69,7 @@ pub async fn create_table(
         HashMap::new(),
     )]);
 
-    create_test_table(path, schema, Vec::new(), config.unwrap_or(HashMap::new())).await
+    create_test_table(path, schema, Vec::new(), config.unwrap_or_default()).await
 }
 
 pub fn add(offset_millis: i64) -> Add {

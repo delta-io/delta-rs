@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 use bytes::Bytes;
 use deltalake::action::{self, Add, Remove};
 use deltalake::builder::DeltaTableBuilder;
@@ -36,16 +38,14 @@ impl TestContext {
     pub async fn from_env() -> Self {
         let backend = std::env::var("DELTA_RS_TEST_BACKEND");
         let backend_ref = backend.as_ref().map(|s| s.as_str());
-        let context = match backend_ref {
+        match backend_ref {
             Ok("LOCALFS") | Err(std::env::VarError::NotPresent) => setup_local_context().await,
             #[cfg(feature = "azure")]
             Ok("AZURE_GEN2") => adls::setup_azure_gen2_context().await,
             #[cfg(any(feature = "s3", feature = "s3-rustls"))]
             Ok("S3_LOCAL_STACK") => s3::setup_s3_context().await,
             _ => panic!("Invalid backend for delta-rs tests"),
-        };
-
-        return context;
+        }
     }
 
     pub fn get_storage(&mut self) -> Arc<DeltaObjectStore> {
@@ -53,7 +53,7 @@ impl TestContext {
             self.backend = Some(self.new_storage())
         }
 
-        return self.backend.as_ref().unwrap().clone();
+        self.backend.as_ref().unwrap().clone()
     }
 
     fn new_storage(&self) -> Arc<DeltaObjectStore> {
@@ -149,15 +149,14 @@ impl TestContext {
             "operation".to_string(),
             serde_json::Value::String("CREATE TABLE".to_string()),
         );
-        let _res = dt
-            .create(
-                table_meta.clone(),
-                protocol.clone(),
-                Some(commit_info),
-                None,
-            )
-            .await
-            .unwrap();
+        dt.create(
+            table_meta.clone(),
+            protocol.clone(),
+            Some(commit_info),
+            None,
+        )
+        .await
+        .unwrap();
 
         self.table = Some(dt);
     }
