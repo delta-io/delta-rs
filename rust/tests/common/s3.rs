@@ -34,7 +34,7 @@ pub async fn setup_s3_context() -> TestContext {
     let mut config = HashMap::new();
     config.insert("URI".to_owned(), uri.clone());
     config.insert("AWS_ENDPOINT_URL".to_owned(), endpoint.clone());
-    config.insert("AWS_REGION".to_owned(), region.clone());
+    config.insert("AWS_REGION".to_owned(), region);
     config.insert("AWS_ACCESS_KEY_ID".to_owned(), "test".to_owned());
     config.insert("AWS_SECRET_ACCESS_KEY".to_owned(), "test".to_owned());
     config.insert("AWS_S3_LOCKING_PROVIDER".to_owned(), "dynamodb".to_owned());

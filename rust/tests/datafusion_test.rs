@@ -22,9 +22,7 @@ use datafusion_expr::Expr;
 fn get_scanned_files(node: &dyn ExecutionPlan) -> HashSet<Label> {
     node.metrics()
         .unwrap()
-        .clone()
         .iter()
-        .cloned()
         .flat_map(|m| m.labels().to_vec())
         .collect()
 }
@@ -64,9 +62,9 @@ async fn prepare_table(
         .await
         .unwrap();
 
-    let table_schema: Schema = batches[0].schema().clone().try_into().unwrap();
+    let table_schema: Schema = batches[0].schema().try_into().unwrap();
     let metadata = DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
-    let _ = commands
+    commands
         .create(metadata.clone(), SaveMode::Ignore)
         .await
         .unwrap();
@@ -178,7 +176,7 @@ async fn test_datafusion_stats() -> Result<()> {
             .iter()
             .map(|x| x.max_value.as_ref())
             .collect::<Vec<Option<&ScalarValue>>>(),
-        vec![Some(&ScalarValue::from(4 as i32))],
+        vec![Some(&ScalarValue::from(4_i32))],
     );
 
     assert_eq!(
@@ -189,7 +187,7 @@ async fn test_datafusion_stats() -> Result<()> {
             .iter()
             .map(|x| x.min_value.as_ref())
             .collect::<Vec<Option<&ScalarValue>>>(),
-        vec![Some(&ScalarValue::from(0 as i32))],
+        vec![Some(&ScalarValue::from(0_i32))],
     );
 
     Ok(())

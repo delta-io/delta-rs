@@ -107,8 +107,10 @@ async fn test_non_partitioned_table() {
     let res = {
         clock.tick(Duration::days(8));
         let table = context.table.as_mut().unwrap();
-        let mut plan = Vacuum::default();
-        plan.clock = Some(Arc::new(clock.clone()));
+        let plan = Vacuum {
+            clock: Some(Arc::new(clock.clone())),
+            ..Default::default()
+        };
         plan.execute(table).await.unwrap()
     };
 
@@ -157,8 +159,10 @@ async fn test_partitioned_table() {
     let res = {
         clock.tick(Duration::days(8));
         let table = context.table.as_mut().unwrap();
-        let mut plan = Vacuum::default();
-        plan.clock = Some(Arc::new(clock.clone()));
+        let plan = Vacuum {
+            clock: Some(Arc::new(clock.clone())),
+            ..Default::default()
+        };
         plan.execute(table).await.unwrap()
     };
 
@@ -220,8 +224,10 @@ async fn test_partitions_included() {
     let res = {
         clock.tick(Duration::days(8));
         let table = context.table.as_mut().unwrap();
-        let mut plan = Vacuum::default();
-        plan.clock = Some(Arc::new(clock.clone()));
+        let plan = deltalake::vacuum::Vacuum {
+            clock: Some(Arc::new(clock.clone())),
+            ..Default::default()
+        };
         plan.execute(table).await.unwrap()
     };
 
@@ -289,8 +295,10 @@ async fn test_non_managed_files() {
     let res = {
         clock.tick(Duration::hours(1));
         let table = context.table.as_mut().unwrap();
-        let mut plan = Vacuum::default();
-        plan.clock = Some(Arc::new(clock.clone()));
+        let plan = Vacuum {
+            clock: Some(Arc::new(clock.clone())),
+            ..Default::default()
+        };
         plan.execute(table).await.unwrap()
     };
 
@@ -303,8 +311,10 @@ async fn test_non_managed_files() {
     let res = {
         clock.tick(Duration::days(8));
         let table = context.table.as_mut().unwrap();
-        let mut plan = Vacuum::default();
-        plan.clock = Some(Arc::new(clock.clone()));
+        let plan = Vacuum {
+            clock: Some(Arc::new(clock.clone())),
+            ..Default::default()
+        };
         plan.execute(table).await.unwrap()
     };
 
@@ -321,8 +331,5 @@ async fn test_non_managed_files() {
 async fn is_deleted(context: &mut TestContext, path: &Path) -> bool {
     let backend = context.get_storage();
     let res = backend.head(path).await;
-    match res {
-        Err(ObjectStoreError::NotFound { .. }) => true,
-        _ => false,
-    }
+    matches!(res, Err(ObjectStoreError::NotFound { .. }))
 }

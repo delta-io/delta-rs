@@ -179,7 +179,7 @@ mod tests {
                 .get_interval_from_metadata(&md)
                 .unwrap()
                 .as_secs(),
-            1 * SECONDS_PER_WEEK,
+            SECONDS_PER_WEEK,
         );
 
         // change to 2 day
