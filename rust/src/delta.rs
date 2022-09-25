@@ -407,12 +407,8 @@ pub enum PeekCommit {
 pub struct DeltaTable {
     /// The state of the table as of the most recent loaded Delta log entry.
     pub state: DeltaTableState,
-    /// The URI the DeltaTable was loaded from.
-    // pub table_uri: String,
     /// the load options used during load
     pub config: DeltaTableConfig,
-    // metadata
-    // application_transactions
     pub(crate) storage: ObjectStoreRef,
 
     last_check_point: Option<CheckPoint>,
