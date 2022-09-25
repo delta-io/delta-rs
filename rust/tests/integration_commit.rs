@@ -10,30 +10,31 @@ use std::collections::HashMap;
 
 #[tokio::test]
 #[serial]
-async fn test_commit_tables_local() -> TestResult {
-    Ok(commit_tables(StorageIntegration::Local).await?)
+async fn test_commit_tables_local() {
+    commit_tables(StorageIntegration::Local).await.unwrap();
 }
 
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+// rustls doesn't support http scheme, so we are skipping the test when s3-rustls is enabled.
+#[cfg(feature = "s3")]
 #[tokio::test]
 #[serial]
-async fn test_commit_tables_aws() -> TestResult {
+async fn test_commit_tables_aws() {
     std::env::set_var("AWS_S3_LOCKING_PROVIDER", "dynamodb");
-    Ok(commit_tables(StorageIntegration::Amazon).await?)
+    commit_tables(StorageIntegration::Amazon).await.unwrap();
 }
 
 #[cfg(feature = "azure")]
 #[tokio::test]
 #[serial]
-async fn test_commit_tables_azure() -> TestResult {
-    Ok(commit_tables(StorageIntegration::Microsoft).await?)
+async fn test_commit_tables_azure() {
+    commit_tables(StorageIntegration::Microsoft).await.unwrap();
 }
 
 #[cfg(feature = "gcs")]
 #[tokio::test]
 #[serial]
-async fn test_commit_tables_gcp() -> TestResult {
-    Ok(commit_tables(StorageIntegration::Google).await?)
+async fn test_commit_tables_gcp() {
+    commit_tables(StorageIntegration::Google).await.unwrap();
 }
 
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
