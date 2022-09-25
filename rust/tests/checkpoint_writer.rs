@@ -1,3 +1,5 @@
+#![deny(warnings)]
+
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 mod fs_common;
 
@@ -54,7 +56,7 @@ mod simple_checkpoint {
         assert_eq!(12, files.len());
     }
 
-    fn get_last_checkpoint_version(log_path: &PathBuf) -> i64 {
+    fn get_last_checkpoint_version(log_path: &Path) -> i64 {
         let last_checkpoint_path = log_path.join("_last_checkpoint");
         assert!(last_checkpoint_path.as_path().exists());
 
@@ -71,18 +73,13 @@ mod simple_checkpoint {
 
     fn cleanup_checkpoint_files(log_path: &Path) {
         let paths = fs::read_dir(log_path).unwrap();
-        for p in paths {
-            match p {
-                Ok(d) => {
-                    let path = d.path();
+        for d in paths.flatten() {
+            let path = d.path();
 
-                    if path.file_name().unwrap() == "_last_checkpoint"
-                        || (path.extension().is_some() && path.extension().unwrap() == "parquet")
-                    {
-                        fs::remove_file(path).unwrap();
-                    }
-                }
-                _ => {}
+            if path.file_name().unwrap() == "_last_checkpoint"
+                || (path.extension().is_some() && path.extension().unwrap() == "parquet")
+            {
+                fs::remove_file(path).unwrap();
             }
         }
     }
@@ -229,9 +226,9 @@ mod checkpoints_with_tombstones {
         let file = File::open(path).unwrap();
         let reader = SerializedFileReader::new(file).unwrap();
         let schema = reader.metadata().file_metadata().schema();
-        let mut row_iter = reader.get_row_iter(None).unwrap();
+        let row_iter = reader.get_row_iter(None).unwrap();
         let mut actions = Vec::new();
-        while let Some(record) = row_iter.next() {
+        for record in row_iter {
             actions.push(Action::from_parquet_record(schema, &record).unwrap())
         }
         (schema.clone(), actions)
@@ -281,7 +278,7 @@ mod checkpoints_with_tombstones {
         let r1 = remove_metadata_true();
         let r2 = remove_metadata_true();
         let version = fs_common::commit_removes(&mut table, vec![&r1, &r2]).await;
-        let (schema, actions) = create_checkpoint_and_parse(&table, &path, version).await;
+        let (schema, actions) = create_checkpoint_and_parse(&table, path, version).await;
 
         assert!(actions.contains(&r1));
         assert!(actions.contains(&r2));
@@ -297,7 +294,7 @@ mod checkpoints_with_tombstones {
         let r1 = remove_metadata_true();
         let r2 = remove_metadata_false();
         let version = fs_common::commit_removes(&mut table, vec![&r1, &r2]).await;
-        let (schema, actions) = create_checkpoint_and_parse(&table, &path, version).await;
+        let (schema, actions) = create_checkpoint_and_parse(&table, path, version).await;
 
         // r2 has extended_file_metadata=false, then every tombstone should be so, even r1
         assert_ne!(actions, vec![r1.clone(), r2.clone()]);
@@ -320,7 +317,7 @@ mod checkpoints_with_tombstones {
         let r1 = remove_metadata_broken();
         let r2 = remove_metadata_false();
         let version = fs_common::commit_removes(&mut table, vec![&r1, &r2]).await;
-        let (schema, actions) = create_checkpoint_and_parse(&table, &path, version).await;
+        let (schema, actions) = create_checkpoint_and_parse(&table, path, version).await;
 
         // r1 extended_file_metadata=true, but the size is null.
         // We should fix this by setting extended_file_metadata=false
@@ -371,7 +368,7 @@ mod checkpoints_with_tombstones {
         path: &str,
         version: i64,
     ) -> (HashSet<String>, Vec<Remove>) {
-        checkpoints::create_checkpoint(&table).await.unwrap();
+        checkpoints::create_checkpoint(table).await.unwrap();
         let cp_path = format!(
             "{}/_delta_log/0000000000000000000{}.checkpoint.parquet",
             path, version

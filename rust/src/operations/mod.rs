@@ -263,7 +263,7 @@ mod tests {
         let metadata =
             DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
 
-        let _ = commands
+        commands
             .create(metadata.clone(), SaveMode::Ignore)
             .await
             .unwrap();
@@ -299,7 +299,7 @@ mod tests {
         assert_eq!(table.version(), 1);
 
         let files = table.get_file_uris();
-        assert_eq!(files.collect::<Vec<_>>().len(), 2)
+        assert_eq!(files.count(), 2)
     }
 
     #[tokio::test]
@@ -324,6 +324,6 @@ mod tests {
         assert_eq!(table.version(), 0);
 
         let files = table.get_file_uris();
-        assert_eq!(files.collect::<Vec<_>>().len(), 2)
+        assert_eq!(files.count(), 2)
     }
 }

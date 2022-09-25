@@ -434,13 +434,13 @@ mod tests {
             .await
             .unwrap();
         table.update().await.unwrap();
-        assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
+        assert_eq!(table.get_file_uris().count(), 2);
         assert_eq!(table.version(), 1);
 
         let transaction = get_transaction(table.table_uri(), 1, SaveMode::Append);
         let _ = collect(transaction.clone(), task_ctx).await.unwrap();
         table.update().await.unwrap();
-        assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 4);
+        assert_eq!(table.get_file_uris().count(), 4);
         assert_eq!(table.version(), 2);
     }
 
@@ -458,13 +458,13 @@ mod tests {
             .await
             .unwrap();
         table.update().await.unwrap();
-        assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
+        assert_eq!(table.get_file_uris().count(), 2);
         assert_eq!(table.version(), 1);
 
         let transaction = get_transaction(table.table_uri(), 1, SaveMode::Overwrite);
         let _ = collect(transaction.clone(), task_ctx).await.unwrap();
         table.update().await.unwrap();
-        assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
+        assert_eq!(table.get_file_uris().count(), 2);
         assert_eq!(table.version(), 2);
     }
 
@@ -487,7 +487,7 @@ mod tests {
 
         // THe table should be created on write and thus have version 0
         let table = open_table(table_path.to_str().unwrap()).await.unwrap();
-        assert_eq!(table.get_file_uris().collect::<Vec<_>>().len(), 2);
+        assert_eq!(table.get_file_uris().count(), 2);
         assert_eq!(table.version(), 0);
     }
 

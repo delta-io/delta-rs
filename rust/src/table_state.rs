@@ -356,7 +356,7 @@ mod tests {
             last_updated: Some(0),
         });
 
-        let _ = state.process_action(txn_action, false, true).unwrap();
+        state.process_action(txn_action, false, true).unwrap();
 
         assert_eq!(2, *state.app_transaction_version().get("abc").unwrap());
         assert_eq!(1, *state.app_transaction_version().get("xyz").unwrap());

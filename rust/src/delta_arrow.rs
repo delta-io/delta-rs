@@ -591,14 +591,13 @@ mod tests {
             .fields()
             .iter()
             .filter(|f| f.name() == "add")
-            .map(|f| {
+            .flat_map(|f| {
                 if let ArrowDataType::Struct(fields) = f.data_type() {
-                    fields.iter().map(|f| f.clone())
+                    fields.iter().cloned()
                 } else {
                     unreachable!();
                 }
             })
-            .flatten()
             .collect();
         assert_eq!(9, add_fields.len());
         let add_field_map: HashMap<_, _> = add_fields
@@ -646,20 +645,19 @@ mod tests {
         }
 
         // verify extended remove schema fields **ARE NOT** included when `use_extended_remove_schema` is false.
-        let remove_fields: Vec<_> = log_schema
+        let num_remove_fields = log_schema
             .fields()
             .iter()
             .filter(|f| f.name() == "remove")
-            .map(|f| {
+            .flat_map(|f| {
                 if let ArrowDataType::Struct(fields) = f.data_type() {
-                    fields.iter().map(|f| f.clone())
+                    fields.iter().cloned()
                 } else {
                     unreachable!();
                 }
             })
-            .flatten()
-            .collect();
-        assert_eq!(4, remove_fields.len());
+            .count();
+        assert_eq!(4, num_remove_fields);
 
         // verify extended remove schema fields **ARE** included when `use_extended_remove_schema` is true.
         let log_schema =
@@ -668,14 +666,13 @@ mod tests {
             .fields()
             .iter()
             .filter(|f| f.name() == "remove")
-            .map(|f| {
+            .flat_map(|f| {
                 if let ArrowDataType::Struct(fields) = f.data_type() {
-                    fields.iter().map(|f| f.clone())
+                    fields.iter().cloned()
                 } else {
                     unreachable!();
                 }
             })
-            .flatten()
             .collect();
         assert_eq!(7, remove_fields.len());
         let expected_fields = vec![
@@ -696,7 +693,7 @@ mod tests {
     fn test_arrow_from_delta_decimal_type() {
         let precision = 20;
         let scale = 2;
-        let decimal_type = String::from(format!["decimal({p},{s})", p = precision, s = scale]);
+        let decimal_type = format!["decimal({p},{s})", p = precision, s = scale];
         let decimal_field = crate::SchemaDataType::primitive(decimal_type);
         assert_eq!(
             <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&decimal_field).unwrap(),
@@ -708,7 +705,7 @@ mod tests {
     fn test_arrow_from_delta_wrong_decimal_type() {
         let precision = 20;
         let scale = "wrong";
-        let decimal_type = String::from(format!["decimal({p},{s})", p = precision, s = scale]);
+        let decimal_type = format!["decimal({p},{s})", p = precision, s = scale];
         let _error = format!(
             "Invalid precision or scale decimal type for Arrow: {}",
             scale

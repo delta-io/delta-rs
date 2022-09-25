@@ -434,8 +434,8 @@ async fn read_delta_1_2_1_struct_stats_table() {
     let file_to_compare = "part-00000-51653f4d-b029-44bd-9fda-578e73518a26-c000.snappy.parquet";
 
     assert_eq!(
-        get_stats_for_file(&table_from_struct_stats, &file_to_compare),
-        get_stats_for_file(&table_from_json_stats, &file_to_compare),
+        get_stats_for_file(&table_from_struct_stats, file_to_compare),
+        get_stats_for_file(&table_from_json_stats, file_to_compare),
     );
 }
 
@@ -528,11 +528,7 @@ async fn test_poll_table_commits() {
     assert!(is_new);
 
     let peek = table.peek_next_commit(table.version()).await.unwrap();
-    let is_up_to_date = match peek {
-        PeekCommit::UpToDate => true,
-        _ => false,
-    };
-    assert!(is_up_to_date);
+    assert!(matches!(peek, PeekCommit::UpToDate));
 }
 
 #[tokio::test]

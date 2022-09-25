@@ -115,7 +115,7 @@ impl<'a> Optimize<'a> {
 
     /// Perform the optimization. On completion, a summary of how many files were added and removed is returned
     pub async fn execute(&self, table: &mut DeltaTable) -> Result<Metrics, DeltaTableError> {
-        let plan = create_merge_plan(table, self.filters, (&self.target_size).to_owned())?;
+        let plan = create_merge_plan(table, self.filters, self.target_size.to_owned())?;
         let metrics = plan.execute(table).await?;
         Ok(metrics)
     }

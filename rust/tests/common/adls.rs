@@ -4,7 +4,9 @@ use rand::Rng;
 use std::collections::HashMap;
 
 pub struct AzureGen2 {
+    #[allow(dead_code)]
     account_name: String,
+    #[allow(dead_code)]
     account_key: String,
     file_system_name: String,
 }
@@ -22,7 +24,7 @@ pub async fn setup_azure_gen2_context() -> TestContext {
     let storage_account_name = std::env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap();
     let storage_account_key = std::env::var("AZURE_STORAGE_ACCOUNT_KEY").unwrap();
     let storage_container_name =
-        std::env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or("deltars".to_string());
+        std::env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or_else(|_| "deltars".to_string());
 
     let rand: u16 = rand::thread_rng().gen();
     let file_system_name = format!("delta-rs-test-{}-{}", Utc::now().timestamp(), rand);
@@ -39,6 +41,10 @@ pub async fn setup_azure_gen2_context() -> TestContext {
     config.insert(
         "AZURE_STORAGE_ACCOUNT_KEY".to_string(),
         storage_account_key.clone(),
+    );
+    config.insert(
+        "AZURE_STORAGE_CONTAINER_NAME".to_string(),
+        storage_container_name,
     );
 
     TestContext {

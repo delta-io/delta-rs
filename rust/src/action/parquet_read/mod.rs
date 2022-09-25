@@ -609,7 +609,7 @@ mod tests {
         let mut iter = preader.get_row_iter(None).unwrap();
         let record = iter.nth(9).unwrap();
         let add_record = record.get_group(1).unwrap();
-        let add_action = Add::from_parquet_record(&add_record).unwrap();
+        let add_action = Add::from_parquet_record(add_record).unwrap();
 
         assert_eq!(add_action.partition_values.len(), 0);
         assert_eq!(add_action.stats, None);

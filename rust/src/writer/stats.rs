@@ -421,7 +421,7 @@ mod tests {
         ref_null_counts.insert("modified".to_string(), ColumnCountStat::Value(0));
 
         let mut null_counts = HashMap::new();
-        apply_null_counts(&record_batch.clone().into(), &mut null_counts, 0);
+        apply_null_counts(&record_batch.into(), &mut null_counts, 0);
 
         assert_eq!(null_counts, ref_null_counts)
     }
@@ -471,14 +471,14 @@ mod tests {
                     assert_eq!("2021-06-22", timestamp.as_str().unwrap());
                 }
                 ("some_int", ColumnValueStat::Value(v)) => assert_eq!(302, v.as_i64().unwrap()),
-                ("some_bool", ColumnValueStat::Value(v)) => assert_eq!(false, v.as_bool().unwrap()),
+                ("some_bool", ColumnValueStat::Value(v)) => assert!(!v.as_bool().unwrap()),
                 ("some_string", ColumnValueStat::Value(v)) => {
                     assert_eq!("GET", v.as_str().unwrap())
                 }
                 ("date", ColumnValueStat::Value(v)) => {
                     assert_eq!("2021-06-22", v.as_str().unwrap())
                 }
-                _ => assert!(false, "Key should not be present"),
+                _ => panic!("Key should not be present"),
             }
         }
 
@@ -499,14 +499,14 @@ mod tests {
                     assert_eq!("2021-06-22", timestamp.as_str().unwrap());
                 }
                 ("some_int", ColumnValueStat::Value(v)) => assert_eq!(400, v.as_i64().unwrap()),
-                ("some_bool", ColumnValueStat::Value(v)) => assert_eq!(true, v.as_bool().unwrap()),
+                ("some_bool", ColumnValueStat::Value(v)) => assert!(v.as_bool().unwrap()),
                 ("some_string", ColumnValueStat::Value(v)) => {
                     assert_eq!("PUT", v.as_str().unwrap())
                 }
                 ("date", ColumnValueStat::Value(v)) => {
                     assert_eq!("2021-06-22", v.as_str().unwrap())
                 }
-                _ => assert!(false, "Key should not be present"),
+                _ => panic!("Key should not be present"),
             }
         }
 
@@ -532,7 +532,7 @@ mod tests {
                 ("some_list", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("some_nested_list", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
                 ("date", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
-                _ => assert!(false, "Key should not be present"),
+                _ => panic!("Key should not be present"),
             }
         }
     }
@@ -550,8 +550,8 @@ mod tests {
     fn create_temp_table(table_path: &Path) {
         let log_path = table_path.join("_delta_log");
 
-        let _ = std::fs::create_dir(log_path.as_path()).unwrap();
-        let _ = std::fs::write(
+        std::fs::create_dir(log_path.as_path()).unwrap();
+        std::fs::write(
             log_path.join("00000000000000000000.json"),
             V0_COMMIT.as_str(),
         )
@@ -660,7 +660,6 @@ mod tests {
                 .map(|j| serde_json::to_string(j).unwrap())
                 .collect::<Vec<String>>()
                 .join("\n")
-                .to_string()
         };
         static ref JSON_ROWS: Vec<Value> = {
             std::iter::repeat(json!({

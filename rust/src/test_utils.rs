@@ -33,7 +33,7 @@ impl IntegrationContext {
         // create a fresh bucket in every context. THis is done via CLI...
         let bucket = match integration {
             StorageIntegration::Local => tmp_dir.as_ref().to_str().unwrap().to_owned(),
-            _ => (format!("test-delta-table-{}", Utc::now().timestamp())),
+            _ => format!("test-delta-table-{}", Utc::now().timestamp()),
         };
         if let StorageIntegration::Google = integration {
             gs_cli::prepare_env();
