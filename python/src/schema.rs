@@ -1069,7 +1069,7 @@ impl PySchema {
     ///
     /// :rtype: List[Tuple[str, str]]
     /// :return: a tuple of strings for each invariant. The first string is the
-    /// field path and the second is the SQL of the invariant.
+    ///          field path and the second is the SQL of the invariant.
     #[getter]
     fn invariants(self_: PyRef<'_, Self>) -> PyResult<Vec<(String, String)>> {
         let super_ = self_.as_ref();
