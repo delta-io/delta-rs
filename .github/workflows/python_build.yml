@@ -36,7 +36,7 @@ jobs:
     name: Python Build (Python 3.7 PyArrow 7.0.0)
     runs-on: ubuntu-latest
     # use the same environment we have for python release
-    container: quay.io/pypa/manylinux2014_x86_64:latest
+    container: quay.io/pypa/manylinux2014_x86_64:2022-09-24-4f086d0
     steps:
       # actions/checkout@v2 is a node action, which runs on a fairly new
       # version of node. however, manylinux environment's glibc is too old for
