@@ -5,17 +5,10 @@ import pyarrow as pa
 import pytest
 
 from deltalake import write_deltalake
-from deltalake.deltalake import PyDeltaTableError
+from deltalake._internal import PyDeltaTableError
+from deltalake.writer import DeltaTableProtocolError
 
 from .utils import assert_spark_read_equal, get_spark
-
-try:
-    from pandas.testing import assert_frame_equal
-except ModuleNotFoundError:
-    _has_pandas = False
-else:
-    _has_pandas = True
-
 
 try:
     import delta
@@ -89,6 +82,7 @@ def test_write_invariant(tmp_path: pathlib.Path):
     with pytest.raises(
         PyDeltaTableError, match="Invariant \(c1 > 3\) violated by value .+2"
     ):
+        # raise PyDeltaTableError("test")
         write_deltalake(str(tmp_path), invalid_data, mode="overwrite")
 
     # Can write valid data to the table
@@ -115,7 +109,7 @@ def test_checks_min_writer_version(tmp_path: pathlib.Path):
     spark.sql(f"ALTER TABLE delta.`{str(tmp_path)}` ADD CONSTRAINT x CHECK (c1 > 2)")
 
     with pytest.raises(
-        PyDeltaTableError, match="This table's min_writer_version is 3, but"
+        DeltaTableProtocolError, match="This table's min_writer_version is 3, but"
     ):
         valid_data = pa.table({"c1": pa.array([5, 6])})
         write_deltalake(str(tmp_path), valid_data, mode="append")
