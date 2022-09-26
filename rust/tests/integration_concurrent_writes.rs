@@ -15,7 +15,8 @@ async fn test_concurrent_writes_local() -> TestResult {
     Ok(())
 }
 
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+// rustls doesn't support http scheme, so we are skipping the test when s3-rustls is enabled.
+#[cfg(feature = "s3")]
 #[tokio::test]
 async fn concurrent_writes_s3() -> TestResult {
     test_concurrent_writes(StorageIntegration::Amazon).await?;

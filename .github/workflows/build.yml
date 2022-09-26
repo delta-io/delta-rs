@@ -105,9 +105,12 @@ jobs:
       - name: Start emulated services
         run: docker-compose up -d
 
-      - name: Run tests
+      - name: Run tests with default ssl
         run: |
           cargo test --features integration_test,azure,s3,gcs,datafusion-ext
+      - name: Run tests with rustls
+        run: |
+          cargo test --features integration_test,s3-rustls,datafusion-ext
 
   paruqet2_test:
     runs-on: ubuntu-latest
