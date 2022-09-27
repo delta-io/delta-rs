@@ -14,6 +14,7 @@ use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
+use crate::builder::{DeltaTableBuilder, DeltaTableConfig};
 use crate::delta_config::DeltaConfigError;
 use crate::storage::ObjectStoreRef;
 use crate::vacuum::{Vacuum, VacuumError};
@@ -27,8 +28,6 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
-
-pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
@@ -85,22 +84,21 @@ pub enum DeltaTableError {
         #[from]
         source: ObjectStoreError,
     },
-    /// Error returned when reading the checkpoint failed.
-    #[cfg(feature = "parquet")]
-    #[error("Failed to read checkpoint: {}", .source)]
-    Parquet {
-        /// Parquet error details returned when reading the checkpoint failed.
-        #[from]
-        source: parquet::errors::ParquetError,
-    },
-    /// Error returned when parsing checkpoint parquet using parquet2 crate.
-    #[cfg(feature = "parquet2")]
+
+    /// Error returned when parsing checkpoint parquet.
+    // #[cfg(feature = "parquet")]
     #[error("Failed to parse parquet: {}", .source)]
     Parquet {
-        /// Parquet error details returned when parsing the checkpoint parquet
+        /// Parquet error details returned when reading the checkpoint failed.
+        #[cfg(feature = "parquet")]
+        #[from]
+        source: parquet::errors::ParquetError,
+        /// Parquet error details returned when reading the checkpoint failed.
+        #[cfg(feature = "parquet2")]
         #[from]
         source: parquet2::error::Error,
     },
+
     /// Error returned when converting the schema in Arrow format failed.
     #[cfg(feature = "arrow")]
     #[error("Failed to convert into Arrow schema: {}", .source)]
@@ -109,6 +107,7 @@ pub enum DeltaTableError {
         #[from]
         source: arrow::error::ArrowError,
     },
+
     /// Error returned when the log record has an invalid JSON.
     #[error("Invalid JSON in log record: {}", .source)]
     InvalidJson {
@@ -191,6 +190,12 @@ pub enum DeltaTableError {
     /// Generic Delta Table error
     #[error("Generic DeltaTable error: {0}")]
     Generic(String),
+    /// Generic Delta Table error
+    #[error("Generic error: {source}")]
+    GenericError {
+        /// Source error
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
 }
 
 /// Delta table metadata
@@ -410,8 +415,9 @@ pub struct DeltaTable {
     /// the load options used during load
     pub config: DeltaTableConfig,
     pub(crate) storage: ObjectStoreRef,
-
+    /// file metadata for latest checkpoint
     last_check_point: Option<CheckPoint>,
+    /// table versions associated with timestamps
     version_timestamp: HashMap<DeltaDataTypeVersion, i64>,
 }
 

@@ -1,251 +1,366 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
+use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::{
-    to_datafusion_err,
-    transaction::{serialize_actions, OPERATION_SCHEMA},
-    DeltaCommandError, *,
-};
-use crate::{
-    action::{Action, DeltaOperation, MetaData, Protocol, SaveMode},
-    DeltaTableBuilder, DeltaTableMetaData,
-};
+use crate::{DeltaTableBuilder, DeltaTableMetaData};
 
-use arrow::datatypes::SchemaRef;
-use async_trait::async_trait;
-use core::any::Any;
-use datafusion::{
-    execution::context::TaskContext,
-    physical_plan::{
-        common::{compute_record_batch_statistics, SizedRecordBatchStream},
-        expressions::PhysicalSortExpr,
-        metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics},
-        stream::RecordBatchStreamAdapter,
-        Distribution, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
-    },
-};
-use datafusion_common::{DataFusionError, Result as DataFusionResult};
-use futures::{TryFutureExt, TryStreamExt};
+use super::transaction::commit;
+use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
+use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
+use crate::builder::StorageUrl;
+use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
+use crate::storage::{utils::flatten_list_stream, DeltaObjectStore};
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
-/// Command for creating new delta table
-pub struct CreateCommand {
-    table_uri: String,
-    mode: SaveMode,
-    metadata: DeltaTableMetaData,
-    protocol: Protocol,
+use futures::future::BoxFuture;
+use serde_json::Value;
+
+#[derive(thiserror::Error, Debug)]
+enum CreateError {
+    #[error("Location must be provided to create a table")]
+    MissingLocation,
+
+    #[error("At least one column must be defined to create a table")]
+    MissingSchema,
+
+    #[error("Please configure table meta data via the CreateBuilder.")]
+    MetadataSpecified,
+
+    #[error("Please configure table meta data via the CreateBuilder.")]
+    TableAlreadyExists,
+
+    #[error("SaveMode `append` is not allowed for create operation.")]
+    AppendNotAllowed,
 }
 
-impl CreateCommand {
-    /// Create new CreateCommand
-    pub fn try_new<T>(table_uri: T, operation: DeltaOperation) -> Result<Self, DeltaCommandError>
-    where
-        T: Into<String>,
-    {
-        match operation {
-            DeltaOperation::Create {
-                metadata,
-                mode,
-                protocol,
-                ..
-            } => Ok(Self {
-                table_uri: table_uri.into(),
-                mode,
-                metadata,
-                protocol,
-            }),
-            _ => Err(DeltaCommandError::UnsupportedCommand(
-                "WriteCommand only implemented for write operation".to_string(),
-            )),
+impl From<CreateError> for DeltaTableError {
+    fn from(err: CreateError) -> Self {
+        DeltaTableError::GenericError {
+            source: Box::new(err),
         }
     }
 }
 
-impl std::fmt::Debug for CreateCommand {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "CreateCommand")
+/// Build a new [DeltaTable]
+#[derive(Debug, Clone)]
+pub struct CreateBuilder {
+    name: Option<String>,
+    location: Option<String>,
+    mode: SaveMode,
+    comment: Option<String>,
+    columns: Vec<SchemaField>,
+    partition_columns: Option<Vec<String>>,
+    properties: HashMap<String, Value>,
+    storage_options: Option<HashMap<String, String>>,
+    actions: Vec<Action>,
+    object_store: Option<Arc<DeltaObjectStore>>,
+}
+
+impl Default for CreateBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-#[async_trait]
-impl ExecutionPlan for CreateCommand {
-    /// Return a reference to Any that can be used for downcasting
-    fn as_any(&self) -> &dyn Any {
+impl CreateBuilder {
+    /// Create a new [`CreateBuilder`]
+    pub fn new() -> Self {
+        Self {
+            name: None,
+            location: None,
+            mode: SaveMode::ErrorIfExists,
+            comment: None,
+            columns: Vec::new(),
+            partition_columns: None,
+            properties: HashMap::new(),
+            storage_options: None,
+            actions: Vec::new(),
+            object_store: None,
+        }
+    }
+
+    /// Specify the table name. Optionally qualified with
+    /// a database name [database_name.] table_name.
+    pub fn with_table_name(mut self, name: impl Into<String>) -> Self {
+        self.name = Some(name.into());
         self
     }
 
-    fn schema(&self) -> SchemaRef {
-        Arc::new(OPERATION_SCHEMA.clone())
+    /// Specify the path to the location where table data is stored,
+    /// which could be a path on distributed storage.
+    pub fn with_location(mut self, location: impl Into<String>) -> Self {
+        self.location = Some(location.into());
+        self
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![]
+    /// Specify the behavior when a table exists at location
+    pub fn with_save_mode(mut self, save_mode: SaveMode) -> Self {
+        self.mode = save_mode;
+        self
     }
 
-    /// Get the output partitioning of this plan
-    fn output_partitioning(&self) -> Partitioning {
-        Partitioning::UnknownPartitioning(1)
+    /// Comment to describe the table.
+    pub fn with_comment(mut self, comment: impl Into<String>) -> Self {
+        self.comment = Some(comment.into());
+        self
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    /// Specify a column in the table
+    pub fn with_column(
+        mut self,
+        name: impl Into<String>,
+        data_type: SchemaDataType,
+        nullable: bool,
+        metadata: Option<HashMap<String, Value>>,
+    ) -> Self {
+        self.columns.push(SchemaField::new(
+            name.into(),
+            data_type,
+            nullable,
+            metadata.unwrap_or_default(),
+        ));
+        self
     }
 
-    fn required_child_distribution(&self) -> Distribution {
-        // TODO
-        Distribution::SinglePartition
+    /// Specify columns to append to schema
+    pub fn with_columns(mut self, columns: impl IntoIterator<Item = SchemaField>) -> Self {
+        self.columns.extend(columns);
+        self
     }
 
-    fn with_new_children(
-        self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        Err(DataFusionError::Internal(
-            "SortExec wrong number of children".to_string(),
-        ))
+    /// Specify table partitioning
+    pub fn with_partition_columns(
+        mut self,
+        partition_columns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.partition_columns = Some(partition_columns.into_iter().map(|s| s.into()).collect());
+        self
     }
 
-    fn execute(
-        &self,
-        partition: usize,
-        _context: Arc<TaskContext>,
-    ) -> DataFusionResult<SendableRecordBatchStream> {
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema(),
-            futures::stream::once(
-                do_create(
-                    self.table_uri.clone(),
-                    partition,
-                    self.mode.clone(),
-                    self.metadata.clone(),
-                    self.protocol.clone(),
-                )
-                .map_err(|e| ArrowError::ExternalError(Box::new(e))),
+    /// Specify a table property
+    pub fn with_property(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
+        self.properties.insert(key.into(), value.into());
+        self
+    }
+
+    /// Set options used to initialize storage backend
+    ///
+    /// Options may be passed in the HashMap or set as environment variables.
+    ///
+    /// [crate::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
+    /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
+    pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
+        self.storage_options = Some(storage_options);
+        self
+    }
+
+    /// Specify additional actions to be added to the commit.
+    pub fn with_actions(mut self, actions: impl IntoIterator<Item = Action>) -> Self {
+        self.actions.extend(actions);
+        self
+    }
+
+    /// Provide a [`DeltaObjectStore`] instance, that points at table location
+    pub fn with_object_store(mut self, object_store: Arc<DeltaObjectStore>) -> Self {
+        self.object_store = Some(object_store);
+        self
+    }
+
+    /// Consume self into uninitialized table with corresponding crate actions and operation meta
+    pub(crate) fn into_table_and_actions(
+        self,
+    ) -> DeltaResult<(DeltaTable, Vec<Action>, DeltaOperation)> {
+        if self
+            .actions
+            .iter()
+            .any(|a| matches!(a, Action::metaData(_)))
+        {
+            return Err(CreateError::MetadataSpecified.into());
+        }
+        if self.columns.is_empty() {
+            return Err(CreateError::MissingSchema.into());
+        }
+
+        let (table, storage_url) = if let Some(object_store) = self.object_store {
+            let storage_url = StorageUrl::parse(object_store.root_uri())?;
+            (
+                DeltaTable::new(object_store, Default::default()),
+                storage_url,
             )
-            .try_flatten(),
-        )))
-    }
+        } else {
+            let storage_url =
+                StorageUrl::parse(self.location.ok_or(CreateError::MissingLocation)?)?;
+            (
+                DeltaTableBuilder::from_uri(&storage_url)
+                    .with_storage_options(self.storage_options.unwrap_or_default())
+                    .build()?,
+                storage_url,
+            )
+        };
 
-    fn statistics(&self) -> Statistics {
-        compute_record_batch_statistics(&[], &self.schema(), None)
+        // TODO configure more permissive versions based on configuration. Also how should this ideally be handled?
+        // We set the lowest protocol we can, and if subsequent writes use newer features we update metadata?
+        let protocol = self
+            .actions
+            .iter()
+            .find(|a| matches!(a, Action::protocol(_)))
+            .map(|a| match a {
+                Action::protocol(p) => p.clone(),
+                _ => unreachable!(),
+            })
+            .unwrap_or_else(|| Protocol {
+                min_reader_version: MAX_SUPPORTED_READER_VERSION,
+                min_writer_version: MAX_SUPPORTED_WRITER_VERSION,
+            });
+
+        let metadata = DeltaTableMetaData::new(
+            self.name,
+            self.comment,
+            None,
+            SchemaTypeStruct::new(self.columns),
+            self.partition_columns.unwrap_or_default(),
+            HashMap::new(),
+        );
+
+        let operation = DeltaOperation::Create {
+            mode: self.mode.clone(),
+            metadata: metadata.clone(),
+            location: storage_url.to_string(),
+            protocol: protocol.clone(),
+        };
+
+        let mut actions = vec![
+            Action::protocol(protocol),
+            Action::metaData(MetaData::try_from(metadata)?),
+        ];
+        actions.extend(
+            self.actions
+                .into_iter()
+                .filter(|a| matches!(a, Action::protocol(_))),
+        );
+
+        Ok((table, actions, operation))
     }
 }
 
-async fn do_create(
-    table_uri: String,
-    partition_id: usize,
-    mode: SaveMode,
-    metadata: DeltaTableMetaData,
-    protocol: Protocol,
-) -> DataFusionResult<SendableRecordBatchStream> {
-    let mut table = DeltaTableBuilder::from_uri(&table_uri)
-        .build()
-        .map_err(to_datafusion_err)?;
+impl std::future::IntoFuture for CreateBuilder {
+    type Output = DeltaResult<DeltaTable>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
 
-    let actions = match table.load_version(0).await {
-        Err(_) => Ok(vec![
-            Action::protocol(protocol.clone()),
-            Action::metaData(MetaData::try_from(metadata.clone()).unwrap()),
-        ]),
-        Ok(_) => match mode {
-            SaveMode::Ignore => Ok(Vec::new()),
-            SaveMode::ErrorIfExists => {
-                Err(DeltaCommandError::TableAlreadyExists(table_uri.clone()))
+    fn into_future(self) -> Self::IntoFuture {
+        let this = self;
+
+        Box::pin(async move {
+            let mode = this.mode.clone();
+            let (mut table, actions, operation) = this.into_table_and_actions()?;
+            if table.object_store().is_delta_table_location().await? {
+                match mode {
+                    SaveMode::ErrorIfExists => return Err(CreateError::TableAlreadyExists.into()),
+                    SaveMode::Append => return Err(CreateError::AppendNotAllowed.into()),
+                    SaveMode::Ignore => {
+                        table.load().await?;
+                        return Ok(table);
+                    }
+                    SaveMode::Overwrite => {
+                        let curr_files =
+                            flatten_list_stream(table.object_store().as_ref(), None).await?;
+                        table.object_store().delete_batch(&curr_files).await?;
+                    }
+                }
             }
-            _ => todo!("Write mode not implemented {:?}", mode),
-        },
+            let version = commit(&table.object_store(), 0, actions, operation, None).await?;
+            table.load_version(version).await?;
+
+            Ok(table)
+        })
     }
-    .map_err(to_datafusion_err)?;
-
-    let serialized_batch = serialize_actions(actions)?;
-    let metrics = ExecutionPlanMetricsSet::new();
-    let tracking_metrics = MemTrackingMetrics::new(&metrics, partition_id);
-    let stream = SizedRecordBatchStream::new(
-        serialized_batch.schema(),
-        vec![Arc::new(serialized_batch)],
-        tracking_metrics,
-    );
-
-    Ok(Box::pin(stream))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        action::{DeltaOperation, Protocol},
-        open_table,
-        operations::transaction::DeltaTransactionPlan,
-        DeltaTableMetaData,
-    };
-    use datafusion::{physical_plan::collect, prelude::SessionContext};
-    use std::collections::HashMap;
-    use std::process::Command;
+    use crate::operations::DeltaOps;
+    use crate::writer::test_utils::get_delta_schema;
 
     #[tokio::test]
-    async fn create_table_without_partitions() {
-        let table_schema = crate::writer::test_utils::get_delta_schema();
-        let metadata =
-            DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
+    async fn test_create() {
+        let table_schema = get_delta_schema();
 
-        let table_dir = tempfile::tempdir().unwrap();
-        let table_path = table_dir.path();
-        let table_uri = table_path.to_str().unwrap().to_string();
-
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-
-        let transaction =
-            get_transaction(table_uri.clone(), -1, metadata.clone(), SaveMode::Ignore);
-        let _ = collect(transaction.clone(), task_ctx.clone())
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(table_schema.get_fields().clone())
+            .with_save_mode(SaveMode::Ignore)
             .await
             .unwrap();
-
-        let table_path = std::path::Path::new(&table_uri);
-        let log_path = table_path.join("_delta_log/00000000000000000000.json");
-        assert!(log_path.exists());
-
-        let mut table = open_table(&table_uri).await.unwrap();
-        assert_eq!(table.version(), 0);
-
-        // Check we can create an existing table with ignore
-        let ts1 = table.get_version_timestamp(0).await.unwrap();
-        let mut child = Command::new("sleep").arg("1").spawn().unwrap();
-        let _result = child.wait().unwrap();
-        let _ = collect(transaction, task_ctx.clone()).await.unwrap();
-        let mut table = open_table(&table_uri).await.unwrap();
-        assert_eq!(table.version(), 0);
-        let ts2 = table.get_version_timestamp(0).await.unwrap();
-        assert_eq!(ts1, ts2);
-
-        // Check error for ErrorIfExists mode
-        let transaction = get_transaction(table_uri, 0, metadata, SaveMode::ErrorIfExists);
-        let result = collect(transaction.clone(), task_ctx).await;
-        assert!(result.is_err())
+        assert_eq!(table.version(), 0)
     }
 
-    fn get_transaction(
-        table_uri: String,
-        table_version: i64,
-        metadata: DeltaTableMetaData,
-        mode: SaveMode,
-    ) -> Arc<DeltaTransactionPlan> {
-        let op = DeltaOperation::Create {
-            location: table_uri.clone(),
-            metadata,
-            mode,
-            protocol: Protocol {
-                min_reader_version: 1,
-                min_writer_version: 1,
-            },
-        };
+    #[tokio::test]
+    async fn test_create_table_metadata() {
+        let schema = get_delta_schema();
+        let table = CreateBuilder::new()
+            .with_location("memory://")
+            .with_columns(schema.get_fields().clone())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_min_reader_version(), MAX_SUPPORTED_READER_VERSION);
+        assert_eq!(table.get_min_writer_version(), MAX_SUPPORTED_WRITER_VERSION);
+        assert_eq!(table.schema().unwrap(), &schema);
 
-        Arc::new(DeltaTransactionPlan::new(
-            table_uri.clone(),
-            table_version,
-            Arc::new(CreateCommand::try_new(table_uri, op.clone()).unwrap()),
-            op,
-            None,
-        ))
+        // check we can overwrite default settings via adding actions
+        let protocol = Protocol {
+            min_reader_version: 0,
+            min_writer_version: 0,
+        };
+        let table = CreateBuilder::new()
+            .with_location("memory://")
+            .with_columns(schema.get_fields().clone())
+            .with_actions(vec![Action::protocol(protocol)])
+            .await
+            .unwrap();
+        assert_eq!(table.get_min_reader_version(), 0);
+        assert_eq!(table.get_min_writer_version(), 0)
+    }
+
+    #[tokio::test]
+    async fn test_create_table_save_mode() {
+        let tmp_dir = tempdir::TempDir::new("").unwrap();
+
+        let schema = get_delta_schema();
+        let table = CreateBuilder::new()
+            .with_location(tmp_dir.path().to_str().unwrap())
+            .with_columns(schema.get_fields().clone())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        let first_id = table.get_metadata().unwrap().id.clone();
+
+        // Check an error is raised when a table exists at location
+        let table = CreateBuilder::new()
+            .with_location(tmp_dir.path().to_str().unwrap())
+            .with_columns(schema.get_fields().clone())
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .await;
+        assert!(table.is_err());
+
+        // Check current table is returned when ignore option is chosen.
+        let table = CreateBuilder::new()
+            .with_location(tmp_dir.path().to_str().unwrap())
+            .with_columns(schema.get_fields().clone())
+            .with_save_mode(SaveMode::Ignore)
+            .await
+            .unwrap();
+        assert_eq!(table.get_metadata().unwrap().id, first_id);
+
+        // Check table is overwritten
+        let table = CreateBuilder::new()
+            .with_location(tmp_dir.path().to_str().unwrap())
+            .with_columns(schema.get_fields().clone())
+            .with_save_mode(SaveMode::Overwrite)
+            .await
+            .unwrap();
+        assert_ne!(table.get_metadata().unwrap().id, first_id)
     }
 }

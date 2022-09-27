@@ -738,6 +738,7 @@ dependencies = [
  "num-traits",
  "object_store",
  "once_cell",
+ "parking_lot",
  "parquet",
  "parquet-format",
  "parquet2",

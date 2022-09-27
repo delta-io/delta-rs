@@ -1,11 +1,10 @@
 #![cfg(feature = "datafusion-ext")]
-
 use std::collections::{HashMap, HashSet};
+use std::future::IntoFuture;
 use std::sync::Arc;
 
 use deltalake::action::SaveMode;
-use deltalake::operations::DeltaCommands;
-use deltalake::{DeltaTable, DeltaTableMetaData, Schema};
+use deltalake::{operations::DeltaOps, DeltaTable, Schema};
 
 use arrow::array::*;
 use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
@@ -57,26 +56,26 @@ async fn prepare_table(
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
     let table_uri = table_path.to_str().unwrap().to_string();
+    let table_schema: Schema = batches[0].schema().clone().try_into().unwrap();
 
-    let mut commands = DeltaCommands::try_from_uri(table_uri.clone())
+    let mut table = DeltaOps::try_from_uri(table_uri)
         .await
-        .unwrap();
-
-    let table_schema: Schema = batches[0].schema().try_into().unwrap();
-    let metadata = DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
-    commands
-        .create(metadata.clone(), SaveMode::Ignore)
+        .unwrap()
+        .create()
+        .with_save_mode(SaveMode::Ignore)
+        .with_columns(table_schema.get_fields().clone())
         .await
         .unwrap();
 
     for batch in batches {
-        commands
-            .write(vec![batch], save_mode.clone(), None)
+        table = DeltaOps::from(table)
+            .write(vec![batch])
+            .with_save_mode(save_mode.clone())
             .await
             .unwrap();
     }
 
-    (table_dir, Arc::new(commands.into()))
+    (table_dir, Arc::new(table))
 }
 
 #[tokio::test]
