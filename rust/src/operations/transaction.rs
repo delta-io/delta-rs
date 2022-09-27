@@ -1,6 +1,4 @@
 //! Delta transactions
-use std::sync::Arc;
-
 use crate::action::{Action, DeltaOperation};
 use crate::storage::DeltaObjectStore;
 use crate::{crate_version, DeltaDataTypeVersion, DeltaResult, DeltaTableError};
@@ -66,7 +64,7 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, TransactionError
 /// the transaction object could be dropped and the actual commit could be executed
 /// with `DeltaTable.try_commit_transaction`.
 async fn prepare_commit(
-    storage: &Arc<DeltaObjectStore>,
+    storage: &DeltaObjectStore,
     operation: DeltaOperation,
     mut actions: Vec<Action>,
     app_metadata: Option<Map<String, Value>>,
@@ -107,7 +105,7 @@ async fn prepare_commit(
 /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
 /// with retry logic.
 async fn try_commit_transaction(
-    storage: &Arc<DeltaObjectStore>,
+    storage: &DeltaObjectStore,
     tmp_commit: &Path,
     version: DeltaDataTypeVersion,
 ) -> Result<DeltaDataTypeVersion, TransactionError> {
@@ -126,7 +124,7 @@ async fn try_commit_transaction(
 }
 
 pub(crate) async fn commit(
-    storage: &Arc<DeltaObjectStore>,
+    storage: &DeltaObjectStore,
     version: DeltaDataTypeVersion,
     actions: Vec<Action>,
     operation: DeltaOperation,
@@ -178,7 +176,7 @@ mod tests {
             .unwrap();
 
         // successfully write in clean location
-        commit(&storage, 0, vec![], operation.clone(), None)
+        commit(storage.as_ref(), 0, vec![], operation.clone(), None)
             .await
             .unwrap();
         let head = storage.head(&commit_path).await;
@@ -186,7 +184,7 @@ mod tests {
         assert_eq!(head.as_ref().unwrap().location, commit_path);
 
         // fail on overwriting
-        let failed_commit = commit(&storage, 0, vec![], operation, None).await;
+        let failed_commit = commit(storage.as_ref(), 0, vec![], operation, None).await;
         assert!(failed_commit.is_err());
         assert!(matches!(
             failed_commit.unwrap_err(),

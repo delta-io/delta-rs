@@ -52,6 +52,16 @@ impl DeltaOps {
     }
 
     /// Create a new Delta table
+    ///
+    /// ```
+    /// use deltalake::DeltaOps;
+    ///
+    /// async {
+    ///     let ops = DeltaOps::try_from_uri("memory://").await.unwrap();
+    ///     let table = ops.create().with_table_name("my_table").await.unwrap();
+    ///     assert_eq!(table.version(), 0);
+    /// };
+    /// ```
     pub fn create(self) -> CreateBuilder {
         CreateBuilder::default().with_object_store(self.0.object_store())
     }
@@ -78,8 +88,8 @@ impl From<DeltaTable> for DeltaOps {
 }
 
 impl From<DeltaOps> for DeltaTable {
-    fn from(comm: DeltaOps) -> Self {
-        comm.0
+    fn from(ops: DeltaOps) -> Self {
+        ops.0
     }
 }
 

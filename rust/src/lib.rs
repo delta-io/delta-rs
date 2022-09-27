@@ -119,6 +119,8 @@ pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, Object
 pub use arrow;
 #[cfg(feature = "datafusion-ext")]
 pub use datafusion;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub use operations::DeltaOps;
 #[cfg(feature = "parquet")]
 pub use parquet;
 #[cfg(feature = "parquet2")]

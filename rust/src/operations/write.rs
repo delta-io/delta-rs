@@ -64,7 +64,7 @@ impl From<WriteError> for DeltaTableError {
     }
 }
 
-/// Builder for write operations
+/// Write data into a DeltaTable
 #[derive(Debug, Clone)]
 pub struct WriteBuilder {
     /// The input plan
@@ -73,13 +73,17 @@ pub struct WriteBuilder {
     location: Option<String>,
     /// SaveMode defines how to treat data already written to table location
     mode: SaveMode,
+    /// Column names for table partitioning
     partition_columns: Option<Vec<String>>,
     /// When using `Overwrite` mode, replace data that matches a predicate
     predicate: Option<String>,
     /// Size above which we will write a buffered parquet file to disk.
     target_file_size: Option<usize>,
+    /// An object store to be used as backend for delta table
     object_store: Option<Arc<DeltaObjectStore>>,
+    /// Storage options used to create a new storage backend
     storage_options: Option<HashMap<String, String>>,
+    /// RecordBatches to be written into the table
     batches: Option<Vec<RecordBatch>>,
 }
 

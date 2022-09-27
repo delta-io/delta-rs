@@ -1,6 +1,5 @@
 #![cfg(feature = "datafusion-ext")]
-use std::collections::{HashMap, HashSet};
-use std::future::IntoFuture;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use deltalake::action::SaveMode;

@@ -138,7 +138,6 @@ impl PartitionWriter {
     fn next_data_path(&mut self) -> Path {
         let part = format!("{:0>5}", self.part_counter);
         self.part_counter += 1;
-        // TODO: what does c000 mean?
         // TODO handle file name for different compressions
         let file_name = format!("part-{}-{}-c000.snappy.parquet", part, self.writer_id);
         self.config.prefix.child(file_name)
@@ -179,7 +178,7 @@ impl PartitionWriter {
     }
 
     async fn flush_arrow_writer(&mut self) -> DeltaResult<()> {
-        // replace counter / buffers adn close the current writer
+        // replace counter / buffers and close the current writer
         let (writer, buffer) = self.replace_arrow_buffer(vec![])?;
         let null_counts = std::mem::take(&mut self.null_counts);
         let metadata = writer.close()?;
