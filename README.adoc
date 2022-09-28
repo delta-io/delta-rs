@@ -52,8 +52,8 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 |
 
 | Vacuum (delete stale files)
-| link:https://github.com/delta-io/delta-rs/issues/97[#97]
-| link:https://github.com/delta-io/delta-rs/issues/97[#97]
+| :heavy_check_mark: 
+| :heavy_check_mark: 
 |
 
 | History
@@ -73,12 +73,12 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 
 | High-level file writer
 |
-| link:https://github.com/delta-io/delta-rs/issues/542[#542]
+| :heavy_check_mark: 
 |
 
 | Optimize
-| link:https://github.com/delta-io/delta-rs/issues/98[#98]
-|
+| :heavy_check_mark: 
+| link:https://github.com/delta-io/delta-rs/issues/622[#622]
 |
 
 |===
