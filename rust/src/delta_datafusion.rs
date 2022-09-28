@@ -654,7 +654,7 @@ impl DeltaDataChecker {
                 invariant.field_name, invariant.invariant_sql
             );
 
-            let dfs: Vec<RecordBatch> =  self.ctx.sql(&sql).await?.collect().await?;
+            let dfs: Vec<RecordBatch> = self.ctx.sql(&sql).await?.collect().await?;
             if !dfs.is_empty() && dfs[0].num_rows() > 0 {
                 let value = format!("{:?}", dfs[0].column(0));
                 let msg = format!(
