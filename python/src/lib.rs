@@ -590,6 +590,7 @@ fn write_new_deltalake(
 #[pyclass(name = "DeltaDataChecker", text_signature = "(invariants)")]
 struct PyDeltaDataChecker {
     inner: DeltaDataChecker,
+    rt: tokio::runtime::Runtime,
 }
 
 #[pymethods]
@@ -605,13 +606,17 @@ impl PyDeltaDataChecker {
             .collect();
         Self {
             inner: DeltaDataChecker::new(invariants),
+            rt: tokio::runtime::Runtime::new().unwrap(),
         }
     }
 
     fn check_batch(&self, batch: RecordBatch) -> PyResult<()> {
-        self.inner
-            .check_batch(&batch)
-            .map_err(PyDeltaTableError::from_raw)
+        self.rt.block_on(async {
+            self.inner
+                .check_batch(&batch)
+                .await
+                .map_err(PyDeltaTableError::from_raw)
+        })
     }
 }
 

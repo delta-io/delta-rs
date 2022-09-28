@@ -610,7 +610,6 @@ fn left_larger_than_right(left: ScalarValue, right: ScalarValue) -> Option<bool>
 pub struct DeltaDataChecker {
     invariants: Vec<Invariant>,
     ctx: SessionContext,
-    rt: tokio::runtime::Runtime,
 }
 
 impl DeltaDataChecker {
@@ -619,7 +618,6 @@ impl DeltaDataChecker {
         Self {
             invariants,
             ctx: SessionContext::new(),
-            rt: tokio::runtime::Runtime::new().unwrap(),
         }
     }
 
@@ -627,12 +625,12 @@ impl DeltaDataChecker {
     ///
     /// If it does not, it will return [DeltaTableError::InvalidData] with a list
     /// of values that violated each invariant.
-    pub fn check_batch(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
-        self.enforce_invariants(record_batch)
+    pub async fn check_batch(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
+        self.enforce_invariants(record_batch).await
         // TODO: for support for Protocol V3, check constraints
     }
 
-    fn enforce_invariants(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
+    async fn enforce_invariants(&self, record_batch: &RecordBatch) -> Result<(), DeltaTableError> {
         // Invariants are deprecated, so let's not pay the overhead for any of this
         // if we can avoid it.
         if self.invariants.is_empty() {
@@ -656,9 +654,7 @@ impl DeltaDataChecker {
                 invariant.field_name, invariant.invariant_sql
             );
 
-            let dfs: Vec<RecordBatch> = self
-                .rt
-                .block_on(async { self.ctx.sql(&sql).await?.collect().await })?;
+            let dfs: Vec<RecordBatch> =  self.ctx.sql(&sql).await?.collect().await?;
             if !dfs.is_empty() && dfs[0].num_rows() > 0 {
                 let value = format!("{:?}", dfs[0].column(0));
                 let msg = format!(
