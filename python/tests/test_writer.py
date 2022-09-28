@@ -420,7 +420,7 @@ def test_writer_null_stats(tmp_path: pathlib.Path):
 
 
 def test_writer_fails_on_protocol(existing_table: DeltaTable, sample_data: pa.Table):
-    existing_table.protocol = Mock(return_value=ProtocolVersions(1, 2))
+    existing_table.protocol = Mock(return_value=ProtocolVersions(1, 3))
     with pytest.raises(DeltaTableProtocolError):
         write_deltalake(existing_table, sample_data, mode="overwrite")
 
