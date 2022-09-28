@@ -1,5 +1,5 @@
 import sys
-from typing import Any, Callable, Dict, List, Mapping, Optional, Union
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple, Union
 
 if sys.version_info >= (3, 8):
     from typing import Literal
@@ -118,6 +118,7 @@ class StructType:
 class Schema:
     def __init__(self, fields: List[Field]) -> None: ...
     fields: List[Field]
+    invariants: List[Tuple[str, str]]
 
     def to_json(self) -> str: ...
     @staticmethod
@@ -212,3 +213,7 @@ class DeltaFileSystemHandler:
         self, path: str, metadata: dict[str, str] | None = None
     ) -> ObjectOutputStream:
         """Open an output stream for sequential writing."""
+
+class DeltaDataChecker:
+    def __init__(self, invariants: List[Tuple[str, str]]) -> None: ...
+    def check_batch(self, batch: pa.RecordBatch) -> None: ...

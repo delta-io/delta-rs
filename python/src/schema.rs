@@ -1064,4 +1064,22 @@ impl PySchema {
             Err(PyTypeError::new_err("Type is not a struct"))
         }
     }
+
+    /// The list of invariants on the table.
+    ///
+    /// :rtype: List[Tuple[str, str]]
+    /// :return: a tuple of strings for each invariant. The first string is the
+    ///          field path and the second is the SQL of the invariant.
+    #[getter]
+    fn invariants(self_: PyRef<'_, Self>) -> PyResult<Vec<(String, String)>> {
+        let super_ = self_.as_ref();
+        let invariants = super_
+            .inner_type
+            .get_invariants()
+            .map_err(|err| PyException::new_err(err.to_string()))?;
+        Ok(invariants
+            .into_iter()
+            .map(|invariant| (invariant.field_name, invariant.invariant_sql))
+            .collect())
+    }
 }
