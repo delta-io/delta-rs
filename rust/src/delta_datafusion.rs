@@ -791,8 +791,8 @@ mod tests {
         assert_eq!(file.partition_values, ref_file.partition_values)
     }
 
-    #[test]
-    fn test_enforce_invariants() {
+    #[tokio::test]
+    async fn test_enforce_invariants() {
         let schema = Arc::new(Schema::new(vec![
             Field::new("a", DataType::Utf8, false),
             Field::new("b", DataType::Int32, false),
@@ -809,6 +809,7 @@ mod tests {
         let invariants: Vec<Invariant> = vec![];
         assert!(DeltaDataChecker::new(invariants)
             .check_batch(&batch)
+            .await
             .is_ok());
 
         // Valid invariants return Ok(())
@@ -818,6 +819,7 @@ mod tests {
         ];
         assert!(DeltaDataChecker::new(invariants)
             .check_batch(&batch)
+            .await
             .is_ok());
 
         // Violated invariants returns an error with list of violations
@@ -825,7 +827,7 @@ mod tests {
             Invariant::new("a", "a is null"),
             Invariant::new("b", "b < 100"),
         ];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch);
+        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::InvalidData { .. })));
         if let Err(DeltaTableError::InvalidData { violations }) = result {
@@ -834,7 +836,7 @@ mod tests {
 
         // Irrelevant invariants return a different error
         let invariants = vec![Invariant::new("c", "c > 2000")];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch);
+        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
         assert!(result.is_err());
 
         // Nested invariants are unsupported
@@ -848,7 +850,7 @@ mod tests {
         let batch = RecordBatch::try_new(schema, vec![inner]).unwrap();
 
         let invariants = vec![Invariant::new("x.b", "x.b < 1000")];
-        let result = DeltaDataChecker::new(invariants).check_batch(&batch);
+        let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
     }
