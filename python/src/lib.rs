@@ -8,14 +8,16 @@ use chrono::{DateTime, FixedOffset, Utc};
 use deltalake::action::{
     self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
 };
+use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::builder::DeltaTableBuilder;
+use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::partitions::PartitionFilter;
 use deltalake::DeltaDataTypeLong;
 use deltalake::DeltaDataTypeTimestamp;
 use deltalake::DeltaTableMetaData;
 use deltalake::DeltaTransactionOptions;
-use deltalake::Schema;
+use deltalake::{Invariant, Schema};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::exceptions::PyValueError;
@@ -585,6 +587,39 @@ fn write_new_deltalake(
     Ok(())
 }
 
+#[pyclass(name = "DeltaDataChecker", text_signature = "(invariants)")]
+struct PyDeltaDataChecker {
+    inner: DeltaDataChecker,
+    rt: tokio::runtime::Runtime,
+}
+
+#[pymethods]
+impl PyDeltaDataChecker {
+    #[new]
+    fn new(invariants: Vec<(String, String)>) -> Self {
+        let invariants: Vec<Invariant> = invariants
+            .into_iter()
+            .map(|(field_name, invariant_sql)| Invariant {
+                field_name,
+                invariant_sql,
+            })
+            .collect();
+        Self {
+            inner: DeltaDataChecker::new(invariants),
+            rt: tokio::runtime::Runtime::new().unwrap(),
+        }
+    }
+
+    fn check_batch(&self, batch: RecordBatch) -> PyResult<()> {
+        self.rt.block_on(async {
+            self.inner
+                .check_batch(&batch)
+                .await
+                .map_err(PyDeltaTableError::from_raw)
+        })
+    }
+}
+
 #[pymodule]
 // module name need to match project name
 fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
@@ -594,6 +629,7 @@ fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_function(pyo3::wrap_pyfunction!(write_new_deltalake, m)?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
+    m.add_class::<PyDeltaDataChecker>()?;
     m.add("PyDeltaTableError", py.get_type::<PyDeltaTableError>())?;
     // There are issues with submodules, so we will expose them flat for now
     // See also: https://github.com/PyO3/pyo3/issues/759

@@ -140,6 +140,12 @@ pub enum DeltaTableError {
         #[from]
         source: action::ActionError,
     },
+    /// Error returned when attempting to write bad data to the table
+    #[error("Attempted to write invalid data to the table: {:#?}", violations)]
+    InvalidData {
+        /// Action error details returned of the invalid action.
+        violations: Vec<String>,
+    },
     /// Error returned when it is not a DeltaTable.
     #[error("Not a Delta table: {0}")]
     NotATable(String),
