@@ -32,7 +32,16 @@ pub const MAX_SUPPORTED_READER_VERSION: i32 = 1;
 pub struct DeltaOps(DeltaTable);
 
 impl DeltaOps {
-    /// load table from uri
+    /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given uri.
+    ///
+    /// ```
+    /// use deltalake::DeltaOps;
+    ///
+    /// async {
+    ///     let ops = DeltaOps::try_from_uri("memory://").await.unwrap();
+    /// };
+    /// ```
+    #[must_use]
     pub async fn try_from_uri(uri: impl AsRef<str>) -> DeltaResult<Self> {
         let mut table = DeltaTableBuilder::from_uri(uri).build()?;
         // We allow for uninitialized locations, since we may want to create the table
@@ -44,6 +53,16 @@ impl DeltaOps {
     }
 
     /// Create a new [`DeltaOps`] instance, backed by an un-initialized in memory table
+    ///
+    /// Using this will not persist any changes beyond the lifetime of the table object.
+    /// THe main purpose of in-memory tables is for use in testing.
+    ///
+    /// ```
+    /// use deltalake::DeltaOps;
+    ///
+    /// let ops = DeltaOps::new_in_memory();
+    /// ```
+    #[must_use]
     pub fn new_in_memory() -> Self {
         DeltaTableBuilder::from_uri("memory://")
             .build()
@@ -62,18 +81,21 @@ impl DeltaOps {
     ///     assert_eq!(table.version(), 0);
     /// };
     /// ```
+    #[must_use]
     pub fn create(self) -> CreateBuilder {
         CreateBuilder::default().with_object_store(self.0.object_store())
     }
 
     /// Write data to Delta table
     #[cfg(feature = "datafusion-ext")]
+    #[must_use]
     pub fn load(self) -> LoadBuilder {
         LoadBuilder::default().with_object_store(self.0.object_store())
     }
 
     /// Write data to Delta table
     #[cfg(feature = "datafusion-ext")]
+    #[must_use]
     pub fn write(self, batches: Vec<RecordBatch>) -> WriteBuilder {
         WriteBuilder::default()
             .with_input_batches(batches)
