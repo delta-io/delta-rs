@@ -338,9 +338,11 @@ mod tests {
         assert_eq!(table.version(), 0);
         let first_id = table.get_metadata().unwrap().id.clone();
 
+        let object_store = table.object_store();
+
         // Check an error is raised when a table exists at location
         let table = CreateBuilder::new()
-            .with_location(tmp_dir.path().to_str().unwrap())
+            .with_object_store(object_store.clone())
             .with_columns(schema.get_fields().clone())
             .with_save_mode(SaveMode::ErrorIfExists)
             .await;
@@ -348,7 +350,7 @@ mod tests {
 
         // Check current table is returned when ignore option is chosen.
         let table = CreateBuilder::new()
-            .with_location(tmp_dir.path().to_str().unwrap())
+            .with_object_store(object_store.clone())
             .with_columns(schema.get_fields().clone())
             .with_save_mode(SaveMode::Ignore)
             .await
@@ -357,7 +359,7 @@ mod tests {
 
         // Check table is overwritten
         let table = CreateBuilder::new()
-            .with_location(tmp_dir.path().to_str().unwrap())
+            .with_object_store(object_store.clone())
             .with_columns(schema.get_fields().clone())
             .with_save_mode(SaveMode::Overwrite)
             .await

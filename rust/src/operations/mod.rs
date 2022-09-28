@@ -41,7 +41,6 @@ impl DeltaOps {
     ///     let ops = DeltaOps::try_from_uri("memory://").await.unwrap();
     /// };
     /// ```
-    #[must_use]
     pub async fn try_from_uri(uri: impl AsRef<str>) -> DeltaResult<Self> {
         let mut table = DeltaTableBuilder::from_uri(uri).build()?;
         // We allow for uninitialized locations, since we may want to create the table
