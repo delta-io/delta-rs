@@ -106,7 +106,7 @@ impl RawDeltaTable {
         table_uri: &str,
         version: Option<deltalake::DeltaDataTypeLong>,
         storage_options: Option<HashMap<String, String>>,
-        without_files: Option<bool>
+        without_files: bool
     ) -> PyResult<Self> {
         let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
         if let Some(storage_options) = storage_options {
@@ -116,7 +116,7 @@ impl RawDeltaTable {
             builder = builder.with_version(version)
         }
 
-        if without_files.unwrap_or(false) {
+        if without_files {
             builder = builder.without_files()
         }
 
