@@ -12,7 +12,7 @@ homepage = "https://github.com/delta-io/delta.rs"
 async-trait = "0.1"
 thiserror = "1"
 log = "0"
-uuid = { version = "0.8", features = ["serde", "v4"] }
+uuid = { version = "1.2", features = ["serde", "v4"] }
 
 rusoto_core = { version = "0.48", default-features = false }
 rusoto_dynamodb = { version = "0.48", default-features = false }
