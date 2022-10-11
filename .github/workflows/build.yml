@@ -112,7 +112,7 @@ jobs:
         run: |
           cargo test --features integration_test,s3-rustls,datafusion-ext
 
-  paruqet2_test:
+  parquet2_test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
