@@ -77,7 +77,7 @@ class DeltaTable:
         table_uri: str,
         version: Optional[int] = None,
         storage_options: Optional[Dict[str, str]] = None,
-        without_files: bool = False
+        without_files: bool = False,
     ):
         """
         Create the Delta Table from a path with an optional version.
@@ -93,7 +93,10 @@ class DeltaTable:
         """
         self._storage_options = storage_options
         self._table = RawDeltaTable(
-            table_uri, version=version, storage_options=storage_options, without_files=without_files
+            table_uri,
+            version=version,
+            storage_options=storage_options,
+            without_files=without_files,
         )
         self._metadata = Metadata(self._table)
 
