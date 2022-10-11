@@ -86,7 +86,7 @@ jobs:
 
   release-docs:
     needs:
-      [validate-release-tag, release-pypi-manylinux, release-pypi-mac-windows]
+      [validate-release-tag, release-pypi-manylinux, release-pypi-mac, release-pypi-windows]
     runs-on: ubuntu-latest
     permissions:
       contents: write
