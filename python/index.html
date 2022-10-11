@@ -29,7 +29,7 @@
             <a href="#" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.6.1
+                0.6.2
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -71,7 +71,17 @@
              
   <section id="python-bindings-documentation-of-delta-rs">
 <h1>Python bindings documentation of delta-rs<a class="headerlink" href="#python-bindings-documentation-of-delta-rs" title="Permalink to this headline"></a></h1>
-<p>This is the documentation of the Python bindings of delta-rs.</p>
+<p>This is the documentation of the Python bindings of delta-rs, <code class="docutils literal notranslate"><span class="pre">deltalake</span></code>.
+This module provides the capability to read, write, and manage <a class="reference external" href="https://delta.io/">Delta Lake</a>
+tables from Python without Spark or Java. It uses <a class="reference external" href="https://arrow.apache.org/">Apache Arrow</a> under the hood,
+so is compatible with other Arrow-native or integrated libraries such as
+<a class="reference external" href="https://pandas.pydata.org/">Pandas</a>, <a class="reference external" href="https://duckdb.org/">DuckDB</a>, and <a class="reference external" href="https://www.pola.rs/">Polars</a>.</p>
+<div class="admonition note">
+<p class="admonition-title">Note</p>
+<p>This module is under active development and some features are experimental.
+It is not yet as feature-complete as the PySpark implementation of Delta
+Lake. If you encounter a bug, please let us know in our <a class="reference external" href="https://github.com/delta-io/delta-rs/issues">GitHub repo</a>.</p>
+</div>
 <div class="toctree-wrapper compound">
 <ul>
 <li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a><ul>

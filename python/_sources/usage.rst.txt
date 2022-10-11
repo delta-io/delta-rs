@@ -73,6 +73,43 @@ For AWS Glue catalog, use AWS environment variables to authenticate.
 .. _`s3 options`: https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L423-L491
 .. _`azure options`: https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L524-L539
 
+Custom Storage Backends
+~~~~~~~~~~~~~~~~~~~~~~~
+
+While delta always needs its internal storage backend to work and be properly configured, in order to manage the delta log,
+it may sometime be advantageous - and is common practice in the arrow world - to customize the storage interface used for
+reading the bulk data. 
+
+``deltalake`` will work with any storage compliant with :class:`pyarrow.fs.FileSystem`, however the root of the filesystem has
+to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into
+a :class:`pyarrow.fs.SubTreeFileSystem`.
+
+.. code-block:: python
+
+    import pyarrow.fs as fs
+    from deltalake import DeltaTable
+    
+    path = "<path/to/table>"
+    filesystem = fs.SubTreeFileSystem(path, fs.LocalFileSystem())
+    
+    dt = DeltaTable(path)
+    ds = dt.to_pyarrow_dataset(filesystem=filesystem)
+
+When using the pyarrow factory method for file systems, the normalized path is provided
+on creation. In case of S3 this would look something like:
+
+.. code-block:: python
+
+    import pyarrow.fs as fs
+    from deltalake import DeltaTable
+
+    table_uri = "s3://<bucket>/<path>"
+    raw_fs, normalized_path = fs.FileSystem.from_uri(table_uri)
+    filesystem = fs.SubTreeFileSystem(normalized_path, raw_fs)
+
+    dt = DeltaTable(table_uri)
+    ds = dt.to_pyarrow_dataset(filesystem=filesystem)
+
 Time Travel
 ~~~~~~~~~~~
 

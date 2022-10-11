@@ -29,7 +29,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.6.1
+                0.6.2
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -296,7 +296,7 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 <dd class="field-even"><p>a pandas dataframe</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.4.4)">pandas.DataFrame</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.5.0)">pandas.DataFrame</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -470,7 +470,7 @@ newer versions.</p>
 <h2>Writing DeltaTables<a class="headerlink" href="#writing-deltatables" title="Permalink to this headline"></a></h2>
 <dl class="py function">
 <dt class="sig sig-object py" id="deltalake.write_deltalake">
-<span class="sig-prename descclassname"><span class="pre">deltalake.</span></span><span class="sig-name descname"><span class="pre">write_deltalake</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_or_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">schema</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partition_by</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filesystem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'error'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">file_options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_open_files</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1024</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rows_per_file</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_rows_per_group</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">0</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rows_per_group</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1048576</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">description</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">configuration</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overwrite_schema</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.write_deltalake" title="Permalink to this definition"></a></dt>
+<span class="sig-prename descclassname"><span class="pre">deltalake.</span></span><span class="sig-name descname"><span class="pre">write_deltalake</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_or_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">schema</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partition_by</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filesystem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">mode</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">'error'</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">file_options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_open_files</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">1024</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rows_per_file</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">10485760</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_rows_per_group</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">65536</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_rows_per_group</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">131072</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">name</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">description</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">configuration</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">overwrite_schema</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">storage_options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.write_deltalake" title="Permalink to this definition"></a></dt>
 <dd><p>Write to a Delta Lake table (Experimental)</p>
 <p>If the table does not already exist, it will be created.</p>
 <p>This function only supports protocol version 1 currently. If an attempting
@@ -481,12 +481,13 @@ function will throw DeltaTableProtocolError.</p>
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>table_or_uri</strong> (<em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference internal" href="#deltalake.table.DeltaTable" title="deltalake.table.DeltaTable"><em>deltalake.table.DeltaTable</em></a><em>]</em>) – URI of a table or a DeltaTable object.</p></li>
-<li><p><strong>data</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.4.4)"><em>pandas.core.frame.DataFrame</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v9.0.0)"><em>pyarrow.lib.Table</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v9.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>, </em><em>Iterable</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v9.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>]</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader" title="(in Apache Arrow v9.0.0)"><em>pyarrow.lib.RecordBatchReader</em></a><em>]</em>) – Data to write. If passing iterable, the schema must also be given.</p></li>
+<li><p><strong>data</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.5.0)"><em>pandas.core.frame.DataFrame</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v9.0.0)"><em>pyarrow.lib.Table</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v9.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>, </em><em>Iterable</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v9.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>]</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader" title="(in Apache Arrow v9.0.0)"><em>pyarrow.lib.RecordBatchReader</em></a><em>]</em>) – Data to write. If passing iterable, the schema must also be given.</p></li>
 <li><p><strong>schema</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v9.0.0)"><em>pyarrow.lib.Schema</em></a><em>]</em>) – Optional schema to write.</p></li>
 <li><p><strong>partition_by</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>]</em>) – List of columns to partition the table by. Only required
 when creating a new table.</p></li>
 <li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v9.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em>) – Optional filesystem to pass to PyArrow. If not provided will
-be inferred from uri.</p></li>
+be inferred from uri. The file system has to be rooted in the table root.
+Use the pyarrow.fs.SubTreeFileSystem, to adopt the root of pyarrow file systems.</p></li>
 <li><p><strong>mode</strong> (<em>Literal</em><em>[</em><em>'error'</em><em>, </em><em>'append'</em><em>, </em><em>'overwrite'</em><em>, </em><em>'ignore'</em><em>]</em>) – How to handle existing data. Default is to error if table already exists.
 If ‘append’, will add new data.
 If ‘overwrite’, will replace table with new data.
@@ -514,6 +515,7 @@ If this value is set, then min_rows_per_group should also be set.</p></li>
 <li><p><strong>description</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – User-provided description for this table.</p></li>
 <li><p><strong>configuration</strong> (<em>Optional</em><em>[</em><em>Mapping</em><em>[</em><em>str</em><em>, </em><em>Optional</em><em>[</em><em>str</em><em>]</em><em>]</em><em>]</em>) – A map containing configuration options for the metadata action.</p></li>
 <li><p><strong>overwrite_schema</strong> (<em>bool</em>) – If True, allows updating the schema of the table.</p></li>
+<li><p><strong>storage_options</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>]</em><em>]</em>) – options passed to the native delta filesystem. Unused if ‘filesystem’ is defined.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type</dt>
@@ -573,6 +575,21 @@ If this value is set, then min_rows_per_group should also be set.</p></li>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><a class="reference internal" href="#deltalake.schema.Schema" title="deltalake.schema.Schema">Schema</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py attribute">
+<dt class="sig sig-object py" id="deltalake.schema.Schema.invariants">
+<span class="sig-name descname"><span class="pre">invariants</span></span><a class="headerlink" href="#deltalake.schema.Schema.invariants" title="Permalink to this definition"></a></dt>
+<dd><p>The list of invariants on the table.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p>List[Tuple[str, str]]</p>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>a tuple of strings for each invariant. The first string is the
+field path and the second is the SQL of the invariant.</p>
 </dd>
 </dl>
 </dd></dl>
@@ -1181,7 +1198,7 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>table_uri</strong> (<em>str</em>) – </p></li>
 <li><p><strong>options</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>]</em><em>]</em>) – </p></li>
-<li><p><strong>backend</strong> (<em>Any</em>) – </p></li>
+<li><p><strong>backend</strong> (<em>Optional</em><em>[</em><em>Any</em><em>]</em>) – </p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type</dt>
@@ -1209,7 +1226,7 @@ Otherwise, it is replaced.</p>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.create_dir">
-<span class="sig-name descname"><span class="pre">create_dir</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">recursive</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.create_dir" title="Permalink to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">create_dir</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">recursive</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.create_dir" title="Permalink to this definition"></a></dt>
 <dd><p>Create a directory and subdirectories.</p>
 <p>This function succeeds if the directory already exists.</p>
 <dl class="field-list simple">

@@ -30,7 +30,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.6.1
+                0.6.2
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -44,6 +44,7 @@
 <li class="toctree-l1"><a class="reference internal" href="installation.html">Installation</a></li>
 <li class="toctree-l1 current"><a class="current reference internal" href="#">Usage</a><ul>
 <li class="toctree-l2"><a class="reference internal" href="#loading-a-delta-table">Loading a Delta Table</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#custom-storage-backends">Custom Storage Backends</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#time-travel">Time Travel</a></li>
 </ul>
 </li>
@@ -152,6 +153,38 @@ database and table name. Currently only AWS Glue is supported.</p>
 <span class="go">{&#39;id&#39;: [5, 7, 9, 5, 6, 7, 8, 9]}</span>
 </pre></div>
 </div>
+<section id="custom-storage-backends">
+<h3>Custom Storage Backends<a class="headerlink" href="#custom-storage-backends" title="Permalink to this headline"></a></h3>
+<p>While delta always needs its internal storage backend to work and be properly configured, in order to manage the delta log,
+it may sometime be advantageous - and is common practice in the arrow world - to customize the storage interface used for
+reading the bulk data.</p>
+<p><code class="docutils literal notranslate"><span class="pre">deltalake</span></code> will work with any storage compliant with <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v9.0.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.FileSystem</span></code></a>, however the root of the filesystem has
+to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into
+a <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.SubTreeFileSystem.html#pyarrow.fs.SubTreeFileSystem" title="(in Apache Arrow v9.0.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.SubTreeFileSystem</span></code></a>.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pyarrow.fs</span> <span class="kn">as</span> <span class="nn">fs</span>
+<span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+
+<span class="n">path</span> <span class="o">=</span> <span class="s2">&quot;&lt;path/to/table&gt;&quot;</span>
+<span class="n">filesystem</span> <span class="o">=</span> <span class="n">fs</span><span class="o">.</span><span class="n">SubTreeFileSystem</span><span class="p">(</span><span class="n">path</span><span class="p">,</span> <span class="n">fs</span><span class="o">.</span><span class="n">LocalFileSystem</span><span class="p">())</span>
+
+<span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="n">path</span><span class="p">)</span>
+<span class="n">ds</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">(</span><span class="n">filesystem</span><span class="o">=</span><span class="n">filesystem</span><span class="p">)</span>
+</pre></div>
+</div>
+<p>When using the pyarrow factory method for file systems, the normalized path is provided
+on creation. In case of S3 this would look something like:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pyarrow.fs</span> <span class="kn">as</span> <span class="nn">fs</span>
+<span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+
+<span class="n">table_uri</span> <span class="o">=</span> <span class="s2">&quot;s3://&lt;bucket&gt;/&lt;path&gt;&quot;</span>
+<span class="n">raw_fs</span><span class="p">,</span> <span class="n">normalized_path</span> <span class="o">=</span> <span class="n">fs</span><span class="o">.</span><span class="n">FileSystem</span><span class="o">.</span><span class="n">from_uri</span><span class="p">(</span><span class="n">table_uri</span><span class="p">)</span>
+<span class="n">filesystem</span> <span class="o">=</span> <span class="n">fs</span><span class="o">.</span><span class="n">SubTreeFileSystem</span><span class="p">(</span><span class="n">normalized_path</span><span class="p">,</span> <span class="n">raw_fs</span><span class="p">)</span>
+
+<span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="n">table_uri</span><span class="p">)</span>
+<span class="n">ds</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">(</span><span class="n">filesystem</span><span class="o">=</span><span class="n">filesystem</span><span class="p">)</span>
+</pre></div>
+</div>
+</section>
 <section id="time-travel">
 <h3>Time Travel<a class="headerlink" href="#time-travel" title="Permalink to this headline"></a></h3>
 <p>To load previous table states, you can provide the version number you wish to
