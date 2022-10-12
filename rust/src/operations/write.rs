@@ -23,7 +23,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::writer::{PartitionWriter, PartitionWriterConfig};
+use super::writer::{DeltaWriter, WriterConfig};
 use super::MAX_SUPPORTED_WRITER_VERSION;
 use super::{transaction::commit, CreateBuilder};
 use crate::action::{Action, Add, DeltaOperation, Remove, SaveMode};
@@ -54,6 +54,16 @@ enum WriteError {
 
     #[error("A table already exists at: {0}")]
     AlreadyExists(String),
+
+    #[error(
+        "Specified table partitioning does not match table partitioning: expected: {:?}, got: {:?}",
+        expected,
+        got
+    )]
+    PartitionColumnMismatch {
+        expected: Vec<String>,
+        got: Vec<String>,
+    },
 }
 
 impl From<WriteError> for DeltaTableError {
@@ -79,6 +89,8 @@ pub struct WriteBuilder {
     predicate: Option<String>,
     /// Size above which we will write a buffered parquet file to disk.
     target_file_size: Option<usize>,
+    /// Number of records to be written in single batch to underlying writer
+    write_batch_size: Option<usize>,
     /// An object store to be used as backend for delta table
     object_store: Option<Arc<DeltaObjectStore>>,
     /// Storage options used to create a new storage backend
@@ -104,6 +116,7 @@ impl WriteBuilder {
             predicate: None,
             storage_options: None,
             target_file_size: None,
+            write_batch_size: None,
             object_store: None,
             batches: None,
         }
@@ -153,9 +166,6 @@ impl WriteBuilder {
     /// Set options used to initialize storage backend
     ///
     /// Options may be passed in the HashMap or set as environment variables.
-    ///
-    /// [crate::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
-    /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
         self
@@ -170,6 +180,12 @@ impl WriteBuilder {
     /// Specify the target file size for data files written to the delta table.
     pub fn with_target_file_size(mut self, target_file_size: usize) -> Self {
         self.target_file_size = Some(target_file_size);
+        self
+    }
+
+    /// Specify the target batch size for row groups written to parquet files.
+    pub fn with_write_batch_size(mut self, write_batch_size: usize) -> Self {
+        self.write_batch_size = Some(write_batch_size);
         self
     }
 }
@@ -231,6 +247,24 @@ impl std::future::IntoFuture for WriteBuilder {
                 Err(err) => Err(err),
             }?;
 
+            // validate partition columns
+            let partition_columns = if let Ok(meta) = table.get_metadata() {
+                if let Some(ref partition_columns) = this.partition_columns {
+                    if &meta.partition_columns != partition_columns {
+                        Err(WriteError::PartitionColumnMismatch {
+                            expected: table.get_metadata()?.partition_columns.clone(),
+                            got: partition_columns.to_vec(),
+                        })
+                    } else {
+                        Ok(partition_columns.clone())
+                    }
+                } else {
+                    Ok(meta.partition_columns.clone())
+                }
+            } else {
+                Ok(this.partition_columns.unwrap_or_default())
+            }?;
+
             let plan = if let Some(plan) = this.input {
                 Ok(plan)
             } else if let Some(batches) = this.batches {
@@ -246,26 +280,25 @@ impl std::future::IntoFuture for WriteBuilder {
                                 "Updating table schema not yet implemented".to_string(),
                             ));
                         }
-                        if let Some(cols) = this.partition_columns.as_ref() {
-                            if cols != &meta.partition_columns {
-                                return Err(DeltaTableError::Generic(
-                                    "Updating table partitions not yet implemented".to_string(),
-                                ));
-                            }
-                        };
                     };
 
-                    let data = if let Some(cols) = this.partition_columns.as_ref() {
+                    let data = if !partition_columns.is_empty() {
                         // TODO partitioning should probably happen in its own plan ...
                         let mut partitions: HashMap<String, Vec<RecordBatch>> = HashMap::new();
                         for batch in batches {
-                            let divided =
-                                divide_by_partition_values(schema.clone(), cols.clone(), &batch)
-                                    .unwrap();
+                            let divided = divide_by_partition_values(
+                                schema.clone(),
+                                partition_columns.clone(),
+                                &batch,
+                            )
+                            .unwrap();
                             for part in divided {
-                                let key = PartitionPath::from_hashmap(cols, &part.partition_values)
-                                    .map_err(DeltaTableError::from)?
-                                    .into();
+                                let key = PartitionPath::from_hashmap(
+                                    &partition_columns,
+                                    &part.partition_values,
+                                )
+                                .map_err(DeltaTableError::from)?
+                                .into();
                                 match partitions.get_mut(&key) {
                                     Some(part_batches) => {
                                         part_batches.push(part.record_batch);
@@ -294,15 +327,14 @@ impl std::future::IntoFuture for WriteBuilder {
                 let inner_plan = plan.clone();
                 let state = SessionContext::new();
                 let task_ctx = Arc::new(TaskContext::from(&state));
-                let config = PartitionWriterConfig::try_new(
+                let config = WriterConfig::new(
                     inner_plan.schema(),
-                    HashMap::new(),
-                    Vec::new(),
+                    partition_columns.clone(),
                     None,
                     this.target_file_size,
-                    None,
-                )?;
-                let mut writer = PartitionWriter::try_with_config(object_store.clone(), config)?;
+                    this.write_batch_size,
+                );
+                let mut writer = DeltaWriter::new(object_store.clone(), config);
 
                 let mut stream = inner_plan.execute(i, task_ctx)?;
                 let handle: tokio::task::JoinHandle<DeltaResult<Vec<Add>>> =
@@ -370,7 +402,11 @@ impl std::future::IntoFuture for WriteBuilder {
             // Finally, commit ...
             let operation = DeltaOperation::Write {
                 mode: this.mode,
-                partition_by: this.partition_columns,
+                partition_by: if !partition_columns.is_empty() {
+                    Some(partition_columns)
+                } else {
+                    None
+                },
                 predicate: this.predicate,
             };
             let _version = commit(

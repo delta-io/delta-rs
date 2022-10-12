@@ -66,6 +66,8 @@ impl LoadBuilder {
     ///
     /// [crate::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
     /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
+    /// [crate::builder::azure_storage_options] describes the available options for the Azure backend.
+    /// [crate::builder::gcp_storage_options] describes the available options for the Google Cloud Platform backend.
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
         self
@@ -83,8 +85,10 @@ impl std::future::IntoFuture for LoadBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
+        let this = self;
+
         Box::pin(async move {
-            let object_store = self.object_store.unwrap();
+            let object_store = this.object_store.unwrap();
             let mut table = DeltaTable::new(object_store, Default::default());
             table.load().await?;
 
@@ -102,7 +106,6 @@ impl std::future::IntoFuture for LoadBuilder {
 mod tests {
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::writer::test_utils::{get_record_batch, TestResult};
-    use arrow::record_batch::RecordBatch;
     use datafusion::assert_batches_sorted_eq;
 
     #[tokio::test]
@@ -112,7 +115,6 @@ mod tests {
 
         let (_table, stream) = DeltaOps(table).load().await?;
         let data = collect_sendable_stream(stream).await?;
-        let batch_loaded = RecordBatch::concat(&data[0].schema(), &data)?;
 
         let expected = vec![
             "+----+-------+------------+",
@@ -132,8 +134,8 @@ mod tests {
             "+----+-------+------------+",
         ];
 
-        assert_batches_sorted_eq!(&expected, &[batch_loaded.clone()]);
-        assert_eq!(batch.schema(), batch_loaded.schema());
+        assert_batches_sorted_eq!(&expected, &data);
+        assert_eq!(batch.schema(), data[0].schema());
         Ok(())
     }
 }

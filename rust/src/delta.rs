@@ -14,7 +14,6 @@ use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::schema::*;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
-use crate::builder::{DeltaTableBuilder, DeltaTableConfig};
 use crate::delta_config::DeltaConfigError;
 use crate::storage::ObjectStoreRef;
 use crate::vacuum::{Vacuum, VacuumError};
@@ -28,6 +27,9 @@ use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use uuid::Uuid;
+
+// TODO re-exports only for transition
+pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
@@ -93,7 +95,6 @@ pub enum DeltaTableError {
         #[cfg(feature = "parquet")]
         #[from]
         source: parquet::errors::ParquetError,
-        /// Parquet error details returned when reading the checkpoint failed.
         #[cfg(feature = "parquet2")]
         #[from]
         source: parquet2::error::Error,

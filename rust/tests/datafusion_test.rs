@@ -67,7 +67,7 @@ async fn prepare_table(
         .unwrap();
 
     for batch in batches {
-        table = DeltaOps::from(table)
+        table = DeltaOps(table)
             .write(vec![batch])
             .with_save_mode(save_mode.clone())
             .await

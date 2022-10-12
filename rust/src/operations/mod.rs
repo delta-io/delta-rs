@@ -29,7 +29,7 @@ pub const MAX_SUPPORTED_WRITER_VERSION: i32 = 1;
 pub const MAX_SUPPORTED_READER_VERSION: i32 = 1;
 
 /// High level interface for executing commands against a DeltaTable
-pub struct DeltaOps(DeltaTable);
+pub struct DeltaOps(pub DeltaTable);
 
 impl DeltaOps {
     /// Create a new [`DeltaOps`] instance, operating on [`DeltaTable`] at given uri.

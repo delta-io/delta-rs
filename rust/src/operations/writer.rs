@@ -2,16 +2,22 @@ use std::collections::HashMap;
 
 use crate::action::Add;
 use crate::storage::ObjectStoreRef;
+use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::{apply_null_counts, create_add, NullCounts};
-use crate::writer::utils::{PartitionPath, ShareableBuffer};
+use crate::writer::utils::{
+    arrow_schema_without_partitions, record_batch_without_partitions, PartitionPath,
+    ShareableBuffer,
+};
 use crate::{crate_version, DeltaResult, DeltaTableError};
 
 use arrow::datatypes::SchemaRef as ArrowSchemaRef;
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
 use log::warn;
 use object_store::{path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
+use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
 // TODO databricks often suggests a file size of 100mb, should we set this default?
@@ -35,6 +41,15 @@ enum WriteError {
     FileName {
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+
+    #[error("Error handling Arrow data: {source}")]
+    Arrow {
+        #[from]
+        source: ArrowError,
+    },
+
+    #[error("Error partitioning record batch: {0}")]
+    Partitioning(String),
 }
 
 impl From<WriteError> for DeltaTableError {
@@ -43,10 +58,184 @@ impl From<WriteError> for DeltaTableError {
             WriteError::SchemaMismatch { .. } => DeltaTableError::SchemaMismatch {
                 msg: err.to_string(),
             },
+            WriteError::Arrow { source } => DeltaTableError::Arrow { source },
             _ => DeltaTableError::GenericError {
                 source: Box::new(err),
             },
         }
+    }
+}
+
+pub(crate) struct WriterConfig {
+    /// Schema of the delta table
+    table_schema: ArrowSchemaRef,
+    /// Column names for columns the table is partitioned by
+    partition_columns: Vec<String>,
+    /// Properties passed to underlying parquet writer
+    writer_properties: WriterProperties,
+    /// Size above which we will write a buffered parquet file to disk.
+    target_file_size: usize,
+    /// Row chunks passed to parquet writer. This and the internal parquet writer settings
+    /// determine how fine granular we can track / control the size of resulting files.
+    write_batch_size: usize,
+}
+
+impl WriterConfig {
+    pub fn new(
+        table_schema: ArrowSchemaRef,
+        partition_columns: Vec<String>,
+        writer_properties: Option<WriterProperties>,
+        target_file_size: Option<usize>,
+        write_batch_size: Option<usize>,
+    ) -> Self {
+        let writer_properties = writer_properties.unwrap_or_else(|| {
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .build()
+        });
+        let target_file_size = target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE);
+        let write_batch_size = write_batch_size.unwrap_or(DEFAULT_WRITE_BATCH_SIZE);
+
+        Self {
+            table_schema,
+            partition_columns,
+            writer_properties,
+            target_file_size,
+            write_batch_size,
+        }
+    }
+
+    pub fn file_schema(&self) -> ArrowSchemaRef {
+        arrow_schema_without_partitions(&self.table_schema, &self.partition_columns)
+    }
+}
+
+/// A parquet writer implementation tailored to the needs of writing data to a delta table.
+pub(crate) struct DeltaWriter {
+    /// An object store pointing at Delta table root
+    object_store: ObjectStoreRef,
+    /// configuration for the writers
+    config: WriterConfig,
+    /// partition writers for individual partitions
+    partition_writers: HashMap<Path, PartitionWriter>,
+}
+
+impl DeltaWriter {
+    pub fn new(object_store: ObjectStoreRef, config: WriterConfig) -> Self {
+        Self {
+            object_store,
+            config,
+            partition_writers: HashMap::new(),
+        }
+    }
+
+    /// Creates a [`DeltaWriter`] to write data to provided Delta Table
+    // pub fn for_table(
+    //     table: &DeltaTable,
+    //     writer_properties: Option<WriterProperties>,
+    // ) -> DeltaResult<Self> {
+    //     // Initialize an arrow schema ref from the delta table schema
+    //     let metadata = table.get_metadata()?;
+    //     let table_schema = Arc::new(<ArrowSchema as TryFrom<&Schema>>::try_from(
+    //         &metadata.schema.clone(),
+    //     )?);
+    //     let partition_columns = metadata.partition_columns.clone();
+    //
+    //     // Initialize writer properties for the underlying arrow writer
+    //     let writer_properties = writer_properties.unwrap_or_else(|| {
+    //         WriterProperties::builder()
+    //             .set_compression(Compression::SNAPPY)
+    //             .build()
+    //     });
+    //
+    //     // TODO get target file size form table meta data
+    //
+    //     let config = WriterConfig::new(
+    //         table_schema,
+    //         partition_columns,
+    //         Some(writer_properties),
+    //         None,
+    //         None,
+    //     );
+    //
+    //     Ok(Self {
+    //         object_store: table.storage.clone(),
+    //         config,
+    //         partition_writers: HashMap::new(),
+    //     })
+    // }
+
+    fn divide_by_partition_values(
+        &mut self,
+        values: &RecordBatch,
+    ) -> DeltaResult<Vec<PartitionResult>> {
+        Ok(divide_by_partition_values(
+            self.config.file_schema(),
+            self.config.partition_columns.clone(),
+            values,
+        )
+        .map_err(|err| WriteError::Partitioning(err.to_string()))?)
+    }
+
+    /// Write a batch to the partition induced by the partition_values. The record batch is expected
+    /// to be pre-partitioned and only contain rows that belong into the same partition.
+    pub async fn write_partition(
+        &mut self,
+        record_batch: RecordBatch,
+        partition_values: &HashMap<String, Option<String>>,
+    ) -> DeltaResult<()> {
+        let partition_key =
+            PartitionPath::from_hashmap(&self.config.partition_columns, partition_values)?
+                .as_ref()
+                .into();
+
+        let record_batch =
+            record_batch_without_partitions(&record_batch, &self.config.partition_columns)?;
+
+        match self.partition_writers.get_mut(&partition_key) {
+            Some(writer) => {
+                writer.write(&record_batch).await?;
+            }
+            None => {
+                let config = PartitionWriterConfig::try_new(
+                    self.config.file_schema(),
+                    partition_values.clone(),
+                    self.config.partition_columns.clone(),
+                    Some(self.config.writer_properties.clone()),
+                    Some(self.config.target_file_size),
+                    Some(self.config.write_batch_size),
+                )?;
+                let mut writer =
+                    PartitionWriter::try_with_config(self.object_store.clone(), config)?;
+                writer.write(&record_batch).await?;
+                let _ = self.partition_writers.insert(partition_key, writer);
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Buffers record batches in-memory per partition up to appx. `target_file_size` for a partition.
+    /// Flushes data to storage once a full file can be written.
+    ///
+    /// The `close` method has to be invoked to write all data still buffered
+    /// and get the list of all written files.
+    pub async fn write(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
+        for result in self.divide_by_partition_values(batch)? {
+            self.write_partition(result.record_batch, &result.partition_values)
+                .await?;
+        }
+        Ok(())
+    }
+
+    pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
+        let writers = std::mem::take(&mut self.partition_writers);
+        let mut actions = Vec::new();
+        for (_, writer) in writers {
+            let writer_actions = writer.close().await?;
+            actions.extend(writer_actions);
+        }
+        Ok(actions)
     }
 }
 
@@ -138,6 +327,7 @@ impl PartitionWriter {
     fn next_data_path(&mut self) -> Path {
         let part = format!("{:0>5}", self.part_counter);
         self.part_counter += 1;
+        // TODO: what does c000 mean?
         // TODO handle file name for different compressions
         let file_name = format!("part-{}-{}-c000.snappy.parquet", part, self.writer_id);
         self.config.prefix.child(file_name)
@@ -178,7 +368,7 @@ impl PartitionWriter {
     }
 
     async fn flush_arrow_writer(&mut self) -> DeltaResult<()> {
-        // replace counter / buffers and close the current writer
+        // replace counter / buffers adn close the current writer
         let (writer, buffer) = self.replace_arrow_buffer(vec![])?;
         let null_counts = std::mem::take(&mut self.null_counts);
         let metadata = writer.close()?;
