@@ -77,6 +77,7 @@ class DeltaTable:
         table_uri: str,
         version: Optional[int] = None,
         storage_options: Optional[Dict[str, str]] = None,
+        without_files: bool = False,
     ):
         """
         Create the Delta Table from a path with an optional version.
@@ -86,10 +87,16 @@ class DeltaTable:
         :param table_uri: the path of the DeltaTable
         :param version: version of the DeltaTable
         :param storage_options: a dictionary of the options to use for the storage backend
+        :param without_files: If True, will load table without tracking files.
+                              Some append-only applications might have no need of tracking any files. So, the
+                              DeltaTable will be loaded with a significant memory reduction.
         """
         self._storage_options = storage_options
         self._table = RawDeltaTable(
-            table_uri, version=version, storage_options=storage_options
+            table_uri,
+            version=version,
+            storage_options=storage_options,
+            without_files=without_files,
         )
         self._metadata = Metadata(self._table)
 
