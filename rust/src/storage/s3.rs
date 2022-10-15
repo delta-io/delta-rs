@@ -225,6 +225,7 @@ pub struct S3StorageOptions {
     pub aws_access_key_id: Option<String>,
     pub aws_secret_access_key: Option<String>,
     pub aws_session_token: Option<String>,
+    pub virtual_hosted_style_request: bool,
     pub locking_provider: Option<String>,
     pub assume_role_arn: Option<String>,
     pub assume_role_session_name: Option<String>,
@@ -285,12 +286,18 @@ impl S3StorageOptions {
             10,
         ) as usize;
 
+        let virtual_hosted_style_request: bool =
+            str_option(&options, s3_storage_options::AWS_S3_ADDRESSING_STYLE)
+                .map(|addressing_style| addressing_style == "virtual")
+                .unwrap_or(false);
+
         Self {
             endpoint_url,
             region,
             aws_access_key_id: str_option(&options, s3_storage_options::AWS_ACCESS_KEY_ID),
             aws_secret_access_key: str_option(&options, s3_storage_options::AWS_SECRET_ACCESS_KEY),
             aws_session_token: str_option(&options, s3_storage_options::AWS_SESSION_TOKEN),
+            virtual_hosted_style_request,
             locking_provider: str_option(&options, s3_storage_options::AWS_S3_LOCKING_PROVIDER),
             assume_role_arn: str_option(&options, s3_storage_options::AWS_S3_ASSUME_ROLE_ARN),
             assume_role_session_name: str_option(
@@ -544,6 +551,7 @@ mod tests {
                 aws_access_key_id: Some("test".to_string()),
                 aws_secret_access_key: Some("test".to_string()),
                 aws_session_token: None,
+                virtual_hosted_style_request: false,
                 assume_role_arn: Some("arn:aws:iam::123456789012:role/some_role".to_string()),
                 assume_role_session_name: Some("session_name".to_string()),
                 use_web_identity: true,
@@ -585,6 +593,7 @@ mod tests {
         let options = S3StorageOptions::from_map(hashmap! {
             s3_storage_options::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
             s3_storage_options::AWS_REGION.to_string() => "us-west-2".to_string(),
+            s3_storage_options::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string(),
             s3_storage_options::AWS_S3_LOCKING_PROVIDER.to_string() => "another_locking_provider".to_string(),
             s3_storage_options::AWS_S3_ASSUME_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/another_role".to_string(),
             s3_storage_options::AWS_S3_ROLE_SESSION_NAME.to_string() => "another_session_name".to_string(),
@@ -604,6 +613,7 @@ mod tests {
                 aws_access_key_id: Some("test".to_string()),
                 aws_secret_access_key: Some("test".to_string()),
                 aws_session_token: None,
+                virtual_hosted_style_request: true,
                 assume_role_arn: Some("arn:aws:iam::123456789012:role/another_role".to_string()),
                 assume_role_session_name: Some("another_session_name".to_string()),
                 use_web_identity: true,
@@ -655,6 +665,7 @@ mod tests {
                 aws_access_key_id: Some("test".to_string()),
                 aws_secret_access_key: Some("test".to_string()),
                 aws_session_token: None,
+                virtual_hosted_style_request: false,
                 assume_role_arn: Some("arn:aws:iam::123456789012:role/some_role".to_string()),
                 assume_role_session_name: Some("session_name".to_string()),
                 use_web_identity: true,
