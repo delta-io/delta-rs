@@ -8,6 +8,7 @@ use crate::action::{self, Action};
 use crate::delta_config;
 use chrono::Utc;
 use object_store::ObjectStore;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -15,7 +16,8 @@ use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, Cursor};
 
 /// State snapshot currently held by the Delta Table instance.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
     version: DeltaDataTypeVersion,
     // A remove action should remain in the state of the table as a tombstone until it has expired.
@@ -329,6 +331,26 @@ mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
+
+    #[test]
+    fn state_round_trip() {
+        let expected = DeltaTableState {
+            version: 0,
+            tombstones: Default::default(),
+            files: vec![],
+            commit_infos: vec![],
+            app_transaction_version: Default::default(),
+            min_reader_version: 0,
+            min_writer_version: 0,
+            current_metadata: None,
+            tombstone_retention_millis: 0,
+            log_retention_millis: 0,
+            enable_expired_log_cleanup: false,
+        };
+        let bytes = serde_json::to_vec(&expected).unwrap();
+        let actual: DeltaTableState = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(actual.version, expected.version);
+    }
 
     #[test]
     fn state_records_new_txn_version() {

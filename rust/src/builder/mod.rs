@@ -1,6 +1,7 @@
 //! Create or load DeltaTables
 
 use std::collections::HashMap;
+use std::fmt;
 use std::sync::Arc;
 
 use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
@@ -18,6 +19,9 @@ use url::Url;
 use crate::storage::s3::{S3StorageBackend, S3StorageOptions};
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 use object_store::aws::AmazonS3Builder;
+use serde::de::{Error, SeqAccess, Visitor};
+use serde::ser::SerializeSeq;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 #[cfg(feature = "azure")]
 mod azure;
@@ -59,7 +63,8 @@ impl Default for DeltaVersion {
 }
 
 /// Configuration options for delta table
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeltaTableConfig {
     /// Indicates whether our use case requires tracking tombstones.
     /// This defaults to `true`
@@ -282,6 +287,51 @@ pub struct StorageUrl {
     pub(crate) prefix: Path,
 }
 
+impl Serialize for StorageUrl {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(None)?;
+        seq.serialize_element(self.url.as_str())?;
+        seq.serialize_element(&self.prefix.to_string())?;
+        seq.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for StorageUrl {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct StorageUrlVisitor {}
+        impl<'de> Visitor<'de> for StorageUrlVisitor {
+            type Value = StorageUrl;
+
+            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
+                formatter.write_str("struct StorageUrl")
+            }
+
+            fn visit_seq<V>(self, mut seq: V) -> Result<StorageUrl, V::Error>
+            where
+                V: SeqAccess<'de>,
+            {
+                let url = seq
+                    .next_element()?
+                    .ok_or_else(|| V::Error::invalid_length(0, &self))?;
+                let prefix: &str = seq
+                    .next_element()?
+                    .ok_or_else(|| V::Error::invalid_length(1, &self))?;
+                let url = Url::parse(url).map_err(|_| V::Error::missing_field("url"))?;
+                let prefix = Path::parse(prefix).map_err(|_| V::Error::missing_field("prefix"))?;
+                let url = StorageUrl { url, prefix };
+                Ok(url)
+            }
+        }
+        deserializer.deserialize_seq(StorageUrlVisitor {})
+    }
+}
+
 impl StorageUrl {
     /// Parse a provided string as a `StorageUrl`
     ///
@@ -422,7 +472,7 @@ impl std::fmt::Display for StorageUrl {
 }
 
 /// Create a new storage backend used in Delta table
-fn get_storage_backend(
+pub(crate) fn get_storage_backend(
     table_uri: impl AsRef<str>,
     // annotation needed for some feature builds
     #[allow(unused_variables)] options: Option<HashMap<String, String>>,

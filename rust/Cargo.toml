@@ -46,9 +46,10 @@ rusoto_dynamodb = { version = "0.48", default-features = false, optional = true 
 rusoto_glue = { version = "0.48", default-features = false, optional = true }
 
 # Datafusion
-datafusion = { version = "14", optional = true }
-datafusion-expr = { version = "14", optional = true }
-datafusion-common = { version = "14", optional = true }
+datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "4a67d0d2613d8c4b323e0dd5a6afe1eb1115c7ba", optional = true }
+datafusion-expr = { git = "https://github.com/apache/arrow-datafusion.git", rev = "4a67d0d2613d8c4b323e0dd5a6afe1eb1115c7ba", optional = true }
+datafusion-common = { git = "https://github.com/apache/arrow-datafusion.git", rev = "4a67d0d2613d8c4b323e0dd5a6afe1eb1115c7ba", optional = true }
+datafusion-proto = { git = "https://github.com/apache/arrow-datafusion.git", rev = "4a67d0d2613d8c4b323e0dd5a6afe1eb1115c7ba", optional = true }
 
 # NOTE dependencies only for integration tests
 fs_extra = { version = "1.2.0", optional = true }
@@ -72,7 +73,7 @@ tempfile = "3"
 utime = "0.3"
 
 [build-dependencies]
-glibc_version = "0"
+glibc_version = { path = "../glibc_version" }
 
 [features]
 default = ["arrow", "parquet"]
@@ -80,6 +81,7 @@ datafusion-ext = [
     "datafusion",
     "datafusion-expr",
     "datafusion-common",
+    "datafusion-proto",
     "arrow",
     "parquet",
 ]
