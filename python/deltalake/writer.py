@@ -196,17 +196,6 @@ def write_deltalake(
     else:  # creating a new table
         current_version = -1
 
-        # TODO: Don't allow writing to non-empty directory
-        # Blocked on: Finish filesystem implementation in fs.py
-    assert (
-        len(
-            filesystem.get_file_info(
-                pa_fs.FileSelector(table_uri, allow_not_found=True)
-            )
-        )
-        == 0
-    )
-
     if partition_by:
         partition_schema = pa.schema([schema.field(name) for name in partition_by])
         partitioning = ds.partitioning(partition_schema, flavor="hive")
