@@ -321,7 +321,7 @@ impl RawDeltaTable {
         let mode = save_mode_from_str(mode)?;
         let schema: Schema = (&schema.0)
             .try_into()
-            .map_err(|_| PyDeltaTableError::new_err("Failed to convert schema"))?;
+            .map_err(PyDeltaTableError::from_arrow)?;
 
         let existing_schema = self
             ._table

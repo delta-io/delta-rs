@@ -95,6 +95,7 @@ pub enum DeltaTableError {
         #[cfg(feature = "parquet")]
         #[from]
         source: parquet::errors::ParquetError,
+        /// Parquet error details returned when reading the checkpoint failed.
         #[cfg(feature = "parquet2")]
         #[from]
         source: parquet2::error::Error,

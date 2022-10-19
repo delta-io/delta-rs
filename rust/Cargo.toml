@@ -75,7 +75,7 @@ utime = "0.3"
 glibc_version = "0"
 
 [features]
-default = ["arrow", "parquet", "datafusion-ext"]
+default = ["arrow", "parquet"]
 datafusion-ext = [
     "datafusion",
     "datafusion-expr",
