@@ -157,10 +157,16 @@ impl DeltaObjectStore {
 
     /// Check if the location is a delta table location
     pub async fn is_delta_table_location(&self) -> ObjectStoreResult<bool> {
-        match self.head(self.log_path()).await {
-            Ok(_) => Ok(true),
-            Err(ObjectStoreError::NotFound { .. }) => Ok(false),
-            Err(err) => Err(err),
+        // TODO We should really be using HEAD here, but this fails in windows tests
+        let mut stream = self.list(Some(self.log_path())).await?;
+        if let Some(res) = stream.next().await {
+            match res {
+                Ok(_) => Ok(true),
+                Err(ObjectStoreError::NotFound { .. }) => Ok(false),
+                Err(err) => Err(err),
+            }
+        } else {
+            Ok(false)
         }
     }
 }
