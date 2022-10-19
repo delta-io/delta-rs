@@ -160,6 +160,9 @@ name = "arrow-schema"
 version = "24.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "86d1fef01f25e1452c86fa6887f078de8e0aaeeb828370feab205944cfc30e27"
+dependencies = [
+ "serde",
+]
 
 [[package]]
 name = "async-stream"
@@ -808,6 +811,7 @@ dependencies = [
 name = "deltalake-python"
 version = "0.6.1"
 dependencies = [
+ "arrow-schema",
  "chrono",
  "deltalake",
  "env_logger 0.9.1",

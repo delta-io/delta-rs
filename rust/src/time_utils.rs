@@ -2,7 +2,7 @@
 
 #[cfg(feature = "arrow")]
 use arrow::temporal_conversions;
-#[cfg(feature = "arrow")]
+
 use parquet::basic::TimeUnit;
 
 // vendored from arrow-rs and arrow2 so we don't need to depend on arrow2 when the parquet2 feature

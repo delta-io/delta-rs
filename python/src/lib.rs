@@ -4,6 +4,7 @@ mod filesystem;
 mod schema;
 mod utils;
 
+use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, FixedOffset, Utc};
 use deltalake::action::{
     self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
@@ -269,8 +270,7 @@ impl RawDeltaTable {
             .map_err(PyDeltaTableError::from_raw)?;
         serde_json::to_string(
             &<ArrowSchema as TryFrom<&deltalake::Schema>>::try_from(schema)
-                .map_err(PyDeltaTableError::from_arrow)?
-                .to_json(),
+                .map_err(PyDeltaTableError::from_arrow)?,
         )
         .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))
     }
@@ -285,7 +285,7 @@ impl RawDeltaTable {
         &mut self,
         py: Python<'py>,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
-        schema: ArrowSchema,
+        schema: PyArrowType<ArrowSchema>,
     ) -> PyResult<Vec<(String, Option<&'py PyAny>)>> {
         let path_set = match partition_filters {
             Some(filters) => Some(HashSet::<_>::from_iter(
@@ -316,10 +316,12 @@ impl RawDeltaTable {
         add_actions: Vec<PyAddAction>,
         mode: &str,
         partition_by: Vec<String>,
-        schema: ArrowSchema,
+        schema: PyArrowType<ArrowSchema>,
     ) -> PyResult<()> {
         let mode = save_mode_from_str(mode)?;
-        let schema: Schema = (&schema).try_into()?;
+        let schema: Schema = (&schema.0)
+            .try_into()
+            .map_err(|_| PyDeltaTableError::new_err("Failed to convert schema"))?;
 
         let existing_schema = self
             ._table
@@ -417,7 +419,7 @@ fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
 /// skipped during a scan.
 fn filestats_to_expression<'py>(
     py: Python<'py>,
-    schema: &ArrowSchema,
+    schema: &PyArrowType<ArrowSchema>,
     partitions_values: &HashMap<String, Option<String>>,
     stats: Option<Stats>,
 ) -> PyResult<Option<&'py PyAny>> {
@@ -427,14 +429,19 @@ fn filestats_to_expression<'py>(
     let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
 
     let cast_to_type = |column_name: &String, value: PyObject, schema: &ArrowSchema| {
-        let column_type = schema
-            .field_with_name(column_name)
-            .map_err(|_| {
-                PyDeltaTableError::new_err(format!("Column not found in schema: {}", column_name))
-            })?
-            .data_type()
-            .clone()
-            .into_py(py);
+        let column_type = PyArrowType(
+            schema
+                .field_with_name(column_name)
+                .map_err(|_| {
+                    PyDeltaTableError::new_err(format!(
+                        "Column not found in schema: {}",
+                        column_name
+                    ))
+                })?
+                .data_type()
+                .clone(),
+        )
+        .into_py(py);
         pa.call_method1("scalar", (value,))?
             .call_method1("cast", (column_type,))
     };
@@ -442,7 +449,7 @@ fn filestats_to_expression<'py>(
     for (column, value) in partitions_values.iter() {
         if let Some(value) = value {
             // value is a string, but needs to be parsed into appropriate type
-            let converted_value = cast_to_type(column, value.into_py(py), schema)?;
+            let converted_value = cast_to_type(column, value.into_py(py), &schema.0)?;
             expressions.push(
                 field
                     .call1((column,))?
@@ -458,7 +465,7 @@ fn filestats_to_expression<'py>(
             // Blocked on https://issues.apache.org/jira/browse/ARROW-11259
             _ => None,
         }) {
-            let maybe_minimum = cast_to_type(&col_name, minimum, schema);
+            let maybe_minimum = cast_to_type(&col_name, minimum, &schema.0);
             if let Ok(minimum) = maybe_minimum {
                 expressions.push(field.call1((col_name,))?.call_method1("__ge__", (minimum,)));
             }
@@ -468,7 +475,7 @@ fn filestats_to_expression<'py>(
             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
             _ => None,
         }) {
-            let maybe_maximum = cast_to_type(&col_name, maximum, schema);
+            let maybe_maximum = cast_to_type(&col_name, maximum, &schema.0);
             if let Ok(maximum) = maybe_maximum {
                 expressions.push(field.call1((col_name,))?.call_method1("__le__", (maximum,)));
             }
@@ -551,7 +558,7 @@ impl From<&PyAddAction> for action::Add {
 #[allow(clippy::too_many_arguments)]
 fn write_new_deltalake(
     table_uri: String,
-    schema: ArrowSchema,
+    schema: PyArrowType<ArrowSchema>,
     add_actions: Vec<PyAddAction>,
     _mode: &str,
     partition_by: Vec<String>,
@@ -567,7 +574,9 @@ fn write_new_deltalake(
         name,
         description,
         None, // Format
-        (&schema).try_into()?,
+        (&schema.0)
+            .try_into()
+            .map_err(PyDeltaTableError::from_arrow)?,
         partition_by,
         configuration.unwrap_or_default(),
     );
@@ -610,10 +619,10 @@ impl PyDeltaDataChecker {
         }
     }
 
-    fn check_batch(&self, batch: RecordBatch) -> PyResult<()> {
+    fn check_batch(&self, batch: PyArrowType<RecordBatch>) -> PyResult<()> {
         self.rt.block_on(async {
             self.inner
-                .check_batch(&batch)
+                .check_batch(&batch.0)
                 .await
                 .map_err(PyDeltaTableError::from_raw)
         })
