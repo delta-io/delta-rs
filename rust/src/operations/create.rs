@@ -327,7 +327,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_create_table_save_mode() {
-        let tmp_dir = tempdir::TempDir::new("").unwrap();
+        let tmp_dir = tempfile::tempdir().unwrap();
 
         let schema = get_delta_schema();
         let table = CreateBuilder::new()
