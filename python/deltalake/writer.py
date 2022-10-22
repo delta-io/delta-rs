@@ -276,6 +276,7 @@ def write_deltalake(
             name,
             description,
             configuration,
+            storage_options,
         )
     else:
         table._table.create_write_transaction(

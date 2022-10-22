@@ -1,6 +1,7 @@
 //! AWS S3 storage backend.
 
 use crate::builder::{s3_storage_options, str_option};
+use crate::str_is_truthy;
 use bytes::Bytes;
 use dynamodb_lock::{DynamoError, LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};
 use futures::stream::BoxStream;
@@ -80,7 +81,11 @@ enum S3LockError {
     #[error("Rename target already exists")]
     AlreadyExists,
 
-    #[error("Atomic rename requires a LockClient for S3 backends.")]
+    #[error(
+        "Atomic rename requires a LockClient for S3 backends. \
+         Either configure the LockClient, or set AWS_S3_ALLOW_UNSAFE_RENAME=true \
+         to opt out of support for concurrent writers."
+    )]
     LockClientRequired,
 }
 
@@ -233,6 +238,7 @@ pub struct S3StorageOptions {
     pub s3_pool_idle_timeout: Duration,
     pub sts_pool_idle_timeout: Duration,
     pub s3_get_internal_server_error_retries: usize,
+    pub allow_unsafe_rename: bool,
     pub extra_opts: HashMap<String, String>,
 }
 
@@ -291,6 +297,11 @@ impl S3StorageOptions {
                 .map(|addressing_style| addressing_style == "virtual")
                 .unwrap_or(false);
 
+        let allow_unsafe_rename =
+            str_option(&options, s3_storage_options::AWS_S3_ALLOW_UNSAFE_RENAME)
+                .map(|val| str_is_truthy(&val))
+                .unwrap_or(false);
+
         Self {
             endpoint_url,
             region,
@@ -309,6 +320,7 @@ impl S3StorageOptions {
             s3_pool_idle_timeout: Duration::from_secs(s3_pool_idle_timeout),
             sts_pool_idle_timeout: Duration::from_secs(sts_pool_idle_timeout),
             s3_get_internal_server_error_retries,
+            allow_unsafe_rename,
             extra_opts,
         }
     }
@@ -350,6 +362,8 @@ fn get_web_identity_provider() -> Result<AutoRefreshingProvider<WebIdentityProvi
 pub struct S3StorageBackend {
     inner: Arc<DynObjectStore>,
     s3_lock_client: Option<S3LockClient>,
+    /// Whether allowed to performance rename_if_not_exist as rename
+    allow_unsafe_rename: bool,
 }
 
 impl std::fmt::Display for S3StorageBackend {
@@ -385,6 +399,7 @@ impl S3StorageBackend {
         Ok(Self {
             inner: storage,
             s3_lock_client,
+            allow_unsafe_rename: options.allow_unsafe_rename,
         })
     }
 
@@ -397,6 +412,7 @@ impl S3StorageBackend {
         Self {
             inner: storage,
             s3_lock_client,
+            allow_unsafe_rename: false, // Doesn't matter if you provided a lock client
         }
     }
 
@@ -463,11 +479,14 @@ impl ObjectStore for S3StorageBackend {
     }
 
     async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        let lock_client = match self.s3_lock_client {
-            Some(ref lock_client) => lock_client,
-            None => return Err(S3LockError::LockClientRequired.into()),
-        };
-        lock_client.rename_with_lock(self, from, to).await?;
+        if let Some(lock_client) = &self.s3_lock_client {
+            lock_client.rename_with_lock(self, from, to).await?;
+        } else if self.allow_unsafe_rename {
+            self.inner.rename(from, to).await?;
+        } else {
+            return Err(S3LockError::LockClientRequired.into());
+        }
+
         Ok(())
     }
 
@@ -525,7 +544,10 @@ mod tests {
         std::env::set_var(s3_storage_options::AWS_ENDPOINT_URL, "http://localhost");
         std::env::set_var(s3_storage_options::AWS_REGION, "us-west-1");
         std::env::set_var(s3_storage_options::AWS_ACCESS_KEY_ID, "default_key_id");
-        std::env::set_var(s3_storage_options::AWS_SECRET_ACCESS_KEY, "default_secret_key");
+        std::env::set_var(
+            s3_storage_options::AWS_SECRET_ACCESS_KEY,
+            "default_secret_key",
+        );
         std::env::set_var(s3_storage_options::AWS_S3_LOCKING_PROVIDER, "dynamodb");
         std::env::set_var(
             s3_storage_options::AWS_S3_ASSUME_ROLE_ARN,
@@ -638,7 +660,10 @@ mod tests {
         std::env::set_var(s3_storage_options::AWS_ENDPOINT_URL, "http://localhost");
         std::env::set_var(s3_storage_options::AWS_REGION, "us-west-1");
         std::env::set_var(s3_storage_options::AWS_ACCESS_KEY_ID, "wrong_key_id");
-        std::env::set_var(s3_storage_options::AWS_SECRET_ACCESS_KEY, "wrong_secret_key");
+        std::env::set_var(
+            s3_storage_options::AWS_SECRET_ACCESS_KEY,
+            "wrong_secret_key",
+        );
         std::env::set_var(s3_storage_options::AWS_S3_LOCKING_PROVIDER, "dynamodb");
         std::env::set_var(
             s3_storage_options::AWS_S3_ASSUME_ROLE_ARN,
