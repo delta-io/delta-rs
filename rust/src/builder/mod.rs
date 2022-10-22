@@ -546,7 +546,7 @@ pub mod s3_storage_options {
     pub const AWS_REGION: &str = "AWS_REGION";
     /// The AWS_ACCESS_KEY_ID to use for S3.
     pub const AWS_ACCESS_KEY_ID: &str = "AWS_ACCESS_KEY_ID";
-    /// The AWS_SECRET_ACCESS_ID to use for S3.
+    /// The AWS_SECRET_ACCESS_KEY to use for S3.
     pub const AWS_SECRET_ACCESS_KEY: &str = "AWS_SECRET_ACCESS_KEY";
     /// The AWS_SESSION_TOKEN to use for S3.
     pub const AWS_SESSION_TOKEN: &str = "AWS_SESSION_TOKEN";

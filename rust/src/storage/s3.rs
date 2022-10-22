@@ -513,7 +513,6 @@ fn try_create_lock_client(options: &S3StorageOptions) -> Result<Option<S3LockCli
 }
 
 #[cfg(test)]
-#[cfg(not(feature = "integration_test"))]
 mod tests {
     use super::*;
 
@@ -525,6 +524,8 @@ mod tests {
     fn storage_options_default_test() {
         std::env::set_var(s3_storage_options::AWS_ENDPOINT_URL, "http://localhost");
         std::env::set_var(s3_storage_options::AWS_REGION, "us-west-1");
+        std::env::set_var(s3_storage_options::AWS_ACCESS_KEY_ID, "default_key_id");
+        std::env::set_var(s3_storage_options::AWS_SECRET_ACCESS_KEY, "default_secret_key");
         std::env::set_var(s3_storage_options::AWS_S3_LOCKING_PROVIDER, "dynamodb");
         std::env::set_var(
             s3_storage_options::AWS_S3_ASSUME_ROLE_ARN,
@@ -548,8 +549,8 @@ mod tests {
                     name: "us-west-1".to_string(),
                     endpoint: "http://localhost".to_string()
                 },
-                aws_access_key_id: Some("test".to_string()),
-                aws_secret_access_key: Some("test".to_string()),
+                aws_access_key_id: Some("default_key_id".to_string()),
+                aws_secret_access_key: Some("default_secret_key".to_string()),
                 aws_session_token: None,
                 virtual_hosted_style_request: false,
                 assume_role_arn: Some("arn:aws:iam::123456789012:role/some_role".to_string()),
@@ -572,7 +573,7 @@ mod tests {
         let options = S3StorageOptions::from_map(hashmap! {
             s3_storage_options::AWS_REGION.to_string() => "eu-west-1".to_string(),
             s3_storage_options::AWS_ACCESS_KEY_ID.to_string() => "test".to_string(),
-            s3_storage_options::AWS_SECRET_ACCESS_KEY.to_string() => "test".to_string(),
+            s3_storage_options::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
         });
 
         assert_eq!(
@@ -580,7 +581,7 @@ mod tests {
                 endpoint_url: None,
                 region: Region::default(),
                 aws_access_key_id: Some("test".to_string()),
-                aws_secret_access_key: Some("test".to_string()),
+                aws_secret_access_key: Some("test_secret".to_string()),
                 ..Default::default()
             },
             options
@@ -601,6 +602,8 @@ mod tests {
             s3_storage_options::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "1".to_string(),
             s3_storage_options::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS.to_string() => "2".to_string(),
             s3_storage_options::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES.to_string() => "3".to_string(),
+            s3_storage_options::AWS_ACCESS_KEY_ID.to_string() => "test_id".to_string(),
+            s3_storage_options::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
         });
 
         assert_eq!(
@@ -610,8 +613,8 @@ mod tests {
                     name: "us-west-2".to_string(),
                     endpoint: "http://localhost:1234".to_string()
                 },
-                aws_access_key_id: Some("test".to_string()),
-                aws_secret_access_key: Some("test".to_string()),
+                aws_access_key_id: Some("test_id".to_string()),
+                aws_secret_access_key: Some("test_secret".to_string()),
                 aws_session_token: None,
                 virtual_hosted_style_request: true,
                 assume_role_arn: Some("arn:aws:iam::123456789012:role/another_role".to_string()),
@@ -621,7 +624,9 @@ mod tests {
                 s3_pool_idle_timeout: Duration::from_secs(1),
                 sts_pool_idle_timeout: Duration::from_secs(2),
                 s3_get_internal_server_error_retries: 3,
-                extra_opts: HashMap::new(),
+                extra_opts: hashmap! {
+                    s3_storage_options::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string()
+                },
             },
             options
         );
@@ -632,6 +637,8 @@ mod tests {
     fn storage_options_mixed_test() {
         std::env::set_var(s3_storage_options::AWS_ENDPOINT_URL, "http://localhost");
         std::env::set_var(s3_storage_options::AWS_REGION, "us-west-1");
+        std::env::set_var(s3_storage_options::AWS_ACCESS_KEY_ID, "wrong_key_id");
+        std::env::set_var(s3_storage_options::AWS_SECRET_ACCESS_KEY, "wrong_secret_key");
         std::env::set_var(s3_storage_options::AWS_S3_LOCKING_PROVIDER, "dynamodb");
         std::env::set_var(
             s3_storage_options::AWS_S3_ASSUME_ROLE_ARN,
@@ -650,6 +657,8 @@ mod tests {
             "3",
         );
         let options = S3StorageOptions::from_map(hashmap! {
+            s3_storage_options::AWS_ACCESS_KEY_ID.to_string() => "test_id_mixed".to_string(),
+            s3_storage_options::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret_mixed".to_string(),
             s3_storage_options::AWS_REGION.to_string() => "us-west-2".to_string(),
             "DYNAMO_LOCK_PARTITION_KEY_VALUE".to_string() => "my_lock".to_string(),
             "AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES".to_string() => "3".to_string(),
@@ -662,8 +671,8 @@ mod tests {
                     name: "us-west-2".to_string(),
                     endpoint: "http://localhost".to_string()
                 },
-                aws_access_key_id: Some("test".to_string()),
-                aws_secret_access_key: Some("test".to_string()),
+                aws_access_key_id: Some("test_id_mixed".to_string()),
+                aws_secret_access_key: Some("test_secret_mixed".to_string()),
                 aws_session_token: None,
                 virtual_hosted_style_request: false,
                 assume_role_arn: Some("arn:aws:iam::123456789012:role/some_role".to_string()),

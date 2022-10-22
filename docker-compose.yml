@@ -12,6 +12,8 @@ services:
       - PORT_WEB_UI=8080
       - DOCKER_HOST=unix:///var/run/docker.sock
       - HOST_TMP_FOLDER=${TMPDIR}
+      - AWS_ACCESS_KEY_ID=deltalake
+      - AWS_SECRET_ACCESS_KEY=weloverust
     healthcheck:
       test: [ "CMD", "curl", "-f", "http://localhost:4566/health" ]
 
