@@ -583,6 +583,7 @@ mod tests {
                 sts_pool_idle_timeout: Duration::from_secs(10),
                 s3_get_internal_server_error_retries: 10,
                 extra_opts: HashMap::new(),
+                allow_unsafe_rename: false,
             },
             options
         );
@@ -649,6 +650,7 @@ mod tests {
                 extra_opts: hashmap! {
                     s3_storage_options::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string()
                 },
+                allow_unsafe_rename: false,
             },
             options
         );
@@ -710,6 +712,7 @@ mod tests {
                 extra_opts: hashmap! {
                     "DYNAMO_LOCK_PARTITION_KEY_VALUE".to_string() => "my_lock".to_string(),
                 },
+                allow_unsafe_rename: false,
             },
             options
         );
