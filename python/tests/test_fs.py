@@ -27,11 +27,18 @@ def test_read_files(s3_localstack):
 
 @pytest.mark.s3
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=20, method="thread")
+@pytest.mark.timeout(timeout=4, method="thread")
 def test_s3_authenticated_read_write(s3_localstack_creds):
     # Create unauthenticated handler
     storage_handler = DeltaStorageHandler(
-        "s3://deltars/", {"AWS_ENDPOINT_URL": s3_localstack_creds["AWS_ENDPOINT_URL"]}
+        "s3://deltars/",
+        {
+            "AWS_ENDPOINT_URL": s3_localstack_creds["AWS_ENDPOINT_URL"],
+            # Grants anonymous access. If we don't do this, will timeout trying
+            # to reading from EC2 instance provider.
+            "AWS_ACCESS_KEY_ID": "",
+            "AWS_SECRET_ACCESS_KEY": "",
+        },
     )
 
     # Make a get request on an object
@@ -87,13 +94,19 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
     table_path = "s3://deltars/roundtrip2"
 
     # Fails without any credentials
-    # with pytest.raises(PyDeltaTableError):
-    # TODO: This fails, but take a long time
-    # write_deltalake(
-    #     table_path,
-    #     sample_data,
-    #     storage_options={"AWS_ENDPOINT_URL": s3_localstack_creds["AWS_ENDPOINT_URL"]},
-    # )
+    with pytest.raises(PyDeltaTableError):
+        anon_storage_options = {
+            "AWS_ENDPOINT_URL": s3_localstack_creds["AWS_ENDPOINT_URL"],
+            # Grants anonymous access. If we don't do this, will timeout trying
+            # to reading from EC2 instance provider.
+            "AWS_ACCESS_KEY_ID": "",
+            "AWS_SECRET_ACCESS_KEY": "",
+        }
+        write_deltalake(
+            table_path,
+            sample_data,
+            storage_options=anon_storage_options,
+        )
 
     # Can pass storage_options in directly
     storage_opts = {
