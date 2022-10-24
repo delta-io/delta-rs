@@ -153,7 +153,14 @@ impl Add {
                         "minValues" => match record.get_group(i) {
                             Ok(row) => {
                                 for (name, field) in row.get_column_iter() {
-                                    stats.min_values.insert(name.clone(), field.into());
+                                    match field.try_into() {
+                                        Ok(values) => {
+                                            stats.min_values.insert(name.clone(), values);
+                                        }
+                                        _ => {
+                                            log::warn!("Unexpected type of minValues field, got: {}", field);
+                                        }
+                                    }
                                 }
                             }
                             _ => {
@@ -163,7 +170,14 @@ impl Add {
                         "maxValues" => match record.get_group(i) {
                             Ok(row) => {
                                 for (name, field) in row.get_column_iter() {
-                                    stats.max_values.insert(name.clone(), field.into());
+                                    match field.try_into() {
+                                        Ok(values) => {
+                                            stats.max_values.insert(name.clone(), values);
+                                        }
+                                        _ => {
+                                            log::warn!("Unexpected type of maxValues field, got: {}", field);
+                                        }
+                                    }
                                 }
                             }
                             _ => {
@@ -202,15 +216,30 @@ impl Add {
     }
 }
 
-impl From<&Field> for ColumnValueStat {
-    fn from(field: &Field) -> Self {
+impl TryFrom<&Field> for ColumnValueStat {
+    type Error = &'static str;
+
+    fn try_from(field: &Field) -> Result<Self, Self::Error> {
         match field {
-            Field::Group(group) => ColumnValueStat::Column(HashMap::from_iter(
+            Field::Group(group) => Ok(ColumnValueStat::Column(HashMap::from_iter(
                 group
                     .get_column_iter()
-                    .map(|(field_name, field)| (field_name.clone(), field.into())),
-            )),
-            _ => ColumnValueStat::Value(primitive_parquet_field_to_json_value(field)),
+                    .filter_map(|(field_name, field)| match field.try_into() {
+                        Ok(count) => Some((field_name.clone(), count)),
+                        _ => {
+                            log::warn!(
+                                "Unexpected type when parsing min/max values for {}. Found {}",
+                                field_name,
+                                field
+                            );
+                            None
+                        }
+                    }),
+            ))),
+            _ => match primitive_parquet_field_to_json_value(field) {
+                Ok(value) => Ok(ColumnValueStat::Value(value)),
+                _ => Err("Invalid type for min/max values."),
+            },
         }
     }
 }
@@ -224,7 +253,7 @@ impl TryFrom<&Field> for ColumnCountStat {
                 group
                     .get_column_iter()
                     .filter_map(|(field_name, field)| match field.try_into() {
-                        Ok(value) => Some((field_name.clone(), value)),
+                        Ok(count) => Some((field_name.clone(), count)),
                         _ => {
                             log::warn!(
                                 "Unexpected type when parsing nullCounts for {}. Found {}",
@@ -241,29 +270,27 @@ impl TryFrom<&Field> for ColumnCountStat {
     }
 }
 
-fn primitive_parquet_field_to_json_value(field: &Field) -> serde_json::Value {
+fn primitive_parquet_field_to_json_value(field: &Field) -> Result<serde_json::Value, &'static str> {
     match field {
-        Field::Null => serde_json::Value::Null,
-        Field::Bool(value) => json!(value),
-        Field::Byte(value) => json!(value),
-        Field::Short(value) => json!(value),
-        Field::Int(value) => json!(value),
-        Field::Long(value) => json!(value),
-        Field::Float(value) => json!(value),
-        Field::Double(value) => json!(value),
-        Field::Str(value) => json!(value),
+        Field::Bool(value) => Ok(json!(value)),
+        Field::Byte(value) => Ok(json!(value)),
+        Field::Short(value) => Ok(json!(value)),
+        Field::Int(value) => Ok(json!(value)),
+        Field::Long(value) => Ok(json!(value)),
+        Field::Float(value) => Ok(json!(value)),
+        Field::Double(value) => Ok(json!(value)),
+        Field::Str(value) => Ok(json!(value)),
         Field::Decimal(decimal) => match BigInt::from_signed_bytes_be(decimal.data()).to_f64() {
-            Some(int) => json!(int / (10_i64.pow((decimal.scale()).try_into().unwrap()) as f64)),
-            _ => serde_json::Value::Null,
+            Some(int) => Ok(json!(
+                int / (10_i64.pow((decimal.scale()).try_into().unwrap()) as f64)
+            )),
+            _ => Err("Invalid type for nullCounts"),
         },
-        Field::TimestampMillis(timestamp) => {
-            serde_json::Value::String(convert_timestamp_millis_to_string(*timestamp))
-        }
-        Field::Date(date) => serde_json::Value::String(convert_date_to_string(*date)),
-        _ => {
-            log::warn!("Unexpected field type {:?}", field,);
-            serde_json::Value::Null
-        }
+        Field::TimestampMillis(timestamp) => Ok(serde_json::Value::String(
+            convert_timestamp_millis_to_string(*timestamp),
+        )),
+        Field::Date(date) => Ok(serde_json::Value::String(convert_date_to_string(*date))),
+        _ => Err("Invalid type for nullCounts"),
     }
 }
 
