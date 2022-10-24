@@ -153,12 +153,17 @@ impl Add {
                         "minValues" => match record.get_group(i) {
                             Ok(row) => {
                                 for (name, field) in row.get_column_iter() {
-                                    match field.try_into() {
-                                        Ok(values) => {
-                                            stats.min_values.insert(name.clone(), values);
-                                        }
+                                    match field {
+                                        Field::Null => {},
                                         _ => {
-                                            log::warn!("Unexpected type of minValues field, got: {}", field);
+                                            match field.try_into() {
+                                                Ok(values) => {
+                                                    stats.min_values.insert(name.clone(), values);
+                                                }
+                                                _ => {
+                                                    log::warn!("Unexpected type of minValues field, got: {}", field);
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -170,12 +175,17 @@ impl Add {
                         "maxValues" => match record.get_group(i) {
                             Ok(row) => {
                                 for (name, field) in row.get_column_iter() {
-                                    match field.try_into() {
-                                        Ok(values) => {
-                                            stats.max_values.insert(name.clone(), values);
-                                        }
+                                    match field {
+                                        Field::Null => {},
                                         _ => {
-                                            log::warn!("Unexpected type of maxValues field, got: {}", field);
+                                            match field.try_into() {
+                                                Ok(values) => {
+                                                    stats.max_values.insert(name.clone(), values);
+                                                }
+                                                _ => {
+                                                    log::warn!("Unexpected type of maxValues field, got: {}", field);
+                                                }
+                                            }
                                         }
                                     }
                                 }
@@ -187,14 +197,19 @@ impl Add {
                         "nullCount" => match record.get_group(i) {
                             Ok(row) => {
                                 for (name, field) in row.get_column_iter() {
-                                    match field.try_into() {
-                                        Ok(count) => {
-                                            stats.null_count.insert(name.clone(), count);
-                                        },
+                                    match field {
+                                        Field::Null => {}
                                         _ => {
-                                            log::warn!("Expect type of nullCount field to be struct or int64, got: {}", field);
-                                        },
-                                    };
+                                            match field.try_into() {
+                                                Ok(count) => {
+                                                    stats.null_count.insert(name.clone(), count);
+                                                },
+                                                _ => {
+                                                    log::warn!("Expect type of nullCount field to be struct or int64, got: {}", field);
+                                                },
+                                            };
+                                        }
+                                    }
                                 }
                             }
                             _ => {
