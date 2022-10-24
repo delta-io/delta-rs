@@ -819,6 +819,8 @@ dependencies = [
 name = "deltalake-python"
 version = "0.6.2"
 dependencies = [
+ "async-trait",
+ "bytes",
  "chrono",
  "deltalake",
  "env_logger 0.9.1",

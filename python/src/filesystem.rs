@@ -4,12 +4,23 @@ use std::sync::Arc;
 use crate::utils::{delete_dir, wait_for_future, walk_tree};
 use crate::PyDeltaTableError;
 
-use deltalake::storage::{DynObjectStore, ListResult, MultipartId, ObjectStoreError, Path};
+use deltalake::storage::{
+    DynObjectStore, GetResult, ListResult, MultipartId, ObjectMeta, ObjectStore, ObjectStoreError,
+    ObjectStoreResult, Path,
+};
 use deltalake::DeltaTableBuilder;
-use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
+use futures::stream::poll_fn;
+use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError, PyFileNotFoundError};
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyBytes};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
+use chrono::{DateTime, NaiveDateTime};
+use bytes::Bytes;
+use std::ops::Range;
+use futures::task::Poll;
+use futures::future::BoxFuture;
+use async_trait::async_trait;
+use futures::stream::BoxStream;
 
 #[pyclass(subclass)]
 #[derive(Debug, Clone)]
@@ -522,6 +533,228 @@ impl ObjectOutputStream {
     fn readlines(&self, _hint: Option<i64>) -> PyResult<()> {
         Err(PyNotImplementedError::new_err(
             "'readlines' not implemented",
+        ))
+    }
+}
+
+/// PyArrow filesystem wrapped as an ObjectStore
+#[derive(Debug)]
+#[pyclass(module = "deltalake.fs", text_signature = "(py_store, root)")]
+struct WrappedPyArrowStore {
+    py_store: PyObject,
+}
+
+#[pymethods]
+impl WrappedPyArrowStore {
+    #[new]
+    pub fn new(py_store: PyObject, root: Option<&str>, py: Python) -> PyResult<Self> {
+        let pa_fs = PyModule::import(py, "pyarrow.fs")?;
+        let pa_filesystem = pa_fs.getattr("FileSystem")?;
+        let pa_subtreefilesystem = pa_fs.getattr("SubTreeFileSystem")?;
+
+        // TODO: handle fsspec here too?
+        
+        if !py_store.as_ref(py).is_instance(pa_filesystem.get_type()) {
+            return Err(PyValueError::new_err("Must pass a PyArrow filesystem."));
+        }
+
+        if !py_store.as_ref(py).is_instance(pa_subtreefilesystem.get_type()) {
+            py_store = pa_subtreefilesystem.call1((root, py_store))?;
+        }
+
+        Ok(WrappedPyArrowStore { py_store })
+    }
+
+    /// The inner filesystem
+    ///
+    /// :rtype: pyarrow.fs.FileSystem
+    #[getter]
+    fn inner(&self) -> PyObject {
+        self.py_store
+    }
+
+    fn __repr__(&self, py: Python) -> PyResult<String> {
+        Ok(format!(
+            "WrappedPyArrowStore({})",
+            self.py_store.call_method0(py, "__repr__")?
+        ))
+    }
+}
+
+impl std::fmt::Display for WrappedPyArrowStore {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "WrappedPyArrowStore()")
+    }
+}
+
+fn store_error_from_python(path: String, py_error: PyErr) -> ObjectStoreError {
+    Python::with_gil(|py| {
+        let pyarrow = PyModule::import(py, "pyarrow").map_err(|err| ObjectStoreError::Generic {
+            store: "pyarrow",
+            source: Box::new(err),
+        })?;
+        let arrow_not_implemented_error =
+            pyarrow
+                .get_attr("ArrowNotImplementedError")
+                .map_err(|err| ObjectStoreError::Generic {
+                    store: "pyarrow",
+                    source: Box::new(err),
+                })?;
+
+        if py_error.get_type(py).is_instance::<PyFileNotFoundError>(py) {
+            ObjectStoreError::NotFound {
+                path,
+                source: Box::new(py_error),
+            }
+        } else if py_error.into_py(py).as_ref(py).is_instance(arrow_not_implemented_error.get_type()) {
+            ObjectStoreError::NotImplemented
+        } else {
+            ObjectStoreError::Generic {
+                store: "pyarrow",
+                source: Box::new(py_error),
+            }
+        }
+    })
+}
+
+#[async_trait]
+impl ObjectStore for WrappedPyArrowStore {
+    async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
+        let path = location.to_string();
+        Python::with_gil(|py| {
+            let out_stream = self
+                .py_store
+                .call_method1(py, "open_output_stream", path)?;
+            out_stream.call_method1(py, "write", bytes)?;
+            out_stream.call_method0(py, "close")?;
+            Ok(())
+        })
+        .map_err(|err| store_error_from_python(path, err))
+    }
+
+    async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
+        let path = location.to_string();
+        let in_stream = Python::with_gil(|py| {
+            let in_stream = self
+                .py_store
+                .call_method1(py, "open_input_stream", path)?;
+            Ok(in_stream)
+        })
+        .map_err(|err| store_error_from_python(path, err))?;
+
+        let current_read: Option<BoxFuture> = None;
+
+        let read_stream = poll_fn(move |cx| -> Poll<Option<Bytes>> {
+            if current_read.is_none() {
+                current_read = tokio::runtime::Runtime::current().block_on(|| -> ObjectStoreResult<Bytes> {
+                    Python::with_gil(|py| -> PyResult<Bytes> {
+                        in_stream
+                            .call_method1(py, "read", 5 * 1024 * 1024)?
+                            .extract(py)
+                    })
+                    .map_err(|err| store_error_from_python(path, err))
+                })
+            }
+
+            if let Some(read_fut) = current_read {
+                let res = read_fut.poll(cx);
+                if let Poll::Ready(_) = res {
+                    current_read = None;
+                }
+                res
+            }
+        });
+
+        Ok(GetResult::Stream(Box::pin(read_stream)))
+    }
+
+    async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
+        // TODO: use read_at()
+        Err(ObjectStoreError::NotImplemented)
+    }
+
+    async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
+        let path = location.to_string();
+        Python::with_gil(|py| {
+            let info = self.py_store.call_method1(py, "get_file_info", (path,))?;
+            let last_modified = if info.getattr(py, "mtime_ns")?.is_none(py) {
+                let last_modified: i64 = info.getattr(py, "mtime")?.extract(py)?;
+                DateTime::<chrono::Utc>::from_utc(NaiveDateTime::from_timestamp(last_modified, 0), chrono::Utc)
+            } else {
+                let last_modified: i64 = info.getattr(py, "mtime_ns")?.extract(py)?;
+                let seconds = last_modified / 1_000_000;
+                let nanoseconds: u32 = last_modified % 1_000_000;
+                DateTime::<chrono::Utc>::from_utc(NaiveDateTime::from_timestamp(seconds, nanoseconds), chrono::Utc)
+            };
+            Ok(ObjectMeta {
+                location: Path::from(info.getattr(py, "path")?.extract(py))?,
+                last_modified,
+                size: info.getattr(py, "size")?.extract(py)?,
+            })
+        })
+        .map_err(|err| store_error_from_python(path, err))
+    }
+
+    async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
+        Err(ObjectStoreError::NotImplemented)
+    }
+
+    async fn list(
+        &self,
+        prefix: Option<&Path>,
+    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
+        Err(ObjectStoreError::NotImplemented)
+    }
+    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
+        Err(ObjectStoreError::NotImplemented)
+    }
+
+    async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
+        Err(ObjectStoreError::NotImplemented)
+    }
+    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
+        Err(ObjectStoreError::NotImplemented)
+    }
+
+    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
+        Err(ObjectStoreError::NotImplemented)
+    }
+
+    async fn put_multipart(
+        &self,
+        location: &Path,
+    ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
+        Err(ObjectStoreError::NotImplemented)
+    }
+
+    async fn abort_multipart(
+        &self,
+        location: &Path,
+        multipart_id: &MultipartId,
+    ) -> ObjectStoreResult<()> {
+        Err(ObjectStoreError::NotImplemented)
+    }
+}
+
+fn try_unwrap_object_store(
+    root: String,
+    py_store: PyObject,
+    py: Python,
+) -> PyResult<Arc<dyn ObjectStore>> {
+    let pa_fs = PyModule::import(py, "pyarrow.fs")?;
+    let pa_filesystem = pa_fs.getattr("FileSystem")?;
+
+    let deltalake = PyModule::import(py, "deltalake.fs")?;
+    let delta_storage_handler = deltalake.getattr("DeltaStorageHandler")?;
+
+    if py_store.as_ref(py).is_instance(pa_filesystem.get_type()) {
+        Ok(Arc::new(WrappedPyArrowStore::new(py_store, Some(&root), py)))
+    } else if py_store.as_ref(py).is_instance(delta_storage_handler.get_type()) {
+        let inner: DeltaFileSystemHandler = py_store.extract(py)?;
+        Ok(Arc::clone(&inner.inner))
+    } else {
+        Err(PyValueError::new_err(
+            "Filesystem must be a pyarrow.FileSystem or DeltaStorageHandler.",
         ))
     }
 }
