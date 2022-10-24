@@ -147,6 +147,9 @@ def write_deltalake(
         else:
             schema = data.schema
 
+    if filesystem is not None:
+        raise NotImplementedError("Filesystem support is not yet implemented.  #570")
+
     if isinstance(table_or_uri, str):
         if "://" in table_or_uri:
             table_uri = table_or_uri
