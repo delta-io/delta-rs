@@ -302,7 +302,7 @@ fn primitive_parquet_field_to_json_value(field: &Field) -> Result<serde_json::Va
             convert_timestamp_millis_to_string(*timestamp),
         )),
         Field::Date(date) => Ok(serde_json::Value::String(convert_date_to_string(*date))),
-        _ => Err("Invalid type for nullCounts"),
+        _ => Err("Invalid type for min/max values."),
     }
 }
 
