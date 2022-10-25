@@ -251,10 +251,7 @@ impl TryFrom<&Field> for ColumnValueStat {
                         }
                     }),
             ))),
-            _ => match primitive_parquet_field_to_json_value(field) {
-                Ok(value) => Ok(ColumnValueStat::Value(value)),
-                _ => Err("Invalid type for min/max values."),
-            },
+            _ => primitive_parquet_field_to_json_value(field).map(ColumnValueStat::Value),
         }
     }
 }
