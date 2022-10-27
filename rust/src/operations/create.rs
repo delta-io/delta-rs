@@ -18,16 +18,16 @@ use serde_json::Value;
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
-    #[error("Location must be provided to create a table")]
+    #[error("Location must be provided to create a table.")]
     MissingLocation,
 
-    #[error("At least one column must be defined to create a table")]
+    #[error("At least one column must be defined to create a table.")]
     MissingSchema,
 
     #[error("Please configure table meta data via the CreateBuilder.")]
     MetadataSpecified,
 
-    #[error("Please configure table meta data via the CreateBuilder.")]
+    #[error("A Delta Lake table already exists at that location.")]
     TableAlreadyExists,
 
     #[error("SaveMode `append` is not allowed for create operation.")]
@@ -42,7 +42,7 @@ impl From<CreateError> for DeltaTableError {
     }
 }
 
-/// Build a new [DeltaTable]
+/// Build an operation to create a new [DeltaTable]
 #[derive(Debug, Clone)]
 pub struct CreateBuilder {
     name: Option<String>,
@@ -50,7 +50,7 @@ pub struct CreateBuilder {
     mode: SaveMode,
     comment: Option<String>,
     columns: Vec<SchemaField>,
-    partition_columns: Option<Vec<String>>,
+    partition_columns: Vec<String>,
     properties: HashMap<String, Value>,
     storage_options: Option<HashMap<String, String>>,
     actions: Vec<Action>,
@@ -150,6 +150,8 @@ impl CreateBuilder {
     ///
     /// [crate::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
     /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
+    ///
+    /// If an object store is also passed using `with_object_store()` these options will be ignored.
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
         self
@@ -167,7 +169,7 @@ impl CreateBuilder {
         self
     }
 
-    /// Consume self into uninitialized table with corresponding crate actions and operation meta
+    /// Consume self into uninitialized table with corresponding create actions and operation meta
     pub(crate) fn into_table_and_actions(
         self,
     ) -> DeltaResult<(DeltaTable, Vec<Action>, DeltaOperation)> {

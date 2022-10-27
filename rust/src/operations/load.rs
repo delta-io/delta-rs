@@ -10,19 +10,6 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
-// #[derive(thiserror::Error, Debug)]
-// enum LoadError {
-//     Task,
-// }
-//
-// impl From<LoadError> for DeltaTableError {
-//     fn from(err: LoadError) -> Self {
-//         DeltaTableError::GenericError {
-//             source: Box::new(err),
-//         }
-//     }
-// }
-
 #[derive(Debug, Clone)]
 pub struct LoadBuilder {
     location: Option<String>,
