@@ -50,7 +50,7 @@ pub struct CreateBuilder {
     mode: SaveMode,
     comment: Option<String>,
     columns: Vec<SchemaField>,
-    partition_columns: Vec<String>,
+    partition_columns: Option<Vec<String>>,
     properties: HashMap<String, Value>,
     storage_options: Option<HashMap<String, String>>,
     actions: Vec<Action>,

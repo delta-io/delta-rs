@@ -84,7 +84,7 @@ pub struct WriteBuilder {
     /// SaveMode defines how to treat data already written to table location
     mode: SaveMode,
     /// Column names for table partitioning
-    partition_columns: Vec<String>,
+    partition_columns: Option<Vec<String>>,
     /// When using `Overwrite` mode, replace data that matches a predicate
     predicate: Option<String>,
     /// Size above which we will write a buffered parquet file to disk.
