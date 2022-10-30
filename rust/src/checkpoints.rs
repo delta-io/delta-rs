@@ -399,7 +399,7 @@ fn checkpoint_add_from_state(
     stats_conversions: &[(SchemaPath, SchemaDataType)],
 ) -> Result<Value, ArrowError> {
     let mut v = serde_json::to_value(action::Action::add(add.clone()))
-        .map_err(|e|ArrowError::ExternalError(Box::new(e)))?;
+        .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
 
     v["add"]["dataChange"] = Value::Bool(false);
 
@@ -415,13 +415,13 @@ fn checkpoint_add_from_state(
         }
 
         let partition_values_parsed = serde_json::to_value(partition_values_parsed)
-            .map_err(|e|ArrowError::ExternalError(Box::new(e)))?;
+            .map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
         v["add"]["partitionValues_parsed"] = partition_values_parsed;
     }
 
     if let Ok(Some(stats)) = add.get_stats() {
-        let mut stats = serde_json::to_value(stats)
-            .map_err(|e|ArrowError::ExternalError(Box::new(e)))?;
+        let mut stats =
+            serde_json::to_value(stats).map_err(|e| ArrowError::ExternalError(Box::new(e)))?;
         let min_values = stats.get_mut("minValues").and_then(|v| v.as_object_mut());
 
         if let Some(min_values) = min_values {
