@@ -16,7 +16,7 @@ use parquet::{
     file::{metadata::RowGroupMetaData, statistics::Statistics},
     schema::types::{ColumnDescriptor, SchemaDescriptor},
 };
-use parquet_format::FileMetaData;
+use parquet::format::FileMetaData;
 use serde_json::{Number, Value};
 use std::collections::HashMap;
 use std::sync::Arc;

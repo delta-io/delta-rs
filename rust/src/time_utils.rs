@@ -1,6 +1,6 @@
 //! Utility functions for converting time formats.
 
-use parquet_format::TimeUnit;
+use parquet::format::TimeUnit;
 
 #[cfg(feature = "arrow")]
 use arrow::temporal_conversions;
@@ -95,7 +95,7 @@ pub fn timestamp_to_delta_stats_string(n: i64, time_unit: &TimeUnit) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use parquet_format::{MicroSeconds, MilliSeconds, NanoSeconds, TimeUnit};
+    use parquet::format::{MicroSeconds, MilliSeconds, NanoSeconds, TimeUnit};
 
     #[test]
     fn test_timestamp_to_delta_stats_string() {
