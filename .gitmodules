@@ -1,0 +1,3 @@
+[submodule "dat"]
+	path = dat
+	url = https://github.com/delta-incubator/dat.git
