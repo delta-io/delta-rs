@@ -107,7 +107,7 @@ jobs:
       - name: Run tests
         run: |
           source venv/bin/activate
-          python -m pytest -m 's3 and integration'
+          python -m pytest -m 's3 and azure and integration'
 
       - name: Test without pandas
         run: |
