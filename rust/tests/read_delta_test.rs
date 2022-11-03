@@ -431,7 +431,7 @@ async fn read_delta_1_2_1_struct_stats_table() {
             .unwrap()
     }
 
-    let file_to_compare = "part-00000-51653f4d-b029-44bd-9fda-578e73518a26-c000.snappy.parquet";
+    let file_to_compare = "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet";
 
     assert_eq!(
         get_stats_for_file(&table_from_struct_stats, file_to_compare),
