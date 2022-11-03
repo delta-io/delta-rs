@@ -142,79 +142,43 @@ impl Add {
 
                 for (i, (name, _)) in record.get_column_iter().enumerate() {
                     match name.as_str() {
-                        "numRecords" => match record.get_long(i) {
-                            Ok(v) => {
+                        "numRecords" => if let Ok(v) = record.get_long(i) {
                                 stats.num_records = v;
-                            }
-                            _ => {
+                            } else {
                                 log::error!("Expect type of stats_parsed field numRecords to be long, got: {}", record);
                             }
-                        }
-                        "minValues" => match record.get_group(i) {
-                            Ok(row) => {
-                                for (name, field) in row.get_column_iter() {
-                                    match field {
-                                        Field::Null => {},
-                                        _ => {
-                                            match field.try_into() {
-                                                Ok(values) => {
-                                                    stats.min_values.insert(name.clone(), values);
-                                                }
-                                                _ => {
-                                                    log::warn!("Unexpected type of minValues field, got: {}", field);
-                                                }
-                                            }
-                                        }
+                        "minValues" => if let Ok(row) = record.get_group(i) {
+                            for (name, field) in row.get_column_iter() {
+                                if !matches!(field, Field::Null) {
+                                    if let Some(values) = field_to_value_stat(field, name) {
+                                        stats.min_values.insert(name.clone(), values);
                                     }
                                 }
                             }
-                            _ => {
-                                log::error!("Expect type of stats_parsed field minRecords to be struct, got: {}", record);
-                            }
+                        } else {
+                            log::error!("Expect type of stats_parsed field minRecords to be struct, got: {}", record);
                         }
-                        "maxValues" => match record.get_group(i) {
-                            Ok(row) => {
-                                for (name, field) in row.get_column_iter() {
-                                    match field {
-                                        Field::Null => {},
-                                        _ => {
-                                            match field.try_into() {
-                                                Ok(values) => {
-                                                    stats.max_values.insert(name.clone(), values);
-                                                }
-                                                _ => {
-                                                    log::warn!("Unexpected type of maxValues field, got: {}", field);
-                                                }
-                                            }
-                                        }
+                        "maxValues" => if let Ok(row) = record.get_group(i) {
+                            for (name, field) in row.get_column_iter() {
+                                if !matches!(field, Field::Null) {
+                                    if let Some(values) = field_to_value_stat(field, name) {
+                                        stats.max_values.insert(name.clone(), values);
                                     }
                                 }
                             }
-                            _ => {
-                                log::error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
-                            }
+                        } else {
+                            log::error!("Expect type of stats_parsed field maxRecords to be struct, got: {}", record);
                         }
-                        "nullCount" => match record.get_group(i) {
-                            Ok(row) => {
-                                for (name, field) in row.get_column_iter() {
-                                    match field {
-                                        Field::Null => {}
-                                        _ => {
-                                            match field.try_into() {
-                                                Ok(count) => {
-                                                    stats.null_count.insert(name.clone(), count);
-                                                },
-                                                _ => {
-                                                    log::warn!("Expect type of nullCount field to be struct or int64, got: {}", field);
-                                                },
-                                            };
-                                        }
+                        "nullCount" => if let Ok(row) = record.get_group(i) {
+                            for (name, field) in row.get_column_iter() {
+                                if !matches!(field, Field::Null) {
+                                    if let Some(count) = field_to_count_stat(field, name) {
+                                        stats.null_count.insert(name.clone(), count);
                                     }
                                 }
                             }
-                            _ => {
-                                log::error!("Expect type of stats_parsed field nullCount to be struct, got: {}", record);
-                            }
+                        } else {
+                            log::error!("Expect type of stats_parsed field nullCount to be struct, got: {}", record);
                         }
                         _ => {
                             log::warn!(
@@ -231,53 +195,45 @@ impl Add {
     }
 }
 
-impl TryFrom<&Field> for ColumnValueStat {
-    type Error = &'static str;
-
-    fn try_from(field: &Field) -> Result<Self, Self::Error> {
-        match field {
-            Field::Group(group) => Ok(ColumnValueStat::Column(HashMap::from_iter(
-                group
-                    .get_column_iter()
-                    .filter_map(|(field_name, field)| match field.try_into() {
-                        Ok(count) => Some((field_name.clone(), count)),
-                        _ => {
-                            log::warn!(
-                                "Unexpected type when parsing min/max values for {}. Found {}",
-                                field_name,
-                                field
-                            );
-                            None
-                        }
-                    }),
-            ))),
-            _ => primitive_parquet_field_to_json_value(field).map(ColumnValueStat::Value),
+fn field_to_value_stat(field: &Field, field_name: &str) -> Option<ColumnValueStat> {
+    match field {
+        Field::Group(group) => {
+            let values = group.get_column_iter().filter_map(|(name, sub_field)| {
+                field_to_value_stat(sub_field, name).map(|val| (name.clone(), val))
+            });
+            Some(ColumnValueStat::Column(HashMap::from_iter(values)))
+        }
+        _ => {
+            if let Ok(val) = primitive_parquet_field_to_json_value(field) {
+                Some(ColumnValueStat::Value(val))
+            } else {
+                log::warn!(
+                    "Unexpected type when parsing min/max values for {}. Found {}",
+                    field_name,
+                    field
+                );
+                None
+            }
         }
     }
 }
 
-impl TryFrom<&Field> for ColumnCountStat {
-    type Error = &'static str;
-
-    fn try_from(field: &Field) -> Result<Self, Self::Error> {
-        match field {
-            Field::Group(group) => Ok(ColumnCountStat::Column(HashMap::from_iter(
-                group
-                    .get_column_iter()
-                    .filter_map(|(field_name, field)| match field.try_into() {
-                        Ok(count) => Some((field_name.clone(), count)),
-                        _ => {
-                            log::warn!(
-                                "Unexpected type when parsing nullCounts for {}. Found {}",
-                                field_name,
-                                field
-                            );
-                            None
-                        }
-                    }),
-            ))),
-            Field::Long(value) => Ok(ColumnCountStat::Value(*value)),
-            _ => Err("Invalid type for nullCounts"),
+fn field_to_count_stat(field: &Field, field_name: &str) -> Option<ColumnCountStat> {
+    match field {
+        Field::Group(group) => {
+            let counts = group.get_column_iter().filter_map(|(name, sub_field)| {
+                field_to_count_stat(sub_field, name).map(|count| (name.clone(), count))
+            });
+            Some(ColumnCountStat::Column(HashMap::from_iter(counts)))
+        }
+        Field::Long(value) => Some(ColumnCountStat::Value(*value)),
+        _ => {
+            log::warn!(
+                "Unexpected type when parsing nullCounts for {}. Found {}",
+                field_name,
+                field
+            );
+            None
         }
     }
 }
