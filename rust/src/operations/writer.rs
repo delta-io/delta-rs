@@ -129,42 +129,6 @@ impl DeltaWriter {
         }
     }
 
-    /// Creates a [`DeltaWriter`] to write data to provided Delta Table
-    // pub fn for_table(
-    //     table: &DeltaTable,
-    //     writer_properties: Option<WriterProperties>,
-    // ) -> DeltaResult<Self> {
-    //     // Initialize an arrow schema ref from the delta table schema
-    //     let metadata = table.get_metadata()?;
-    //     let table_schema = Arc::new(<ArrowSchema as TryFrom<&Schema>>::try_from(
-    //         &metadata.schema.clone(),
-    //     )?);
-    //     let partition_columns = metadata.partition_columns.clone();
-    //
-    //     // Initialize writer properties for the underlying arrow writer
-    //     let writer_properties = writer_properties.unwrap_or_else(|| {
-    //         WriterProperties::builder()
-    //             .set_compression(Compression::SNAPPY)
-    //             .build()
-    //     });
-    //
-    //     // TODO get target file size form table meta data
-    //
-    //     let config = WriterConfig::new(
-    //         table_schema,
-    //         partition_columns,
-    //         Some(writer_properties),
-    //         None,
-    //         None,
-    //     );
-    //
-    //     Ok(Self {
-    //         object_store: table.storage.clone(),
-    //         config,
-    //         partition_writers: HashMap::new(),
-    //     })
-    // }
-
     fn divide_by_partition_values(
         &mut self,
         values: &RecordBatch,
@@ -179,6 +143,7 @@ impl DeltaWriter {
 
     /// Write a batch to the partition induced by the partition_values. The record batch is expected
     /// to be pre-partitioned and only contain rows that belong into the same partition.
+    /// However, it should still contain the partition columns.
     pub async fn write_partition(
         &mut self,
         record_batch: RecordBatch,
@@ -414,7 +379,7 @@ impl PartitionWriter {
         for offset in (0..max_offset).step_by(self.config.write_batch_size) {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
             self.write_batch(&batch.slice(offset, length))?;
-            // flush currently buffered data to disc once we meet ot exceed the tart file size.
+            // flush currently buffered data to disk once we meet or exceed the target file size.
             if self.buffer.len() >= self.config.target_file_size {
                 log::debug!("Writing file with size {:?} to disk.", self.buffer.len());
                 self.flush_arrow_writer().await?;

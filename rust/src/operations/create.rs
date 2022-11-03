@@ -296,7 +296,8 @@ mod tests {
             .with_save_mode(SaveMode::Ignore)
             .await
             .unwrap();
-        assert_eq!(table.version(), 0)
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_metadata().unwrap().schema, table_schema)
     }
 
     #[tokio::test]

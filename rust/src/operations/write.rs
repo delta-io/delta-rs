@@ -14,8 +14,6 @@
 //!
 //! In combination with `Overwrite`, a `replaceWhere` option can be used to transactionally
 //! replace data that matches a predicate.
-//!
-//! # Example
 
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/WriteIntoDelta.scala
 
