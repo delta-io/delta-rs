@@ -29,7 +29,7 @@ pub type MinAndMaxValues = (
 pub(crate) fn apply_null_counts(
     array: &StructArray,
     null_counts: &mut HashMap<String, ColumnCountStat>,
-    nest_level: i32,
+    #[allow(clippy::only_used_in_recursion)] nest_level: i32,
 ) {
     let fields = match array.data_type() {
         DataType::Struct(fields) => fields,

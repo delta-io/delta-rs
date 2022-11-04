@@ -146,7 +146,7 @@ async fn create_checkpoint_for(
     debug!("Writing checkpoint to {:?}.", checkpoint_path);
     storage.put(&checkpoint_path, parquet_bytes).await?;
 
-    let last_checkpoint_content: Value = serde_json::to_value(&checkpoint)?;
+    let last_checkpoint_content: Value = serde_json::to_value(checkpoint)?;
     let last_checkpoint_content = bytes::Bytes::from(serde_json::to_vec(&last_checkpoint_content)?);
 
     debug!("Writing _last_checkpoint to {:?}.", last_checkpoint_path);
@@ -359,7 +359,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
 
         // As a "new writer", we should always set `extendedFileMetadata` when writing, and include/ignore the other three fields accordingly.
         // https://github.com/delta-io/delta/blob/fb0452c2fb142310211c6d3604eefb767bb4a134/core/src/main/scala/org/apache/spark/sql/delta/actions/actions.scala#L311-L314
-        if None == r.extended_file_metadata {
+        if r.extended_file_metadata.is_none() {
             r.extended_file_metadata = Some(false);
         }
 
