@@ -550,6 +550,9 @@ pub mod s3_storage_options {
     pub const AWS_SECRET_ACCESS_KEY: &str = "AWS_SECRET_ACCESS_KEY";
     /// The AWS_SESSION_TOKEN to use for S3.
     pub const AWS_SESSION_TOKEN: &str = "AWS_SESSION_TOKEN";
+    /// Uses either "path" (the default) or "virtual", which turns on
+    /// [virtual host addressing](http://docs.aws.amazon.com/AmazonS3/latest/dev/VirtualHosting.html).
+    pub const AWS_S3_ADDRESSING_STYLE: &str = "AWS_S3_ADDRESSING_STYLE";
     /// Locking provider to use for safe atomic rename.
     /// `dynamodb` is currently the only supported locking provider.
     /// If not set, safe atomic rename is not available.
@@ -637,6 +640,9 @@ pub fn get_s3_builder_from_options(
     }
     if let Some(session_token) = &s3_options.aws_session_token {
         builder = builder.with_token(session_token);
+    }
+    if s3_options.virtual_hosted_style_request {
+        builder = builder.with_virtual_hosted_style_request(true);
     }
     // TODO AWS_WEB_IDENTITY_TOKEN_FILE and AWS_ROLE_ARN are not configurable on the builder, but picked
     // up by the build function if set on the environment. If we have them in the map, should we set them in the env?
