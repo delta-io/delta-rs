@@ -265,9 +265,7 @@ impl std::future::IntoFuture for CreateBuilder {
                         return Ok(table);
                     }
                     SaveMode::Overwrite => {
-                        let curr_files =
-                            flatten_list_stream(table.object_store().as_ref(), None).await?;
-                        table.object_store().delete_batch(&curr_files).await?;
+                        todo!("Overwriting on create not yet implemented. Use 'write' operation instead.")
                     }
                 }
             }
