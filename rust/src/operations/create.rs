@@ -10,7 +10,7 @@ use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
 use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
 use crate::builder::StorageUrl;
 use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
-use crate::storage::{utils::flatten_list_stream, DeltaObjectStore};
+use crate::storage::DeltaObjectStore;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 use futures::future::BoxFuture;
