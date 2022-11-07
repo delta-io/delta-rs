@@ -46,7 +46,7 @@ rusoto_glue = { version = "0.48", default-features = false, optional = true }
 
 # Datafusion
 datafusion = { version = "12", optional = true }
-datafusion-expr = { version = "12", optional = true }
+datafusion-expr = { version = "13", optional = true }
 datafusion-common = { version = "12", optional = true }
 
 # NOTE dependencies only for integration tests
