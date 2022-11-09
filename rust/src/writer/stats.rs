@@ -31,7 +31,7 @@ pub type MinAndMaxValues = (
 pub(crate) fn apply_null_counts(
     array: &StructArray,
     null_counts: &mut HashMap<String, ColumnCountStat>,
-    nest_level: i32,
+    _nest_level: i32,
 ) {
     let fields = match array.data_type() {
         DataType::Struct(fields) => fields,
@@ -54,7 +54,7 @@ pub(crate) fn apply_null_counts(
 
                     match col_struct {
                         ColumnCountStat::Column(map) => {
-                            apply_null_counts(as_struct_array(column), map, nest_level + 1);
+                            apply_null_counts(as_struct_array(column), map, _nest_level + 1);
                         }
                         _ => unreachable!(),
                     }

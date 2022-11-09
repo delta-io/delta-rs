@@ -486,7 +486,7 @@ impl DynamoDbLockClient {
             PARTITION_KEY_NAME.to_string() => attr(self.opts.partition_key_value.clone()),
             OWNER_NAME.to_string() => attr(&self.opts.owner_name),
             RECORD_VERSION_NUMBER.to_string() => attr(&rvn),
-            LEASE_DURATION.to_string() => attr(&self.opts.lease_duration),
+            LEASE_DURATION.to_string() => attr(self.opts.lease_duration),
         };
 
         if let Some(d) = data {
