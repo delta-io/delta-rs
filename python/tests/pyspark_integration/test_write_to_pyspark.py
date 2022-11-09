@@ -80,7 +80,7 @@ def test_write_invariant(tmp_path: pathlib.Path):
     # Cannot write invalid data to the table
     invalid_data = pa.table({"c1": pa.array([6, 2], type=pa.int32())})
     with pytest.raises(
-        PyDeltaTableError, match="Invariant \(c1 > 3\) violated by value .+2"
+        PyDeltaTableError, match=r"Invariant \(c1 > 3\) violated by value .+2"
     ):
         # raise PyDeltaTableError("test")
         write_deltalake(str(tmp_path), invalid_data, mode="overwrite")

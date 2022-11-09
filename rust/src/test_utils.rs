@@ -323,8 +323,8 @@ pub mod s3_cli {
             s3_storage_options::AWS_ENDPOINT_URL,
             "http://localhost:4566",
         );
-        set_env_if_not_set(s3_storage_options::AWS_ACCESS_KEY_ID, "test");
-        set_env_if_not_set(s3_storage_options::AWS_SECRET_ACCESS_KEY, "test");
+        set_env_if_not_set(s3_storage_options::AWS_ACCESS_KEY_ID, "deltalake");
+        set_env_if_not_set(s3_storage_options::AWS_SECRET_ACCESS_KEY, "weloverust");
         set_env_if_not_set("AWS_DEFAULT_REGION", "us-east-1");
         set_env_if_not_set(s3_storage_options::AWS_REGION, "us-east-1");
         set_env_if_not_set(s3_storage_options::AWS_S3_LOCKING_PROVIDER, "dynamodb");
