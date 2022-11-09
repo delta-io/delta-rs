@@ -564,8 +564,10 @@ fn write_new_deltalake(
     name: Option<String>,
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
+    storage_options: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
     let mut table = DeltaTableBuilder::from_uri(table_uri)
+        .with_storage_options(storage_options.unwrap_or_default())
         .build()
         .map_err(PyDeltaTableError::from_raw)?;
 
