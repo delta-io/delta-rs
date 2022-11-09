@@ -147,13 +147,16 @@ def write_deltalake(
         else:
             schema = data.schema
 
+    if filesystem is not None:
+        raise NotImplementedError("Filesystem support is not yet implemented.  #570")
+
     if isinstance(table_or_uri, str):
         if "://" in table_or_uri:
             table_uri = table_or_uri
         else:
             # Non-existant local paths are only accepted as fully-qualified URIs
             table_uri = "file://" + str(Path(table_or_uri).absolute())
-        table = try_get_deltatable(table_or_uri)
+        table = try_get_deltatable(table_or_uri, storage_options)
     else:
         table = table_or_uri
         table_uri = table._table.table_uri()
@@ -162,17 +165,11 @@ def write_deltalake(
 
     if filesystem is None:
         if table is not None:
-            filesystem = pa_fs.PyFileSystem(
-                DeltaStorageHandler(
-                    table._table.table_uri(),
-                    table._storage_options,
-                    table._table.get_py_storage_backend(),
-                )
+            storage_options = dict(
+                **(table._storage_options or {}), **(storage_options or {})
             )
-        else:
-            filesystem = pa_fs.PyFileSystem(
-                DeltaStorageHandler(table_uri, storage_options)
-            )
+
+        filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
     if table:  # already exists
         if schema != table.schema().to_pyarrow() and not (
@@ -201,10 +198,6 @@ def write_deltalake(
             )
     else:  # creating a new table
         current_version = -1
-
-        # TODO: Don't allow writing to non-empty directory
-        # Blocked on: Finish filesystem implementation in fs.py
-        # assert len(filesystem.get_file_info(pa_fs.FileSelector(table_uri, allow_not_found=True))) == 0
 
     if partition_by:
         partition_schema = pa.schema([schema.field(name) for name in partition_by])
@@ -286,6 +279,7 @@ def write_deltalake(
             name,
             description,
             configuration,
+            storage_options,
         )
     else:
         table._table.create_write_transaction(
@@ -327,9 +321,11 @@ class DeltaJSONEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-def try_get_deltatable(table_uri: str) -> Optional[DeltaTable]:
+def try_get_deltatable(
+    table_uri: str, storage_options: Optional[Dict[str, str]]
+) -> Optional[DeltaTable]:
     try:
-        return DeltaTable(table_uri)
+        return DeltaTable(table_uri, storage_options=storage_options)
     except PyDeltaTableError as err:
         # TODO: There has got to be a better way...
         if "Not a Delta table" in str(err):

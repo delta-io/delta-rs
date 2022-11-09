@@ -24,9 +24,6 @@ mod azure;
 #[cfg(feature = "gcs")]
 mod google;
 
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
-const TRUTHY: [&str; 3] = ["TRUE", "1", "OK"];
-
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
 enum BuilderError {
@@ -546,7 +543,7 @@ pub mod s3_storage_options {
     pub const AWS_REGION: &str = "AWS_REGION";
     /// The AWS_ACCESS_KEY_ID to use for S3.
     pub const AWS_ACCESS_KEY_ID: &str = "AWS_ACCESS_KEY_ID";
-    /// The AWS_SECRET_ACCESS_ID to use for S3.
+    /// The AWS_SECRET_ACCESS_KEY to use for S3.
     pub const AWS_SECRET_ACCESS_KEY: &str = "AWS_SECRET_ACCESS_KEY";
     /// The AWS_SESSION_TOKEN to use for S3.
     pub const AWS_SESSION_TOKEN: &str = "AWS_SESSION_TOKEN";
@@ -592,6 +589,10 @@ pub mod s3_storage_options {
     /// Allow http connections - mainly useful for integration tests
     pub const AWS_STORAGE_ALLOW_HTTP: &str = "AWS_STORAGE_ALLOW_HTTP";
 
+    /// If set to "true", allows creating commits without concurrent writer protection.
+    /// Only safe if there is one writer to a given table.
+    pub const AWS_S3_ALLOW_UNSAFE_RENAME: &str = "AWS_S3_ALLOW_UNSAFE_RENAME";
+
     /// The list of option keys owned by the S3 module.
     /// Option keys not contained in this list will be added to the `extra_opts`
     /// field of [crate::storage::s3::S3StorageOptions].
@@ -621,7 +622,7 @@ pub fn get_s3_builder_from_options(
 ) -> (AmazonS3Builder, S3StorageOptions) {
     let mut builder = AmazonS3Builder::new();
     if let Some(val) = str_option(&options, s3_storage_options::AWS_STORAGE_ALLOW_HTTP) {
-        if TRUTHY.contains(&val.to_uppercase().as_str()) {
+        if str_is_truthy(&val) {
             builder = builder.with_allow_http(true);
         }
     }
@@ -654,4 +655,9 @@ pub fn get_s3_builder_from_options(
 pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
     map.get(key)
         .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
+}
+
+#[allow(dead_code)]
+pub(crate) fn str_is_truthy(val: &str) -> bool {
+    val == "1" || val.to_lowercase() == "true" || val.to_lowercase() == "on"
 }
