@@ -147,6 +147,40 @@ def azurite_env_vars(monkeypatch, azurite_creds):
 
 
 @pytest.fixture()
+def azurite_sas_creds(azurite_creds):
+    endpoint_url = (
+        f"http://localhost:10000/{azurite_creds['AZURE_STORAGE_ACCOUNT_NAME']}"
+    )
+    env = os.environ.copy()
+    env.update(azurite_creds)
+    env["AZURE_STORAGE_CONNECTION_STRING"] = (
+        f"DefaultEndpointsProtocol=http;"
+        f"AccountName={azurite_creds['AZURE_STORAGE_ACCOUNT_NAME']};"
+        f"AccountKey={azurite_creds['AZURE_STORAGE_ACCOUNT_KEY']};"
+        f"BlobEndpoint={endpoint_url};"
+    )
+    output = subprocess.run(
+        [
+            "az",
+            "storage",
+            "container",
+            "generate-sas",
+            "--name",
+            azurite_creds["AZURE_STORAGE_CONTAINER_NAME"],
+            "--permissions",
+            "dlrw",
+        ],
+        env=env,
+        capture_output=True,
+    )
+
+    creds = {key: value for key, value in azurite_creds.items() if "KEY" not in key}
+    creds["SAS_TOKEN"] = output.stdout.decode()
+
+    return creds
+
+
+@pytest.fixture()
 def sample_data():
     nrows = 5
     return pa.table(
