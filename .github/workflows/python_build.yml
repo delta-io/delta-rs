@@ -120,6 +120,52 @@ jobs:
         run: |
           source venv/bin/activate
           make build-documentation
+  
+  benchmark:
+    name: Python Benchmark
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v2
+
+      - name: Install latest nightly
+        uses: actions-rs/toolchain@v1
+        with:
+          toolchain: stable
+          override: true
+          components: rustfmt, clippy
+
+      - uses: Swatinem/rust-cache@v1
+
+      - uses: actions/setup-python@v3
+        with:
+          python-version: "3.10"
+      
+      - name: Build deltalake in release mode
+        run: |
+          pip install virtualenv
+          virtualenv venv
+          source venv/bin/activate
+          MATURIN_EXTRA_ARGS=--release make develop
+      
+      # Download previous benchmark result from cache (if exists)
+      - name: Download previous benchmark data
+        uses: actions/cache@v1
+        with:
+          path: ./cache
+          key: ${{ runner.os }}-benchmark
+      
+      - name: Run benchmark
+        run: |
+          source venv/bin/activate
+          pytest tests/test_benchmark.py --benchmark-json output.json
+        
+      - name: Store benchmark result
+        uses: benchmark-action/github-action-benchmark@v1
+        with:
+          tool: 'pytest'
+          output-file-path: output.json
+          external-data-json-path: ./cache/benchmark-data.json
+          fail-on-alert: true
 
   test-pyspark:
     name: PySpark Integration Tests
