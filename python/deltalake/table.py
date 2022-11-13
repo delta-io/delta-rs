@@ -10,10 +10,18 @@ from pyarrow.dataset import FileSystemDataset, ParquetFileFormat, ParquetReadOpt
 if TYPE_CHECKING:
     import pandas
 
-from ._internal import RawDeltaTable
+from ._internal import PyDeltaTableError, RawDeltaTable
 from .data_catalog import DataCatalog
 from .fs import DeltaStorageHandler
 from .schema import Schema
+
+
+class DeltaTableProtocolError(PyDeltaTableError):
+    pass
+
+
+MAX_SUPPORTED_READER_VERSION = 1
+MAX_SUPPORTED_WRITER_VERSION = 2
 
 
 @dataclass(init=False)
@@ -298,6 +306,12 @@ class DeltaTable:
          More info: https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html
         :return: the PyArrow dataset in PyArrow
         """
+        if self.protocol().min_reader_version > MAX_SUPPORTED_READER_VERSION:
+            raise DeltaTableProtocolError(
+                f"The table's minimum reader version is {self.protocol().min_reader_version}"
+                f"but deltalake only supports up to version {MAX_SUPPORTED_READER_VERSION}."
+            )
+
         if not filesystem:
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler(
