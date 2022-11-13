@@ -38,7 +38,7 @@ from pyarrow.lib import RecordBatchReader
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import PyDeltaTableError
 from ._internal import write_new_deltalake as _write_new_deltalake
-from .table import DeltaTable
+from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable, DeltaTableProtocolError
 
 try:
     import pandas as pd
@@ -48,10 +48,6 @@ else:
     _has_pandas = True
 
 PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
-
-
-class DeltaTableProtocolError(PyDeltaTableError):
-    pass
 
 
 @dataclass
@@ -190,7 +186,7 @@ def write_deltalake(
         if partition_by:
             assert partition_by == table.metadata().partition_columns
 
-        if table.protocol().min_writer_version > 2:
+        if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
             raise DeltaTableProtocolError(
                 "This table's min_writer_version is "
                 f"{table.protocol().min_writer_version}, "
