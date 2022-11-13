@@ -2,8 +2,12 @@ import os
 from datetime import datetime
 from pathlib import Path
 from threading import Barrier, Thread
+from unittest.mock import Mock
 
 from packaging import version
+
+from deltalake.table import ProtocolVersions
+from deltalake.writer import DeltaTableProtocolError
 
 try:
     import pandas as pd
@@ -323,6 +327,18 @@ def test_delta_table_with_filesystem():
     dt = DeltaTable(table_path)
     filesystem = SubTreeFileSystem(table_path, LocalFileSystem())
     assert dt.to_pandas(filesystem=filesystem).equals(pd.DataFrame({"id": [5, 7, 9]}))
+
+
+def test_writer_fails_on_protocol():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    dt.protocol = Mock(return_value=ProtocolVersions(2, 1))
+    with pytest.raises(DeltaTableProtocolError):
+        dt.to_pyarrow_dataset()
+    with pytest.raises(DeltaTableProtocolError):
+        dt.to_pyarrow_table()
+    with pytest.raises(DeltaTableProtocolError):
+        dt.to_pandas()
 
 
 def test_import_delta_table_error():
