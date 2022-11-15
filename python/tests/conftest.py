@@ -1,5 +1,6 @@
 import os
 import pathlib
+import subprocess
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 
@@ -10,18 +11,80 @@ from deltalake import DeltaTable, write_deltalake
 
 
 @pytest.fixture(scope="session")
-def s3cred() -> None:
-    os.environ["AWS_REGION"] = "us-west-2"
-    os.environ["AWS_ACCESS_KEY_ID"] = "AKIAX7EGEQ7FT6CLQGWH"
-    os.environ["AWS_SECRET_ACCESS_KEY"] = "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"
+def s3_localstack_creds():
+    endpoint_url = "http://localhost:4566"
+
+    config = dict(
+        AWS_REGION="us-east-1",
+        AWS_ACCESS_KEY_ID="deltalake",
+        AWS_SECRET_ACCESS_KEY="weloverust",
+        AWS_ENDPOINT_URL=endpoint_url,
+    )
+
+    env = os.environ.copy()
+    env.update(config)
+
+    setup_commands = [
+        [
+            "aws",
+            "s3api",
+            "create-bucket",
+            "--bucket",
+            "deltars",
+            "--endpoint-url",
+            endpoint_url,
+        ],
+        [
+            "aws",
+            "s3",
+            "sync",
+            "--quiet",
+            "../rust/tests/data/simple_table",
+            "s3://deltars/simple",
+            "--endpoint-url",
+            endpoint_url,
+        ],
+    ]
+
+    try:
+        for args in setup_commands:
+            subprocess.run(args, env=env)
+    except OSError:
+        pytest.skip("aws cli not installed")
+
+    yield config
+
+    shutdown_commands = [
+        [
+            "aws",
+            "s3",
+            "rm",
+            "--quiet",
+            "--recursive",
+            "s3://deltars",
+            "--endpoint-url",
+            endpoint_url,
+        ],
+        [
+            "aws",
+            "s3api",
+            "delete-bucket",
+            "--bucket",
+            "deltars",
+            "--endpoint-url",
+            endpoint_url,
+        ],
+    ]
+
+    for args in shutdown_commands:
+        subprocess.run(args, env=env)
 
 
 @pytest.fixture()
-def s3_localstack(monkeypatch):
-    monkeypatch.setenv("AWS_REGION", "us-east-1")
-    monkeypatch.setenv("AWS_ACCESS_KEY_ID", "test")
-    monkeypatch.setenv("AWS_SECRET_ACCESS_KEY", "test")
-    monkeypatch.setenv("AWS_ENDPOINT_URL", "http://localhost:4566")
+def s3_localstack(monkeypatch, s3_localstack_creds):
+    monkeypatch.setenv("AWS_STORAGE_ALLOW_HTTP", "TRUE")
+    for key, value in s3_localstack_creds.items():
+        monkeypatch.setenv(key, value)
 
 
 @pytest.fixture()

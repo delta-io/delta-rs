@@ -29,7 +29,6 @@ pub type MinAndMaxValues = (
 pub(crate) fn apply_null_counts(
     array: &StructArray,
     null_counts: &mut HashMap<String, ColumnCountStat>,
-    // NOTE clippy wants the underscore
     _nest_level: i32,
 ) {
     let fields = match array.data_type() {

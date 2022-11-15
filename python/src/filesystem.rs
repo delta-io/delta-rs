@@ -401,7 +401,7 @@ pub struct ObjectOutputStream {
 
 impl ObjectOutputStream {
     pub async fn try_new(store: Arc<DynObjectStore>, path: Path) -> Result<Self, ObjectStoreError> {
-        let (multipart_id, writer) = store.put_multipart(&path).await.unwrap();
+        let (multipart_id, writer) = store.put_multipart(&path).await?;
         Ok(Self {
             store,
             path,

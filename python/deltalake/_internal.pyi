@@ -26,6 +26,7 @@ write_new_deltalake: Callable[
         Optional[str],
         Optional[str],
         Optional[Mapping[str, Optional[str]]],
+        Optional[Dict[str, str]],
     ],
     None,
 ]
