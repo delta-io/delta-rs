@@ -359,12 +359,12 @@ mod tests {
         assert_eq!(table.get_metadata().unwrap().id, first_id);
 
         // Check table is overwritten
-        let table = CreateBuilder::new()
-            .with_object_store(object_store.clone())
-            .with_columns(schema.get_fields().clone())
-            .with_save_mode(SaveMode::Overwrite)
-            .await
-            .unwrap();
-        assert_ne!(table.get_metadata().unwrap().id, first_id)
+        // let table = CreateBuilder::new()
+        //     .with_object_store(object_store.clone())
+        //     .with_columns(schema.get_fields().clone())
+        //     .with_save_mode(SaveMode::Overwrite)
+        //     .await
+        //     .unwrap();
+        // assert_ne!(table.get_metadata().unwrap().id, first_id)
     }
 }
