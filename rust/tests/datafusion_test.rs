@@ -1,10 +1,8 @@
 #![cfg(feature = "datafusion-ext")]
+
 use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
-
-use deltalake::action::SaveMode;
-use deltalake::{operations::DeltaOps, DeltaTable, Schema};
 
 use arrow::array::*;
 use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
@@ -20,7 +18,10 @@ use datafusion::prelude::SessionConfig;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::Expr;
+
+use deltalake::action::SaveMode;
 use deltalake::delta_datafusion::DeltaTableFactory;
+use deltalake::{operations::DeltaOps, DeltaTable, Schema};
 
 fn get_scanned_files(node: &dyn ExecutionPlan) -> HashSet<Label> {
     node.metrics()

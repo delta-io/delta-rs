@@ -26,10 +26,6 @@ use std::convert::TryFrom;
 use std::fmt::Debug;
 use std::sync::Arc;
 
-use crate::{action, open_table};
-use crate::{schema, DeltaTableBuilder};
-use crate::{DeltaTable, DeltaTableError};
-
 use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
@@ -43,8 +39,8 @@ use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
-use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::optimizer::utils::conjunction;
+use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
@@ -58,6 +54,9 @@ use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
 use crate::Invariant;
+use crate::{action, open_table};
+use crate::{schema, DeltaTableBuilder};
+use crate::{DeltaTable, DeltaTableError};
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -845,12 +844,13 @@ impl TableProviderFactory for DeltaTableFactory {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::array::StructArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
     use datafusion::from_slice::FromSlice;
     use serde_json::json;
+
+    use super::*;
 
     // test deserialization of serialized partition values.
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization

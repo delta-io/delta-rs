@@ -1522,13 +1522,15 @@ mod tests {
     use pretty_assertions::assert_eq;
     use std::io::{BufRead, BufReader};
     use std::{collections::HashMap, fs::File, path::Path};
+    use tempdir::TempDir;
 
     #[tokio::test]
     async fn table_round_trip() {
-        let (_, _, dt) = create_test_table().await;
+        let (_, _, dt, tmp_dir) = create_test_table().await;
         let bytes = serde_json::to_vec(&dt).unwrap();
         let actual: DeltaTable = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(actual.version(), dt.version());
+        drop(tmp_dir);
     }
 
     #[cfg(any(feature = "s3", feature = "s3-rustls"))]
@@ -1546,7 +1548,7 @@ mod tests {
         }
     }
 
-    async fn create_test_table() -> (DeltaTableMetaData, Protocol, DeltaTable) {
+    async fn create_test_table() -> (DeltaTableMetaData, Protocol, DeltaTable, TempDir) {
         // Setup
         let test_schema = Schema::new(vec![
             SchemaField::new(
@@ -1577,7 +1579,7 @@ mod tests {
             min_writer_version: 1,
         };
 
-        let tmp_dir = tempdir::TempDir::new("create_table_test").unwrap();
+        let tmp_dir = TempDir::new("create_table_test").unwrap();
         let table_dir = tmp_dir.path().join("test_create");
         std::fs::create_dir(&table_dir).unwrap();
 
@@ -1598,12 +1600,12 @@ mod tests {
         dt.create(delta_md.clone(), protocol.clone(), Some(commit_info), None)
             .await
             .unwrap();
-        (delta_md, protocol, dt)
+        (delta_md, protocol, dt, tmp_dir)
     }
 
     #[tokio::test]
     async fn test_create_delta_table() {
-        let (delta_md, protocol, dt) = create_test_table().await;
+        let (delta_md, protocol, dt, tmp_dir) = create_test_table().await;
 
         // Validation
         // assert DeltaTable version is now 0 and no data files have been added
@@ -1666,5 +1668,6 @@ mod tests {
         let current_metadata = dt.get_metadata().unwrap();
         assert!(current_metadata.partition_columns.is_empty());
         assert!(current_metadata.configuration.is_empty());
+        drop(tmp_dir);
     }
 }
