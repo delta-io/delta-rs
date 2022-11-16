@@ -38,12 +38,13 @@ use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionContext, SessionState};
+use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError, Result as DataFusionResult};
-use datafusion_expr::{combine_filters, Expr};
+use datafusion_expr::Expr;
 use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
@@ -332,7 +333,9 @@ impl TableProvider for DeltaTable {
         // and partitions are somewhat evenly distributed, probably not the worst choice ...
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-        if let Some(Some(predicate)) = (!filters.is_empty()).then_some(combine_filters(filters)) {
+        if let Some(Some(predicate)) =
+            (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
+        {
             let pruning_predicate = PruningPredicate::try_new(predicate, schema.clone())?;
             let files_to_prune = pruning_predicate.prune(self)?;
             self.get_state()
@@ -377,6 +380,7 @@ impl TableProvider for DeltaTable {
                     projection: projection.clone(),
                     limit,
                     table_partition_cols,
+                    config_options: Default::default(),
                 },
                 filters,
             )

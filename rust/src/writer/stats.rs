@@ -315,8 +315,10 @@ fn min_and_max_from_parquet_statistics(
 
             match column_descr.logical_type().as_ref() {
                 Some(LogicalType::Timestamp { unit, .. }) => {
-                    let min = min.map(|n| Value::String(timestamp_to_delta_stats_string(n, unit)));
-                    let max = max.map(|n| Value::String(timestamp_to_delta_stats_string(n, unit)));
+                    let min = min
+                        .and_then(|n| timestamp_to_delta_stats_string(n, unit).map(Value::String));
+                    let max = max
+                        .and_then(|n| timestamp_to_delta_stats_string(n, unit).map(Value::String));
 
                     Ok((min, max))
                 }
