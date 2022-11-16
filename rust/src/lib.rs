@@ -89,6 +89,7 @@ pub mod delta_config;
 pub mod partitions;
 pub mod schema;
 pub mod storage;
+pub mod table_properties;
 pub mod table_state;
 pub mod time_utils;
 pub mod vacuum;
@@ -99,7 +100,7 @@ pub mod checkpoints;
 pub mod delta_arrow;
 #[cfg(feature = "datafusion-ext")]
 pub mod delta_datafusion;
-#[cfg(feature = "datafusion-ext")]
+#[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod operations;
 #[cfg(feature = "parquet")]
 pub mod optimize;
@@ -118,6 +119,8 @@ pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, Object
 pub use arrow;
 #[cfg(feature = "datafusion-ext")]
 pub use datafusion;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub use operations::DeltaOps;
 #[cfg(feature = "parquet")]
 pub use parquet;
 #[cfg(feature = "parquet2")]

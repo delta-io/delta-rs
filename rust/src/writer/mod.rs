@@ -1,19 +1,8 @@
-//! Abstractions and implementations for writing data to delta tables
-// TODO
-// - consider file size when writing parquet files
-// - handle writer version
 #![cfg(all(feature = "arrow", feature = "parquet"))]
-
-pub mod json;
-pub mod record_batch;
-mod stats;
-#[cfg(test)]
-pub mod test_utils;
-pub mod utils;
+//! Abstractions and implementations for writing data to delta tables
 
 use crate::action::{Action, Add, ColumnCountStat, Stats};
-use crate::delta::DeltaTable;
-use crate::{DeltaDataTypeVersion, DeltaTableError};
+use crate::{DeltaDataTypeVersion, DeltaTable, DeltaTableError};
 
 use arrow::{datatypes::SchemaRef, datatypes::*, error::ArrowError};
 use async_trait::async_trait;
@@ -23,6 +12,14 @@ use serde_json::Value;
 
 pub use json::JsonWriter;
 pub use record_batch::RecordBatchWriter;
+
+pub mod json;
+pub mod record_batch;
+pub(crate) mod stats;
+pub mod utils;
+
+#[cfg(test)]
+pub mod test_utils;
 
 /// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]

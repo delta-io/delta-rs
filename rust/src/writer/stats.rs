@@ -11,12 +11,10 @@ use arrow::{
     },
     buffer::MutableBuffer,
 };
-use parquet::{
-    errors::ParquetError,
-    file::{metadata::RowGroupMetaData, statistics::Statistics},
-    schema::types::{ColumnDescriptor, SchemaDescriptor},
-};
-use parquet_format::FileMetaData;
+use parquet::errors::ParquetError;
+use parquet::file::{metadata::RowGroupMetaData, statistics::Statistics};
+use parquet::format::FileMetaData;
+use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use serde_json::{Number, Value};
 use std::collections::HashMap;
 use std::sync::Arc;

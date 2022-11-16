@@ -1,21 +1,22 @@
 //! Handle JSON messages when writing to delta tables
-use crate::writer::DeltaWriterError;
-use crate::DeltaTableError;
-use arrow::{
-    array::{as_primitive_array, Array},
-    datatypes::{
-        DataType, Int16Type, Int32Type, Int64Type, Int8Type, Schema as ArrowSchema,
-        SchemaRef as ArrowSchemaRef, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-    },
-    json::reader::{Decoder, DecoderOptions},
-    record_batch::*,
-};
-use object_store::path::Path;
-use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::Write;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use crate::writer::DeltaWriterError;
+use crate::DeltaTableError;
+
+use arrow::array::{as_primitive_array, Array};
+use arrow::datatypes::{
+    DataType, Int16Type, Int32Type, Int64Type, Int8Type, Schema as ArrowSchema,
+    SchemaRef as ArrowSchemaRef, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+};
+use arrow::json::reader::{Decoder, DecoderOptions};
+use arrow::record_batch::*;
+use object_store::path::Path;
+use parking_lot::RwLock;
+use serde_json::Value;
 use uuid::Uuid;
 
 const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
@@ -197,25 +198,25 @@ impl ShareableBuffer {
     pub fn into_inner(self) -> Option<Vec<u8>> {
         Arc::try_unwrap(self.buffer)
             .ok()
-            .and_then(|lock| lock.into_inner().ok())
+            .map(|lock| lock.into_inner())
     }
 
     /// Returns a clone of the the underlying buffer as a `Vec`.
     pub fn to_vec(&self) -> Vec<u8> {
-        let inner = self.buffer.read().unwrap();
-        inner.to_vec()
+        let inner = self.buffer.read();
+        (*inner).to_vec()
     }
 
     /// Returns the number of bytes in the underlying buffer.
     pub fn len(&self) -> usize {
-        let inner = self.buffer.read().unwrap();
-        inner.len()
+        let inner = self.buffer.read();
+        (*inner).len()
     }
 
     /// Returns true if the underlying buffer is empty.
     pub fn is_empty(&self) -> bool {
-        let inner = self.buffer.read().unwrap();
-        inner.is_empty()
+        let inner = self.buffer.read();
+        (*inner).is_empty()
     }
 
     /// Creates a new instance with buffer initialized from the underylying bytes.
@@ -228,12 +229,12 @@ impl ShareableBuffer {
 
 impl Write for ShareableBuffer {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut inner = self.buffer.write().unwrap();
-        inner.write(buf)
+        let mut inner = self.buffer.write();
+        (*inner).write(buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        let mut inner = self.buffer.write().unwrap();
-        inner.flush()
+        let mut inner = self.buffer.write();
+        (*inner).flush()
     }
 }

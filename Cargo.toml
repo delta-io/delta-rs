@@ -8,6 +8,3 @@ members = [
     "dynamodb_lock",
 ]
 exclude = ["proofs", "delta-inspect"]
-
-[profile.dev]
-split-debuginfo = "unpacked"

@@ -13,6 +13,8 @@ use arrow::{
 use std::collections::HashMap;
 use std::sync::Arc;
 
+pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
+
 pub fn get_record_batch(part: Option<String>, with_null: bool) -> RecordBatch {
     let (base_int, base_str, base_mod) = if with_null {
         data_with_null()
