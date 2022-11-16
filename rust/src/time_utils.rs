@@ -22,7 +22,7 @@ mod temporal_conversions {
 
     /// converts a `i64` representing a `timestamp(ms)` to [`NaiveDateTime`]
     #[inline]
-    pub fn timestamp_ms_to_datetime(v: i64) -> NaiveDateTime {
+    pub fn timestamp_ms_to_datetime(v: i64) -> Option<NaiveDateTime> {
         let (sec, milli_sec) = split_second(v, MILLISECONDS);
 
         NaiveDateTime::from_timestamp_opt(
@@ -31,12 +31,11 @@ mod temporal_conversions {
             // discard extracted seconds and convert milliseconds to nanoseconds
             milli_sec * MICROSECONDS as u32,
         )
-        .unwrap()
     }
 
     /// converts a `i64` representing a `timestamp(us)` to [`NaiveDateTime`]
     #[inline]
-    pub fn timestamp_us_to_datetime(v: i64) -> NaiveDateTime {
+    pub fn timestamp_us_to_datetime(v: i64) -> Option<NaiveDateTime> {
         let (sec, micro_sec) = split_second(v, MICROSECONDS);
 
         NaiveDateTime::from_timestamp_opt(
@@ -45,12 +44,11 @@ mod temporal_conversions {
             // discard extracted seconds and convert microseconds to nanoseconds
             micro_sec * MILLISECONDS as u32,
         )
-        .unwrap()
     }
 
     /// converts a `i64` representing a `timestamp(ns)` to [`NaiveDateTime`]
     #[inline]
-    pub fn timestamp_ns_to_datetime(v: i64) -> NaiveDateTime {
+    pub fn timestamp_ns_to_datetime(v: i64) -> Option<NaiveDateTime> {
         let (sec, nano_sec) = split_second(v, NANOSECONDS);
 
         NaiveDateTime::from_timestamp_opt(
@@ -58,7 +56,6 @@ mod temporal_conversions {
             sec, // discard extracted seconds
             nano_sec,
         )
-        .unwrap()
     }
 
     ///
@@ -88,26 +85,26 @@ pub fn timestamp_micros_from_stats_string(s: &str) -> Result<i64, chrono::format
 
 /// Convert the timestamp to a ISO-8601 style format suitable for JSON statistics.
 #[cfg(not(feature = "parquet2"))]
-pub fn timestamp_to_delta_stats_string(n: i64, time_unit: &TimeUnit) -> String {
+pub fn timestamp_to_delta_stats_string(n: i64, time_unit: &TimeUnit) -> Option<String> {
     let dt = match time_unit {
         TimeUnit::MILLIS(_) => temporal_conversions::timestamp_ms_to_datetime(n),
         TimeUnit::MICROS(_) => temporal_conversions::timestamp_us_to_datetime(n),
         TimeUnit::NANOS(_) => temporal_conversions::timestamp_ns_to_datetime(n),
-    };
+    }?;
 
-    format!("{}", dt.format("%Y-%m-%dT%H:%M:%S%.3fZ"))
+    Some(format!("{}", dt.format("%Y-%m-%dT%H:%M:%S%.3fZ")))
 }
 
 /// Convert the timestamp to a ISO-8601 style format suitable for JSON statistics.
 #[cfg(feature = "parquet2")]
-pub fn timestamp_to_delta_stats_string(n: i64, time_unit: &TimeUnit) -> String {
+pub fn timestamp_to_delta_stats_string(n: i64, time_unit: &TimeUnit) -> Option<String> {
     let dt = match time_unit {
         TimeUnit::Milliseconds => temporal_conversions::timestamp_ms_to_datetime(n),
         TimeUnit::Microseconds => temporal_conversions::timestamp_us_to_datetime(n),
         TimeUnit::Nanoseconds => temporal_conversions::timestamp_ns_to_datetime(n),
-    };
+    }?;
 
-    format!("{}", dt.format("%Y-%m-%dT%H:%M:%S%.3fZ"))
+    Some(format!("{}", dt.format("%Y-%m-%dT%H:%M:%S%.3fZ")))
 }
 
 #[cfg(test)]
@@ -120,28 +117,32 @@ mod tests {
     #[test]
     fn test_timestamp_to_delta_stats_string() {
         let s =
-            timestamp_to_delta_stats_string(1628685199541, &TimeUnit::MILLIS(MilliSeconds::new()));
+            timestamp_to_delta_stats_string(1628685199541, &TimeUnit::MILLIS(MilliSeconds::new()))
+                .unwrap();
         assert_eq!("2021-08-11T12:33:19.541Z".to_string(), s);
         let s = timestamp_to_delta_stats_string(
             1628685199541000,
             &TimeUnit::MICROS(MicroSeconds::new()),
-        );
+        )
+        .unwrap();
         assert_eq!("2021-08-11T12:33:19.541Z".to_string(), s);
         let s = timestamp_to_delta_stats_string(
             1628685199541000000,
             &TimeUnit::NANOS(NanoSeconds::new()),
-        );
+        )
+        .unwrap();
         assert_eq!("2021-08-11T12:33:19.541Z".to_string(), s);
     }
 
     #[cfg(feature = "parquet2")]
     #[test]
     fn test_timestamp_to_delta_stats_string() {
-        let s = timestamp_to_delta_stats_string(1628685199541, &TimeUnit::Milliseconds);
+        let s = timestamp_to_delta_stats_string(1628685199541, &TimeUnit::Milliseconds).unwrap();
         assert_eq!("2021-08-11T12:33:19.541Z".to_string(), s);
-        let s = timestamp_to_delta_stats_string(1628685199541000, &TimeUnit::Microseconds);
+        let s = timestamp_to_delta_stats_string(1628685199541000, &TimeUnit::Microseconds).unwrap();
         assert_eq!("2021-08-11T12:33:19.541Z".to_string(), s);
-        let s = timestamp_to_delta_stats_string(1628685199541000000, &TimeUnit::Nanoseconds);
+        let s =
+            timestamp_to_delta_stats_string(1628685199541000000, &TimeUnit::Nanoseconds).unwrap();
         assert_eq!("2021-08-11T12:33:19.541Z".to_string(), s);
     }
 
