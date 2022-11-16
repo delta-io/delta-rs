@@ -160,6 +160,21 @@ def test_read_table_with_column_subset():
     )
 
 
+def test_read_table_as_category():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+
+    assert dt.schema().to_pyarrow().field("value").type == pa.string()
+
+    read_options = ds.ParquetReadOptions(dictionary_columns={"value"})
+
+    data = dt.to_pyarrow_dataset(parquet_read_options=read_options).to_table(
+        columns=["value"]
+    )
+
+    assert data.schema.field("value").type == pa.dictionary(pa.int32(), pa.string())
+
+
 def test_read_table_with_filter():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
