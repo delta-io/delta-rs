@@ -10,6 +10,7 @@ ListType: Any
 StructType: Any
 MapType: Any
 schema: Any
+unify_schemas: Any
 map_: Any
 list_: Any
 field: Any
