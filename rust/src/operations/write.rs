@@ -1,4 +1,4 @@
-//! Used to write a [RecordBatch] into a delta table.
+//! Used to write [RecordBatch]es into a delta table.
 //!
 //! New Table Semantics
 //!  - The schema of the [RecordBatch] is used to initialize the table.
@@ -6,7 +6,7 @@
 //!
 //! Existing Table Semantics
 //!  - The save mode will control how existing data is handled (i.e. overwrite, append, etc)
-//!  - The schema of the RecordBatch will be checked and if there are new columns present
+//!  - (NOT YET IMPLEMENTED) The schema of the RecordBatch will be checked and if there are new columns present
 //!    they will be added to the tables schema. Conflicting columns (i.e. a INT, and a STRING)
 //!    will result in an exception.
 //!  - The partition columns, if present, are validated against the existing metadata. If not
@@ -16,502 +16,491 @@
 //! replace data that matches a predicate.
 
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/WriteIntoDelta.scala
-use core::any::Any;
+
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::{
-    create::CreateCommand,
-    transaction::{serialize_actions, OPERATION_SCHEMA},
-    *,
-};
-use crate::action::{Action, Add, Remove, SaveMode};
-use crate::writer::{DeltaWriter, RecordBatchWriter};
-use crate::Schema;
+use super::writer::{DeltaWriter, WriterConfig};
+use super::MAX_SUPPORTED_WRITER_VERSION;
+use super::{transaction::commit, CreateBuilder};
+use crate::action::{Action, Add, DeltaOperation, Remove, SaveMode};
+use crate::builder::DeltaTableBuilder;
+use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::schema::Schema;
+use crate::storage::DeltaObjectStore;
+use crate::writer::record_batch::divide_by_partition_values;
+use crate::writer::utils::PartitionPath;
 
 use arrow::datatypes::SchemaRef as ArrowSchemaRef;
-use datafusion::{
-    execution::context::TaskContext,
-    physical_plan::{
-        common::{
-            collect as collect_batch, compute_record_batch_statistics, SizedRecordBatchStream,
-        },
-        expressions::PhysicalSortExpr,
-        metrics::{ExecutionPlanMetricsSet, MemTrackingMetrics},
-        stream::RecordBatchStreamAdapter,
-        Distribution, EmptyRecordBatchStream, ExecutionPlan, Partitioning,
-        SendableRecordBatchStream, Statistics,
+use arrow::record_batch::RecordBatch;
+use datafusion::execution::context::{SessionContext, TaskContext};
+use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
+use futures::future::BoxFuture;
+use futures::StreamExt;
+
+#[derive(thiserror::Error, Debug)]
+enum WriteError {
+    #[error("No data source supplied to write command.")]
+    MissingData,
+
+    #[error("Failed to execute write task: {source}")]
+    WriteTask { source: tokio::task::JoinError },
+
+    #[error("Delta-rs does not support writer version requirement: {0}")]
+    UnsupportedWriterVersion(i32),
+
+    #[error("A table already exists at: {0}")]
+    AlreadyExists(String),
+
+    #[error(
+        "Specified table partitioning does not match table partitioning: expected: {:?}, got: {:?}",
+        expected,
+        got
+    )]
+    PartitionColumnMismatch {
+        expected: Vec<String>,
+        got: Vec<String>,
     },
-};
-use datafusion_common::Result as DataFusionResult;
-use futures::{TryFutureExt, TryStreamExt};
+}
 
-const MAX_SUPPORTED_WRITER_VERSION: i32 = 1;
+impl From<WriteError> for DeltaTableError {
+    fn from(err: WriteError) -> Self {
+        DeltaTableError::GenericError {
+            source: Box::new(err),
+        }
+    }
+}
 
-/// Command for writing data into Delta table
-#[derive(Debug)]
-pub struct WriteCommand {
-    table_uri: String,
-    /// The save mode used in operation
+/// Write data into a DeltaTable
+#[derive(Debug, Clone)]
+pub struct WriteBuilder {
+    /// The input plan
+    input: Option<Arc<dyn ExecutionPlan>>,
+    /// Location where the table is stored
+    location: Option<String>,
+    /// SaveMode defines how to treat data already written to table location
     mode: SaveMode,
     /// Column names for table partitioning
     partition_columns: Option<Vec<String>>,
     /// When using `Overwrite` mode, replace data that matches a predicate
     predicate: Option<String>,
-    /// Schema of data to be written to disk
-    schema: ArrowSchemaRef,
-    /// The input plan
-    input: Arc<dyn ExecutionPlan>,
+    /// Size above which we will write a buffered parquet file to disk.
+    target_file_size: Option<usize>,
+    /// Number of records to be written in single batch to underlying writer
+    write_batch_size: Option<usize>,
+    /// An object store to be used as backend for delta table
+    object_store: Option<Arc<DeltaObjectStore>>,
+    /// Storage options used to create a new storage backend
+    storage_options: Option<HashMap<String, String>>,
+    /// RecordBatches to be written into the table
+    batches: Option<Vec<RecordBatch>>,
 }
 
-impl WriteCommand {
-    /// Create a new write command
-    pub fn try_new<T>(
-        table_uri: T,
-        operation: DeltaOperation,
-        input: Arc<dyn ExecutionPlan>,
-    ) -> Result<Self, DeltaCommandError>
-    where
-        T: Into<String> + Clone,
-    {
-        match operation {
-            DeltaOperation::Write {
-                mode,
-                partition_by,
-                predicate,
-            } => {
-                let uri = table_uri.into();
-                let plan = Arc::new(WritePartitionCommand::new(
-                    uri.clone(),
-                    partition_by.clone(),
-                    input.clone(),
-                ));
-                Ok(Self {
-                    table_uri: uri,
-                    mode,
-                    partition_columns: partition_by,
-                    predicate,
-                    schema: input.schema(),
-                    input: plan,
-                })
-            }
-            _ => Err(DeltaCommandError::UnsupportedCommand(
-                "WriteCommand only implemented for write operation".to_string(),
-            )),
-        }
+impl Default for WriteBuilder {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
-impl ExecutionPlan for WriteCommand {
-    fn as_any(&self) -> &dyn Any {
-        self
-    }
-
-    fn schema(&self) -> ArrowSchemaRef {
-        Arc::new(OPERATION_SCHEMA.clone())
-    }
-
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
-    }
-
-    fn output_partitioning(&self) -> Partitioning {
-        self.input.output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
-    }
-
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::UnspecifiedDistribution
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        todo!()
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> DataFusionResult<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, context.clone())?;
-
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema(),
-            futures::stream::once(
-                do_write(
-                    input,
-                    self.table_uri.clone(),
-                    partition,
-                    self.partition_columns.clone(),
-                    self.schema.clone(),
-                    self.predicate.clone(),
-                    self.mode.clone(),
-                    context,
-                )
-                .map_err(|e| ArrowError::ExternalError(Box::new(e))),
-            )
-            .try_flatten(),
-        )))
-    }
-
-    fn statistics(&self) -> Statistics {
-        compute_record_batch_statistics(&[], &self.schema(), None)
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn do_write(
-    input: SendableRecordBatchStream,
-    table_uri: String,
-    partition_id: usize,
-    partition_columns: Option<Vec<String>>,
-    schema: ArrowSchemaRef,
-    predicate: Option<String>,
-    mode: SaveMode,
-    context: Arc<TaskContext>,
-) -> DataFusionResult<SendableRecordBatchStream> {
-    let mut table = DeltaTableBuilder::from_uri(&table_uri)
-        .build()
-        .map_err(to_datafusion_err)?;
-    let metrics = ExecutionPlanMetricsSet::new();
-    let tracking_metrics = MemTrackingMetrics::new(&metrics, partition_id);
-
-    let mut actions = match table.load().await {
-        // Table is not yet created
-        Err(_) => {
-            let schema = Schema::try_from(schema.clone()).map_err(to_datafusion_err)?;
-            let metadata = DeltaTableMetaData::new(
-                None,
-                None,
-                None,
-                schema,
-                partition_columns.unwrap_or_default(),
-                HashMap::new(),
-            );
-            let op = DeltaOperation::Create {
-                location: table_uri.clone(),
-                metadata: metadata.clone(),
-                mode: SaveMode::ErrorIfExists,
-                // TODO get the protocol from somewhere central
-                protocol: Protocol {
-                    min_reader_version: 1,
-                    min_writer_version: 1,
-                },
-            };
-            let plan =
-                Arc::new(CreateCommand::try_new(table_uri.clone(), op).map_err(to_datafusion_err)?);
-
-            let create_actions = collect(plan.clone(), context.clone()).await?;
-
-            Ok(create_actions)
-        }
-        Ok(_) => {
-            if table.get_min_writer_version() > MAX_SUPPORTED_WRITER_VERSION {
-                Err(DeltaCommandError::UnsupportedWriterVersion(
-                    table.get_min_writer_version(),
-                ))
-            } else {
-                match mode {
-                    SaveMode::ErrorIfExists => {
-                        Err(DeltaCommandError::TableAlreadyExists(table_uri.clone()))
-                    }
-                    SaveMode::Ignore => {
-                        return Ok(Box::pin(SizedRecordBatchStream::new(
-                            schema,
-                            vec![],
-                            tracking_metrics,
-                        )))
-                    }
-                    _ => Ok(vec![]),
-                }
-            }
-        }
-    }
-    .map_err(to_datafusion_err)?;
-
-    actions.append(&mut collect_batch(input).await?);
-
-    if let SaveMode::Overwrite = mode {
-        // This should never error, since SystemTime::now() will always be larger than UNIX_EPOCH
-        let deletion_timestamp = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-        let deletion_timestamp = deletion_timestamp.as_millis() as i64;
-
-        let to_remove_action = |add: &Add| {
-            Action::remove(Remove {
-                path: add.path.clone(),
-                deletion_timestamp: Some(deletion_timestamp),
-                data_change: true,
-                // TODO add file metadata to remove action (tags missing)
-                extended_file_metadata: Some(false),
-                partition_values: Some(add.partition_values.clone()),
-                size: Some(add.size),
-                tags: None,
-            })
-        };
-
-        match predicate {
-            Some(_) => todo!("Overwriting data based on predicate is not yet implemented"),
-            _ => {
-                let remove_actions = table
-                    .get_state()
-                    .files()
-                    .iter()
-                    .map(to_remove_action)
-                    .collect::<Vec<_>>();
-                actions.push(serialize_actions(remove_actions)?);
-            }
-        }
-    };
-
-    let stream = SizedRecordBatchStream::new(
-        schema,
-        actions
-            .iter()
-            .map(|b| Arc::new(b.to_owned()))
-            .collect::<Vec<_>>(),
-        tracking_metrics,
-    );
-    Ok(Box::pin(stream))
-}
-
-#[derive(Debug)]
-/// Writes the partitioned input data into separate batches
-/// and forwards the add actions as record batches
-struct WritePartitionCommand {
-    table_uri: String,
-    /// Column names for table partitioning
-    partition_columns: Option<Vec<String>>,
-    // TODO When using `Overwrite` mode, replace data that matches a predicate
-    // predicate: Option<String>,
-    /// The input plan
-    input: Arc<dyn ExecutionPlan>,
-}
-
-impl WritePartitionCommand {
-    pub fn new<T>(
-        table_uri: T,
-        partition_columns: Option<Vec<String>>,
-        // predicate: Option<String>,
-        input: Arc<dyn ExecutionPlan>,
-    ) -> Self
-    where
-        T: Into<String>,
-    {
+impl WriteBuilder {
+    /// Create a new [`WriteBuilder`]
+    pub fn new() -> Self {
         Self {
-            table_uri: table_uri.into(),
-            partition_columns,
-            // predicate,
-            input,
+            input: None,
+            location: None,
+            mode: SaveMode::Append,
+            partition_columns: None,
+            predicate: None,
+            storage_options: None,
+            target_file_size: None,
+            write_batch_size: None,
+            object_store: None,
+            batches: None,
         }
     }
-}
 
-impl ExecutionPlan for WritePartitionCommand {
-    fn as_any(&self) -> &dyn Any {
+    /// Specify the path to the location where table data is stored,
+    /// which could be a path on distributed storage.
+    pub fn with_location(mut self, location: impl Into<String>) -> Self {
+        self.location = Some(location.into());
         self
     }
 
-    fn schema(&self) -> ArrowSchemaRef {
-        Arc::new(OPERATION_SCHEMA.clone())
+    /// Specify the behavior when a table exists at location
+    pub fn with_save_mode(mut self, save_mode: SaveMode) -> Self {
+        self.mode = save_mode;
+        self
     }
 
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.input.clone()]
+    /// When using `Overwrite` mode, replace data that matches a predicate
+    pub fn with_replace_where(mut self, predicate: impl Into<String>) -> Self {
+        self.predicate = Some(predicate.into());
+        self
     }
 
-    fn output_partitioning(&self) -> Partitioning {
-        self.input.output_partitioning()
+    /// (Optional) Specify table partitioning. If specified, the partitioning is validated,
+    /// if the table already exists. In case a new table is created, the partitioning is applied.
+    pub fn with_partition_columns(
+        mut self,
+        partition_columns: impl IntoIterator<Item = impl Into<String>>,
+    ) -> Self {
+        self.partition_columns = Some(partition_columns.into_iter().map(|s| s.into()).collect());
+        self
     }
 
-    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
-        None
+    /// Execution plan that produces the data to be written to the delta table
+    pub fn with_input_execution_plan(mut self, plan: Arc<dyn ExecutionPlan>) -> Self {
+        self.input = Some(plan);
+        self
     }
 
-    fn required_child_distribution(&self) -> Distribution {
-        Distribution::UnspecifiedDistribution
+    /// Execution plan that produces the data to be written to the delta table
+    pub fn with_input_batches(mut self, batches: impl IntoIterator<Item = RecordBatch>) -> Self {
+        self.batches = Some(batches.into_iter().collect());
+        self
     }
 
-    fn with_new_children(
-        self: Arc<Self>,
-        _children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        todo!()
+    /// Set options used to initialize storage backend
+    ///
+    /// Options may be passed in the HashMap or set as environment variables.
+    pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
+        self.storage_options = Some(storage_options);
+        self
     }
 
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<TaskContext>,
-    ) -> DataFusionResult<SendableRecordBatchStream> {
-        let input = self.input.execute(partition, context)?;
-
-        Ok(Box::pin(RecordBatchStreamAdapter::new(
-            self.schema(),
-            futures::stream::once(
-                do_write_partition(
-                    input,
-                    self.table_uri.clone(),
-                    partition,
-                    self.partition_columns.clone(),
-                )
-                .map_err(|e| ArrowError::ExternalError(Box::new(e))),
-            )
-            .try_flatten(),
-        )))
+    /// Provide a [`DeltaObjectStore`] instance, that points at table location
+    pub fn with_object_store(mut self, object_store: Arc<DeltaObjectStore>) -> Self {
+        self.object_store = Some(object_store);
+        self
     }
 
-    fn statistics(&self) -> Statistics {
-        compute_record_batch_statistics(&[], &self.schema(), None)
+    /// Specify the target file size for data files written to the delta table.
+    pub fn with_target_file_size(mut self, target_file_size: usize) -> Self {
+        self.target_file_size = Some(target_file_size);
+        self
+    }
+
+    /// Specify the target batch size for row groups written to parquet files.
+    pub fn with_write_batch_size(mut self, write_batch_size: usize) -> Self {
+        self.write_batch_size = Some(write_batch_size);
+        self
     }
 }
 
-async fn do_write_partition(
-    input: SendableRecordBatchStream,
-    table_uri: String,
-    partition_id: usize,
-    partition_columns: Option<Vec<String>>,
-) -> DataFusionResult<SendableRecordBatchStream> {
-    let schema = input.schema().clone();
-    let data = collect_batch(input).await?;
-    if data.is_empty() {
-        let stream = EmptyRecordBatchStream::new(Arc::new(OPERATION_SCHEMA.clone()));
-        return Ok(Box::pin(stream));
+impl std::future::IntoFuture for WriteBuilder {
+    type Output = DeltaResult<DeltaTable>;
+    type IntoFuture = BoxFuture<'static, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let this = self;
+
+        Box::pin(async move {
+            let object_store = if let Some(store) = this.object_store {
+                Ok(store)
+            } else {
+                DeltaTableBuilder::from_uri(&this.location.unwrap())
+                    .with_storage_options(this.storage_options.unwrap_or_default())
+                    .build_storage()
+            }?;
+
+            // TODO we can find a more optimized config. Of course we want to pass in the state anyhow..
+            let mut table = DeltaTable::new(object_store.clone(), Default::default());
+            let mut actions = match table.load().await {
+                Err(DeltaTableError::NotATable(_)) => {
+                    let schema: Schema = if let Some(plan) = &this.input {
+                        Ok(plan.schema().try_into()?)
+                    } else if let Some(batches) = &this.batches {
+                        if batches.is_empty() {
+                            return Err(WriteError::MissingData.into());
+                        }
+                        Ok(batches[0].schema().try_into()?)
+                    } else {
+                        Err(WriteError::MissingData)
+                    }?;
+                    let mut builder = CreateBuilder::new()
+                        .with_object_store(table.object_store())
+                        .with_columns(schema.get_fields().clone());
+                    if let Some(partition_columns) = this.partition_columns.as_ref() {
+                        builder = builder.with_partition_columns(partition_columns.clone())
+                    }
+                    let (_, actions, _) = builder.into_table_and_actions()?;
+                    Ok(actions)
+                }
+                Ok(_) => {
+                    if table.get_min_writer_version() > MAX_SUPPORTED_WRITER_VERSION {
+                        Err(
+                            WriteError::UnsupportedWriterVersion(table.get_min_writer_version())
+                                .into(),
+                        )
+                    } else {
+                        match this.mode {
+                            SaveMode::ErrorIfExists => {
+                                Err(WriteError::AlreadyExists(table.table_uri()).into())
+                            }
+                            _ => Ok(vec![]),
+                        }
+                    }
+                }
+                Err(err) => Err(err),
+            }?;
+
+            // validate partition columns
+            let partition_columns = if let Ok(meta) = table.get_metadata() {
+                if let Some(ref partition_columns) = this.partition_columns {
+                    if &meta.partition_columns != partition_columns {
+                        Err(WriteError::PartitionColumnMismatch {
+                            expected: table.get_metadata()?.partition_columns.clone(),
+                            got: partition_columns.to_vec(),
+                        })
+                    } else {
+                        Ok(partition_columns.clone())
+                    }
+                } else {
+                    Ok(meta.partition_columns.clone())
+                }
+            } else {
+                Ok(this.partition_columns.unwrap_or_default())
+            }?;
+
+            let plan = if let Some(plan) = this.input {
+                Ok(plan)
+            } else if let Some(batches) = this.batches {
+                if batches.is_empty() {
+                    Err(WriteError::MissingData)
+                } else {
+                    let schema = batches[0].schema();
+
+                    if let Ok(meta) = table.get_metadata() {
+                        let curr_schema: ArrowSchemaRef = Arc::new((&meta.schema).try_into()?);
+                        if schema != curr_schema {
+                            return Err(DeltaTableError::Generic(
+                                "Updating table schema not yet implemented".to_string(),
+                            ));
+                        }
+                    };
+
+                    let data = if !partition_columns.is_empty() {
+                        // TODO partitioning should probably happen in its own plan ...
+                        let mut partitions: HashMap<String, Vec<RecordBatch>> = HashMap::new();
+                        for batch in batches {
+                            let divided = divide_by_partition_values(
+                                schema.clone(),
+                                partition_columns.clone(),
+                                &batch,
+                            )
+                            .unwrap();
+                            for part in divided {
+                                let key = PartitionPath::from_hashmap(
+                                    &partition_columns,
+                                    &part.partition_values,
+                                )
+                                .map_err(DeltaTableError::from)?
+                                .into();
+                                match partitions.get_mut(&key) {
+                                    Some(part_batches) => {
+                                        part_batches.push(part.record_batch);
+                                    }
+                                    None => {
+                                        partitions.insert(key, vec![part.record_batch]);
+                                    }
+                                }
+                            }
+                        }
+                        partitions.into_values().collect::<Vec<_>>()
+                    } else {
+                        vec![batches]
+                    };
+
+                    Ok(Arc::new(MemoryExec::try_new(&data, schema, None)?)
+                        as Arc<dyn ExecutionPlan>)
+                }
+            } else {
+                Err(WriteError::MissingData)
+            }?;
+
+            // Write data to disk
+            let mut tasks = vec![];
+            for i in 0..plan.output_partitioning().partition_count() {
+                let inner_plan = plan.clone();
+                let state = SessionContext::new();
+                let task_ctx = Arc::new(TaskContext::from(&state));
+                let config = WriterConfig::new(
+                    inner_plan.schema(),
+                    partition_columns.clone(),
+                    None,
+                    this.target_file_size,
+                    this.write_batch_size,
+                );
+                let mut writer = DeltaWriter::new(object_store.clone(), config);
+
+                let mut stream = inner_plan.execute(i, task_ctx)?;
+                let handle: tokio::task::JoinHandle<DeltaResult<Vec<Add>>> =
+                    tokio::task::spawn(async move {
+                        while let Some(batch) = stream.next().await {
+                            writer.write(&batch?).await?;
+                        }
+                        writer.close().await
+                    });
+
+                tasks.push(handle);
+            }
+
+            // Collect add actions to add to commit
+            let add_actions = futures::future::join_all(tasks)
+                .await
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()
+                .map_err(|err| WriteError::WriteTask { source: err })?
+                .into_iter()
+                .collect::<Result<Vec<_>, _>>()?
+                .concat()
+                .into_iter()
+                .map(Action::add)
+                .collect::<Vec<_>>();
+            actions.extend(add_actions);
+
+            // Collect remove actions if we are overwriting the table
+            if matches!(this.mode, SaveMode::Overwrite) {
+                // This should never error, since now() will always be larger than UNIX_EPOCH
+                let deletion_timestamp = SystemTime::now()
+                    .duration_since(UNIX_EPOCH)
+                    .unwrap()
+                    .as_millis() as i64;
+
+                let to_remove_action = |add: &Add| {
+                    Action::remove(Remove {
+                        path: add.path.clone(),
+                        deletion_timestamp: Some(deletion_timestamp),
+                        data_change: true,
+                        extended_file_metadata: Some(false),
+                        partition_values: Some(add.partition_values.clone()),
+                        size: Some(add.size),
+                        // TODO add file metadata to remove action (tags missing)
+                        tags: None,
+                    })
+                };
+
+                match this.predicate {
+                    Some(_pred) => {
+                        todo!("Overwriting data based on predicate is not yet implemented")
+                    }
+                    _ => {
+                        let remove_actions = table
+                            .get_state()
+                            .files()
+                            .iter()
+                            .map(to_remove_action)
+                            .collect::<Vec<_>>();
+                        actions.extend(remove_actions);
+                    }
+                }
+            };
+
+            // Finally, commit ...
+            let operation = DeltaOperation::Write {
+                mode: this.mode,
+                partition_by: if !partition_columns.is_empty() {
+                    Some(partition_columns)
+                } else {
+                    None
+                },
+                predicate: this.predicate,
+            };
+            let _version = commit(
+                &table.storage,
+                table.version() + 1,
+                actions,
+                operation,
+                None,
+            )
+            .await?;
+            table.update().await?;
+
+            // TODO should we build checkpoints based on config?
+
+            Ok(table)
+        })
     }
-    let mut writer =
-        RecordBatchWriter::try_new(table_uri.clone(), schema, partition_columns.clone(), None)
-            .map_err(to_datafusion_err)?;
-
-    for batch in data {
-        // TODO we should have an API that allows us to circumvent internal partitioning
-        writer.write(batch).await.map_err(to_datafusion_err)?;
-    }
-    let actions = writer
-        .flush()
-        .await
-        .map_err(to_datafusion_err)?
-        .iter()
-        .map(|e| Action::add(e.clone()))
-        .collect::<Vec<_>>();
-
-    let serialized_actions = serialize_actions(actions)?;
-    let metrics = ExecutionPlanMetricsSet::new();
-    let tracking_metrics = MemTrackingMetrics::new(&metrics, partition_id);
-    let stream = SizedRecordBatchStream::new(
-        serialized_actions.schema(),
-        vec![Arc::new(serialized_actions)],
-        tracking_metrics,
-    );
-
-    Ok(Box::pin(stream))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        open_table,
-        writer::test_utils::{create_initialized_table, get_record_batch},
-    };
+    use crate::operations::DeltaOps;
+    use crate::writer::test_utils::{get_delta_schema, get_record_batch};
 
     #[tokio::test]
-    async fn test_append_data() {
-        let partition_cols = vec!["modified".to_string()];
-        let mut table = create_initialized_table(&partition_cols).await;
-        assert_eq!(table.version(), 0);
-
-        let transaction = get_transaction(table.table_uri(), 0, SaveMode::Append);
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-
-        let _ = collect(transaction.clone(), task_ctx.clone())
-            .await
-            .unwrap();
-        table.update().await.unwrap();
-        assert_eq!(table.get_file_uris().count(), 2);
-        assert_eq!(table.version(), 1);
-
-        let transaction = get_transaction(table.table_uri(), 1, SaveMode::Append);
-        let _ = collect(transaction.clone(), task_ctx).await.unwrap();
-        table.update().await.unwrap();
-        assert_eq!(table.get_file_uris().count(), 4);
-        assert_eq!(table.version(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_overwrite_data() {
-        let partition_cols = vec!["modified".to_string()];
-        let mut table = create_initialized_table(&partition_cols).await;
-        assert_eq!(table.version(), 0);
-
-        let transaction = get_transaction(table.table_uri(), 0, SaveMode::Overwrite);
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-
-        let _ = collect(transaction.clone(), task_ctx.clone())
-            .await
-            .unwrap();
-        table.update().await.unwrap();
-        assert_eq!(table.get_file_uris().count(), 2);
-        assert_eq!(table.version(), 1);
-
-        let transaction = get_transaction(table.table_uri(), 1, SaveMode::Overwrite);
-        let _ = collect(transaction.clone(), task_ctx).await.unwrap();
-        table.update().await.unwrap();
-        assert_eq!(table.get_file_uris().count(), 2);
-        assert_eq!(table.version(), 2);
-    }
-
-    #[tokio::test]
-    async fn test_write_non_existent() {
-        let table_dir = tempfile::tempdir().unwrap();
-        let table_path = table_dir.path();
-
-        let transaction = get_transaction(
-            table_path.to_str().unwrap().to_string(),
-            -1,
-            SaveMode::Overwrite,
-        );
-        let session_ctx = SessionContext::new();
-        let task_ctx = session_ctx.task_ctx();
-
-        let _ = collect(transaction.clone(), task_ctx.clone())
-            .await
-            .unwrap();
-
-        // THe table should be created on write and thus have version 0
-        let table = open_table(table_path.to_str().unwrap()).await.unwrap();
-        assert_eq!(table.get_file_uris().count(), 2);
-        assert_eq!(table.version(), 0);
-    }
-
-    fn get_transaction(
-        table_uri: String,
-        table_version: i64,
-        mode: SaveMode,
-    ) -> Arc<DeltaTransactionPlan> {
+    async fn test_create_write() {
+        let table_schema = get_delta_schema();
         let batch = get_record_batch(None, false);
-        let schema = batch.schema();
-        let data_plan = Arc::new(MemoryExec::try_new(&[vec![batch]], schema, None).unwrap());
-        let op = DeltaOperation::Write {
-            partition_by: Some(vec!["modified".to_string()]),
-            mode,
-            predicate: None,
-        };
-        let command = WriteCommand::try_new(&table_uri, op.clone(), data_plan).unwrap();
 
-        Arc::new(DeltaTransactionPlan::new(
-            table_uri,
-            table_version,
-            Arc::new(command),
-            op,
-            None,
-        ))
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(table_schema.get_fields().clone())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        // write some data
+        let table = DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 1);
+
+        // append some data
+        let table = DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+        assert_eq!(table.get_file_uris().count(), 2);
+
+        // overwrite table
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Overwrite)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 3);
+        assert_eq!(table.get_file_uris().count(), 1)
+    }
+
+    #[tokio::test]
+    async fn test_write_nonexistent() {
+        let batch = get_record_batch(None, false);
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_file_uris().count(), 1)
+    }
+
+    #[tokio::test]
+    async fn test_write_partitioned() {
+        let batch = get_record_batch(None, false);
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .with_partition_columns(["modified"])
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_file_uris().count(), 2);
+
+        let table = DeltaOps::new_in_memory()
+            .write(vec![batch])
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .with_partition_columns(["modified", "id"])
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_file_uris().count(), 4)
     }
 }

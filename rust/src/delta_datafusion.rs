@@ -406,8 +406,10 @@ fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> P
 
     let ts_secs = action.modification_time / 1000;
     let ts_ns = (action.modification_time % 1000) * 1_000_000;
-    let last_modified =
-        DateTime::<Utc>::from_utc(NaiveDateTime::from_timestamp(ts_secs, ts_ns as u32), Utc);
+    let last_modified = DateTime::<Utc>::from_utc(
+        NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap(),
+        Utc,
+    );
     PartitionedFile {
         object_meta: ObjectMeta {
             location: Path::from(action.path.clone()),
@@ -781,7 +783,7 @@ mod tests {
         let ref_file = PartitionedFile {
             object_meta: object_store::ObjectMeta {
                 location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
-                last_modified: Utc.timestamp_millis(1660497727833),
+                last_modified: Utc.timestamp_millis_opt(1660497727833).unwrap(),
                 size: 10644,
             },
             partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),

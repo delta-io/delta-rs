@@ -365,7 +365,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
 
         action::Action::remove(r)
     }))
-    .map(|a| serde_json::to_value(a).map_err(ArrowError::from))
+    .map(|a| serde_json::to_value(a).map_err(|err| ArrowError::JsonError(err.to_string())))
     // adds
     .chain(state.files().iter().map(|f| {
         checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
@@ -398,7 +398,8 @@ fn checkpoint_add_from_state(
     partition_col_data_types: &[(&str, &SchemaDataType)],
     stats_conversions: &[(SchemaPath, SchemaDataType)],
 ) -> Result<Value, ArrowError> {
-    let mut v = serde_json::to_value(action::Action::add(add.clone()))?;
+    let mut v = serde_json::to_value(action::Action::add(add.clone()))
+        .map_err(|err| ArrowError::JsonError(err.to_string()))?;
 
     v["add"]["dataChange"] = Value::Bool(false);
 
@@ -413,12 +414,14 @@ fn checkpoint_add_from_state(
             }
         }
 
-        let partition_values_parsed = serde_json::to_value(partition_values_parsed)?;
+        let partition_values_parsed = serde_json::to_value(partition_values_parsed)
+            .map_err(|err| ArrowError::JsonError(err.to_string()))?;
         v["add"]["partitionValues_parsed"] = partition_values_parsed;
     }
 
     if let Ok(Some(stats)) = add.get_stats() {
-        let mut stats = serde_json::to_value(stats)?;
+        let mut stats =
+            serde_json::to_value(stats).map_err(|err| ArrowError::JsonError(err.to_string()))?;
         let min_values = stats.get_mut("minValues").and_then(|v| v.as_object_mut());
 
         if let Some(min_values) = min_values {

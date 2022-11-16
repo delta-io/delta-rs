@@ -255,22 +255,29 @@ fn primitive_parquet_field_to_json_value(field: &Field) -> Result<serde_json::Va
             _ => Err("Invalid type for min/max values."),
         },
         Field::TimestampMillis(timestamp) => Ok(serde_json::Value::String(
-            convert_timestamp_millis_to_string(*timestamp),
+            convert_timestamp_millis_to_string(*timestamp)?,
         )),
-        Field::Date(date) => Ok(serde_json::Value::String(convert_date_to_string(*date))),
+        Field::Date(date) => Ok(serde_json::Value::String(convert_date_to_string(*date)?)),
         _ => Err("Invalid type for min/max values."),
     }
 }
 
-fn convert_timestamp_millis_to_string(value: u64) -> String {
-    let dt = Utc.timestamp((value / 1000) as i64, ((value % 1000) * 1000000) as u32);
-    dt.to_rfc3339_opts(SecondsFormat::Millis, true)
+fn convert_timestamp_millis_to_string(value: u64) -> Result<String, &'static str> {
+    let dt = Utc
+        .timestamp_opt((value / 1000) as i64, ((value % 1000) * 1000000) as u32)
+        .single()
+        .ok_or("Value out of bounds")?;
+    Ok(dt.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
-fn convert_date_to_string(value: u32) -> String {
+fn convert_date_to_string(value: u32) -> Result<String, &'static str> {
     static NUM_SECONDS_IN_DAY: i64 = 60 * 60 * 24;
-    let dt = Utc.timestamp(value as i64 * NUM_SECONDS_IN_DAY, 0).date();
-    format!("{}", dt.format("%Y-%m-%d"))
+    let dt = Utc
+        .timestamp_opt(value as i64 * NUM_SECONDS_IN_DAY, 0)
+        .single()
+        .ok_or("Value out of bounds")?
+        .date_naive();
+    Ok(format!("{}", dt.format("%Y-%m-%d")))
 }
 
 impl MetaData {
