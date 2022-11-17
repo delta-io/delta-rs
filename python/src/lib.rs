@@ -27,6 +27,7 @@ use pyo3::types::PyType;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
@@ -394,10 +395,11 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    pub fn get_py_storage_backend(&self) -> filesystem::DeltaFileSystemHandler {
-        filesystem::DeltaFileSystemHandler {
+    pub fn get_py_storage_backend(&self) -> PyResult<filesystem::DeltaFileSystemHandler> {
+        Ok(filesystem::DeltaFileSystemHandler {
             inner: self._table.object_store(),
-        }
+            rt: Arc::new(rt()?),
+        })
     }
 }
 
