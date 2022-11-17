@@ -168,11 +168,10 @@ def test_read_table_as_category():
 
     read_options = ds.ParquetReadOptions(dictionary_columns={"value"})
 
-    data = dt.to_pyarrow_dataset(parquet_read_options=read_options).to_table(
-        columns=["value"]
-    )
+    data = dt.to_pyarrow_dataset(parquet_read_options=read_options).to_table()
 
     assert data.schema.field("value").type == pa.dictionary(pa.int32(), pa.string())
+    assert data.schema.field("day").type == pa.string()
 
 
 def test_read_table_with_filter():

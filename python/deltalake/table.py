@@ -334,10 +334,16 @@ class DeltaTable:
             )
         ]
 
-        if parquet_read_options is not None and parquet_read_options.dictionary_columns:
-            schema = pyarrow.unify_schemas([f.physical_schema for f in fragments])
-        else:
-            schema = self.schema().to_pyarrow()
+        schema = self.schema().to_pyarrow()
+
+        dictionary_columns = format.read_options.dictionary_columns or set()
+        if dictionary_columns:
+            for index, field in enumerate(schema):
+                if field.name in dictionary_columns:
+                    dict_field = field.with_type(
+                        pyarrow.dictionary(pyarrow.int32(), field.type)
+                    )
+                    schema = schema.set(index, dict_field)
 
         return FileSystemDataset(fragments, schema, format, filesystem)
 

@@ -10,7 +10,6 @@ ListType: Any
 StructType: Any
 MapType: Any
 schema: Any
-unify_schemas: Any
 map_: Any
 list_: Any
 field: Any
@@ -19,9 +18,11 @@ type_for_alias: Any
 date32: Any
 date64: Any
 decimal128: Any
+int32: Any
 float16: Any
 float32: Any
 float64: Any
+dictionary: Any
 
 py_buffer: Callable[[bytes], Any]
 NativeFile: Any
