@@ -14,7 +14,7 @@ use crate::storage::DeltaObjectStore;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 use futures::future::BoxFuture;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
@@ -55,6 +55,7 @@ pub struct CreateBuilder {
     storage_options: Option<HashMap<String, String>>,
     actions: Vec<Action>,
     object_store: Option<Arc<DeltaObjectStore>>,
+    metadata: Option<Map<String, Value>>,
 }
 
 impl Default for CreateBuilder {
@@ -77,6 +78,7 @@ impl CreateBuilder {
             storage_options: None,
             actions: Vec::new(),
             object_store: None,
+            metadata: None,
         }
     }
 
@@ -154,6 +156,12 @@ impl CreateBuilder {
     /// If an object store is also passed using `with_object_store()` these options will be ignored.
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
+        self
+    }
+
+    /// Append custom metadata to created table
+    pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
+        self.metadata = Some(metadata);
         self
     }
 
@@ -255,6 +263,7 @@ impl std::future::IntoFuture for CreateBuilder {
 
         Box::pin(async move {
             let mode = this.mode.clone();
+            let metadata = this.metadata.clone();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
             if table.object_store().is_delta_table_location().await? {
                 match mode {
@@ -269,8 +278,14 @@ impl std::future::IntoFuture for CreateBuilder {
                     }
                 }
             }
-            let version =
-                commit(table.object_store().as_ref(), 0, actions, operation, None).await?;
+            let version = commit(
+                table.object_store().as_ref(),
+                0,
+                actions,
+                operation,
+                metadata,
+            )
+            .await?;
             table.load_version(version).await?;
 
             Ok(table)
