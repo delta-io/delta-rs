@@ -334,9 +334,18 @@ class DeltaTable:
             )
         ]
 
-        return FileSystemDataset(
-            fragments, self.schema().to_pyarrow(), format, filesystem
-        )
+        schema = self.schema().to_pyarrow()
+
+        dictionary_columns = format.read_options.dictionary_columns or set()
+        if dictionary_columns:
+            for index, field in enumerate(schema):
+                if field.name in dictionary_columns:
+                    dict_field = field.with_type(
+                        pyarrow.dictionary(pyarrow.int32(), field.type)
+                    )
+                    schema = schema.set(index, dict_field)
+
+        return FileSystemDataset(fragments, schema, format, filesystem)
 
     def to_pyarrow_table(
         self,
