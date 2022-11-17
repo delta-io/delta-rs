@@ -5,7 +5,9 @@
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
+use std::fmt::Formatter;
 use std::io::{BufRead, BufReader, Cursor};
+use std::sync::Arc;
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 
 use super::action;
@@ -24,7 +26,9 @@ use lazy_static::lazy_static;
 use log::debug;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
-use serde::{Deserialize, Serialize};
+use serde::de::{Error, SeqAccess, Visitor};
+use serde::ser::SerializeSeq;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use serde_json::{Map, Value};
 use uuid::Uuid;
 
@@ -429,6 +433,70 @@ pub struct DeltaTable {
     version_timestamp: HashMap<DeltaDataTypeVersion, i64>,
 }
 
+impl Serialize for DeltaTable {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        let mut seq = serializer.serialize_seq(None)?;
+        seq.serialize_element(&self.state)?;
+        seq.serialize_element(&self.config)?;
+        seq.serialize_element(self.storage.as_ref())?;
+        seq.serialize_element(&self.last_check_point)?;
+        seq.serialize_element(&self.version_timestamp)?;
+        seq.end()
+    }
+}
+
+impl<'de> Deserialize<'de> for DeltaTable {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        struct DeltaTableVisitor {}
+
+        impl<'de> Visitor<'de> for DeltaTableVisitor {
+            type Value = DeltaTable;
+
+            fn expecting(&self, formatter: &mut Formatter) -> fmt::Result {
+                formatter.write_str("struct DeltaTable")
+            }
+
+            fn visit_seq<A>(self, mut seq: A) -> Result<Self::Value, A::Error>
+            where
+                A: SeqAccess<'de>,
+            {
+                let state = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+                let config = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+                let storage = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+                let last_check_point = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+                let version_timestamp = seq
+                    .next_element()?
+                    .ok_or_else(|| A::Error::invalid_length(0, &self))?;
+
+                let table = DeltaTable {
+                    state,
+                    config,
+                    storage: Arc::new(storage),
+                    last_check_point,
+                    version_timestamp,
+                };
+                Ok(table)
+            }
+        }
+
+        deserializer.deserialize_seq(DeltaTableVisitor {})
+    }
+}
+
 impl DeltaTable {
     /// Create a new Delta Table struct without loading any data from backing storage.
     ///
@@ -449,7 +517,7 @@ impl DeltaTable {
         self.storage.clone()
     }
 
-    /// The
+    /// The URI of the underlying data
     pub fn table_uri(&self) -> String {
         self.storage.root_uri()
     }
@@ -1449,10 +1517,21 @@ pub fn crate_version() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::action::Protocol;
     use crate::builder::DeltaTableBuilder;
     use pretty_assertions::assert_eq;
     use std::io::{BufRead, BufReader};
     use std::{collections::HashMap, fs::File, path::Path};
+    use tempdir::TempDir;
+
+    #[tokio::test]
+    async fn table_round_trip() {
+        let (_, _, dt, tmp_dir) = create_test_table().await;
+        let bytes = serde_json::to_vec(&dt).unwrap();
+        let actual: DeltaTable = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(actual.version(), dt.version());
+        drop(tmp_dir);
+    }
 
     #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[test]
@@ -1469,8 +1548,7 @@ mod tests {
         }
     }
 
-    #[tokio::test]
-    async fn test_create_delta_table() {
+    async fn create_test_table() -> (DeltaTableMetaData, Protocol, DeltaTable, TempDir) {
         // Setup
         let test_schema = Schema::new(vec![
             SchemaField::new(
@@ -1501,7 +1579,7 @@ mod tests {
             min_writer_version: 1,
         };
 
-        let tmp_dir = tempdir::TempDir::new("create_table_test").unwrap();
+        let tmp_dir = TempDir::new("create_table_test").unwrap();
         let table_dir = tmp_dir.path().join("test_create");
         std::fs::create_dir(&table_dir).unwrap();
 
@@ -1522,6 +1600,12 @@ mod tests {
         dt.create(delta_md.clone(), protocol.clone(), Some(commit_info), None)
             .await
             .unwrap();
+        (delta_md, protocol, dt, tmp_dir)
+    }
+
+    #[tokio::test]
+    async fn test_create_delta_table() {
+        let (delta_md, protocol, dt, tmp_dir) = create_test_table().await;
 
         // Validation
         // assert DeltaTable version is now 0 and no data files have been added
@@ -1584,5 +1668,6 @@ mod tests {
         let current_metadata = dt.get_metadata().unwrap();
         assert!(current_metadata.partition_columns.is_empty());
         assert!(current_metadata.configuration.is_empty());
+        drop(tmp_dir);
     }
 }

@@ -23,32 +23,40 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::fmt::Debug;
 use std::sync::Arc;
-
-use crate::action;
-use crate::schema;
-use crate::{DeltaTable, DeltaTableError};
 
 use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
-use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, TimeUnit};
+use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
+use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
+use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
-use datafusion::execution::context::{SessionContext, SessionState};
+use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::execution::runtime_env::RuntimeEnv;
+use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
+use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::file_format::FileScanConfig;
-use datafusion::physical_plan::{ColumnStatistics, ExecutionPlan, Statistics};
+use datafusion::physical_plan::{
+    ColumnStatistics, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+};
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError, Result as DataFusionResult};
-use datafusion_expr::Expr;
+use datafusion_expr::{Expr, Extension, LogicalPlan};
+use datafusion_proto::logical_plan::{LogicalExtensionCodec, PhysicalExtensionCodec};
 use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
 use crate::Invariant;
+use crate::{action, open_table};
+use crate::{schema, DeltaTableBuilder};
+use crate::{DeltaTable, DeltaTableError};
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -295,6 +303,18 @@ impl PruningStatistics for DeltaTable {
     }
 }
 
+// each delta table must register a specific object store, since paths are internally
+// handled relative to the table root.
+fn register_store(table: &DeltaTable, env: Arc<RuntimeEnv>) {
+    let object_store_url = table.storage.object_store_url();
+    let url: &Url = object_store_url.as_ref();
+    env.register_object_store(
+        url.scheme(),
+        url.host_str().unwrap_or_default(),
+        table.object_store(),
+    );
+}
+
 #[async_trait]
 impl TableProvider for DeltaTable {
     fn schema(&self) -> Arc<ArrowSchema> {
@@ -319,15 +339,7 @@ impl TableProvider for DeltaTable {
             DeltaTable::schema(self).unwrap(),
         )?);
 
-        // each delta table must register a specific object store, since paths are internally
-        // handled relative to the table root.
-        let object_store_url = self.storage.object_store_url();
-        let url: &Url = object_store_url.as_ref();
-        session.runtime_env.register_object_store(
-            url.scheme(),
-            url.host_str().unwrap_or_default(),
-            self.object_store(),
-        );
+        register_store(self, session.runtime_env.clone());
 
         // TODO we group files together by their partition values. If the table is partitioned
         // and partitions are somewhat evenly distributed, probably not the worst choice ...
@@ -370,10 +382,10 @@ impl TableProvider for DeltaTable {
                 .cloned()
                 .collect(),
         ));
-        ParquetFormat::default()
+        let parquet_scan = ParquetFormat::default()
             .create_physical_plan(
                 FileScanConfig {
-                    object_store_url,
+                    object_store_url: self.storage.object_store_url(),
                     file_schema,
                     file_groups: file_groups.into_values().collect(),
                     statistics: self.datafusion_table_statistics(),
@@ -384,11 +396,81 @@ impl TableProvider for DeltaTable {
                 },
                 filters,
             )
-            .await
+            .await?;
+        let mut url = self.table_uri();
+        if url.ends_with(':') {
+            url += "//"; // table_uri() trims slashes from `memory://` so add them back
+        }
+        let delta_scan = DeltaScan { url, parquet_scan };
+
+        Ok(Arc::new(delta_scan))
     }
 
     fn as_any(&self) -> &dyn Any {
         self
+    }
+}
+
+// TODO: this will likely also need to perform column mapping later when we support reader protocol v2
+/// A wrapper for parquet scans that installs the required ObjectStore
+#[derive(Debug)]
+pub struct DeltaScan {
+    /// The URL of the ObjectStore root
+    pub url: String,
+    /// The parquet scan to wrap
+    pub parquet_scan: Arc<dyn ExecutionPlan>,
+}
+
+impl ExecutionPlan for DeltaScan {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn schema(&self) -> SchemaRef {
+        self.parquet_scan.schema()
+    }
+
+    fn output_partitioning(&self) -> Partitioning {
+        self.parquet_scan.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[PhysicalSortExpr]> {
+        self.parquet_scan.output_ordering()
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        vec![self.parquet_scan.clone()]
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+        ExecutionPlan::with_new_children(self.parquet_scan.clone(), children)
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<TaskContext>,
+    ) -> DataFusionResult<SendableRecordBatchStream> {
+        let url = self.url.as_str();
+        let url = ListingTableUrl::parse(url)?;
+        let storage = context.runtime_env().object_store_registry.get_by_url(url);
+        let mut table = DeltaTableBuilder::from_uri(self.url.clone());
+        if let Ok(storage) = storage {
+            // When running in ballista, the store will be deserialized and re-created
+            // When testing with a MemoryStore, it will already be present and we should re-use it
+            let path = &Path::parse("")?;
+            table = table.with_storage_backend(storage, path);
+        }
+        let table = table.build()?;
+        register_store(&table, context.runtime_env());
+        self.parquet_scan.execute(partition, context)
+    }
+
+    fn statistics(&self) -> Statistics {
+        self.parquet_scan.statistics()
     }
 }
 
@@ -679,14 +761,107 @@ impl DeltaDataChecker {
     }
 }
 
+/// A codec for deltalake physical plans
+#[derive(Debug)]
+pub struct DeltaPhysicalCodec {}
+
+impl PhysicalExtensionCodec for DeltaPhysicalCodec {
+    fn try_decode(
+        &self,
+        buf: &[u8],
+        inputs: &[Arc<dyn ExecutionPlan>],
+        _registry: &dyn FunctionRegistry,
+    ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+        let url: String = serde_json::from_reader(buf)
+            .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
+        let delta_scan = DeltaScan {
+            url,
+            parquet_scan: (*inputs)[0].clone(),
+        };
+        Ok(Arc::new(delta_scan))
+    }
+
+    fn try_encode(
+        &self,
+        node: Arc<dyn ExecutionPlan>,
+        buf: &mut Vec<u8>,
+    ) -> Result<(), DataFusionError> {
+        let delta_scan = node
+            .as_any()
+            .downcast_ref::<DeltaScan>()
+            .ok_or_else(|| DataFusionError::Internal("Not a delta scan!".to_string()))?;
+        serde_json::to_writer(buf, delta_scan.url.as_str())
+            .map_err(|_| DataFusionError::Internal("Unable to encode delta scan!".to_string()))?;
+        Ok(())
+    }
+}
+
+/// Does serde on DeltaTables
+#[derive(Debug)]
+pub struct DeltaLogicalCodec {}
+
+impl LogicalExtensionCodec for DeltaLogicalCodec {
+    fn try_decode(
+        &self,
+        _buf: &[u8],
+        _inputs: &[LogicalPlan],
+        _ctx: &SessionContext,
+    ) -> Result<Extension, DataFusionError> {
+        todo!("DeltaLogicalCodec")
+    }
+
+    fn try_encode(&self, _node: &Extension, _buf: &mut Vec<u8>) -> Result<(), DataFusionError> {
+        todo!("DeltaLogicalCodec")
+    }
+
+    fn try_decode_table_provider(
+        &self,
+        buf: &[u8],
+        _schema: SchemaRef,
+        _ctx: &SessionContext,
+    ) -> Result<Arc<dyn TableProvider>, DataFusionError> {
+        let provider: DeltaTable = serde_json::from_slice(buf)
+            .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))?;
+        Ok(Arc::new(provider))
+    }
+
+    fn try_encode_table_provider(
+        &self,
+        node: Arc<dyn TableProvider>,
+        mut buf: &mut Vec<u8>,
+    ) -> Result<(), DataFusionError> {
+        let table = node
+            .as_ref()
+            .as_any()
+            .downcast_ref::<DeltaTable>()
+            .ok_or_else(|| {
+                DataFusionError::Internal("Can't encode non-delta tables".to_string())
+            })?;
+        serde_json::to_writer(&mut buf, table)
+            .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))
+    }
+}
+
+/// Responsible for creating deltatables
+pub struct DeltaTableFactory {}
+
+#[async_trait]
+impl TableProviderFactory for DeltaTableFactory {
+    async fn create(&self, url: &str) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let provider = open_table(url).await.unwrap();
+        Ok(Arc::new(provider))
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::*;
     use arrow::array::StructArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
     use datafusion::from_slice::FromSlice;
     use serde_json::json;
+
+    use super::*;
 
     // test deserialization of serialized partition values.
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization

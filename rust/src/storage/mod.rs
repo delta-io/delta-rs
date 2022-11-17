@@ -19,8 +19,11 @@ use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
 
+use crate::get_storage_backend;
 #[cfg(feature = "datafusion-ext")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
+use serde::de::Error;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 lazy_static! {
     static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
@@ -30,9 +33,9 @@ lazy_static! {
 pub type ObjectStoreRef = Arc<DeltaObjectStore>;
 
 /// Configuration for a DeltaObjectStore
-#[derive(Debug, Clone)]
-struct DeltaObjectStoreConfig {
-    storage_url: StorageUrl,
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct DeltaObjectStoreConfig {
+    pub(crate) storage_url: StorageUrl,
 }
 
 impl DeltaObjectStoreConfig {
@@ -89,6 +92,32 @@ impl DeltaObjectStoreConfig {
 pub struct DeltaObjectStore {
     storage: Arc<DynObjectStore>,
     config: DeltaObjectStoreConfig,
+}
+
+impl Serialize for DeltaObjectStore {
+    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        self.config.serialize(serializer)
+    }
+}
+
+impl<'de> Deserialize<'de> for DeltaObjectStore {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let config = DeltaObjectStoreConfig::deserialize(deserializer)?;
+        let (storage, storage_url) = get_storage_backend(
+            config.storage_url.as_str(),
+            None,       // TODO: config options
+            Some(true), // TODO: this isn't preserved after builder stage
+        )
+        .map_err(|_| D::Error::missing_field("storage"))?;
+        let storage = Arc::new(DeltaObjectStore::new(storage_url, storage));
+        Ok(DeltaObjectStore { storage, config })
+    }
 }
 
 impl std::fmt::Display for DeltaObjectStore {
