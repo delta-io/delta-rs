@@ -76,10 +76,16 @@ impl std::future::IntoFuture for LoadBuilder {
 
         Box::pin(async move {
             let object_store = this.object_store.unwrap();
+            let scheme = object_store.root_uri(); // underlying store, i.e. `memory:`
+            let scheme = scheme.trim_end_matches(':');
+            let store = object_store.storage_backend().clone();
             let mut table = DeltaTable::new(object_store, Default::default());
             table.load().await?;
 
             let ctx = SessionContext::new();
+            ctx.state()
+                .runtime_env
+                .register_object_store(scheme, "", store);
             let scan_plan = table.scan(&ctx.state(), &None, &[], None).await?;
             let plan = CoalescePartitionsExec::new(scan_plan);
             let task_ctx = Arc::new(TaskContext::from(&ctx.state()));

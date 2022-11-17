@@ -232,13 +232,21 @@ impl DeltaTableBuilder {
     /// table use the `load` function
     pub fn build(self) -> Result<DeltaTable, DeltaTableError> {
         let (storage, storage_url) = match self.options.storage_backend {
-            // Some(storage) => storage,
+            Some((store, path)) => {
+                let mut uri = self.options.table_uri + path.as_ref();
+                if !uri.contains(':') {
+                    uri = format!("file://{}", uri);
+                }
+                let url = Url::parse(uri.as_str())
+                    .map_err(|_| DeltaTableError::Generic(format!("Can't parse uri: {}", uri)))?;
+                let url = StorageUrl::new(url);
+                (store, url)
+            }
             None => get_storage_backend(
                 &self.options.table_uri,
                 self.storage_options,
                 self.allow_http,
             )?,
-            _ => todo!(),
         };
         let config = DeltaTableConfig {
             require_tombstones: self.options.require_tombstones,

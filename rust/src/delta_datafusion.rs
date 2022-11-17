@@ -34,6 +34,7 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
+use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -396,10 +397,11 @@ impl TableProvider for DeltaTable {
                 filters,
             )
             .await?;
-        let delta_scan = DeltaScan {
-            url: self.table_uri(),
-            parquet_scan,
-        };
+        let mut url = self.table_uri();
+        if url.ends_with(':') {
+            url += "//"; // table_uri() trims slashes from `memory://` so add them back
+        }
+        let delta_scan = DeltaScan { url, parquet_scan };
 
         Ok(Arc::new(delta_scan))
     }
@@ -452,7 +454,17 @@ impl ExecutionPlan for DeltaScan {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
-        let table = DeltaTableBuilder::from_uri(self.url.clone()).build()?;
+        let url = self.url.as_str();
+        let url = ListingTableUrl::parse(url)?;
+        let storage = context.runtime_env().object_store_registry.get_by_url(url);
+        let mut table = DeltaTableBuilder::from_uri(self.url.clone());
+        if let Ok(storage) = storage {
+            // When running in ballista, the store will be deserialized and re-created
+            // When testing with a MemoryStore, it will already be present and we should re-use it
+            let path = &Path::parse("")?;
+            table = table.with_storage_backend(storage, path);
+        }
+        let table = table.build()?;
         register_store(&table, context.runtime_env());
         self.parquet_scan.execute(partition, context)
     }
