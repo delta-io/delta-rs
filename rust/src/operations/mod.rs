@@ -54,7 +54,7 @@ impl DeltaOps {
     /// Create a new [`DeltaOps`] instance, backed by an un-initialized in memory table
     ///
     /// Using this will not persist any changes beyond the lifetime of the table object.
-    /// THe main purpose of in-memory tables is for use in testing.
+    /// The main purpose of in-memory tables is for use in testing.
     ///
     /// ```
     /// use deltalake::DeltaOps;
@@ -95,7 +95,7 @@ impl DeltaOps {
     /// Write data to Delta table
     #[cfg(feature = "datafusion-ext")]
     #[must_use]
-    pub fn write(self, batches: Vec<RecordBatch>) -> WriteBuilder {
+    pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
         WriteBuilder::default()
             .with_input_batches(batches)
             .with_object_store(self.0.object_store())
