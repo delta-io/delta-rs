@@ -22,7 +22,7 @@ And if you have an idea, feel free to open a new issue to discuss it.
 
 These projects have been scoped and a contributor(s) who will work on them. They are also reflected on the official Delta Lake roadmap: https://delta.io/roadmap/
 
-* [ ] (P0) **Support V2 writer protocol** (#575; @wjones127) 2022H2
+* [x] (P0) **Support V2 writer protocol** (#575; @wjones127) 2022H2
 * [ ] (P1) **Data Acceptance Tests running** in CI (@wjones127) P0 for 2023H1 & P1 for 2022H2
 * [ ] (P0) **First pass at Rust documentation**: Create some basic documentation that shows how to create a Delta Lake, how to read a Delta Lake into a Polars DataFrame, and how to append a Polars DataFrame to an existing Delta Lake.  Publish the Rust documentation, so it’s easily accessible. (@MrPowers) 
 * [ ] (P0) **Blogging for Rust community**: grow Delta Rust awareness in the Rust community by blogging and posting in the Rust subreddit (@MrPowers)
