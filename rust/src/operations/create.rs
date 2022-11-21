@@ -166,6 +166,9 @@ impl CreateBuilder {
     }
 
     /// Specify additional actions to be added to the commit.
+    ///
+    /// This method is mainly meant for internal use. Manually adding inconsistent
+    /// actions to a create operation may have undesired effects - use with caution.
     pub fn with_actions(mut self, actions: impl IntoIterator<Item = Action>) -> Self {
         self.actions.extend(actions);
         self

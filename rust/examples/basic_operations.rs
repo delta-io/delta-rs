@@ -24,7 +24,7 @@ fn get_table_columns() -> Vec<SchemaField> {
     ]
 }
 
-fn get_table_batches() -> Vec<RecordBatch> {
+fn get_table_batches() -> RecordBatch {
     let schema = Arc::new(ArrowSchema::new(vec![
         Field::new("int", DataType::Int32, false),
         Field::new("string", DataType::Utf8, true),
@@ -33,7 +33,7 @@ fn get_table_batches() -> Vec<RecordBatch> {
     let int_values = Int32Array::from(vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
     let str_values = StringArray::from(vec!["A", "B", "A", "B", "A", "A", "A", "B", "B", "A", "A"]);
 
-    vec![RecordBatch::try_new(schema, vec![Arc::new(int_values), Arc::new(str_values)]).unwrap()]
+    RecordBatch::try_new(schema, vec![Arc::new(int_values), Arc::new(str_values)]).unwrap()
 }
 
 #[tokio::main(flavor = "current_thread")]
@@ -54,20 +54,23 @@ async fn main() -> Result<(), deltalake::DeltaTableError> {
 
     assert_eq!(table.version(), 0);
 
-    let table = DeltaOps(table).write(get_table_batches()).await?;
+    let batch = get_table_batches();
+    let table = DeltaOps(table).write(vec![batch.clone()]).await?;
 
     assert_eq!(table.version(), 1);
 
     // setting options allows us to e.g. overwrite the table rather then appending to it.
     let table = DeltaOps(table)
-        .write(get_table_batches())
+        .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Overwrite)
         .await?;
 
     assert_eq!(table.version(), 2);
 
     let (_table, stream) = DeltaOps(table).load().await?;
-    let _data = collect_sendable_stream(stream).await?;
+    let data = collect_sendable_stream(stream).await?;
+
+    println!("{:?}", data);
 
     Ok(())
 }
