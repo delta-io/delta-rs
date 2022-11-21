@@ -25,7 +25,7 @@ num-traits = "0.2.15"
 object_store = "0.5.1"
 once_cell = "1.16.0"
 parking_lot = "0.12"
-parquet = { version = "26", features = ["async"], optional = true }
+parquet = { version = "27", features = ["async"], optional = true }
 parquet2 = { version = "0.16", optional = true }
 percent-encoding = "2"
 serde = { version = "1", features = ["derive"] }
