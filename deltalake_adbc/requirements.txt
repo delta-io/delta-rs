@@ -1,0 +1,3 @@
+pyarrow
+adbc-driver-manager
+pytest

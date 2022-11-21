@@ -1,0 +1,12 @@
+[package]
+name = "deltalake_adbc"
+version = "0.1.0"
+edition = "2021"
+crate-type = ["cdylib"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+path = "../rust"
+version = "0"
+features = ["s3", "azure", "glue", "gcs", "datafusion-ext"]
