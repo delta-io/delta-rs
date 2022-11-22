@@ -111,3 +111,7 @@ integration_test = ["fs_extra", "tempdir"]
 [[bench]]
 name = "read_checkpoint"
 harness = false
+
+[[example]]
+name = "basic_operations"
+required-features = ["datafusion-ext"]
