@@ -25,6 +25,7 @@ impl Default for LoadBuilder {
 }
 
 impl LoadBuilder {
+    /// Create a new [`LoadBuilder`]
     pub fn new() -> Self {
         Self {
             location: None,

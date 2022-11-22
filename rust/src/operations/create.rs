@@ -14,7 +14,7 @@ use crate::storage::DeltaObjectStore;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 use futures::future::BoxFuture;
-use serde_json::Value;
+use serde_json::{Map, Value};
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
@@ -51,10 +51,11 @@ pub struct CreateBuilder {
     comment: Option<String>,
     columns: Vec<SchemaField>,
     partition_columns: Option<Vec<String>>,
-    properties: HashMap<String, Value>,
     storage_options: Option<HashMap<String, String>>,
     actions: Vec<Action>,
     object_store: Option<Arc<DeltaObjectStore>>,
+    configuration: HashMap<String, Option<String>>,
+    metadata: Option<Map<String, Value>>,
 }
 
 impl Default for CreateBuilder {
@@ -71,12 +72,13 @@ impl CreateBuilder {
             location: None,
             mode: SaveMode::ErrorIfExists,
             comment: None,
-            columns: Vec::new(),
+            columns: Default::default(),
             partition_columns: None,
-            properties: HashMap::new(),
             storage_options: None,
-            actions: Vec::new(),
+            actions: Default::default(),
             object_store: None,
+            configuration: Default::default(),
+            metadata: Default::default(),
         }
     }
 
@@ -138,12 +140,6 @@ impl CreateBuilder {
         self
     }
 
-    /// Specify a table property
-    pub fn with_property(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
-        self.properties.insert(key.into(), value.into());
-        self
-    }
-
     /// Set options used to initialize storage backend
     ///
     /// Options may be passed in the HashMap or set as environment variables.
@@ -157,7 +153,36 @@ impl CreateBuilder {
         self
     }
 
+    /// Set configuration on created table
+    pub fn with_configuration(mut self, configuration: HashMap<String, Option<String>>) -> Self {
+        self.configuration = configuration;
+        self
+    }
+
+    /// Specify a table property in the table configuration
+    pub fn with_configuration_property(
+        mut self,
+        key: impl Into<String>,
+        value: Option<impl Into<String>>,
+    ) -> Self {
+        self.configuration
+            .insert(key.into(), value.map(|v| v.into()));
+        self
+    }
+
+    /// Append custom (application-specific) metadata to the commit.
+    ///
+    /// This might include provenance information such as an id of the
+    /// user that made the commit or the program that created it.
+    pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
+        self.metadata = Some(metadata);
+        self
+    }
+
     /// Specify additional actions to be added to the commit.
+    ///
+    /// This method is mainly meant for internal use. Manually adding inconsistent
+    /// actions to a create operation may have undesired effects - use with caution.
     pub fn with_actions(mut self, actions: impl IntoIterator<Item = Action>) -> Self {
         self.actions.extend(actions);
         self
@@ -222,7 +247,7 @@ impl CreateBuilder {
             None,
             SchemaTypeStruct::new(self.columns),
             self.partition_columns.unwrap_or_default(),
-            HashMap::new(),
+            self.configuration,
         );
 
         let operation = DeltaOperation::Create {
@@ -255,6 +280,7 @@ impl std::future::IntoFuture for CreateBuilder {
 
         Box::pin(async move {
             let mode = this.mode.clone();
+            let metadata = this.metadata.clone();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
             if table.object_store().is_delta_table_location().await? {
                 match mode {
@@ -269,8 +295,14 @@ impl std::future::IntoFuture for CreateBuilder {
                     }
                 }
             }
-            let version =
-                commit(table.object_store().as_ref(), 0, actions, operation, None).await?;
+            let version = commit(
+                table.object_store().as_ref(),
+                0,
+                actions,
+                operation,
+                metadata,
+            )
+            .await?;
             table.load_version(version).await?;
 
             Ok(table)
@@ -282,6 +314,7 @@ impl std::future::IntoFuture for CreateBuilder {
 mod tests {
     use super::*;
     use crate::operations::DeltaOps;
+    use crate::table_properties::APPEND_ONLY;
     use crate::writer::test_utils::get_delta_schema;
 
     #[tokio::test]
@@ -323,7 +356,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.get_min_reader_version(), 0);
-        assert_eq!(table.get_min_writer_version(), 0)
+        assert_eq!(table.get_min_writer_version(), 0);
+
+        let table = CreateBuilder::new()
+            .with_location("memory://")
+            .with_columns(schema.get_fields().clone())
+            .with_configuration_property(APPEND_ONLY, Some("true"))
+            .await
+            .unwrap();
+        let append = table
+            .get_metadata()
+            .unwrap()
+            .configuration
+            .get(APPEND_ONLY)
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(String::from("true"), append)
     }
 
     #[tokio::test]

@@ -1,4 +1,11 @@
-//! High level delta commands that can be executed against a delta table
+//! High level operations API to interact with Delta tables
+//!
+//! At the heart of the high level operations APIs is the [`DeltaOps`] struct,
+//! which consumes a [`DeltaTable`] and exposes methods to attain builders for
+//! several high level operations. The specific builder structs allow fine-tuning
+//! the operations' behaviors and will return an updated table potentially in conjunction
+//! with a [data stream][datafusion::physical_plan::SendableRecordBatchStream],
+//! if the operation returns data as well.
 
 use self::create::CreateBuilder;
 use crate::builder::DeltaTableBuilder;
@@ -54,7 +61,7 @@ impl DeltaOps {
     /// Create a new [`DeltaOps`] instance, backed by an un-initialized in memory table
     ///
     /// Using this will not persist any changes beyond the lifetime of the table object.
-    /// THe main purpose of in-memory tables is for use in testing.
+    /// The main purpose of in-memory tables is for use in testing.
     ///
     /// ```
     /// use deltalake::DeltaOps;
@@ -85,7 +92,7 @@ impl DeltaOps {
         CreateBuilder::default().with_object_store(self.0.object_store())
     }
 
-    /// Write data to Delta table
+    /// Load data from a DeltaTable
     #[cfg(feature = "datafusion-ext")]
     #[must_use]
     pub fn load(self) -> LoadBuilder {
@@ -95,7 +102,7 @@ impl DeltaOps {
     /// Write data to Delta table
     #[cfg(feature = "datafusion-ext")]
     #[must_use]
-    pub fn write(self, batches: Vec<RecordBatch>) -> WriteBuilder {
+    pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
         WriteBuilder::default()
             .with_input_batches(batches)
             .with_object_store(self.0.object_store())
