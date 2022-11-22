@@ -170,7 +170,10 @@ impl CreateBuilder {
         self
     }
 
-    /// Append custom (application specific) metadata to created table
+    /// Append custom (application-specific) metadata to the commit.
+    ///
+    /// This might include provenance information such as an id of the
+    /// user that made the commit or the program that created it.
     pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
         self.metadata = Some(metadata);
         self
