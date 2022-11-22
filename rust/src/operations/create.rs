@@ -11,7 +11,6 @@ use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
 use crate::builder::StorageUrl;
 use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
 use crate::storage::DeltaObjectStore;
-use crate::table_properties::APPEND_ONLY;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 use futures::future::BoxFuture;
@@ -312,6 +311,7 @@ impl std::future::IntoFuture for CreateBuilder {
 mod tests {
     use super::*;
     use crate::operations::DeltaOps;
+    use crate::table_properties::APPEND_ONLY;
     use crate::writer::test_utils::get_delta_schema;
 
     #[tokio::test]
