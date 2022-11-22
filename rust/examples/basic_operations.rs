@@ -38,13 +38,14 @@ fn get_table_batches() -> RecordBatch {
 
 #[tokio::main(flavor = "current_thread")]
 async fn main() -> Result<(), deltalake::DeltaTableError> {
-    // create a delta operations client pointing at an un-initialized im memory location
-    // in a productive environment this would be created with "try_new" and point at
+    // Create a delta operations client pointing at an un-initialized in-memory location.
+    // In a production environment this would be created with "try_new" and point at
     // a real storage location.
     let ops = DeltaOps::new_in_memory();
 
-    // the operations module uses a builder pattern that allows specifying several options
-    // on how the command behaves.
+    // The operations module uses a builder pattern that allows specifying several options
+    // on how the command behaves. The builders implement `Into<Future>`, so once
+    // options are set you can run the command using `.await`.
     let table = ops
         .create()
         .with_columns(get_table_columns())
@@ -59,7 +60,7 @@ async fn main() -> Result<(), deltalake::DeltaTableError> {
 
     assert_eq!(table.version(), 1);
 
-    // setting options allows us to e.g. overwrite the table rather then appending to it.
+    // To overwrite instead of append (which is the default), use `.with_save_mode`:
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Overwrite)
@@ -68,7 +69,7 @@ async fn main() -> Result<(), deltalake::DeltaTableError> {
     assert_eq!(table.version(), 2);
 
     let (_table, stream) = DeltaOps(table).load().await?;
-    let data = collect_sendable_stream(stream).await?;
+    let data: Vec<RecordBatch> = collect_sendable_stream(stream).await?;
 
     println!("{:?}", data);
 
