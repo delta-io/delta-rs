@@ -333,7 +333,7 @@ impl PartitionWriter {
     }
 
     async fn flush_arrow_writer(&mut self) -> DeltaResult<()> {
-        // replace counter / buffers adn close the current writer
+        // replace counter / buffers and close the current writer
         let (writer, buffer) = self.replace_arrow_buffer(vec![])?;
         let null_counts = std::mem::take(&mut self.null_counts);
         let metadata = writer.close()?;

@@ -11,6 +11,7 @@ use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
 use crate::builder::StorageUrl;
 use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
 use crate::storage::DeltaObjectStore;
+use crate::table_properties::APPEND_ONLY;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 use futures::future::BoxFuture;
@@ -51,10 +52,10 @@ pub struct CreateBuilder {
     comment: Option<String>,
     columns: Vec<SchemaField>,
     partition_columns: Option<Vec<String>>,
-    properties: HashMap<String, Value>,
     storage_options: Option<HashMap<String, String>>,
     actions: Vec<Action>,
     object_store: Option<Arc<DeltaObjectStore>>,
+    configuration: HashMap<String, Option<String>>,
     metadata: Option<Map<String, Value>>,
 }
 
@@ -72,13 +73,13 @@ impl CreateBuilder {
             location: None,
             mode: SaveMode::ErrorIfExists,
             comment: None,
-            columns: Vec::new(),
+            columns: Default::default(),
             partition_columns: None,
-            properties: HashMap::new(),
             storage_options: None,
-            actions: Vec::new(),
+            actions: Default::default(),
             object_store: None,
-            metadata: None,
+            configuration: Default::default(),
+            metadata: Default::default(),
         }
     }
 
@@ -140,12 +141,6 @@ impl CreateBuilder {
         self
     }
 
-    /// Specify a table property
-    pub fn with_property(mut self, key: impl Into<String>, value: impl Into<Value>) -> Self {
-        self.properties.insert(key.into(), value.into());
-        self
-    }
-
     /// Set options used to initialize storage backend
     ///
     /// Options may be passed in the HashMap or set as environment variables.
@@ -159,7 +154,24 @@ impl CreateBuilder {
         self
     }
 
-    /// Append custom metadata to created table
+    /// Set configuration on created table
+    pub fn with_configuration(mut self, configuration: HashMap<String, Option<String>>) -> Self {
+        self.configuration = configuration;
+        self
+    }
+
+    /// Specify a table property in the table configuration
+    pub fn with_configuration_property(
+        mut self,
+        key: impl Into<String>,
+        value: Option<impl Into<String>>,
+    ) -> Self {
+        self.configuration
+            .insert(key.into(), value.map(|v| v.into()));
+        self
+    }
+
+    /// Append custom (application specific) metadata to created table
     pub fn with_metadata(mut self, metadata: Map<String, Value>) -> Self {
         self.metadata = Some(metadata);
         self
@@ -233,7 +245,7 @@ impl CreateBuilder {
             None,
             SchemaTypeStruct::new(self.columns),
             self.partition_columns.unwrap_or_default(),
-            HashMap::new(),
+            self.configuration,
         );
 
         let operation = DeltaOperation::Create {
@@ -341,7 +353,24 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.get_min_reader_version(), 0);
-        assert_eq!(table.get_min_writer_version(), 0)
+        assert_eq!(table.get_min_writer_version(), 0);
+
+        let table = CreateBuilder::new()
+            .with_location("memory://")
+            .with_columns(schema.get_fields().clone())
+            .with_configuration_property(APPEND_ONLY, Some("true"))
+            .await
+            .unwrap();
+        let append = table
+            .get_metadata()
+            .unwrap()
+            .configuration
+            .get(APPEND_ONLY)
+            .unwrap()
+            .as_ref()
+            .unwrap()
+            .clone();
+        assert_eq!(String::from("true"), append)
     }
 
     #[tokio::test]

@@ -67,5 +67,3 @@ pub const SET_TRANSACTION_RETENTION_DURATION: &str = "delta.setTransactionRetent
 pub const TARGET_FILE_SIZE: &str = "delta.targetFileSize";
 /// The target file size in bytes or higher units for file tuning. For example, 104857600 (bytes) or 100mb.
 pub const TUNE_FILE_SIZES_FOR_REWRITES: &str = "delta.tuneFileSizesForRewrites";
-/// Invariants defined on the table
-pub const INVARIANTS: &str = "delta.invariants";
