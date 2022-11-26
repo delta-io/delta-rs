@@ -141,7 +141,7 @@ def write_deltalake(
             _schema = _data.schema
             schema_out = []
             for _field in _schema:
-                # handles https://github.com/delta-io/delta-rs/issues/686
+                # partially handles https://github.com/delta-io/delta-rs/issues/686
                 if isinstance(_field.type, pa.lib.TimestampType):
                     f = pa.field(
                         name=_field.name,
