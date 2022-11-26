@@ -132,8 +132,28 @@ def write_deltalake(
     :param overwrite_schema: If True, allows updating the schema of the table.
     :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
     """
+
     if _has_pandas and isinstance(data, pd.DataFrame):
-        data = pa.Table.from_pandas(data)
+        if schema is not None:
+            data = pa.Table.from_panda(data, schema=schema)
+        else:
+            _data = pa.Table.from_pandas(data)
+            _schema = _data.schema
+            schema_out = []
+            for _field in _schema:
+                # handles https://github.com/delta-io/delta-rs/issues/686
+                if isinstance(_field.type, pa.lib.TimestampType):
+                    f = pa.field(
+                        name=_field.name,
+                        type=pa.timestamp("us"),
+                        nullable=_field.nullable,
+                        metadata=_field.metadata,
+                    )
+                    schema_out.append(f)
+                else:
+                    schema_out.append(_field)
+            schema = pa.schema(schema_out, metadata=_schema.metadata)
+            data = pa.Table.from_pandas(data, schema=schema)
 
     if schema is None:
         if isinstance(data, RecordBatchReader):
