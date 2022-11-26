@@ -149,6 +149,22 @@ pub struct StatsParsed {
     pub null_count: HashMap<String, DeltaDataTypeLong>,
 }
 
+/// Delta AddCDCFile action that describes a parquet CDC data file.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AddCDCFile {
+    /// A relative path, from the root of the table, to a CDC file
+    pub path: String,
+    /// The size of this file in bytes
+    pub size: DeltaDataTypeLong,
+    /// A map from partition column to value for this file
+    pub partition_values: HashMap<String, Option<String>>,
+    /// Should always be set to false because they do not change the underlying data of the table
+    pub data_change: bool,
+    /// Map containing metadata about this file
+    pub tags: Option<HashMap<String, Option<String>>>,
+}
+
 /// Delta log action that describes a parquet data file that is part of the table.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
