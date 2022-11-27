@@ -60,6 +60,36 @@ class AddAction:
     stats: str
 
 
+def _delta_arrow_schema_from_pandas(
+    data: pd.DataFrame,
+) -> Tuple[pd.DataFrame, pa.Schema]:
+    """ "
+    Infers the schema for the delta table from the Pandas DataFrame.
+    Necessary because of issues such as:  https://github.com/delta-io/delta-rs/issues/686
+
+    :param data: Data to write.
+    :returns A Pyarrow Table and the inferred schema for the Delta Table
+    """
+
+    table = pa.Table.from_pandas(data)
+    _schema = table.schema
+    schema_out = []
+    for _field in _schema:
+        if isinstance(_field.type, pa.lib.TimestampType):
+            f = pa.field(
+                name=_field.name,
+                type=pa.timestamp("us"),
+                nullable=_field.nullable,
+                metadata=_field.metadata,
+            )
+            schema_out.append(f)
+        else:
+            schema_out.append(_field)
+    schema = pa.schema(schema_out, metadata=_schema.metadata)
+    data = pa.Table.from_pandas(data, schema=schema)
+    return data, schema
+
+
 def write_deltalake(
     table_or_uri: Union[str, DeltaTable],
     data: Union[
@@ -137,23 +167,7 @@ def write_deltalake(
         if schema is not None:
             data = pa.Table.from_pandas(data, schema=schema)
         else:
-            _data = pa.Table.from_pandas(data)
-            _schema = _data.schema
-            schema_out = []
-            for _field in _schema:
-                # partially handles https://github.com/delta-io/delta-rs/issues/686
-                if isinstance(_field.type, pa.lib.TimestampType):
-                    f = pa.field(
-                        name=_field.name,
-                        type=pa.timestamp("us"),
-                        nullable=_field.nullable,
-                        metadata=_field.metadata,
-                    )
-                    schema_out.append(f)
-                else:
-                    schema_out.append(_field)
-            schema = pa.schema(schema_out, metadata=_schema.metadata)
-            data = pa.Table.from_pandas(data, schema=schema)
+            data, schema = _delta_arrow_schema_from_pandas(data)
 
     if schema is None:
         if isinstance(data, RecordBatchReader):
