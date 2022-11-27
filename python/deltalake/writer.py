@@ -60,7 +60,7 @@ class AddAction:
     stats: str
 
 
-def _delta_arrow_schema_from_pandas(
+def delta_arrow_schema_from_pandas(
     data: pd.DataFrame,
 ) -> Tuple[pd.DataFrame, pa.Schema]:
     """ "
@@ -167,7 +167,7 @@ def write_deltalake(
         if schema is not None:
             data = pa.Table.from_pandas(data, schema=schema)
         else:
-            data, schema = _delta_arrow_schema_from_pandas(data)
+            data, schema = delta_arrow_schema_from_pandas(data)
 
     if schema is None:
         if isinstance(data, RecordBatchReader):
