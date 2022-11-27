@@ -135,7 +135,7 @@ def write_deltalake(
 
     if _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
-            data = pa.Table.from_panda(data, schema=schema)
+            data = pa.Table.from_pandas(data, schema=schema)
         else:
             _data = pa.Table.from_pandas(data)
             _schema = _data.schema

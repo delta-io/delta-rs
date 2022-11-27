@@ -272,11 +272,16 @@ def test_fails_wrong_partitioning(existing_table: DeltaTable, sample_data: pa.Ta
 
 
 @pytest.mark.pandas
-def test_write_pandas(tmp_path: pathlib.Path, sample_data: pa.Table):
+@pytest.mark.parametrize("schema_provided", [True, False])
+def test_write_pandas(tmp_path: pathlib.Path, sample_data: pa.Table, schema_provided):
     # When timestamp is converted to Pandas, it gets casted to ns resolution,
     # but Delta Lake schemas only support us resolution.
     sample_pandas = sample_data.to_pandas()
-    write_deltalake(str(tmp_path), sample_pandas)
+    if schema_provided is True:
+        schema = sample_data.schema
+    else:
+        schema = None
+    write_deltalake(str(tmp_path), sample_pandas, schema=schema)
     delta_table = DeltaTable(str(tmp_path))
     df = delta_table.to_pandas()
     assert_frame_equal(df, sample_pandas)
