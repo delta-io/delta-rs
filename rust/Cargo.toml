@@ -73,7 +73,7 @@ tempfile = "3"
 utime = "0.3"
 
 [build-dependencies]
-glibc_version = { path = "../glibc_version" }
+glibc_version = { path = "../glibc_version", version = "0.1" }
 
 [features]
 default = ["arrow", "parquet"]
