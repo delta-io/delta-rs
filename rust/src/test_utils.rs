@@ -25,7 +25,7 @@ impl IntegrationContext {
         // environment variables are loaded from .env files if found. Otherwise
         // default values based on the default setting of the respective emulators are set.
         #[cfg(test)]
-        dotenv::dotenv().ok();
+        dotenvy::dotenv().ok();
 
         integration.prepare_env();
 

@@ -63,7 +63,7 @@ optional = true
 
 [dev-dependencies]
 criterion = "0"
-dotenv = "*"
+dotenvy = "0"
 maplit = "1"
 pretty_assertions = "1.2.1"
 rand = "0.8"
