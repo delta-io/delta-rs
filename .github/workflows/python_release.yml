@@ -35,13 +35,29 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Publish to pypi (without sdist)
-        uses: messense/maturin-action@main
+        uses: messense/maturin-action@v1
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
           target: ${{ matrix.target }}
           command: publish
           args: -m python/Cargo.toml --no-sdist
+
+  release-pypi-mac-universal2:
+    needs: validate-release-tag
+    name: PyPI release on Mac universal 2
+    runs-on: macos-latest
+    steps:
+        - uses: actions/checkout@v3
+
+        - name: Publish to pypi (without sdist)
+          uses: messense/maturin-action@v1
+          env:
+            MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
+          with:
+            target: ${{ matrix.target }}
+            command: publish
+            args: -m python/Cargo.toml --no-sdist --universal2
 
   release-pypi-windows:
     needs: validate-release-tag
@@ -51,7 +67,7 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Publish to pypi (without sdist)
-        uses: messense/maturin-action@main
+        uses: messense/maturin-action@v1
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
@@ -67,7 +83,7 @@ jobs:
       - uses: actions/checkout@v3
 
       - name: Publish manylinux to pypi x86_64 (with sdist)
-        uses: messense/maturin-action@main
+        uses: messense/maturin-action@v1
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
@@ -76,7 +92,7 @@ jobs:
           args: -m python/Cargo.toml
 
       - name: Publish manylinux to pypi aarch64 (without sdist)
-        uses: messense/maturin-action@main
+        uses: messense/maturin-action@v1
         env:
           MATURIN_PYPI_TOKEN: ${{ secrets.PYPI_TOKEN }}
         with:
