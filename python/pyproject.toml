@@ -79,6 +79,7 @@ testpaths = [
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "s3: marks tests as integration tests with S3 (deselect with '-m \"not s3\"')",
+    "azure: marks tests as integration tests with Azure Blob Store",
     "pandas: marks tests that require pandas",
     "pyspark: marks tests that require pyspark",
 ]

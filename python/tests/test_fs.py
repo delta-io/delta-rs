@@ -140,3 +140,67 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
     # assert dt.version() == 2
     # table = dt.to_pyarrow_table()
     # assert table == sample_data
+
+
+@pytest.mark.azure
+@pytest.mark.integration
+@pytest.mark.timeout(timeout=5, method="thread")
+def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
+    table_path = "az://deltars/roundtrip"
+
+    # Create new table with path
+    write_deltalake(table_path, sample_data)
+    dt = DeltaTable(table_path)
+    table = dt.to_pyarrow_table()
+    assert table == sample_data
+    assert dt.version() == 0
+
+    # Write with existing DeltaTable
+    write_deltalake(dt, sample_data, mode="overwrite")
+    dt.update_incremental()
+    assert dt.version() == 1
+
+    table = dt.to_pyarrow_table()
+    assert table == sample_data
+
+
+@pytest.mark.azure
+@pytest.mark.integration
+@pytest.mark.timeout(timeout=5, method="thread")
+def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
+    table_path = "az://deltars/roundtrip2"
+
+    # Fails without any creds
+    with pytest.raises(PyDeltaTableError):
+        anon_storage_options = {
+            key: value for key, value in azurite_creds.items() if "ACCOUNT" not in key
+        }
+        write_deltalake(table_path, sample_data, storage_options=anon_storage_options)
+
+    # Can pass storage_options in directly
+    write_deltalake(table_path, sample_data, storage_options=azurite_creds)
+    dt = DeltaTable(table_path, storage_options=azurite_creds)
+    table = dt.to_pyarrow_table()
+    assert table == sample_data
+    assert dt.version() == 0
+
+    # Can pass storage_options into DeltaTable and then write
+    write_deltalake(dt, sample_data, mode="overwrite")
+    dt.update_incremental()
+    assert dt.version() == 1
+
+    table = dt.to_pyarrow_table()
+    assert table == sample_data
+
+
+@pytest.mark.azure
+@pytest.mark.integration
+@pytest.mark.timeout(timeout=5, method="thread")
+def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
+    table_path = "az://deltars/roundtrip3"
+
+    write_deltalake(table_path, sample_data, storage_options=azurite_sas_creds)
+    dt = DeltaTable(table_path, storage_options=azurite_sas_creds)
+    table = dt.to_pyarrow_table()
+    assert table == sample_data
+    assert dt.version() == 0
