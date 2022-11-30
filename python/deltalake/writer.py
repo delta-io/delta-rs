@@ -161,9 +161,8 @@ def write_deltalake(
 
     if filesystem is None:
         if table is not None:
-            storage_options = dict(
-                **(table._storage_options or {}), **(storage_options or {})
-            )
+            storage_options = table._storage_options or {}
+            storage_options.update(storage_options or {})
 
         filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
