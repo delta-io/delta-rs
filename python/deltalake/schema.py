@@ -12,7 +12,7 @@ DataType = Union["PrimitiveType", "MapType", "StructType", "ArrayType"]
 
 def delta_arrow_schema_from_pandas(
     data: pd.DataFrame,
-) -> Tuple[pd.DataFrame, pa.Schema]:
+) -> Tuple[pa.Table, pa.Schema]:
     """ "
     Infers the schema for the delta table from the Pandas DataFrame.
     Necessary because of issues such as:  https://github.com/delta-io/delta-rs/issues/686
