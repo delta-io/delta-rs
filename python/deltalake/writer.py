@@ -75,7 +75,7 @@ def delta_arrow_schema_from_pandas(
     _schema = table.schema
     schema_out = []
     for _field in _schema:
-        if isinstance(_field.type, pa.lib.TimestampType):
+        if isinstance(_field.type, pa.TimestampType):
             f = pa.field(
                 name=_field.name,
                 type=pa.timestamp("us"),
