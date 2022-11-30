@@ -35,6 +35,8 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.lib import RecordBatchReader
 
+from deltalake.schema import delta_arrow_schema_from_pandas
+
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import PyDeltaTableError
 from ._internal import write_new_deltalake as _write_new_deltalake
@@ -58,36 +60,6 @@ class AddAction:
     modification_time: int
     data_change: bool
     stats: str
-
-
-def delta_arrow_schema_from_pandas(
-    data: pd.DataFrame,
-) -> Tuple[pd.DataFrame, pa.Schema]:
-    """ "
-    Infers the schema for the delta table from the Pandas DataFrame.
-    Necessary because of issues such as:  https://github.com/delta-io/delta-rs/issues/686
-
-    :param data: Data to write.
-    :returns A Pyarrow Table and the inferred schema for the Delta Table
-    """
-
-    table = pa.Table.from_pandas(data)
-    _schema = table.schema
-    schema_out = []
-    for _field in _schema:
-        if isinstance(_field.type, pa.TimestampType):
-            f = pa.field(
-                name=_field.name,
-                type=pa.timestamp("us"),
-                nullable=_field.nullable,
-                metadata=_field.metadata,
-            )
-            schema_out.append(f)
-        else:
-            schema_out.append(_field)
-    schema = pa.schema(schema_out, metadata=_schema.metadata)
-    data = pa.Table.from_pandas(data, schema=schema)
-    return data, schema
 
 
 def write_deltalake(
