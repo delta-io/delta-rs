@@ -22,19 +22,19 @@ def delta_arrow_schema_from_pandas(
     """
 
     table = pa.Table.from_pandas(data)
-    _schema = table.schema
+    schema = table.schema
     schema_out = []
-    for _field in _schema:
-        if isinstance(_field.type, pa.TimestampType):
+    for field in schema:
+        if isinstance(field.type, pa.TimestampType):
             f = pa.field(
-                name=_field.name,
+                name=field.name,
                 type=pa.timestamp("us"),
-                nullable=_field.nullable,
-                metadata=_field.metadata,
+                nullable=field.nullable,
+                metadata=field.metadata,
             )
             schema_out.append(f)
         else:
-            schema_out.append(_field)
+            schema_out.append(field)
     schema = pa.schema(schema_out, metadata=_schema.metadata)
     data = pa.Table.from_pandas(data, schema=schema)
     return data, schema
