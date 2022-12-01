@@ -1,7 +1,9 @@
-from typing import Tuple, Union
+from typing import Tuple, Union, TYPE_CHECKING
 
-import pandas as pd
 import pyarrow as pa
+
+if TYPE_CHECKING:
+    import pandas as pd
 
 from ._internal import ArrayType, Field, MapType, PrimitiveType, Schema, StructType
 
@@ -11,7 +13,7 @@ DataType = Union["PrimitiveType", "MapType", "StructType", "ArrayType"]
 
 
 def delta_arrow_schema_from_pandas(
-    data: pd.DataFrame,
+    data: "pd.DataFrame",
 ) -> Tuple[pa.Table, pa.Schema]:
     """
     Infers the schema for the delta table from the Pandas DataFrame.
