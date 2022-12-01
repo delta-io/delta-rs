@@ -1,4 +1,4 @@
-from typing import Tuple, Union, TYPE_CHECKING
+from typing import TYPE_CHECKING, Tuple, Union
 
 import pyarrow as pa
 
