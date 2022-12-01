@@ -323,7 +323,7 @@ impl std::future::IntoFuture for WriteBuilder {
             let invariants = table
                 .get_metadata()
                 .and_then(|meta| meta.schema.get_invariants())
-                .unwrap_or(vec![]);
+                .unwrap_or_default();
             let checker = DeltaDataChecker::new(invariants);
 
             // Write data to disk
