@@ -12,7 +12,7 @@ from deltalake.writer import write_deltalake
 
 @pytest.mark.s3
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_read_files(s3_localstack):
     table_path = "s3://deltars/simple"
     handler = DeltaStorageHandler(table_path)
@@ -29,7 +29,7 @@ def test_read_files(s3_localstack):
 
 @pytest.mark.s3
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=4, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_s3_authenticated_read_write(s3_localstack_creds):
     # Create unauthenticated handler
     storage_handler = DeltaStorageHandler(
@@ -54,7 +54,7 @@ def test_s3_authenticated_read_write(s3_localstack_creds):
 
 @pytest.mark.s3
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_read_simple_table_from_remote(s3_localstack):
     table_path = "s3://deltars/simple"
     dt = DeltaTable(table_path)
@@ -63,7 +63,7 @@ def test_read_simple_table_from_remote(s3_localstack):
 
 @pytest.mark.s3
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_roundtrip_s3_env(s3_localstack, sample_data: pa.Table, monkeypatch):
     table_path = "s3://deltars/roundtrip"
 
@@ -91,7 +91,7 @@ def test_roundtrip_s3_env(s3_localstack, sample_data: pa.Table, monkeypatch):
 
 @pytest.mark.s3
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
     table_path = "s3://deltars/roundtrip2"
 
@@ -146,7 +146,7 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip"
 
@@ -168,7 +168,7 @@ def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip2"
 
@@ -197,7 +197,7 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip3"
 
