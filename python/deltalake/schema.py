@@ -18,7 +18,7 @@ def delta_arrow_schema_from_pandas(
     Necessary because of issues such as:  https://github.com/delta-io/delta-rs/issues/686
 
     :param data: Data to write.
-    :returns A Pyarrow Table and the inferred schema for the Delta Table
+    :return: A PyArrow Table and the inferred schema for the Delta Table
     """
 
     table = pa.Table.from_pandas(data)
