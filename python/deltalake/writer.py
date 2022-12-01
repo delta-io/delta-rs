@@ -35,6 +35,8 @@ import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.lib import RecordBatchReader
 
+from deltalake.schema import delta_arrow_schema_from_pandas
+
 from ._internal import DeltaDataChecker as _DeltaDataChecker
 from ._internal import PyDeltaTableError
 from ._internal import write_new_deltalake as _write_new_deltalake
@@ -132,8 +134,12 @@ def write_deltalake(
     :param overwrite_schema: If True, allows updating the schema of the table.
     :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
     """
+
     if _has_pandas and isinstance(data, pd.DataFrame):
-        data = pa.Table.from_pandas(data)
+        if schema is not None:
+            data = pa.Table.from_pandas(data, schema=schema)
+        else:
+            data, schema = delta_arrow_schema_from_pandas(data)
 
     if schema is None:
         if isinstance(data, RecordBatchReader):
