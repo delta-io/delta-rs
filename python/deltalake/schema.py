@@ -35,6 +35,6 @@ def delta_arrow_schema_from_pandas(
             schema_out.append(f)
         else:
             schema_out.append(field)
-    schema = pa.schema(schema_out, metadata=_schema.metadata)
+    schema = pa.schema(schema_out, metadata=schema.metadata)
     data = pa.Table.from_pandas(data, schema=schema)
     return data, schema
