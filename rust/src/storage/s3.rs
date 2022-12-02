@@ -227,6 +227,7 @@ impl S3LockClient {
 pub struct S3StorageOptions {
     pub endpoint_url: Option<String>,
     pub region: Region,
+    pub profile: Option<String>,
     pub aws_access_key_id: Option<String>,
     pub aws_secret_access_key: Option<String>,
     pub aws_session_token: Option<String>,
@@ -254,6 +255,7 @@ impl S3StorageOptions {
         // Copy web identity values provided in options but not the environment into the environment
         // to get picked up by the `from_k8s_env` call in `get_web_identity_provider`.
         Self::ensure_env_var(&options, s3_storage_options::AWS_REGION);
+        Self::ensure_env_var(&options, s3_storage_options::AWS_PROFILE);
         Self::ensure_env_var(&options, s3_storage_options::AWS_ACCESS_KEY_ID);
         Self::ensure_env_var(&options, s3_storage_options::AWS_SECRET_ACCESS_KEY);
         Self::ensure_env_var(&options, s3_storage_options::AWS_SESSION_TOKEN);
@@ -274,6 +276,7 @@ impl S3StorageOptions {
         } else {
             Region::default()
         };
+        let profile = str_option(&options, s3_storage_options::AWS_PROFILE);
 
         let s3_pool_idle_timeout = Self::u64_or_default(
             &options,
@@ -305,6 +308,7 @@ impl S3StorageOptions {
         Self {
             endpoint_url,
             region,
+            profile,
             aws_access_key_id: str_option(&options, s3_storage_options::AWS_ACCESS_KEY_ID),
             aws_secret_access_key: str_option(&options, s3_storage_options::AWS_SECRET_ACCESS_KEY),
             aws_session_token: str_option(&options, s3_storage_options::AWS_SESSION_TOKEN),
@@ -543,6 +547,7 @@ mod tests {
     fn storage_options_default_test() {
         std::env::set_var(s3_storage_options::AWS_ENDPOINT_URL, "http://localhost");
         std::env::set_var(s3_storage_options::AWS_REGION, "us-west-1");
+        std::env::set_var(s3_storage_options::AWS_PROFILE, "default");
         std::env::set_var(s3_storage_options::AWS_ACCESS_KEY_ID, "default_key_id");
         std::env::set_var(
             s3_storage_options::AWS_SECRET_ACCESS_KEY,
@@ -571,6 +576,7 @@ mod tests {
                     name: "us-west-1".to_string(),
                     endpoint: "http://localhost".to_string()
                 },
+                profile: Some("default".to_string()),
                 aws_access_key_id: Some("default_key_id".to_string()),
                 aws_secret_access_key: Some("default_secret_key".to_string()),
                 aws_session_token: None,
@@ -617,6 +623,7 @@ mod tests {
         let options = S3StorageOptions::from_map(hashmap! {
             s3_storage_options::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
             s3_storage_options::AWS_REGION.to_string() => "us-west-2".to_string(),
+            s3_storage_options::AWS_PROFILE.to_string() => "default".to_string(),
             s3_storage_options::AWS_S3_ADDRESSING_STYLE.to_string() => "virtual".to_string(),
             s3_storage_options::AWS_S3_LOCKING_PROVIDER.to_string() => "another_locking_provider".to_string(),
             s3_storage_options::AWS_S3_ASSUME_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/another_role".to_string(),
@@ -636,6 +643,7 @@ mod tests {
                     name: "us-west-2".to_string(),
                     endpoint: "http://localhost:1234".to_string()
                 },
+                profile: Some("default".to_string()),
                 aws_access_key_id: Some("test_id".to_string()),
                 aws_secret_access_key: Some("test_secret".to_string()),
                 aws_session_token: None,
@@ -661,6 +669,7 @@ mod tests {
     fn storage_options_mixed_test() {
         std::env::set_var(s3_storage_options::AWS_ENDPOINT_URL, "http://localhost");
         std::env::set_var(s3_storage_options::AWS_REGION, "us-west-1");
+        std::env::set_var(s3_storage_options::AWS_PROFILE, "default");
         std::env::set_var(s3_storage_options::AWS_ACCESS_KEY_ID, "wrong_key_id");
         std::env::set_var(
             s3_storage_options::AWS_SECRET_ACCESS_KEY,
@@ -698,6 +707,7 @@ mod tests {
                     name: "us-west-2".to_string(),
                     endpoint: "http://localhost".to_string()
                 },
+                profile: Some("default".to_string()),
                 aws_access_key_id: Some("test_id_mixed".to_string()),
                 aws_secret_access_key: Some("test_secret_mixed".to_string()),
                 aws_session_token: None,
