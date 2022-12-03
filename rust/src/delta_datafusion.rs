@@ -695,6 +695,7 @@ fn left_larger_than_right(left: ScalarValue, right: ScalarValue) -> Option<bool>
 }
 
 /// Responsible for checking batches of data conform to table's invariants.
+#[derive(Clone)]
 pub struct DeltaDataChecker {
     invariants: Vec<Invariant>,
     ctx: SessionContext,
