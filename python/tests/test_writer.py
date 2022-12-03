@@ -16,7 +16,7 @@ from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, write_deltalake
 from deltalake.table import ProtocolVersions
-from deltalake.writer import DeltaTableProtocolError
+from deltalake.writer import DeltaTableProtocolError, get_partitions_from_path
 
 try:
     from pandas.testing import assert_frame_equal
@@ -496,3 +496,17 @@ def test_writer_with_options(tmp_path: pathlib.Path):
     )
 
     assert table == data
+
+
+@pytest.mark.parametrize(
+    "test_path",
+    [
+        "strings=Hannah/0-1-2.parquet",
+        "first/strings=Hannah/0-1-2.parquet",
+        "first/second/strings=Hannah/0-1-2.parquet",
+    ],
+)
+def test_get_partitions_from_path(test_path: str):
+    path, out = get_partitions_from_path(test_path)
+    assert test_path == path
+    assert out == {"strings": "Hannah"}

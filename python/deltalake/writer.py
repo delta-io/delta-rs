@@ -210,6 +210,7 @@ def write_deltalake(
 
     def visitor(written_file: Any) -> None:
         path, partition_values = get_partitions_from_path(written_file.path)
+        print(written_file.path)
         stats = get_file_stats_from_metadata(written_file.metadata)
 
         # PyArrow added support for written_file.size in 9.0.0
@@ -345,9 +346,8 @@ def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
     parts = path.split("/")
     parts.pop()  # remove filename
     out: Dict[str, Optional[str]] = {}
+    parts = [p for p in parts if "=" in p]
     for part in parts:
-        if part == "":
-            continue
         key, value = part.split("=", maxsplit=1)
         if value == "__HIVE_DEFAULT_PARTITION__":
             out[key] = None
