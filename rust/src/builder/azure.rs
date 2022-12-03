@@ -52,6 +52,10 @@ static ALIAS_MAP: Lazy<HashMap<&'static str, AzureConfigKey>> = Lazy::new(|| {
         ("azure_storage_client_id", AzureConfigKey::ClientId),
         ("azure_client_id", AzureConfigKey::ClientId),
         ("client_id", AzureConfigKey::ClientId),
+        // client secret
+        ("azure_storage_client_secret", AzureConfigKey::ClientSecret),
+        ("azure_client_secret", AzureConfigKey::ClientSecret),
+        ("client_secret", AzureConfigKey::ClientSecret),
         // authority id
         ("azure_storage_tenant_id", AzureConfigKey::AuthorityId),
         ("azure_storage_authority_id", AzureConfigKey::AuthorityId),
