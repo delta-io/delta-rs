@@ -210,7 +210,6 @@ def write_deltalake(
 
     def visitor(written_file: Any) -> None:
         path, partition_values = get_partitions_from_path(written_file.path)
-        print(written_file.path)
         stats = get_file_stats_from_metadata(written_file.metadata)
 
         # PyArrow added support for written_file.size in 9.0.0
