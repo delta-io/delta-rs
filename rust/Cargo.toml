@@ -10,7 +10,7 @@ description = "Native Delta Lake implementation in Rust"
 edition = "2021"
 
 [dependencies]
-arrow = { version = "26", optional = true }
+arrow = { version = "28", optional = true }
 async-trait = "0.1"
 bytes = "1"
 chrono = "0.4.22"
