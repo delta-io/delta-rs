@@ -2204,9 +2204,9 @@ checksum = "1131c54b167dd4e4799ce762e1ab01549ebb94d5bdd13e6ec1b467491c378e1f"
 
 [[package]]
 name = "parquet2"
-version = "0.16.3"
+version = "0.17.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7752b1a7d61b278f36820ba05557a2a8bfcb17f3559254577ef447beda0c4975"
+checksum = "e0bbada33c3674484db647d889a581ab1105cafb871ba77be785af2cc44a8747"
 dependencies = [
  "brotli",
  "flate2",
