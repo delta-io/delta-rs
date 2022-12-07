@@ -17,3 +17,11 @@ tlaplus/*.toolbox/*/[0-9]*-[0-9]*-[0-9]*-[0-9]*-[0-9]*-[0-9]*/
 *.env
 __azurite*
 __blobstorage__
+.githubchangeloggenerator*
+
+# Add all Cargo.lock files except for those in binary crates
+Cargo.lock
+!/aws/delta-checkpoint/Cargo.lock
+!/delta-inspect/Cargo.lock
+!/proofs/Cargo.lock
+
