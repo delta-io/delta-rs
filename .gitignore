@@ -19,3 +19,11 @@ __azurite*
 __blobstorage__
 .githubchangeloggenerator.cache.log
 .githubchangeloggenerator.cache/
+.githubchangeloggenerator*
+
+# Add all Cargo.lock files except for those in binary crates
+Cargo.lock
+!/aws/delta-checkpoint/Cargo.lock
+!/delta-inspect/Cargo.lock
+!/proofs/Cargo.lock
+
