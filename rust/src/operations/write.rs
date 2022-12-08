@@ -27,6 +27,7 @@ use super::{transaction::commit, CreateBuilder};
 use crate::action::{Action, Add, DeltaOperation, Remove, SaveMode};
 use crate::builder::DeltaTableBuilder;
 use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::delta_datafusion::DeltaDataChecker;
 use crate::schema::Schema;
 use crate::storage::DeltaObjectStore;
 use crate::writer::record_batch::divide_by_partition_values;
@@ -319,6 +320,12 @@ impl std::future::IntoFuture for WriteBuilder {
                 Err(WriteError::MissingData)
             }?;
 
+            let invariants = table
+                .get_metadata()
+                .and_then(|meta| meta.schema.get_invariants())
+                .unwrap_or_default();
+            let checker = DeltaDataChecker::new(invariants);
+
             // Write data to disk
             let mut tasks = vec![];
             for i in 0..plan.output_partitioning().partition_count() {
@@ -333,12 +340,14 @@ impl std::future::IntoFuture for WriteBuilder {
                     this.write_batch_size,
                 );
                 let mut writer = DeltaWriter::new(object_store.clone(), config);
-
+                let checker_stream = checker.clone();
                 let mut stream = inner_plan.execute(i, task_ctx)?;
                 let handle: tokio::task::JoinHandle<DeltaResult<Vec<Add>>> =
                     tokio::task::spawn(async move {
-                        while let Some(batch) = stream.next().await {
-                            writer.write(&batch?).await?;
+                        while let Some(maybe_batch) = stream.next().await {
+                            let batch = maybe_batch?;
+                            checker_stream.check_batch(&batch).await?;
+                            writer.write(&batch).await?;
                         }
                         writer.close().await
                     });
@@ -429,6 +438,7 @@ mod tests {
     use super::*;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::{get_delta_schema, get_record_batch};
+    use serde_json::json;
 
     #[tokio::test]
     async fn test_create_write() {
@@ -502,5 +512,53 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_file_uris().count(), 4)
+    }
+
+    #[tokio::test]
+    async fn test_check_invariants() {
+        let batch = get_record_batch(None, false);
+        let schema: Schema = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [
+                {"name": "id", "type": "string", "nullable": true, "metadata": {}},
+                {"name": "value", "type": "integer", "nullable": true, "metadata": {
+                    "delta.invariants": "{\"expression\": { \"expression\": \"value < 12\"} }"
+                }},
+                {"name": "modified", "type": "string", "nullable": true, "metadata": {}},
+            ]
+        }))
+        .unwrap();
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .with_columns(schema.get_fields().clone())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let table = DeltaOps(table).write(vec![batch.clone()]).await.unwrap();
+        assert_eq!(table.version(), 1);
+
+        let schema: Schema = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [
+                {"name": "id", "type": "string", "nullable": true, "metadata": {}},
+                {"name": "value", "type": "integer", "nullable": true, "metadata": {
+                    "delta.invariants": "{\"expression\": { \"expression\": \"value < 6\"} }"
+                }},
+                {"name": "modified", "type": "string", "nullable": true, "metadata": {}},
+            ]
+        }))
+        .unwrap();
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_save_mode(SaveMode::ErrorIfExists)
+            .with_columns(schema.get_fields().clone())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let table = DeltaOps(table).write(vec![batch.clone()]).await;
+        assert!(table.is_err())
     }
 }
