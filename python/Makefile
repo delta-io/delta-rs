@@ -1,7 +1,7 @@
 .DEFAULT_GOAL := help
 
 VENV := venv
-MATURIN_VERSION := $(shell awk -F '[ ="]+' '$$1 == "requires" { print $$4 }' pyproject.toml)
+MATURIN_VERSION := $(shell grep 'requires =' pyproject.toml | cut -d= -f2- | tr -d '[ "]')
 PACKAGE_VERSION := $(shell grep version Cargo.toml | head -n 1 | awk '{print $$3}' | tr -d '"' )
 
 .PHONY: setup-venv
@@ -12,7 +12,7 @@ setup-venv: ## Setup the virtualenv
 .PHONY: setup
 setup: ## Setup the requirements
 	$(info --- Setup dependencies ---)
-	pip install maturin==$(MATURIN_VERSION)
+	pip install "$(MATURIN_VERSION)"
 
 .PHONY: build
 build: setup ## Build Python binding of delta-rs
