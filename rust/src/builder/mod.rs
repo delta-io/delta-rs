@@ -599,6 +599,8 @@ pub mod s3_storage_options {
     pub const AWS_ENDPOINT_URL: &str = "AWS_ENDPOINT_URL";
     /// The AWS region.
     pub const AWS_REGION: &str = "AWS_REGION";
+    /// The AWS profile.
+    pub const AWS_PROFILE: &str = "AWS_PROFILE";
     /// The AWS_ACCESS_KEY_ID to use for S3.
     pub const AWS_ACCESS_KEY_ID: &str = "AWS_ACCESS_KEY_ID";
     /// The AWS_SECRET_ACCESS_KEY to use for S3.
@@ -658,6 +660,7 @@ pub mod s3_storage_options {
     pub const S3_OPTS: &[&str] = &[
         AWS_ENDPOINT_URL,
         AWS_REGION,
+        AWS_PROFILE,
         AWS_ACCESS_KEY_ID,
         AWS_SECRET_ACCESS_KEY,
         AWS_SESSION_TOKEN,
@@ -690,6 +693,10 @@ pub fn get_s3_builder_from_options(
         builder = builder.with_endpoint(endpoint);
     }
     builder = builder.with_region(s3_options.region.name());
+
+    if let Some(profile) = &s3_options.profile {
+        builder = builder.with_profile(profile);
+    }
 
     if let Some(access_key_id) = &s3_options.aws_access_key_id {
         builder = builder.with_access_key_id(access_key_id);
