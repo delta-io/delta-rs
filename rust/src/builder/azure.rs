@@ -226,16 +226,10 @@ fn split_sas(sas: &str) -> Result<Vec<(String, String)>, BuilderError> {
         .filter(|s| !s.chars().all(char::is_whitespace));
     let mut pairs = Vec::new();
     for kv_pair_str in kv_str_pairs {
-        let mut kv = kv_pair_str.trim().split('=');
-        let k = match kv.next().filter(|k| !k.chars().all(char::is_whitespace)) {
-            None => {
-                return Err(BuilderError::MissingCredential);
-            }
-            Some(k) => k,
-        };
-        let v = match kv.next().filter(|k| !k.chars().all(char::is_whitespace)) {
+        let kv = kv_pair_str.trim().split_once('=');
+        let (k, v) = match kv {
             None => return Err(BuilderError::MissingCredential),
-            Some(v) => v,
+            Some(kv) => kv,
         };
         pairs.push((k.into(), v.into()))
     }
