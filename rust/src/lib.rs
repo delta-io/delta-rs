@@ -46,11 +46,11 @@
 //! - `datafusion-ext` - DEPRECATED: alias for `datafusion` feature.
 //! - `parquet2` - use parquet2 for checkpoint deserialization. Since `arrow` and `parquet` features
 //!   are enabled by default for backwards compatibility, this feature needs to be used with `--no-default-features`.
-//! - `aws-profile` - EXPERIMENTAL support for aws profile authorization
+//! - `aws-profile` - enable support for aws profile authorization in underlying object_store crat
 //!
-//! It is strongly encouraged that users do not use `aws-profile` and instead make use of a credential
-//! manager such as [aws-vault] not only to avoid the significant additional dependencies,
-//! but also to avoid storing credentials in [plain text on disk]
+//! Using `aws-profile` requires that credentials being stored in plain-text on the local disk in `~/.aws/credentials`
+//! Consider using a manager such as [aws-vault] to avoid additional dependencies and storing
+//! credentials in [plain text on disk]
 //!
 //! [aws-config]: https://docs.rs/aws-config
 //! [aws-vault]: https://github.com/99designs/aws-vault

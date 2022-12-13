@@ -48,7 +48,7 @@ cargo run --example read_delta_table
 - `gcs` - enable the Google storage backend to work with Delta Tables in Google Cloud Storage.
 - `datafusion` - enable the `datafusion::datasource::TableProvider` trait implementation for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow-datafusion).
 - `datafusion-ext` - DEPRECATED: alias for `datafusion` feature
-- `aws-profile` - enable support for aws profile authorization in uderlying object_store crate
+- `aws-profile` - enable support for aws profile authorization in underlying object_store crate
 - `parquet2` - use parquet2 for checkpoint deserialization. Since `arrow` and `parquet` features are enabled by default for backwards compatibility, this feature needs to be used with `--no-default-features`.
 
 ## Development
