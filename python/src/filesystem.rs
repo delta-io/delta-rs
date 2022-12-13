@@ -32,7 +32,7 @@ impl DeltaFileSystemHandler {
     #[new]
     #[args(options = "None")]
     fn new(table_uri: &str, options: Option<HashMap<String, String>>) -> PyResult<Self> {
-        let storage = DeltaTableBuilder::from_uri(table_uri.clone())
+        let storage = DeltaTableBuilder::from_uri(table_uri)
             .with_storage_options(options.clone().unwrap_or_default())
             .build_storage()
             .map_err(PyDeltaTableError::from_raw)?;

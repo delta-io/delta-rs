@@ -113,7 +113,7 @@ impl RawDeltaTable {
         storage_options: Option<HashMap<String, String>>,
         without_files: bool,
     ) -> PyResult<Self> {
-        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri.clone());
+        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
         let options = storage_options.clone().unwrap_or_default();
         if let Some(storage_options) = storage_options {
             builder = builder.with_storage_options(storage_options)
