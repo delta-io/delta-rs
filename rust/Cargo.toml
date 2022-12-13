@@ -13,7 +13,7 @@ edition = "2021"
 arrow = { version = "28", optional = true }
 async-trait = "0.1"
 bytes = "1"
-chrono = "0.4.22"
+chrono = { version = "0.4.22", default-features = false, features = ["clock"] }
 cfg-if = "1"
 errno = "0.2"
 futures = "0.3"
