@@ -273,8 +273,21 @@ impl std::future::IntoFuture for WriteBuilder {
                     let schema = batches[0].schema();
 
                     if let Ok(meta) = table.get_metadata() {
+                        // NOTE the schema generated from the delta schema will have the delta field metadata included,
+                        // so we need to compare the field names and datatypes instead.
+                        // TODO update comparison logic, once we have column mappings supported.
                         let curr_schema: ArrowSchemaRef = Arc::new((&meta.schema).try_into()?);
-                        if schema != curr_schema {
+                        let curr_fields = curr_schema
+                            .fields()
+                            .iter()
+                            .map(|f| (f.name(), f.data_type()))
+                            .collect::<Vec<_>>();
+                        let new_fields = schema
+                            .fields()
+                            .iter()
+                            .map(|f| (f.name(), f.data_type()))
+                            .collect::<Vec<_>>();
+                        if new_fields != curr_fields {
                             return Err(DeltaTableError::Generic(
                                 "Updating table schema not yet implemented".to_string(),
                             ));

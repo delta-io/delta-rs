@@ -1,4 +1,4 @@
-#![cfg(feature = "datafusion-ext")]
+#![cfg(feature = "datafusion")]
 
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -86,7 +86,7 @@ async fn prepare_table(
 #[tokio::test]
 async fn test_datafusion_sql_registration() -> Result<()> {
     let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> = HashMap::new();
-    table_factories.insert("deltatable".to_string(), Arc::new(DeltaTableFactory {}));
+    table_factories.insert("DELTA".to_string(), Arc::new(DeltaTableFactory {}));
     let cfg = RuntimeConfig::new().with_table_factories(table_factories);
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
@@ -95,7 +95,7 @@ async fn test_datafusion_sql_registration() -> Result<()> {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     d.push("tests/data/delta-0.8.0-partitioned");
     let sql = format!(
-        "CREATE EXTERNAL TABLE demo STORED AS DELTATABLE LOCATION '{}'",
+        "CREATE EXTERNAL TABLE demo STORED AS DELTA LOCATION '{}'",
         d.to_str().unwrap()
     );
     let _ = ctx
@@ -255,7 +255,7 @@ async fn test_files_scanned() -> Result<()> {
     assert_eq!(table.version(), 2);
 
     let ctx = SessionContext::new();
-    let plan = table.scan(&ctx.state(), &None, &[], None).await?;
+    let plan = table.scan(&ctx.state(), None, &[], None).await?;
     let plan = CoalescePartitionsExec::new(plan.clone());
 
     let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
@@ -270,7 +270,7 @@ async fn test_files_scanned() -> Result<()> {
         Expr::Literal(ScalarValue::Int32(Some(5))),
     );
 
-    let plan = CoalescePartitionsExec::new(table.scan(&ctx.state(), &None, &[filter], None).await?);
+    let plan = CoalescePartitionsExec::new(table.scan(&ctx.state(), None, &[filter], None).await?);
     let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
     let _result = common::collect(plan.execute(0, task_ctx)?).await?;
 
