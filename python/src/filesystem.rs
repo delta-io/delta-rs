@@ -9,14 +9,22 @@ use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyBytes};
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Runtime;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct FsConfig {
+    pub(crate) root_url: String,
+    pub(crate) options: HashMap<String, String>,
+}
 
 #[pyclass(subclass)]
 #[derive(Debug, Clone)]
 pub struct DeltaFileSystemHandler {
     pub(crate) inner: Arc<DynObjectStore>,
     pub(crate) rt: Arc<Runtime>,
+    pub(crate) config: FsConfig,
 }
 
 #[pymethods]
@@ -24,13 +32,17 @@ impl DeltaFileSystemHandler {
     #[new]
     #[args(options = "None")]
     fn new(table_uri: &str, options: Option<HashMap<String, String>>) -> PyResult<Self> {
-        let storage = DeltaTableBuilder::from_uri(table_uri)
-            .with_storage_options(options.unwrap_or_default())
+        let storage = DeltaTableBuilder::from_uri(table_uri.clone())
+            .with_storage_options(options.clone().unwrap_or_default())
             .build_storage()
             .map_err(PyDeltaTableError::from_raw)?;
         Ok(Self {
             inner: storage,
             rt: Arc::new(rt()?),
+            config: FsConfig {
+                root_url: table_uri.into(),
+                options: options.unwrap_or_default(),
+            },
         })
     }
 
@@ -241,6 +253,35 @@ impl DeltaFileSystemHandler {
             ))
             .map_err(PyDeltaTableError::from_object_store)?;
         Ok(file)
+    }
+
+    pub fn __getstate__(&self) -> PyResult<Vec<u8>> {
+        // Used in pickle/pickling
+        let s = serde_json::to_string(&self.config).unwrap();
+        Ok(s.as_bytes().to_vec())
+    }
+
+    pub fn __setstate__(&mut self, state: Vec<u8>) -> PyResult<()> {
+        let config: FsConfig = serde_json::from_slice(&state)
+            .map_err(|err| PyDeltaTableError::from_raw(err.into()))?;
+
+        let storage = DeltaTableBuilder::from_uri(config.root_url.clone())
+            .with_storage_options(config.options.clone())
+            .build_storage()
+            .map_err(PyDeltaTableError::from_raw)?;
+
+        self.inner = storage;
+        self.rt = Arc::new(rt()?);
+        self.config = config;
+
+        Ok(())
+    }
+
+    pub fn __getnewargs__(&self) -> PyResult<(String, Option<HashMap<String, String>>)> {
+        Ok((
+            self.config.root_url.clone(),
+            Some(self.config.options.clone()),
+        ))
     }
 }
 

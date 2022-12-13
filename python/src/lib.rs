@@ -31,6 +31,7 @@ use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 
+use crate::filesystem::FsConfig;
 use crate::schema::schema_to_pyobject;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
@@ -83,6 +84,8 @@ enum PartitionFilterValue<'a> {
 #[pyclass]
 struct RawDeltaTable {
     _table: deltalake::DeltaTable,
+    // storing the config additionally on the table helps us make pickling work.
+    _config: FsConfig,
 }
 
 #[pyclass]
@@ -110,7 +113,8 @@ impl RawDeltaTable {
         storage_options: Option<HashMap<String, String>>,
         without_files: bool,
     ) -> PyResult<Self> {
-        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
+        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri.clone());
+        let options = storage_options.clone().unwrap_or_default();
         if let Some(storage_options) = storage_options {
             builder = builder.with_storage_options(storage_options)
         }
@@ -125,7 +129,13 @@ impl RawDeltaTable {
         let table = rt()?
             .block_on(builder.load())
             .map_err(PyDeltaTableError::from_raw)?;
-        Ok(RawDeltaTable { _table: table })
+        Ok(RawDeltaTable {
+            _table: table,
+            _config: FsConfig {
+                root_url: table_uri.into(),
+                options,
+            },
+        })
     }
 
     #[classmethod]
@@ -399,6 +409,7 @@ impl RawDeltaTable {
         Ok(filesystem::DeltaFileSystemHandler {
             inner: self._table.object_store(),
             rt: Arc::new(rt()?),
+            config: self._config.clone(),
         })
     }
 }
