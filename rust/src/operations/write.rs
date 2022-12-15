@@ -200,7 +200,7 @@ impl std::future::IntoFuture for WriteBuilder {
             let object_store = if let Some(store) = this.object_store {
                 Ok(store)
             } else {
-                DeltaTableBuilder::from_uri(&this.location.unwrap())
+                DeltaTableBuilder::from_uri(this.location.unwrap())
                     .with_storage_options(this.storage_options.unwrap_or_default())
                     .build_storage()
             }?;

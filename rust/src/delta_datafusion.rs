@@ -48,8 +48,10 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError, Result as DataFusionResult};
+use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::{Expr, Extension, LogicalPlan};
-use datafusion_proto::logical_plan::{LogicalExtensionCodec, PhysicalExtensionCodec};
+use datafusion_proto::logical_plan::LogicalExtensionCodec;
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
@@ -331,7 +333,7 @@ impl TableProvider for DeltaTable {
     async fn scan(
         &self,
         session: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
@@ -373,25 +375,44 @@ impl TableProvider for DeltaTable {
             });
         };
 
-        let table_partition_cols = self.get_metadata()?.partition_columns.clone();
+        let table_partition_cols = self
+            .get_metadata()?
+            .partition_columns
+            .clone()
+            .into_iter()
+            .flat_map(|c| {
+                let f_types = schema
+                    .fields()
+                    .iter()
+                    .map(|e| (e.name(), e.data_type()))
+                    .filter(|&(col_name, _)| c.eq_ignore_ascii_case(col_name))
+                    .collect::<Vec<_>>();
+                f_types.first().map(|o| o.to_owned())
+            })
+            .collect::<HashMap<_, _>>();
         let file_schema = Arc::new(ArrowSchema::new(
             schema
                 .fields()
                 .iter()
-                .filter(|f| !table_partition_cols.contains(f.name()))
+                .filter(|f| !table_partition_cols.contains_key(f.name()))
                 .cloned()
                 .collect(),
         ));
-        let parquet_scan = ParquetFormat::default()
+
+        let parquet_scan = ParquetFormat::new(session.config_options())
             .create_physical_plan(
                 FileScanConfig {
                     object_store_url: self.storage.object_store_url(),
                     file_schema,
                     file_groups: file_groups.into_values().collect(),
                     statistics: self.datafusion_table_statistics(),
-                    projection: projection.clone(),
+                    projection: projection.map(|o| o.to_owned()),
                     limit,
-                    table_partition_cols,
+                    table_partition_cols: table_partition_cols
+                        .into_iter()
+                        .map(|(a, b)| (a.to_owned(), b.to_owned()))
+                        .collect::<Vec<(_, _)>>(),
+                    output_ordering: None,
                     config_options: Default::default(),
                 },
                 filters,
@@ -829,7 +850,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
     fn try_encode_table_provider(
         &self,
         node: Arc<dyn TableProvider>,
-        mut buf: &mut Vec<u8>,
+        buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
         let table = node
             .as_ref()
@@ -838,7 +859,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
             .ok_or_else(|| {
                 DataFusionError::Internal("Can't encode non-delta tables".to_string())
             })?;
-        serde_json::to_writer(&mut buf, table)
+        serde_json::to_writer(buf, table)
             .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))
     }
 }
@@ -848,8 +869,12 @@ pub struct DeltaTableFactory {}
 
 #[async_trait]
 impl TableProviderFactory for DeltaTableFactory {
-    async fn create(&self, url: &str) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        let provider = open_table(url).await.unwrap();
+    async fn create(
+        &self,
+        _ctx: &SessionState,
+        cmd: &CreateExternalTable,
+    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let provider = open_table(cmd.to_owned().location).await.unwrap();
         Ok(Arc::new(provider))
     }
 }

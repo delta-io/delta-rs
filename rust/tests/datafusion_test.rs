@@ -255,7 +255,7 @@ async fn test_files_scanned() -> Result<()> {
     assert_eq!(table.version(), 2);
 
     let ctx = SessionContext::new();
-    let plan = table.scan(&ctx.state(), &None, &[], None).await?;
+    let plan = table.scan(&ctx.state(), None, &[], None).await?;
     let plan = CoalescePartitionsExec::new(plan.clone());
 
     let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
@@ -270,7 +270,7 @@ async fn test_files_scanned() -> Result<()> {
         Expr::Literal(ScalarValue::Int32(Some(5))),
     );
 
-    let plan = CoalescePartitionsExec::new(table.scan(&ctx.state(), &None, &[filter], None).await?);
+    let plan = CoalescePartitionsExec::new(table.scan(&ctx.state(), None, &[filter], None).await?);
     let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
     let _result = common::collect(plan.execute(0, task_ctx)?).await?;
 

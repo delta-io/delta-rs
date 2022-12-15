@@ -8,8 +8,6 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::convert::TryFrom;
 
 impl TryFrom<&schema::Schema> for ArrowSchema {
@@ -36,16 +34,13 @@ impl TryFrom<&schema::SchemaField> for ArrowField {
             f.is_nullable(),
         );
 
-        let metadata: Option<BTreeMap<String, String>> = Some(f.get_metadata())
-            .filter(|metadata| metadata.is_empty())
-            .map(|metadata| {
-                metadata
-                    .iter()
-                    .map(|(key, val)| Ok((key.clone(), serde_json::to_string(val)?)))
-                    .collect::<Result<_, serde_json::Error>>()
-                    .map_err(|err| ArrowError::JsonError(err.to_string()))
-            })
-            .transpose()?;
+        let metadata = f
+            .get_metadata()
+            .to_owned()
+            .iter()
+            .map(|(key, val)| Ok((key.clone(), serde_json::to_string(val)?)))
+            .collect::<Result<_, serde_json::Error>>()
+            .map_err(|err| ArrowError::JsonError(err.to_string()))?;
 
         field.set_metadata(metadata);
         Ok(field)
@@ -111,7 +106,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                             ))
                         })?;
                         let precision = extract.get(1).and_then(|v| v.as_str().parse::<u8>().ok());
-                        let scale = extract.get(2).and_then(|v| v.as_str().parse::<u8>().ok());
+                        let scale = extract.get(2).and_then(|v| v.as_str().parse::<i8>().ok());
                         match (precision, scale) {
                             // TODO how do we decide which variant (128 / 256) to use?
                             (Some(p), Some(s)) => Ok(ArrowDataType::Decimal128(p, s)),
@@ -205,12 +200,10 @@ impl TryFrom<&ArrowField> for schema::SchemaField {
             arrow_field.is_nullable(),
             arrow_field
                 .metadata()
-                .as_ref()
-                .map_or_else(HashMap::new, |m| {
-                    m.iter()
-                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                        .collect()
-                }),
+                .to_owned()
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect(),
         ))
     }
 }
