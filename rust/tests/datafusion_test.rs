@@ -7,6 +7,7 @@ use std::sync::Arc;
 use arrow::array::*;
 use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
 use arrow::record_batch::RecordBatch;
+use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, TaskContext};
@@ -86,7 +87,7 @@ async fn prepare_table(
 #[tokio::test]
 async fn test_datafusion_sql_registration() -> Result<()> {
     let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> = HashMap::new();
-    table_factories.insert("deltatable".to_string(), Arc::new(DeltaTableFactory {}));
+    table_factories.insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
     let cfg = RuntimeConfig::new().with_table_factories(table_factories);
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
@@ -255,7 +256,7 @@ async fn test_files_scanned() -> Result<()> {
     assert_eq!(table.version(), 2);
 
     let ctx = SessionContext::new();
-    let plan = table.scan(&ctx.state(), &None, &[], None).await?;
+    let plan = table.scan(&ctx.state(), None, &[], None).await?;
     let plan = CoalescePartitionsExec::new(plan.clone());
 
     let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
@@ -270,13 +271,60 @@ async fn test_files_scanned() -> Result<()> {
         Expr::Literal(ScalarValue::Int32(Some(5))),
     );
 
-    let plan = CoalescePartitionsExec::new(table.scan(&ctx.state(), &None, &[filter], None).await?);
+    let plan = CoalescePartitionsExec::new(table.scan(&ctx.state(), None, &[filter], None).await?);
     let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
     let _result = common::collect(plan.execute(0, task_ctx)?).await?;
 
     let mut metrics = ExecutionMetricsCollector::default();
     visit_execution_plan(&plan, &mut metrics).unwrap();
     assert!(metrics.num_scanned_files() == 1);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_datafusion_partitioned_types() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table = deltalake::open_table("./tests/data/delta-2.2.0-partitioned-types")
+        .await
+        .unwrap();
+    ctx.register_table("demo", Arc::new(table))?;
+
+    let batches = ctx.sql("SELECT * FROM demo").await?.collect().await?;
+
+    let expected = vec![
+        "+----+----+----+",
+        "| c3 | c1 | c2 |",
+        "+----+----+----+",
+        "| 5  | 4  | c  |",
+        "| 6  | 5  | b  |",
+        "| 4  | 6  | a  |",
+        "+----+----+----+",
+    ];
+
+    assert_batches_sorted_eq!(&expected, &batches);
+
+    let expected_schema = ArrowSchema::new(vec![
+        ArrowField::new("c3", ArrowDataType::Int32, true),
+        ArrowField::new(
+            "c1",
+            ArrowDataType::Dictionary(
+                Box::new(ArrowDataType::UInt16),
+                Box::new(ArrowDataType::Int32),
+            ),
+            false,
+        ),
+        ArrowField::new(
+            "c2",
+            ArrowDataType::Dictionary(
+                Box::new(ArrowDataType::UInt16),
+                Box::new(ArrowDataType::Utf8),
+            ),
+            false,
+        ),
+    ]);
+
+    assert_eq!(Arc::new(expected_schema), batches[0].schema());
 
     Ok(())
 }
