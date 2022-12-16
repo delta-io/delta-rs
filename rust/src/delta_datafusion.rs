@@ -29,6 +29,7 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -42,14 +43,16 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion::physical_plan::file_format::FileScanConfig;
+use datafusion::physical_plan::file_format::{partition_type_wrap, FileScanConfig};
 use datafusion::physical_plan::{
     ColumnStatistics, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError, Result as DataFusionResult};
+use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::{Expr, Extension, LogicalPlan};
-use datafusion_proto::logical_plan::{LogicalExtensionCodec, PhysicalExtensionCodec};
+use datafusion_proto::logical_plan::LogicalExtensionCodec;
+use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
@@ -331,7 +334,7 @@ impl TableProvider for DeltaTable {
     async fn scan(
         &self,
         session: &SessionState,
-        projection: &Option<Vec<usize>>,
+        projection: Option<&Vec<usize>>,
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
@@ -382,16 +385,26 @@ impl TableProvider for DeltaTable {
                 .cloned()
                 .collect(),
         ));
-        let parquet_scan = ParquetFormat::default()
+
+        let parquet_scan = ParquetFormat::new(session.config_options())
             .create_physical_plan(
                 FileScanConfig {
                     object_store_url: self.storage.object_store_url(),
                     file_schema,
                     file_groups: file_groups.into_values().collect(),
                     statistics: self.datafusion_table_statistics(),
-                    projection: projection.clone(),
+                    projection: projection.cloned(),
                     limit,
-                    table_partition_cols,
+                    table_partition_cols: table_partition_cols
+                        .iter()
+                        .map(|c| {
+                            Ok((
+                                c.to_owned(),
+                                partition_type_wrap(schema.field_with_name(c)?.data_type().clone()),
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, ArrowError>>()?,
+                    output_ordering: None,
                     config_options: Default::default(),
                 },
                 filters,
@@ -829,7 +842,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
     fn try_encode_table_provider(
         &self,
         node: Arc<dyn TableProvider>,
-        mut buf: &mut Vec<u8>,
+        buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
         let table = node
             .as_ref()
@@ -838,7 +851,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
             .ok_or_else(|| {
                 DataFusionError::Internal("Can't encode non-delta tables".to_string())
             })?;
-        serde_json::to_writer(&mut buf, table)
+        serde_json::to_writer(buf, table)
             .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))
     }
 }
@@ -848,8 +861,12 @@ pub struct DeltaTableFactory {}
 
 #[async_trait]
 impl TableProviderFactory for DeltaTableFactory {
-    async fn create(&self, url: &str) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        let provider = open_table(url).await.unwrap();
+    async fn create(
+        &self,
+        _ctx: &SessionState,
+        cmd: &CreateExternalTable,
+    ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
+        let provider = open_table(cmd.to_owned().location).await.unwrap();
         Ok(Arc::new(provider))
     }
 }

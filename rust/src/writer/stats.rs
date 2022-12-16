@@ -38,7 +38,7 @@ pub(crate) fn apply_null_counts(
 
     array
         .columns()
-        .into_iter()
+        .iter()
         .zip(fields)
         .for_each(|(column, field)| {
             let key = field.name().to_owned();
