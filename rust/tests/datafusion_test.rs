@@ -96,7 +96,7 @@ async fn test_datafusion_sql_registration() -> Result<()> {
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     d.push("tests/data/delta-0.8.0-partitioned");
     let sql = format!(
-        "CREATE EXTERNAL TABLE demo STORED AS DELTA LOCATION '{}'",
+        "CREATE EXTERNAL TABLE demo STORED AS DELTATABLE LOCATION '{}'",
         d.to_str().unwrap()
     );
     let _ = ctx
@@ -140,53 +140,6 @@ async fn test_datafusion_simple_query_partitioned() -> Result<()> {
         batch.column(0).as_ref(),
         Arc::new(Int32Array::from(vec![4, 5, 20, 20])).as_ref(),
     );
-
-    Ok(())
-}
-
-#[tokio::test]
-async fn test_datafusion_partitioned_types() -> Result<()> {
-    let ctx = SessionContext::new();
-    let table = deltalake::open_table("./tests/data/delta-2.2.0-partitioned-types")
-        .await
-        .unwrap();
-    ctx.register_table("demo", Arc::new(table))?;
-
-    let batches = ctx.sql("SELECT * FROM demo").await?.collect().await?;
-
-    let expected = vec![
-        "+----+----+----+",
-        "| c3 | c1 | c2 |",
-        "+----+----+----+",
-        "| 5  | 4  | c  |",
-        "| 6  | 5  | b  |",
-        "| 4  | 6  | a  |",
-        "+----+----+----+",
-    ];
-
-    assert_batches_sorted_eq!(&expected, &batches);
-
-    let expected_schema = ArrowSchema::new(vec![
-        ArrowField::new("c3", ArrowDataType::Int32, true),
-        ArrowField::new(
-            "c1",
-            ArrowDataType::Dictionary(
-                Box::new(ArrowDataType::UInt16),
-                Box::new(ArrowDataType::Int32),
-            ),
-            false,
-        ),
-        ArrowField::new(
-            "c2",
-            ArrowDataType::Dictionary(
-                Box::new(ArrowDataType::UInt16),
-                Box::new(ArrowDataType::Utf8),
-            ),
-            false,
-        ),
-    ]);
-
-    assert_eq!(Arc::new(expected_schema), batches[0].schema());
 
     Ok(())
 }
