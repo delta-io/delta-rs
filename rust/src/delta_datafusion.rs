@@ -49,7 +49,8 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError, Result as DataFusionResult};
-use datafusion_expr::{CreateExternalTable, Expr, Extension, LogicalPlan};
+use datafusion_expr::logical_plan::CreateExternalTable;
+use datafusion_expr::{Expr, Extension, LogicalPlan};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::{path::Path, ObjectMeta};
@@ -384,15 +385,8 @@ impl TableProvider for DeltaTable {
                 .cloned()
                 .collect(),
         ));
-        let table_partition_cols = table_partition_cols
-            .iter()
-            .map(|col| {
-                let data_type = schema.field_with_name(col)?.data_type();
-                Ok((col.clone(), partition_type_wrap(data_type.clone())))
-            })
-            .collect::<Result<Vec<_>, ArrowError>>()?;
 
-        let parquet_scan = ParquetFormat::new(session.config.config_options.clone())
+        let parquet_scan = ParquetFormat::new(session.config_options())
             .create_physical_plan(
                 FileScanConfig {
                     object_store_url: self.storage.object_store_url(),
@@ -401,9 +395,17 @@ impl TableProvider for DeltaTable {
                     statistics: self.datafusion_table_statistics(),
                     projection: projection.cloned(),
                     limit,
-                    table_partition_cols,
-                    config_options: session.config.config_options.clone(),
-                    output_ordering: Default::default(),
+                    table_partition_cols: table_partition_cols
+                        .iter()
+                        .map(|c| {
+                            Ok((
+                                c.to_owned(),
+                                partition_type_wrap(schema.field_with_name(c)?.data_type().clone()),
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, ArrowError>>()?,
+                    output_ordering: None,
+                    config_options: Default::default(),
                 },
                 filters,
             )
@@ -840,7 +842,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
     fn try_encode_table_provider(
         &self,
         node: Arc<dyn TableProvider>,
-        mut buf: &mut Vec<u8>,
+        buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
         let table = node
             .as_ref()
@@ -849,7 +851,7 @@ impl LogicalExtensionCodec for DeltaLogicalCodec {
             .ok_or_else(|| {
                 DataFusionError::Internal("Can't encode non-delta tables".to_string())
             })?;
-        serde_json::to_writer(&mut buf, table)
+        serde_json::to_writer(buf, table)
             .map_err(|_| DataFusionError::Internal("Error encoding delta table".to_string()))
     }
 }
@@ -864,7 +866,7 @@ impl TableProviderFactory for DeltaTableFactory {
         _ctx: &SessionState,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        let provider = open_table(cmd.location.clone()).await.unwrap();
+        let provider = open_table(cmd.to_owned().location).await.unwrap();
         Ok(Arc::new(provider))
     }
 }

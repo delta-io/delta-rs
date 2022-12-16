@@ -28,18 +28,21 @@ impl TryFrom<&schema::SchemaField> for ArrowField {
     type Error = ArrowError;
 
     fn try_from(f: &schema::SchemaField) -> Result<Self, ArrowError> {
-        Ok(ArrowField::new(
+        let metadata = f
+            .get_metadata()
+            .iter()
+            .map(|(key, val)| Ok((key.clone(), serde_json::to_string(val)?)))
+            .collect::<Result<_, serde_json::Error>>()
+            .map_err(|err| ArrowError::JsonError(err.to_string()))?;
+
+        let field = ArrowField::new(
             f.get_name(),
             ArrowDataType::try_from(f.get_type())?,
             f.is_nullable(),
         )
-        .with_metadata(
-            f.get_metadata()
-                .iter()
-                .map(|(key, val)| Ok((key.clone(), serde_json::to_string(val)?)))
-                .collect::<Result<_, serde_json::Error>>()
-                .map_err(|err| ArrowError::JsonError(err.to_string()))?,
-        ))
+        .with_metadata(metadata);
+
+        Ok(field)
     }
 }
 

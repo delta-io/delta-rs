@@ -33,7 +33,7 @@ use crate::storage::DeltaObjectStore;
 use crate::writer::record_batch::divide_by_partition_values;
 use crate::writer::utils::PartitionPath;
 
-use arrow::datatypes::SchemaRef as ArrowSchemaRef;
+use arrow::datatypes::{DataType, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::RecordBatch;
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
@@ -196,11 +196,23 @@ impl std::future::IntoFuture for WriteBuilder {
     fn into_future(self) -> Self::IntoFuture {
         let this = self;
 
+        fn schema_to_vec_name_type(schema: ArrowSchemaRef) -> Vec<(String, DataType)> {
+            schema
+                .fields()
+                .iter()
+                .map(|f| (f.name().to_owned(), f.data_type().clone()))
+                .collect::<Vec<_>>()
+        }
+
+        fn schema_eq(l: ArrowSchemaRef, r: ArrowSchemaRef) -> bool {
+            schema_to_vec_name_type(l) == schema_to_vec_name_type(r)
+        }
+
         Box::pin(async move {
             let object_store = if let Some(store) = this.object_store {
                 Ok(store)
             } else {
-                DeltaTableBuilder::from_uri(&this.location.unwrap())
+                DeltaTableBuilder::from_uri(this.location.unwrap())
                     .with_storage_options(this.storage_options.unwrap_or_default())
                     .build_storage()
             }?;
@@ -277,17 +289,8 @@ impl std::future::IntoFuture for WriteBuilder {
                         // so we need to compare the field names and datatypes instead.
                         // TODO update comparison logic, once we have column mappings supported.
                         let curr_schema: ArrowSchemaRef = Arc::new((&meta.schema).try_into()?);
-                        let curr_fields = curr_schema
-                            .fields()
-                            .iter()
-                            .map(|f| (f.name(), f.data_type()))
-                            .collect::<Vec<_>>();
-                        let new_fields = schema
-                            .fields()
-                            .iter()
-                            .map(|f| (f.name(), f.data_type()))
-                            .collect::<Vec<_>>();
-                        if new_fields != curr_fields {
+
+                        if !schema_eq(curr_schema, schema.clone()) {
                             return Err(DeltaTableError::Generic(
                                 "Updating table schema not yet implemented".to_string(),
                             ));
