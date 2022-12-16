@@ -86,7 +86,7 @@ async fn prepare_table(
 #[tokio::test]
 async fn test_datafusion_sql_registration() -> Result<()> {
     let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> = HashMap::new();
-    table_factories.insert("deltatable".to_string(), Arc::new(DeltaTableFactory {}));
+    table_factories.insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
     let cfg = RuntimeConfig::new().with_table_factories(table_factories);
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();

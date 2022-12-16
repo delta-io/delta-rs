@@ -29,6 +29,7 @@ use std::sync::Arc;
 use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
+use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -42,7 +43,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion::physical_plan::file_format::FileScanConfig;
+use datafusion::physical_plan::file_format::{partition_type_wrap, FileScanConfig};
 use datafusion::physical_plan::{
     ColumnStatistics, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -375,26 +376,12 @@ impl TableProvider for DeltaTable {
             });
         };
 
-        let table_partition_cols = self
-            .get_metadata()?
-            .partition_columns
-            .clone()
-            .into_iter()
-            .flat_map(|c| {
-                let f_types = schema
-                    .fields()
-                    .iter()
-                    .map(|e| (e.name(), e.data_type()))
-                    .filter(|&(col_name, _)| c.eq_ignore_ascii_case(col_name))
-                    .collect::<Vec<_>>();
-                f_types.first().map(|o| o.to_owned())
-            })
-            .collect::<HashMap<_, _>>();
+        let table_partition_cols = self.get_metadata()?.partition_columns.clone();
         let file_schema = Arc::new(ArrowSchema::new(
             schema
                 .fields()
                 .iter()
-                .filter(|f| !table_partition_cols.contains_key(f.name()))
+                .filter(|f| !table_partition_cols.contains(f.name()))
                 .cloned()
                 .collect(),
         ));
@@ -406,12 +393,17 @@ impl TableProvider for DeltaTable {
                     file_schema,
                     file_groups: file_groups.into_values().collect(),
                     statistics: self.datafusion_table_statistics(),
-                    projection: projection.map(|o| o.to_owned()),
+                    projection: projection.cloned(),
                     limit,
                     table_partition_cols: table_partition_cols
-                        .into_iter()
-                        .map(|(a, b)| (a.to_owned(), b.to_owned()))
-                        .collect::<Vec<(_, _)>>(),
+                        .iter()
+                        .map(|c| {
+                            Ok((
+                                c.to_owned(),
+                                partition_type_wrap(schema.field_with_name(c)?.data_type().clone()),
+                            ))
+                        })
+                        .collect::<Result<Vec<_>, ArrowError>>()?,
                     output_ordering: None,
                     config_options: Default::default(),
                 },
