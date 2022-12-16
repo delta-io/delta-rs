@@ -1,3 +1,5 @@
+import urllib
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -198,6 +200,22 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
 @pytest.mark.timeout(timeout=5, method="thread")
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip3"
+
+    write_deltalake(table_path, sample_data, storage_options=azurite_sas_creds)
+    dt = DeltaTable(table_path, storage_options=azurite_sas_creds)
+    table = dt.to_pyarrow_table()
+    assert table == sample_data
+    assert dt.version() == 0
+
+
+@pytest.mark.azure
+@pytest.mark.integration
+@pytest.mark.timeout(timeout=5, method="thread")
+def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
+    table_path = "az://deltars/roundtrip4"
+    azurite_sas_creds["SAS_TOKEN"] = urllib.parse.unquote(
+        azurite_sas_creds["SAS_TOKEN"]
+    )
 
     write_deltalake(table_path, sample_data, storage_options=azurite_sas_creds)
     dt = DeltaTable(table_path, storage_options=azurite_sas_creds)

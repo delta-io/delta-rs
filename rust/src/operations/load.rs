@@ -87,7 +87,7 @@ impl std::future::IntoFuture for LoadBuilder {
             ctx.state()
                 .runtime_env
                 .register_object_store(scheme, "", store);
-            let scan_plan = table.scan(&ctx.state(), &None, &[], None).await?;
+            let scan_plan = table.scan(&ctx.state(), None, &[], None).await?;
             let plan = CoalescePartitionsExec::new(scan_plan);
             let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
             let stream = plan.execute(0, task_ctx)?;
