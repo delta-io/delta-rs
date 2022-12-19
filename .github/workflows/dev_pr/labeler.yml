@@ -20,6 +20,7 @@ documentation:
   - ./**/README.md
   - CODE_OF_CONDUCT.md
   - CONTRIBUTING.md
+  - python/docs/**/*
 
 aws:
   - aws/**/*
