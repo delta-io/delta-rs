@@ -1,0 +1,48 @@
+rust:
+  - aws/**/*
+  - delta-inspect/**/*
+  - dynamodb_lock/**/*
+  - glibc_version/**/*
+  - proofs/**/*
+  - rust/**/*
+
+python:
+  - python/**/*
+
+ruby:
+  - ruby/**/*
+
+ci:
+  - .github/**.*
+
+documentation:
+  - README.adoc
+  - ./**/README.md
+  - CODE_OF_CONDUCT.md
+  - CONTRIBUTING.md
+  - python/docs/**/*
+
+aws:
+  - aws/**/*
+
+delta-checkpoint:
+  - aws/delta-checkpoint/**/*
+  
+delta-inspect:
+  - delta-inspect/**/*
+
+delta-rs-crate:
+  - rust/**/*
+
+dynamodb_lock:
+  - dynamodb_lock/**/*
+
+glibc_version:
+  - glibc_version/**/*
+
+proofs:
+  - proofs/**/*
+
+tlaplus:
+  - tlaplus/**/*
+
