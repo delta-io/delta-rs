@@ -1,7 +1,7 @@
 version: "3.9"
 services:
   localstack:
-    image: localstack/localstack:1.2
+    image: localstack/localstack:0.14
     ports:
       - 4566:4566
       - 8080:8080
