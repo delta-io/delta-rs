@@ -46,7 +46,7 @@ impl IntegrationContext {
                 account_path.as_path().to_str().unwrap(),
             );
         }
-        integration.crate_bucket(&bucket)?;
+        integration.create_bucket(&bucket)?;
         let store_uri = match integration {
             StorageIntegration::Amazon => format!("s3://{}", &bucket),
             StorageIntegration::Microsoft => format!("az://{}", &bucket),
@@ -109,12 +109,12 @@ impl IntegrationContext {
                 options.content_only = true;
                 let dest_path = self.tmp_dir.path().join(name.as_ref());
                 std::fs::create_dir_all(&dest_path)?;
-                copy(&table.as_path(), &dest_path, &options)?;
+                copy(table.as_path(), &dest_path, &options)?;
             }
             _ => {
                 let from = table.as_path().as_str().to_owned();
                 let to = format!("{}/{}", self.root_uri(), name.as_ref());
-                copy_table(from, None, to, None).await?;
+                copy_table(from, None, to, None, true).await?;
             }
         };
         Ok(())
@@ -125,7 +125,7 @@ impl Drop for IntegrationContext {
     fn drop(&mut self) {
         match self.integration {
             StorageIntegration::Amazon => {
-                s3_cli::delete_bucket(&self.root_uri()).unwrap();
+                s3_cli::delete_bucket(self.root_uri()).unwrap();
                 s3_cli::delete_lock_table().unwrap();
             }
             StorageIntegration::Microsoft => {
@@ -157,14 +157,14 @@ impl StorageIntegration {
         }
     }
 
-    fn crate_bucket(&self, name: impl AsRef<str>) -> std::io::Result<()> {
+    fn create_bucket(&self, name: impl AsRef<str>) -> std::io::Result<()> {
         match self {
             Self::Microsoft => {
                 az_cli::create_container(name)?;
                 Ok(())
             }
             Self::Amazon => {
-                s3_cli::create_bucket(&format!("s3://{}", name.as_ref()))?;
+                s3_cli::create_bucket(format!("s3://{}", name.as_ref()))?;
                 set_env_if_not_set(
                     "DYNAMO_LOCK_PARTITION_KEY_VALUE",
                     format!("s3://{}", name.as_ref()),
