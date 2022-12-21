@@ -231,6 +231,11 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
                 Ok(schema::SchemaDataType::primitive("timestamp".to_string()))
             }
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz))
+                if tz.eq_ignore_ascii_case("utc") =>
+            {
+                Ok(schema::SchemaDataType::primitive("timestamp".to_string()))
+            }
             ArrowDataType::Struct(fields) => {
                 let converted_fields: Result<Vec<schema::SchemaField>, _> =
                     fields.iter().map(|field| field.try_into()).collect();
@@ -707,5 +712,33 @@ mod tests {
                 .unwrap_err(),
             arrow::error::ArrowError::SchemaError(_error),
         ));
+    }
+
+    #[test]
+    fn test_arrow_from_delta_timestamp_type() {
+        let timestamp_field = crate::SchemaDataType::primitive("timestamp".to_string());
+        assert_eq!(
+            <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&timestamp_field).unwrap(),
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+    }
+
+    #[test]
+    fn test_delta_from_arrow_timestamp_type() {
+        let timestamp_field = ArrowDataType::Timestamp(TimeUnit::Microsecond, None);
+        assert_eq!(
+            <crate::SchemaDataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
+            crate::SchemaDataType::primitive("timestamp".to_string())
+        );
+    }
+
+    #[test]
+    fn test_delta_from_arrow_timestamp_type_with_tz() {
+        let timestamp_field =
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string()));
+        assert_eq!(
+            <crate::SchemaDataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
+            crate::SchemaDataType::primitive("timestamp".to_string())
+        );
     }
 }
