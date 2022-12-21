@@ -109,7 +109,7 @@ impl IntegrationContext {
                 options.content_only = true;
                 let dest_path = self.tmp_dir.path().join(name.as_ref());
                 std::fs::create_dir_all(&dest_path)?;
-                copy(&table.as_path(), &dest_path, &options)?;
+                copy(table.as_path(), &dest_path, &options)?;
             }
             _ => {
                 let from = table.as_path().as_str().to_owned();
@@ -125,7 +125,7 @@ impl Drop for IntegrationContext {
     fn drop(&mut self) {
         match self.integration {
             StorageIntegration::Amazon => {
-                s3_cli::delete_bucket(&self.root_uri()).unwrap();
+                s3_cli::delete_bucket(self.root_uri()).unwrap();
                 s3_cli::delete_lock_table().unwrap();
             }
             StorageIntegration::Microsoft => {
@@ -164,7 +164,7 @@ impl StorageIntegration {
                 Ok(())
             }
             Self::Amazon => {
-                s3_cli::create_bucket(&format!("s3://{}", name.as_ref()))?;
+                s3_cli::create_bucket(format!("s3://{}", name.as_ref()))?;
                 set_env_if_not_set(
                     "DYNAMO_LOCK_PARTITION_KEY_VALUE",
                     format!("s3://{}", name.as_ref()),
