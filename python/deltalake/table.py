@@ -212,12 +212,7 @@ relative to the table root or absolute URIs.
             category=DeprecationWarning,
             stacklevel=2,
         )
-        try:
-            return self.file_uris(partition_filters)
-        except TypeError:
-            raise TypeError(
-                "Only the type String is currently allowed inside the partition filters."
-            )
+        return self.file_uris(partition_filters)
 
     def file_uris(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
