@@ -453,6 +453,15 @@ impl RawDeltaTable {
 
         Ok(())
     }
+
+    pub fn get_add_actions_df(&self) -> PyResult<PyArrowType<RecordBatch>> {
+        Ok(PyArrowType(
+            self._table
+                .get_state()
+                .add_actions_table()
+                .map_err(PyDeltaTableError::from_arrow)?,
+        ))
+    }
 }
 
 fn convert_partition_filters<'a>(

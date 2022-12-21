@@ -8,6 +8,8 @@ use crate::{
     ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
     DeltaTableMetaData,
 };
+use arrow::array::ArrayRef;
+use arrow::error::ArrowError;
 use chrono::Utc;
 use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
@@ -16,6 +18,7 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, Cursor};
+use std::sync::Arc;
 
 #[cfg(any(feature = "parquet", feature = "parquet2"))]
 use super::{CheckPoint, DeltaTableConfig};
@@ -377,6 +380,35 @@ impl DeltaTableState {
                 .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
         });
         Ok(actions)
+    }
+
+    /// Get the add actions as a RecordBatch
+    pub fn add_actions_table(&self) -> Result<arrow::record_batch::RecordBatch, ArrowError> {
+        let mut paths = arrow::array::StringBuilder::with_capacity(
+            self.files.len(),
+            self.files.iter().map(|add| add.path.len()).sum(),
+        );
+        let mut size = arrow::array::Int64Builder::with_capacity(self.files.len());
+        // let mut partition_keys = arrow::array::StringArray::with_capacity()
+        // let partition_values = arrow::array::MapBuilder::with_capacity(None, , key_builder, value_builder, capacity)
+        let mut mod_time =
+            arrow::array::TimestampMillisecondBuilder::with_capacity(self.files.len());
+        let mut data_change = arrow::array::BooleanBuilder::with_capacity(self.files.len());
+
+        for action in &self.files {
+            paths.append_value(&action.path);
+            size.append_value(action.size);
+            mod_time.append_value(action.modification_time);
+            data_change.append_value(action.data_change);
+        }
+
+        let arrays: Vec<(&str, ArrayRef)> = vec![
+            ("path", Arc::new(paths.finish())),
+            ("size_bytes", Arc::new(size.finish())),
+            ("modification_time", Arc::new(mod_time.finish())),
+            ("data_change", Arc::new(data_change.finish())),
+        ];
+        arrow::record_batch::RecordBatch::try_from_iter(arrays)
     }
 }
 
