@@ -15,12 +15,15 @@ pub async fn copy_table(
     from_options: Option<HashMap<String, String>>,
     to: impl AsRef<str>,
     to_options: Option<HashMap<String, String>>,
+    allow_http: bool,
 ) -> Result<(), DeltaTableError> {
     let from_store = DeltaTableBuilder::from_uri(from)
         .with_storage_options(from_options.unwrap_or_default())
+        .with_allow_http(allow_http)
         .build_storage()?;
     let to_store = DeltaTableBuilder::from_uri(to)
         .with_storage_options(to_options.unwrap_or_default())
+        .with_allow_http(allow_http)
         .build_storage()?;
     sync_stores(from_store, to_store).await
 }

@@ -46,7 +46,7 @@ impl IntegrationContext {
                 account_path.as_path().to_str().unwrap(),
             );
         }
-        integration.crate_bucket(&bucket)?;
+        integration.create_bucket(&bucket)?;
         let store_uri = match integration {
             StorageIntegration::Amazon => format!("s3://{}", &bucket),
             StorageIntegration::Microsoft => format!("az://{}", &bucket),
@@ -114,7 +114,7 @@ impl IntegrationContext {
             _ => {
                 let from = table.as_path().as_str().to_owned();
                 let to = format!("{}/{}", self.root_uri(), name.as_ref());
-                copy_table(from, None, to, None).await?;
+                copy_table(from, None, to, None, true).await?;
             }
         };
         Ok(())
@@ -157,7 +157,7 @@ impl StorageIntegration {
         }
     }
 
-    fn crate_bucket(&self, name: impl AsRef<str>) -> std::io::Result<()> {
+    fn create_bucket(&self, name: impl AsRef<str>) -> std::io::Result<()> {
         match self {
             Self::Microsoft => {
                 az_cli::create_container(name)?;
