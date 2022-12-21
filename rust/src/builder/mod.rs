@@ -37,7 +37,7 @@ enum BuilderError {
     Required(String),
     #[error("Failed to find valid credential.")]
     MissingCredential,
-    #[error("Failed to decode sas key. {0}")]
+    #[error("Failed to decode SAS key: {0}\nSAS keys must be percent-encoded. They come encoded in the Azure portal and Azure Storage Explorer.")]
     Decode(String),
 }
 
