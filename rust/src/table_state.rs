@@ -14,6 +14,7 @@ use chrono::Utc;
 use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
+use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -383,7 +384,10 @@ impl DeltaTableState {
     }
 
     /// Get the add actions as a RecordBatch
-    pub fn add_actions_table(&self) -> Result<arrow::record_batch::RecordBatch, ArrowError> {
+    pub fn add_actions_table(
+        &self,
+        flatten: bool,
+    ) -> Result<arrow::record_batch::RecordBatch, ArrowError> {
         let mut paths = arrow::array::StringBuilder::with_capacity(
             self.files.len(),
             self.files.iter().map(|add| add.path.len()).sum(),
@@ -394,20 +398,100 @@ impl DeltaTableState {
         let mut mod_time =
             arrow::array::TimestampMillisecondBuilder::with_capacity(self.files.len());
         let mut data_change = arrow::array::BooleanBuilder::with_capacity(self.files.len());
+        let mut stats = arrow::array::StringBuilder::with_capacity(
+            self.files.len(),
+            self.files
+                .iter()
+                .map(|add| add.stats.as_ref().map(|s| s.len()).unwrap_or(0))
+                .sum(),
+        );
 
         for action in &self.files {
             paths.append_value(&action.path);
             size.append_value(action.size);
             mod_time.append_value(action.modification_time);
             data_change.append_value(action.data_change);
+            if let Some(action_stats) = &action.stats {
+                stats.append_value(action_stats);
+            } else {
+                stats.append_null();
+            }
         }
 
-        let arrays: Vec<(&str, ArrayRef)> = vec![
-            ("path", Arc::new(paths.finish())),
-            ("size_bytes", Arc::new(size.finish())),
-            ("modification_time", Arc::new(mod_time.finish())),
-            ("data_change", Arc::new(data_change.finish())),
+        let mut arrays: Vec<(Cow<str>, ArrayRef)> = vec![
+            (Cow::Borrowed("path"), Arc::new(paths.finish())),
+            (Cow::Borrowed("size_bytes"), Arc::new(size.finish())),
+            (
+                Cow::Borrowed("modification_time"),
+                Arc::new(mod_time.finish()),
+            ),
+            (Cow::Borrowed("data_change"), Arc::new(data_change.finish())),
+            (Cow::Borrowed("stats"), Arc::new(stats.finish())),
         ];
+
+        let partition_columns: Vec<(Cow<str>, ArrayRef)> = if flatten {
+            // Figure out partition columns
+            let names = self
+                .files
+                .iter()
+                .flat_map(|add_action| add_action.partition_values.keys())
+                .map(|col| col.as_ref())
+                .collect::<HashSet<&str>>();
+
+            // Create builder for each
+            let mut builders = names
+                .into_iter()
+                .map(|name| {
+                    let builder = arrow::array::StringBuilder::new();
+                    (name, builder)
+                })
+                .collect::<HashMap<&str, _>>();
+
+            // Append values
+            for action in &self.files {
+                for (name, maybe_value) in action.partition_values.iter() {
+                    if let Some(value) = maybe_value {
+                        builders.get_mut(name.as_str()).unwrap().append_value(value);
+                    } else {
+                        builders.get_mut(name.as_str()).unwrap().append_null();
+                    }
+                }
+            }
+
+            builders
+                .into_iter()
+                .map(|(name, mut builder)| {
+                    let name: Cow<str> = Cow::Owned(format!("partition_{}", name));
+                    let array: ArrayRef = Arc::new(builder.finish());
+                    (name, array)
+                })
+                .collect()
+        } else {
+            // Create a mapbuilder
+            let key_builder = arrow::array::StringBuilder::new();
+            let value_builder = arrow::array::StringBuilder::new();
+            let mut map_builder = arrow::array::MapBuilder::new(None, key_builder, value_builder);
+
+            // Append values
+            for action in &self.files {
+                for (name, maybe_value) in action.partition_values.iter() {
+                    map_builder.keys().append_value(name);
+                    if let Some(value) = maybe_value {
+                        map_builder.values().append_value(value);
+                    } else {
+                        map_builder.values().append_null();
+                    }
+                }
+                map_builder.append(true)?;
+            }
+            vec![(
+                Cow::Borrowed("partition_values"),
+                Arc::new(map_builder.finish()),
+            )]
+        };
+
+        arrays.extend(partition_columns.into_iter());
+
         arrow::record_batch::RecordBatch::try_from_iter(arrays)
     }
 }

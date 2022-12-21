@@ -444,5 +444,5 @@ given filters.
             out.append((field, op, str_value))
         return out
 
-    def get_add_actions_df(self) -> pyarrow.RecordBatch:
-        return self._table.get_add_actions_df()
+    def get_add_actions_df(self, flatten: bool = False) -> pyarrow.RecordBatch:
+        return self._table.get_add_actions_df(flatten)
