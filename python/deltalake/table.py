@@ -76,6 +76,24 @@ class ProtocolVersions(NamedTuple):
     min_writer_version: int
 
 
+_DNF_filter_doc = """
+Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
+DNF allows arbitrary boolean logical combinations of single partition predicates.
+The innermost tuples each describe a single partition predicate. The list of inner
+predicates is interpreted as a conjunction (AND), forming a more selective and 
+multiple partition predicates. Each tuple has format: (key, op, value) and compares 
+the key with the value. The supported op are: `=`, `!=`, `in`, and `not in`. If 
+the op is in or not in, the value must be a collection such as a list, a set or a tuple.
+The supported type for value is str. Use empty string `''` for Null partition value.
+
+Examples:
+("x", "=", "a")
+("x", "!=", "a")
+("y", "in", ["a", "b", "c"])
+("z", "not in", ["a","b"])
+"""
+
+
 @dataclass(init=False)
 class DeltaTable:
     """Create a DeltaTable instance."""
@@ -145,19 +163,31 @@ class DeltaTable:
     def files(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
     ) -> List[str]:
-        """
-        Get the .parquet files of the DeltaTable. The paths are as they are saved in the
-        delta log, which may either be relative to the table root or absolute URIs.
 
-        :return: list of the .parquet files referenced for the current version of the DeltaTable
-        """
         return self._table.files(self.__stringify_partition_values(partition_filters))
+
+    files.__doc__ = f"""
+Get the .parquet files of the DeltaTable.
+    
+The paths are as they are saved in the delta log, which may either be
+relative to the table root or absolute URIs.
+
+:param partition_filters: the partition filters that will be used for 
+    getting the matched files
+:return: list of the .parquet files referenced for the current version 
+    of the DeltaTable
+{_DNF_filter_doc}
+    """
 
     def files_by_partitions(
         self, partition_filters: List[Tuple[str, str, Any]]
     ) -> List[str]:
         """
         Get the files that match a given list of partitions filters.
+
+        .. deprecated:: 0.7.0
+            Use :meth:`file_uris` instead.
+
         Partitions which do not match the filter predicate will be removed from scanned data.
         Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
         DNF allows arbitrary boolean logical combinations of single partition predicates.
@@ -192,14 +222,23 @@ class DeltaTable:
     def file_uris(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
     ) -> List[str]:
-        """
-        Get the list of files with an absolute path.
-
-        :return: list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
-        """
         return self._table.file_uris(
             self.__stringify_partition_values(partition_filters)
         )
+
+    file_uris.__doc__ = f"""
+Get the list of files as absolute URIs, including the scheme (e.g. "s3://").
+
+Local files will be just plain absolute paths, without a scheme. (That is,
+no 'file://' prefix.)
+
+Use the partition_filters parameter to retrieve a subset of files that match the
+given filters.
+
+:param partition_filters: the partition filters that will be used for getting the matched files
+:return: list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
+{_DNF_filter_doc}
+    """
 
     def load_version(self, version: int) -> None:
         """
