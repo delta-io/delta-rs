@@ -142,13 +142,16 @@ class DeltaTable:
         """
         return self._table.version()
 
-    def files(self) -> List[str]:
+    def files(
+        self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
+    ) -> List[str]:
         """
-        Get the .parquet files of the DeltaTable.
+        Get the .parquet files of the DeltaTable. The paths are as they are saved in the
+        delta log, which may either be relative to the table root or absolute URIs.
 
         :return: list of the .parquet files referenced for the current version of the DeltaTable
         """
-        return self._table.files()
+        return self._table.files(self.__stringify_partition_values(partition_filters))
 
     def files_by_partitions(
         self, partition_filters: List[Tuple[str, str, Any]]
@@ -174,33 +177,29 @@ class DeltaTable:
         :param partition_filters: the partition filters that will be used for getting the matched files
         :return: list of the .parquet files after applying the partition filters referenced for the current version of the DeltaTable.
         """
-        try:
-            return self._table.files_by_partitions(partition_filters)
-        except TypeError:
-            raise ValueError(
-                "Only the type String is currently allowed inside the partition filters."
-            )
-
-    def file_paths(self) -> List[str]:
-        """
-        Get the list of files with an absolute path.
-
-        :return: list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
-        """
         warnings.warn(
-            "Call to deprecated method file_paths. Please use file_uris instead.",
+            "Call to deprecated method files_by_partitions. Please use file_uris instead.",
             category=DeprecationWarning,
             stacklevel=2,
         )
-        return self.file_uris()
+        try:
+            return self.file_uris(partition_filters)
+        except TypeError:
+            raise TypeError(
+                "Only the type String is currently allowed inside the partition filters."
+            )
 
-    def file_uris(self) -> List[str]:
+    def file_uris(
+        self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
+    ) -> List[str]:
         """
         Get the list of files with an absolute path.
 
         :return: list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
         """
-        return self._table.file_uris()
+        return self._table.file_uris(
+            self.__stringify_partition_values(partition_filters)
+        )
 
     def load_version(self, version: int) -> None:
         """
@@ -223,6 +222,10 @@ class DeltaTable:
         :param datetime_string: the identifier of the datetime point of the DeltaTable to load
         """
         self._table.load_with_datetime(datetime_string)
+
+    @property
+    def table_uri(self) -> str:
+        return self._table.table_uri()
 
     def schema(self) -> Schema:
         """
@@ -389,3 +392,18 @@ class DeltaTable:
         newer versions.
         """
         self._table.update_incremental()
+
+    def __stringify_partition_values(
+        self, partition_filters: Optional[List[Tuple[str, str, Any]]]
+    ) -> Optional[List[Tuple[str, str, Union[str, List[str]]]]]:
+        if partition_filters is None:
+            return partition_filters
+        out = []
+        for field, op, value in partition_filters:
+            str_value: Union[str, List[str]]
+            if isinstance(value, (list, tuple)):
+                str_value = [str(val) for val in value]
+            else:
+                str_value = str(value)
+            out.append((field, op, str_value))
+        return out
