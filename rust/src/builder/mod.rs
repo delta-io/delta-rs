@@ -37,6 +37,8 @@ enum BuilderError {
     Required(String),
     #[error("Failed to find valid credential.")]
     MissingCredential,
+    #[error("Failed to decode sas key. {0}")]
+    Decode(String),
 }
 
 impl From<BuilderError> for DeltaTableError {

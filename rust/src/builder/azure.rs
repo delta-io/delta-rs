@@ -5,6 +5,7 @@ use crate::DeltaResult;
 
 use object_store::azure::MicrosoftAzureBuilder;
 use once_cell::sync::Lazy;
+use percent_encoding::percent_decode_str;
 
 #[derive(PartialEq, Eq)]
 enum AzureConfigKey {
@@ -220,6 +221,9 @@ fn parse_boolean(term: &str) -> Option<bool> {
 }
 
 fn split_sas(sas: &str) -> Result<Vec<(String, String)>, BuilderError> {
+    let sas = percent_decode_str(sas)
+        .decode_utf8()
+        .map_err(|err| BuilderError::Decode(err.to_string()))?;
     let kv_str_pairs = sas
         .trim_start_matches('?')
         .split('&')
