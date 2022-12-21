@@ -445,4 +445,58 @@ given filters.
         return out
 
     def get_add_actions_df(self, flatten: bool = False) -> pyarrow.RecordBatch:
+        """
+        Return a dataframe with all current add actions.
+
+        Add actions represent the files that currently make up the table. This
+        data is a low-level representation parsed from the transaction log.
+
+        :param flatten: whether to use a flattened schema in output (default False).
+            When False, all partition values are in a single map column,
+            `partition_values`. When True, each partition column becomes it's own
+            field, with the prefix `partition_` in the name.
+
+        :returns: a PyArrow Table containing the add action data.
+
+        Examples:
+
+        >>> from deltalake import DeltaTable, write_deltalake
+        >>> import pyarrow as pa
+        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        >>> write_deltalake("tmp", data, partition_by=["x"])
+        >>> dt = DeltaTable("tmp")
+        >>> dt.get_add_actions_df()
+        pyarrow.Table
+        path: string
+        size_bytes: int64
+        modification_time: timestamp[ms]
+        data_change: bool
+        stats: string
+        partition_values: map<string, string>
+          child 0, entries: struct<key: string not null, value: string> not null
+              child 0, key: string not null
+              child 1, value: string
+        ----
+        path: [["x=2/0-6e6952dd-ed03-4488-810e-ebe76a1a1200-0.parquet","x=3/0-6e6952dd-ed03-4488-810e-ebe76a1a1200-0.parquet","x=1/0-6e6952dd-ed03-4488-810e-ebe76a1a1200-0.parquet"]]
+        size_bytes: [[565,565,565]]
+        modification_time: [[1970-01-20 08:20:49.399,1970-01-20 08:20:49.399,1970-01-20 08:20:49.399]]
+        data_change: [[true,true,true]]
+        stats: [["{"numRecords": 1, "minValues": {"y": 5}, "maxValues": {"y": 5}, "nullCount": {"y": 0}}","{"numRecords": 1, "minValues": {"y": 6}, "maxValues": {"y": 6}, "nullCount": {"y": 0}}","{"numRecords": 1, "minValues": {"y": 4}, "maxValues": {"y": 4}, "nullCount": {"y": 0}}"]]
+        partition_values: [[keys:["x"]values:["2"],keys:["x"]values:["3"],keys:["x"]values:["1"]]]
+        >>> dt.get_add_actions_df(flatten=True)
+        pyarrow.Table
+        path: string
+        size_bytes: int64
+        modification_time: timestamp[ms]
+        data_change: bool
+        stats: string
+        partition_x: string
+        ----
+        path: [["x=2/0-6e6952dd-ed03-4488-810e-ebe76a1a1200-0.parquet","x=3/0-6e6952dd-ed03-4488-810e-ebe76a1a1200-0.parquet","x=1/0-6e6952dd-ed03-4488-810e-ebe76a1a1200-0.parquet"]]
+        size_bytes: [[565,565,565]]
+        modification_time: [[1970-01-20 08:20:49.399,1970-01-20 08:20:49.399,1970-01-20 08:20:49.399]]
+        data_change: [[true,true,true]]
+        stats: [["{"numRecords": 1, "minValues": {"y": 5}, "maxValues": {"y": 5}, "nullCount": {"y": 0}}","{"numRecords": 1, "minValues": {"y": 6}, "maxValues": {"y": 6}, "nullCount": {"y": 0}}","{"numRecords": 1, "minValues": {"y": 4}, "maxValues": {"y": 4}, "nullCount": {"y": 0}}"]]
+        partition_x: [["2","3","1"]]
+        """
         return self._table.get_add_actions_df(flatten)

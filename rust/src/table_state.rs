@@ -9,7 +9,7 @@ use crate::{
     DeltaTableMetaData,
 };
 use arrow::array::ArrayRef;
-use arrow::error::ArrowError;
+use arrow::compute::cast;
 use chrono::Utc;
 use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
@@ -387,7 +387,8 @@ impl DeltaTableState {
     pub fn add_actions_table(
         &self,
         flatten: bool,
-    ) -> Result<arrow::record_batch::RecordBatch, ArrowError> {
+    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        // TODO: test this thoroughly in Rust
         let mut paths = arrow::array::StringBuilder::with_capacity(
             self.files.len(),
             self.files.iter().map(|add| add.path.len()).sum(),
@@ -428,71 +429,81 @@ impl DeltaTableState {
             (Cow::Borrowed("data_change"), Arc::new(data_change.finish())),
             (Cow::Borrowed("stats"), Arc::new(stats.finish())),
         ];
+        let metadata = self
+            .current_metadata
+            .as_ref()
+            .ok_or(DeltaTableError::NoMetadata)?;
+        let partition_column_types: Vec<arrow::datatypes::DataType> = metadata
+            .partition_columns
+            .iter()
+            .map(
+                |name| -> Result<arrow::datatypes::DataType, DeltaTableError> {
+                    let field = metadata.schema.get_field_with_name(name)?;
+                    Ok(field.get_type().try_into()?)
+                },
+            )
+            .collect::<Result<_, DeltaTableError>>()?;
 
-        let partition_columns: Vec<(Cow<str>, ArrayRef)> = if flatten {
-            // Figure out partition columns
-            let names = self
-                .files
-                .iter()
-                .flat_map(|add_action| add_action.partition_values.keys())
-                .map(|col| col.as_ref())
-                .collect::<HashSet<&str>>();
+        // Create builder for each
+        let mut builders = metadata
+            .partition_columns
+            .iter()
+            .map(|name| {
+                let builder = arrow::array::StringBuilder::new();
+                (name.as_str(), builder)
+            })
+            .collect::<HashMap<&str, _>>();
 
-            // Create builder for each
-            let mut builders = names
-                .into_iter()
-                .map(|name| {
-                    let builder = arrow::array::StringBuilder::new();
-                    (name, builder)
-                })
-                .collect::<HashMap<&str, _>>();
-
-            // Append values
-            for action in &self.files {
-                for (name, maybe_value) in action.partition_values.iter() {
-                    if let Some(value) = maybe_value {
-                        builders.get_mut(name.as_str()).unwrap().append_value(value);
-                    } else {
-                        builders.get_mut(name.as_str()).unwrap().append_null();
-                    }
+        // Append values
+        for action in &self.files {
+            for (name, maybe_value) in action.partition_values.iter() {
+                if let Some(value) = maybe_value {
+                    builders.get_mut(name.as_str()).unwrap().append_value(value);
+                } else {
+                    builders.get_mut(name.as_str()).unwrap().append_null();
                 }
             }
+        }
 
-            builders
+        // Cast them to their appropriate types
+        let partition_columns: Vec<ArrayRef> = metadata
+            .partition_columns
+            .iter()
+            // Get the builders in their original order
+            .map(|name| builders.remove(name.as_str()).unwrap())
+            .zip(partition_column_types.iter())
+            .map(|(mut builder, datatype)| {
+                let string_arr: ArrayRef = Arc::new(builder.finish());
+                Ok(cast(&string_arr, datatype)?)
+            })
+            .collect::<Result<_, DeltaTableError>>()?;
+
+        // if flatten, append columns, otherwise combine into a struct column
+        let partition_columns: Vec<(Cow<str>, ArrayRef)> = if flatten {
+            partition_columns
                 .into_iter()
-                .map(|(name, mut builder)| {
+                .zip(metadata.partition_columns.iter())
+                .map(|(array, name)| {
                     let name: Cow<str> = Cow::Owned(format!("partition_{}", name));
-                    let array: ArrayRef = Arc::new(builder.finish());
                     (name, array)
                 })
                 .collect()
         } else {
-            // Create a mapbuilder
-            let key_builder = arrow::array::StringBuilder::new();
-            let value_builder = arrow::array::StringBuilder::new();
-            let mut map_builder = arrow::array::MapBuilder::new(None, key_builder, value_builder);
-
-            // Append values
-            for action in &self.files {
-                for (name, maybe_value) in action.partition_values.iter() {
-                    map_builder.keys().append_value(name);
-                    if let Some(value) = maybe_value {
-                        map_builder.values().append_value(value);
-                    } else {
-                        map_builder.values().append_null();
-                    }
-                }
-                map_builder.append(true)?;
-            }
-            vec![(
-                Cow::Borrowed("partition_values"),
-                Arc::new(map_builder.finish()),
-            )]
+            let fields = partition_column_types
+                .into_iter()
+                .zip(metadata.partition_columns.iter())
+                .map(|(datatype, name)| arrow::datatypes::Field::new(name, datatype, true));
+            let arr = arrow::array::StructArray::from(
+                fields
+                    .zip(partition_columns.into_iter())
+                    .collect::<Vec<_>>(),
+            );
+            vec![(Cow::Borrowed("partition_values"), Arc::new(arr))]
         };
 
         arrays.extend(partition_columns.into_iter());
 
-        arrow::record_batch::RecordBatch::try_from_iter(arrays)
+        Ok(arrow::record_batch::RecordBatch::try_from_iter(arrays)?)
     }
 }
 

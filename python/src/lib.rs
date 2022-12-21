@@ -459,7 +459,7 @@ impl RawDeltaTable {
             self._table
                 .get_state()
                 .add_actions_table(flatten)
-                .map_err(PyDeltaTableError::from_arrow)?,
+                .map_err(PyDeltaTableError::from_raw)?,
         ))
     }
 }
