@@ -237,6 +237,15 @@ def test_read_partitioned_table_protocol():
     assert protocol.min_writer_version == 2
 
 
+def test_read_table_with_cdc():
+    table_path = "../rust/tests/data/simple_table_with_cdc"
+    dt = DeltaTable(table_path)
+    assert dt.to_pyarrow_table().to_pydict() == {
+        "id": [0],
+        "name": ["Mino"],
+    }
+
+
 def test_history_partitioned_table_metadata():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
