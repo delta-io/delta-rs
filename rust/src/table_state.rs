@@ -283,6 +283,8 @@ impl DeltaTableState {
         require_files: bool,
     ) -> Result<(), ApplyLogError> {
         match action {
+            // TODO: optionally load CDC into TableState
+            action::Action::cdc(_v) => {}
             action::Action::add(v) => {
                 if require_files {
                     self.files.push(v.path_decoded()?);
