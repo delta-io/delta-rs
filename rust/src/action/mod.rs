@@ -153,7 +153,8 @@ pub struct StatsParsed {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct AddCDCFile {
-    /// A relative path, from the root of the table, to a CDC file
+    /// A relative path, from the root of the table, or an
+    /// absolute path to a CDC file
     pub path: String,
     /// The size of this file in bytes
     pub size: DeltaDataTypeLong,

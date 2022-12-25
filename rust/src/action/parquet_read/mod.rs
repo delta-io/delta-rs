@@ -6,8 +6,8 @@ use serde_json::json;
 use std::collections::HashMap;
 
 use crate::action::{
-    Action, ActionError, Add, ColumnCountStat, ColumnValueStat, MetaData, Protocol, Remove, Stats,
-    Txn, AddCDCFile
+    Action, ActionError, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, MetaData, Protocol,
+    Remove, Stats, Txn,
 };
 
 fn populate_hashmap_with_option_from_parquet_map(
@@ -595,7 +595,7 @@ impl Action {
             "remove" => Action::remove(Remove::from_parquet_record(col_data)?),
             "txn" => Action::txn(Txn::from_parquet_record(col_data)?),
             "protocol" => Action::protocol(Protocol::from_parquet_record(col_data)?),
-            "cds" => Action::cdc(AddCDCFile::from_parquet_record(col_data)?),
+            "cdc" => Action::cdc(AddCDCFile::from_parquet_record(col_data)?),
             name => {
                 return Err(ActionError::InvalidField(format!(
                     "Unexpected action from checkpoint: {}",
