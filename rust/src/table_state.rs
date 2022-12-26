@@ -493,12 +493,15 @@ impl DeltaTableState {
                 .into_iter()
                 .zip(metadata.partition_columns.iter())
                 .map(|(datatype, name)| arrow::datatypes::Field::new(name, datatype, true));
-            let arr = arrow::array::StructArray::from(
-                fields
-                    .zip(partition_columns.into_iter())
-                    .collect::<Vec<_>>(),
-            );
-            vec![(Cow::Borrowed("partition_values"), Arc::new(arr))]
+            let field_arrays = fields
+                .zip(partition_columns.into_iter())
+                .collect::<Vec<_>>();
+            if field_arrays.is_empty() {
+                vec![]
+            } else {
+                let arr = Arc::new(arrow::array::StructArray::from(field_arrays));
+                vec![(Cow::Borrowed("partition_values"), arr)]
+            }
         };
 
         arrays.extend(partition_columns.into_iter());
