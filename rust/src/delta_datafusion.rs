@@ -57,7 +57,7 @@ use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
 use crate::Invariant;
-use crate::{action, open_table};
+use crate::{action, open_table, open_table_with_storage_options};
 use crate::{schema, DeltaTableBuilder};
 use crate::{DeltaTable, DeltaTableError};
 
@@ -866,7 +866,11 @@ impl TableProviderFactory for DeltaTableFactory {
         _ctx: &SessionState,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        let provider = open_table(cmd.to_owned().location).await.unwrap();
+        let provider = if cmd.options.is_empty() {
+            open_table(cmd.to_owned().location).await?
+        } else {
+            open_table_with_storage_options(cmd.to_owned().location, cmd.to_owned().options).await?
+        };
         Ok(Arc::new(provider))
     }
 }
