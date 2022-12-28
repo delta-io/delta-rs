@@ -12,7 +12,7 @@ pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
 /// The IntegrationContext provides temporary resources to test against cloud storage services.
 pub struct IntegrationContext {
-    integration: StorageIntegration,
+    pub integration: StorageIntegration,
     bucket: String,
     store: Arc<DynObjectStore>,
     tmp_dir: TempDir,
@@ -432,5 +432,24 @@ pub mod gs_cli {
     pub fn prepare_env() {
         set_env_if_not_set("GOOGLE_BASE_URL", "http://localhost:4443");
         set_env_if_not_set("GOOGLE_ENDPOINT_URL", "http://localhost:4443/storage/v1/b");
+    }
+}
+
+pub mod datafusion {
+    use crate::delta_datafusion::DeltaTableFactory;
+    use datafusion::datasource::datasource::TableProviderFactory;
+    use datafusion::execution::context::SessionContext;
+    use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
+    use datafusion::prelude::SessionConfig;
+    use std::collections::HashMap;
+    use std::sync::Arc;
+
+    pub fn context_with_delta_table_factory() -> SessionContext {
+        let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> = HashMap::new();
+        table_factories.insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
+        let cfg = RuntimeConfig::new().with_table_factories(table_factories);
+        let env = RuntimeEnv::new(cfg).unwrap();
+        let ses = SessionConfig::new();
+        SessionContext::with_config_rt(ses, Arc::new(env))
     }
 }

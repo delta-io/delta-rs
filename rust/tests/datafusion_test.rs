@@ -1,6 +1,6 @@
 #![cfg(feature = "datafusion-ext")]
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -8,20 +8,17 @@ use arrow::array::*;
 use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
 use arrow::record_batch::RecordBatch;
 use datafusion::assert_batches_sorted_eq;
-use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, TaskContext};
-use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{common, file_format::ParquetExec, metrics::Label};
 use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor};
-use datafusion::prelude::SessionConfig;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::Expr;
 
 use deltalake::action::SaveMode;
-use deltalake::delta_datafusion::DeltaTableFactory;
+use deltalake::test_utils::datafusion::context_with_delta_table_factory;
 use deltalake::{operations::DeltaOps, DeltaTable, Schema};
 
 fn get_scanned_files(node: &dyn ExecutionPlan) -> HashSet<Label> {
@@ -86,12 +83,7 @@ async fn prepare_table(
 
 #[tokio::test]
 async fn test_datafusion_sql_registration() -> Result<()> {
-    let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> = HashMap::new();
-    table_factories.insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
-    let cfg = RuntimeConfig::new().with_table_factories(table_factories);
-    let env = RuntimeEnv::new(cfg).unwrap();
-    let ses = SessionConfig::new();
-    let ctx = SessionContext::with_config_rt(ses, Arc::new(env));
+    let ctx = context_with_delta_table_factory();
 
     let mut d = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     d.push("tests/data/delta-0.8.0-partitioned");
