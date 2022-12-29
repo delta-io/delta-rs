@@ -388,14 +388,11 @@ impl DeltaTableState {
         &self,
         flatten: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
-        // TODO: test this thoroughly in Rust
         let mut paths = arrow::array::StringBuilder::with_capacity(
             self.files.len(),
             self.files.iter().map(|add| add.path.len()).sum(),
         );
         let mut size = arrow::array::Int64Builder::with_capacity(self.files.len());
-        // let mut partition_keys = arrow::array::StringArray::with_capacity()
-        // let partition_values = arrow::array::MapBuilder::with_capacity(None, , key_builder, value_builder, capacity)
         let mut mod_time =
             arrow::array::TimestampMillisecondBuilder::with_capacity(self.files.len());
         let mut data_change = arrow::array::BooleanBuilder::with_capacity(self.files.len());
@@ -412,8 +409,9 @@ impl DeltaTableState {
             size.append_value(action.size);
             mod_time.append_value(action.modification_time);
             data_change.append_value(action.data_change);
-            if let Some(action_stats) = &action.stats {
-                stats.append_value(action_stats);
+
+            if let Some(action_stats) = &action.get_stats()? {
+                stats.append_value(serde_json::to_string(action_stats)?);
             } else {
                 stats.append_null();
             }
