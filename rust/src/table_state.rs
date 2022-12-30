@@ -1,8 +1,8 @@
 //! The module for delta table state.
 
 use super::{
-    ApplyLogError, CheckPoint, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable,
-    DeltaTableConfig, DeltaTableError, DeltaTableMetaData,
+    ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable,
+    DeltaTableMetaData,
 };
 use crate::action::{self, Action};
 use crate::delta_config;
@@ -14,6 +14,9 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, Cursor};
+
+#[cfg(any(feature = "parquet", feature = "parquet2"))]
+use super::{CheckPoint, DeltaTableConfig, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
@@ -83,6 +86,7 @@ impl DeltaTableState {
     }
 
     /// Update DeltaTableState with checkpoint data.
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     pub fn process_checkpoint_bytes(
         &mut self,
         data: bytes::Bytes,
@@ -133,6 +137,7 @@ impl DeltaTableState {
     }
 
     /// Construct a delta table state object from checkpoint.
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     pub async fn from_checkpoint(
         table: &DeltaTable,
         check_point: &CheckPoint,

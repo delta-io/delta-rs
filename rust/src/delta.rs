@@ -92,7 +92,7 @@ pub enum DeltaTableError {
     },
 
     /// Error returned when parsing checkpoint parquet.
-    // #[cfg(feature = "parquet")]
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     #[error("Failed to parse parquet: {}", .source)]
     Parquet {
         /// Parquet error details returned when reading the checkpoint failed.
@@ -676,6 +676,7 @@ impl DeltaTable {
         Ok(())
     }
 
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
         self.state = DeltaTableState::from_checkpoint(self, &check_point).await?;
 
@@ -787,6 +788,7 @@ impl DeltaTable {
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
@@ -801,6 +803,12 @@ impl DeltaTable {
             Err(LoadCheckpointError::NotFound) => self.update_incremental().await,
             Err(e) => Err(DeltaTableError::LoadCheckpoint { source: e }),
         }
+    }
+
+    /// Updates the DeltaTable to the most recent state committed to the transaction log.
+    #[cfg(not(any(feature = "parquet", feature = "parquet2")))]
+    pub async fn update(&mut self) -> Result<(), DeltaTableError> {
+        self.update_incremental().await
     }
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
@@ -838,8 +846,9 @@ impl DeltaTable {
             }
         }
 
-        let mut next_version;
+        let mut next_version = 0;
         // 1. find latest checkpoint below version
+        #[cfg(any(feature = "parquet", feature = "parquet2"))]
         match self.find_latest_check_point_for_version(version).await? {
             Some(check_point) => {
                 self.restore_checkpoint(check_point).await?;
@@ -848,7 +857,6 @@ impl DeltaTable {
             None => {
                 // no checkpoint found, clear table state and start from the beginning
                 self.state = DeltaTableState::with_version(0);
-                next_version = 0;
             }
         }
 
