@@ -354,7 +354,6 @@ given filters.
                 DeltaStorageHandler(
                     self._table.table_uri(),
                     self._storage_options,
-                    self._table.get_py_storage_backend(),
                 )
             )
 
