@@ -696,7 +696,6 @@ pub fn get_s3_builder_from_options(
     }
     builder = builder.with_region(s3_options.region.name());
 
-    #[cfg(feature = "aws-profile")]
     if let Some(profile) = &s3_options.profile {
         builder = builder.with_profile(profile);
     }

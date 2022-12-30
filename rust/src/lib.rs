@@ -76,12 +76,6 @@ compile_error!(
     "Features parquet and parquet2 are mutually exclusive and cannot be enabled together"
 );
 
-#[cfg(all(
-    feature = "aws-profile",
-    not(any(feature = "s3", feature = "s3-rustls"))
-))]
-compile_error!("Feature aws-profile must be used together with s3 or s3-rustls feature");
-
 #[cfg(all(feature = "s3", feature = "s3-rustls"))]
 compile_error!("Features s3 and s3-rustls are mutually exclusive and cannot be enabled together");
 
