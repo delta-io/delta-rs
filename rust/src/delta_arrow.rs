@@ -211,6 +211,7 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
     fn try_from(arrow_datatype: &ArrowDataType) -> Result<Self, ArrowError> {
         match arrow_datatype {
             ArrowDataType::Utf8 => Ok(schema::SchemaDataType::primitive("string".to_string())),
+            ArrowDataType::LargeUtf8 => Ok(schema::SchemaDataType::primitive("string".to_string())),
             ArrowDataType::Int64 => Ok(schema::SchemaDataType::primitive("long".to_string())), // undocumented type
             ArrowDataType::Int32 => Ok(schema::SchemaDataType::primitive("integer".to_string())),
             ArrowDataType::Int16 => Ok(schema::SchemaDataType::primitive("short".to_string())),
@@ -219,6 +220,7 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
             ArrowDataType::Float64 => Ok(schema::SchemaDataType::primitive("double".to_string())),
             ArrowDataType::Boolean => Ok(schema::SchemaDataType::primitive("boolean".to_string())),
             ArrowDataType::Binary => Ok(schema::SchemaDataType::primitive("binary".to_string())),
+            ArrowDataType::LargeBinary => Ok(schema::SchemaDataType::primitive("binary".to_string())),
             ArrowDataType::Decimal128(p, s) => Ok(schema::SchemaDataType::primitive(format!(
                 "decimal({},{})",
                 p, s
