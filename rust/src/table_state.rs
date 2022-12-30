@@ -1,8 +1,7 @@
 //! The module for delta table state.
 
 use super::{
-    ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable,
-    DeltaTableMetaData,
+    ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableMetaData,
 };
 use crate::action::{self, Action};
 use crate::delta_config;
