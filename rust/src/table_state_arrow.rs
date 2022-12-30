@@ -1,0 +1,424 @@
+//! Methods to get Delta Table state in Arrow structures
+
+use crate::action::ColumnCountStat;
+use crate::action::ColumnValueStat;
+use crate::action::Stats;
+use crate::arrow::array::TimestampMicrosecondArray;
+use crate::table_state::DeltaTableState;
+use crate::DeltaDataTypeLong;
+use crate::DeltaTableError;
+use crate::SchemaDataType;
+use crate::SchemaTypeStruct;
+use arrow::array::ArrayRef;
+use arrow::array::BinaryArray;
+use arrow::array::BooleanArray;
+use arrow::array::Date32Array;
+use arrow::array::Int64Array;
+use arrow::array::PrimitiveArray;
+use arrow::array::StringArray;
+use arrow::array::TimestampMillisecondArray;
+use arrow::compute::cast;
+use arrow::compute::kernels::cast_utils::Parser;
+use arrow::datatypes::ArrowPrimitiveType;
+use arrow::datatypes::DataType;
+use arrow::datatypes::Date32Type;
+use arrow::datatypes::TimeUnit;
+use arrow::datatypes::TimestampMicrosecondType;
+use std::borrow::Cow;
+use std::collections::HashMap;
+use std::collections::VecDeque;
+use std::sync::Arc;
+
+impl DeltaTableState {
+    /// Get the add actions as a RecordBatch
+    pub fn add_actions_table(
+        &self,
+        flatten: bool,
+        parse_stats: bool,
+    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        let mut paths = arrow::array::StringBuilder::with_capacity(
+            self.files().len(),
+            self.files().iter().map(|add| add.path.len()).sum(),
+        );
+        for action in self.files() {
+            paths.append_value(&action.path);
+        }
+
+        let size = self
+            .files()
+            .iter()
+            .map(|file| file.size)
+            .collect::<Int64Array>();
+        let mod_time: TimestampMillisecondArray = self
+            .files()
+            .iter()
+            .map(|file| file.modification_time)
+            .collect::<Vec<i64>>()
+            .into();
+        let data_change = self
+            .files()
+            .iter()
+            .map(|file| Some(file.data_change))
+            .collect::<BooleanArray>();
+
+        let mut arrays: Vec<(Cow<str>, ArrayRef)> = vec![
+            (Cow::Borrowed("path"), Arc::new(paths.finish())),
+            (Cow::Borrowed("size_bytes"), Arc::new(size)),
+            (Cow::Borrowed("modification_time"), Arc::new(mod_time)),
+            (Cow::Borrowed("data_change"), Arc::new(data_change)),
+        ];
+        let metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let partition_column_types: Vec<arrow::datatypes::DataType> = metadata
+            .partition_columns
+            .iter()
+            .map(
+                |name| -> Result<arrow::datatypes::DataType, DeltaTableError> {
+                    let field = metadata.schema.get_field_with_name(name)?;
+                    Ok(field.get_type().try_into()?)
+                },
+            )
+            .collect::<Result<_, DeltaTableError>>()?;
+
+        // Create builder for each
+        let mut builders = metadata
+            .partition_columns
+            .iter()
+            .map(|name| {
+                let builder = arrow::array::StringBuilder::new();
+                (name.as_str(), builder)
+            })
+            .collect::<HashMap<&str, _>>();
+
+        // Append values
+        for action in self.files() {
+            for (name, maybe_value) in action.partition_values.iter() {
+                if let Some(value) = maybe_value {
+                    builders.get_mut(name.as_str()).unwrap().append_value(value);
+                } else {
+                    builders.get_mut(name.as_str()).unwrap().append_null();
+                }
+            }
+        }
+
+        // Cast them to their appropriate types
+        let partition_columns: Vec<ArrayRef> = metadata
+            .partition_columns
+            .iter()
+            // Get the builders in their original order
+            .map(|name| builders.remove(name.as_str()).unwrap())
+            .zip(partition_column_types.iter())
+            .map(|(mut builder, datatype)| {
+                let string_arr: ArrayRef = Arc::new(builder.finish());
+                Ok(cast(&string_arr, datatype)?)
+            })
+            .collect::<Result<_, DeltaTableError>>()?;
+
+        // if flatten, append columns, otherwise combine into a struct column
+        let partition_columns: Vec<(Cow<str>, ArrayRef)> = if flatten {
+            partition_columns
+                .into_iter()
+                .zip(metadata.partition_columns.iter())
+                .map(|(array, name)| {
+                    let name: Cow<str> = Cow::Owned(format!("partition_{}", name));
+                    (name, array)
+                })
+                .collect()
+        } else {
+            let fields = partition_column_types
+                .into_iter()
+                .zip(metadata.partition_columns.iter())
+                .map(|(datatype, name)| arrow::datatypes::Field::new(name, datatype, true));
+            let field_arrays = fields
+                .zip(partition_columns.into_iter())
+                .collect::<Vec<_>>();
+            if field_arrays.is_empty() {
+                vec![]
+            } else {
+                let arr = Arc::new(arrow::array::StructArray::from(field_arrays));
+                vec![(Cow::Borrowed("partition_values"), arr)]
+            }
+        };
+
+        if parse_stats {
+            let stats = self.stats_as_batch(flatten)?;
+            arrays.extend(
+                stats
+                    .schema()
+                    .fields
+                    .iter()
+                    .map(|field| Cow::Owned(field.name().clone()))
+                    .zip(stats.columns().iter().map(Arc::clone)),
+            );
+        } else {
+            let mut stats_builder = arrow::array::StringBuilder::with_capacity(
+                self.files().len(),
+                self.files()
+                    .iter()
+                    .map(|add| add.stats.as_ref().map(|s| s.len()).unwrap_or(0))
+                    .sum(),
+            );
+
+            for action in self.files() {
+                if let Some(stats) = &action.get_stats()? {
+                    stats_builder.append_value(&serde_json::to_string(stats)?);
+                } else {
+                    stats_builder.append_null();
+                }
+            }
+            arrays.push((Cow::Borrowed("stats"), Arc::new(stats_builder.finish())));
+        }
+
+        arrays.extend(partition_columns.into_iter());
+
+        Ok(arrow::record_batch::RecordBatch::try_from_iter(arrays)?)
+    }
+
+    fn stats_as_batch(
+        &self,
+        flatten: bool,
+    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        let stats: Vec<Option<Stats>> = self
+            .files()
+            .iter()
+            .map(|f| {
+                f.get_stats()
+                    .map_err(|err| DeltaTableError::InvalidJson { source: err })
+            })
+            .collect::<Result<_, DeltaTableError>>()?;
+
+        let num_records = arrow::array::Int64Array::from(
+            stats
+                .iter()
+                .map(|maybe_stat| maybe_stat.as_ref().map(|stat| stat.num_records))
+                .collect::<Vec<Option<i64>>>(),
+        );
+        let metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let schema = &metadata.schema;
+
+        struct ColStats<'a> {
+            path: Vec<&'a str>,
+            null_count: Option<ArrayRef>,
+            min_values: Option<ArrayRef>,
+            max_values: Option<ArrayRef>,
+        }
+        let columnar_stats: Vec<ColStats> = SchemaLeafIterator::new(schema)
+            .filter(|(_path, datatype)| !matches!(datatype, SchemaDataType::r#struct(_)))
+            .map(|(path, datatype)| -> Result<ColStats, DeltaTableError> {
+                let null_count: Option<ArrayRef> = stats
+                    .iter()
+                    .flat_map(|maybe_stat| {
+                        maybe_stat
+                            .as_ref()
+                            .map(|stat| resolve_column_count_stat(&stat.null_count, &path))
+                    })
+                    .collect::<Option<Vec<DeltaDataTypeLong>>>()
+                    .map(arrow::array::Int64Array::from)
+                    .map(|arr| -> ArrayRef { Arc::new(arr) });
+
+                let arrow_type: arrow::datatypes::DataType = datatype.try_into()?;
+
+                // Min and max are collected for primitive values, not list or maps
+                let min_values = if matches!(datatype, SchemaDataType::primitive(_)) {
+                    stats
+                        .iter()
+                        .flat_map(|maybe_stat| {
+                            maybe_stat
+                                .as_ref()
+                                .map(|stat| resolve_column_value_stat(&stat.min_values, &path))
+                        })
+                        .collect::<Option<Vec<&serde_json::Value>>>()
+                        .map(|min_values| {
+                            json_value_to_array_general(&arrow_type, min_values.into_iter())
+                        })
+                        .transpose()?
+                } else {
+                    None
+                };
+
+                let max_values = if matches!(datatype, SchemaDataType::primitive(_)) {
+                    stats
+                        .iter()
+                        .flat_map(|maybe_stat| {
+                            maybe_stat
+                                .as_ref()
+                                .map(|stat| resolve_column_value_stat(&stat.max_values, &path))
+                        })
+                        .collect::<Option<Vec<&serde_json::Value>>>()
+                        .map(|max_values| {
+                            json_value_to_array_general(&arrow_type, max_values.into_iter())
+                        })
+                        .transpose()?
+                } else {
+                    None
+                };
+
+                Ok(ColStats {
+                    path,
+                    null_count,
+                    min_values,
+                    max_values,
+                })
+            })
+            .collect::<Result<_, DeltaTableError>>()?;
+
+        let mut out_columns: Vec<(Cow<str>, ArrayRef)> =
+            vec![(Cow::Borrowed("num_records"), Arc::new(num_records))];
+        if flatten {
+            for col_stats in columnar_stats {
+                if let Some(null_count) = col_stats.null_count {
+                    out_columns.push((
+                        Cow::Owned(format!("null_count.{}", col_stats.path.join("."))),
+                        null_count,
+                    ));
+                }
+                if let Some(min_values) = col_stats.min_values {
+                    out_columns.push((
+                        Cow::Owned(format!("min.{}", col_stats.path.join("."))),
+                        min_values,
+                    ));
+                }
+                if let Some(max_values) = col_stats.max_values {
+                    out_columns.push((
+                        Cow::Owned(format!("max.{}", col_stats.path.join("."))),
+                        max_values,
+                    ));
+                }
+            }
+        } else {
+            todo!()
+        }
+
+        Ok(arrow::record_batch::RecordBatch::try_from_iter(
+            out_columns,
+        )?)
+    }
+}
+
+fn resolve_column_value_stat<'a>(
+    values: &'a HashMap<String, ColumnValueStat>,
+    path: &[&'a str],
+) -> Option<&'a serde_json::Value> {
+    let mut current = values;
+    let (&name, path) = path.split_last()?;
+    for &segment in path {
+        current = current.get(segment)?.as_column()?;
+    }
+    let current = current.get(name)?;
+    current.as_value()
+}
+
+fn resolve_column_count_stat(
+    values: &HashMap<String, ColumnCountStat>,
+    path: &[&str],
+) -> Option<DeltaDataTypeLong> {
+    let mut current = values;
+    let (&name, path) = path.split_last()?;
+    for &segment in path {
+        current = current.get(segment)?.as_column()?;
+    }
+    let current = current.get(name)?;
+    current.as_value()
+}
+
+struct SchemaLeafIterator<'a> {
+    fields_remaining: VecDeque<(Vec<&'a str>, &'a SchemaDataType)>,
+}
+
+impl<'a> SchemaLeafIterator<'a> {
+    fn new(schema: &'a SchemaTypeStruct) -> Self {
+        SchemaLeafIterator {
+            fields_remaining: schema
+                .get_fields()
+                .iter()
+                .map(|field| (vec![field.get_name()], field.get_type()))
+                .collect(),
+        }
+    }
+}
+
+impl<'a> std::iter::Iterator for SchemaLeafIterator<'a> {
+    type Item = (Vec<&'a str>, &'a SchemaDataType);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some((path, datatype)) = self.fields_remaining.pop_front() {
+            if let SchemaDataType::r#struct(struct_type) = datatype {
+                // push child fields to front
+                for field in struct_type.get_fields() {
+                    let mut new_path = path.clone();
+                    new_path.push(field.get_name());
+                    self.fields_remaining
+                        .push_front((new_path, field.get_type()));
+                }
+            };
+
+            Some((path, datatype))
+        } else {
+            None
+        }
+    }
+}
+
+fn json_value_to_array_general<'a>(
+    datatype: &arrow::datatypes::DataType,
+    values: impl Iterator<Item = &'a serde_json::Value>,
+) -> Result<ArrayRef, DeltaTableError> {
+    match datatype {
+        DataType::Boolean => Ok(Arc::new(
+            values
+                .map(|value| value.as_bool())
+                .collect::<BooleanArray>(),
+        )),
+        DataType::Int64 => json_value_to_array::<arrow::datatypes::Int64Type>(values),
+        DataType::Int32 => json_value_to_array::<arrow::datatypes::Int32Type>(values),
+        DataType::Int16 => json_value_to_array::<arrow::datatypes::Int16Type>(values),
+        DataType::Int8 => json_value_to_array::<arrow::datatypes::Int8Type>(values),
+        DataType::Float32 => json_value_to_array::<arrow::datatypes::Float32Type>(values),
+        DataType::Float64 => json_value_to_array::<arrow::datatypes::Float64Type>(values),
+        DataType::Utf8 => Ok(Arc::new(
+            values.map(|value| value.as_str()).collect::<StringArray>(),
+        )),
+        DataType::Binary => Ok(Arc::new(
+            values.map(|value| value.as_str()).collect::<BinaryArray>(),
+        )),
+        DataType::Timestamp(TimeUnit::Microsecond, None) => {
+            Ok(Arc::new(TimestampMicrosecondArray::from(
+                values
+                    .map(|value| value.as_str().and_then(TimestampMicrosecondType::parse))
+                    .collect::<Vec<Option<i64>>>(),
+            )))
+        }
+        DataType::Date32 => Ok(Arc::new(Date32Array::from(
+            values
+                .map(|value| value.as_str().and_then(Date32Type::parse))
+                .collect::<Vec<Option<i32>>>(),
+        ))),
+        DataType::Decimal128(_, _) => {
+            let float_arr = json_value_to_array::<arrow::datatypes::Float64Type>(values)?;
+            Ok(arrow::compute::cast(&float_arr, datatype)?)
+        }
+        _ => Err(DeltaTableError::Generic("Invalid datatype".to_string())),
+    }
+}
+
+fn json_value_to_array<'a, T>(
+    values: impl Iterator<Item = &'a serde_json::Value>,
+) -> Result<ArrayRef, DeltaTableError>
+where
+    T: ArrowPrimitiveType,
+    T::Native: num::NumCast,
+{
+    // Adapted from
+    Ok(Arc::new(
+        values
+            .map(|value| -> Option<T::Native> {
+                if value.is_i64() {
+                    value.as_i64().and_then(num::cast::cast)
+                } else if value.is_u64() {
+                    value.as_u64().and_then(num::cast::cast)
+                } else {
+                    value.as_f64().and_then(num::cast::cast)
+                }
+            })
+            .collect::<PrimitiveArray<T>>(),
+    ))
+}

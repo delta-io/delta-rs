@@ -8,18 +8,14 @@ use crate::{
     ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
     DeltaTableMetaData,
 };
-use arrow::array::ArrayRef;
-use arrow::compute::cast;
 use chrono::Utc;
 use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
-use std::borrow::Cow;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, Cursor};
-use std::sync::Arc;
 
 #[cfg(any(feature = "parquet", feature = "parquet2"))]
 use super::{CheckPoint, DeltaTableConfig};
@@ -382,137 +378,10 @@ impl DeltaTableState {
         });
         Ok(actions)
     }
-
-    /// Get the add actions as a RecordBatch
-    pub fn add_actions_table(
-        &self,
-        flatten: bool,
-    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
-        let mut paths = arrow::array::StringBuilder::with_capacity(
-            self.files.len(),
-            self.files.iter().map(|add| add.path.len()).sum(),
-        );
-        let mut size = arrow::array::Int64Builder::with_capacity(self.files.len());
-        let mut mod_time =
-            arrow::array::TimestampMillisecondBuilder::with_capacity(self.files.len());
-        let mut data_change = arrow::array::BooleanBuilder::with_capacity(self.files.len());
-        let mut stats = arrow::array::StringBuilder::with_capacity(
-            self.files.len(),
-            self.files
-                .iter()
-                .map(|add| add.stats.as_ref().map(|s| s.len()).unwrap_or(0))
-                .sum(),
-        );
-
-        for action in &self.files {
-            paths.append_value(&action.path);
-            size.append_value(action.size);
-            mod_time.append_value(action.modification_time);
-            data_change.append_value(action.data_change);
-
-            if let Some(action_stats) = &action.get_stats()? {
-                stats.append_value(serde_json::to_string(action_stats)?);
-            } else {
-                stats.append_null();
-            }
-        }
-
-        let mut arrays: Vec<(Cow<str>, ArrayRef)> = vec![
-            (Cow::Borrowed("path"), Arc::new(paths.finish())),
-            (Cow::Borrowed("size_bytes"), Arc::new(size.finish())),
-            (
-                Cow::Borrowed("modification_time"),
-                Arc::new(mod_time.finish()),
-            ),
-            (Cow::Borrowed("data_change"), Arc::new(data_change.finish())),
-            (Cow::Borrowed("stats"), Arc::new(stats.finish())),
-        ];
-        let metadata = self
-            .current_metadata
-            .as_ref()
-            .ok_or(DeltaTableError::NoMetadata)?;
-        let partition_column_types: Vec<arrow::datatypes::DataType> = metadata
-            .partition_columns
-            .iter()
-            .map(
-                |name| -> Result<arrow::datatypes::DataType, DeltaTableError> {
-                    let field = metadata.schema.get_field_with_name(name)?;
-                    Ok(field.get_type().try_into()?)
-                },
-            )
-            .collect::<Result<_, DeltaTableError>>()?;
-
-        // Create builder for each
-        let mut builders = metadata
-            .partition_columns
-            .iter()
-            .map(|name| {
-                let builder = arrow::array::StringBuilder::new();
-                (name.as_str(), builder)
-            })
-            .collect::<HashMap<&str, _>>();
-
-        // Append values
-        for action in &self.files {
-            for (name, maybe_value) in action.partition_values.iter() {
-                if let Some(value) = maybe_value {
-                    builders.get_mut(name.as_str()).unwrap().append_value(value);
-                } else {
-                    builders.get_mut(name.as_str()).unwrap().append_null();
-                }
-            }
-        }
-
-        // Cast them to their appropriate types
-        let partition_columns: Vec<ArrayRef> = metadata
-            .partition_columns
-            .iter()
-            // Get the builders in their original order
-            .map(|name| builders.remove(name.as_str()).unwrap())
-            .zip(partition_column_types.iter())
-            .map(|(mut builder, datatype)| {
-                let string_arr: ArrayRef = Arc::new(builder.finish());
-                Ok(cast(&string_arr, datatype)?)
-            })
-            .collect::<Result<_, DeltaTableError>>()?;
-
-        // if flatten, append columns, otherwise combine into a struct column
-        let partition_columns: Vec<(Cow<str>, ArrayRef)> = if flatten {
-            partition_columns
-                .into_iter()
-                .zip(metadata.partition_columns.iter())
-                .map(|(array, name)| {
-                    let name: Cow<str> = Cow::Owned(format!("partition_{}", name));
-                    (name, array)
-                })
-                .collect()
-        } else {
-            let fields = partition_column_types
-                .into_iter()
-                .zip(metadata.partition_columns.iter())
-                .map(|(datatype, name)| arrow::datatypes::Field::new(name, datatype, true));
-            let field_arrays = fields
-                .zip(partition_columns.into_iter())
-                .collect::<Vec<_>>();
-            if field_arrays.is_empty() {
-                vec![]
-            } else {
-                let arr = Arc::new(arrow::array::StructArray::from(field_arrays));
-                vec![(Cow::Borrowed("partition_values"), arr)]
-            }
-        };
-
-        arrays.extend(partition_columns.into_iter());
-
-        Ok(arrow::record_batch::RecordBatch::try_from_iter(arrays)?)
-    }
 }
-
-#[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
 
     #[test]
     fn state_round_trip() {

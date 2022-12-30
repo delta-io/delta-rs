@@ -1,8 +1,9 @@
 #![cfg(feature = "arrow")]
 
 use arrow::array::{self, ArrayRef, StringArray};
+use arrow::compute::kernels::cast_utils::Parser;
 use arrow::compute::sort_to_indices;
-use arrow::datatypes::{DataType, Field};
+use arrow::datatypes::{DataType, Date32Type, Field, TimestampMicrosecondType};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
@@ -24,12 +25,14 @@ fn sort_batch_by(batch: &RecordBatch, column: &str) -> arrow::error::Result<Reco
     RecordBatch::try_from_iter(sorted_columns)
 }
 
+// TODO: split this into multiple tests
+
 #[tokio::test]
-async fn test_add_action_table() {
+async fn test_with_partitions() {
     // test table with partitions
     let path = "./tests/data/delta-0.8.0-null-partition";
     let table = deltalake::open_table(path).await.unwrap();
-    let actions = table.get_state().add_actions_table(true).unwrap();
+    let actions = table.get_state().add_actions_table(true, false).unwrap();
     let actions = sort_batch_by(&actions, "path").unwrap();
 
     let mut expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -49,7 +52,7 @@ async fn test_add_action_table() {
 
     assert_eq!(expected, actions);
 
-    let actions = table.get_state().add_actions_table(false).unwrap();
+    let actions = table.get_state().add_actions_table(false, false).unwrap();
     let actions = sort_batch_by(&actions, "path").unwrap();
 
     expected_columns[5] = (
@@ -62,12 +65,15 @@ async fn test_add_action_table() {
     let expected = RecordBatch::try_from_iter(expected_columns).unwrap();
 
     assert_eq!(expected, actions);
+}
 
+#[tokio::test]
+async fn test_without_partitions() {
     // test table without partitions
     let path = "./tests/data/simple_table";
     let table = deltalake::open_table(path).await.unwrap();
 
-    let actions = table.get_state().add_actions_table(true).unwrap();
+    let actions = table.get_state().add_actions_table(true, false).unwrap();
     let actions = sort_batch_by(&actions, "path").unwrap();
 
     let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -110,7 +116,7 @@ async fn test_add_action_table() {
 
     assert_eq!(expected, actions);
 
-    let actions = table.get_state().add_actions_table(false).unwrap();
+    let actions = table.get_state().add_actions_table(false, false).unwrap();
     let actions = sort_batch_by(&actions, "path").unwrap();
 
     // For now, this column is ignored.
@@ -121,37 +127,76 @@ async fn test_add_action_table() {
     let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
 
     assert_eq!(expected, actions);
+}
 
+#[tokio::test]
+async fn test_with_stats() {
     // test table with stats
     let path = "./tests/data/delta-0.8.0";
     let table = deltalake::open_table(path).await.unwrap();
-    let actions = table.get_state().add_actions_table(true).unwrap();
+    let actions = table.get_state().add_actions_table(true, false).unwrap();
     let actions = sort_batch_by(&actions, "path").unwrap();
 
+    let stats_col_index = actions.schema().column_with_name("stats").unwrap().0;
+    let result_stats: &StringArray = actions
+        .column(stats_col_index)
+        .as_any()
+        .downcast_ref()
+        .unwrap();
+    let actions = actions
+        .project(
+            &(0..actions.num_columns())
+                .into_iter()
+                .filter(|i| i != &stats_col_index)
+                .collect::<Vec<usize>>(),
+        )
+        .unwrap();
+
     let expected_columns: Vec<(&str, ArrayRef)> = vec![
-        ("path", Arc::new(array::StringArray::from(vec![
-            "part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet",
-            "part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet",
-        ]))),
-        ("size_bytes", Arc::new(array::Int64Array::from(vec![440, 440]))),
-        ("modification_time", Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
-            1615043776000, 1615043767000
-        ]))),
-        ("data_change", Arc::new(array::BooleanArray::from(vec![true, true]))),
-        ("stats", Arc::new(array::StringArray::from(vec![
-            "{\"numRecords\":2,\"minValues\":{\"value\":2},\"maxValues\":{\"value\":4},\"nullCount\":{\"value\":0}}",
-            "{\"numRecords\":2,\"minValues\":{\"value\":0},\"maxValues\":{\"value\":2},\"nullCount\":{\"value\":0}}",
-        ]))),
+        (
+            "path",
+            Arc::new(array::StringArray::from(vec![
+                "part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet",
+                "part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet",
+            ])),
+        ),
+        (
+            "size_bytes",
+            Arc::new(array::Int64Array::from(vec![440, 440])),
+        ),
+        (
+            "modification_time",
+            Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
+                1615043776000,
+                1615043767000,
+            ])),
+        ),
+        (
+            "data_change",
+            Arc::new(array::BooleanArray::from(vec![true, true])),
+        ),
     ];
     let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
 
     assert_eq!(expected, actions);
 
+    let expected_stats = vec![
+        "{\"numRecords\":2,\"minValues\":{\"value\":2},\"maxValues\":{\"value\":4},\"nullCount\":{\"value\":0}}",
+        "{\"numRecords\":2,\"minValues\":{\"value\":0},\"maxValues\":{\"value\":2},\"nullCount\":{\"value\":0}}",
+    ];
+
+    for (maybe_result_stat, expected_stat) in result_stats.iter().zip(expected_stats.into_iter()) {
+        assert_json_equal(maybe_result_stat.unwrap(), expected_stat);
+    }
+}
+
+#[tokio::test]
+async fn test_only_struct_stats() {
     // test table with no json stats
     let path = "./tests/data/delta-1.2.1-only-struct-stats";
     let table = deltalake::open_table(path).await.unwrap();
 
-    let actions = table.get_state().add_actions_table(true).unwrap();
+    let actions = table.get_state().add_actions_table(true, false).unwrap();
     let actions = sort_batch_by(&actions, "path").unwrap();
 
     let stats_col_index = actions.schema().column_with_name("stats").unwrap().0;
@@ -238,9 +283,187 @@ async fn test_add_action_table() {
     ];
 
     for (maybe_result_stat, expected_stat) in result_stats.iter().zip(expected_stats.into_iter()) {
-        let result_value: serde_json::Value =
-            serde_json::from_str(maybe_result_stat.unwrap()).unwrap();
-        let expected_value: serde_json::Value = serde_json::from_str(expected_stat).unwrap();
-        assert_eq!(result_value, expected_value);
+        assert_json_equal(maybe_result_stat.unwrap(), expected_stat);
     }
+}
+
+#[tokio::test]
+async fn test_parsed_stats() {
+    // test table with no json stats
+    let path = "./tests/data/delta-1.2.1-only-struct-stats";
+    let mut table = deltalake::open_table(path).await.unwrap();
+    table.load_version(1).await.unwrap();
+
+    let actions = table.get_state().add_actions_table(true, true).unwrap();
+
+    let expected_columns: Vec<(&str, ArrayRef)> = vec![
+        (
+            "path",
+            Arc::new(array::StringArray::from(vec![
+                "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
+            ])),
+        ),
+        ("size_bytes", Arc::new(array::Int64Array::from(vec![5489]))),
+        (
+            "modification_time",
+            Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
+                1666652373000,
+            ])),
+        ),
+        (
+            "data_change",
+            Arc::new(array::BooleanArray::from(vec![true])),
+        ),
+        ("num_records", Arc::new(array::Int64Array::from(vec![1]))),
+        (
+            "null_count.integer",
+            Arc::new(array::Int64Array::from(vec![0])),
+        ),
+        ("min.integer", Arc::new(array::Int32Array::from(vec![0]))),
+        ("max.integer", Arc::new(array::Int32Array::from(vec![0]))),
+        (
+            "null_count.null",
+            Arc::new(array::Int64Array::from(vec![1])),
+        ),
+        (
+            "null_count.boolean",
+            Arc::new(array::Int64Array::from(vec![0])),
+        ),
+        (
+            "null_count.double",
+            Arc::new(array::Int64Array::from(vec![0])),
+        ),
+        (
+            "min.double",
+            Arc::new(array::Float64Array::from(vec![1.234])),
+        ),
+        (
+            "max.double",
+            Arc::new(array::Float64Array::from(vec![1.234])),
+        ),
+        (
+            "null_count.decimal",
+            Arc::new(array::Int64Array::from(vec![0])),
+        ),
+        (
+            "min.decimal",
+            Arc::new(
+                array::Decimal128Array::from_iter_values([-567800])
+                    .with_precision_and_scale(8, 5)
+                    .unwrap(),
+            ),
+        ),
+        (
+            "max.decimal",
+            Arc::new(
+                array::Decimal128Array::from_iter_values([-567800])
+                    .with_precision_and_scale(8, 5)
+                    .unwrap(),
+            ),
+        ),
+        (
+            "null_count.string",
+            Arc::new(array::Int64Array::from(vec![0])),
+        ),
+        (
+            "min.string",
+            Arc::new(array::StringArray::from(vec!["string"])),
+        ),
+        (
+            "max.string",
+            Arc::new(array::StringArray::from(vec!["string"])),
+        ),
+        (
+            "null_count.binary",
+            Arc::new(array::Int64Array::from(vec![0])),
+        ),
+        (
+            "null_count.date",
+            Arc::new(array::Int64Array::from(vec![0])),
+        ),
+        (
+            "min.date",
+            Arc::new(array::Date32Array::from(vec![Date32Type::parse(
+                "2022-10-24",
+            )])),
+        ),
+        (
+            "max.date",
+            Arc::new(array::Date32Array::from(vec![Date32Type::parse(
+                "2022-10-24",
+            )])),
+        ),
+        (
+            "null_count.timestamp",
+            Arc::new(array::Int64Array::from(vec![0])),
+        ),
+        (
+            "min.timestamp",
+            Arc::new(array::TimestampMicrosecondArray::from(vec![
+                TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
+            ])),
+        ),
+        (
+            "max.timestamp",
+            Arc::new(array::TimestampMicrosecondArray::from(vec![
+                TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
+            ])),
+        ),
+        (
+            "null_count.struct.struct_element",
+            Arc::new(array::Int64Array::from(vec![0])),
+        ),
+        (
+            "min.struct.struct_element",
+            Arc::new(array::StringArray::from(vec!["struct_value"])),
+        ),
+        (
+            "max.struct.struct_element",
+            Arc::new(array::StringArray::from(vec!["struct_value"])),
+        ),
+        ("null_count.map", Arc::new(array::Int64Array::from(vec![0]))),
+        (
+            "null_count.array",
+            Arc::new(array::Int64Array::from(vec![0])),
+        ),
+        (
+            "null_count.nested_struct.struct_element.nested_struct_element",
+            Arc::new(array::Int64Array::from(vec![0])),
+        ),
+        (
+            "min.nested_struct.struct_element.nested_struct_element",
+            Arc::new(array::StringArray::from(vec!["nested_struct_value"])),
+        ),
+        (
+            "max.nested_struct.struct_element.nested_struct_element",
+            Arc::new(array::StringArray::from(vec!["nested_struct_value"])),
+        ),
+        (
+            "null_count.struct_of_array_of_map.struct_element",
+            Arc::new(array::Int64Array::from(vec![0])),
+        ),
+    ];
+    let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
+
+    assert_eq!(
+        expected
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<&str>>(),
+        actions
+            .schema()
+            .fields()
+            .iter()
+            .map(|field| field.name().as_str())
+            .collect::<Vec<&str>>()
+    );
+    assert_eq!(expected, actions);
+}
+
+fn assert_json_equal(left: &str, right: &str) {
+    let left_value: serde_json::Value = serde_json::from_str(left).unwrap();
+    let right_value: serde_json::Value = serde_json::from_str(right).unwrap();
+    assert_eq!(left_value, right_value);
 }
