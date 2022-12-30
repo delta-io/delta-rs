@@ -46,15 +46,6 @@
 //! - `datafusion-ext` - DEPRECATED: alias for `datafusion` feature.
 //! - `parquet2` - use parquet2 for checkpoint deserialization. Since `arrow` and `parquet` features
 //!   are enabled by default for backwards compatibility, this feature needs to be used with `--no-default-features`.
-//! - `aws-profile` - enable support for aws profile authorization in underlying object_store crat
-//!
-//! Using `aws-profile` requires that credentials being stored in plain-text on the local disk in `~/.aws/credentials`
-//! Consider using a manager such as [aws-vault] to avoid additional dependencies and storing
-//! credentials in [plain text on disk]
-//!
-//! [aws-config]: https://docs.rs/aws-config
-//! [aws-vault]: https://github.com/99designs/aws-vault
-//! [plain text on disk]: https://99designs.com.au/blog/engineering/aws-vault/
 //!
 //! # Querying Delta Tables with Datafusion
 //!
