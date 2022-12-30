@@ -1,8 +1,8 @@
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 #[allow(dead_code)]
 mod s3_common;
 
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
 mod dynamodb {
     use deltalake::storage::s3::dynamodb_lock::*;
     use deltalake::storage::s3::LockItem;

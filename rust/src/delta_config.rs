@@ -29,7 +29,7 @@ lazy_static! {
 }
 
 /// Delta configuration error
-#[derive(thiserror::Error, Debug, PartialEq)]
+#[derive(thiserror::Error, Debug, PartialEq, Eq)]
 pub enum DeltaConfigError {
     /// Error returned when configuration validation failed.
     #[error("Validation failed - {0}")]
@@ -179,7 +179,7 @@ mod tests {
                 .get_interval_from_metadata(&md)
                 .unwrap()
                 .as_secs(),
-            1 * SECONDS_PER_WEEK,
+            SECONDS_PER_WEEK,
         );
 
         // change to 2 day

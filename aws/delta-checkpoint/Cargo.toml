@@ -9,7 +9,7 @@ edition = "2018"
 [dependencies]
 anyhow = "1"
 thiserror = "1"
-lambda_runtime = { version = "0.3" }
+lambda_runtime = { version = "0.7" }
 lazy_static = "1"
 log = "0.4"
 openssl = { version = "0.10", features = ["vendored"] }
@@ -23,12 +23,12 @@ tokio-stream = { version = "0", features = ["fs"] }
 [dependencies.deltalake]
 path = "../../rust"
 version = "0"
-features = ["s3"]
+features = ["s3-rustls"]
 
 [dev-dependencies]
-rusoto_core = "0.48"
+rusoto_core = { version = "0.48", default-features = false, features = ["rustls"] }
 rusoto_credential = "0.48"
-rusoto_s3 = "0.48"
+rusoto_s3 = { version = "0.48", default-features = false, features = ["rustls"] }
 
 [[bin]]
 name = "bootstrap"

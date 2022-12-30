@@ -1,27 +1,27 @@
 //! The module for delta table state.
 
-use chrono::Utc;
-use parquet::file::{
-    reader::{FileReader, SerializedFileReader},
-    serialized_reader::SliceableCursor,
+use super::{
+    ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableMetaData,
 };
+use crate::action::{self, Action};
+use crate::delta_config;
+use chrono::Utc;
+use object_store::ObjectStore;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, Cursor};
 
-use super::{
-    ApplyLogError, CheckPoint, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable,
-    DeltaTableError, DeltaTableMetaData,
-};
-use crate::action::{self, Action};
-use crate::delta_config;
+#[cfg(any(feature = "parquet", feature = "parquet2"))]
+use super::{CheckPoint, DeltaTableConfig, DeltaTableError};
 
 /// State snapshot currently held by the Delta Table instance.
-#[derive(Default, Debug, Clone)]
+#[derive(Default, Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
-    pub version: DeltaDataTypeVersion,
+    version: DeltaDataTypeVersion,
     // A remove action should remain in the state of the table as a tombstone until it has expired.
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: HashSet<action::Remove>,
@@ -37,12 +37,17 @@ pub struct DeltaTableState {
 }
 
 impl DeltaTableState {
-    /// Create a new table state instance with default values and version specified
+    /// Create Table state with specified version
     pub fn with_version(version: DeltaDataTypeVersion) -> Self {
         Self {
             version,
             ..Self::default()
         }
+    }
+
+    /// Return table version
+    pub fn version(&self) -> DeltaDataTypeVersion {
+        self.version
     }
 
     /// Construct a delta table state object from commit version.
@@ -51,7 +56,7 @@ impl DeltaTableState {
         version: DeltaDataTypeVersion,
     ) -> Result<Self, ApplyLogError> {
         let commit_uri = table.commit_uri_from_version(version);
-        let commit_log_bytes = table.storage.get_obj(&commit_uri).await?;
+        let commit_log_bytes = table.storage.get(&commit_uri).await?.bytes().await?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
         let mut new_state = DeltaTableState::with_version(version);
@@ -79,18 +84,18 @@ impl DeltaTableState {
         Ok(new_state)
     }
 
-    /// Construct a delta table state object from checkpoint.
-    pub async fn from_checkpoint(
-        table: &DeltaTable,
-        check_point: &CheckPoint,
-    ) -> Result<Self, DeltaTableError> {
-        let checkpoint_data_paths = table.get_checkpoint_data_paths(check_point);
-        // process actions from checkpoint
-        let mut new_state = DeltaTableState::with_version(check_point.version);
+    /// Update DeltaTableState with checkpoint data.
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    pub fn process_checkpoint_bytes(
+        &mut self,
+        data: bytes::Bytes,
+        table_config: &DeltaTableConfig,
+    ) -> Result<(), DeltaTableError> {
+        #[cfg(feature = "parquet")]
+        {
+            use parquet::file::reader::{FileReader, SerializedFileReader};
 
-        for f in &checkpoint_data_paths {
-            let obj = table.storage.get_obj(f).await?;
-            let preader = SerializedFileReader::new(SliceableCursor::new(obj))?;
+            let preader = SerializedFileReader::new(data)?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
                 return Err(DeltaTableError::from(action::ActionError::Generic(
@@ -98,12 +103,50 @@ impl DeltaTableState {
                 )));
             }
             for record in preader.get_row_iter(None)? {
-                new_state.process_action(
+                self.process_action(
                     action::Action::from_parquet_record(schema, &record)?,
-                    table.config.require_tombstones,
-                    table.config.require_files,
+                    table_config.require_tombstones,
+                    table_config.require_files,
                 )?;
             }
+        }
+
+        #[cfg(feature = "parquet2")]
+        {
+            use crate::action::parquet2_read::actions_from_row_group;
+            use parquet2::read::read_metadata;
+
+            let mut reader = std::io::Cursor::new(data);
+            let metadata = read_metadata(&mut reader)?;
+
+            for row_group in metadata.row_groups {
+                for action in actions_from_row_group(row_group, &mut reader)
+                    .map_err(action::ActionError::from)?
+                {
+                    self.process_action(
+                        action,
+                        table_config.require_tombstones,
+                        table_config.require_files,
+                    )?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Construct a delta table state object from checkpoint.
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
+    pub async fn from_checkpoint(
+        table: &DeltaTable,
+        check_point: &CheckPoint,
+    ) -> Result<Self, DeltaTableError> {
+        let checkpoint_data_paths = table.get_checkpoint_data_paths(check_point);
+        let mut new_state = Self::with_version(check_point.version);
+
+        for f in &checkpoint_data_paths {
+            let obj = table.storage.get(f).await?.bytes().await?;
+            new_state.process_checkpoint_bytes(obj, &table.config)?;
         }
 
         Ok(new_state)
@@ -244,6 +287,8 @@ impl DeltaTableState {
         require_files: bool,
     ) -> Result<(), ApplyLogError> {
         match action {
+            // TODO: optionally load CDC into TableState
+            action::Action::cdc(_v) => {}
             action::Action::add(v) => {
                 if require_files {
                     self.files.push(v.path_decoded()?);
@@ -260,7 +305,8 @@ impl DeltaTableState {
                 self.min_writer_version = v.min_writer_version;
             }
             action::Action::metaData(v) => {
-                let md = DeltaTableMetaData::try_from(v)?;
+                let md = DeltaTableMetaData::try_from(v)
+                    .map_err(|e| ApplyLogError::InvalidJson { source: e })?;
                 self.tombstone_retention_millis = delta_config::TOMBSTONE_RETENTION
                     .get_interval_from_metadata(&md)?
                     .as_millis() as i64;
@@ -293,6 +339,26 @@ mod tests {
     use std::collections::HashMap;
 
     #[test]
+    fn state_round_trip() {
+        let expected = DeltaTableState {
+            version: 0,
+            tombstones: Default::default(),
+            files: vec![],
+            commit_infos: vec![],
+            app_transaction_version: Default::default(),
+            min_reader_version: 0,
+            min_writer_version: 0,
+            current_metadata: None,
+            tombstone_retention_millis: 0,
+            log_retention_millis: 0,
+            enable_expired_log_cleanup: false,
+        };
+        let bytes = serde_json::to_vec(&expected).unwrap();
+        let actual: DeltaTableState = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(actual.version, expected.version);
+    }
+
+    #[test]
     fn state_records_new_txn_version() {
         let mut app_transaction_version = HashMap::new();
         app_transaction_version.insert("abc".to_string(), 1);
@@ -318,7 +384,7 @@ mod tests {
             last_updated: Some(0),
         });
 
-        let _ = state.process_action(txn_action, false, true).unwrap();
+        state.process_action(txn_action, false, true).unwrap();
 
         assert_eq!(2, *state.app_transaction_version().get("abc").unwrap());
         assert_eq!(1, *state.app_transaction_version().get("xyz").unwrap());

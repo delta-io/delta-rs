@@ -1,30 +1,29 @@
+#![cfg(all(feature = "arrow", feature = "parquet"))]
 //! Abstractions and implementations for writing data to delta tables
-// TODO
-// - consider file size when writing parquet files
-// - handle writer version
-pub mod json;
-pub mod record_batch;
-mod stats;
-#[cfg(test)]
-pub mod test_utils;
-pub mod utils;
 
-use crate::{
-    action::{Action, Add, ColumnCountStat, Stats},
-    delta::DeltaTable,
-    DeltaDataTypeVersion, DeltaTableError, StorageError, UriError,
-};
+use crate::action::{Action, Add, ColumnCountStat, Stats};
+use crate::{DeltaDataTypeVersion, DeltaTable, DeltaTableError};
+
 use arrow::{datatypes::SchemaRef, datatypes::*, error::ArrowError};
 use async_trait::async_trait;
-pub use json::JsonWriter;
+use object_store::Error as ObjectStoreError;
 use parquet::{basic::LogicalType, errors::ParquetError};
-pub use record_batch::RecordBatchWriter;
 use serde_json::Value;
-use std::sync::Arc;
+
+pub use json::JsonWriter;
+pub use record_batch::RecordBatchWriter;
+
+pub mod json;
+pub mod record_batch;
+pub(crate) mod stats;
+pub mod utils;
+
+#[cfg(test)]
+pub mod test_utils;
 
 /// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]
-pub enum DeltaWriterError {
+pub(crate) enum DeltaWriterError {
     /// Partition column is missing in a record written to delta.
     #[error("Missing partition column: {0}")]
     MissingPartitionColumn(String),
@@ -35,7 +34,7 @@ pub enum DeltaWriterError {
         /// The record batch schema.
         record_batch_schema: SchemaRef,
         /// The schema of the target delta table.
-        expected_schema: Arc<arrow::datatypes::Schema>,
+        expected_schema: SchemaRef,
     },
 
     /// An Arrow RecordBatch could not be created from the JSON buffer.
@@ -63,20 +62,12 @@ pub enum DeltaWriterError {
         stats: Stats,
     },
 
-    /// Invalid table paths was specified for the delta table.
-    #[error("Invalid table path: {}", .source)]
-    UriError {
-        /// The wrapped [`UriError`].
+    /// underlying object store returned an error.
+    #[error("ObjectStore interaction failed: {source}")]
+    ObjectStore {
+        /// The wrapped [`ObjectStoreError`]
         #[from]
-        source: UriError,
-    },
-
-    /// deltalake storage backend returned an error.
-    #[error("Storage interaction failed: {source}")]
-    Storage {
-        /// The wrapped [`StorageError`]
-        #[from]
-        source: StorageError,
+        source: ObjectStoreError,
     },
 
     /// Arrow returned an error.
@@ -108,22 +99,34 @@ pub enum DeltaWriterError {
     DeltaTable(#[from] DeltaTableError),
 }
 
+impl From<DeltaWriterError> for DeltaTableError {
+    fn from(err: DeltaWriterError) -> Self {
+        match err {
+            DeltaWriterError::Arrow { source } => DeltaTableError::Arrow { source },
+            DeltaWriterError::Io { source } => DeltaTableError::Io { source },
+            DeltaWriterError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
+            DeltaWriterError::Parquet { source } => DeltaTableError::Parquet { source },
+            _ => DeltaTableError::Generic(err.to_string()),
+        }
+    }
+}
+
 #[async_trait]
 /// Trait for writing data to Delta tables
 pub trait DeltaWriter<T> {
     /// write a chunk of values into the internal write buffers.
-    async fn write(&mut self, values: T) -> Result<(), DeltaWriterError>;
+    async fn write(&mut self, values: T) -> Result<(), DeltaTableError>;
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// The corresponding delta [`Add`] actions are returned and should be committed via a transaction.
-    async fn flush(&mut self) -> Result<Vec<Add>, DeltaWriterError>;
+    async fn flush(&mut self) -> Result<Vec<Add>, DeltaTableError>;
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// and commit the changes to the Delta log, creating a new table version.
     async fn flush_and_commit(
         &mut self,
         table: &mut DeltaTable,
-    ) -> Result<DeltaDataTypeVersion, DeltaWriterError> {
+    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         let mut adds = self.flush().await?;
         let mut tx = table.create_transaction(None);
         tx.add_actions(adds.drain(..).map(Action::add).collect());

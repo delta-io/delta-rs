@@ -8,7 +8,6 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::HashMap;
 use std::convert::TryFrom;
 
 impl TryFrom<&schema::Schema> for ArrowSchema {
@@ -29,11 +28,21 @@ impl TryFrom<&schema::SchemaField> for ArrowField {
     type Error = ArrowError;
 
     fn try_from(f: &schema::SchemaField) -> Result<Self, ArrowError> {
-        Ok(ArrowField::new(
+        let metadata = f
+            .get_metadata()
+            .iter()
+            .map(|(key, val)| Ok((key.clone(), serde_json::to_string(val)?)))
+            .collect::<Result<_, serde_json::Error>>()
+            .map_err(|err| ArrowError::JsonError(err.to_string()))?;
+
+        let field = ArrowField::new(
             f.get_name(),
             ArrowDataType::try_from(f.get_type())?,
             f.is_nullable(),
-        ))
+        )
+        .with_metadata(metadata);
+
+        Ok(field)
     }
 }
 
@@ -42,7 +51,7 @@ impl TryFrom<&schema::SchemaTypeArray> for ArrowField {
 
     fn try_from(a: &schema::SchemaTypeArray) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
-            "element",
+            "item",
             ArrowDataType::try_from(a.get_element_type())?,
             a.contains_null(),
         ))
@@ -54,7 +63,7 @@ impl TryFrom<&schema::SchemaTypeMap> for ArrowField {
 
     fn try_from(a: &schema::SchemaTypeMap) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
-            "key_value",
+            "entries",
             ArrowDataType::Struct(vec![
                 ArrowField::new("key", ArrowDataType::try_from(a.get_key_type())?, false),
                 ArrowField::new(
@@ -95,14 +104,11 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                                 decimal
                             ))
                         })?;
-                        let precision = extract
-                            .get(1)
-                            .and_then(|v| v.as_str().parse::<usize>().ok());
-                        let scale = extract
-                            .get(2)
-                            .and_then(|v| v.as_str().parse::<usize>().ok());
+                        let precision = extract.get(1).and_then(|v| v.as_str().parse::<u8>().ok());
+                        let scale = extract.get(2).and_then(|v| v.as_str().parse::<i8>().ok());
                         match (precision, scale) {
-                            (Some(p), Some(s)) => Ok(ArrowDataType::Decimal(p, s)),
+                            // TODO how do we decide which variant (128 / 256) to use?
+                            (Some(p), Some(s)) => Ok(ArrowDataType::Decimal128(p, s)),
                             _ => Err(ArrowError::SchemaError(format!(
                                 "Invalid precision or scale decimal type for Arrow: {}",
                                 decimal
@@ -193,12 +199,9 @@ impl TryFrom<&ArrowField> for schema::SchemaField {
             arrow_field.is_nullable(),
             arrow_field
                 .metadata()
-                .as_ref()
-                .map_or_else(HashMap::new, |m| {
-                    m.iter()
-                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                        .collect()
-                }),
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect(),
         ))
     }
 }
@@ -216,12 +219,21 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
             ArrowDataType::Float64 => Ok(schema::SchemaDataType::primitive("double".to_string())),
             ArrowDataType::Boolean => Ok(schema::SchemaDataType::primitive("boolean".to_string())),
             ArrowDataType::Binary => Ok(schema::SchemaDataType::primitive("binary".to_string())),
-            ArrowDataType::Decimal(p, s) => Ok(schema::SchemaDataType::primitive(format!(
+            ArrowDataType::Decimal128(p, s) => Ok(schema::SchemaDataType::primitive(format!(
+                "decimal({},{})",
+                p, s
+            ))),
+            ArrowDataType::Decimal256(p, s) => Ok(schema::SchemaDataType::primitive(format!(
                 "decimal({},{})",
                 p, s
             ))),
             ArrowDataType::Date32 => Ok(schema::SchemaDataType::primitive("date".to_string())),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
+                Ok(schema::SchemaDataType::primitive("timestamp".to_string()))
+            }
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz))
+                if tz.eq_ignore_ascii_case("utc") =>
+            {
                 Ok(schema::SchemaDataType::primitive("timestamp".to_string()))
             }
             ArrowDataType::Struct(fields) => {
@@ -575,14 +587,13 @@ mod tests {
             .fields()
             .iter()
             .filter(|f| f.name() == "add")
-            .map(|f| {
+            .flat_map(|f| {
                 if let ArrowDataType::Struct(fields) = f.data_type() {
-                    fields.iter().map(|f| f.clone())
+                    fields.iter().cloned()
                 } else {
                     unreachable!();
                 }
             })
-            .flatten()
             .collect();
         assert_eq!(9, add_fields.len());
         let add_field_map: HashMap<_, _> = add_fields
@@ -630,20 +641,19 @@ mod tests {
         }
 
         // verify extended remove schema fields **ARE NOT** included when `use_extended_remove_schema` is false.
-        let remove_fields: Vec<_> = log_schema
+        let num_remove_fields = log_schema
             .fields()
             .iter()
             .filter(|f| f.name() == "remove")
-            .map(|f| {
+            .flat_map(|f| {
                 if let ArrowDataType::Struct(fields) = f.data_type() {
-                    fields.iter().map(|f| f.clone())
+                    fields.iter().cloned()
                 } else {
                     unreachable!();
                 }
             })
-            .flatten()
-            .collect();
-        assert_eq!(4, remove_fields.len());
+            .count();
+        assert_eq!(4, num_remove_fields);
 
         // verify extended remove schema fields **ARE** included when `use_extended_remove_schema` is true.
         let log_schema =
@@ -652,14 +662,13 @@ mod tests {
             .fields()
             .iter()
             .filter(|f| f.name() == "remove")
-            .map(|f| {
+            .flat_map(|f| {
                 if let ArrowDataType::Struct(fields) = f.data_type() {
-                    fields.iter().map(|f| f.clone())
+                    fields.iter().cloned()
                 } else {
                     unreachable!();
                 }
             })
-            .flatten()
             .collect();
         assert_eq!(7, remove_fields.len());
         let expected_fields = vec![
@@ -674,5 +683,62 @@ mod tests {
         for f in remove_fields.iter() {
             assert!(expected_fields.contains(&f.name().as_str()));
         }
+    }
+
+    #[test]
+    fn test_arrow_from_delta_decimal_type() {
+        let precision = 20;
+        let scale = 2;
+        let decimal_type = format!["decimal({p},{s})", p = precision, s = scale];
+        let decimal_field = crate::SchemaDataType::primitive(decimal_type);
+        assert_eq!(
+            <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&decimal_field).unwrap(),
+            ArrowDataType::Decimal128(precision, scale)
+        );
+    }
+
+    #[test]
+    fn test_arrow_from_delta_wrong_decimal_type() {
+        let precision = 20;
+        let scale = "wrong";
+        let decimal_type = format!["decimal({p},{s})", p = precision, s = scale];
+        let _error = format!(
+            "Invalid precision or scale decimal type for Arrow: {}",
+            scale
+        );
+        let decimal_field = crate::SchemaDataType::primitive(decimal_type);
+        assert!(matches!(
+            <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&decimal_field)
+                .unwrap_err(),
+            arrow::error::ArrowError::SchemaError(_error),
+        ));
+    }
+
+    #[test]
+    fn test_arrow_from_delta_timestamp_type() {
+        let timestamp_field = crate::SchemaDataType::primitive("timestamp".to_string());
+        assert_eq!(
+            <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&timestamp_field).unwrap(),
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+    }
+
+    #[test]
+    fn test_delta_from_arrow_timestamp_type() {
+        let timestamp_field = ArrowDataType::Timestamp(TimeUnit::Microsecond, None);
+        assert_eq!(
+            <crate::SchemaDataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
+            crate::SchemaDataType::primitive("timestamp".to_string())
+        );
+    }
+
+    #[test]
+    fn test_delta_from_arrow_timestamp_type_with_tz() {
+        let timestamp_field =
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string()));
+        assert_eq!(
+            <crate::SchemaDataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
+            crate::SchemaDataType::primitive("timestamp".to_string())
+        );
     }
 }

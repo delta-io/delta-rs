@@ -1,19 +1,22 @@
 //! Handle JSON messages when writing to delta tables
-use crate::writer::DeltaWriterError;
-use arrow::{
-    array::{as_primitive_array, Array},
-    datatypes::{
-        DataType, Int16Type, Int32Type, Int64Type, Int8Type, Schema as ArrowSchema,
-        SchemaRef as ArrowSchemaRef, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
-    },
-    json::reader::{Decoder, DecoderOptions},
-    record_batch::*,
-};
-use serde_json::Value;
 use std::collections::HashMap;
 use std::fmt::Display;
 use std::io::Write;
-use std::sync::{Arc, RwLock};
+use std::sync::Arc;
+
+use crate::writer::DeltaWriterError;
+use crate::DeltaTableError;
+
+use arrow::array::{as_primitive_array, Array};
+use arrow::datatypes::{
+    DataType, Int16Type, Int32Type, Int64Type, Int8Type, Schema as ArrowSchema,
+    SchemaRef as ArrowSchemaRef, UInt16Type, UInt32Type, UInt64Type, UInt8Type,
+};
+use arrow::json::reader::{Decoder, DecoderOptions};
+use arrow::record_batch::*;
+use object_store::path::Path;
+use parking_lot::RwLock;
+use serde_json::Value;
 use uuid::Uuid;
 
 const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
@@ -72,7 +75,7 @@ pub(crate) fn next_data_path(
     partition_columns: &[String],
     partition_values: &HashMap<String, Option<String>>,
     part: Option<i32>,
-) -> Result<String, DeltaWriterError> {
+) -> Result<Path, DeltaWriterError> {
     // TODO: what does 00000 mean?
     // TODO (roeap): my understanding is, that the values are used as a counter - i.e. if a single batch of
     // data written to one partition needs to be split due to desired file size constraints.
@@ -91,59 +94,24 @@ pub(crate) fn next_data_path(
     );
 
     if partition_columns.is_empty() {
-        return Ok(file_name);
+        return Ok(Path::from(file_name));
     }
 
     let partition_key = PartitionPath::from_hashmap(partition_columns, partition_values)?;
-    Ok(format!("{}/{}", partition_key, file_name))
-}
-
-/// partition json values
-pub fn divide_by_partition_values(
-    partition_columns: &[String],
-    records: Vec<Value>,
-) -> Result<HashMap<String, Vec<Value>>, DeltaWriterError> {
-    let mut partitioned_records: HashMap<String, Vec<Value>> = HashMap::new();
-
-    for record in records {
-        let partition_value = json_to_partition_values(partition_columns, &record)?;
-        match partitioned_records.get_mut(&partition_value) {
-            Some(vec) => vec.push(record),
-            None => {
-                partitioned_records.insert(partition_value, vec![record]);
-            }
-        };
-    }
-
-    Ok(partitioned_records)
-}
-
-fn json_to_partition_values(
-    partition_columns: &[String],
-    value: &Value,
-) -> Result<String, DeltaWriterError> {
-    if let Some(obj) = value.as_object() {
-        let key: Vec<String> = partition_columns
-            .iter()
-            .map(|c| obj.get(c).unwrap_or(&Value::Null).to_string())
-            .collect();
-        return Ok(key.join("/"));
-    }
-
-    Err(DeltaWriterError::InvalidRecord(value.to_string()))
+    Ok(Path::from(format!("{}/{}", partition_key, file_name)))
 }
 
 /// Convert a vector of json values to a RecordBatch
 pub fn record_batch_from_message(
     arrow_schema: Arc<ArrowSchema>,
     message_buffer: &[Value],
-) -> Result<RecordBatch, DeltaWriterError> {
+) -> Result<RecordBatch, DeltaTableError> {
     let mut value_iter = message_buffer.iter().map(|j| Ok(j.to_owned()));
     let options = DecoderOptions::new().with_batch_size(message_buffer.len());
     let decoder = Decoder::new(arrow_schema, options);
     decoder
         .next_batch(&mut value_iter)?
-        .ok_or(DeltaWriterError::EmptyRecordBatch)
+        .ok_or_else(|| DeltaWriterError::EmptyRecordBatch.into())
 }
 
 // very naive implementation for plucking the partition value from the first element of a column array.
@@ -230,25 +198,25 @@ impl ShareableBuffer {
     pub fn into_inner(self) -> Option<Vec<u8>> {
         Arc::try_unwrap(self.buffer)
             .ok()
-            .and_then(|lock| lock.into_inner().ok())
+            .map(|lock| lock.into_inner())
     }
 
     /// Returns a clone of the the underlying buffer as a `Vec`.
     pub fn to_vec(&self) -> Vec<u8> {
-        let inner = self.buffer.read().unwrap();
-        inner.to_vec()
+        let inner = self.buffer.read();
+        (*inner).to_vec()
     }
 
     /// Returns the number of bytes in the underlying buffer.
     pub fn len(&self) -> usize {
-        let inner = self.buffer.read().unwrap();
-        inner.len()
+        let inner = self.buffer.read();
+        (*inner).len()
     }
 
     /// Returns true if the underlying buffer is empty.
     pub fn is_empty(&self) -> bool {
-        let inner = self.buffer.read().unwrap();
-        inner.is_empty()
+        let inner = self.buffer.read();
+        (*inner).is_empty()
     }
 
     /// Creates a new instance with buffer initialized from the underylying bytes.
@@ -261,12 +229,12 @@ impl ShareableBuffer {
 
 impl Write for ShareableBuffer {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        let mut inner = self.buffer.write().unwrap();
-        inner.write(buf)
+        let mut inner = self.buffer.write();
+        (*inner).write(buf)
     }
 
     fn flush(&mut self) -> std::io::Result<()> {
-        let mut inner = self.buffer.write().unwrap();
-        inner.flush()
+        let mut inner = self.buffer.write();
+        (*inner).flush()
     }
 }

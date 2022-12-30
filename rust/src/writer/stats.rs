@@ -11,12 +11,10 @@ use arrow::{
     },
     buffer::MutableBuffer,
 };
-use parquet::{
-    errors::ParquetError,
-    file::{metadata::RowGroupMetaData, statistics::Statistics},
-    schema::types::{ColumnDescriptor, SchemaDescriptor},
-};
-use parquet_format::FileMetaData;
+use parquet::errors::ParquetError;
+use parquet::file::{metadata::RowGroupMetaData, statistics::Statistics};
+use parquet::format::FileMetaData;
+use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use serde_json::{Number, Value};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -31,7 +29,7 @@ pub type MinAndMaxValues = (
 pub(crate) fn apply_null_counts(
     array: &StructArray,
     null_counts: &mut HashMap<String, ColumnCountStat>,
-    nest_level: i32,
+    _nest_level: i32,
 ) {
     let fields = match array.data_type() {
         DataType::Struct(fields) => fields,
@@ -40,7 +38,7 @@ pub(crate) fn apply_null_counts(
 
     array
         .columns()
-        .into_iter()
+        .iter()
         .zip(fields)
         .for_each(|(column, field)| {
             let key = field.name().to_owned();
@@ -54,7 +52,7 @@ pub(crate) fn apply_null_counts(
 
                     match col_struct {
                         ColumnCountStat::Column(map) => {
-                            apply_null_counts(as_struct_array(column), map, nest_level + 1);
+                            apply_null_counts(as_struct_array(column), map, _nest_level + 1);
                         }
                         _ => unreachable!(),
                     }
@@ -317,8 +315,10 @@ fn min_and_max_from_parquet_statistics(
 
             match column_descr.logical_type().as_ref() {
                 Some(LogicalType::Timestamp { unit, .. }) => {
-                    let min = min.map(|n| Value::String(timestamp_to_delta_stats_string(n, unit)));
-                    let max = max.map(|n| Value::String(timestamp_to_delta_stats_string(n, unit)));
+                    let min = min
+                        .and_then(|n| timestamp_to_delta_stats_string(n, unit).map(Value::String));
+                    let max = max
+                        .and_then(|n| timestamp_to_delta_stats_string(n, unit).map(Value::String));
 
                     Ok((min, max))
                 }
@@ -404,6 +404,7 @@ mod tests {
     use super::{test_utils::get_record_batch, utils::record_batch_from_message};
     use crate::{
         action::{ColumnCountStat, ColumnValueStat},
+        builder::DeltaTableBuilder,
         DeltaTable, DeltaTableError,
     };
     use lazy_static::lazy_static;
@@ -420,7 +421,7 @@ mod tests {
         ref_null_counts.insert("modified".to_string(), ColumnCountStat::Value(0));
 
         let mut null_counts = HashMap::new();
-        apply_null_counts(&record_batch.clone().into(), &mut null_counts, 0);
+        apply_null_counts(&record_batch.into(), &mut null_counts, 0);
 
         assert_eq!(null_counts, ref_null_counts)
     }
@@ -435,7 +436,7 @@ mod tests {
             .await
             .unwrap();
 
-        let mut writer = RecordBatchWriter::for_table(&table, HashMap::new()).unwrap();
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let arrow_schema = writer.arrow_schema();
         let batch = record_batch_from_message(arrow_schema, JSON_ROWS.clone().as_ref()).unwrap();
@@ -470,14 +471,14 @@ mod tests {
                     assert_eq!("2021-06-22", timestamp.as_str().unwrap());
                 }
                 ("some_int", ColumnValueStat::Value(v)) => assert_eq!(302, v.as_i64().unwrap()),
-                ("some_bool", ColumnValueStat::Value(v)) => assert_eq!(false, v.as_bool().unwrap()),
+                ("some_bool", ColumnValueStat::Value(v)) => assert!(!v.as_bool().unwrap()),
                 ("some_string", ColumnValueStat::Value(v)) => {
                     assert_eq!("GET", v.as_str().unwrap())
                 }
                 ("date", ColumnValueStat::Value(v)) => {
                     assert_eq!("2021-06-22", v.as_str().unwrap())
                 }
-                _ => assert!(false, "Key should not be present"),
+                _ => panic!("Key should not be present"),
             }
         }
 
@@ -498,14 +499,14 @@ mod tests {
                     assert_eq!("2021-06-22", timestamp.as_str().unwrap());
                 }
                 ("some_int", ColumnValueStat::Value(v)) => assert_eq!(400, v.as_i64().unwrap()),
-                ("some_bool", ColumnValueStat::Value(v)) => assert_eq!(true, v.as_bool().unwrap()),
+                ("some_bool", ColumnValueStat::Value(v)) => assert!(v.as_bool().unwrap()),
                 ("some_string", ColumnValueStat::Value(v)) => {
                     assert_eq!("PUT", v.as_str().unwrap())
                 }
                 ("date", ColumnValueStat::Value(v)) => {
                     assert_eq!("2021-06-22", v.as_str().unwrap())
                 }
-                _ => assert!(false, "Key should not be present"),
+                _ => panic!("Key should not be present"),
             }
         }
 
@@ -531,7 +532,7 @@ mod tests {
                 ("some_list", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("some_nested_list", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
                 ("date", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
-                _ => assert!(false, "Key should not be present"),
+                _ => panic!("Key should not be present"),
             }
         }
     }
@@ -540,17 +541,17 @@ mod tests {
         table_uri: &str,
         options: HashMap<String, String>,
     ) -> Result<DeltaTable, DeltaTableError> {
-        let backend = crate::get_backend_for_uri_with_options(table_uri, options)?;
-        let mut table = DeltaTable::new(table_uri, backend, crate::DeltaTableConfig::default())?;
-        table.load().await?;
-        Ok(table)
+        DeltaTableBuilder::from_uri(table_uri)
+            .with_storage_options(options)
+            .load()
+            .await
     }
 
     fn create_temp_table(table_path: &Path) {
         let log_path = table_path.join("_delta_log");
 
-        let _ = std::fs::create_dir(log_path.as_path()).unwrap();
-        let _ = std::fs::write(
+        std::fs::create_dir(log_path.as_path()).unwrap();
+        std::fs::write(
             log_path.join("00000000000000000000.json"),
             V0_COMMIT.as_str(),
         )
@@ -659,7 +660,6 @@ mod tests {
                 .map(|j| serde_json::to_string(j).unwrap())
                 .collect::<Vec<String>>()
                 .join("\n")
-                .to_string()
         };
         static ref JSON_ROWS: Vec<Value> = {
             std::iter::repeat(json!({

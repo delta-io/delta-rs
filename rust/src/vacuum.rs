@@ -12,18 +12,22 @@
 //! When you run vacuum then you cannot use time travel to a version older than
 //! the specified retention period.
 //!
+//! Warning: Vacuum does not support partitioned tables on Windows. This is due
+//! to Windows not using unix style paths. See #682
+//!
 //! # Example
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;
 //! let metrics = Vacuum::default().execute(table).await?;
 //! ````
 
-use crate::delta::extract_rel_path;
 use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError};
 use chrono::{Duration, Utc};
 use futures::StreamExt;
+use object_store::{path::Path, ObjectStore};
 use std::collections::HashSet;
 use std::fmt::Debug;
+use std::sync::Arc;
 
 #[derive(Debug)]
 /// Vacuum a Delta table with the given options
@@ -35,6 +39,8 @@ pub struct Vacuum {
     pub enforce_retention_duration: bool,
     /// Don't delete the files. Just determine which files can be deleted
     pub dry_run: bool,
+    /// Override the source of time
+    pub clock: Option<Arc<dyn Clock>>,
 }
 
 impl Default for Vacuum {
@@ -43,6 +49,7 @@ impl Default for Vacuum {
             retention_period: None,
             enforce_retention_duration: true,
             dry_run: false,
+            clock: None,
         }
     }
 }
@@ -50,7 +57,7 @@ impl Default for Vacuum {
 /// Encapsulate which files are to be deleted and the parameters used to make that decision
 pub struct VacuumPlan {
     /// What files are to be deleted
-    pub files_to_delete: Vec<String>,
+    pub files_to_delete: Vec<Path>,
 }
 
 /// Details for the Vacuum operation including which files were
@@ -108,8 +115,9 @@ pub(crate) fn get_stale_files(
 /// indexes and these must be deleted when the data they are tied to is deleted.
 pub(crate) fn is_hidden_directory(
     table: &DeltaTable,
-    path_name: &str,
+    path: &Path,
 ) -> Result<bool, DeltaTableError> {
+    let path_name = path.to_string();
     Ok((path_name.starts_with('.') || path_name.starts_with('_'))
         && !path_name.starts_with("_delta_index")
         && !path_name.starts_with("_change_data")
@@ -133,12 +141,15 @@ impl VacuumPlan {
         }
 
         // Delete the files
-        let files_deleted = match table.storage.delete_objs(&self.files_to_delete).await {
+        let files_deleted = match table.storage.delete_batch(&self.files_to_delete).await {
             Ok(_) => Ok(self.files_to_delete),
-            Err(err) => Err(VacuumError::from(DeltaTableError::StorageError {
+            Err(err) => Err(VacuumError::from(DeltaTableError::ObjectStore {
                 source: err,
             })),
-        }?;
+        }?
+        .into_iter()
+        .map(|file| file.to_string())
+        .collect();
 
         Ok(VacuumMetrics {
             files_deleted,
@@ -163,29 +174,32 @@ pub async fn create_vacuum_plan(
         });
     }
 
-    let now_millis = Utc::now().timestamp_millis();
+    let now_millis = match params.clock {
+        Some(clock) => clock.current_timestamp_millis(),
+        None => Utc::now().timestamp_millis(),
+    };
+
     let expired_tombstones = get_stale_files(table, retention_period, now_millis)?;
     let valid_files = table.get_file_set();
 
     let mut files_to_delete = vec![];
     let mut all_files = table
         .storage
-        .list_objs(&table.table_uri)
+        .list(None)
         .await
         .map_err(DeltaTableError::from)?;
 
     while let Some(obj_meta) = all_files.next().await {
+        // TODO should we allow NotFound here in case we have a temporary commit file in the list
         let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
-        let rel_path = extract_rel_path(&table.table_uri, &obj_meta.path)?;
-
-        if valid_files.contains(rel_path) // file is still being tracked in table
-            || !expired_tombstones.contains(rel_path) // file is not an expired tombstone
-            || is_hidden_directory(table, rel_path)?
+        if valid_files.contains(&obj_meta.location) // file is still being tracked in table
+            || !expired_tombstones.contains(obj_meta.location.as_ref()) // file is not an expired tombstone
+            || is_hidden_directory(table, &obj_meta.location)?
         {
             continue;
         }
 
-        files_to_delete.push(obj_meta.path);
+        files_to_delete.push(obj_meta.location);
     }
 
     Ok(VacuumPlan { files_to_delete })
@@ -217,11 +231,17 @@ impl Vacuum {
         let plan = create_vacuum_plan(table, self).await?;
         if dry_run {
             return Ok(VacuumMetrics {
-                files_deleted: plan.files_to_delete,
+                files_deleted: plan.files_to_delete.iter().map(|f| f.to_string()).collect(),
                 dry_run: true,
             });
         }
 
-        return plan.execute(table).await;
+        plan.execute(table).await
     }
+}
+
+/// A source of time
+pub trait Clock: Debug {
+    /// get the current time in milliseconds since epoch
+    fn current_timestamp_millis(&self) -> i64;
 }

@@ -18,24 +18,24 @@
 //! let table = open_table("../path/to/table")?;
 //! let metrics = Optimize::default().execute(table).await?;
 //! ````
-
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-
-use log::debug;
-use log::error;
-use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
-use parquet::file::serialized_reader::{SerializedFileReader, SliceableCursor};
+#![allow(deprecated)]
 
 use crate::action::DeltaOperation;
 use crate::action::{self, Action};
-use crate::parquet::file::reader::FileReader;
 use crate::writer::utils::PartitionPath;
-use crate::writer::{DeltaWriter, DeltaWriterError, RecordBatchWriter};
+use crate::writer::{DeltaWriter, RecordBatchWriter};
 use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter};
+use log::debug;
+use log::error;
+use object_store::{path::Path, ObjectStore};
+use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
+use parquet::file::reader::FileReader;
+use parquet::file::serialized_reader::SerializedFileReader;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
@@ -114,8 +114,8 @@ impl<'a> Optimize<'a> {
     }
 
     /// Perform the optimization. On completion, a summary of how many files were added and removed is returned
-    pub async fn execute(&self, table: &mut DeltaTable) -> Result<Metrics, DeltaWriterError> {
-        let plan = create_merge_plan(table, self.filters, (&self.target_size).to_owned())?;
+    pub async fn execute(&self, table: &mut DeltaTable) -> Result<Metrics, DeltaTableError> {
+        let plan = create_merge_plan(table, self.filters, self.target_size.to_owned())?;
         let metrics = plan.execute(table).await?;
         Ok(metrics)
     }
@@ -138,7 +138,7 @@ impl From<OptimizeInput> for DeltaOperation {
 /// A collection of bins for a particular partition
 #[derive(Debug)]
 struct MergeBin {
-    files: Vec<String>,
+    files: Vec<Path>,
     size_bytes: DeltaDataTypeLong,
 }
 
@@ -164,7 +164,7 @@ impl MergeBin {
         self.files.len()
     }
 
-    fn add(&mut self, file_path: String, size: i64) {
+    fn add(&mut self, file_path: Path, size: i64) {
         self.files.push(file_path);
         self.size_bytes += size;
     }
@@ -199,7 +199,7 @@ pub struct MergePlan {
 
 impl MergePlan {
     /// Peform the operations outlined in the plan.
-    pub async fn execute(self, table: &mut DeltaTable) -> Result<Metrics, DeltaWriterError> {
+    pub async fn execute(self, table: &mut DeltaTable) -> Result<Metrics, DeltaTableError> {
         // Read files into memory and write into memory. Once a file is complete write to underlying storage.
         let mut actions = vec![];
         let mut metrics = self.metrics;
@@ -211,15 +211,12 @@ impl MergePlan {
             debug!("{:?}", _partition_path);
 
             for bin in bins {
-                let mut writer = RecordBatchWriter::for_table(table, HashMap::new())?;
+                let mut writer = RecordBatchWriter::for_table(table)?;
 
                 for path in &bin.files {
                     //Read the file into memory and append it to the writer.
-
-                    let parquet_uri = table.storage.join_path(&table.table_uri, path);
-                    let data = table.storage.get_obj(&parquet_uri).await?;
+                    let data = table.storage.get(path).await?.bytes().await?;
                     let size: DeltaDataTypeLong = data.len().try_into().unwrap();
-                    let data = SliceableCursor::new(data);
                     let reader = SerializedFileReader::new(data)?;
                     let records = reader.metadata().file_metadata().num_rows();
 
@@ -232,7 +229,7 @@ impl MergePlan {
                         writer.write_partition(batch, partition_values).await?;
                     }
 
-                    actions.push(create_remove(path, partition_values, size)?);
+                    actions.push(create_remove(path.as_ref(), partition_values, size)?);
 
                     metrics.num_files_removed += 1;
                     metrics.files_removed.total_files += 1;
@@ -247,8 +244,7 @@ impl MergePlan {
                     // Ensure we don't deviate from the merge plan which may result in idempotency being violated
                     return Err(DeltaTableError::Generic(
                         "Expected writer to return only one add action".to_owned(),
-                    )
-                    .into());
+                    ));
                 }
                 for mut add in add_actions {
                     add.data_change = false;
@@ -328,7 +324,7 @@ pub fn create_merge_plan<'a>(
     table: &mut DeltaTable,
     filters: &[PartitionFilter<'a, &str>],
     target_size: Option<DeltaDataTypeLong>,
-) -> Result<MergePlan, DeltaWriterError> {
+) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| get_target_file_size(table));
     let mut candidates = HashMap::new();
     let mut operations: HashMap<PartitionPath, PartitionMergePlan> = HashMap::new();
@@ -362,7 +358,7 @@ pub fn create_merge_plan<'a>(
             }
 
             if file.size + curr_bin.get_total_file_size() < target_size {
-                curr_bin.add(file.path.clone(), file.size);
+                curr_bin.add(Path::from(file.path.as_str()), file.size);
             } else {
                 if curr_bin.get_num_files() > 1 {
                     bins.push(curr_bin);
@@ -370,7 +366,7 @@ pub fn create_merge_plan<'a>(
                     metrics.total_files_skipped += curr_bin.get_num_files();
                 }
                 curr_bin = MergeBin::new();
-                curr_bin.add(file.path.clone(), file.size);
+                curr_bin.add(Path::from(file.path.as_str()), file.size);
             }
         }
 

@@ -11,8 +11,7 @@ import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
 from packaging import version
-from pyarrow._dataset_parquet import ParquetReadOptions
-from pyarrow.dataset import ParquetFileFormat
+from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
 from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, write_deltalake
@@ -41,12 +40,15 @@ def test_handle_existing(tmp_path: pathlib.Path, sample_data: pa.Table):
 
 
 def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
+    # Check we can create the subdirectory
+    tmp_path = tmp_path / "path" / "to" / "table"
+
     write_deltalake(str(tmp_path), sample_data)
 
     assert ("0" * 20 + ".json") in os.listdir(tmp_path / "_delta_log")
 
     delta_table = DeltaTable(str(tmp_path))
-    assert delta_table.pyarrow_schema() == sample_data.schema
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
     assert table == sample_data
@@ -59,6 +61,35 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
         path = os.path.join(tmp_path, action["path"])
         actual_size = os.path.getsize(path)
         assert actual_size == action["size"]
+
+
+def test_roundtrip_nulls(tmp_path: pathlib.Path):
+    data = pa.table({"x": pa.array([None, None, 1, 2], type=pa.int64())})
+    # One row group will have values, one will be all nulls.
+    # The first will have None in min and max stats, so we need to handle that.
+    write_deltalake(str(tmp_path), data, min_rows_per_group=2, max_rows_per_group=2)
+
+    delta_table = DeltaTable(str(tmp_path))
+    assert delta_table.schema().to_pyarrow() == data.schema
+
+    table = delta_table.to_pyarrow_table()
+    assert table == data
+
+    data = pa.table({"x": pa.array([None, None, None, None], type=pa.int64())})
+    # Will be all null, with two row groups
+    write_deltalake(
+        str(tmp_path),
+        data,
+        min_rows_per_group=2,
+        max_rows_per_group=2,
+        mode="overwrite",
+    )
+
+    delta_table = DeltaTable(str(tmp_path))
+    assert delta_table.schema().to_pyarrow() == data.schema
+
+    table = delta_table.to_pyarrow_table()
+    assert table == data
 
 
 @pytest.mark.parametrize("mode", ["append", "overwrite"])
@@ -85,16 +116,17 @@ def test_update_schema(existing_table: DeltaTable):
 
     read_data = existing_table.to_pyarrow_table()
     assert new_data == read_data
-    assert existing_table.pyarrow_schema() == new_data.schema
+    assert existing_table.schema().to_pyarrow() == new_data.schema
 
 
 def test_local_path(tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch):
     monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
+    (tmp_path / "path/to/table").mkdir(parents=True)
 
     local_path = "./path/to/table"
     write_deltalake(local_path, sample_data)
     delta_table = DeltaTable(local_path)
-    assert delta_table.pyarrow_schema() == sample_data.schema
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
     assert table == sample_data
@@ -139,7 +171,7 @@ def test_roundtrip_partitioned(
     write_deltalake(str(tmp_path), sample_data, partition_by=[column])
 
     delta_table = DeltaTable(str(tmp_path))
-    assert delta_table.pyarrow_schema() == sample_data.schema
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
     table = table.take(pc.sort_indices(table["int64"]))
@@ -157,7 +189,7 @@ def test_roundtrip_null_partition(tmp_path: pathlib.Path, sample_data: pa.Table)
     write_deltalake(str(tmp_path), sample_data, partition_by=["utf8_with_nulls"])
 
     delta_table = DeltaTable(str(tmp_path))
-    assert delta_table.pyarrow_schema() == sample_data.schema
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
     table = table.take(pc.sort_indices(table["int64"]))
@@ -168,7 +200,7 @@ def test_roundtrip_multi_partitioned(tmp_path: pathlib.Path, sample_data: pa.Tab
     write_deltalake(str(tmp_path), sample_data, partition_by=["int32", "bool"])
 
     delta_table = DeltaTable(str(tmp_path))
-    assert delta_table.pyarrow_schema() == sample_data.schema
+    assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
     table = table.take(pc.sort_indices(table["int64"]))
@@ -240,12 +272,16 @@ def test_fails_wrong_partitioning(existing_table: DeltaTable, sample_data: pa.Ta
 
 
 @pytest.mark.pandas
-def test_write_pandas(tmp_path: pathlib.Path, sample_data: pa.Table):
+@pytest.mark.parametrize("schema_provided", [True, False])
+def test_write_pandas(tmp_path: pathlib.Path, sample_data: pa.Table, schema_provided):
     # When timestamp is converted to Pandas, it gets casted to ns resolution,
     # but Delta Lake schemas only support us resolution.
-    sample_pandas = sample_data.to_pandas().drop(["timestamp"], axis=1)
-    write_deltalake(str(tmp_path), sample_pandas)
-
+    sample_pandas = sample_data.to_pandas()
+    if schema_provided is True:
+        schema = sample_data.schema
+    else:
+        schema = None
+    write_deltalake(str(tmp_path), sample_pandas, schema=schema)
     delta_table = DeltaTable(str(tmp_path))
     df = delta_table.to_pandas()
     assert_frame_equal(df, sample_pandas)
@@ -388,7 +424,7 @@ def test_writer_null_stats(tmp_path: pathlib.Path):
 
 
 def test_writer_fails_on_protocol(existing_table: DeltaTable, sample_data: pa.Table):
-    existing_table.protocol = Mock(return_value=ProtocolVersions(1, 2))
+    existing_table.protocol = Mock(return_value=ProtocolVersions(1, 3))
     with pytest.raises(DeltaTableProtocolError):
         write_deltalake(existing_table, sample_data, mode="overwrite")
 
@@ -428,6 +464,7 @@ def test_writer_with_max_rows(
         data,
         file_options=ParquetFileFormat().make_write_options(),
         max_rows_per_file=rows_per_file,
+        min_rows_per_group=rows_per_file,
         max_rows_per_group=rows_per_file,
     )
 

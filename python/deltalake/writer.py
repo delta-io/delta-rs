@@ -4,6 +4,7 @@ import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
@@ -22,15 +23,24 @@ from deltalake.fs import DeltaStorageHandler
 if TYPE_CHECKING:
     import pandas as pd
 
+import sys
+
+if sys.version_info >= (3, 8):
+    from typing import Literal
+else:
+    from typing_extensions import Literal
+
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
 from pyarrow.lib import RecordBatchReader
-from typing_extensions import Literal
 
-from .deltalake import PyDeltaTableError
-from .deltalake import write_new_deltalake as _write_new_deltalake
-from .table import DeltaTable
+from deltalake.schema import delta_arrow_schema_from_pandas
+
+from ._internal import DeltaDataChecker as _DeltaDataChecker
+from ._internal import PyDeltaTableError
+from ._internal import write_new_deltalake as _write_new_deltalake
+from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable, DeltaTableProtocolError
 
 try:
     import pandas as pd
@@ -40,10 +50,6 @@ else:
     _has_pandas = True
 
 PYARROW_MAJOR_VERSION = int(pa.__version__.split(".", maxsplit=1)[0])
-
-
-class DeltaTableProtocolError(PyDeltaTableError):
-    pass
 
 
 @dataclass
@@ -72,13 +78,14 @@ def write_deltalake(
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
     file_options: Optional[ds.ParquetFileWriteOptions] = None,
     max_open_files: int = 1024,
-    max_rows_per_file: int = 0,
-    min_rows_per_group: int = 0,
-    max_rows_per_group: int = 1048576,
+    max_rows_per_file: int = 10 * 1024 * 1024,
+    min_rows_per_group: int = 64 * 1024,
+    max_rows_per_group: int = 128 * 1024,
     name: Optional[str] = None,
     description: Optional[str] = None,
     configuration: Optional[Mapping[str, Optional[str]]] = None,
     overwrite_schema: bool = False,
+    storage_options: Optional[Dict[str, str]] = None,
 ) -> None:
     """Write to a Delta Lake table (Experimental)
 
@@ -96,7 +103,8 @@ def write_deltalake(
     :param partition_by: List of columns to partition the table by. Only required
         when creating a new table.
     :param filesystem: Optional filesystem to pass to PyArrow. If not provided will
-        be inferred from uri.
+        be inferred from uri. The file system has to be rooted in the table root.
+        Use the pyarrow.fs.SubTreeFileSystem, to adopt the root of pyarrow file systems.
     :param mode: How to handle existing data. Default is to error if table already exists.
         If 'append', will add new data.
         If 'overwrite', will replace table with new data.
@@ -124,9 +132,14 @@ def write_deltalake(
     :param description: User-provided description for this table.
     :param configuration: A map containing configuration options for the metadata action.
     :param overwrite_schema: If True, allows updating the schema of the table.
+    :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
     """
+
     if _has_pandas and isinstance(data, pd.DataFrame):
-        data = pa.Table.from_pandas(data)
+        if schema is not None:
+            data = pa.Table.from_pandas(data, schema=schema)
+        else:
+            data, schema = delta_arrow_schema_from_pandas(data)
 
     if schema is None:
         if isinstance(data, RecordBatchReader):
@@ -136,27 +149,36 @@ def write_deltalake(
         else:
             schema = data.schema
 
+    if filesystem is not None:
+        raise NotImplementedError("Filesystem support is not yet implemented.  #570")
+
     if isinstance(table_or_uri, str):
-        table = try_get_deltatable(table_or_uri)
-        table_uri = table_or_uri
+        if "://" in table_or_uri:
+            table_uri = table_or_uri
+        else:
+            # Non-existant local paths are only accepted as fully-qualified URIs
+            table_uri = "file://" + str(Path(table_or_uri).absolute())
+        table = try_get_deltatable(table_or_uri, storage_options)
     else:
         table = table_or_uri
-        table_uri = table_uri = table._table.table_uri()
+        table_uri = table._table.table_uri()
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
-    # TODO: Pass through filesystem once it is complete
-    # if filesystem is None:
-    #    filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri))
-    fs = DeltaStorageHandler(table_uri)
+    if filesystem is None:
+        if table is not None:
+            storage_options = table._storage_options or {}
+            storage_options.update(storage_options or {})
+
+        filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
     if table:  # already exists
-        if schema != table.pyarrow_schema() and not (
+        if schema != table.schema().to_pyarrow() and not (
             mode == "overwrite" and overwrite_schema
         ):
             raise ValueError(
                 "Schema of data does not match table schema\n"
-                f"Table schema:\n{schema}\nData Schema:\n{table.pyarrow_schema()}"
+                f"Table schema:\n{schema}\nData Schema:\n{table.schema().to_pyarrow()}"
             )
 
         if mode == "error":
@@ -169,18 +191,14 @@ def write_deltalake(
         if partition_by:
             assert partition_by == table.metadata().partition_columns
 
-        if table.protocol().min_writer_version > 1:
+        if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
             raise DeltaTableProtocolError(
                 "This table's min_writer_version is "
                 f"{table.protocol().min_writer_version}, "
-                "but this method only supports version 1."
+                "but this method only supports version 2."
             )
     else:  # creating a new table
         current_version = -1
-
-        # TODO: Don't allow writing to non-empty directory
-        # Blocked on: Finish filesystem implementation in fs.py
-        # assert len(filesystem.get_file_info(pa_fs.FileSelector(table_uri, allow_not_found=True))) == 0
 
     if partition_by:
         partition_schema = pa.schema([schema.field(name) for name in partition_by])
@@ -191,10 +209,14 @@ def write_deltalake(
     add_actions: List[AddAction] = []
 
     def visitor(written_file: Any) -> None:
-        path, partition_values = get_partitions_from_path(table_uri, written_file.path)
+        path, partition_values = get_partitions_from_path(written_file.path)
         stats = get_file_stats_from_metadata(written_file.metadata)
 
-        size = fs.get_file_info([os.path.join(table_uri, path)])[0].size
+        # PyArrow added support for written_file.size in 9.0.0
+        if PYARROW_MAJOR_VERSION >= 9:
+            size = written_file.size
+        else:
+            size = filesystem.get_file_info([path])[0].size  # type: ignore
 
         add_actions.append(
             AddAction(
@@ -207,9 +229,32 @@ def write_deltalake(
             )
         )
 
+    if table is not None:
+        # We don't currently provide a way to set invariants
+        # (and maybe never will), so only enforce if already exist.
+        invariants = table.schema().invariants
+        checker = _DeltaDataChecker(invariants)
+
+        def validate_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
+            checker.check_batch(batch)
+            return batch
+
+        if isinstance(data, RecordBatchReader):
+            batch_iter = data
+        elif isinstance(data, pa.RecordBatch):
+            batch_iter = [data]
+        elif isinstance(data, pa.Table):
+            batch_iter = data.to_batches()
+        else:
+            batch_iter = data
+
+        data = RecordBatchReader.from_batches(
+            schema, (validate_batch(batch) for batch in batch_iter)
+        )
+
     ds.write_dataset(
         data,
-        base_dir=table_uri,
+        base_dir="/",
         basename_template=f"{current_version + 1}-{uuid.uuid4()}-{{i}}.parquet",
         format="parquet",
         partitioning=partitioning,
@@ -222,10 +267,11 @@ def write_deltalake(
         max_rows_per_file=max_rows_per_file,
         min_rows_per_group=min_rows_per_group,
         max_rows_per_group=max_rows_per_group,
+        filesystem=filesystem,
     )
 
     if table is None:
-        _write_new_deltalake(  # type: ignore[call-arg]
+        _write_new_deltalake(
             table_uri,
             schema,
             add_actions,
@@ -234,6 +280,7 @@ def write_deltalake(
             name,
             description,
             configuration,
+            storage_options,
         )
     else:
         table._table.create_write_transaction(
@@ -275,19 +322,24 @@ class DeltaJSONEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
-def try_get_deltatable(table_uri: str) -> Optional[DeltaTable]:
+def try_get_deltatable(
+    table_uri: str, storage_options: Optional[Dict[str, str]]
+) -> Optional[DeltaTable]:
     try:
-        return DeltaTable(table_uri)
+        return DeltaTable(table_uri, storage_options=storage_options)
     except PyDeltaTableError as err:
-        if "Not a Delta table" not in str(err):
+        # TODO: There has got to be a better way...
+        if "Not a Delta table" in str(err):
+            return None
+        elif "cannot find" in str(err):
+            return None
+        elif "No such file or directory" in str(err):
+            return None
+        else:
             raise
-        return None
 
 
-def get_partitions_from_path(
-    base_path: str, path: str
-) -> Tuple[str, Dict[str, Optional[str]]]:
-    path = path.split(base_path, maxsplit=1)[1]
+def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
     if path[0] == "/":
         path = path[1:]
     parts = path.split("/")
@@ -329,9 +381,11 @@ def get_file_stats_from_metadata(
                 for group in iter_groups(metadata)
             )
 
-            # I assume for now this is based on data type, and thus is
-            # consistent between groups
-            if metadata.row_group(0).column(column_idx).statistics.has_min_max:
+            # Min / max may not exist for some column types, or if all values are null
+            if any(
+                group.column(column_idx).statistics.has_min_max
+                for group in iter_groups(metadata)
+            ):
                 # Min and Max are recorded in physical type, not logical type
                 # https://stackoverflow.com/questions/66753485/decoding-parquet-min-max-statistics-for-decimal-type
                 # TODO: Add logic to decode physical type for DATE, DECIMAL
@@ -349,12 +403,19 @@ def get_file_stats_from_metadata(
                 ]:
                     continue
 
-                stats["minValues"][name] = min(
+                minimums = (
                     group.column(column_idx).statistics.min
                     for group in iter_groups(metadata)
                 )
-                stats["maxValues"][name] = max(
+                # If some row groups have all null values, their min and max will be null too.
+                stats["minValues"][name] = min(
+                    minimum for minimum in minimums if minimum is not None
+                )
+                maximums = (
                     group.column(column_idx).statistics.max
                     for group in iter_groups(metadata)
+                )
+                stats["maxValues"][name] = max(
+                    maximum for maximum in maximums if maximum is not None
                 )
     return stats

@@ -21,6 +21,25 @@ static STRUCT_TAG: &str = "struct";
 static ARRAY_TAG: &str = "array";
 static MAP_TAG: &str = "map";
 
+/// An invariant for a column that is enforced on all writes to a Delta table.
+#[derive(Eq, PartialEq, Debug, Default, Clone)]
+pub struct Invariant {
+    /// The full path to the field.
+    pub field_name: String,
+    /// The SQL string that must always evaluate to true.
+    pub invariant_sql: String,
+}
+
+impl Invariant {
+    /// Create a new invariant
+    pub fn new(field_name: &str, invariant_sql: &str) -> Self {
+        Self {
+            field_name: field_name.to_string(),
+            invariant_sql: invariant_sql.to_string(),
+        }
+    }
+}
+
 /// Represents a struct field defined in the Delta table schema.
 // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#Schema-Serialization-Format
 #[derive(Serialize, Deserialize, PartialEq, Debug, Default, Clone)]
@@ -42,6 +61,92 @@ impl SchemaTypeStruct {
     /// Returns the list of fields contained within the column struct.
     pub fn get_fields(&self) -> &Vec<SchemaField> {
         &self.fields
+    }
+
+    /// Returns an immutable reference of a specific `Field` instance selected by name.
+    pub fn get_field_with_name(&self, name: &str) -> Result<&SchemaField, crate::DeltaTableError> {
+        Ok(&self.fields[self.index_of(name)?])
+    }
+
+    /// Find the index of the column with the given name.
+    pub fn index_of(&self, name: &str) -> Result<usize, crate::DeltaTableError> {
+        for i in 0..self.fields.len() {
+            if self.fields[i].get_name() == name {
+                return Ok(i);
+            }
+        }
+        let valid_fields: Vec<String> = self.fields.iter().map(|f| f.name.clone()).collect();
+        Err(crate::DeltaTableError::Generic(format!(
+            "Unable to get field named \"{}\". Valid fields: {:?}",
+            name, valid_fields
+        )))
+    }
+
+    /// Get all invariants in the schemas
+    pub fn get_invariants(&self) -> Result<Vec<Invariant>, crate::DeltaTableError> {
+        let mut remaining_fields: Vec<(String, SchemaField)> = self
+            .get_fields()
+            .iter()
+            .map(|field| (field.name.clone(), field.clone()))
+            .collect();
+        let mut invariants: Vec<Invariant> = Vec::new();
+
+        let add_segment = |prefix: &str, segment: &str| -> String {
+            if prefix.is_empty() {
+                segment.to_owned()
+            } else {
+                format!("{}.{}", prefix, segment)
+            }
+        };
+
+        while let Some((field_path, field)) = remaining_fields.pop() {
+            match field.r#type {
+                SchemaDataType::r#struct(inner) => {
+                    remaining_fields.extend(
+                        inner
+                            .get_fields()
+                            .iter()
+                            .map(|field| {
+                                let new_prefix = add_segment(&field_path, &field.name);
+                                (new_prefix, field.clone())
+                            })
+                            .collect::<Vec<(String, SchemaField)>>(),
+                    );
+                }
+                SchemaDataType::array(inner) => {
+                    let element_field_name = add_segment(&field_path, "element");
+                    remaining_fields.push((
+                        element_field_name,
+                        SchemaField::new("".to_string(), *inner.elementType, false, HashMap::new()),
+                    ));
+                }
+                SchemaDataType::map(inner) => {
+                    let key_field_name = add_segment(&field_path, "key");
+                    remaining_fields.push((
+                        key_field_name,
+                        SchemaField::new("".to_string(), *inner.keyType, false, HashMap::new()),
+                    ));
+                    let value_field_name = add_segment(&field_path, "value");
+                    remaining_fields.push((
+                        value_field_name,
+                        SchemaField::new("".to_string(), *inner.valueType, false, HashMap::new()),
+                    ));
+                }
+                _ => {}
+            }
+            // JSON format: {"expression": {"expression": "<SQL STRING>"} }
+            if let Some(Value::String(invariant_json)) = field.metadata.get("delta.invariants") {
+                let json: Value = serde_json::from_str(invariant_json)?;
+                if let Value::Object(json) = json {
+                    if let Some(Value::Object(expr1)) = json.get("expression") {
+                        if let Some(Value::String(sql)) = expr1.get("expression") {
+                            invariants.push(Invariant::new(&field_path, sql));
+                        }
+                    }
+                }
+            }
+        }
+        Ok(invariants)
     }
 }
 
@@ -200,3 +305,72 @@ pub enum SchemaDataType {
 
 /// Represents the schema of the delta table.
 pub type Schema = SchemaTypeStruct;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    #[test]
+    fn test_get_invariants() {
+        let schema: Schema = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [{"name": "x", "type": "string", "nullable": true, "metadata": {}}]
+        }))
+        .unwrap();
+        let invariants = schema.get_invariants().unwrap();
+        assert_eq!(invariants.len(), 0);
+
+        let schema: Schema = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [
+                {"name": "x", "type": "integer", "nullable": true, "metadata": {
+                    "delta.invariants": "{\"expression\": { \"expression\": \"x > 2\"} }"
+                }},
+                {"name": "y", "type": "integer", "nullable": true, "metadata": {
+                    "delta.invariants": "{\"expression\": { \"expression\": \"y < 4\"} }"
+                }}
+            ]
+        }))
+        .unwrap();
+        let invariants = schema.get_invariants().unwrap();
+        assert_eq!(invariants.len(), 2);
+        assert!(invariants.contains(&Invariant::new("x", "x > 2")));
+        assert!(invariants.contains(&Invariant::new("y", "y < 4")));
+
+        let schema: Schema = serde_json::from_value(json!({
+            "type": "struct",
+            "fields": [{
+                "name": "a_map",
+                "type": {
+                    "type": "map",
+                    "keyType": "string",
+                    "valueType": {
+                        "type": "array",
+                        "elementType": {
+                            "type": "struct",
+                            "fields": [{
+                                "name": "d",
+                                "type": "integer",
+                                "metadata": {
+                                    "delta.invariants": "{\"expression\": { \"expression\": \"a_map.value.element.d < 4\"} }"
+                                },
+                                "nullable": false
+                            }]
+                        },
+                        "containsNull": false
+                    },
+                    "valueContainsNull": false
+                },
+                "nullable": false,
+                "metadata": {}
+            }]
+        })).unwrap();
+        let invariants = schema.get_invariants().unwrap();
+        assert_eq!(invariants.len(), 1);
+        assert_eq!(
+            invariants[0],
+            Invariant::new("a_map.value.element.d", "a_map.value.element.d < 4")
+        );
+    }
+}

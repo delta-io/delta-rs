@@ -26,7 +26,7 @@ mod imp {
     // glibc version is taken from std/sys/unix/os.rs
     pub fn get_version() -> Result<Version, String> {
         let output = Command::new("ldd")
-            .args(&["--version"])
+            .args(["--version"])
             .output()
             .expect("failed to execute ldd");
         let output_str = std::str::from_utf8(&output.stdout).unwrap();

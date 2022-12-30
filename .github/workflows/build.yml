@@ -14,7 +14,7 @@ jobs:
   format:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
@@ -30,24 +30,26 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - macOS-10.15
+          - macos-11
           - windows-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: stable
+          toolchain: "1.64.0" # Switch to "stable" when the 1.67.0 release of https://github.com/rust-lang/rust is published, more information: https://github.com/delta-io/delta-rs/pull/923
           override: true
       - uses: Swatinem/rust-cache@v1
       - name: build and lint with clippy
-        run: cargo clippy --features azure,datafusion-ext,s3,gcs,glue
+        run: cargo clippy --features azure,datafusion,s3,gcs,glue
       - name: Spot-check build for rustls features
         run: cargo clippy --features s3-rustls
       - name: Check docs
-        run: cargo doc --features azure,datafusion-ext,s3,gcs,glue
+        run: cargo doc --features azure,datafusion,s3,gcs,glue
+      - name: Check no default features
+        run: cargo check --no-default-features
 
   test:
     strategy:
@@ -55,22 +57,64 @@ jobs:
       matrix:
         os:
           - ubuntu-latest
-          - macOS-10.15
+          - macos-11
           - windows-latest
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: "1.64.0" # Switch to "stable" when the 1.67.0 release of https://github.com/rust-lang/rust is published, more information: https://github.com/delta-io/delta-rs/pull/923
+          override: true
+      - uses: Swatinem/rust-cache@v1
+      - name: Run tests
+        run: cargo test --verbose --features datafusion,azure
+
+  integration_test:
+    name: Integration Tests
+    runs-on: ubuntu-latest
+    env:
+      # Disable full debug symbol generation to speed up CI build and keep memory down
+      # "1" means line tables only, which is useful for panic tracebacks.
+      RUSTFLAGS: "-C debuginfo=1"
+      # https://github.com/rust-lang/cargo/issues/10280
+      CARGO_NET_GIT_FETCH_WITH_CLI: "true"
+      RUST_BACKTRACE: "1"
+      AWS_DEFAULT_REGION: "us-east-1"
+      AWS_ACCESS_KEY_ID: deltalake
+      AWS_SECRET_ACCESS_KEY: weloverust
+      AWS_ENDPOINT_URL: http://localhost:4566
+      AWS_STORAGE_ALLOW_HTTP: "1"
+      AZURE_USE_EMULATOR: "1"
+      AZURE_STORAGE_ALLOW_HTTP: "1"
+      AZURITE_BLOB_STORAGE_URL: "http://localhost:10000"
+      AZURE_STORAGE_CONNECTION_STRING: "DefaultEndpointsProtocol=http;AccountName=devstoreaccount1;AccountKey=Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==;BlobEndpoint=http://localhost:10000/devstoreaccount1;QueueEndpoint=http://localhost:10001/devstoreaccount1;"
+
+    steps:
+      - uses: actions/checkout@v3
+
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
           profile: default
           toolchain: stable
           override: true
-      - uses: Swatinem/rust-cache@v1
-      - name: Run tests
-        run: cargo test --verbose --features datafusion-ext,azure
 
-  s3_test:
+      - uses: Swatinem/rust-cache@v1
+
+      - name: Start emulated services
+        run: docker-compose up -d
+
+      - name: Run tests with default ssl
+        run: |
+          cargo test --features integration_test,azure,s3,gcs,datafusion
+      - name: Run tests with rustls
+        run: |
+          cargo test --features integration_test,s3-rustls,datafusion
+
+  parquet2_test:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v2
@@ -81,8 +125,5 @@ jobs:
           toolchain: stable
           override: true
       - uses: Swatinem/rust-cache@v1
-      - name: Setup localstack
-        run: docker-compose up setup
       - name: Run tests
-        run: |
-          cargo test --features s3
+        run: cargo test --no-default-features --features=parquet2

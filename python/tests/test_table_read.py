@@ -1,8 +1,13 @@
 import os
 from datetime import datetime
+from pathlib import Path
 from threading import Barrier, Thread
+from unittest.mock import Mock
 
 from packaging import version
+
+from deltalake.table import ProtocolVersions
+from deltalake.writer import DeltaTableProtocolError
 
 try:
     import pandas as pd
@@ -15,7 +20,7 @@ import pyarrow as pa
 import pyarrow.dataset as ds
 import pytest
 from pyarrow.dataset import ParquetReadOptions
-from pyarrow.fs import LocalFileSystem
+from pyarrow.fs import LocalFileSystem, SubTreeFileSystem
 
 from deltalake import DeltaTable
 
@@ -23,13 +28,17 @@ from deltalake import DeltaTable
 def test_read_table_with_edge_timestamps():
     table_path = "../rust/tests/data/table_with_edge_timestamps"
     dt = DeltaTable(table_path)
-    assert dt.to_pyarrow_dataset(
+    dataset = dt.to_pyarrow_dataset(
         parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit="ms")
-    ).to_table().to_pydict() == {
+    )
+    assert dataset.to_table().to_pydict() == {
         "BIG_DATE": [datetime(9999, 12, 31, 0, 0, 0), datetime(9999, 12, 30, 0, 0, 0)],
         "NORMAL_DATE": [datetime(2022, 1, 1, 0, 0, 0), datetime(2022, 2, 1, 0, 0, 0)],
         "SOME_VALUE": [1, 2],
     }
+    # Can push down filters to these timestamps.
+    predicate = ds.field("BIG_DATE") == datetime(9999, 12, 31, 0, 0, 0)
+    assert len(list(dataset.get_fragments(predicate))) == 1
 
 
 def test_read_simple_table_to_dict():
@@ -151,6 +160,20 @@ def test_read_table_with_column_subset():
     )
 
 
+def test_read_table_as_category():
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+
+    assert dt.schema().to_pyarrow().field("value").type == pa.string()
+
+    read_options = ds.ParquetReadOptions(dictionary_columns={"value"})
+
+    data = dt.to_pyarrow_dataset(parquet_read_options=read_options).to_table()
+
+    assert data.schema.field("value").type == pa.dictionary(pa.int32(), pa.string())
+    assert data.schema.field("day").type == pa.string()
+
+
 def test_read_table_with_filter():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
@@ -214,6 +237,15 @@ def test_read_partitioned_table_protocol():
     assert protocol.min_writer_version == 2
 
 
+def test_read_table_with_cdc():
+    table_path = "../rust/tests/data/simple_table_with_cdc"
+    dt = DeltaTable(table_path)
+    assert dt.to_pyarrow_table().to_pydict() == {
+        "id": [0],
+        "name": ["Mino"],
+    }
+
+
 def test_history_partitioned_table_metadata():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
@@ -237,41 +269,65 @@ def test_history_partitioned_table_metadata():
     }
 
 
+def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
+    assert dt.files(partition_filters) == expected_paths
+    absolute_paths = [os.path.join(dt.table_uri, path) for path in expected_paths]
+    assert dt.file_uris(partition_filters) == absolute_paths
+
+
 def test_get_files_partitioned_table():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
+    table_path = (
+        Path.cwd().parent / "rust/tests/data/delta-0.8.0-partitioned"
+    ).as_posix()
+
     partition_filters = [("day", "=", "3")]
-    assert dt.files_by_partitions(partition_filters=partition_filters) == [
-        f"{table_path}/year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet"
+    paths = [
+        "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet"
     ]
+    assert_correct_files(dt, partition_filters, paths)
+
+    # Also accepts integers
+    partition_filters = [("day", "=", 3)]
+    assert_correct_files(dt, partition_filters, paths)
+
     partition_filters = [("day", "!=", "3")]
-    assert dt.files_by_partitions(partition_filters=partition_filters) == [
-        f"{table_path}/year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet",
-        f"{table_path}/year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet",
-        f"{table_path}/year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet",
-        f"{table_path}/year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
-        f"{table_path}/year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
+    paths = [
+        "year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet",
+        "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet",
+        "year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet",
+        "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
+        "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
     ]
+    assert_correct_files(dt, partition_filters, paths)
+
     partition_filters = [("day", "in", ["3", "20"])]
-    assert dt.files_by_partitions(partition_filters=partition_filters) == [
-        f"{table_path}/year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet",
-        f"{table_path}/year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet",
+    paths = [
+        "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet",
+        "year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet",
     ]
+    assert_correct_files(dt, partition_filters, paths)
+
     partition_filters = [("day", "not in", ["3", "20"])]
-    assert dt.files_by_partitions(partition_filters=partition_filters) == [
-        f"{table_path}/year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet",
-        f"{table_path}/year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet",
-        f"{table_path}/year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
-        f"{table_path}/year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
+    paths = [
+        f"year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet",
+        f"year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet",
+        f"year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
+        f"year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
     ]
+    assert_correct_files(dt, partition_filters, paths)
+
     partition_filters = [("day", "not in", ["3", "20"]), ("year", "=", "2021")]
-    assert dt.files_by_partitions(partition_filters=partition_filters) == [
-        f"{table_path}/year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
-        f"{table_path}/year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
+    paths = [
+        f"year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
+        f"year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
     ]
+    assert_correct_files(dt, partition_filters, paths)
+
     partition_filters = [("invalid_operation", "=>", "3")]
     with pytest.raises(Exception) as exception:
-        dt.files_by_partitions(partition_filters=partition_filters)
+        dt.files(partition_filters)
     assert (
         str(exception.value)
         == 'Invalid partition filter found: ("invalid_operation", "=>", "3").'
@@ -279,23 +335,15 @@ def test_get_files_partitioned_table():
 
     partition_filters = [("invalid_operation", "=", ["3", "20"])]
     with pytest.raises(Exception) as exception:
-        dt.files_by_partitions(partition_filters=partition_filters)
+        dt.files(partition_filters)
     assert (
         str(exception.value)
         == 'Invalid partition filter found: ("invalid_operation", "=", ["3", "20"]).'
     )
 
-    partition_filters = [("day", "=", 3)]
-    with pytest.raises(Exception) as exception:
-        dt.files_by_partitions(partition_filters=partition_filters)
-    assert (
-        str(exception.value)
-        == "Only the type String is currently allowed inside the partition filters."
-    )
-
     partition_filters = [("unknown", "=", "3")]
     with pytest.raises(Exception) as exception:
-        dt.files_by_partitions(partition_filters=partition_filters)
+        dt.files(partition_filters)
     assert (
         str(exception.value)
         == 'Invalid partition filter found: [PartitionFilter { key: "unknown", value: Equal("3") }].'
@@ -313,8 +361,20 @@ def test_delta_table_to_pandas():
 def test_delta_table_with_filesystem():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    filesystem = LocalFileSystem()
+    filesystem = SubTreeFileSystem(table_path, LocalFileSystem())
     assert dt.to_pandas(filesystem=filesystem).equals(pd.DataFrame({"id": [5, 7, 9]}))
+
+
+def test_writer_fails_on_protocol():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    dt.protocol = Mock(return_value=ProtocolVersions(2, 1))
+    with pytest.raises(DeltaTableProtocolError):
+        dt.to_pyarrow_dataset()
+    with pytest.raises(DeltaTableProtocolError):
+        dt.to_pyarrow_table()
+    with pytest.raises(DeltaTableProtocolError):
+        dt.to_pandas()
 
 
 def test_import_delta_table_error():

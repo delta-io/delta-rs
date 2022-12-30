@@ -29,12 +29,30 @@ To load the current version, use the constructor:
     >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0")
 
 Depending on your storage backend, you could use the ``storage_options`` parameter to provide some configuration.
-Currently only AWS S3 is supported.
+Configuration is defined for specific backends - `s3 options`_, `azure options`_.
 
 .. code-block:: python
 
     >>> storage_options = {"AWS_ACCESS_KEY_ID": "THE_AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY":"THE_AWS_SECRET_ACCESS_KEY"}
     >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0", storage_options=storage_options)
+
+The configuration can also be provided via the environment, and the basic service provider is derived from the URL
+being used. We try to support many of the well-known formats to identify basic service properties.
+
+**S3**:
+
+  * s3://<bucket>/<path>
+  * s3a://<bucket>/<path>
+
+**Azure**:
+
+  * az://<container>/<path>
+  * adl://<container>/<path>
+  * abfs://<container>/<path>
+
+**GCS**:
+
+  * gs://<bucket>/<path>
 
 Alternatively, if you have a data catalog you can load it by reference to a 
 database and table name. Currently only AWS Glue is supported.
@@ -52,16 +70,45 @@ For AWS Glue catalog, use AWS environment variables to authenticate.
     >>> dt.to_pyarrow_table().to_pydict()
     {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
 
-Besides local filesystems, the following backends are supported:
+.. _`s3 options`: https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L423-L491
+.. _`azure options`: https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L524-L539
 
-* AWS S3, detected by the prefix ``s3://``. AWS credentials can be specified using
-  environment variables in the same way as the CLI.
-* Azure Data Lake Storage Gen 2, detected by the prefix ``adls2://``. Note that
-  `specific instructions`_ must be followed to setup the Azure Storage Account.
-* Google Cloud Storage, detected by the prefix ``gs://``.
+Custom Storage Backends
+~~~~~~~~~~~~~~~~~~~~~~~
 
-.. _`specific instructions`: https://github.com/delta-io/delta-rs/blob/main/docs/ADLSGen2-HOWTO.md
+While delta always needs its internal storage backend to work and be properly configured, in order to manage the delta log,
+it may sometime be advantageous - and is common practice in the arrow world - to customize the storage interface used for
+reading the bulk data. 
 
+``deltalake`` will work with any storage compliant with :class:`pyarrow.fs.FileSystem`, however the root of the filesystem has
+to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into
+a :class:`pyarrow.fs.SubTreeFileSystem`.
+
+.. code-block:: python
+
+    import pyarrow.fs as fs
+    from deltalake import DeltaTable
+    
+    path = "<path/to/table>"
+    filesystem = fs.SubTreeFileSystem(path, fs.LocalFileSystem())
+    
+    dt = DeltaTable(path)
+    ds = dt.to_pyarrow_dataset(filesystem=filesystem)
+
+When using the pyarrow factory method for file systems, the normalized path is provided
+on creation. In case of S3 this would look something like:
+
+.. code-block:: python
+
+    import pyarrow.fs as fs
+    from deltalake import DeltaTable
+
+    table_uri = "s3://<bucket>/<path>"
+    raw_fs, normalized_path = fs.FileSystem.from_uri(table_uri)
+    filesystem = fs.SubTreeFileSystem(normalized_path, raw_fs)
+
+    dt = DeltaTable(table_uri)
+    ds = dt.to_pyarrow_dataset(filesystem=filesystem)
 
 Time Travel
 ~~~~~~~~~~~
@@ -79,7 +126,7 @@ number or datetime string:
 .. code-block:: python
 
     >>> dt.load_version(1)
-    >>> dt.load_with_timestamp("2021-11-04 00:05:23.283+00:00")
+    >>> dt.load_with_datetime("2021-11-04 00:05:23.283+00:00")
 
 .. warning::
 
@@ -126,21 +173,21 @@ Use :meth:`DeltaTable.schema` to retrieve the delta lake schema:
     >>> from deltalake import DeltaTable
     >>> dt = DeltaTable("../rust/tests/data/simple_table")
     >>> dt.schema()
-    Schema(Field(id: DataType(long) nullable(True) metadata({})))
+    Schema([Field(id, PrimitiveType("long"), nullable=True)])
 
 These schemas have a JSON representation that can be retrieved. To reconstruct
-from json, use :meth:`deltalake.schema.Schema.from_json`.
+from json, use :meth:`deltalake.schema.Schema.from_json()`.
 
 .. code-block:: python
 
     >>> dt.schema().json()
-    {'type': 'struct', 'fields': [{'name': 'id', 'type': 'long', 'nullable': True, 'metadata': {}}]}
+    '{"type":"struct","fields":[{"name":"id","type":"long","nullable":true,"metadata":{}}]}'
 
-Use :meth:`DeltaTable.pyarrow_schema` to retrieve the PyArrow schema:
+Use :meth:`deltalake.schema.Schema.to_pyarrow()` to retrieve the PyArrow schema:
 
 .. code-block:: python
 
-    >>> dt.pyarrow_schema()
+    >>> dt.schema().to_pyarrow()
     id: int64
 
 
@@ -194,7 +241,7 @@ support filtering partitions and selecting particular columns.
 
     >>> from deltalake import DeltaTable
     >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0-partitioned")
-    >>> dt.dt.pyarrow_schema()
+    >>> dt.schema().to_pyarrow()
     value: string
     year: string
     month: string

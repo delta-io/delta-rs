@@ -1,5 +1,5 @@
 [build-system]
-requires = ["maturin==0.12.19"]
+requires = ["maturin>=0.14,<0.15"]
 build-backend = "maturin"
 
 [project]
@@ -7,7 +7,7 @@ name = "deltalake"
 description = "Native Delta Lake Python binding based on delta-rs with Pandas integration"
 readme = "README.md"
 license = {file = "LICENSE.txt"}
-requires-python = ">=3.6"
+requires-python = ">=3.7"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -15,14 +15,12 @@ classifiers = [
     "Programming Language :: Python :: 3 :: Only"
 ]
 dependencies = [
-    "pyarrow>=4",
-    'numpy<1.20.0;python_version<="3.6"',
-    'dataclasses;python_version<="3.6"',
+    "pyarrow>=7",
+    'typing-extensions;python_version<"3.8"',
 ]
 
 [project.optional-dependencies]
 pandas = [
-    'types-dataclasses;python_version<="3.6"',
     "pandas"
 ]
 devel = [
@@ -37,11 +35,12 @@ devel = [
     "sphinx<=4.5",
     "sphinx-rtd-theme",
     "toml",
-    "typing-extensions"
+    "wheel"
 ]
 pyspark = [
     "pyspark",
-    "delta-spark"
+    "delta-spark",
+    "numpy==1.22.2" # pyspark is no compatible with latest numpy
 ]
 
 [project.urls]
@@ -63,7 +62,7 @@ no_implicit_optional = true
 warn_redundant_casts = true
 warn_unused_ignores = true
 warn_return_any = false
-implicit_reexport = false
+implicit_reexport = true
 strict_equality = true
 
 [tool.isort]
@@ -82,6 +81,7 @@ testpaths = [
 markers = [
     "integration: marks tests as integration tests (deselect with '-m \"not integration\"')",
     "s3: marks tests as integration tests with S3 (deselect with '-m \"not s3\"')",
+    "azure: marks tests as integration tests with Azure Blob Store",
     "pandas: marks tests that require pandas",
     "pyspark: marks tests that require pyspark",
 ]

@@ -1,7 +1,7 @@
 //! Utilities for writing unit tests
 use super::*;
 use crate::{
-    action::Protocol, schema::Schema, DeltaTable, DeltaTableConfig, DeltaTableMetaData,
+    action::Protocol, schema::Schema, DeltaTable, DeltaTableBuilder, DeltaTableMetaData,
     SchemaDataType, SchemaField,
 };
 use arrow::record_batch::RecordBatch;
@@ -12,6 +12,8 @@ use arrow::{
 };
 use std::collections::HashMap;
 use std::sync::Arc;
+
+pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
 pub fn get_record_batch(part: Option<String>, with_null: bool) -> RecordBatch {
     let (base_int, base_str, base_mod) = if with_null {
@@ -165,15 +167,9 @@ pub fn get_delta_metadata(partition_cols: &[String]) -> DeltaTableMetaData {
 pub fn create_bare_table() -> DeltaTable {
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
-    let backend = Box::new(crate::storage::file::FileStorageBackend::new(
-        table_path.to_str().unwrap(),
-    ));
-    DeltaTable::new(
-        table_path.to_str().unwrap(),
-        backend,
-        DeltaTableConfig::default(),
-    )
-    .unwrap()
+    DeltaTableBuilder::from_uri(table_path.to_str().unwrap())
+        .build()
+        .unwrap()
 }
 
 pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {

@@ -1,9 +1,6 @@
 extern crate deltalake;
 
-use deltalake::action::Add;
 use deltalake::schema::SchemaDataType;
-use maplit::hashmap;
-use serde_json::json;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 
@@ -56,22 +53,10 @@ fn test_match_partition() {
     };
     let string_type = SchemaDataType::primitive(String::from("string"));
 
-    assert_eq!(
-        partition_year_2020_filter.match_partition(&partition_2021, &string_type),
-        false
-    );
-    assert_eq!(
-        partition_year_2020_filter.match_partition(&partition_2020, &string_type),
-        true
-    );
-    assert_eq!(
-        partition_year_2020_filter.match_partition(&partition_2019, &string_type),
-        false
-    );
-    assert_eq!(
-        partition_month_12_filter.match_partition(&partition_2019, &string_type),
-        false
-    );
+    assert!(!partition_year_2020_filter.match_partition(&partition_2021, &string_type));
+    assert!(partition_year_2020_filter.match_partition(&partition_2020, &string_type));
+    assert!(!partition_year_2020_filter.match_partition(&partition_2019, &string_type));
+    assert!(!partition_month_12_filter.match_partition(&partition_2019, &string_type));
 }
 
 #[test]
@@ -108,22 +93,19 @@ fn test_match_filters() {
         value: deltalake::PartitionValue::Equal("2020"),
     };
 
-    assert_eq!(
-        valid_filters.match_partitions(&partitions, &partition_data_types),
-        true
-    );
-    assert_eq!(
-        valid_filter_month.match_partitions(&partitions, &partition_data_types),
-        true
-    );
-    assert_eq!(
-        invalid_filter.match_partitions(&partitions, &partition_data_types),
-        false
-    );
+    assert!(valid_filters.match_partitions(&partitions, &partition_data_types),);
+    assert!(valid_filter_month.match_partitions(&partitions, &partition_data_types),);
+    assert!(!invalid_filter.match_partitions(&partitions, &partition_data_types),);
 }
 
+// FIXME: enable this for parquet2
+#[cfg(all(feature = "arrow", feature = "parquet"))]
 #[tokio::test]
 async fn read_null_partitions_from_checkpoint() {
+    use deltalake::action::Add;
+    use maplit::hashmap;
+    use serde_json::json;
+
     let mut table = fs_common::create_table_from_json(
         "./tests/data/read_null_partitions_from_checkpoint",
         json!({
@@ -138,9 +120,7 @@ async fn read_null_partitions_from_checkpoint() {
     )
     .await;
 
-    println!("{}", table.table_uri);
-
-    let delta_log = std::path::Path::new(&table.table_uri).join("_delta_log");
+    let delta_log = std::path::Path::new(&table.table_uri()).join("_delta_log");
 
     let add = |partition: Option<String>| Add {
         partition_values: hashmap! {
@@ -164,6 +144,6 @@ async fn read_null_partitions_from_checkpoint() {
     assert!(cp.exists());
 
     // verify that table loads from checkpoint and handles null partitions
-    let table = deltalake::open_table(&table.table_uri).await.unwrap();
+    let table = deltalake::open_table(&table.table_uri()).await.unwrap();
     assert_eq!(table.version(), 2);
 }

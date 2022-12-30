@@ -1,31 +1,38 @@
 #![deny(warnings)]
 
-extern crate pyo3;
+mod filesystem;
+mod schema;
+mod utils;
 
+use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, FixedOffset, Utc};
-use deltalake::action;
-use deltalake::action::Action;
-use deltalake::action::{ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats};
-use deltalake::arrow::datatypes::Schema as ArrowSchema;
-use deltalake::get_backend_for_uri;
+use deltalake::action::{
+    self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
+};
+use deltalake::arrow::record_batch::RecordBatch;
+use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
+use deltalake::builder::DeltaTableBuilder;
+use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::partitions::PartitionFilter;
-use deltalake::storage;
 use deltalake::DeltaDataTypeLong;
 use deltalake::DeltaDataTypeTimestamp;
 use deltalake::DeltaTableMetaData;
 use deltalake::DeltaTransactionOptions;
-use deltalake::Schema;
-use deltalake::{arrow, StorageBackend};
+use deltalake::{Invariant, Schema};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
-use pyo3::types::{PyBytes, PyTuple, PyType};
+use pyo3::types::PyType;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+
+use crate::filesystem::FsConfig;
+use crate::schema::schema_to_pyobject;
 
 create_exception!(deltalake, PyDeltaTableError, PyException);
 
@@ -46,11 +53,15 @@ impl PyDeltaTableError {
         PyDeltaTableError::new_err(err.to_string())
     }
 
-    fn from_storage(err: deltalake::StorageError) -> pyo3::PyErr {
+    fn from_tokio(err: tokio::io::Error) -> pyo3::PyErr {
         PyDeltaTableError::new_err(err.to_string())
     }
 
-    fn from_tokio(err: tokio::io::Error) -> pyo3::PyErr {
+    fn from_io(err: std::io::Error) -> pyo3::PyErr {
+        PyDeltaTableError::new_err(err.to_string())
+    }
+
+    fn from_object_store(err: deltalake::ObjectStoreError) -> pyo3::PyErr {
         PyDeltaTableError::new_err(err.to_string())
     }
 
@@ -73,6 +84,8 @@ enum PartitionFilterValue<'a> {
 #[pyclass]
 struct RawDeltaTable {
     _table: deltalake::DeltaTable,
+    // storing the config additionally on the table helps us make pickling work.
+    _config: FsConfig,
 }
 
 #[pyclass]
@@ -98,21 +111,31 @@ impl RawDeltaTable {
         table_uri: &str,
         version: Option<deltalake::DeltaDataTypeLong>,
         storage_options: Option<HashMap<String, String>>,
+        without_files: bool,
     ) -> PyResult<Self> {
-        let mut table = deltalake::DeltaTableBuilder::from_uri(table_uri)
-            .map_err(PyDeltaTableError::from_raw)?;
+        let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
+        let options = storage_options.clone().unwrap_or_default();
         if let Some(storage_options) = storage_options {
-            let backend = deltalake::get_backend_for_uri_with_options(table_uri, storage_options)
-                .map_err(PyDeltaTableError::from_storage)?;
-            table = table.with_storage_backend(backend)
+            builder = builder.with_storage_options(storage_options)
         }
         if let Some(version) = version {
-            table = table.with_version(version)
+            builder = builder.with_version(version)
         }
+
+        if without_files {
+            builder = builder.without_files()
+        }
+
         let table = rt()?
-            .block_on(table.load())
+            .block_on(builder.load())
             .map_err(PyDeltaTableError::from_raw)?;
-        Ok(RawDeltaTable { _table: table })
+        Ok(RawDeltaTable {
+            _table: table,
+            _config: FsConfig {
+                root_url: table_uri.into(),
+                options,
+            },
+        })
     }
 
     #[classmethod]
@@ -136,8 +159,8 @@ impl RawDeltaTable {
         Ok(table_uri)
     }
 
-    pub fn table_uri(&self) -> PyResult<&str> {
-        Ok(&self._table.table_uri)
+    pub fn table_uri(&self) -> PyResult<String> {
+        Ok(self._table.table_uri())
     }
 
     pub fn version(&self) -> PyResult<i64> {
@@ -201,31 +224,61 @@ impl RawDeltaTable {
         match partition_filters {
             Ok(filters) => Ok(self
                 ._table
-                .get_file_uris_by_partitions(&filters)
-                .map_err(PyDeltaTableError::from_raw)?),
+                .get_files_by_partitions(&filters)
+                .map_err(PyDeltaTableError::from_raw)?
+                .into_iter()
+                .map(|p| p.to_string())
+                .collect()),
             Err(err) => Err(PyDeltaTableError::from_raw(err)),
         }
     }
 
-    pub fn files(&self) -> PyResult<Vec<String>> {
-        Ok(self
-            ._table
-            .get_files_iter()
-            .map(|f| f.to_string())
-            .collect())
+    pub fn files(
+        &self,
+        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+    ) -> PyResult<Vec<String>> {
+        if let Some(filters) = partition_filters {
+            let filters =
+                convert_partition_filters(filters).map_err(PyDeltaTableError::from_raw)?;
+            Ok(self
+                ._table
+                .get_files_by_partitions(&filters)
+                .map_err(PyDeltaTableError::from_raw)?
+                .into_iter()
+                .map(|p| p.to_string())
+                .collect())
+        } else {
+            Ok(self
+                ._table
+                .get_files_iter()
+                .map(|f| f.to_string())
+                .collect())
+        }
     }
 
-    pub fn file_uris(&self) -> PyResult<Vec<String>> {
-        Ok(self._table.get_file_uris().collect())
+    pub fn file_uris(
+        &self,
+        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+    ) -> PyResult<Vec<String>> {
+        if let Some(filters) = partition_filters {
+            let filters =
+                convert_partition_filters(filters).map_err(PyDeltaTableError::from_raw)?;
+            Ok(self
+                ._table
+                .get_file_uris_by_partitions(&filters)
+                .map_err(PyDeltaTableError::from_raw)?)
+        } else {
+            Ok(self._table.get_file_uris().collect())
+        }
     }
 
-    pub fn schema_json(&self) -> PyResult<String> {
-        let schema = self
+    #[getter]
+    pub fn schema(&self, py: Python) -> PyResult<PyObject> {
+        let schema: &Schema = self
             ._table
             .get_schema()
             .map_err(PyDeltaTableError::from_raw)?;
-        serde_json::to_string(&schema)
-            .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))
+        schema_to_pyobject(schema, py)
     }
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
@@ -261,8 +314,7 @@ impl RawDeltaTable {
             .map_err(PyDeltaTableError::from_raw)?;
         serde_json::to_string(
             &<ArrowSchema as TryFrom<&deltalake::Schema>>::try_from(schema)
-                .map_err(PyDeltaTableError::from_arrow)?
-                .to_json(),
+                .map_err(PyDeltaTableError::from_arrow)?,
         )
         .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))
     }
@@ -277,7 +329,7 @@ impl RawDeltaTable {
         &mut self,
         py: Python<'py>,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
-        schema: ArrowSchema,
+        schema: PyArrowType<ArrowSchema>,
     ) -> PyResult<Vec<(String, Option<&'py PyAny>)>> {
         let path_set = match partition_filters {
             Some(filters) => Some(HashSet::<_>::from_iter(
@@ -287,7 +339,8 @@ impl RawDeltaTable {
         };
 
         self._table
-            .get_file_uris()
+            .get_files_iter()
+            .map(|p| p.to_string())
             .zip(self._table.get_partition_values())
             .zip(self._table.get_stats())
             .filter(|((path, _), _)| match &path_set {
@@ -307,10 +360,12 @@ impl RawDeltaTable {
         add_actions: Vec<PyAddAction>,
         mode: &str,
         partition_by: Vec<String>,
-        schema: ArrowSchema,
+        schema: PyArrowType<ArrowSchema>,
     ) -> PyResult<()> {
         let mode = save_mode_from_str(mode)?;
-        let schema: Schema = (&schema).try_into()?;
+        let schema: Schema = (&schema.0)
+            .try_into()
+            .map_err(PyDeltaTableError::from_arrow)?;
 
         let existing_schema = self
             ._table
@@ -376,6 +431,26 @@ impl RawDeltaTable {
 
         Ok(())
     }
+
+    pub fn get_py_storage_backend(&self) -> PyResult<filesystem::DeltaFileSystemHandler> {
+        Ok(filesystem::DeltaFileSystemHandler {
+            inner: self._table.object_store(),
+            rt: Arc::new(rt()?),
+            config: self._config.clone(),
+        })
+    }
+}
+
+fn convert_partition_filters<'a>(
+    partitions_filters: Vec<(&'a str, &'a str, PartitionFilterValue<'a>)>,
+) -> Result<Vec<PartitionFilter<&'a str>>, deltalake::DeltaTableError> {
+    partitions_filters
+        .into_iter()
+        .map(|filter| match filter {
+            (key, op, PartitionFilterValue::Single(v)) => PartitionFilter::try_from((key, op, v)),
+            (key, op, PartitionFilterValue::Multiple(v)) => PartitionFilter::try_from((key, op, v)),
+        })
+        .collect()
 }
 
 fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
@@ -402,7 +477,7 @@ fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
 /// skipped during a scan.
 fn filestats_to_expression<'py>(
     py: Python<'py>,
-    schema: &ArrowSchema,
+    schema: &PyArrowType<ArrowSchema>,
     partitions_values: &HashMap<String, Option<String>>,
     stats: Option<Stats>,
 ) -> PyResult<Option<&'py PyAny>> {
@@ -411,18 +486,28 @@ fn filestats_to_expression<'py>(
     let pa = PyModule::import(py, "pyarrow")?;
     let mut expressions: Vec<PyResult<&PyAny>> = Vec::new();
 
+    let cast_to_type = |column_name: &String, value: PyObject, schema: &ArrowSchema| {
+        let column_type = PyArrowType(
+            schema
+                .field_with_name(column_name)
+                .map_err(|_| {
+                    PyDeltaTableError::new_err(format!(
+                        "Column not found in schema: {}",
+                        column_name
+                    ))
+                })?
+                .data_type()
+                .clone(),
+        )
+        .into_py(py);
+        pa.call_method1("scalar", (value,))?
+            .call_method1("cast", (column_type,))
+    };
+
     for (column, value) in partitions_values.iter() {
         if let Some(value) = value {
             // value is a string, but needs to be parsed into appropriate type
-            let column_type = schema
-                .field_with_name(column)
-                .map_err(|_| PyDeltaTableError::new_err("Partition column not found in schema"))?
-                .data_type()
-                .clone()
-                .into_py(py);
-            let converted_value = pa
-                .call_method1("scalar", (value,))?
-                .call_method1("cast", (column_type,))?;
+            let converted_value = cast_to_type(column, value.into_py(py), &schema.0)?;
             expressions.push(
                 field
                     .call1((column,))?
@@ -432,32 +517,38 @@ fn filestats_to_expression<'py>(
     }
 
     if let Some(stats) = stats {
-        for (column, minimum) in stats.min_values.iter().filter_map(|(k, v)| match v {
+        for (col_name, minimum) in stats.min_values.iter().filter_map(|(k, v)| match v {
             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
             // TODO(wjones127): Handle nested field statistics.
             // Blocked on https://issues.apache.org/jira/browse/ARROW-11259
             _ => None,
         }) {
-            expressions.push(field.call1((column,))?.call_method1("__ge__", (minimum,)));
+            let maybe_minimum = cast_to_type(&col_name, minimum, &schema.0);
+            if let Ok(minimum) = maybe_minimum {
+                expressions.push(field.call1((col_name,))?.call_method1("__ge__", (minimum,)));
+            }
         }
 
-        for (column, maximum) in stats.max_values.iter().filter_map(|(k, v)| match v {
+        for (col_name, maximum) in stats.max_values.iter().filter_map(|(k, v)| match v {
             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
             _ => None,
         }) {
-            expressions.push(field.call1((column,))?.call_method1("__le__", (maximum,)));
+            let maybe_maximum = cast_to_type(&col_name, maximum, &schema.0);
+            if let Ok(maximum) = maybe_maximum {
+                expressions.push(field.call1((col_name,))?.call_method1("__le__", (maximum,)));
+            }
         }
 
-        for (column, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
+        for (col_name, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
             ColumnCountStat::Value(val) => Some((k, val)),
             _ => None,
         }) {
             if *null_count == stats.num_records {
-                expressions.push(field.call1((column.clone(),))?.call_method0("is_null"));
+                expressions.push(field.call1((col_name.clone(),))?.call_method0("is_null"));
             }
 
             if *null_count == 0 {
-                expressions.push(field.call1((column.clone(),))?.call_method0("is_valid"));
+                expressions.push(field.call1((col_name.clone(),))?.call_method0("is_valid"));
             }
         }
     }
@@ -469,46 +560,6 @@ fn filestats_to_expression<'py>(
             .into_iter()
             .reduce(|accum, item| accum?.getattr("__and__")?.call1((item?,)))
             .transpose()
-    }
-}
-
-#[pyclass]
-pub struct DeltaStorageFsBackend {
-    _storage: Box<dyn StorageBackend>,
-}
-
-#[pymethods]
-impl DeltaStorageFsBackend {
-    #[new]
-    fn new(table_uri: &str) -> PyResult<Self> {
-        let storage =
-            storage::get_backend_for_uri(table_uri).map_err(PyDeltaTableError::from_storage)?;
-        Ok(Self { _storage: storage })
-    }
-
-    fn normalize_path(&self, path: &str) -> PyResult<String> {
-        Ok(self._storage.trim_path(path))
-    }
-
-    fn head_obj<'py>(&mut self, py: Python<'py>, path: &str) -> PyResult<&'py PyTuple> {
-        let obj = rt()?
-            .block_on(self._storage.head_obj(path))
-            .map_err(PyDeltaTableError::from_storage)?;
-        Ok(PyTuple::new(
-            py,
-            &[
-                obj.path.into_py(py),
-                obj.modified.timestamp().to_string().into_py(py),
-                obj.size.into_py(py),
-            ],
-        ))
-    }
-
-    fn get_obj<'py>(&mut self, py: Python<'py>, path: &str) -> PyResult<&'py PyBytes> {
-        let obj = rt()?
-            .block_on(self._storage.get_obj(path))
-            .map_err(PyDeltaTableError::from_storage)?;
-        Ok(PyBytes::new(py, &obj))
     }
 }
 
@@ -565,26 +616,27 @@ impl From<&PyAddAction> for action::Add {
 #[allow(clippy::too_many_arguments)]
 fn write_new_deltalake(
     table_uri: String,
-    schema: ArrowSchema,
+    schema: PyArrowType<ArrowSchema>,
     add_actions: Vec<PyAddAction>,
     _mode: &str,
     partition_by: Vec<String>,
     name: Option<String>,
     description: Option<String>,
     configuration: Option<HashMap<String, Option<String>>>,
+    storage_options: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-    let mut table = deltalake::DeltaTable::new(
-        &table_uri,
-        get_backend_for_uri(&table_uri).map_err(PyDeltaTableError::from_storage)?,
-        deltalake::DeltaTableConfig::default(),
-    )
-    .map_err(PyDeltaTableError::from_raw)?;
+    let mut table = DeltaTableBuilder::from_uri(table_uri)
+        .with_storage_options(storage_options.unwrap_or_default())
+        .build()
+        .map_err(PyDeltaTableError::from_raw)?;
 
     let metadata = DeltaTableMetaData::new(
         name,
         description,
         None, // Format
-        (&schema).try_into()?,
+        (&schema.0)
+            .try_into()
+            .map_err(PyDeltaTableError::from_arrow)?,
         partition_by,
         configuration.unwrap_or_default(),
     );
@@ -604,16 +656,60 @@ fn write_new_deltalake(
     Ok(())
 }
 
+#[pyclass(name = "DeltaDataChecker", text_signature = "(invariants)")]
+struct PyDeltaDataChecker {
+    inner: DeltaDataChecker,
+    rt: tokio::runtime::Runtime,
+}
+
+#[pymethods]
+impl PyDeltaDataChecker {
+    #[new]
+    fn new(invariants: Vec<(String, String)>) -> Self {
+        let invariants: Vec<Invariant> = invariants
+            .into_iter()
+            .map(|(field_name, invariant_sql)| Invariant {
+                field_name,
+                invariant_sql,
+            })
+            .collect();
+        Self {
+            inner: DeltaDataChecker::new(invariants),
+            rt: tokio::runtime::Runtime::new().unwrap(),
+        }
+    }
+
+    fn check_batch(&self, batch: PyArrowType<RecordBatch>) -> PyResult<()> {
+        self.rt.block_on(async {
+            self.inner
+                .check_batch(&batch.0)
+                .await
+                .map_err(PyDeltaTableError::from_raw)
+        })
+    }
+}
+
 #[pymodule]
 // module name need to match project name
-fn deltalake(py: Python, m: &PyModule) -> PyResult<()> {
+fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
 
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_new_deltalake, m)?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
-    m.add_class::<DeltaStorageFsBackend>()?;
+    m.add_class::<PyDeltaDataChecker>()?;
     m.add("PyDeltaTableError", py.get_type::<PyDeltaTableError>())?;
+    // There are issues with submodules, so we will expose them flat for now
+    // See also: https://github.com/PyO3/pyo3/issues/759
+    m.add_class::<schema::PrimitiveType>()?;
+    m.add_class::<schema::ArrayType>()?;
+    m.add_class::<schema::MapType>()?;
+    m.add_class::<schema::Field>()?;
+    m.add_class::<schema::StructType>()?;
+    m.add_class::<schema::PySchema>()?;
+    m.add_class::<filesystem::DeltaFileSystemHandler>()?;
+    m.add_class::<filesystem::ObjectInputFile>()?;
+    m.add_class::<filesystem::ObjectOutputStream>()?;
     Ok(())
 }

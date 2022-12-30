@@ -1,30 +1,27 @@
 use chrono::Utc;
 use deltalake::action::{Action, Add, Protocol, Remove};
 use deltalake::{
-    storage, DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
+    builder::DeltaTableBuilder, DeltaTable, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
 };
-use parquet::file::reader::{FileReader, SerializedFileReader};
-use parquet::schema::types::Type;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::fs::File;
 use std::path::Path;
 use uuid::Uuid;
 
 pub fn cleanup_dir_except<P: AsRef<Path>>(path: P, ignore_files: Vec<String>) {
-    for p in fs::read_dir(path).unwrap() {
-        if let Ok(d) = p {
-            let path = d.path();
-            let name = d.path().file_name().unwrap().to_str().unwrap().to_string();
+    for d in fs::read_dir(path).unwrap().flatten() {
+        let path = d.path();
+        let name = d.path().file_name().unwrap().to_str().unwrap().to_string();
 
-            if !ignore_files.contains(&name) && !name.starts_with(".") {
-                fs::remove_file(&path).unwrap();
-            }
+        if !ignore_files.contains(&name) && !name.starts_with('.') {
+            fs::remove_file(&path).unwrap();
         }
     }
 }
 
+// TODO: should we drop this
+#[allow(dead_code)]
 pub async fn create_table_from_json(
     path: &str,
     schema: Value,
@@ -34,6 +31,7 @@ pub async fn create_table_from_json(
     assert!(path.starts_with("./tests/data"));
     std::fs::create_dir_all(path).unwrap();
     std::fs::remove_dir_all(path).unwrap();
+    std::fs::create_dir_all(path).unwrap();
     let schema: Schema = serde_json::from_value(schema).unwrap();
     let config: HashMap<String, Option<String>> = serde_json::from_value(config).unwrap();
     create_test_table(path, schema, partition_columns, config).await
@@ -45,8 +43,7 @@ pub async fn create_test_table(
     partition_columns: Vec<&str>,
     config: HashMap<String, Option<String>>,
 ) -> DeltaTable {
-    let backend = storage::get_backend_for_uri(path).unwrap();
-    let mut table = DeltaTable::new(path, backend, DeltaTableConfig::default()).unwrap();
+    let mut table = DeltaTableBuilder::from_uri(path).build().unwrap();
     let partition_columns = partition_columns.iter().map(|s| s.to_string()).collect();
     let md = DeltaTableMetaData::new(None, None, None, schema, partition_columns, config);
     let protocol = Protocol {
@@ -55,18 +52,6 @@ pub async fn create_test_table(
     };
     table.create(md, protocol, None, None).await.unwrap();
     table
-}
-
-pub async fn read_checkpoint(path: &str) -> (Type, Vec<Action>) {
-    let file = File::open(path).unwrap();
-    let reader = SerializedFileReader::new(file).unwrap();
-    let schema = reader.metadata().file_metadata().schema();
-    let mut row_iter = reader.get_row_iter(None).unwrap();
-    let mut actions = Vec::new();
-    while let Some(record) = row_iter.next() {
-        actions.push(Action::from_parquet_record(schema, &record).unwrap())
-    }
-    (schema.clone(), actions)
 }
 
 pub async fn create_table(
@@ -84,7 +69,7 @@ pub async fn create_table(
         HashMap::new(),
     )]);
 
-    create_test_table(path, schema, Vec::new(), config.unwrap_or(HashMap::new())).await
+    create_test_table(path, schema, Vec::new(), config.unwrap_or_default()).await
 }
 
 pub fn add(offset_millis: i64) -> Add {

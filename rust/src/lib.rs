@@ -38,11 +38,14 @@
 //! # Optional cargo package features
 //!
 //! - `s3`, `gcs`, `azure` - enable the storage backends for AWS S3, Google Cloud Storage (GCS),
-//!   or Azure Data Lake Storage Gen2 (ADLS2). Use `s3-rustls` to use Rust TLS instead of native
-//!   TLS implementation.
+//!   or Azure Blob Storage / Azure Data Lake Storage Gen2 (ADLS2). Use `s3-rustls` to use Rust TLS
+//!   instead of native TLS implementation.
 //! - `glue` - enable the Glue data catalog to work with Delta Tables with AWS Glue.
-//! - `datafusion-ext` - enable the `datafusion::datasource::TableProvider` trait implementation
+//! - `datafusion` - enable the `datafusion::datasource::TableProvider` trait implementation
 //!   for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow-datafusion).
+//! - `datafusion-ext` - DEPRECATED: alias for `datafusion` feature.
+//! - `parquet2` - use parquet2 for checkpoint deserialization. Since `arrow` and `parquet` features
+//!   are enabled by default for backwards compatibility, this feature needs to be used with `--no-default-features`.
 //!
 //! # Querying Delta Tables with Datafusion
 //!
@@ -64,51 +67,64 @@
 //!       .await.unwrap();
 //! };
 //! ```
-//!
-//! It's important to note that the DataFusion library is evolving quickly, often with breaking api
-//! changes, and this may cause compilation issues as a result.  If you are having issues with the most
-//! recently released `delta-rs` you can set a specific branch or commit in your `Cargo.toml`.
-//!
-//! ```toml
-//! datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "07bc2c754805f536fe1cd873dbe6adfc0a21cbb3" }
-//! ```
 
 #![deny(warnings)]
 #![deny(missing_docs)]
 
+#[cfg(all(feature = "parquet", feature = "parquet2"))]
+compile_error!(
+    "Features parquet and parquet2 are mutually exclusive and cannot be enabled together"
+);
+
+#[cfg(all(feature = "s3", feature = "s3-rustls"))]
+compile_error!("Features s3 and s3-rustls are mutually exclusive and cannot be enabled together");
+
 pub mod action;
-pub mod checkpoints;
-mod conflict_checker;
+pub mod builder;
 pub mod data_catalog;
-mod delta;
-pub mod delta_arrow;
+pub mod delta;
 pub mod delta_config;
-#[cfg(feature = "rust-dataframe-ext")]
-mod delta_dataframe;
-#[cfg(feature = "datafusion-ext")]
-pub mod delta_datafusion;
-#[cfg(feature = "datafusion-ext")]
-pub mod operations;
-pub mod optimize;
 pub mod partitions;
 pub mod schema;
 pub mod storage;
-mod table_state;
+pub mod table_properties;
+pub mod table_state;
 pub mod time_utils;
 pub mod vacuum;
+
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod checkpoints;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod delta_arrow;
+#[cfg(feature = "datafusion")]
+pub mod delta_datafusion;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod operations;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod optimize;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod writer;
 
+pub use self::builder::*;
 pub use self::data_catalog::{get_data_catalog, DataCatalog, DataCatalogError};
 pub use self::delta::*;
 pub use self::partitions::*;
 pub use self::schema::*;
-#[cfg(feature = "azure")]
-pub use self::storage::azure::azure_storage_options;
-#[cfg(feature = "s3")]
-pub use self::storage::s3::s3_storage_options;
-pub use self::storage::{
-    get_backend_for_uri, get_backend_for_uri_with_options, parse_uri, StorageBackend, StorageError,
-    Uri, UriError,
-};
+pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
+
+// convenience exports for consumers to avoid aligning crate versions
+#[cfg(feature = "arrow")]
 pub use arrow;
+#[cfg(feature = "datafusion")]
+pub use datafusion;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub use operations::DeltaOps;
+#[cfg(feature = "parquet")]
 pub use parquet;
+#[cfg(feature = "parquet2")]
+pub use parquet2;
+
+// needed only for integration tests
+// TODO can / should we move this into the test crate?
+#[cfg(feature = "integration_test")]
+pub mod test_utils;
