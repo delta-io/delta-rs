@@ -233,6 +233,7 @@ impl Add {
     }
 
     /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         match self.get_stats_parsed() {
             Ok(Some(stats)) => Ok(Some(stats)),
@@ -245,6 +246,12 @@ impl Add {
                 self.get_json_stats()
             }
         }
+    }
+
+    /// Get whatever stats are available.
+    #[cfg(not(any(feature = "parquet", feature = "parquet2")))]
+    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+        self.get_json_stats()
     }
 
     /// Returns the serde_json representation of stats contained in the action if present.
