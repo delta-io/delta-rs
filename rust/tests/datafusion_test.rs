@@ -7,19 +7,21 @@ use std::sync::Arc;
 use arrow::array::*;
 use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
 use arrow::record_batch::RecordBatch;
+use common::datafusion::context_with_delta_table_factory;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::{common, file_format::ParquetExec, metrics::Label};
+use datafusion::physical_plan::{common::collect, file_format::ParquetExec, metrics::Label};
 use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor};
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::Expr;
 
 use deltalake::action::SaveMode;
-use deltalake::test_utils::datafusion::context_with_delta_table_factory;
 use deltalake::{operations::DeltaOps, DeltaTable, Schema};
+
+mod common;
 
 fn get_scanned_files(node: &dyn ExecutionPlan) -> HashSet<Label> {
     node.metrics()
@@ -252,7 +254,7 @@ async fn test_files_scanned() -> Result<()> {
     let plan = CoalescePartitionsExec::new(plan.clone());
 
     let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
-    let _ = common::collect(plan.execute(0, task_ctx)?).await?;
+    let _ = collect(plan.execute(0, task_ctx)?).await?;
 
     let mut metrics = ExecutionMetricsCollector::default();
     visit_execution_plan(&plan, &mut metrics).unwrap();
@@ -265,7 +267,7 @@ async fn test_files_scanned() -> Result<()> {
 
     let plan = CoalescePartitionsExec::new(table.scan(&ctx.state(), None, &[filter], None).await?);
     let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
-    let _result = common::collect(plan.execute(0, task_ctx)?).await?;
+    let _result = collect(plan.execute(0, task_ctx)?).await?;
 
     let mut metrics = ExecutionMetricsCollector::default();
     visit_execution_plan(&plan, &mut metrics).unwrap();

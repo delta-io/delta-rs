@@ -1,12 +1,12 @@
 #![cfg(all(feature = "integration_test", feature = "datafusion-ext"))]
 
 use arrow::array::Int64Array;
-use deltalake::test_utils::{
-    datafusion::context_with_delta_table_factory, IntegrationContext, StorageIntegration,
-    TestResult, TestTables,
-};
+use common::datafusion::context_with_delta_table_factory;
+use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
 use serial_test::serial;
 use std::sync::Arc;
+
+mod common;
 
 #[tokio::test]
 #[serial]
