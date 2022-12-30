@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWrite;
 
 use crate::get_storage_backend;
-#[cfg(feature = "datafusion-ext")]
+#[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
 use serde::de::Error;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -143,7 +143,7 @@ impl DeltaObjectStore {
         self.config.to_uri(&Path::from(""))
     }
 
-    #[cfg(feature = "datafusion-ext")]
+    #[cfg(feature = "datafusion")]
     /// generate a unique enough url to identify the store in datafusion.
     pub(crate) fn object_store_url(&self) -> ObjectStoreUrl {
         // we are certain, that the URL can be parsed, since

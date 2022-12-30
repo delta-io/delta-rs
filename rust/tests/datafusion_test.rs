@@ -1,4 +1,4 @@
-#![cfg(feature = "datafusion-ext")]
+#![cfg(feature = "datafusion")]
 
 use std::collections::HashSet;
 use std::path::PathBuf;

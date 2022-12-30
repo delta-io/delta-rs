@@ -16,7 +16,7 @@ use tempdir::TempDir;
 #[cfg(feature = "azure")]
 pub mod adls;
 pub mod clock;
-#[cfg(feature = "datafusion-ext")]
+#[cfg(feature = "datafusion")]
 pub mod datafusion;
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 pub mod s3;
