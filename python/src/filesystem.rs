@@ -255,28 +255,6 @@ impl DeltaFileSystemHandler {
         Ok(file)
     }
 
-    pub fn __getstate__(&self) -> PyResult<Vec<u8>> {
-        // Used in pickle/pickling
-        let s = serde_json::to_string(&self.config).unwrap();
-        Ok(s.as_bytes().to_vec())
-    }
-
-    pub fn __setstate__(&mut self, state: Vec<u8>) -> PyResult<()> {
-        let config: FsConfig = serde_json::from_slice(&state)
-            .map_err(|err| PyDeltaTableError::from_raw(err.into()))?;
-
-        let storage = DeltaTableBuilder::from_uri(config.root_url.clone())
-            .with_storage_options(config.options.clone())
-            .build_storage()
-            .map_err(PyDeltaTableError::from_raw)?;
-
-        self.inner = storage;
-        self.rt = Arc::new(rt()?);
-        self.config = config;
-
-        Ok(())
-    }
-
     pub fn __getnewargs__(&self) -> PyResult<(String, Option<HashMap<String, String>>)> {
         Ok((
             self.config.root_url.clone(),
