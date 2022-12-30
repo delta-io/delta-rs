@@ -285,6 +285,9 @@ impl std::future::IntoFuture for WriteBuilder {
                     let schema = batches[0].schema();
 
                     if let Ok(meta) = table.get_metadata() {
+                        // NOTE the schema generated from the delta schema will have the delta field metadata included,
+                        // so we need to compare the field names and datatypes instead.
+                        // TODO update comparison logic, once we have column mappings supported.
                         let curr_schema: ArrowSchemaRef = Arc::new((&meta.schema).try_into()?);
 
                         if !schema_eq(curr_schema, schema.clone()) {

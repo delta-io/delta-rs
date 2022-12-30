@@ -43,11 +43,13 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v1
       - name: build and lint with clippy
-        run: cargo clippy --features azure,datafusion-ext,s3,gcs,glue
+        run: cargo clippy --features azure,datafusion,s3,gcs,glue
       - name: Spot-check build for rustls features
         run: cargo clippy --features s3-rustls
       - name: Check docs
-        run: cargo doc --features azure,datafusion-ext,s3,gcs,glue
+        run: cargo doc --features azure,datafusion,s3,gcs,glue
+      - name: Check no default features
+        run: cargo check --no-default-features
 
   test:
     strategy:
@@ -68,7 +70,7 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v1
       - name: Run tests
-        run: cargo test --verbose --features datafusion-ext,azure
+        run: cargo test --verbose --features datafusion,azure
 
   integration_test:
     name: Integration Tests
@@ -107,10 +109,10 @@ jobs:
 
       - name: Run tests with default ssl
         run: |
-          cargo test --features integration_test,azure,s3,gcs,datafusion-ext
+          cargo test --features integration_test,azure,s3,gcs,datafusion
       - name: Run tests with rustls
         run: |
-          cargo test --features integration_test,s3-rustls,datafusion-ext
+          cargo test --features integration_test,s3-rustls,datafusion
 
   parquet2_test:
     runs-on: ubuntu-latest

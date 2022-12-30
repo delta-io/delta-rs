@@ -1,4 +1,4 @@
-#![cfg(all(feature = "integration_test", feature = "datafusion-ext"))]
+#![cfg(all(feature = "integration_test", feature = "datafusion"))]
 
 use arrow::array::Int64Array;
 use common::datafusion::context_with_delta_table_factory;
