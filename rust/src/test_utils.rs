@@ -12,7 +12,7 @@ pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
 /// The IntegrationContext provides temporary resources to test against cloud storage services.
 pub struct IntegrationContext {
-    integration: StorageIntegration,
+    pub integration: StorageIntegration,
     bucket: String,
     store: Arc<DynObjectStore>,
     tmp_dir: TempDir,
