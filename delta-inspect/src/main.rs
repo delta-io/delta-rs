@@ -79,7 +79,7 @@ async fn main() -> anyhow::Result<()> {
         Some(("vacuum", vacuum_matches)) => {
             let dry_run = !vacuum_matches.is_present("no_dry_run");
             let table_uri = vacuum_matches.value_of("uri").unwrap();
-            let table = deltalake::open_table(table_uri).await?;
+            let mut table = deltalake::open_table(table_uri).await?;
             let files = table
                 .vacuum(
                     vacuum_matches.value_of("retention_hours").map(|s| {
@@ -87,6 +87,7 @@ async fn main() -> anyhow::Result<()> {
                             .expect("retention hour should be an unsigned integer")
                     }),
                     dry_run,
+                    true
                 )
                 .await?;
             if dry_run {
