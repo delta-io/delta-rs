@@ -13,7 +13,7 @@ from deltalake.writer import write_deltalake
 
 @pytest.mark.s3
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_read_files(s3_localstack):
     table_path = "s3://deltars/simple"
     handler = DeltaStorageHandler(table_path)
@@ -30,7 +30,7 @@ def test_read_files(s3_localstack):
 
 @pytest.mark.s3
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=4, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_s3_authenticated_read_write(s3_localstack_creds):
     # Create unauthenticated handler
     storage_handler = DeltaStorageHandler(
@@ -55,16 +55,27 @@ def test_s3_authenticated_read_write(s3_localstack_creds):
 
 @pytest.mark.s3
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_read_simple_table_from_remote(s3_localstack):
     table_path = "s3://deltars/simple"
     dt = DeltaTable(table_path)
     assert dt.to_pyarrow_table().equals(pa.table({"id": [5, 7, 9]}))
 
+    expected_files = [
+        "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+        "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+        "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
+        "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
+        "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
+    ]
+
+    assert dt.files() == expected_files
+    assert dt.file_uris() == [table_path + "/" + path for path in expected_files]
+
 
 @pytest.mark.s3
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_roundtrip_s3_env(s3_localstack, sample_data: pa.Table, monkeypatch):
     table_path = "s3://deltars/roundtrip"
 
@@ -92,7 +103,7 @@ def test_roundtrip_s3_env(s3_localstack, sample_data: pa.Table, monkeypatch):
 
 @pytest.mark.s3
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
     table_path = "s3://deltars/roundtrip2"
 
@@ -147,7 +158,7 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip"
 
@@ -169,7 +180,7 @@ def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip2"
 
@@ -198,7 +209,7 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=15, method="thread")
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip3"
 

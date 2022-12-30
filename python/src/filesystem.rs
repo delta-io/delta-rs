@@ -397,7 +397,7 @@ impl ObjectInputFile {
             }
             // reference is  end of the stream; offset is usually negative
             2 => {
-                self.pos = self.content_length as i64 + offset;
+                self.pos = self.content_length + offset;
             }
             _ => {
                 return Err(PyValueError::new_err(

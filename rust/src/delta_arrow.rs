@@ -8,8 +8,6 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use lazy_static::lazy_static;
 use regex::Regex;
-use std::collections::BTreeMap;
-use std::collections::HashMap;
 use std::convert::TryFrom;
 
 impl TryFrom<&schema::Schema> for ArrowSchema {
@@ -30,24 +28,20 @@ impl TryFrom<&schema::SchemaField> for ArrowField {
     type Error = ArrowError;
 
     fn try_from(f: &schema::SchemaField) -> Result<Self, ArrowError> {
-        let mut field = ArrowField::new(
+        let metadata = f
+            .get_metadata()
+            .iter()
+            .map(|(key, val)| Ok((key.clone(), serde_json::to_string(val)?)))
+            .collect::<Result<_, serde_json::Error>>()
+            .map_err(|err| ArrowError::JsonError(err.to_string()))?;
+
+        let field = ArrowField::new(
             f.get_name(),
             ArrowDataType::try_from(f.get_type())?,
             f.is_nullable(),
-        );
+        )
+        .with_metadata(metadata);
 
-        let metadata: Option<BTreeMap<String, String>> = Some(f.get_metadata())
-            .filter(|metadata| metadata.is_empty())
-            .map(|metadata| {
-                metadata
-                    .iter()
-                    .map(|(key, val)| Ok((key.clone(), serde_json::to_string(val)?)))
-                    .collect::<Result<_, serde_json::Error>>()
-                    .map_err(|err| ArrowError::JsonError(err.to_string()))
-            })
-            .transpose()?;
-
-        field.set_metadata(metadata);
         Ok(field)
     }
 }
@@ -111,7 +105,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                             ))
                         })?;
                         let precision = extract.get(1).and_then(|v| v.as_str().parse::<u8>().ok());
-                        let scale = extract.get(2).and_then(|v| v.as_str().parse::<u8>().ok());
+                        let scale = extract.get(2).and_then(|v| v.as_str().parse::<i8>().ok());
                         match (precision, scale) {
                             // TODO how do we decide which variant (128 / 256) to use?
                             (Some(p), Some(s)) => Ok(ArrowDataType::Decimal128(p, s)),
@@ -205,12 +199,9 @@ impl TryFrom<&ArrowField> for schema::SchemaField {
             arrow_field.is_nullable(),
             arrow_field
                 .metadata()
-                .as_ref()
-                .map_or_else(HashMap::new, |m| {
-                    m.iter()
-                        .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                        .collect()
-                }),
+                .iter()
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+                .collect(),
         ))
     }
 }
@@ -238,6 +229,11 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
             ))),
             ArrowDataType::Date32 => Ok(schema::SchemaDataType::primitive("date".to_string())),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
+                Ok(schema::SchemaDataType::primitive("timestamp".to_string()))
+            }
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz))
+                if tz.eq_ignore_ascii_case("utc") =>
+            {
                 Ok(schema::SchemaDataType::primitive("timestamp".to_string()))
             }
             ArrowDataType::Struct(fields) => {
@@ -716,5 +712,33 @@ mod tests {
                 .unwrap_err(),
             arrow::error::ArrowError::SchemaError(_error),
         ));
+    }
+
+    #[test]
+    fn test_arrow_from_delta_timestamp_type() {
+        let timestamp_field = crate::SchemaDataType::primitive("timestamp".to_string());
+        assert_eq!(
+            <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&timestamp_field).unwrap(),
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+    }
+
+    #[test]
+    fn test_delta_from_arrow_timestamp_type() {
+        let timestamp_field = ArrowDataType::Timestamp(TimeUnit::Microsecond, None);
+        assert_eq!(
+            <crate::SchemaDataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
+            crate::SchemaDataType::primitive("timestamp".to_string())
+        );
+    }
+
+    #[test]
+    fn test_delta_from_arrow_timestamp_type_with_tz() {
+        let timestamp_field =
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string()));
+        assert_eq!(
+            <crate::SchemaDataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
+            crate::SchemaDataType::primitive("timestamp".to_string())
+        );
     }
 }

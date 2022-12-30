@@ -582,3 +582,17 @@ async fn read_empty_folder() {
         deltalake::DeltaTableError::NotATable(_),
     ));
 }
+
+#[tokio::test]
+async fn read_delta_table_with_cdc() {
+    let table = deltalake::open_table("./tests/data/simple_table_with_cdc")
+        .await
+        .unwrap();
+    assert_eq!(table.version(), 2);
+    assert_eq!(
+        table.get_files(),
+        vec![Path::from(
+            "part-00000-7444aec4-710a-4a4c-8abe-3323499043e9.c000.snappy.parquet"
+        ),]
+    );
+}

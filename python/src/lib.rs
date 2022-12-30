@@ -233,16 +233,43 @@ impl RawDeltaTable {
         }
     }
 
-    pub fn files(&self) -> PyResult<Vec<String>> {
-        Ok(self
-            ._table
-            .get_files_iter()
-            .map(|f| f.to_string())
-            .collect())
+    pub fn files(
+        &self,
+        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+    ) -> PyResult<Vec<String>> {
+        if let Some(filters) = partition_filters {
+            let filters =
+                convert_partition_filters(filters).map_err(PyDeltaTableError::from_raw)?;
+            Ok(self
+                ._table
+                .get_files_by_partitions(&filters)
+                .map_err(PyDeltaTableError::from_raw)?
+                .into_iter()
+                .map(|p| p.to_string())
+                .collect())
+        } else {
+            Ok(self
+                ._table
+                .get_files_iter()
+                .map(|f| f.to_string())
+                .collect())
+        }
     }
 
-    pub fn file_uris(&self) -> PyResult<Vec<String>> {
-        Ok(self._table.get_file_uris().collect())
+    pub fn file_uris(
+        &self,
+        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+    ) -> PyResult<Vec<String>> {
+        if let Some(filters) = partition_filters {
+            let filters =
+                convert_partition_filters(filters).map_err(PyDeltaTableError::from_raw)?;
+            Ok(self
+                ._table
+                .get_file_uris_by_partitions(&filters)
+                .map_err(PyDeltaTableError::from_raw)?)
+        } else {
+            Ok(self._table.get_file_uris().collect())
+        }
     }
 
     #[getter]
@@ -412,6 +439,18 @@ impl RawDeltaTable {
             config: self._config.clone(),
         })
     }
+}
+
+fn convert_partition_filters<'a>(
+    partitions_filters: Vec<(&'a str, &'a str, PartitionFilterValue<'a>)>,
+) -> Result<Vec<PartitionFilter<&'a str>>, deltalake::DeltaTableError> {
+    partitions_filters
+        .into_iter()
+        .map(|filter| match filter {
+            (key, op, PartitionFilterValue::Single(v)) => PartitionFilter::try_from((key, op, v)),
+            (key, op, PartitionFilterValue::Multiple(v)) => PartitionFilter::try_from((key, op, v)),
+        })
+        .collect()
 }
 
 fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
