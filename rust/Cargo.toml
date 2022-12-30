@@ -95,6 +95,7 @@ s3 = [
     "rusoto_dynamodb/native-tls",
     "dynamodb_lock/native-tls",
     "object_store/aws",
+    "object_store/aws_profile",
 ]
 s3-rustls = [
     "rusoto_core/rustls",
@@ -103,13 +104,10 @@ s3-rustls = [
     "rusoto_dynamodb/rustls",
     "dynamodb_lock/rustls",
     "object_store/aws",
+    "object_store/aws_profile",
 ]
 glue = ["s3", "rusoto_glue"]
 python = ["arrow/pyarrow"]
-
-# AWS_PROFILE is experimental in object_store, and comes with a hefty load of dependencies.
-# must be used in conjunction with s3 or s3-rustls feature
-aws-profile = ["object_store/aws_profile"]
 
 # used only for integration testing
 integration_test = ["fs_extra", "tempdir"]
