@@ -21,6 +21,8 @@
 //! let (table, metrics) = VacuumBuilder::new(table).await?;
 //! ````
 
+use crate::storage::DeltaObjectStore;
+use crate::table_state::DeltaTableState;
 use crate::{DeltaDataTypeLong, DeltaResult, DeltaTable, DeltaTableError};
 use chrono::{Duration, Utc};
 use futures::future::BoxFuture;
@@ -32,7 +34,7 @@ use std::sync::Arc;
 
 /// Errors that can occur during vacuum
 #[derive(thiserror::Error, Debug)]
-pub enum VacuumError {
+enum VacuumError {
     /// Error returned when Vacuum retention period is below the safe threshold
     #[error(
         "Invalid retention period, minimum retention for vacuum is configured to be greater than {} hours, got {} hours", .min, .provided
@@ -67,8 +69,10 @@ pub trait Clock: Debug + Send + Sync {
 /// Vacuum a Delta table with the given options
 /// See this module's documentation for more information
 pub struct VacuumBuilder {
-    /// Table to be vacuumed
-    table: DeltaTable,
+    /// A snapshot of the to-be-vacuumed table's state
+    snapshot: Arc<DeltaTableState>,
+    /// Delta object store for handling data files
+    store: Arc<DeltaObjectStore>,
     /// Period of stale files allowed.
     retention_period: Option<Duration>,
     /// Validate the retention period is not below the retention period configured in the table
@@ -91,9 +95,10 @@ pub struct VacuumMetrics {
 /// Methods to specify various vacuum options and to execute the operation
 impl VacuumBuilder {
     /// Create a new [`VacuumBuilder`]
-    pub fn new(table: DeltaTable) -> Self {
+    pub fn new(snapshot: Arc<DeltaTableState>, store: Arc<DeltaObjectStore>) -> Self {
         VacuumBuilder {
-            table,
+            snapshot,
+            store,
             retention_period: None,
             enforce_retention_duration: true,
             dry_run: false,
@@ -124,6 +129,46 @@ impl VacuumBuilder {
         self.clock = Some(clock);
         self
     }
+
+    /// Determine which files can be deleted. Does not actually peform the deletion
+    async fn create_vacuum_plan(&self) -> Result<VacuumPlan, VacuumError> {
+        let min_retention = Duration::milliseconds(self.snapshot.tombstone_retention_millis());
+        let retention_period = self.retention_period.unwrap_or(min_retention);
+        let enforce_retention_duration = self.enforce_retention_duration;
+
+        if enforce_retention_duration && retention_period < min_retention {
+            return Err(VacuumError::InvalidVacuumRetentionPeriod {
+                provided: retention_period.num_hours(),
+                min: min_retention.num_hours(),
+            });
+        }
+
+        let now_millis = match &self.clock {
+            Some(clock) => clock.current_timestamp_millis(),
+            None => Utc::now().timestamp_millis(),
+        };
+
+        let expired_tombstones = get_stale_files(&self.snapshot, retention_period, now_millis);
+        let valid_files = self.snapshot.file_paths_iter().collect::<HashSet<Path>>();
+
+        let mut files_to_delete = vec![];
+        let mut all_files = self.store.list(None).await.map_err(DeltaTableError::from)?;
+
+        while let Some(obj_meta) = all_files.next().await {
+            // TODO should we allow NotFound here in case we have a temporary commit file in the list
+            let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
+            if valid_files.contains(&obj_meta.location) // file is still being tracked in table
+            || !expired_tombstones.contains(obj_meta.location.as_ref()) // file is not an expired tombstone
+            || is_hidden_directory(&self.snapshot, &obj_meta.location)?
+            {
+                continue;
+            }
+
+            files_to_delete.push(obj_meta.location);
+        }
+
+        Ok(VacuumPlan { files_to_delete })
+    }
 }
 
 impl std::future::IntoFuture for VacuumBuilder {
@@ -131,14 +176,13 @@ impl std::future::IntoFuture for VacuumBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let mut this = self;
+        let this = self;
 
         Box::pin(async move {
-            let plan = create_vacuum_plan(&this.table, &this).await?;
-
+            let plan = this.create_vacuum_plan().await?;
             if this.dry_run {
                 return Ok((
-                    this.table,
+                    DeltaTable::new_with_state(this.store, this.snapshot.as_ref().clone()),
                     VacuumMetrics {
                         files_deleted: plan.files_to_delete.iter().map(|f| f.to_string()).collect(),
                         dry_run: true,
@@ -146,9 +190,11 @@ impl std::future::IntoFuture for VacuumBuilder {
                 ));
             }
 
-            let metrics = plan.execute(&mut this.table).await?;
-
-            Ok((this.table, metrics))
+            let metrics = plan.execute(&this.store).await?;
+            Ok((
+                DeltaTable::new_with_state(this.store, this.snapshot.as_ref().clone()),
+                metrics,
+            ))
         })
     }
 }
@@ -161,7 +207,7 @@ struct VacuumPlan {
 
 impl VacuumPlan {
     /// Execute the vacuum plan and delete files from underlying storage
-    pub async fn execute(self, table: &mut DeltaTable) -> Result<VacuumMetrics, VacuumError> {
+    pub async fn execute(self, store: &DeltaObjectStore) -> Result<VacuumMetrics, DeltaTableError> {
         if self.files_to_delete.is_empty() {
             return Ok(VacuumMetrics {
                 dry_run: false,
@@ -170,11 +216,9 @@ impl VacuumPlan {
         }
 
         // Delete the files
-        let files_deleted = match table.storage.delete_batch(&self.files_to_delete).await {
+        let files_deleted = match store.delete_batch(&self.files_to_delete).await {
             Ok(_) => Ok(self.files_to_delete),
-            Err(err) => Err(VacuumError::from(DeltaTableError::ObjectStore {
-                source: err,
-            })),
+            Err(err) => Err(err),
         }?
         .into_iter()
         .map(|file| file.to_string())
@@ -187,64 +231,16 @@ impl VacuumPlan {
     }
 }
 
-/// Determine which files can be deleted. Does not actually peform the deletion
-async fn create_vacuum_plan(
-    table: &DeltaTable,
-    params: &VacuumBuilder,
-) -> Result<VacuumPlan, VacuumError> {
-    let min_retention = Duration::milliseconds(table.state.tombstone_retention_millis());
-    let retention_period = params.retention_period.unwrap_or(min_retention);
-    let enforce_retention_duration = params.enforce_retention_duration;
-
-    if enforce_retention_duration && retention_period < min_retention {
-        return Err(VacuumError::InvalidVacuumRetentionPeriod {
-            provided: retention_period.num_hours(),
-            min: min_retention.num_hours(),
-        });
-    }
-
-    let now_millis = match &params.clock {
-        Some(clock) => clock.current_timestamp_millis(),
-        None => Utc::now().timestamp_millis(),
-    };
-
-    let expired_tombstones = get_stale_files(table, retention_period, now_millis);
-    let valid_files = table.get_file_set();
-
-    let mut files_to_delete = vec![];
-    let mut all_files = table
-        .storage
-        .list(None)
-        .await
-        .map_err(DeltaTableError::from)?;
-
-    while let Some(obj_meta) = all_files.next().await {
-        // TODO should we allow NotFound here in case we have a temporary commit file in the list
-        let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
-        if valid_files.contains(&obj_meta.location) // file is still being tracked in table
-            || !expired_tombstones.contains(obj_meta.location.as_ref()) // file is not an expired tombstone
-            || is_hidden_directory(table, &obj_meta.location)?
-        {
-            continue;
-        }
-
-        files_to_delete.push(obj_meta.location);
-    }
-
-    Ok(VacuumPlan { files_to_delete })
-}
-
 /// Whether a path should be hidden for delta-related file operations, such as Vacuum.
 /// Names of the form partitionCol=[value] are partition directories, and should be
 /// deleted even if they'd normally be hidden. The _db_index directory contains (bloom filter)
 /// indexes and these must be deleted when the data they are tied to is deleted.
-fn is_hidden_directory(table: &DeltaTable, path: &Path) -> Result<bool, DeltaTableError> {
+fn is_hidden_directory(snapshot: &DeltaTableState, path: &Path) -> Result<bool, DeltaTableError> {
     let path_name = path.to_string();
     Ok((path_name.starts_with('.') || path_name.starts_with('_'))
         && !path_name.starts_with("_delta_index")
         && !path_name.starts_with("_change_data")
-        && !table
-            .state
+        && !snapshot
             .current_metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .partition_columns
@@ -254,14 +250,12 @@ fn is_hidden_directory(table: &DeltaTable, path: &Path) -> Result<bool, DeltaTab
 
 /// List files no longer referenced by a Delta table and are older than the retention threshold.
 fn get_stale_files(
-    table: &DeltaTable,
+    snapshot: &DeltaTableState,
     retention_period: Duration,
     now_timestamp_millis: i64,
 ) -> HashSet<&str> {
     let tombstone_retention_timestamp = now_timestamp_millis - retention_period.num_milliseconds();
-
-    table
-        .state
+    snapshot
         .all_tombstones()
         .iter()
         .filter(|tombstone| {
@@ -283,7 +277,7 @@ mod tests {
     async fn vacuum_delta_8_0_table() {
         let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
 
-        let result = VacuumBuilder::new(table)
+        let result = VacuumBuilder::new(Arc::new(table.state.clone()), table.object_store())
             .with_retention_period(Duration::hours(1))
             .with_dry_run(true)
             .await;
@@ -291,23 +285,25 @@ mod tests {
         assert!(result.is_err());
 
         let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
-        let (table, result) = VacuumBuilder::new(table)
-            .with_retention_period(Duration::hours(0))
-            .with_dry_run(true)
-            .with_enforce_retention_duration(false)
-            .await
-            .unwrap();
+        let (table, result) =
+            VacuumBuilder::new(Arc::new(table.state.clone()), table.object_store())
+                .with_retention_period(Duration::hours(0))
+                .with_dry_run(true)
+                .with_enforce_retention_duration(false)
+                .await
+                .unwrap();
         // do not enforce retention duration check with 0 hour will purge all files
         assert_eq!(
             result.files_deleted,
             vec!["part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"]
         );
 
-        let (table, result) = VacuumBuilder::new(table)
-            .with_retention_period(Duration::hours(169))
-            .with_dry_run(true)
-            .await
-            .unwrap();
+        let (table, result) =
+            VacuumBuilder::new(Arc::new(table.state.clone()), table.object_store())
+                .with_retention_period(Duration::hours(169))
+                .with_dry_run(true)
+                .await
+                .unwrap();
 
         assert_eq!(
             result.files_deleted,
@@ -320,11 +316,12 @@ mod tests {
             .as_secs()
             / 3600;
         let empty: Vec<String> = Vec::new();
-        let (_table, result) = VacuumBuilder::new(table)
-            .with_retention_period(Duration::hours(retention_hours as i64))
-            .with_dry_run(true)
-            .await
-            .unwrap();
+        let (_table, result) =
+            VacuumBuilder::new(Arc::new(table.state.clone()), table.object_store())
+                .with_retention_period(Duration::hours(retention_hours as i64))
+                .with_dry_run(true)
+                .await
+                .unwrap();
 
         assert_eq!(result.files_deleted, empty);
     }

@@ -5,7 +5,7 @@ mod schema;
 mod utils;
 
 use arrow::pyarrow::PyArrowType;
-use chrono::{DateTime, FixedOffset, Utc};
+use chrono::{DateTime, Duration, FixedOffset, Utc};
 use deltalake::action::{
     self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
 };
@@ -13,12 +13,12 @@ use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::builder::DeltaTableBuilder;
 use deltalake::delta_datafusion::DeltaDataChecker;
+use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
-use deltalake::DeltaDataTypeLong;
-use deltalake::DeltaDataTypeTimestamp;
-use deltalake::DeltaTableMetaData;
-use deltalake::DeltaTransactionOptions;
-use deltalake::{Invariant, Schema};
+use deltalake::{
+    DeltaDataTypeLong, DeltaDataTypeTimestamp, DeltaTableMetaData, DeltaTransactionOptions,
+    Invariant, Schema,
+};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::exceptions::PyValueError;
@@ -46,10 +46,6 @@ impl PyDeltaTableError {
     }
 
     fn from_raw(err: deltalake::DeltaTableError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(err.to_string())
-    }
-
-    fn from_vacuum_error(err: deltalake::vacuum::VacuumError) -> pyo3::PyErr {
         PyDeltaTableError::new_err(err.to_string())
     }
 
@@ -288,12 +284,20 @@ impl RawDeltaTable {
         retention_hours: Option<u64>,
         enforce_retention_duration: bool,
     ) -> PyResult<Vec<String>> {
-        rt()?
-            .block_on(
-                self._table
-                    .vacuum(retention_hours, dry_run, enforce_retention_duration),
-            )
-            .map_err(PyDeltaTableError::from_vacuum_error)
+        let mut cmd = VacuumBuilder::new(
+            Arc::new(self._table.state.clone()),
+            self._table.object_store(),
+        )
+        .with_enforce_retention_duration(enforce_retention_duration)
+        .with_dry_run(dry_run);
+        if let Some(retention_period) = retention_hours {
+            cmd = cmd.with_retention_period(Duration::hours(retention_period as i64));
+        }
+        let (table, metrics) = rt()?
+            .block_on(async { cmd.await })
+            .map_err(PyDeltaTableError::from_raw)?;
+        self._table = table;
+        Ok(metrics.files_deleted)
     }
 
     // Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.

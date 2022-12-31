@@ -30,7 +30,7 @@ def test_vacuum_dry_run_simple_table():
         dt.vacuum(retention_periods)
     assert (
         str(exception.value)
-        == "Invalid retention period, minimum retention for vacuum is configured to be greater than 168 hours, got 167 hours"
+        == "Generic error: Invalid retention period, minimum retention for vacuum is configured to be greater than 168 hours, got 167 hours"
     )
 
 

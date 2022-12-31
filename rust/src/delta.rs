@@ -12,14 +12,15 @@ use std::{cmp::max, cmp::Ordering, collections::HashSet};
 
 use super::action;
 use super::action::{Action, DeltaOperation};
-use super::partitions::{DeltaTablePartition, PartitionFilter};
+use super::partitions::PartitionFilter;
 use super::schema::*;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
 use crate::delta_config::DeltaConfigError;
+use crate::operations::vacuum::VacuumBuilder;
 use crate::storage::ObjectStoreRef;
 
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::debug;
@@ -425,6 +426,7 @@ pub struct DeltaTable {
     pub state: DeltaTableState,
     /// the load options used during load
     pub config: DeltaTableConfig,
+    /// object store to access log and data files
     pub(crate) storage: ObjectStoreRef,
     /// file metadata for latest checkpoint
     last_check_point: Option<CheckPoint>,
@@ -506,6 +508,21 @@ impl DeltaTable {
             state: DeltaTableState::with_version(-1),
             storage,
             config,
+            last_check_point: None,
+            version_timestamp: HashMap::new(),
+        }
+    }
+
+    /// Create a new [`DeltaTable`] from a [`DeltaTableState`] without loading any
+    /// data from backing storage.
+    ///
+    /// NOTE: This is for advanced users. If you don't know why you need to use this method,
+    /// please call one of the `open_table` helper methods instead.
+    pub fn new_with_state(storage: ObjectStoreRef, state: DeltaTableState) -> Self {
+        Self {
+            state,
+            storage,
+            config: Default::default(),
             last_check_point: None,
             version_timestamp: HashMap::new(),
         }
@@ -947,35 +964,7 @@ impl DeltaTable {
         &'a self,
         filters: &'a [PartitionFilter<'a, &'a str>],
     ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
-        let current_metadata = self
-            .state
-            .current_metadata()
-            .ok_or(DeltaTableError::NoMetadata)?;
-        if !filters
-            .iter()
-            .all(|f| current_metadata.partition_columns.contains(&f.key.into()))
-        {
-            return Err(DeltaTableError::InvalidPartitionFilter {
-                partition_filter: format!("{:?}", filters),
-            });
-        }
-
-        let partition_col_data_types: HashMap<&str, &SchemaDataType> = current_metadata
-            .get_partition_col_data_types()
-            .into_iter()
-            .collect();
-
-        let actions = self.state.files().iter().filter(move |add| {
-            let partitions = add
-                .partition_values
-                .iter()
-                .map(|p| DeltaTablePartition::from_partition_value(p, ""))
-                .collect::<Vec<DeltaTablePartition>>();
-            filters
-                .iter()
-                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
-        });
-        Ok(actions)
+        self.state.get_active_add_actions_by_partitions(filters)
     }
 
     /// Returns the file list tracked in current table state filtered by provided
@@ -1005,33 +994,25 @@ impl DeltaTable {
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn get_files_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.state
-            .files()
-            .iter()
-            .map(|add| Path::from(add.path.as_ref()))
+        self.state.file_paths_iter()
     }
 
     /// Returns a collection of file names present in the loaded state
     #[inline]
     pub fn get_files(&self) -> Vec<Path> {
-        self.get_files_iter().collect()
+        self.state.file_paths_iter().collect()
     }
 
     /// Returns file names present in the loaded state in HashSet
     pub fn get_file_set(&self) -> HashSet<Path> {
-        self.state
-            .files()
-            .iter()
-            .map(|add| Path::from(add.path.as_ref()))
-            .collect()
+        self.state.file_paths_iter().collect()
     }
 
     /// Returns a URIs for all active files present in the current table version.
     pub fn get_file_uris(&self) -> impl Iterator<Item = String> + '_ {
         self.state
-            .files()
-            .iter()
-            .map(|add| self.storage.to_uri(&Path::from(add.path.as_ref())))
+            .file_paths_iter()
+            .map(|path| self.storage.to_uri(&path))
     }
 
     /// Returns statistics for files, in order
@@ -1102,6 +1083,29 @@ impl DeltaTable {
             .current_metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .get_configuration())
+    }
+
+    /// Vacuum the delta table see [`Vacuum`] for more info
+    #[deprecated(
+        since = "0.7.0",
+        note = "Use 'DeltaOps' from operations module instead."
+    )]
+    pub async fn vacuum(
+        &mut self,
+        retention_hours: Option<u64>,
+        dry_run: bool,
+        enforce_retention_duration: bool,
+    ) -> Result<Vec<String>, DeltaTableError> {
+        let mut plan = VacuumBuilder::new(Arc::new(self.state.clone()), self.object_store())
+            .with_dry_run(dry_run)
+            .with_enforce_retention_duration(enforce_retention_duration);
+        if let Some(hours) = retention_hours {
+            plan = plan.with_retention_period(Duration::hours(hours as i64));
+        }
+
+        let (table, metrics) = plan.await?;
+        self.state = table.state;
+        Ok(metrics.files_deleted)
     }
 
     /// Creates a new DeltaTransaction for the DeltaTable.
