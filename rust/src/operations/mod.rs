@@ -8,11 +8,13 @@
 //! if the operation returns data as well.
 
 use self::create::CreateBuilder;
+use self::vacuum::VacuumBuilder;
 use crate::builder::DeltaTableBuilder;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 pub mod create;
 pub mod transaction;
+pub mod vacuum;
 
 #[cfg(feature = "datafusion")]
 use self::{load::LoadBuilder, write::WriteBuilder};
@@ -106,6 +108,12 @@ impl DeltaOps {
         WriteBuilder::default()
             .with_input_batches(batches)
             .with_object_store(self.0.object_store())
+    }
+
+    /// Vacuum stale files from delta table
+    #[must_use]
+    pub fn vacuum(self) -> VacuumBuilder {
+        VacuumBuilder::new(self.0)
     }
 }
 

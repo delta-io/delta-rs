@@ -90,7 +90,6 @@ pub mod storage;
 pub mod table_properties;
 pub mod table_state;
 pub mod time_utils;
-pub mod vacuum;
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod checkpoints;

@@ -68,64 +68,12 @@ impl TestContext {
             .unwrap()
     }
 
-    pub async fn add_file(
-        &mut self,
-        path: &Path,
-        data: Bytes,
-        partition_values: &[(&str, Option<&str>)],
-        create_time: i64,
-        commit_to_log: bool,
-    ) {
-        let backend = self.get_storage();
-        backend.put(path, data.clone()).await.unwrap();
-
-        if commit_to_log {
-            let mut part_values = HashMap::new();
-            for v in partition_values {
-                part_values.insert(v.0.to_string(), v.1.map(|v| v.to_string()));
-            }
-
-            let add = Add {
-                path: path.as_ref().into(),
-                size: data.len() as i64,
-                modification_time: create_time,
-                partition_values: part_values,
-                data_change: true,
-                ..Default::default()
-            };
-            let table = self.table.as_mut().unwrap();
-            let mut transaction = table.create_transaction(None);
-            transaction.add_action(action::Action::add(add));
-            transaction.commit(None, None).await.unwrap();
-        }
-    }
-
-    pub async fn remove_file(
-        &mut self,
-        path: &str,
-        partition_values: &[(&str, Option<&str>)],
-        deletion_timestamp: i64,
-    ) {
-        let mut part_values = HashMap::new();
-        for v in partition_values {
-            part_values.insert(v.0.to_string(), v.1.map(|v| v.to_string()));
-        }
-
-        let remove = Remove {
-            path: path.into(),
-            deletion_timestamp: Some(deletion_timestamp),
-            partition_values: Some(part_values),
-            data_change: true,
-            ..Default::default()
-        };
-        let table = self.table.as_mut().unwrap();
-        let mut transaction = table.create_transaction(None);
-        transaction.add_action(action::Action::remove(remove));
-        transaction.commit(None, None).await.unwrap();
-    }
-
     //Create and set a new table from the provided schema
-    pub async fn create_table_from_schema(&mut self, schema: Schema, partitions: &[&str]) {
+    pub async fn create_table_from_schema(
+        &mut self,
+        schema: Schema,
+        partitions: &[&str],
+    ) -> DeltaTable {
         let p = partitions
             .iter()
             .map(|s| s.to_string())
@@ -161,7 +109,7 @@ impl TestContext {
         .await
         .unwrap();
 
-        self.table = Some(dt);
+        dt
     }
 }
 
@@ -180,4 +128,58 @@ pub async fn setup_local_context() -> TestContext {
         config,
         ..TestContext::default()
     }
+}
+
+pub async fn add_file(
+    table: &mut DeltaTable,
+    path: &Path,
+    data: Bytes,
+    partition_values: &[(&str, Option<&str>)],
+    create_time: i64,
+    commit_to_log: bool,
+) {
+    let backend = table.object_store();
+    backend.put(path, data.clone()).await.unwrap();
+
+    if commit_to_log {
+        let mut part_values = HashMap::new();
+        for v in partition_values {
+            part_values.insert(v.0.to_string(), v.1.map(|v| v.to_string()));
+        }
+
+        let add = Add {
+            path: path.as_ref().into(),
+            size: data.len() as i64,
+            modification_time: create_time,
+            partition_values: part_values,
+            data_change: true,
+            ..Default::default()
+        };
+        let mut transaction = table.create_transaction(None);
+        transaction.add_action(action::Action::add(add));
+        transaction.commit(None, None).await.unwrap();
+    }
+}
+
+pub async fn remove_file(
+    table: &mut DeltaTable,
+    path: &str,
+    partition_values: &[(&str, Option<&str>)],
+    deletion_timestamp: i64,
+) {
+    let mut part_values = HashMap::new();
+    for v in partition_values {
+        part_values.insert(v.0.to_string(), v.1.map(|v| v.to_string()));
+    }
+
+    let remove = Remove {
+        path: path.into(),
+        deletion_timestamp: Some(deletion_timestamp),
+        partition_values: Some(part_values),
+        data_change: true,
+        ..Default::default()
+    };
+    let mut transaction = table.create_transaction(None);
+    transaction.add_action(action::Action::remove(remove));
+    transaction.commit(None, None).await.unwrap();
 }
