@@ -1066,7 +1066,8 @@ impl DeltaTable {
         dry_run: bool,
         enforce_retention_duration: bool,
     ) -> Result<Vec<String>, DeltaTableError> {
-        let mut plan = VacuumBuilder::new(Arc::new(self.state.clone()), self.object_store())
+        let state = std::mem::take(&mut self.state);
+        let mut plan = VacuumBuilder::new(self.object_store(), state)
             .with_dry_run(dry_run)
             .with_enforce_retention_duration(enforce_retention_duration);
         if let Some(hours) = retention_hours {

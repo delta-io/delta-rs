@@ -18,7 +18,7 @@
 //! # Example
 //! ```rust ignore
 //! let mut table = open_table("../path/to/table")?;
-//! let (table, metrics) = VacuumBuilder::new(table).await?;
+//! let (table, metrics) = VacuumBuilder::new(table.object_store(). table.state).await?;
 //! ````
 
 use crate::storage::DeltaObjectStore;
@@ -70,7 +70,7 @@ pub trait Clock: Debug + Send + Sync {
 /// See this module's documentation for more information
 pub struct VacuumBuilder {
     /// A snapshot of the to-be-vacuumed table's state
-    snapshot: Arc<DeltaTableState>,
+    snapshot: DeltaTableState,
     /// Delta object store for handling data files
     store: Arc<DeltaObjectStore>,
     /// Period of stale files allowed.
@@ -95,7 +95,7 @@ pub struct VacuumMetrics {
 /// Methods to specify various vacuum options and to execute the operation
 impl VacuumBuilder {
     /// Create a new [`VacuumBuilder`]
-    pub fn new(snapshot: Arc<DeltaTableState>, store: Arc<DeltaObjectStore>) -> Self {
+    pub fn new(store: Arc<DeltaObjectStore>, snapshot: DeltaTableState) -> Self {
         VacuumBuilder {
             snapshot,
             store,
@@ -182,7 +182,7 @@ impl std::future::IntoFuture for VacuumBuilder {
             let plan = this.create_vacuum_plan().await?;
             if this.dry_run {
                 return Ok((
-                    DeltaTable::new_with_state(this.store, this.snapshot.as_ref().clone()),
+                    DeltaTable::new_with_state(this.store, this.snapshot),
                     VacuumMetrics {
                         files_deleted: plan.files_to_delete.iter().map(|f| f.to_string()).collect(),
                         dry_run: true,
@@ -192,7 +192,7 @@ impl std::future::IntoFuture for VacuumBuilder {
 
             let metrics = plan.execute(&this.store).await?;
             Ok((
-                DeltaTable::new_with_state(this.store, this.snapshot.as_ref().clone()),
+                DeltaTable::new_with_state(this.store, this.snapshot),
                 metrics,
             ))
         })
@@ -277,7 +277,7 @@ mod tests {
     async fn vacuum_delta_8_0_table() {
         let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
 
-        let result = VacuumBuilder::new(Arc::new(table.state.clone()), table.object_store())
+        let result = VacuumBuilder::new(table.object_store(), table.state.clone())
             .with_retention_period(Duration::hours(1))
             .with_dry_run(true)
             .await;
@@ -285,25 +285,23 @@ mod tests {
         assert!(result.is_err());
 
         let table = open_table("./tests/data/delta-0.8.0").await.unwrap();
-        let (table, result) =
-            VacuumBuilder::new(Arc::new(table.state.clone()), table.object_store())
-                .with_retention_period(Duration::hours(0))
-                .with_dry_run(true)
-                .with_enforce_retention_duration(false)
-                .await
-                .unwrap();
+        let (table, result) = VacuumBuilder::new(table.object_store(), table.state)
+            .with_retention_period(Duration::hours(0))
+            .with_dry_run(true)
+            .with_enforce_retention_duration(false)
+            .await
+            .unwrap();
         // do not enforce retention duration check with 0 hour will purge all files
         assert_eq!(
             result.files_deleted,
             vec!["part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet"]
         );
 
-        let (table, result) =
-            VacuumBuilder::new(Arc::new(table.state.clone()), table.object_store())
-                .with_retention_period(Duration::hours(169))
-                .with_dry_run(true)
-                .await
-                .unwrap();
+        let (table, result) = VacuumBuilder::new(table.object_store(), table.state)
+            .with_retention_period(Duration::hours(169))
+            .with_dry_run(true)
+            .await
+            .unwrap();
 
         assert_eq!(
             result.files_deleted,
@@ -316,12 +314,11 @@ mod tests {
             .as_secs()
             / 3600;
         let empty: Vec<String> = Vec::new();
-        let (_table, result) =
-            VacuumBuilder::new(Arc::new(table.state.clone()), table.object_store())
-                .with_retention_period(Duration::hours(retention_hours as i64))
-                .with_dry_run(true)
-                .await
-                .unwrap();
+        let (_table, result) = VacuumBuilder::new(table.object_store(), table.state)
+            .with_retention_period(Duration::hours(retention_hours as i64))
+            .with_dry_run(true)
+            .await
+            .unwrap();
 
         assert_eq!(result.files_deleted, empty);
     }

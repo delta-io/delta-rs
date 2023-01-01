@@ -284,19 +284,17 @@ impl RawDeltaTable {
         retention_hours: Option<u64>,
         enforce_retention_duration: bool,
     ) -> PyResult<Vec<String>> {
-        let mut cmd = VacuumBuilder::new(
-            Arc::new(self._table.state.clone()),
-            self._table.object_store(),
-        )
-        .with_enforce_retention_duration(enforce_retention_duration)
-        .with_dry_run(dry_run);
+        let state = std::mem::take(&mut self._table.state);
+        let mut cmd = VacuumBuilder::new(self._table.object_store(), state)
+            .with_enforce_retention_duration(enforce_retention_duration)
+            .with_dry_run(dry_run);
         if let Some(retention_period) = retention_hours {
             cmd = cmd.with_retention_period(Duration::hours(retention_period as i64));
         }
         let (table, metrics) = rt()?
             .block_on(async { cmd.await })
             .map_err(PyDeltaTableError::from_raw)?;
-        self._table = table;
+        self._table.state = table.state;
         Ok(metrics.files_deleted)
     }
 

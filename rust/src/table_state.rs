@@ -1,13 +1,13 @@
 //! The module for delta table state.
 
-use super::partitions::{DeltaTablePartition, PartitionFilter};
-use super::{
+use crate::action::{self, Action, Add};
+use crate::delta_config;
+use crate::partitions::{DeltaTablePartition, PartitionFilter};
+use crate::schema::SchemaDataType;
+use crate::{
     ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
     DeltaTableMetaData,
 };
-use crate::action::{self, Action, Add};
-use crate::delta_config;
-use crate::schema::SchemaDataType;
 use chrono::Utc;
 use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};

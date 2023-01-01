@@ -11,7 +11,6 @@ use self::create::CreateBuilder;
 use self::vacuum::VacuumBuilder;
 use crate::builder::DeltaTableBuilder;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use std::sync::Arc;
 
 pub mod create;
 pub mod transaction;
@@ -114,7 +113,7 @@ impl DeltaOps {
     /// Vacuum stale files from delta table
     #[must_use]
     pub fn vacuum(self) -> VacuumBuilder {
-        VacuumBuilder::new(Arc::new(self.0.state.clone()), self.0.object_store())
+        VacuumBuilder::new(self.0.object_store(), self.0.state)
     }
 }
 
