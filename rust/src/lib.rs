@@ -84,6 +84,7 @@ pub mod builder;
 pub mod data_catalog;
 pub mod delta;
 pub mod delta_config;
+pub mod operations;
 pub mod partitions;
 pub mod schema;
 pub mod storage;
@@ -97,8 +98,6 @@ pub mod checkpoints;
 pub mod delta_arrow;
 #[cfg(feature = "datafusion")]
 pub mod delta_datafusion;
-#[cfg(all(feature = "arrow", feature = "parquet"))]
-pub mod operations;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod optimize;
 #[cfg(all(feature = "arrow", feature = "parquet"))]

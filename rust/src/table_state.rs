@@ -2,7 +2,8 @@
 
 use super::partitions::{DeltaTablePartition, PartitionFilter};
 use super::{
-    ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableMetaData,
+    ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
+    DeltaTableMetaData,
 };
 use crate::action::{self, Action, Add};
 use crate::delta_config;
@@ -17,7 +18,7 @@ use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, Cursor};
 
 #[cfg(any(feature = "parquet", feature = "parquet2"))]
-use super::{CheckPoint, DeltaTableConfig, DeltaTableError};
+use super::{CheckPoint, DeltaTableConfig};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
