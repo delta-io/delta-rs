@@ -2,7 +2,7 @@ name: Release to Cargo
 
 on:
   push:
-    tags: [ 'rust-v*' ]
+    tags: ["rust-v*"]
 
 defaults:
   run:
@@ -13,7 +13,7 @@ jobs:
     name: Validate git tag
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: compare git tag with cargo metadata
         run: |
           PUSHED_TAG=${GITHUB_REF##*/}
@@ -30,7 +30,7 @@ jobs:
       fail-fast: false
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
 
       - uses: actions-rs/toolchain@v1
         with:
