@@ -11,6 +11,7 @@ use self::create::CreateBuilder;
 use self::vacuum::VacuumBuilder;
 use crate::builder::DeltaTableBuilder;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use std::sync::Arc;
 
 pub mod create;
 pub mod transaction;
