@@ -30,12 +30,16 @@ pub struct DeltaTableState {
     tombstones: HashSet<action::Remove>,
     // active files for table state
     files: Vec<action::Add>,
+    // Information added to individual commits
     commit_infos: Vec<Map<String, Value>>,
     app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
     min_reader_version: i32,
     min_writer_version: i32,
+    // table metadata corresponding to current version
     current_metadata: Option<DeltaTableMetaData>,
+    // retention period for tombstones in milli-seconds
     tombstone_retention_millis: DeltaDataTypeLong,
+    // retention period for log entries in milli-seconds
     log_retention_millis: DeltaDataTypeLong,
     enable_expired_log_cleanup: bool,
 }

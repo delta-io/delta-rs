@@ -325,7 +325,7 @@ impl RawDeltaTable {
 
     pub fn update_incremental(&mut self) -> PyResult<()> {
         rt()?
-            .block_on(self._table.update_incremental())
+            .block_on(self._table.update_incremental(None))
             .map_err(PyDeltaTableError::from_raw)
     }
 

@@ -681,17 +681,6 @@ impl DeltaTable {
         Ok(cp)
     }
 
-    async fn apply_log(&mut self, version: DeltaDataTypeVersion) -> Result<(), ApplyLogError> {
-        let new_state = DeltaTableState::from_commit(self, version).await?;
-        self.state.merge(
-            new_state,
-            self.config.require_tombstones,
-            self.config.require_files,
-        );
-
-        Ok(())
-    }
-
     #[cfg(any(feature = "parquet", feature = "parquet2"))]
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
         self.state = DeltaTableState::from_checkpoint(self, &check_point).await?;
@@ -782,26 +771,6 @@ impl DeltaTable {
         Ok(PeekCommit::New(next_version, actions))
     }
 
-    ///Apply any actions associated with the PeekCommit to the DeltaTable
-    pub fn apply_actions(
-        &mut self,
-        new_version: DeltaDataTypeVersion,
-        actions: Vec<Action>,
-    ) -> Result<(), DeltaTableError> {
-        if self.version() + 1 != new_version {
-            return Err(DeltaTableError::VersionMismatch(
-                new_version,
-                self.version(),
-            ));
-        }
-
-        let s = DeltaTableState::from_actions(actions, new_version)?;
-        self.state
-            .merge(s, self.config.require_tombstones, self.config.require_files);
-
-        Ok(())
-    }
-
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
     #[cfg(any(feature = "parquet", feature = "parquet2"))]
@@ -809,29 +778,39 @@ impl DeltaTable {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
                 if Some(last_check_point) == self.last_check_point {
-                    self.update_incremental().await
+                    self.update_incremental(None).await
                 } else {
                     self.last_check_point = Some(last_check_point);
                     self.restore_checkpoint(last_check_point).await?;
-                    self.update_incremental().await
+                    self.update_incremental(None).await
                 }
             }
-            Err(LoadCheckpointError::NotFound) => self.update_incremental().await,
-            Err(e) => Err(DeltaTableError::LoadCheckpoint { source: e }),
+            Err(LoadCheckpointError::NotFound) => self.update_incremental(None).await,
+            Err(source) => Err(DeltaTableError::LoadCheckpoint { source }),
         }
     }
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log.
     #[cfg(not(any(feature = "parquet", feature = "parquet2")))]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
-        self.update_incremental().await
+        self.update_incremental(None).await
     }
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
-    pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
-        while let PeekCommit::New(version, actions) = self.peek_next_commit(self.version()).await? {
-            self.apply_actions(version, actions)?;
+    pub async fn update_incremental(
+        &mut self,
+        max_version: Option<DeltaDataTypeVersion>,
+    ) -> Result<(), DeltaTableError> {
+        while let PeekCommit::New(new_version, actions) =
+            self.peek_next_commit(self.version()).await?
+        {
+            let s = DeltaTableState::from_actions(actions, new_version)?;
+            self.state
+                .merge(s, self.config.require_tombstones, self.config.require_files);
+            if Some(self.version()) == max_version {
+                return Ok(());
+            }
         }
 
         if self.version() == -1 {
@@ -862,25 +841,20 @@ impl DeltaTable {
             }
         }
 
-        let mut next_version = 0;
         // 1. find latest checkpoint below version
         #[cfg(any(feature = "parquet", feature = "parquet2"))]
         match self.find_latest_check_point_for_version(version).await? {
             Some(check_point) => {
                 self.restore_checkpoint(check_point).await?;
-                next_version = check_point.version + 1;
             }
             None => {
                 // no checkpoint found, clear table state and start from the beginning
-                self.state = DeltaTableState::with_version(0);
+                self.state = DeltaTableState::with_version(-1);
             }
         }
 
         // 2. apply all logs starting from checkpoint
-        while next_version <= version {
-            self.apply_log(next_version).await?;
-            next_version += 1;
-        }
+        self.update_incremental(Some(version)).await?;
 
         Ok(())
     }
@@ -1086,10 +1060,6 @@ impl DeltaTable {
     }
 
     /// Vacuum the delta table see [`Vacuum`] for more info
-    #[deprecated(
-        since = "0.7.0",
-        note = "Use 'DeltaOps' from operations module instead."
-    )]
     pub async fn vacuum(
         &mut self,
         retention_hours: Option<u64>,
