@@ -2,14 +2,14 @@ name: lambda_checkpoint_release
 
 on:
   push:
-    tags: [ 'lambda-delta-checkpoint-v*' ]
+    tags: ["lambda-delta-checkpoint-v*"]
 
 jobs:
   validate-release-tag:
     name: Validate git tag
     runs-on: ubuntu-20.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: compare git tag with cargo metadata
         run: |
           PUSHED_TAG=${GITHUB_REF##*/}
@@ -25,19 +25,18 @@ jobs:
     runs-on: ubuntu-20.04
     name: Lambda Checkpoint release zip
     steps:
-    - uses: actions/checkout@v2
-    - name: Build musl
-      uses: docker://messense/rust-musl-cross:x86_64-musl
-      with:
-        args: cargo build -p lambda-delta-checkpoint --release
-    - name: Zip lambda bin
-      run: |
-        PUSHED_TAG=${GITHUB_REF##*/}
-        zip -j "${PUSHED_TAG}.zip" ./target/x86_64-unknown-linux-musl/release/bootstrap
-    - name: Publish artifact  
-      uses: softprops/action-gh-release@v1
-      with:
-        files: lambda-delta-checkpoint-v*.zip
-      env:
-        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-
+      - uses: actions/checkout@v3
+      - name: Build musl
+        uses: docker://messense/rust-musl-cross:x86_64-musl
+        with:
+          args: cargo build -p lambda-delta-checkpoint --release
+      - name: Zip lambda bin
+        run: |
+          PUSHED_TAG=${GITHUB_REF##*/}
+          zip -j "${PUSHED_TAG}.zip" ./target/x86_64-unknown-linux-musl/release/bootstrap
+      - name: Publish artifact
+        uses: softprops/action-gh-release@v1
+        with:
+          files: lambda-delta-checkpoint-v*.zip
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

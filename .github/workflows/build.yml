@@ -41,7 +41,7 @@ jobs:
           profile: default
           toolchain: "1.64.0" # Switch to "stable" when the 1.67.0 release of https://github.com/rust-lang/rust is published, more information: https://github.com/delta-io/delta-rs/pull/923
           override: true
-      - uses: Swatinem/rust-cache@v1
+      - uses: Swatinem/rust-cache@v2
       - name: build and lint with clippy
         run: cargo clippy --features azure,datafusion,s3,gcs,glue
       - name: Spot-check build for rustls features
@@ -68,7 +68,7 @@ jobs:
           profile: default
           toolchain: "1.64.0" # Switch to "stable" when the 1.67.0 release of https://github.com/rust-lang/rust is published, more information: https://github.com/delta-io/delta-rs/pull/923
           override: true
-      - uses: Swatinem/rust-cache@v1
+      - uses: Swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test --verbose --features datafusion,azure
 
@@ -102,7 +102,7 @@ jobs:
           toolchain: stable
           override: true
 
-      - uses: Swatinem/rust-cache@v1
+      - uses: Swatinem/rust-cache@v2
 
       - name: Start emulated services
         run: docker-compose up -d
@@ -117,13 +117,13 @@ jobs:
   parquet2_test:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
           profile: default
           toolchain: stable
           override: true
-      - uses: Swatinem/rust-cache@v1
+      - uses: Swatinem/rust-cache@v2
       - name: Run tests
         run: cargo test --no-default-features --features=parquet2
