@@ -1059,7 +1059,7 @@ impl DeltaTable {
             .get_configuration())
     }
 
-    /// Vacuum the delta table see [`Vacuum`] for more info
+    /// Vacuum the delta table. See [`VacuumBuilder`] for more information.
     pub async fn vacuum(
         &mut self,
         retention_hours: Option<u64>,
