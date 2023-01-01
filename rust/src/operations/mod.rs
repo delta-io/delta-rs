@@ -113,7 +113,7 @@ impl DeltaOps {
     /// Vacuum stale files from delta table
     #[must_use]
     pub fn vacuum(self) -> VacuumBuilder {
-        VacuumBuilder::new(self.0)
+        VacuumBuilder::new(Arc::new(self.0.state.clone()), self.0.object_store())
     }
 }
 
