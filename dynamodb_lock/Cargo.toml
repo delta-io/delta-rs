@@ -1,7 +1,7 @@
 [package]
 name = "dynamodb_lock"
 description = "Distributed lock backed by Dynamodb"
-version = "0.4.1"
+version = "0.4.2"
 authors = ["Mykhailo Osypov <mykhailo.osypov@gmail.com>"]
 edition = "2018"
 readme = "README.md"
