@@ -24,7 +24,7 @@ use super::{CheckPoint, DeltaTableConfig};
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
-    // current table version represxented by this table state
+    // current table version represented by this table state
     version: DeltaDataTypeVersion,
     // A remove action should remain in the state of the table as a tombstone until it has expired.
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration

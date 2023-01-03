@@ -284,8 +284,7 @@ impl RawDeltaTable {
         retention_hours: Option<u64>,
         enforce_retention_duration: bool,
     ) -> PyResult<Vec<String>> {
-        let state = std::mem::take(&mut self._table.state);
-        let mut cmd = VacuumBuilder::new(self._table.object_store(), state)
+        let mut cmd = VacuumBuilder::new(self._table.object_store(), self._table.state.clone())
             .with_enforce_retention_duration(enforce_retention_duration)
             .with_dry_run(dry_run);
         if let Some(retention_period) = retention_hours {

@@ -518,7 +518,7 @@ impl DeltaTable {
     ///
     /// NOTE: This is for advanced users. If you don't know why you need to use this method,
     /// please call one of the `open_table` helper methods instead.
-    pub fn new_with_state(storage: ObjectStoreRef, state: DeltaTableState) -> Self {
+    pub(crate) fn new_with_state(storage: ObjectStoreRef, state: DeltaTableState) -> Self {
         Self {
             state,
             storage,
@@ -1066,8 +1066,7 @@ impl DeltaTable {
         dry_run: bool,
         enforce_retention_duration: bool,
     ) -> Result<Vec<String>, DeltaTableError> {
-        let state = std::mem::take(&mut self.state);
-        let mut plan = VacuumBuilder::new(self.object_store(), state)
+        let mut plan = VacuumBuilder::new(self.object_store(), self.state.clone())
             .with_dry_run(dry_run)
             .with_enforce_retention_duration(enforce_retention_duration);
         if let Some(hours) = retention_hours {
