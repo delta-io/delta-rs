@@ -1,32 +1,23 @@
 //! Methods to get Delta Table state in Arrow structures
 
-use crate::action::ColumnCountStat;
-use crate::action::ColumnValueStat;
-use crate::action::Stats;
-use crate::arrow::array::TimestampMicrosecondArray;
+use crate::action::{ColumnCountStat, ColumnValueStat, Stats};
 use crate::table_state::DeltaTableState;
 use crate::DeltaDataTypeLong;
 use crate::DeltaTableError;
 use crate::SchemaDataType;
 use crate::SchemaTypeStruct;
-use arrow::array::ArrayRef;
-use arrow::array::BinaryArray;
-use arrow::array::BooleanArray;
-use arrow::array::Date32Array;
-use arrow::array::Int64Array;
-use arrow::array::PrimitiveArray;
-use arrow::array::StringArray;
-use arrow::array::TimestampMillisecondArray;
+use arrow::array::{
+    ArrayRef, BinaryArray, BooleanArray, Date32Array, Int64Array, PrimitiveArray, StringArray,
+    StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+};
 use arrow::compute::cast;
 use arrow::compute::kernels::cast_utils::Parser;
-use arrow::datatypes::ArrowPrimitiveType;
-use arrow::datatypes::DataType;
-use arrow::datatypes::Date32Type;
-use arrow::datatypes::TimeUnit;
-use arrow::datatypes::TimestampMicrosecondType;
+use arrow::datatypes::{
+    ArrowPrimitiveType, DataType, Date32Type, Field, TimeUnit, TimestampMicrosecondType,
+};
+use itertools::Itertools;
 use std::borrow::Cow;
-use std::collections::HashMap;
-use std::collections::VecDeque;
+use std::collections::{HashMap, VecDeque};
 use std::sync::Arc;
 
 impl DeltaTableState {
@@ -34,7 +25,6 @@ impl DeltaTableState {
     pub fn add_actions_table(
         &self,
         flatten: bool,
-        parse_stats: bool,
     ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
         let mut paths = arrow::array::StringBuilder::with_capacity(
             self.files().len(),
@@ -139,7 +129,7 @@ impl DeltaTableState {
             }
         };
 
-        if parse_stats {
+        if self.files().iter().any(|add| add.stats.is_some()) {
             let stats = self.stats_as_batch(flatten)?;
             arrays.extend(
                 stats
@@ -149,23 +139,6 @@ impl DeltaTableState {
                     .map(|field| Cow::Owned(field.name().clone()))
                     .zip(stats.columns().iter().map(Arc::clone)),
             );
-        } else {
-            let mut stats_builder = arrow::array::StringBuilder::with_capacity(
-                self.files().len(),
-                self.files()
-                    .iter()
-                    .map(|add| add.stats.as_ref().map(|s| s.len()).unwrap_or(0))
-                    .sum(),
-            );
-
-            for action in self.files() {
-                if let Some(stats) = &action.get_stats()? {
-                    stats_builder.append_value(&serde_json::to_string(stats)?);
-                } else {
-                    stats_builder.append_null();
-                }
-            }
-            arrays.push((Cow::Borrowed("stats"), Arc::new(stats_builder.finish())));
         }
 
         arrays.extend(partition_columns.into_iter());
@@ -195,13 +168,15 @@ impl DeltaTableState {
         let metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
         let schema = &metadata.schema;
 
+        #[derive(Debug)]
         struct ColStats<'a> {
             path: Vec<&'a str>,
             null_count: Option<ArrayRef>,
             min_values: Option<ArrayRef>,
             max_values: Option<ArrayRef>,
         }
-        let columnar_stats: Vec<ColStats> = SchemaLeafIterator::new(schema)
+
+        let mut columnar_stats: Vec<ColStats> = SchemaLeafIterator::new(schema)
             .filter(|(_path, datatype)| !matches!(datatype, SchemaDataType::r#struct(_)))
             .map(|(path, datatype)| -> Result<ColStats, DeltaTableError> {
                 let null_count: Option<ArrayRef> = stats
@@ -285,7 +260,90 @@ impl DeltaTableState {
                 }
             }
         } else {
-            todo!()
+            let mut level = columnar_stats
+                .iter()
+                .map(|col_stat| col_stat.path.len())
+                .max()
+                .unwrap_or(0);
+
+            let combine_arrays = |sub_fields: &Vec<ColStats>,
+                                  getter: for<'a> fn(&'a ColStats) -> &'a Option<ArrayRef>|
+             -> Option<ArrayRef> {
+                let fields = sub_fields
+                    .iter()
+                    .flat_map(|sub_field| {
+                        if let Some(values) = getter(sub_field) {
+                            let field = Field::new(
+                                sub_field
+                                    .path
+                                    .last()
+                                    .expect("paths must have at least one element"),
+                                values.data_type().clone(),
+                                false,
+                            );
+                            Some((field, Arc::clone(values)))
+                        } else {
+                            None
+                        }
+                    })
+                    .collect::<Vec<_>>();
+                if fields.is_empty() {
+                    None
+                } else {
+                    Some(Arc::new(StructArray::from(fields)))
+                }
+            };
+
+            while level > 0 {
+                // Starting with most nested level, iteratively group null_count, min_values, max_values
+                // into StructArrays, until it is consolidated into a single array.
+                columnar_stats = columnar_stats
+                    .into_iter()
+                    .group_by(|col_stat| {
+                        if col_stat.path.len() < level {
+                            col_stat.path.clone()
+                        } else {
+                            col_stat.path[0..(level - 1)].to_vec()
+                        }
+                    })
+                    .into_iter()
+                    .map(|(prefix, group)| {
+                        let current_fields: Vec<ColStats> = group.into_iter().collect();
+                        if current_fields[0].path.len() < level {
+                            debug_assert_eq!(current_fields.len(), 1);
+                            current_fields.into_iter().next().unwrap()
+                        } else {
+                            ColStats {
+                                path: prefix.to_vec(),
+                                null_count: combine_arrays(&current_fields, |sub_field| {
+                                    &sub_field.null_count
+                                }),
+                                min_values: combine_arrays(&current_fields, |sub_field| {
+                                    &sub_field.min_values
+                                }),
+                                max_values: combine_arrays(&current_fields, |sub_field| {
+                                    &sub_field.max_values
+                                }),
+                            }
+                        }
+                    })
+                    .collect();
+                level -= 1;
+            }
+            debug_assert!(columnar_stats.len() == 1);
+            debug_assert!(columnar_stats
+                .iter()
+                .all(|col_stat| col_stat.path.is_empty()));
+
+            if let Some(null_count) = columnar_stats[0].null_count.take() {
+                out_columns.push((Cow::Borrowed("null_count"), null_count));
+            }
+            if let Some(min_values) = columnar_stats[0].min_values.take() {
+                out_columns.push((Cow::Borrowed("min"), min_values));
+            }
+            if let Some(max_values) = columnar_stats[0].max_values.take() {
+                out_columns.push((Cow::Borrowed("max"), max_values));
+            }
         }
 
         Ok(arrow::record_batch::RecordBatch::try_from_iter(

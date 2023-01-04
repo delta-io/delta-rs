@@ -499,4 +499,4 @@ given filters.
         stats: [["{"numRecords": 1, "minValues": {"y": 5}, "maxValues": {"y": 5}, "nullCount": {"y": 0}}","{"numRecords": 1, "minValues": {"y": 6}, "maxValues": {"y": 6}, "nullCount": {"y": 0}}","{"numRecords": 1, "minValues": {"y": 4}, "maxValues": {"y": 4}, "nullCount": {"y": 0}}"]]
         partition_x: [["2","3","1"]]
         """
-        return self._table.get_add_actions_df(flatten)
+        return self._table.get_add_actions_df(flatten, parse_stats)

@@ -1,6 +1,6 @@
 #![cfg(feature = "arrow")]
 
-use arrow::array::{self, ArrayRef, StringArray};
+use arrow::array::{self, ArrayRef, StructArray};
 use arrow::compute::kernels::cast_utils::Parser;
 use arrow::compute::sort_to_indices;
 use arrow::datatypes::{DataType, Date32Type, Field, TimestampMicrosecondType};
@@ -25,14 +25,12 @@ fn sort_batch_by(batch: &RecordBatch, column: &str) -> arrow::error::Result<Reco
     RecordBatch::try_from_iter(sorted_columns)
 }
 
-// TODO: split this into multiple tests
-
 #[tokio::test]
 async fn test_with_partitions() {
     // test table with partitions
     let path = "./tests/data/delta-0.8.0-null-partition";
     let table = deltalake::open_table(path).await.unwrap();
-    let actions = table.get_state().add_actions_table(true, false).unwrap();
+    let actions = table.get_state().add_actions_table(true).unwrap();
     let actions = sort_batch_by(&actions, "path").unwrap();
 
     let mut expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -45,17 +43,16 @@ async fn test_with_partitions() {
             1627990384000, 1627990384000
         ]))),
         ("data_change", Arc::new(array::BooleanArray::from(vec![true, true]))),
-        ("stats", Arc::new(array::StringArray::from(vec![None, None]))),
         ("partition_k", Arc::new(array::StringArray::from(vec![Some("A"), None]))),
     ];
     let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
 
     assert_eq!(expected, actions);
 
-    let actions = table.get_state().add_actions_table(false, false).unwrap();
+    let actions = table.get_state().add_actions_table(false).unwrap();
     let actions = sort_batch_by(&actions, "path").unwrap();
 
-    expected_columns[5] = (
+    expected_columns[4] = (
         "partition_values",
         Arc::new(array::StructArray::from(vec![(
             Field::new("k", DataType::Utf8, true),
@@ -73,7 +70,7 @@ async fn test_without_partitions() {
     let path = "./tests/data/simple_table";
     let table = deltalake::open_table(path).await.unwrap();
 
-    let actions = table.get_state().add_actions_table(true, false).unwrap();
+    let actions = table.get_state().add_actions_table(true).unwrap();
     let actions = sort_batch_by(&actions, "path").unwrap();
 
     let expected_columns: Vec<(&str, ArrayRef)> = vec![
@@ -107,16 +104,12 @@ async fn test_without_partitions() {
                 true, true, true, true, true,
             ])),
         ),
-        (
-            "stats",
-            Arc::new(array::StringArray::from(vec![None, None, None, None, None])),
-        ),
     ];
     let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
 
     assert_eq!(expected, actions);
 
-    let actions = table.get_state().add_actions_table(false, false).unwrap();
+    let actions = table.get_state().add_actions_table(false).unwrap();
     let actions = sort_batch_by(&actions, "path").unwrap();
 
     // For now, this column is ignored.
@@ -134,23 +127,8 @@ async fn test_with_stats() {
     // test table with stats
     let path = "./tests/data/delta-0.8.0";
     let table = deltalake::open_table(path).await.unwrap();
-    let actions = table.get_state().add_actions_table(true, false).unwrap();
+    let actions = table.get_state().add_actions_table(true).unwrap();
     let actions = sort_batch_by(&actions, "path").unwrap();
-
-    let stats_col_index = actions.schema().column_with_name("stats").unwrap().0;
-    let result_stats: &StringArray = actions
-        .column(stats_col_index)
-        .as_any()
-        .downcast_ref()
-        .unwrap();
-    let actions = actions
-        .project(
-            &(0..actions.num_columns())
-                .into_iter()
-                .filter(|i| i != &stats_col_index)
-                .collect::<Vec<usize>>(),
-        )
-        .unwrap();
 
     let expected_columns: Vec<(&str, ArrayRef)> = vec![
         (
@@ -175,126 +153,27 @@ async fn test_with_stats() {
             "data_change",
             Arc::new(array::BooleanArray::from(vec![true, true])),
         ),
+        ("num_records", Arc::new(array::Int64Array::from(vec![2, 2]))),
+        (
+            "null_count.value",
+            Arc::new(array::Int64Array::from(vec![0, 0])),
+        ),
+        ("min.value", Arc::new(array::Int32Array::from(vec![2, 0]))),
+        ("max.value", Arc::new(array::Int32Array::from(vec![4, 2]))),
     ];
     let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
 
     assert_eq!(expected, actions);
-
-    let expected_stats = vec![
-        "{\"numRecords\":2,\"minValues\":{\"value\":2},\"maxValues\":{\"value\":4},\"nullCount\":{\"value\":0}}",
-        "{\"numRecords\":2,\"minValues\":{\"value\":0},\"maxValues\":{\"value\":2},\"nullCount\":{\"value\":0}}",
-    ];
-
-    for (maybe_result_stat, expected_stat) in result_stats.iter().zip(expected_stats.into_iter()) {
-        assert_json_equal(maybe_result_stat.unwrap(), expected_stat);
-    }
 }
 
 #[tokio::test]
 async fn test_only_struct_stats() {
     // test table with no json stats
     let path = "./tests/data/delta-1.2.1-only-struct-stats";
-    let table = deltalake::open_table(path).await.unwrap();
-
-    let actions = table.get_state().add_actions_table(true, false).unwrap();
-    let actions = sort_batch_by(&actions, "path").unwrap();
-
-    let stats_col_index = actions.schema().column_with_name("stats").unwrap().0;
-    let result_stats: &StringArray = actions
-        .column(stats_col_index)
-        .as_any()
-        .downcast_ref()
-        .unwrap();
-    let actions = actions
-        .project(
-            &(0..actions.num_columns())
-                .into_iter()
-                .filter(|i| i != &stats_col_index)
-                .collect::<Vec<usize>>(),
-        )
-        .unwrap();
-
-    let expected_columns: Vec<(&str, ArrayRef)> = vec![
-        (
-            "path",
-            Arc::new(array::StringArray::from(vec![
-                "part-00000-1c2d1a32-02dc-484f-87ff-4328ea56045d-c000.snappy.parquet",
-                "part-00000-28925d3a-bdf2-411e-bca9-b067444cbcb0-c000.snappy.parquet",
-                "part-00000-6630b7c4-0aca-405b-be86-68a812f2e4c8-c000.snappy.parquet",
-                "part-00000-74151571-7ec6-4bd6-9293-b5daab2ce667-c000.snappy.parquet",
-                "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
-                "part-00000-8e0aefe1-6645-4601-ac29-68cba64023b5-c000.snappy.parquet",
-                "part-00000-b26ba634-874c-45b0-a7ff-2f0395a53966-c000.snappy.parquet",
-                "part-00000-c4c8caec-299d-42a4-b50c-5a4bf724c037-c000.snappy.parquet",
-                "part-00000-ce300400-58ff-4b8f-8ba9-49422fdf9f2e-c000.snappy.parquet",
-                "part-00000-e1262b3e-2959-4910-aea9-4eaf92f0c68c-c000.snappy.parquet",
-                "part-00000-e8e3753f-e2f6-4c9f-98f9-8f3d346727ba-c000.snappy.parquet",
-                "part-00000-f73ff835-0571-4d67-ac43-4fbf948bfb9b-c000.snappy.parquet",
-            ])),
-        ),
-        (
-            "size_bytes",
-            Arc::new(array::Int64Array::from(vec![
-                5488, 5489, 5489, 5489, 5489, 5489, 5489, 5489, 5489, 5489, 5489, 5731,
-            ])),
-        ),
-        (
-            "modification_time",
-            Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
-                1666652376000,
-                1666652374000,
-                1666652378000,
-                1666652377000,
-                1666652373000,
-                1666652385000,
-                1666652375000,
-                1666652379000,
-                1666652382000,
-                1666652386000,
-                1666652380000,
-                1666652383000,
-            ])),
-        ),
-        (
-            "data_change",
-            Arc::new(array::BooleanArray::from(vec![
-                false, false, false, false, false, true, false, false, false, true, false, false,
-            ])),
-        ),
-    ];
-    let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
-
-    assert_eq!(expected, actions);
-
-    // For stats in checkpoints, the serialization order isn't deterministic, so we can't compare with strings
-    let expected_stats = vec![
-        "{\"numRecords\":1,\"minValues\":{\"struct\":{\"struct_element\":\"struct_value\"},\"double\":1.234,\"decimal\":-5.678,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"timestamp\":\"2022-10-24T22:59:36.177Z\",\"string\":\"string\",\"integer\":3,\"date\":\"2022-10-24\"},\"maxValues\":{\"timestamp\":\"2022-10-24T22:59:36.177Z\",\"integer\":3,\"struct\":{\"struct_element\":\"struct_value\"},\"double\":1.234,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"string\":\"string\",\"date\":\"2022-10-24\",\"decimal\":-5.678},\"nullCount\":{\"struct\":{\"struct_element\":0},\"double\":0,\"array\":0,\"integer\":0,\"date\":0,\"map\":0,\"struct_of_array_of_map\":{\"struct_element\":0},\"boolean\":0,\"null\":1,\"decimal\":0,\"binary\":0,\"timestamp\":0,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":0}},\"string\":0}}",
-        "{\"numRecords\":1,\"minValues\":{\"integer\":1,\"timestamp\":\"2022-10-24T22:59:34.067Z\",\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"struct\":{\"struct_element\":\"struct_value\"},\"string\":\"string\",\"double\":1.234,\"date\":\"2022-10-24\",\"decimal\":-5.678},\"maxValues\":{\"decimal\":-5.678,\"timestamp\":\"2022-10-24T22:59:34.067Z\",\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"integer\":1,\"double\":1.234,\"string\":\"string\",\"struct\":{\"struct_element\":\"struct_value\"},\"date\":\"2022-10-24\"},\"nullCount\":{\"boolean\":0,\"string\":0,\"struct\":{\"struct_element\":0},\"map\":0,\"double\":0,\"array\":0,\"null\":1,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":0}},\"binary\":0,\"decimal\":0,\"date\":0,\"timestamp\":0,\"struct_of_array_of_map\":{\"struct_element\":0},\"integer\":0}}",
-        "{\"numRecords\":1,\"minValues\":{\"integer\":5,\"decimal\":-5.678,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"string\":\"string\",\"timestamp\":\"2022-10-24T22:59:38.358Z\",\"double\":1.234,\"date\":\"2022-10-24\",\"struct\":{\"struct_element\":\"struct_value\"}},\"maxValues\":{\"timestamp\":\"2022-10-24T22:59:38.358Z\",\"integer\":5,\"decimal\":-5.678,\"date\":\"2022-10-24\",\"string\":\"string\",\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"double\":1.234,\"struct\":{\"struct_element\":\"struct_value\"}},\"nullCount\":{\"null\":1,\"struct_of_array_of_map\":{\"struct_element\":0},\"binary\":0,\"string\":0,\"double\":0,\"integer\":0,\"date\":0,\"timestamp\":0,\"map\":0,\"array\":0,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":0}},\"decimal\":0,\"struct\":{\"struct_element\":0},\"boolean\":0}}",
-        "{\"numRecords\":1,\"minValues\":{\"string\":\"string\",\"double\":1.234,\"integer\":4,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"timestamp\":\"2022-10-24T22:59:37.235Z\",\"date\":\"2022-10-24\",\"decimal\":-5.678,\"struct\":{\"struct_element\":\"struct_value\"}},\"maxValues\":{\"timestamp\":\"2022-10-24T22:59:37.235Z\",\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"date\":\"2022-10-24\",\"string\":\"string\",\"struct\":{\"struct_element\":\"struct_value\"},\"double\":1.234,\"integer\":4,\"decimal\":-5.678},\"nullCount\":{\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":0}},\"struct_of_array_of_map\":{\"struct_element\":0},\"binary\":0,\"map\":0,\"string\":0,\"double\":0,\"date\":0,\"null\":1,\"integer\":0,\"boolean\":0,\"decimal\":0,\"timestamp\":0,\"struct\":{\"struct_element\":0},\"array\":0}}",
-        "{\"numRecords\":1,\"minValues\":{\"struct\":{\"struct_element\":\"struct_value\"},\"decimal\":-5.678,\"timestamp\":\"2022-10-24T22:59:32.846Z\",\"string\":\"string\",\"integer\":0,\"double\":1.234,\"date\":\"2022-10-24\",\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}}},\"maxValues\":{\"string\":\"string\",\"struct\":{\"struct_element\":\"struct_value\"},\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"date\":\"2022-10-24\",\"decimal\":-5.678,\"integer\":0,\"double\":1.234,\"timestamp\":\"2022-10-24T22:59:32.846Z\"},\"nullCount\":{\"timestamp\":0,\"struct\":{\"struct_element\":0},\"double\":0,\"binary\":0,\"string\":0,\"boolean\":0,\"decimal\":0,\"null\":1,\"integer\":0,\"array\":0,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":0}},\"struct_of_array_of_map\":{\"struct_element\":0},\"date\":0,\"map\":0}}",
-        "{\"numRecords\":1,\"minValues\":{\"struct\":{\"struct_element\":\"struct_value\"},\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"date\":\"2022-10-24\",\"timestamp\":\"2022-10-24T22:59:44.639Z\",\"double\":1.234,\"integer\":10,\"string\":\"string\",\"decimal\":-5.678},\"maxValues\":{\"struct\":{\"struct_element\":\"struct_value\"},\"date\":\"2022-10-24\",\"integer\":10,\"decimal\":-5.678,\"string\":\"string\",\"double\":1.234,\"timestamp\":\"2022-10-24T22:59:44.639Z\",\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}}},\"nullCount\":{\"binary\":0,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":0}},\"timestamp\":0,\"boolean\":0,\"string\":0,\"struct_of_array_of_map\":{\"struct_element\":0},\"map\":0,\"null\":1,\"decimal\":0,\"array\":0,\"struct\":{\"struct_element\":0},\"double\":0,\"integer\":0,\"date\":0}}",
-        "{\"numRecords\":1,\"minValues\":{\"date\":\"2022-10-24\",\"timestamp\":\"2022-10-24T22:59:35.117Z\",\"integer\":2,\"struct\":{\"struct_element\":\"struct_value\"},\"decimal\":-5.678,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"string\":\"string\",\"double\":1.234},\"maxValues\":{\"integer\":2,\"timestamp\":\"2022-10-24T22:59:35.117Z\",\"struct\":{\"struct_element\":\"struct_value\"},\"decimal\":-5.678,\"double\":1.234,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"date\":\"2022-10-24\",\"string\":\"string\"},\"nullCount\":{\"struct\":{\"struct_element\":0},\"double\":0,\"map\":0,\"array\":0,\"boolean\":0,\"integer\":0,\"date\":0,\"binary\":0,\"decimal\":0,\"string\":0,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":0}},\"struct_of_array_of_map\":{\"struct_element\":0},\"null\":1,\"timestamp\":0}}",
-        "{\"numRecords\":1,\"minValues\":{\"timestamp\":\"2022-10-24T22:59:39.489Z\",\"string\":\"string\",\"struct\":{\"struct_element\":\"struct_value\"},\"date\":\"2022-10-24\",\"integer\":6,\"double\":1.234,\"decimal\":-5.678,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}}},\"maxValues\":{\"timestamp\":\"2022-10-24T22:59:39.489Z\",\"decimal\":-5.678,\"integer\":6,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"string\":\"string\",\"struct\":{\"struct_element\":\"struct_value\"},\"date\":\"2022-10-24\",\"double\":1.234},\"nullCount\":{\"double\":0,\"decimal\":0,\"boolean\":0,\"struct\":{\"struct_element\":0},\"date\":0,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":0}},\"timestamp\":0,\"array\":0,\"binary\":0,\"map\":0,\"null\":1,\"struct_of_array_of_map\":{\"struct_element\":0},\"string\":0,\"integer\":0}}",
-        "{\"numRecords\":1,\"minValues\":{\"timestamp\":\"2022-10-24T22:59:41.637Z\",\"decimal\":-5.678,\"date\":\"2022-10-24\",\"integer\":8,\"string\":\"string\",\"double\":1.234,\"struct\":{\"struct_element\":\"struct_value\"},\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}}},\"maxValues\":{\"date\":\"2022-10-24\",\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"decimal\":-5.678,\"double\":1.234,\"integer\":8,\"timestamp\":\"2022-10-24T22:59:41.637Z\",\"string\":\"string\",\"struct\":{\"struct_element\":\"struct_value\"}},\"nullCount\":{\"array\":0,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":0}},\"timestamp\":0,\"string\":0,\"struct_of_array_of_map\":{\"struct_element\":0},\"map\":0,\"integer\":0,\"binary\":0,\"double\":0,\"null\":1,\"date\":0,\"decimal\":0,\"boolean\":0,\"struct\":{\"struct_element\":0}}}",
-        "{\"numRecords\":1,\"minValues\":{\"timestamp\":\"2022-10-24T22:59:46.083Z\",\"date\":\"2022-10-24\",\"struct\":{\"struct_element\":\"struct_value\"},\"integer\":11,\"string\":\"string\",\"double\":1.234,\"decimal\":-5.678,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}}},\"maxValues\":{\"decimal\":-5.678,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"date\":\"2022-10-24\",\"timestamp\":\"2022-10-24T22:59:46.083Z\",\"string\":\"string\",\"struct\":{\"struct_element\":\"struct_value\"},\"double\":1.234,\"integer\":11},\"nullCount\":{\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":0}},\"binary\":0,\"date\":0,\"double\":0,\"map\":0,\"null\":1,\"struct_of_array_of_map\":{\"struct_element\":0},\"string\":0,\"boolean\":0,\"integer\":0,\"struct\":{\"struct_element\":0},\"decimal\":0,\"timestamp\":0,\"array\":0}}",
-        "{\"numRecords\":1,\"minValues\":{\"date\":\"2022-10-24\",\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"decimal\":-5.678,\"timestamp\":\"2022-10-24T22:59:40.572Z\",\"struct\":{\"struct_element\":\"struct_value\"},\"string\":\"string\",\"integer\":7,\"double\":1.234},\"maxValues\":{\"integer\":7,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"struct\":{\"struct_element\":\"struct_value\"},\"double\":1.234,\"decimal\":-5.678,\"string\":\"string\",\"timestamp\":\"2022-10-24T22:59:40.572Z\",\"date\":\"2022-10-24\"},\"nullCount\":{\"double\":0,\"binary\":0,\"boolean\":0,\"timestamp\":0,\"array\":0,\"null\":1,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":0}},\"struct\":{\"struct_element\":0},\"struct_of_array_of_map\":{\"struct_element\":0},\"map\":0,\"integer\":0,\"date\":0,\"string\":0,\"decimal\":0}}",
-        "{\"numRecords\":1,\"minValues\":{\"double\":1.234,\"string\":\"string\",\"date\":\"2022-10-24\",\"struct\":{\"struct_element\":\"struct_value\"},\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"timestamp\":\"2022-10-24T22:59:42.908Z\",\"integer\":9,\"decimal\":-5.678,\"new_column\":0},\"maxValues\":{\"date\":\"2022-10-24\",\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":\"nested_struct_value\"}},\"decimal\":-5.678,\"integer\":9,\"double\":1.234,\"string\":\"string\",\"struct\":{\"struct_element\":\"struct_value\"},\"timestamp\":\"2022-10-24T22:59:42.908Z\",\"new_column\":0},\"nullCount\":{\"double\":0,\"new_column\":0,\"struct_of_array_of_map\":{\"struct_element\":0},\"date\":0,\"map\":0,\"decimal\":0,\"null\":1,\"timestamp\":0,\"struct\":{\"struct_element\":0},\"boolean\":0,\"nested_struct\":{\"struct_element\":{\"nested_struct_element\":0}},\"binary\":0,\"integer\":0,\"array\":0,\"string\":0}}",
-    ];
-
-    for (maybe_result_stat, expected_stat) in result_stats.iter().zip(expected_stats.into_iter()) {
-        assert_json_equal(maybe_result_stat.unwrap(), expected_stat);
-    }
-}
-
-#[tokio::test]
-async fn test_parsed_stats() {
-    // test table with no json stats
-    let path = "./tests/data/delta-1.2.1-only-struct-stats";
     let mut table = deltalake::open_table(path).await.unwrap();
     table.load_version(1).await.unwrap();
 
-    let actions = table.get_state().add_actions_table(true, true).unwrap();
+    let actions = table.get_state().add_actions_table(true).unwrap();
 
     let expected_columns: Vec<(&str, ArrayRef)> = vec![
         (
@@ -460,10 +339,92 @@ async fn test_parsed_stats() {
             .collect::<Vec<&str>>()
     );
     assert_eq!(expected, actions);
+
+    let actions = table.get_state().add_actions_table(false).unwrap();
+    // For brevity, just checking a few nested columns in stats
+
+    assert_eq!(
+        actions
+            .get_field_at_path(&vec![
+                "null_count",
+                "nested_struct",
+                "struct_element",
+                "nested_struct_element"
+            ])
+            .unwrap()
+            .as_any()
+            .downcast_ref::<array::Int64Array>()
+            .unwrap(),
+        &array::Int64Array::from(vec![0]),
+    );
+
+    assert_eq!(
+        actions
+            .get_field_at_path(&vec![
+                "min",
+                "nested_struct",
+                "struct_element",
+                "nested_struct_element"
+            ])
+            .unwrap()
+            .as_any()
+            .downcast_ref::<array::StringArray>()
+            .unwrap(),
+        &array::StringArray::from(vec!["nested_struct_value"]),
+    );
+
+    assert_eq!(
+        actions
+            .get_field_at_path(&vec![
+                "max",
+                "nested_struct",
+                "struct_element",
+                "nested_struct_element"
+            ])
+            .unwrap()
+            .as_any()
+            .downcast_ref::<array::StringArray>()
+            .unwrap(),
+        &array::StringArray::from(vec!["nested_struct_value"]),
+    );
+
+    assert_eq!(
+        actions
+            .get_field_at_path(&vec![
+                "null_count",
+                "struct_of_array_of_map",
+                "struct_element"
+            ])
+            .unwrap()
+            .as_any()
+            .downcast_ref::<array::Int64Array>()
+            .unwrap(),
+        &array::Int64Array::from(vec![0])
+    );
 }
 
-fn assert_json_equal(left: &str, right: &str) {
-    let left_value: serde_json::Value = serde_json::from_str(left).unwrap();
-    let right_value: serde_json::Value = serde_json::from_str(right).unwrap();
-    assert_eq!(left_value, right_value);
+/// Trait to make it easier to access nested fields
+trait NestedTabular {
+    fn get_field_at_path(&self, path: &[&str]) -> Option<ArrayRef>;
+}
+
+impl NestedTabular for RecordBatch {
+    fn get_field_at_path(&self, path: &[&str]) -> Option<ArrayRef> {
+        // First, get array in the batch
+        let (first_key, remainder) = path.split_at(1);
+        let mut col = self.column(self.schema().column_with_name(first_key[0])?.0);
+
+        if remainder.is_empty() {
+            return Some(Arc::clone(col));
+        }
+
+        for segment in remainder {
+            col = col
+                .as_any()
+                .downcast_ref::<StructArray>()?
+                .column_by_name(segment)?;
+        }
+
+        Some(Arc::clone(col))
+    }
 }
