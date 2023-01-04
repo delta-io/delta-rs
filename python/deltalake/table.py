@@ -453,7 +453,7 @@ given filters.
 
         :param flatten: whether to flatten the schema. Partition values columns are
           given the prefix `partition.`, statistics (null_count, min, and max) are
-          given the prefix `null_count.`, `min.`, and `max.`, and tags the 
+          given the prefix `null_count.`, `min.`, and `max.`, and tags the
           prefix `tags.`. Nested field names are concatenated with `.`.
 
         :returns: a PyArrow RecordBatch containing the add action data.

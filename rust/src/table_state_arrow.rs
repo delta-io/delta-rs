@@ -1,5 +1,5 @@
 //! Methods to get Delta Table state in Arrow structures
-//! 
+//!
 //! See [crate::table_state::DeltaTableState].
 
 use crate::action::{ColumnCountStat, ColumnValueStat, Stats};
@@ -24,24 +24,24 @@ use std::sync::Arc;
 
 impl DeltaTableState {
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.
-    /// 
+    ///
     /// # Arguments
-    /// 
+    ///
     /// * `flatten` - whether to flatten the schema. Partition values columns are
     ///   given the prefix `partition.`, statistics (null_count, min, and max) are
-    ///   given the prefix `null_count.`, `min.`, and `max.`, and tags the 
+    ///   given the prefix `null_count.`, `min.`, and `max.`, and tags the
     ///   prefix `tags.`. Nested field names are concatenated with `.`.
-    /// 
+    ///
     /// # Data schema
-    /// 
+    ///
     /// Each row represents a file that is a part of the selected tables state.
-    /// 
+    ///
     /// * `path` (String): relative or absolute to a file.
     /// * `size_bytes` (Int64): size of file in bytes.
     /// * `modification_time` (Millisecond Timestamp): time the file was created.
     /// * `data_change` (Boolean): false if data represents data moved from other files
     ///   in the same transaction.
-    /// * `partition.{partition column name}` (matches column type): value of 
+    /// * `partition.{partition column name}` (matches column type): value of
     ///   partition the file corresponds to.
     /// * `null_count.{col_name}` (Int64): number of null values for column in
     ///   this file.
