@@ -43,7 +43,7 @@ async fn test_with_partitions() {
             1627990384000, 1627990384000
         ]))),
         ("data_change", Arc::new(array::BooleanArray::from(vec![true, true]))),
-        ("partition_k", Arc::new(array::StringArray::from(vec![Some("A"), None]))),
+        ("partition.k", Arc::new(array::StringArray::from(vec![Some("A"), None]))),
     ];
     let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
 
