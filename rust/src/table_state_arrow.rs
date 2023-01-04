@@ -17,7 +17,7 @@ use arrow::datatypes::{
 };
 use itertools::Itertools;
 use std::borrow::Cow;
-use std::collections::{HashMap, VecDeque};
+use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
 
 impl DeltaTableState {
@@ -57,7 +57,58 @@ impl DeltaTableState {
             (Cow::Borrowed("modification_time"), Arc::new(mod_time)),
             (Cow::Borrowed("data_change"), Arc::new(data_change)),
         ];
+
         let metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
+
+        if !metadata.partition_columns.is_empty() {
+            let partition_cols_batch = self.partition_columns_as_batch(flatten)?;
+            arrays.extend(
+                partition_cols_batch
+                    .schema()
+                    .fields
+                    .iter()
+                    .map(|field| Cow::Owned(field.name().clone()))
+                    .zip(partition_cols_batch.columns().iter().map(Arc::clone)),
+            )
+        }
+
+        if self.files().iter().any(|add| add.stats.is_some()) {
+            let stats = self.stats_as_batch(flatten)?;
+            arrays.extend(
+                stats
+                    .schema()
+                    .fields
+                    .iter()
+                    .map(|field| Cow::Owned(field.name().clone()))
+                    .zip(stats.columns().iter().map(Arc::clone)),
+            );
+        }
+
+        if self.files().iter().any(|add| {
+            add.tags
+                .as_ref()
+                .map(|tags| !tags.is_empty())
+                .unwrap_or(false)
+        }) {
+            let tags = self.tags_as_batch(flatten)?;
+            arrays.extend(
+                tags.schema()
+                    .fields
+                    .iter()
+                    .map(|field| Cow::Owned(field.name().clone()))
+                    .zip(tags.columns().iter().map(Arc::clone)),
+            );
+        }
+
+        Ok(arrow::record_batch::RecordBatch::try_from_iter(arrays)?)
+    }
+
+    fn partition_columns_as_batch(
+        &self,
+        flatten: bool,
+    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        let metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
+
         let partition_column_types: Vec<arrow::datatypes::DataType> = metadata
             .partition_columns
             .iter()
@@ -129,21 +180,72 @@ impl DeltaTableState {
             }
         };
 
-        if self.files().iter().any(|add| add.stats.is_some()) {
-            let stats = self.stats_as_batch(flatten)?;
-            arrays.extend(
-                stats
-                    .schema()
-                    .fields
-                    .iter()
-                    .map(|field| Cow::Owned(field.name().clone()))
-                    .zip(stats.columns().iter().map(Arc::clone)),
-            );
+        Ok(arrow::record_batch::RecordBatch::try_from_iter(
+            partition_columns,
+        )?)
+    }
+
+    fn tags_as_batch(
+        &self,
+        flatten: bool,
+    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        let tag_keys: HashSet<&str> = self
+            .files()
+            .iter()
+            .flat_map(|add| add.tags.as_ref().map(|tags| tags.keys()))
+            .flatten()
+            .map(|key| key.as_str())
+            .collect();
+        let mut builder_map: HashMap<&str, arrow::array::StringBuilder> = tag_keys
+            .iter()
+            .map(|&key| {
+                (
+                    key,
+                    arrow::array::StringBuilder::with_capacity(self.files().len(), 64),
+                )
+            })
+            .collect();
+
+        for add in self.files() {
+            for &key in &tag_keys {
+                if let Some(value) = add
+                    .tags
+                    .as_ref()
+                    .and_then(|tags| tags.get(key))
+                    .and_then(|val| val.as_deref())
+                {
+                    builder_map.get_mut(key).unwrap().append_value(value);
+                } else {
+                    builder_map.get_mut(key).unwrap().append_null();
+                }
+            }
         }
 
-        arrays.extend(partition_columns.into_iter());
-
-        Ok(arrow::record_batch::RecordBatch::try_from_iter(arrays)?)
+        let mut arrays: Vec<(&str, ArrayRef)> = builder_map
+            .into_iter()
+            .map(|(key, mut builder)| (key, Arc::new(builder.finish()) as ArrayRef))
+            .collect();
+        // Sorted for consistent order
+        arrays.sort_by(|(key1, _), (key2, _)| key1.cmp(key2));
+        if flatten {
+            Ok(arrow::record_batch::RecordBatch::try_from_iter(
+                arrays
+                    .into_iter()
+                    .map(|(key, array)| (format!("tags.{}", key), array)),
+            )?)
+        } else {
+            Ok(arrow::record_batch::RecordBatch::try_from_iter(vec![(
+                "tags",
+                Arc::new(StructArray::from(
+                    arrays
+                        .into_iter()
+                        .map(|(key, array)| {
+                            (Field::new(key, array.data_type().clone(), true), array)
+                        })
+                        .collect_vec(),
+                )) as ArrayRef,
+            )])?)
+        }
     }
 
     fn stats_as_batch(

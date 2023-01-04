@@ -321,6 +321,14 @@ async fn test_only_struct_stats() {
             "null_count.struct_of_array_of_map.struct_element",
             Arc::new(array::Int64Array::from(vec![0])),
         ),
+        (
+            "tags.INSERTION_TIME",
+            Arc::new(array::StringArray::from(vec!["1666652373000000"])),
+        ),
+        (
+            "tags.OPTIMIZE_TARGET_SIZE",
+            Arc::new(array::StringArray::from(vec!["268435456"])),
+        ),
     ];
     let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
 
@@ -400,6 +408,16 @@ async fn test_only_struct_stats() {
             .downcast_ref::<array::Int64Array>()
             .unwrap(),
         &array::Int64Array::from(vec![0])
+    );
+
+    assert_eq!(
+        actions
+            .get_field_at_path(&vec!["tags", "OPTIMIZE_TARGET_SIZE"])
+            .unwrap()
+            .as_any()
+            .downcast_ref::<array::StringArray>()
+            .unwrap(),
+        &array::StringArray::from(vec!["268435456"])
     );
 }
 
