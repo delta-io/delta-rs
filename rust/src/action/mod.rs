@@ -226,6 +226,12 @@ pub struct Add {
     pub tags: Option<HashMap<String, Option<String>>>,
 }
 
+impl Hash for Add {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.path.hash(state);
+    }
+}
+
 impl Add {
     /// Returns the Add action with path decoded.
     pub fn path_decoded(self) -> Result<Self, ActionError> {
