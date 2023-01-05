@@ -9,14 +9,12 @@ use crate::DeltaTableError;
 use crate::SchemaDataType;
 use crate::SchemaTypeStruct;
 use arrow::array::{
-    ArrayRef, BinaryArray, BooleanArray, Date32Array, Int64Array, PrimitiveArray, StringArray,
+    ArrayRef, BinaryArray, BooleanArray, Date32Array, Float64Array, Int64Array, StringArray,
     StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
 };
 use arrow::compute::cast;
 use arrow::compute::kernels::cast_utils::Parser;
-use arrow::datatypes::{
-    ArrowPrimitiveType, DataType, Date32Type, Field, TimeUnit, TimestampMicrosecondType,
-};
+use arrow::datatypes::{DataType, Date32Type, Field, TimeUnit, TimestampMicrosecondType};
 use itertools::Itertools;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -556,12 +554,16 @@ fn json_value_to_array_general<'a>(
                 .map(|value| value.as_bool())
                 .collect::<BooleanArray>(),
         )),
-        DataType::Int64 => json_value_to_array::<arrow::datatypes::Int64Type>(values),
-        DataType::Int32 => json_value_to_array::<arrow::datatypes::Int32Type>(values),
-        DataType::Int16 => json_value_to_array::<arrow::datatypes::Int16Type>(values),
-        DataType::Int8 => json_value_to_array::<arrow::datatypes::Int8Type>(values),
-        DataType::Float32 => json_value_to_array::<arrow::datatypes::Float32Type>(values),
-        DataType::Float64 => json_value_to_array::<arrow::datatypes::Float64Type>(values),
+        DataType::Int64 | DataType::Int32 | DataType::Int16 | DataType::Int8 => {
+            let i64_arr: ArrayRef =
+                Arc::new(values.map(|value| value.as_i64()).collect::<Int64Array>());
+            Ok(arrow::compute::cast(&i64_arr, datatype)?)
+        }
+        DataType::Float32 | DataType::Float64 | DataType::Decimal128(_, _) => {
+            let f64_arr: ArrayRef =
+                Arc::new(values.map(|value| value.as_f64()).collect::<Float64Array>());
+            Ok(arrow::compute::cast(&f64_arr, datatype)?)
+        }
         DataType::Utf8 => Ok(Arc::new(
             values.map(|value| value.as_str()).collect::<StringArray>(),
         )),
@@ -580,33 +582,6 @@ fn json_value_to_array_general<'a>(
                 .map(|value| value.as_str().and_then(Date32Type::parse))
                 .collect::<Vec<Option<i32>>>(),
         ))),
-        DataType::Decimal128(_, _) => {
-            let float_arr = json_value_to_array::<arrow::datatypes::Float64Type>(values)?;
-            Ok(arrow::compute::cast(&float_arr, datatype)?)
-        }
         _ => Err(DeltaTableError::Generic("Invalid datatype".to_string())),
     }
-}
-
-fn json_value_to_array<'a, T>(
-    values: impl Iterator<Item = &'a serde_json::Value>,
-) -> Result<ArrayRef, DeltaTableError>
-where
-    T: ArrowPrimitiveType,
-    T::Native: num::NumCast,
-{
-    // Adapted from
-    Ok(Arc::new(
-        values
-            .map(|value| -> Option<T::Native> {
-                if value.is_i64() {
-                    value.as_i64().and_then(num::cast::cast)
-                } else if value.is_u64() {
-                    value.as_u64().and_then(num::cast::cast)
-                } else {
-                    value.as_f64().and_then(num::cast::cast)
-                }
-            })
-            .collect::<PrimitiveArray<T>>(),
-    ))
 }
