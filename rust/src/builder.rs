@@ -496,7 +496,7 @@ pub(crate) fn get_storage_backend(
         ObjectStoreKind::InMemory => Ok((Arc::new(InMemory::new()), storage_url)),
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
         ObjectStoreKind::S3 => {
-            let mut s3_options = options
+            let s3_options = options
                 .clone()
                 .into_iter()
                 .filter_map(|(key, value)| {
@@ -565,7 +565,6 @@ pub(crate) fn get_storage_backend(
                 })?;
             Ok((Arc::new(store), storage_url))
         }
-        _ => todo!(),
     }
 }
 
