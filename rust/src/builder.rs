@@ -45,6 +45,8 @@ enum BuilderError {
     MissingCredential,
     #[error("Failed to decode SAS key: {0}\nSAS keys must be percent-encoded. They come encoded in the Azure portal and Azure Storage Explorer.")]
     Decode(String),
+    #[error("Delta-rs must be build with feature '{feature}' to support url: {url}.")]
+    MissingFeature { feature: &'static str, url: String },
 }
 
 impl From<BuilderError> for DeltaTableError {
@@ -523,6 +525,12 @@ pub(crate) fn get_storage_backend(
                 storage_url,
             ))
         }
+        #[cfg(not(any(feature = "s3", feature = "s3-rustls")))]
+        ObjectStoreKind::S3 => Err(BuilderError::MissingFeature {
+            feature: "s3",
+            url: storage_url.as_ref().into(),
+        }
+        .into()),
         #[cfg(feature = "azure")]
         ObjectStoreKind::Azure => {
             let azure_options = options
@@ -544,6 +552,12 @@ pub(crate) fn get_storage_backend(
                 })?;
             Ok((Arc::new(store), storage_url))
         }
+        #[cfg(not(feature = "azure"))]
+        ObjectStoreKind::Azure => Err(BuilderError::MissingFeature {
+            feature: "azure",
+            url: storage_url.as_ref().into(),
+        }
+        .into()),
         #[cfg(feature = "gcs")]
         ObjectStoreKind::Google => {
             let google_options = options
@@ -565,6 +579,12 @@ pub(crate) fn get_storage_backend(
                 })?;
             Ok((Arc::new(store), storage_url))
         }
+        #[cfg(not(feature = "gcs"))]
+        ObjectStoreKind::Google => Err(BuilderError::MissingFeature {
+            feature: "gcs",
+            url: storage_url.as_ref().into(),
+        }
+        .into()),
     }
 }
 
