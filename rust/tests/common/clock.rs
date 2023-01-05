@@ -1,5 +1,5 @@
 use chrono::{Duration, Utc};
-use deltalake::vacuum::Clock;
+use deltalake::operations::vacuum::Clock;
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug)]

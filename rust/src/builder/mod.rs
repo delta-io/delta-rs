@@ -228,7 +228,7 @@ impl DeltaTableBuilder {
         Ok(object_store)
     }
 
-    /// Build the delta Table from specified options.
+    /// Build the [`DeltaTable`] from specified options.
     ///
     /// This will not load the log, i.e. the table is not initialized. To get an initialized
     /// table use the `load` function
@@ -258,7 +258,7 @@ impl DeltaTableBuilder {
         Ok(DeltaTable::new(object_store, config))
     }
 
-    /// finally load the table
+    /// Build the [`DeltaTable`] and load its state
     pub async fn load(self) -> Result<DeltaTable, DeltaTableError> {
         let version = self.options.version.clone();
         let mut table = self.build()?;

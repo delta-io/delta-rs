@@ -141,7 +141,7 @@ pub(crate) async fn commit(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "parquet"))]
 mod tests {
     use super::*;
     use crate::action::{DeltaOperation, Protocol, SaveMode};

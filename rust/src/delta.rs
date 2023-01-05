@@ -12,13 +12,13 @@ use std::{cmp::max, cmp::Ordering, collections::HashSet};
 
 use super::action;
 use super::action::{Action, DeltaOperation};
-use super::partitions::{DeltaTablePartition, PartitionFilter};
+use super::partitions::PartitionFilter;
 use super::schema::*;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
 use crate::delta_config::DeltaConfigError;
+use crate::operations::vacuum::VacuumBuilder;
 use crate::storage::ObjectStoreRef;
-use crate::vacuum::{Vacuum, VacuumError};
 
 use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt;
@@ -426,6 +426,7 @@ pub struct DeltaTable {
     pub state: DeltaTableState,
     /// the load options used during load
     pub config: DeltaTableConfig,
+    /// object store to access log and data files
     pub(crate) storage: ObjectStoreRef,
     /// file metadata for latest checkpoint
     last_check_point: Option<CheckPoint>,
@@ -507,6 +508,21 @@ impl DeltaTable {
             state: DeltaTableState::with_version(-1),
             storage,
             config,
+            last_check_point: None,
+            version_timestamp: HashMap::new(),
+        }
+    }
+
+    /// Create a new [`DeltaTable`] from a [`DeltaTableState`] without loading any
+    /// data from backing storage.
+    ///
+    /// NOTE: This is for advanced users. If you don't know why you need to use this method,
+    /// please call one of the `open_table` helper methods instead.
+    pub(crate) fn new_with_state(storage: ObjectStoreRef, state: DeltaTableState) -> Self {
+        Self {
+            state,
+            storage,
+            config: Default::default(),
             last_check_point: None,
             version_timestamp: HashMap::new(),
         }
@@ -665,17 +681,6 @@ impl DeltaTable {
         Ok(cp)
     }
 
-    async fn apply_log(&mut self, version: DeltaDataTypeVersion) -> Result<(), ApplyLogError> {
-        let new_state = DeltaTableState::from_commit(self, version).await?;
-        self.state.merge(
-            new_state,
-            self.config.require_tombstones,
-            self.config.require_files,
-        );
-
-        Ok(())
-    }
-
     #[cfg(any(feature = "parquet", feature = "parquet2"))]
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
         self.state = DeltaTableState::from_checkpoint(self, &check_point).await?;
@@ -766,26 +771,6 @@ impl DeltaTable {
         Ok(PeekCommit::New(next_version, actions))
     }
 
-    ///Apply any actions associated with the PeekCommit to the DeltaTable
-    pub fn apply_actions(
-        &mut self,
-        new_version: DeltaDataTypeVersion,
-        actions: Vec<Action>,
-    ) -> Result<(), DeltaTableError> {
-        if self.version() + 1 != new_version {
-            return Err(DeltaTableError::VersionMismatch(
-                new_version,
-                self.version(),
-            ));
-        }
-
-        let s = DeltaTableState::from_actions(actions, new_version)?;
-        self.state
-            .merge(s, self.config.require_tombstones, self.config.require_files);
-
-        Ok(())
-    }
-
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
     #[cfg(any(feature = "parquet", feature = "parquet2"))]
@@ -793,29 +778,39 @@ impl DeltaTable {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
                 if Some(last_check_point) == self.last_check_point {
-                    self.update_incremental().await
+                    self.update_incremental(None).await
                 } else {
                     self.last_check_point = Some(last_check_point);
                     self.restore_checkpoint(last_check_point).await?;
-                    self.update_incremental().await
+                    self.update_incremental(None).await
                 }
             }
-            Err(LoadCheckpointError::NotFound) => self.update_incremental().await,
-            Err(e) => Err(DeltaTableError::LoadCheckpoint { source: e }),
+            Err(LoadCheckpointError::NotFound) => self.update_incremental(None).await,
+            Err(source) => Err(DeltaTableError::LoadCheckpoint { source }),
         }
     }
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log.
     #[cfg(not(any(feature = "parquet", feature = "parquet2")))]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
-        self.update_incremental().await
+        self.update_incremental(None).await
     }
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
-    pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
-        while let PeekCommit::New(version, actions) = self.peek_next_commit(self.version()).await? {
-            self.apply_actions(version, actions)?;
+    pub async fn update_incremental(
+        &mut self,
+        max_version: Option<DeltaDataTypeVersion>,
+    ) -> Result<(), DeltaTableError> {
+        while let PeekCommit::New(new_version, actions) =
+            self.peek_next_commit(self.version()).await?
+        {
+            let s = DeltaTableState::from_actions(actions, new_version)?;
+            self.state
+                .merge(s, self.config.require_tombstones, self.config.require_files);
+            if Some(self.version()) == max_version {
+                return Ok(());
+            }
         }
 
         if self.version() == -1 {
@@ -846,25 +841,20 @@ impl DeltaTable {
             }
         }
 
-        let mut next_version = 0;
         // 1. find latest checkpoint below version
         #[cfg(any(feature = "parquet", feature = "parquet2"))]
         match self.find_latest_check_point_for_version(version).await? {
             Some(check_point) => {
                 self.restore_checkpoint(check_point).await?;
-                next_version = check_point.version + 1;
             }
             None => {
                 // no checkpoint found, clear table state and start from the beginning
-                self.state = DeltaTableState::with_version(0);
+                self.state = DeltaTableState::with_version(-1);
             }
         }
 
         // 2. apply all logs starting from checkpoint
-        while next_version <= version {
-            self.apply_log(next_version).await?;
-            next_version += 1;
-        }
+        self.update_incremental(Some(version)).await?;
 
         Ok(())
     }
@@ -948,35 +938,7 @@ impl DeltaTable {
         &'a self,
         filters: &'a [PartitionFilter<'a, &'a str>],
     ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
-        let current_metadata = self
-            .state
-            .current_metadata()
-            .ok_or(DeltaTableError::NoMetadata)?;
-        if !filters
-            .iter()
-            .all(|f| current_metadata.partition_columns.contains(&f.key.into()))
-        {
-            return Err(DeltaTableError::InvalidPartitionFilter {
-                partition_filter: format!("{:?}", filters),
-            });
-        }
-
-        let partition_col_data_types: HashMap<&str, &SchemaDataType> = current_metadata
-            .get_partition_col_data_types()
-            .into_iter()
-            .collect();
-
-        let actions = self.state.files().iter().filter(move |add| {
-            let partitions = add
-                .partition_values
-                .iter()
-                .map(|p| DeltaTablePartition::from_partition_value(p, ""))
-                .collect::<Vec<DeltaTablePartition>>();
-            filters
-                .iter()
-                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
-        });
-        Ok(actions)
+        self.state.get_active_add_actions_by_partitions(filters)
     }
 
     /// Returns the file list tracked in current table state filtered by provided
@@ -1006,33 +968,25 @@ impl DeltaTable {
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn get_files_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.state
-            .files()
-            .iter()
-            .map(|add| Path::from(add.path.as_ref()))
+        self.state.file_paths_iter()
     }
 
     /// Returns a collection of file names present in the loaded state
     #[inline]
     pub fn get_files(&self) -> Vec<Path> {
-        self.get_files_iter().collect()
+        self.state.file_paths_iter().collect()
     }
 
     /// Returns file names present in the loaded state in HashSet
     pub fn get_file_set(&self) -> HashSet<Path> {
-        self.state
-            .files()
-            .iter()
-            .map(|add| Path::from(add.path.as_ref()))
-            .collect()
+        self.state.file_paths_iter().collect()
     }
 
     /// Returns a URIs for all active files present in the current table version.
     pub fn get_file_uris(&self) -> impl Iterator<Item = String> + '_ {
         self.state
-            .files()
-            .iter()
-            .map(|add| self.storage.to_uri(&Path::from(add.path.as_ref())))
+            .file_paths_iter()
+            .map(|path| self.storage.to_uri(&path))
     }
 
     /// Returns statistics for files, in order
@@ -1084,24 +1038,6 @@ impl DeltaTable {
         self.state.min_writer_version()
     }
 
-    /// Vacuum the delta table see [`Vacuum`] for more info
-    pub async fn vacuum(
-        &mut self,
-        retention_hours: Option<u64>,
-        dry_run: bool,
-        enforce_retention_duration: bool,
-    ) -> Result<Vec<String>, VacuumError> {
-        let mut plan = Vacuum::default()
-            .dry_run(dry_run)
-            .enforce_retention_duration(enforce_retention_duration);
-        if let Some(hours) = retention_hours {
-            plan = plan.with_retention_period(Duration::hours(hours as i64));
-        }
-
-        let res = plan.execute(self).await?;
-        Ok(res.files_deleted)
-    }
-
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
     /// no metadata was found in the log.
     pub fn schema(&self) -> Option<&Schema> {
@@ -1121,6 +1057,25 @@ impl DeltaTable {
             .current_metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .get_configuration())
+    }
+
+    /// Vacuum the delta table. See [`VacuumBuilder`] for more information.
+    pub async fn vacuum(
+        &mut self,
+        retention_hours: Option<u64>,
+        dry_run: bool,
+        enforce_retention_duration: bool,
+    ) -> Result<Vec<String>, DeltaTableError> {
+        let mut plan = VacuumBuilder::new(self.object_store(), self.state.clone())
+            .with_dry_run(dry_run)
+            .with_enforce_retention_duration(enforce_retention_duration);
+        if let Some(hours) = retention_hours {
+            plan = plan.with_retention_period(Duration::hours(hours as i64));
+        }
+
+        let (table, metrics) = plan.await?;
+        self.state = table.state;
+        Ok(metrics.files_deleted)
     }
 
     /// Creates a new DeltaTransaction for the DeltaTable.
