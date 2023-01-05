@@ -8,3 +8,6 @@ members = [
     "dynamodb_lock",
 ]
 exclude = ["proofs", "delta-inspect"]
+
+[patch.crates-io]
+object_store = { git = "https://github.com/apache/arrow-rs", rev = "28a04db03cea376991e7efb04c3cf4f71f6d05bf" }
