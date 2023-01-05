@@ -276,22 +276,6 @@ impl DeltaTableBuilder {
     }
 }
 
-/// Well known storage services
-pub enum StorageService {
-    /// Local filesystem storage
-    Local,
-    /// S3 compliant service
-    S3,
-    /// Azure blob service
-    Azure,
-    /// Google cloud storage
-    GCS,
-    /// In-memory table
-    Memory,
-    /// Unrecognized service
-    Unknown,
-}
-
 /// A parsed URL identifying a storage location
 /// for more information on the supported expressions
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -561,7 +545,7 @@ pub(crate) fn get_storage_backend(
             Ok((Arc::new(store), storage_url))
         }
         #[cfg(feature = "gcs")]
-        ObjectStoreKind::GCS => {
+        ObjectStoreKind::Google => {
             let google_options = options
                 .into_iter()
                 .filter_map(|(key, value)| {
