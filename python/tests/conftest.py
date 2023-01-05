@@ -113,7 +113,7 @@ def azurite_creds():
         AZURE_STORAGE_ACCOUNT_KEY="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
         AZURE_STORAGE_CONTAINER_NAME="deltars",
         AZURE_STORAGE_USE_EMULATOR="true",
-        AZURE_STORAGE_USE_HTTP="true",
+        AZURE_ALLOW_HTTP="true",
     )
 
     endpoint_url = f"http://localhost:10000/{config['AZURE_STORAGE_ACCOUNT_NAME']}"

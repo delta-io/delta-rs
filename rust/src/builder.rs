@@ -493,6 +493,13 @@ pub(crate) fn get_storage_backend(
         );
     }
 
+    if let Ok(allow) = std::env::var("AWS_ALLOW_HTTP") {
+        options.insert("allow_http".into(), allow);
+    }
+    if let Ok(allow) = std::env::var("AZURE_ALLOW_HTTP") {
+        options.insert("allow_http".into(), allow);
+    }
+
     match ObjectStoreKind::parse_url(&storage_url.url)? {
         ObjectStoreKind::Local => Ok((Arc::new(FileStorageBackend::new()), storage_url)),
         ObjectStoreKind::InMemory => Ok((Arc::new(InMemory::new()), storage_url)),
