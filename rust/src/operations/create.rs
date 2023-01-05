@@ -310,7 +310,7 @@ impl std::future::IntoFuture for CreateBuilder {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "parquet"))]
 mod tests {
     use super::*;
     use crate::operations::DeltaOps;
