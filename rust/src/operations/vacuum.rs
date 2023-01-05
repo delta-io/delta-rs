@@ -125,6 +125,7 @@ impl VacuumBuilder {
     }
 
     /// add a time source for testing
+    #[doc(hidden)]
     pub fn with_clock(mut self, clock: Arc<dyn Clock>) -> Self {
         self.clock = Some(clock);
         self
