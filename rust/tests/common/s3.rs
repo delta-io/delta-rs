@@ -21,7 +21,7 @@ pub async fn setup_s3_context() -> TestContext {
     env::set_var("AWS_ACCESS_KEY_ID", "deltalake");
     env::set_var("AWS_SECRET_ACCESS_KEY", "weloverust");
     env::set_var("AWS_DEFAULT_REGION", &region);
-    env::set_var("AWS_STORAGE_ALLOW_HTTP", "TRUE");
+    env::set_var("AWS_ALLOW_HTTP", "TRUE");
 
     cli.create_bucket(bucket_name, &endpoint);
     cli.create_table(
@@ -40,7 +40,7 @@ pub async fn setup_s3_context() -> TestContext {
     config.insert("AWS_SECRET_ACCESS_KEY".to_owned(), "weloverust".to_owned());
     config.insert("AWS_S3_LOCKING_PROVIDER".to_owned(), "dynamodb".to_owned());
     config.insert("DYNAMO_LOCK_TABLE_NAME".to_owned(), lock_table.clone());
-    config.insert("AWS_STORAGE_ALLOW_HTTP".to_owned(), "TRUE".to_string());
+    config.insert("AWS_ALLOW_HTTP".to_owned(), "TRUE".to_string());
 
     TestContext {
         config,
