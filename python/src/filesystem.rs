@@ -229,9 +229,10 @@ impl DeltaFileSystemHandler {
         let file = self
             .rt
             .block_on(ObjectInputFile::try_new(
-                self.rt.clone(),
+                Arc::clone(&self.rt),
                 self.inner.clone(),
                 path,
+
             ))
             .map_err(PyDeltaTableError::from_object_store)?;
         Ok(file)
@@ -247,7 +248,7 @@ impl DeltaFileSystemHandler {
         let file = self
             .rt
             .block_on(ObjectOutputStream::try_new(
-                self.rt.clone(),
+                Arc::clone(&self.rt),
                 self.inner.clone(),
                 path,
             ))
@@ -404,14 +405,14 @@ impl ObjectInputFile {
         };
         let nbytes = (range.end - range.start) as i64;
         self.pos += nbytes;
-        let obj = if nbytes > 0 {
+        let data = if nbytes > 0 {
             self.rt
                 .block_on(self.store.get_range(&self.path, range))
                 .map_err(PyDeltaTableError::from_object_store)?
         } else {
             "".into()
         };
-        Python::with_gil(|py| Ok(PyBytes::new(py, obj.as_ref()).into_py(py)))
+        Python::with_gil(|py| Ok(PyBytes::new(py, data.as_ref()).into_py(py)))
     }
 
     fn fileno(&self) -> PyResult<()> {
