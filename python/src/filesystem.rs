@@ -232,7 +232,6 @@ impl DeltaFileSystemHandler {
                 Arc::clone(&self.rt),
                 self.inner.clone(),
                 path,
-
             ))
             .map_err(PyDeltaTableError::from_object_store)?;
         Ok(file)
