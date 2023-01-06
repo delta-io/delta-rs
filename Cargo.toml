@@ -9,9 +9,6 @@ members = [
 ]
 exclude = ["proofs", "delta-inspect"]
 
-[profile.dev]
-split-debuginfo = "unpacked"
-
 [profile.release-with-debug]
 inherits = "release"
 debug = true
