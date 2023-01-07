@@ -41,6 +41,7 @@ impl StorageOptions {
         Self(options)
     }
 
+    /// Denotes if unsecure connections are configures to be allowed
     pub fn allow_http(&self) -> bool {
         self.0
             .get("allow_http")
