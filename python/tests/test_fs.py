@@ -186,7 +186,9 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
 
     # Fails without any creds
     with pytest.raises(PyDeltaTableError):
-        anon_storage_options = {key: value for key, value in azurite_creds.items() if "ACCOUNT" not in key}
+        anon_storage_options = {
+            key: value for key, value in azurite_creds.items() if "ACCOUNT" not in key
+        }
         write_deltalake(table_path, sample_data, storage_options=anon_storage_options)
 
     # Can pass storage_options in directly
@@ -223,7 +225,9 @@ def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
 @pytest.mark.timeout(timeout=5, method="thread")
 def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip4"
-    azurite_sas_creds["SAS_TOKEN"] = urllib.parse.unquote(azurite_sas_creds["SAS_TOKEN"])
+    azurite_sas_creds["SAS_TOKEN"] = urllib.parse.unquote(
+        azurite_sas_creds["SAS_TOKEN"]
+    )
 
     write_deltalake(table_path, sample_data, storage_options=azurite_sas_creds)
     dt = DeltaTable(table_path, storage_options=azurite_sas_creds)

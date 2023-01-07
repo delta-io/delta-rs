@@ -7,6 +7,7 @@ from time import sleep
 
 import pyarrow as pa
 import pytest
+
 from deltalake import DeltaTable, write_deltalake
 
 
@@ -112,7 +113,7 @@ def azurite_creds():
         AZURE_STORAGE_ACCOUNT_KEY="Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==",
         AZURE_STORAGE_CONTAINER_NAME="deltars",
         AZURE_STORAGE_USE_EMULATOR="true",
-        AZURE_STORAGE_ALLOW_HTTP="true",
+        AZURE_STORAGE_USE_HTTP="true",
     )
 
     endpoint_url = f"http://localhost:10000/{config['AZURE_STORAGE_ACCOUNT_NAME']}"
@@ -164,7 +165,9 @@ def azurite_env_vars(monkeypatch, azurite_creds):
 
 @pytest.fixture()
 def azurite_sas_creds(azurite_creds):
-    endpoint_url = f"http://localhost:10000/{azurite_creds['AZURE_STORAGE_ACCOUNT_NAME']}"
+    endpoint_url = (
+        f"http://localhost:10000/{azurite_creds['AZURE_STORAGE_ACCOUNT_NAME']}"
+    )
     env = os.environ.copy()
     env.update(azurite_creds)
     env["AZURE_STORAGE_CONNECTION_STRING"] = (
@@ -209,8 +212,12 @@ def sample_data():
             "bool": pa.array([x % 2 == 0 for x in range(nrows)]),
             "binary": pa.array([str(x).encode() for x in range(nrows)]),
             "decimal": pa.array([Decimal("10.000") + x for x in range(nrows)]),
-            "date32": pa.array([date(2022, 1, 1) + timedelta(days=x) for x in range(nrows)]),
-            "timestamp": pa.array([datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)]),
+            "date32": pa.array(
+                [date(2022, 1, 1) + timedelta(days=x) for x in range(nrows)]
+            ),
+            "timestamp": pa.array(
+                [datetime(2022, 1, 1) + timedelta(hours=x) for x in range(nrows)]
+            ),
             "struct": pa.array([{"x": x, "y": str(x)} for x in range(nrows)]),
             "list": pa.array([list(range(x + 1)) for x in range(nrows)]),
             # NOTE: https://github.com/apache/arrow-rs/issues/477
