@@ -72,14 +72,12 @@ impl StorageOptions {
             })
             .collect::<HashMap<_, _>>();
         if let Ok(region) = std::env::var("AWS_REGION") {
-            if !config.contains_key(&AmazonS3ConfigKey::Region) {
-                config.insert(AmazonS3ConfigKey::Region, region);
-            }
+            config.entry(AmazonS3ConfigKey::Region).or_insert(region);
         }
         if let Ok(region) = std::env::var("AWS_DEFAULT_REGION") {
-            if !config.contains_key(&AmazonS3ConfigKey::DefaultRegion) {
-                config.insert(AmazonS3ConfigKey::DefaultRegion, region);
-            }
+            config
+                .entry(AmazonS3ConfigKey::DefaultRegion)
+                .or_insert(region);
         }
         if !(config.contains_key(&AmazonS3ConfigKey::DefaultRegion)
             | config.contains_key(&AmazonS3ConfigKey::Region))
