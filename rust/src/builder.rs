@@ -5,8 +5,9 @@ use std::sync::Arc;
 
 use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
 use crate::schema::DeltaDataTypeVersion;
+use crate::storage::config::{StorageLocation, StorageOptions};
 use crate::storage::file::FileStorageBackend;
-use crate::storage::{config::StorageLocation, DeltaObjectStore, ObjectStoreRef};
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 
 use chrono::{DateTime, FixedOffset, Utc};
 use object_store::memory::InMemory;
@@ -323,42 +324,28 @@ pub(crate) fn get_storage_backend(
             if allow { "true" } else { "false" }.into(),
         );
     }
-
-    if let Ok(allow) = std::env::var("AWS_STORAGE_ALLOW_HTTP") {
-        options.insert("allow_http".into(), allow);
-    }
-    if let Ok(allow) = std::env::var("AZURE_STORAGE_ALLOW_HTTP") {
-        options.insert("allow_http".into(), allow);
-    }
+    let options = StorageOptions::new(options);
 
     match ObjectStoreKind::parse_url(&storage_url.url)? {
         ObjectStoreKind::Local => Ok((Arc::new(FileStorageBackend::new()), storage_url)),
         ObjectStoreKind::InMemory => Ok((Arc::new(InMemory::new()), storage_url)),
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
         ObjectStoreKind::S3 => {
-            let s3_options = options
-                .clone()
-                .into_iter()
-                .filter_map(|(key, value)| {
-                    AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
-                    Some((key.to_ascii_lowercase(), value))
-                })
-                .collect::<HashMap<_, _>>();
             // TODO add custom options currently used in delta-rs
             let store = AmazonS3Builder::new()
                 .with_url(storage_url.as_ref())
-                .try_with_options(&s3_options)?
+                .try_with_options(&options.as_s3_options())?
                 .build()
                 .or_else(|_| {
                     AmazonS3Builder::from_env()
                         .with_url(storage_url.as_ref())
-                        .try_with_options(&s3_options)?
+                        .try_with_options(&options.as_s3_options())?
                         .build()
                 })?;
             Ok((
                 Arc::new(S3StorageBackend::try_new(
                     Arc::new(store),
-                    S3StorageOptions::from_map(options),
+                    S3StorageOptions::from_map(options.0),
                 )?),
                 storage_url,
             ))
@@ -371,21 +358,14 @@ pub(crate) fn get_storage_backend(
         .into()),
         #[cfg(feature = "azure")]
         ObjectStoreKind::Azure => {
-            let azure_options = options
-                .into_iter()
-                .filter_map(|(key, value)| {
-                    AzureConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
-                    Some((key.to_ascii_lowercase(), value))
-                })
-                .collect::<HashMap<_, _>>();
             let store = MicrosoftAzureBuilder::new()
                 .with_url(storage_url.as_ref())
-                .try_with_options(&azure_options)?
+                .try_with_options(&options.as_azure_options())?
                 .build()
                 .or_else(|_| {
                     MicrosoftAzureBuilder::from_env()
                         .with_url(storage_url.as_ref())
-                        .try_with_options(&azure_options)?
+                        .try_with_options(&options.as_azure_options())?
                         .build()
                 })?;
             Ok((Arc::new(store), storage_url))
@@ -398,21 +378,14 @@ pub(crate) fn get_storage_backend(
         .into()),
         #[cfg(feature = "gcs")]
         ObjectStoreKind::Google => {
-            let google_options = options
-                .into_iter()
-                .filter_map(|(key, value)| {
-                    GoogleConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
-                    Some((key.to_ascii_lowercase(), value))
-                })
-                .collect::<HashMap<_, _>>();
             let store = GoogleCloudStorageBuilder::new()
                 .with_url(storage_url.as_ref())
-                .try_with_options(&google_options)?
+                .try_with_options(&options.as_gcs_options())?
                 .build()
                 .or_else(|_| {
                     GoogleCloudStorageBuilder::from_env()
                         .with_url(storage_url.as_ref())
-                        .try_with_options(&google_options)?
+                        .try_with_options(&options.as_gcs_options())?
                         .build()
                 })?;
             Ok((Arc::new(store), storage_url))

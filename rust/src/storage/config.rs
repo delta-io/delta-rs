@@ -4,8 +4,63 @@ use object_store::{Error as ObjectStoreError, Result as ObjectStoreResult};
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use std::collections::HashMap;
 use std::fmt;
+use std::str::FromStr;
 use url::Url;
+
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+use object_store::aws::AmazonS3ConfigKey;
+#[cfg(feature = "azure")]
+use object_store::azure::AzureConfigKey;
+#[cfg(feature = "gcs")]
+use object_store::gcp::GoogleConfigKey;
+
+pub struct StorageOptions(pub HashMap<String, String>);
+
+impl StorageOptions {
+    pub fn new(options: HashMap<String, String>) -> Self {
+        let mut options = options;
+        if let Ok(value) = std::env::var("AZURE_STORAGE_ALLOW_HTTP") {
+            options.insert("allow_http".into(), value);
+        }
+        if let Ok(value) = std::env::var("AZURE_STORAGE_USE_HTTP") {
+            options.insert("allow_http".into(), value);
+        }
+        if let Ok(value) = std::env::var("AWS_STORAGE_ALLOW_HTTP") {
+            options.insert("allow_http".into(), value);
+        }
+        Self(options)
+    }
+
+    #[cfg(feature = "azure")]
+    pub fn as_azure_options(
+        &self,
+    ) -> impl IntoIterator<Item = (AzureConfigKey, impl Into<String>)> {
+        self.0.into_iter().filter_map(|(key, value)| {
+            let az_key = AzureConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
+            Some((az_key, value))
+        })
+    }
+
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    pub fn as_s3_options(
+        &self,
+    ) -> impl IntoIterator<Item = (AmazonS3ConfigKey, impl Into<String>)> {
+        self.0.into_iter().filter_map(|(key, value)| {
+            let s3_key = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
+            Some((s3_key, value))
+        })
+    }
+
+    #[cfg(feature = "gcs")]
+    pub fn as_gcs_options(&self) -> impl IntoIterator<Item = (GoogleConfigKey, impl Into<String>)> {
+        self.0.into_iter().filter_map(|(key, value)| {
+            let gcs_key = GoogleConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
+            Some((gcs_key, value))
+        })
+    }
+}
 
 /// A parsed URL identifying a storage location
 /// for more information on the supported expressions
