@@ -6,7 +6,6 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt;
-use std::str::FromStr;
 use url::Url;
 
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
@@ -15,6 +14,13 @@ use object_store::aws::AmazonS3ConfigKey;
 use object_store::azure::AzureConfigKey;
 #[cfg(feature = "gcs")]
 use object_store::gcp::GoogleConfigKey;
+#[cfg(any(
+    feature = "s3",
+    feature = "s3-rustls",
+    feature = "gcs",
+    feature = "azure"
+))]
+use std::str::FromStr;
 
 /// Options used for configuring backend storage
 pub struct StorageOptions(pub HashMap<String, String>);

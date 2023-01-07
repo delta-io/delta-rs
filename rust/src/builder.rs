@@ -317,7 +317,7 @@ pub(crate) fn get_storage_backend(
             if allow { "true" } else { "false" }.into(),
         );
     }
-    let options = StorageOptions::new(options);
+    let _options = StorageOptions::new(options);
 
     match ObjectStoreKind::parse_url(&storage_url.url)? {
         ObjectStoreKind::Local => Ok((Arc::new(FileStorageBackend::new()), storage_url)),
@@ -327,18 +327,18 @@ pub(crate) fn get_storage_backend(
             // TODO add custom options currently used in delta-rs
             let store = AmazonS3Builder::new()
                 .with_url(storage_url.as_ref())
-                .try_with_options(&options.as_s3_options())?
+                .try_with_options(&_options.as_s3_options())?
                 .build()
                 .or_else(|_| {
                     AmazonS3Builder::from_env()
                         .with_url(storage_url.as_ref())
-                        .try_with_options(&options.as_s3_options())?
+                        .try_with_options(&_options.as_s3_options())?
                         .build()
                 })?;
             Ok((
                 Arc::new(S3StorageBackend::try_new(
                     Arc::new(store),
-                    S3StorageOptions::from_map(options.0),
+                    S3StorageOptions::from_map(_options.0),
                 )?),
                 storage_url,
             ))
@@ -353,12 +353,12 @@ pub(crate) fn get_storage_backend(
         ObjectStoreKind::Azure => {
             let store = MicrosoftAzureBuilder::new()
                 .with_url(storage_url.as_ref())
-                .try_with_options(&options.as_azure_options())?
+                .try_with_options(&_options.as_azure_options())?
                 .build()
                 .or_else(|_| {
                     MicrosoftAzureBuilder::from_env()
                         .with_url(storage_url.as_ref())
-                        .try_with_options(&options.as_azure_options())?
+                        .try_with_options(&_options.as_azure_options())?
                         .build()
                 })?;
             Ok((Arc::new(store), storage_url))
@@ -373,12 +373,12 @@ pub(crate) fn get_storage_backend(
         ObjectStoreKind::Google => {
             let store = GoogleCloudStorageBuilder::new()
                 .with_url(storage_url.as_ref())
-                .try_with_options(&options.as_gcs_options())?
+                .try_with_options(&_options.as_gcs_options())?
                 .build()
                 .or_else(|_| {
                     GoogleCloudStorageBuilder::from_env()
                         .with_url(storage_url.as_ref())
-                        .try_with_options(&options.as_gcs_options())?
+                        .try_with_options(&_options.as_gcs_options())?
                         .build()
                 })?;
             Ok((Arc::new(store), storage_url))
