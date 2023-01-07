@@ -8,8 +8,8 @@ use crate::{DeltaTableBuilder, DeltaTableMetaData};
 use super::transaction::commit;
 use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
 use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
-use crate::builder::StorageLocation;
 use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
+use crate::storage::config::StorageLocation;
 use crate::storage::DeltaObjectStore;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 

@@ -1,12 +1,13 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
+pub mod config;
 pub mod file;
 pub mod utils;
 
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 pub mod s3;
 
-use crate::builder::StorageLocation;
+use crate::storage::config::StorageLocation;
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
