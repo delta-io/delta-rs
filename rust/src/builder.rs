@@ -19,18 +19,11 @@ use url::Url;
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 use crate::storage::s3::{S3StorageBackend, S3StorageOptions};
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+use object_store::aws::AmazonS3Builder;
 #[cfg(feature = "azure")]
-use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
+use object_store::azure::MicrosoftAzureBuilder;
 #[cfg(feature = "gcs")]
-use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
-#[cfg(any(
-    feature = "s3",
-    feature = "s3-rustls",
-    feature = "azure",
-    feature = "gcs"
-))]
-use std::str::FromStr;
+use object_store::gcp::GoogleCloudStorageBuilder;
 
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]

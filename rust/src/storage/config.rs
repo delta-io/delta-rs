@@ -16,9 +16,11 @@ use object_store::azure::AzureConfigKey;
 #[cfg(feature = "gcs")]
 use object_store::gcp::GoogleConfigKey;
 
+/// Options used for configuring backend storage
 pub struct StorageOptions(pub HashMap<String, String>);
 
 impl StorageOptions {
+    /// Create a new instance of [`StorageOptions`]
     pub fn new(options: HashMap<String, String>) -> Self {
         let mut options = options;
         if let Ok(value) = std::env::var("AZURE_STORAGE_ALLOW_HTTP") {
@@ -33,32 +35,40 @@ impl StorageOptions {
         Self(options)
     }
 
+    /// Subset of options relevant for azure storage
     #[cfg(feature = "azure")]
-    pub fn as_azure_options(
-        &self,
-    ) -> impl IntoIterator<Item = (AzureConfigKey, impl Into<String>)> {
-        self.0.into_iter().filter_map(|(key, value)| {
-            let az_key = AzureConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
-            Some((az_key, value))
-        })
+    pub fn as_azure_options(&self) -> HashMap<AzureConfigKey, String> {
+        self.0
+            .iter()
+            .filter_map(|(key, value)| {
+                let az_key = AzureConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
+                Some((az_key, value.clone()))
+            })
+            .collect()
     }
 
+    /// Subset of options relevant for s3 storage
     #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-    pub fn as_s3_options(
-        &self,
-    ) -> impl IntoIterator<Item = (AmazonS3ConfigKey, impl Into<String>)> {
-        self.0.into_iter().filter_map(|(key, value)| {
-            let s3_key = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
-            Some((s3_key, value))
-        })
+    pub fn as_s3_options(&self) -> HashMap<AmazonS3ConfigKey, String> {
+        self.0
+            .iter()
+            .filter_map(|(key, value)| {
+                let s3_key = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
+                Some((s3_key, value.clone()))
+            })
+            .collect()
     }
 
+    /// Subset of options relevant for gcs storage
     #[cfg(feature = "gcs")]
-    pub fn as_gcs_options(&self) -> impl IntoIterator<Item = (GoogleConfigKey, impl Into<String>)> {
-        self.0.into_iter().filter_map(|(key, value)| {
-            let gcs_key = GoogleConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
-            Some((gcs_key, value))
-        })
+    pub fn as_gcs_options(&self) -> HashMap<GoogleConfigKey, String> {
+        self.0
+            .iter()
+            .filter_map(|(key, value)| {
+                let gcs_key = GoogleConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
+                Some((gcs_key, value.clone()))
+            })
+            .collect()
     }
 }
 
