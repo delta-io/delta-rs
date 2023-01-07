@@ -49,9 +49,9 @@ async fn simple_query(context: &IntegrationContext) -> TestResult {
 
     let dynamo_lock_option = "'DYNAMO_LOCK_OWNER_NAME' 's3::deltars/simple'".to_string();
     let options = match context.integration {
-        StorageIntegration::Amazon => format!("'AWS_ALLOW_HTTP' '1', {dynamo_lock_option}"),
+        StorageIntegration::Amazon => format!("'AWS_STORAGE_ALLOW_HTTP' '1', {dynamo_lock_option}"),
         StorageIntegration::Microsoft => {
-            format!("'AZURE_ALLOW_HTTP' '1', {dynamo_lock_option}")
+            format!("'AZURE_STORAGE_ALLOW_HTTP' '1', {dynamo_lock_option}")
         }
         _ => dynamo_lock_option,
     };
