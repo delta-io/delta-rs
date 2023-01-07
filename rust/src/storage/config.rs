@@ -43,10 +43,9 @@ impl StorageOptions {
 
     /// Denotes if unsecure connections are configures to be allowed
     pub fn allow_http(&self) -> bool {
-        self.0
-            .get("allow_http")
-            .map(|val| str_is_truthy(val))
-            .unwrap_or(false)
+        self.0.iter().any(|(key, value)| {
+            key.to_ascii_lowercase().contains("allow_http") & str_is_truthy(value)
+        })
     }
 
     /// Subset of options relevant for azure storage
