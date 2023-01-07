@@ -535,7 +535,11 @@ fn try_create_lock_client(options: &S3StorageOptions) -> Result<Option<S3LockCli
 }
 
 fn str_is_truthy(val: &str) -> bool {
-    val == "1" || val.to_lowercase() == "true" || val.to_lowercase() == "on"
+    val.eq_ignore_ascii_case("1")
+        | val.eq_ignore_ascii_case("true")
+        | val.eq_ignore_ascii_case("on")
+        | val.eq_ignore_ascii_case("yes")
+        | val.eq_ignore_ascii_case("y")
 }
 
 #[cfg(test)]

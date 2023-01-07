@@ -6,7 +6,7 @@ pub mod utils;
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 pub mod s3;
 
-use crate::builder::StorageUrl;
+use crate::builder::StorageLocation;
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt, TryStreamExt};
 use lazy_static::lazy_static;
@@ -32,54 +32,6 @@ lazy_static! {
 /// Sharable reference to [`DeltaObjectStore`]
 pub type ObjectStoreRef = Arc<DeltaObjectStore>;
 
-/// Configuration for a DeltaObjectStore
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub(crate) struct DeltaObjectStoreConfig {
-    pub(crate) storage_url: StorageUrl,
-}
-
-impl DeltaObjectStoreConfig {
-    /// Create a new [DeltaObjectStoreConfig]
-    pub fn new(storage_url: StorageUrl) -> Self {
-        Self { storage_url }
-    }
-
-    /// Prefix a path with the table root path
-    fn full_path(&self, location: &Path) -> ObjectStoreResult<Path> {
-        let path: &str = location.as_ref();
-        let stripped = match self.storage_url.prefix.as_ref() {
-            "" => path.to_string(),
-            p => format!("{}/{}", p, path),
-        };
-        Ok(Path::parse(stripped.trim_end_matches(DELIMITER))?)
-    }
-
-    fn strip_prefix(&self, path: &Path) -> Option<Path> {
-        let path: &str = path.as_ref();
-        let stripped = match self.storage_url.prefix.as_ref() {
-            "" => path,
-            p => path.strip_prefix(p)?.strip_prefix(DELIMITER)?,
-        };
-        Path::parse(stripped).ok()
-    }
-
-    /// convert a table [Path] to a fully qualified uri
-    pub fn to_uri(&self, location: &Path) -> String {
-        let uri = match self.storage_url.scheme() {
-            "file" | "" => {
-                // On windows the drive (e.g. 'c:') is part of root and must not be prefixed.
-                #[cfg(windows)]
-                let os_uri = format!("{}/{}", self.storage_url.prefix, location.as_ref());
-                #[cfg(unix)]
-                let os_uri = format!("/{}/{}", self.storage_url.prefix, location.as_ref());
-                os_uri
-            }
-            _ => format!("{}/{}", self.storage_url.as_str(), location.as_ref()),
-        };
-        uri.trim_end_matches('/').into()
-    }
-}
-
 /// Object Store implementation for DeltaTable.
 ///
 /// The [DeltaObjectStore] implements the [object_store::ObjectStore] trait to facilitate
@@ -91,7 +43,7 @@ impl DeltaObjectStoreConfig {
 #[derive(Debug, Clone)]
 pub struct DeltaObjectStore {
     storage: Arc<DynObjectStore>,
-    config: DeltaObjectStoreConfig,
+    location: StorageLocation,
 }
 
 impl Serialize for DeltaObjectStore {
@@ -99,7 +51,7 @@ impl Serialize for DeltaObjectStore {
     where
         S: Serializer,
     {
-        self.config.serialize(serializer)
+        self.location.serialize(serializer)
     }
 }
 
@@ -108,29 +60,34 @@ impl<'de> Deserialize<'de> for DeltaObjectStore {
     where
         D: Deserializer<'de>,
     {
-        let config = DeltaObjectStoreConfig::deserialize(deserializer)?;
+        let config = StorageLocation::deserialize(deserializer)?;
         let (storage, storage_url) = get_storage_backend(
-            config.storage_url.as_str(),
+            config.clone(),
             None,       // TODO: config options
             Some(true), // TODO: this isn't preserved after builder stage
         )
         .map_err(|_| D::Error::missing_field("storage"))?;
         let storage = Arc::new(DeltaObjectStore::new(storage_url, storage));
-        Ok(DeltaObjectStore { storage, config })
+        Ok(DeltaObjectStore {
+            storage,
+            location: config,
+        })
     }
 }
 
 impl std::fmt::Display for DeltaObjectStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "DeltaObjectStore({})", self.config.storage_url.as_str())
+        write!(f, "DeltaObjectStore({})", self.location.as_ref())
     }
 }
 
 impl DeltaObjectStore {
     /// Create new DeltaObjectStore
-    pub fn new(storage_url: StorageUrl, storage: Arc<DynObjectStore>) -> Self {
-        let config = DeltaObjectStoreConfig::new(storage_url);
-        Self { storage, config }
+    pub fn new(storage_url: StorageLocation, storage: Arc<DynObjectStore>) -> Self {
+        Self {
+            storage,
+            location: storage_url,
+        }
     }
 
     /// Get a reference to the underlying storage backend
@@ -140,7 +97,7 @@ impl DeltaObjectStore {
 
     /// Get fully qualified uri for table root
     pub fn root_uri(&self) -> String {
-        self.config.to_uri(&Path::from(""))
+        self.location.to_uri(&Path::from(""))
     }
 
     #[cfg(feature = "datafusion")]
@@ -152,8 +109,7 @@ impl DeltaObjectStore {
             "delta-rs://{}",
             // NOTE We need to also replace colons, but its fine, since it just needs
             // to be a unique-ish identifier for the object store in datafusion
-            self.config
-                .storage_url
+            self.location
                 .prefix
                 .as_ref()
                 .replace(DELIMITER, "-")
@@ -169,7 +125,7 @@ impl DeltaObjectStore {
 
     /// [Path] to Delta log
     pub fn to_uri(&self, location: &Path) -> String {
-        self.config.to_uri(location)
+        self.location.to_uri(location)
     }
 
     /// Deletes object by `paths`.
@@ -204,31 +160,31 @@ impl DeltaObjectStore {
 impl ObjectStore for DeltaObjectStore {
     /// Save the provided bytes to the specified location.
     async fn put(&self, location: &Path, bytes: Bytes) -> ObjectStoreResult<()> {
-        let full_path = self.config.full_path(location)?;
+        let full_path = self.location.full_path(location);
         self.storage.put(&full_path, bytes).await
     }
 
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
-        let full_path = self.config.full_path(location)?;
+        let full_path = self.location.full_path(location);
         self.storage.get(&full_path).await
     }
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte range
     async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
-        let full_path = self.config.full_path(location)?;
+        let full_path = self.location.full_path(location);
         object_store::ObjectStore::get_range(self.storage.as_ref(), &full_path, range).await
     }
 
     /// Return the metadata for the specified location
     async fn head(&self, location: &Path) -> ObjectStoreResult<ObjectMeta> {
-        let full_path = self.config.full_path(location)?;
+        let full_path = self.location.full_path(location);
         self.storage.head(&full_path).await.map(|meta| ObjectMeta {
             last_modified: meta.last_modified,
             size: meta.size,
             location: self
-                .config
+                .location
                 .strip_prefix(&meta.location)
                 .unwrap_or(meta.location),
         })
@@ -236,7 +192,7 @@ impl ObjectStore for DeltaObjectStore {
 
     /// Delete the object at the specified location.
     async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
-        let full_path = self.config.full_path(location)?;
+        let full_path = self.location.full_path(location);
         self.storage.delete(&full_path).await
     }
 
@@ -248,18 +204,18 @@ impl ObjectStore for DeltaObjectStore {
         &self,
         prefix: Option<&Path>,
     ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
-        let prefix = prefix.and_then(|p| self.config.full_path(p).ok());
+        let prefix = prefix.map(|p| self.location.full_path(p));
         Ok(self
             .storage
             .list(Some(
-                &prefix.unwrap_or_else(|| self.config.storage_url.prefix.clone()),
+                &prefix.unwrap_or_else(|| self.location.prefix.clone()),
             ))
             .await?
             .map_ok(|meta| ObjectMeta {
                 last_modified: meta.last_modified,
                 size: meta.size,
                 location: self
-                    .config
+                    .location
                     .strip_prefix(&meta.location)
                     .unwrap_or(meta.location),
             })
@@ -273,17 +229,17 @@ impl ObjectStore for DeltaObjectStore {
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`.
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {
-        let prefix = prefix.and_then(|p| self.config.full_path(p).ok());
+        let prefix = prefix.map(|p| self.location.full_path(p));
         self.storage
             .list_with_delimiter(Some(
-                &prefix.unwrap_or_else(|| self.config.storage_url.prefix.clone()),
+                &prefix.unwrap_or_else(|| self.location.prefix.clone()),
             ))
             .await
             .map(|lst| ListResult {
                 common_prefixes: lst
                     .common_prefixes
                     .iter()
-                    .map(|p| self.config.strip_prefix(p).unwrap_or_else(|| p.clone()))
+                    .map(|p| self.location.strip_prefix(p).unwrap_or_else(|| p.clone()))
                     .collect(),
                 objects: lst
                     .objects
@@ -292,7 +248,7 @@ impl ObjectStore for DeltaObjectStore {
                         last_modified: meta.last_modified,
                         size: meta.size,
                         location: self
-                            .config
+                            .location
                             .strip_prefix(&meta.location)
                             .unwrap_or_else(|| meta.location.clone()),
                     })
@@ -304,8 +260,8 @@ impl ObjectStore for DeltaObjectStore {
     ///
     /// If there exists an object at the destination, it will be overwritten.
     async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        let full_from = self.config.full_path(from)?;
-        let full_to = self.config.full_path(to)?;
+        let full_from = self.location.full_path(from);
+        let full_to = self.location.full_path(to);
         self.storage.copy(&full_from, &full_to).await
     }
 
@@ -313,8 +269,8 @@ impl ObjectStore for DeltaObjectStore {
     ///
     /// Will return an error if the destination already has an object.
     async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        let full_from = self.config.full_path(from)?;
-        let full_to = self.config.full_path(to)?;
+        let full_from = self.location.full_path(from);
+        let full_to = self.location.full_path(to);
         self.storage.copy_if_not_exists(&full_from, &full_to).await
     }
 
@@ -322,8 +278,8 @@ impl ObjectStore for DeltaObjectStore {
     ///
     /// Will return an error if the destination already has an object.
     async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        let full_from = self.config.full_path(from)?;
-        let full_to = self.config.full_path(to)?;
+        let full_from = self.location.full_path(from);
+        let full_to = self.location.full_path(to);
         self.storage
             .rename_if_not_exists(&full_from, &full_to)
             .await
@@ -333,7 +289,7 @@ impl ObjectStore for DeltaObjectStore {
         &self,
         location: &Path,
     ) -> ObjectStoreResult<(MultipartId, Box<dyn AsyncWrite + Unpin + Send>)> {
-        let full_path = self.config.full_path(location)?;
+        let full_path = self.location.full_path(location);
         self.storage.put_multipart(&full_path).await
     }
 
@@ -342,21 +298,7 @@ impl ObjectStore for DeltaObjectStore {
         location: &Path,
         multipart_id: &MultipartId,
     ) -> ObjectStoreResult<()> {
-        let full_path = self.config.full_path(location)?;
+        let full_path = self.location.full_path(location);
         self.storage.abort_multipart(&full_path, multipart_id).await
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn path_handling() {
-        let storage_url = StorageUrl::parse("s3://bucket").unwrap();
-        let file_with_delimiter = Path::from_iter(["a", "b/c", "foo.file"]);
-        let config = DeltaObjectStoreConfig::new(storage_url);
-        let added = config.full_path(&file_with_delimiter).unwrap();
-        assert_eq!(file_with_delimiter, added)
     }
 }

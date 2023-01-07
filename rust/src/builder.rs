@@ -248,7 +248,7 @@ impl DeltaTableBuilder {
                 }
                 let url = Url::parse(uri.as_str())
                     .map_err(|_| DeltaTableError::Generic(format!("Can't parse uri: {}", uri)))?;
-                let url = StorageUrl::new(url);
+                let url = StorageLocation::new(url);
                 (store, url)
             }
             None => get_storage_backend(
@@ -281,14 +281,14 @@ impl DeltaTableBuilder {
 /// A parsed URL identifying a storage location
 /// for more information on the supported expressions
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StorageUrl {
+pub struct StorageLocation {
     /// A URL that identifies a file or directory to list files from
     pub(crate) url: Url,
     /// The path prefix
     pub(crate) prefix: Path,
 }
 
-impl Serialize for StorageUrl {
+impl Serialize for StorageLocation {
     fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
     where
         S: Serializer,
@@ -300,20 +300,20 @@ impl Serialize for StorageUrl {
     }
 }
 
-impl<'de> Deserialize<'de> for StorageUrl {
+impl<'de> Deserialize<'de> for StorageLocation {
     fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
     where
         D: Deserializer<'de>,
     {
-        struct StorageUrlVisitor {}
-        impl<'de> Visitor<'de> for StorageUrlVisitor {
-            type Value = StorageUrl;
+        struct StorageLocationVisitor {}
+        impl<'de> Visitor<'de> for StorageLocationVisitor {
+            type Value = StorageLocation;
 
             fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
                 formatter.write_str("struct StorageUrl")
             }
 
-            fn visit_seq<V>(self, mut seq: V) -> Result<StorageUrl, V::Error>
+            fn visit_seq<V>(self, mut seq: V) -> Result<StorageLocation, V::Error>
             where
                 V: SeqAccess<'de>,
             {
@@ -325,15 +325,15 @@ impl<'de> Deserialize<'de> for StorageUrl {
                     .ok_or_else(|| V::Error::invalid_length(1, &self))?;
                 let url = Url::parse(url).map_err(|_| V::Error::missing_field("url"))?;
                 let prefix = Path::parse(prefix).map_err(|_| V::Error::missing_field("prefix"))?;
-                let url = StorageUrl { url, prefix };
+                let url = StorageLocation { url, prefix };
                 Ok(url)
             }
         }
-        deserializer.deserialize_seq(StorageUrlVisitor {})
+        deserializer.deserialize_seq(StorageLocationVisitor {})
     }
 }
 
-impl StorageUrl {
+impl StorageLocation {
     /// Parse a provided string as a `StorageUrl`
     ///
     /// # Paths without a Scheme
@@ -422,25 +422,46 @@ impl StorageUrl {
     }
 
     /// Returns the URL scheme
-    pub(crate) fn scheme(&self) -> &str {
+    pub fn scheme(&self) -> &str {
         self.url.scheme()
     }
 
-    /// Returns this [`StorageUrl`] as a string
-    pub(crate) fn as_str(&self) -> &str {
-        self.as_ref()
+    /// Create the full path from a path relative to prefix
+    pub fn full_path(&self, location: &Path) -> Path {
+        self.prefix.parts().chain(location.parts()).collect()
+    }
+
+    /// Strip the constant prefix from a given path
+    pub fn strip_prefix(&self, path: &Path) -> Option<Path> {
+        Some(path.prefix_match(&self.prefix)?.collect())
+    }
+
+    /// convert a table [Path] to a fully qualified uri
+    pub fn to_uri(&self, location: &Path) -> String {
+        let uri = match self.scheme() {
+            "file" | "" => {
+                // On windows the drive (e.g. 'c:') is part of root and must not be prefixed.
+                #[cfg(windows)]
+                let os_uri = format!("{}/{}", self.prefix, location.as_ref());
+                #[cfg(unix)]
+                let os_uri = format!("/{}/{}", self.prefix, location.as_ref());
+                os_uri
+            }
+            _ => format!("{}/{}", self.as_ref(), location.as_ref()),
+        };
+        uri.trim_end_matches('/').into()
     }
 }
 
-impl AsRef<str> for StorageUrl {
+impl AsRef<str> for StorageLocation {
     fn as_ref(&self) -> &str {
         self.url.as_ref()
     }
 }
 
-impl std::fmt::Display for StorageUrl {
+impl std::fmt::Display for StorageLocation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.as_str().fmt(f)
+        self.as_ref().fmt(f)
     }
 }
 
@@ -483,8 +504,8 @@ pub(crate) fn get_storage_backend(
     // annotation needed for some feature builds
     #[allow(unused_variables)] options: Option<HashMap<String, String>>,
     #[allow(unused_variables)] allow_http: Option<bool>,
-) -> DeltaResult<(Arc<DynObjectStore>, StorageUrl)> {
-    let storage_url = StorageUrl::parse(table_uri)?;
+) -> DeltaResult<(Arc<DynObjectStore>, StorageLocation)> {
+    let storage_url = StorageLocation::parse(table_uri)?;
     let mut options = options.unwrap_or_default();
     if let Some(allow) = allow_http {
         options.insert(
