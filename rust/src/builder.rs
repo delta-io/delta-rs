@@ -328,11 +328,13 @@ pub(crate) fn get_storage_backend(
             let store = AmazonS3Builder::new()
                 .with_url(storage_url.as_ref())
                 .try_with_options(&_options.as_s3_options())?
+                .with_allow_http(_options.allow_http())
                 .build()
                 .or_else(|_| {
                     AmazonS3Builder::from_env()
                         .with_url(storage_url.as_ref())
                         .try_with_options(&_options.as_s3_options())?
+                        .with_allow_http(_options.allow_http())
                         .build()
                 })?;
             Ok((
@@ -354,11 +356,13 @@ pub(crate) fn get_storage_backend(
             let store = MicrosoftAzureBuilder::new()
                 .with_url(storage_url.as_ref())
                 .try_with_options(&_options.as_azure_options())?
+                .with_allow_http(_options.allow_http())
                 .build()
                 .or_else(|_| {
                     MicrosoftAzureBuilder::from_env()
                         .with_url(storage_url.as_ref())
                         .try_with_options(&_options.as_azure_options())?
+                        .with_allow_http(_options.allow_http())
                         .build()
                 })?;
             Ok((Arc::new(store), storage_url))

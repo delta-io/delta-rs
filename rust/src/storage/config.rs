@@ -41,6 +41,13 @@ impl StorageOptions {
         Self(options)
     }
 
+    pub fn allow_http(&self) -> bool {
+        self.0
+            .get("allow_http")
+            .map(|val| str_is_truthy(val))
+            .unwrap_or(false)
+    }
+
     /// Subset of options relevant for azure storage
     #[cfg(feature = "azure")]
     pub fn as_azure_options(&self) -> HashMap<AzureConfigKey, String> {
@@ -263,4 +270,12 @@ impl<'de> Deserialize<'de> for StorageLocation {
         }
         deserializer.deserialize_seq(StorageLocationVisitor {})
     }
+}
+
+pub(crate) fn str_is_truthy(val: &str) -> bool {
+    val.eq_ignore_ascii_case("1")
+        | val.eq_ignore_ascii_case("true")
+        | val.eq_ignore_ascii_case("on")
+        | val.eq_ignore_ascii_case("yes")
+        | val.eq_ignore_ascii_case("y")
 }
