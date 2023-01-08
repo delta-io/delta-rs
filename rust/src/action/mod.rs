@@ -510,9 +510,11 @@ impl DeltaOperation {
 
         if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(self) {
             let all_operation_fields = map.values().next().unwrap().as_object().unwrap();
-            let converted_operation_fields: Map<String, Value> = all_operation_fields.iter()
+            let converted_operation_fields: Map<String, Value> = all_operation_fields
+                .iter()
                 .filter(|item| !item.1.is_null())
-                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.to_string()))).collect();
+                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.to_string())))
+                .collect();
 
             commit_info.insert(
                 "operationParameters".to_string(),
