@@ -31,7 +31,8 @@ def test_read_files(s3_localstack):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
-def test_s3_authenticated_read_write(s3_localstack_creds):
+def test_s3_authenticated_read_write(s3_localstack_creds, monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     # Create unauthenticated handler
     storage_handler = DeltaStorageHandler(
         "s3://deltars/",
