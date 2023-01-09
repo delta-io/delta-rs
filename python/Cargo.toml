@@ -17,7 +17,7 @@ crate-type = ["cdylib"]
 name = "deltalake._internal"
 
 [dependencies]
-arrow-schema = { version = "28", features = ["serde"] }
+arrow-schema = { version = "30", features = ["serde"] }
 chrono = "0"
 env_logger = "0"
 futures = "0.3"
