@@ -324,7 +324,6 @@ pub(crate) fn get_storage_backend(
         ObjectStoreKind::InMemory => Ok((Arc::new(InMemory::new()), storage_url)),
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
         ObjectStoreKind::S3 => {
-            // TODO add custom options currently used in delta-rs
             let store = AmazonS3Builder::new()
                 .with_url(storage_url.as_ref())
                 .try_with_options(&_options.as_s3_options())?
@@ -340,7 +339,7 @@ pub(crate) fn get_storage_backend(
             Ok((
                 Arc::new(S3StorageBackend::try_new(
                     Arc::new(store),
-                    S3StorageOptions::from_map(_options.0),
+                    S3StorageOptions::from_map(&_options.0),
                 )?),
                 storage_url,
             ))
