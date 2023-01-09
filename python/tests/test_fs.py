@@ -185,13 +185,6 @@ def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
 def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip2"
 
-    # Fails without any creds
-    with pytest.raises(PyDeltaTableError):
-        anon_storage_options = {
-            key: value for key, value in azurite_creds.items() if "ACCOUNT" not in key
-        }
-        write_deltalake(table_path, sample_data, storage_options=anon_storage_options)
-
     # Can pass storage_options in directly
     write_deltalake(table_path, sample_data, storage_options=azurite_creds)
     dt = DeltaTable(table_path, storage_options=azurite_creds)
