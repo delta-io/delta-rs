@@ -29,7 +29,7 @@ To load the current version, use the constructor:
     >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0")
 
 Depending on your storage backend, you could use the ``storage_options`` parameter to provide some configuration.
-Configuration is defined for specific backends - `s3 options`_, `azure options`_.
+Configuration is defined for specific backends - `s3 options`_, `azure options`_, `gcs options`_.
 
 .. code-block:: python
 
@@ -70,8 +70,9 @@ For AWS Glue catalog, use AWS environment variables to authenticate.
     >>> dt.to_pyarrow_table().to_pydict()
     {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
 
-.. _`s3 options`: https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L423-L491
-.. _`azure options`: https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L524-L539
+.. _`s3 options`: https://docs.rs/object_store/0.5.3/object_store/aws/enum.AmazonS3ConfigKey.html#variants
+.. _`azure options`: https://docs.rs/object_store/0.5.3/object_store/azure/enum.AzureConfigKey.html#variants
+.. _`gcs options`: https://docs.rs/object_store/0.5.3/object_store/gcp/enum.GoogleConfigKey.html#variants
 
 Custom Storage Backends
 ~~~~~~~~~~~~~~~~~~~~~~~
