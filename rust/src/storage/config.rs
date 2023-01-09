@@ -63,28 +63,13 @@ impl StorageOptions {
     /// Subset of options relevant for s3 storage
     #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     pub fn as_s3_options(&self) -> HashMap<AmazonS3ConfigKey, String> {
-        let mut config = self
-            .0
+        self.0
             .iter()
             .filter_map(|(key, value)| {
                 let s3_key = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()).ok()?;
                 Some((s3_key, value.clone()))
             })
-            .collect::<HashMap<_, _>>();
-        if let Ok(region) = std::env::var("AWS_REGION") {
-            config.entry(AmazonS3ConfigKey::Region).or_insert(region);
-        }
-        if let Ok(region) = std::env::var("AWS_DEFAULT_REGION") {
-            config
-                .entry(AmazonS3ConfigKey::DefaultRegion)
-                .or_insert(region);
-        }
-        if !(config.contains_key(&AmazonS3ConfigKey::DefaultRegion)
-            | config.contains_key(&AmazonS3ConfigKey::Region))
-        {
-            config.insert(AmazonS3ConfigKey::DefaultRegion, "us-east-1".into());
-        }
-        config
+            .collect()
     }
 
     /// Subset of options relevant for gcs storage
