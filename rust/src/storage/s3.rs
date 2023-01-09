@@ -263,7 +263,7 @@ impl S3StorageOptions {
         Self::ensure_env_var(options, s3_storage_options::AWS_ROLE_ARN);
         Self::ensure_env_var(options, s3_storage_options::AWS_ROLE_SESSION_NAME);
 
-        let endpoint_url = str_option(&options, s3_storage_options::AWS_ENDPOINT_URL);
+        let endpoint_url = str_option(options, s3_storage_options::AWS_ENDPOINT_URL);
         let region = if let Some(endpoint_url) = endpoint_url.as_ref() {
             Region::Custom {
                 name: Self::str_or_default(
@@ -276,7 +276,7 @@ impl S3StorageOptions {
         } else {
             Region::default()
         };
-        let profile = str_option(&options, s3_storage_options::AWS_PROFILE);
+        let profile = str_option(options, s3_storage_options::AWS_PROFILE);
 
         let s3_pool_idle_timeout = Self::u64_or_default(
             options,
@@ -316,7 +316,7 @@ impl S3StorageOptions {
             locking_provider: str_option(options, s3_storage_options::AWS_S3_LOCKING_PROVIDER),
             assume_role_arn: str_option(options, s3_storage_options::AWS_S3_ASSUME_ROLE_ARN),
             assume_role_session_name: str_option(
-                &options,
+                options,
                 s3_storage_options::AWS_S3_ROLE_SESSION_NAME,
             ),
             use_web_identity: std::env::var(s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE)
