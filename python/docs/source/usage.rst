@@ -70,9 +70,9 @@ For AWS Glue catalog, use AWS environment variables to authenticate.
     >>> dt.to_pyarrow_table().to_pydict()
     {'id': [5, 7, 9, 5, 6, 7, 8, 9]}
 
-.. _`s3 options`: https://docs.rs/object_store/0.5.3/object_store/aws/enum.AmazonS3ConfigKey.html#variants
-.. _`azure options`: https://docs.rs/object_store/0.5.3/object_store/azure/enum.AzureConfigKey.html#variants
-.. _`gcs options`: https://docs.rs/object_store/0.5.3/object_store/gcp/enum.GoogleConfigKey.html#variants
+.. _`s3 options`: https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants
+.. _`azure options`: https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants
+.. _`gcs options`: https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants
 
 Custom Storage Backends
 ~~~~~~~~~~~~~~~~~~~~~~~
