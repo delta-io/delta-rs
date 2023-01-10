@@ -198,9 +198,9 @@ impl DeltaTableBuilder {
     /// Options may be passed in the HashMap or set as environment variables. See documentation of
     /// underlying object store implementation for details.
     ///
-    /// - [Azure options](https://docs.rs/object_store/0.5.3/object_store/azure/enum.AzureConfigKey.html#variants)
-    /// - [S3 options](https://docs.rs/object_store/0.5.3/object_store/aws/enum.AmazonS3ConfigKey.html#variants)
-    /// - [Google options](https://docs.rs/object_store/0.5.3/object_store/gcp/enum.GoogleConfigKey.html#variants)
+    /// - [Azure options](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants)
+    /// - [S3 options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants)
+    /// - [Google options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants)
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
         self
