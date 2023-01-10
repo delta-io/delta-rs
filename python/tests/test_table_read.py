@@ -295,9 +295,9 @@ def test_add_actions_table(flatten: bool):
     )
 
     if flatten:
-        partition_year = actions_df["partition_year"]
-        partition_month = actions_df["partition_month"]
-        partition_day = actions_df["partition_day"]
+        partition_year = actions_df["partition.year"]
+        partition_month = actions_df["partition.month"]
+        partition_day = actions_df["partition.day"]
     else:
         partition_year = actions_df["partition_values"].field("year")
         partition_month = actions_df["partition_values"].field("month")
