@@ -134,9 +134,9 @@ jobs:
           override: true
           components: rustfmt, clippy
 
-      - uses: Swatinem/rust-cache@v1
+      - uses: Swatinem/rust-cache@v2
 
-      - uses: actions/setup-python@v3
+      - uses: actions/setup-python@v4
         with:
           python-version: "3.10"
       
@@ -149,7 +149,7 @@ jobs:
       
       # Download previous benchmark result from cache (if exists)
       - name: Download previous benchmark data
-        uses: actions/cache@v1
+        uses: actions/cache@v2
         with:
           path: ./cache
           key: ${{ runner.os }}-benchmark
@@ -163,7 +163,7 @@ jobs:
         uses: benchmark-action/github-action-benchmark@v1
         with:
           tool: 'pytest'
-          output-file-path: output.json
+          output-file-path: python/output.json
           external-data-json-path: ./cache/benchmark-data.json
           fail-on-alert: true
 
