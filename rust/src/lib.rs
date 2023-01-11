@@ -70,6 +70,7 @@
 
 #![deny(warnings)]
 #![deny(missing_docs)]
+#![allow(rustdoc::invalid_html_tags)]
 
 #[cfg(all(feature = "parquet", feature = "parquet2"))]
 compile_error!(
@@ -91,6 +92,9 @@ pub mod storage;
 pub mod table_properties;
 pub mod table_state;
 pub mod time_utils;
+
+#[cfg(all(feature = "arrow"))]
+pub mod table_state_arrow;
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod checkpoints;
