@@ -269,6 +269,45 @@ def test_history_partitioned_table_metadata():
     }
 
 
+@pytest.mark.parametrize("flatten", [True, False])
+def test_add_actions_table(flatten: bool):
+    table_path = "../rust/tests/data/delta-0.8.0-partitioned"
+    dt = DeltaTable(table_path)
+    actions_df = dt.get_add_actions(flatten)
+    # RecordBatch doesn't have a sort_by method yet
+    actions_df = pa.Table.from_batches([actions_df]).sort_by("path").to_batches()[0]
+
+    assert actions_df.num_rows == 6
+    assert actions_df["path"] == pa.array(
+        [
+            "year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet",
+            "year=2020/month=2/day=3/part-00000-94d16827-f2fd-42cd-a060-f67ccc63ced9.c000.snappy.parquet",
+            "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet",
+            "year=2021/month=12/day=20/part-00000-9275fdf4-3961-4184-baa0-1c8a2bb98104.c000.snappy.parquet",
+            "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
+            "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
+        ]
+    )
+    assert actions_df["size_bytes"] == pa.array([414, 414, 414, 407, 414, 414])
+    assert actions_df["data_change"] == pa.array([True] * 6)
+    assert actions_df["modification_time"] == pa.array(
+        [1615555646000] * 6, type=pa.timestamp("ms")
+    )
+
+    if flatten:
+        partition_year = actions_df["partition.year"]
+        partition_month = actions_df["partition.month"]
+        partition_day = actions_df["partition.day"]
+    else:
+        partition_year = actions_df["partition_values"].field("year")
+        partition_month = actions_df["partition_values"].field("month")
+        partition_day = actions_df["partition_values"].field("day")
+
+    assert partition_year == pa.array(["2020"] * 3 + ["2021"] * 3)
+    assert partition_month == pa.array(["1", "2", "2", "12", "12", "4"])
+    assert partition_day == pa.array(["1", "3", "5", "20", "4", "5"])
+
+
 def assert_correct_files(dt: DeltaTable, partition_filters, expected_paths):
     assert dt.files(partition_filters) == expected_paths
     absolute_paths = [os.path.join(dt.table_uri, path) for path in expected_paths]
