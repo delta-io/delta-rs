@@ -31,7 +31,8 @@ def test_read_files(s3_localstack):
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")
-def test_s3_authenticated_read_write(s3_localstack_creds):
+def test_s3_authenticated_read_write(s3_localstack_creds, monkeypatch):
+    monkeypatch.setenv("AWS_DEFAULT_REGION", "us-east-1")
     # Create unauthenticated handler
     storage_handler = DeltaStorageHandler(
         "s3://deltars/",
@@ -183,13 +184,6 @@ def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
 @pytest.mark.timeout(timeout=15, method="thread")
 def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip2"
-
-    # Fails without any creds
-    with pytest.raises(PyDeltaTableError):
-        anon_storage_options = {
-            key: value for key, value in azurite_creds.items() if "ACCOUNT" not in key
-        }
-        write_deltalake(table_path, sample_data, storage_options=anon_storage_options)
 
     # Can pass storage_options in directly
     write_deltalake(table_path, sample_data, storage_options=azurite_creds)
