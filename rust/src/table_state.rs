@@ -384,7 +384,6 @@ impl DeltaTableState {
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
 
     #[test]
     fn state_round_trip() {
