@@ -426,7 +426,7 @@ given filters.
         """
         self._table.update_incremental()
 
-    def create_checkpoint(self):
+    def create_checkpoint(self) -> None:
         self._table.create_checkpoint()
 
     def __stringify_partition_values(
