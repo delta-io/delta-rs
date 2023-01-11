@@ -96,7 +96,7 @@ pub struct StorageLocation {
 }
 
 impl StorageLocation {
-    /// Parse a provided string as a `StorageUrl`
+    /// Parse a provided string as a `StorageLocation`
     ///
     /// # Paths without a Scheme
     ///
