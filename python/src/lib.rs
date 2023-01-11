@@ -454,7 +454,7 @@ impl RawDeltaTable {
         Ok(())
     }
 
-    pub fn get_add_actions_df(&self) -> PyResult<PyArrowType<RecordBatch>> {
+    pub fn get_add_actions(&self, flatten: bool) -> PyResult<PyArrowType<RecordBatch>> {
         Ok(PyArrowType(
             self._table
                 .get_state()

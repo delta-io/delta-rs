@@ -273,7 +273,7 @@ def test_history_partitioned_table_metadata():
 def test_add_actions_table(flatten: bool):
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
-    actions_df = dt.get_add_actions_df(flatten)
+    actions_df = dt.get_add_actions(flatten)
     # RecordBatch doesn't have a sort_by method yet
     actions_df = pa.Table.from_batches([actions_df]).sort_by("path").to_batches()[0]
 

@@ -444,7 +444,7 @@ given filters.
             out.append((field, op, str_value))
         return out
 
-    def get_add_actions_df(self, flatten: bool = False) -> pyarrow.RecordBatch:
+    def get_add_actions(self, flatten: bool = False) -> pyarrow.RecordBatch:
         """
         Return a dataframe with all current add actions.
 
@@ -476,4 +476,4 @@ given filters.
         1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            3            1             0      6      6
         2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            1            1             0      4      4
         """
-        return self._table.get_add_actions_df(flatten)
+        return self._table.get_add_actions(flatten)
