@@ -12,6 +12,7 @@ use deltalake::action::{
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::builder::DeltaTableBuilder;
+use deltalake::checkpoints::create_checkpoint;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
@@ -63,6 +64,10 @@ impl PyDeltaTableError {
 
     fn from_chrono(err: chrono::ParseError) -> pyo3::PyErr {
         PyDeltaTableError::new_err(format!("Parse date and time string failed: {}", err))
+    }
+
+    fn from_checkpoint(err: deltalake::checkpoints::CheckpointError) -> pyo3::PyErr {
+        PyDeltaTableError::new_err(err.to_string())
     }
 }
 
@@ -439,6 +444,14 @@ impl RawDeltaTable {
             rt: Arc::new(rt()?),
             config: self._config.clone(),
         })
+    }
+
+    pub fn create_checkpoint(&self) -> PyResult<()> {
+        rt()?
+            .block_on(create_checkpoint(&self._table))
+            .map_err(PyDeltaTableError::from_checkpoint)?;
+
+        Ok(())
     }
 }
 

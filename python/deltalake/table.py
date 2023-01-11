@@ -426,6 +426,9 @@ given filters.
         """
         self._table.update_incremental()
 
+    def create_checkpoint(self) -> None:
+        self._table.create_checkpoint()
+
     def __stringify_partition_values(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]]
     ) -> Optional[List[Tuple[str, str, Union[str, List[str]]]]]:
