@@ -1,11 +1,11 @@
 //! Create or load DeltaTables
 
 use std::collections::HashMap;
-use std::fmt;
 use std::sync::Arc;
 
 use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
 use crate::schema::DeltaDataTypeVersion;
+use crate::storage::config::{StorageLocation, StorageOptions};
 use crate::storage::file::FileStorageBackend;
 use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 
@@ -13,20 +13,17 @@ use chrono::{DateTime, FixedOffset, Utc};
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::{DynObjectStore, Error as ObjectStoreError, Result as ObjectStoreResult};
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 use crate::storage::s3::{S3StorageBackend, S3StorageOptions};
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
 use object_store::aws::AmazonS3Builder;
-use serde::de::{Error, SeqAccess, Visitor};
-use serde::ser::SerializeSeq;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
-
 #[cfg(feature = "azure")]
-mod azure;
+use object_store::azure::MicrosoftAzureBuilder;
 #[cfg(feature = "gcs")]
-mod google;
+use object_store::gcp::GoogleCloudStorageBuilder;
 
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
@@ -39,6 +36,8 @@ enum BuilderError {
     MissingCredential,
     #[error("Failed to decode SAS key: {0}\nSAS keys must be percent-encoded. They come encoded in the Azure portal and Azure Storage Explorer.")]
     Decode(String),
+    #[error("Delta-rs must be build with feature '{feature}' to support url: {url}.")]
+    MissingFeature { feature: &'static str, url: String },
 }
 
 impl From<BuilderError> for DeltaTableError {
@@ -196,10 +195,12 @@ impl DeltaTableBuilder {
 
     /// Set options used to initialize storage backend
     ///
-    /// Options may be passed in the HashMap or set as environment variables.
+    /// Options may be passed in the HashMap or set as environment variables. See documentation of
+    /// underlying object store implementation for details.
     ///
-    /// [s3_storage_options] describes the available options for the AWS or S3-compliant backend.
-    /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
+    /// - [Azure options](https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants)
+    /// - [S3 options](https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants)
+    /// - [Google options](https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants)
     pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
         self.storage_options = Some(storage_options);
         self
@@ -241,7 +242,7 @@ impl DeltaTableBuilder {
                 }
                 let url = Url::parse(uri.as_str())
                     .map_err(|_| DeltaTableError::Generic(format!("Can't parse uri: {}", uri)))?;
-                let url = StorageUrl::new(url);
+                let url = StorageLocation::new(url);
                 (store, url)
             }
             None => get_storage_backend(
@@ -271,213 +272,36 @@ impl DeltaTableBuilder {
     }
 }
 
-/// Well known storage services
-pub enum StorageService {
-    /// Local filesystem storage
+enum ObjectStoreKind {
     Local,
-    /// S3 compliant service
+    InMemory,
     S3,
-    /// Azure blob service
+    Google,
     Azure,
-    /// Google cloud storage
-    GCS,
-    /// In-memory table
-    Memory,
-    /// Unrecognized service
-    Unknown,
 }
 
-/// A parsed URL identifying a storage location
-/// for more information on the supported expressions
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StorageUrl {
-    /// A URL that identifies a file or directory to list files from
-    pub(crate) url: Url,
-    /// The path prefix
-    pub(crate) prefix: Path,
-}
-
-impl Serialize for StorageUrl {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(None)?;
-        seq.serialize_element(self.url.as_str())?;
-        seq.serialize_element(&self.prefix.to_string())?;
-        seq.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for StorageUrl {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct StorageUrlVisitor {}
-        impl<'de> Visitor<'de> for StorageUrlVisitor {
-            type Value = StorageUrl;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("struct StorageUrl")
+impl ObjectStoreKind {
+    pub fn parse_url(url: &Url) -> ObjectStoreResult<Self> {
+        match url.scheme() {
+            "file" => Ok(ObjectStoreKind::Local),
+            "memory" => Ok(ObjectStoreKind::InMemory),
+            "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => Ok(ObjectStoreKind::Azure),
+            "s3" | "s3a" => Ok(ObjectStoreKind::S3),
+            "gs" => Ok(ObjectStoreKind::Google),
+            "https" => {
+                let host = url.host_str().unwrap_or_default();
+                if host.contains("amazonaws.com") {
+                    Ok(ObjectStoreKind::S3)
+                } else if host.contains("dfs.core.windows.net")
+                    || host.contains("blob.core.windows.net")
+                {
+                    Ok(ObjectStoreKind::Azure)
+                } else {
+                    Err(ObjectStoreError::NotImplemented)
+                }
             }
-
-            fn visit_seq<V>(self, mut seq: V) -> Result<StorageUrl, V::Error>
-            where
-                V: SeqAccess<'de>,
-            {
-                let url = seq
-                    .next_element()?
-                    .ok_or_else(|| V::Error::invalid_length(0, &self))?;
-                let prefix: &str = seq
-                    .next_element()?
-                    .ok_or_else(|| V::Error::invalid_length(1, &self))?;
-                let url = Url::parse(url).map_err(|_| V::Error::missing_field("url"))?;
-                let prefix = Path::parse(prefix).map_err(|_| V::Error::missing_field("prefix"))?;
-                let url = StorageUrl { url, prefix };
-                Ok(url)
-            }
+            _ => Err(ObjectStoreError::NotImplemented),
         }
-        deserializer.deserialize_seq(StorageUrlVisitor {})
-    }
-}
-
-impl StorageUrl {
-    /// Parse a provided string as a `StorageUrl`
-    ///
-    /// # Paths without a Scheme
-    ///
-    /// If no scheme is provided, or the string is an absolute filesystem path
-    /// as determined [`std::path::Path::is_absolute`], the string will be
-    /// interpreted as a path on the local filesystem using the operating
-    /// system's standard path delimiter, i.e. `\` on Windows, `/` on Unix.
-    ///
-    /// Otherwise, the path will be resolved to an absolute path, returning
-    /// an error if it does not exist, and converted to a [file URI]
-    ///
-    /// If you wish to specify a path that does not exist on the local
-    /// machine you must provide it as a fully-qualified [file URI]
-    /// e.g. `file:///myfile.txt`
-    ///
-    /// [file URI]: https://en.wikipedia.org/wiki/File_URI_scheme
-    ///
-    /// # Well-known formats
-    ///
-    /// The lists below enumerates some well known uris, that are understood by the
-    /// parse function. We parse uris to refer to a specific storage location, which
-    /// is accessed using the internal storage backends.
-    ///
-    /// ## Azure
-    ///
-    /// URIs according to <https://github.com/fsspec/adlfs#filesystem-interface-to-azure-datalake-gen1-and-gen2-storage>:
-    ///
-    ///   * az://<container>/<path>
-    ///   * adl://<container>/<path>
-    ///   * abfs(s)://<container>/<path>
-    ///
-    /// URIs according to <https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri>:
-    ///   
-    ///   * abfs(s)://<file_system>@<account_name>.dfs.core.windows.net/<path>
-    ///
-    /// and a custom one
-    ///
-    ///   * azure://<container>/<path>
-    ///
-    /// ## S3
-    ///   * s3://<bucket>/<path>
-    ///   * s3a://<bucket>/<path>
-    ///
-    /// ## GCS
-    ///   * gs://<bucket>/<path>
-    pub fn parse(s: impl AsRef<str>) -> ObjectStoreResult<Self> {
-        let s = s.as_ref();
-
-        // This is necessary to handle the case of a path starting with a drive letter
-        if std::path::Path::new(s).is_absolute() {
-            return Self::parse_path(s);
-        }
-
-        match Url::parse(s) {
-            Ok(url) => Ok(Self::new(url)),
-            Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
-            Err(e) => Err(ObjectStoreError::Generic {
-                store: "DeltaObjectStore",
-                source: Box::new(e),
-            }),
-        }
-    }
-
-    /// Creates a new [`StorageUrl`] interpreting `s` as a filesystem path
-    fn parse_path(s: &str) -> ObjectStoreResult<Self> {
-        let path =
-            std::path::Path::new(s)
-                .canonicalize()
-                .map_err(|e| ObjectStoreError::Generic {
-                    store: "DeltaObjectStore",
-                    source: Box::new(e),
-                })?;
-        let url = match path.is_file() {
-            true => Url::from_file_path(path).unwrap(),
-            false => Url::from_directory_path(path).unwrap(),
-        };
-
-        Ok(Self::new(url))
-    }
-
-    /// Creates a new [`StorageUrl`] from a url
-    fn new(url: Url) -> Self {
-        let prefix = Path::parse(url.path()).expect("should be URL safe");
-        Self { url, prefix }
-    }
-
-    /// Returns the URL scheme
-    pub fn scheme(&self) -> &str {
-        self.url.scheme()
-    }
-
-    /// Returns the URL host
-    pub fn host(&self) -> Option<&str> {
-        self.url.host_str()
-    }
-
-    /// Returns the path prefix relative to location root
-    pub fn prefix(&self) -> Path {
-        self.prefix.clone()
-    }
-
-    /// Returns this [`StorageUrl`] as a string
-    pub fn as_str(&self) -> &str {
-        self.as_ref()
-    }
-
-    /// Returns the type of storage the URl refers to
-    pub fn service_type(&self) -> StorageService {
-        match self.url.scheme() {
-            "file" => StorageService::Local,
-            "az" | "abfs" | "abfss" | "adls2" | "azure" | "wasb" | "adl" => StorageService::Azure,
-            "s3" | "s3a" => StorageService::S3,
-            "gs" => StorageService::GCS,
-            "memory" => StorageService::Memory,
-            _ => StorageService::Unknown,
-        }
-    }
-}
-
-impl AsRef<str> for StorageUrl {
-    fn as_ref(&self) -> &str {
-        self.url.as_ref()
-    }
-}
-
-impl AsRef<Url> for StorageUrl {
-    fn as_ref(&self) -> &Url {
-        &self.url
-    }
-}
-
-impl std::fmt::Display for StorageUrl {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.as_str().fmt(f)
     }
 }
 
@@ -487,109 +311,90 @@ pub(crate) fn get_storage_backend(
     // annotation needed for some feature builds
     #[allow(unused_variables)] options: Option<HashMap<String, String>>,
     #[allow(unused_variables)] allow_http: Option<bool>,
-) -> DeltaResult<(Arc<DynObjectStore>, StorageUrl)> {
-    let storage_url = StorageUrl::parse(table_uri)?;
-    match storage_url.service_type() {
-        StorageService::Local => Ok((Arc::new(FileStorageBackend::new()), storage_url)),
-        StorageService::Memory => Ok((Arc::new(InMemory::new()), storage_url)),
+) -> DeltaResult<(Arc<DynObjectStore>, StorageLocation)> {
+    let storage_url = StorageLocation::parse(table_uri)?;
+    let mut options = options.unwrap_or_default();
+    if let Some(allow) = allow_http {
+        options.insert(
+            "allow_http".into(),
+            if allow { "true" } else { "false" }.into(),
+        );
+    }
+    let _options = StorageOptions::new(options);
+
+    match ObjectStoreKind::parse_url(&storage_url.url)? {
+        ObjectStoreKind::Local => Ok((Arc::new(FileStorageBackend::new()), storage_url)),
+        ObjectStoreKind::InMemory => Ok((Arc::new(InMemory::new()), storage_url)),
         #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-        StorageService::S3 => {
-            let url: &Url = storage_url.as_ref();
-            let bucket_name = url.host_str().ok_or(BuilderError::MissingHost {
-                backend: "S3".into(),
-                url: storage_url.to_string(),
-            })?;
-            let (mut builder, s3_options) =
-                get_s3_builder_from_options(options.unwrap_or_default());
-            builder = builder.with_bucket_name(bucket_name);
-            if let Some(allow) = allow_http {
-                builder = builder.with_allow_http(allow);
-            }
+        ObjectStoreKind::S3 => {
+            let store = AmazonS3Builder::new()
+                .with_url(storage_url.as_ref())
+                .try_with_options(&_options.as_s3_options())?
+                .with_allow_http(_options.allow_http())
+                .build()
+                .or_else(|_| {
+                    AmazonS3Builder::from_env()
+                        .with_url(storage_url.as_ref())
+                        .try_with_options(&_options.as_s3_options())?
+                        .with_allow_http(_options.allow_http())
+                        .build()
+                })?;
             Ok((
                 Arc::new(S3StorageBackend::try_new(
-                    Arc::new(builder.build()?),
-                    s3_options,
+                    Arc::new(store),
+                    S3StorageOptions::from_map(&_options.0),
                 )?),
                 storage_url,
             ))
         }
+        #[cfg(not(any(feature = "s3", feature = "s3-rustls")))]
+        ObjectStoreKind::S3 => Err(BuilderError::MissingFeature {
+            feature: "s3",
+            url: storage_url.as_ref().into(),
+        }
+        .into()),
         #[cfg(feature = "azure")]
-        StorageService::Azure => {
-            let (container_name, url_account) = match storage_url.scheme() {
-                "az" | "adl" | "azure" => {
-                    let container = storage_url.host().ok_or(BuilderError::MissingHost {
-                        backend: "Azure".into(),
-                        url: storage_url.to_string(),
-                    })?;
-                    (container.to_owned(), None)
-                }
-                "adls2" => {
-                    log::warn!("Support for the 'adls2' scheme is deprecated and will be removed in a future version. Use `az://<container>/<path>` instead.");
-                    let account = storage_url.host().ok_or(BuilderError::MissingHost {
-                        backend: "Azure".into(),
-                        url: storage_url.to_string(),
-                    })?;
-                    let container = storage_url
-                        .prefix
-                        .parts()
-                        .next()
-                        .ok_or(ObjectStoreError::NotImplemented)?
-                        .to_owned();
-                    (container.as_ref().to_string(), Some(account))
-                }
-                "abfs" | "abfss" => {
-                    // abfs(s) might refer to the fsspec convention abfs://<container>/<path>
-                    // or the convention for the hadoop driver abfs[s]://<file_system>@<account_name>.dfs.core.windows.net/<path>
-                    let url: &Url = storage_url.as_ref();
-                    if url.username().is_empty() {
-                        (
-                            url.host_str()
-                                .ok_or(BuilderError::MissingHost {
-                                    backend: "Azure".into(),
-                                    url: storage_url.to_string(),
-                                })?
-                                .to_string(),
-                            None,
-                        )
-                    } else {
-                        let parts: Vec<&str> = url
-                            .host_str()
-                            .ok_or(BuilderError::MissingHost {
-                                backend: "Azure".into(),
-                                url: storage_url.to_string(),
-                            })?
-                            .splitn(2, '.')
-                            .collect();
-                        if parts.len() != 2 {
-                            Err(ObjectStoreError::NotImplemented)
-                        } else {
-                            Ok((url.username().to_owned(), Some(parts[0])))
-                        }?
-                    }
-                }
-                _ => todo!(),
-            };
-            let mut options = options.unwrap_or_default();
-            if let Some(account) = url_account {
-                options.insert("account_name".into(), account.into());
-            }
-            let builder =
-                azure::AzureConfig::get_builder(&options)?.with_container_name(container_name);
-            Ok((Arc::new(builder.build()?), storage_url))
+        ObjectStoreKind::Azure => {
+            let store = MicrosoftAzureBuilder::new()
+                .with_url(storage_url.as_ref())
+                .try_with_options(&_options.as_azure_options())?
+                .with_allow_http(_options.allow_http())
+                .build()
+                .or_else(|_| {
+                    MicrosoftAzureBuilder::from_env()
+                        .with_url(storage_url.as_ref())
+                        .try_with_options(&_options.as_azure_options())?
+                        .with_allow_http(_options.allow_http())
+                        .build()
+                })?;
+            Ok((Arc::new(store), storage_url))
         }
+        #[cfg(not(feature = "azure"))]
+        ObjectStoreKind::Azure => Err(BuilderError::MissingFeature {
+            feature: "azure",
+            url: storage_url.as_ref().into(),
+        }
+        .into()),
         #[cfg(feature = "gcs")]
-        StorageService::GCS => {
-            let url: &Url = storage_url.as_ref();
-            let bucket_name = url.host_str().ok_or(BuilderError::MissingHost {
-                backend: "Google".into(),
-                url: storage_url.to_string(),
-            })?;
-            let options = options.unwrap_or_default();
-            let builder =
-                google::GoogleConfig::get_builder(&options)?.with_bucket_name(bucket_name);
-            Ok((Arc::new(builder.build()?), storage_url))
+        ObjectStoreKind::Google => {
+            let store = GoogleCloudStorageBuilder::new()
+                .with_url(storage_url.as_ref())
+                .try_with_options(&_options.as_gcs_options())?
+                .build()
+                .or_else(|_| {
+                    GoogleCloudStorageBuilder::from_env()
+                        .with_url(storage_url.as_ref())
+                        .try_with_options(&_options.as_gcs_options())?
+                        .build()
+                })?;
+            Ok((Arc::new(store), storage_url))
         }
-        _ => todo!(),
+        #[cfg(not(feature = "gcs"))]
+        ObjectStoreKind::Google => Err(BuilderError::MissingFeature {
+            feature: "gcs",
+            url: storage_url.as_ref().into(),
+        }
+        .into()),
     }
 }
 
@@ -678,53 +483,8 @@ pub mod s3_storage_options {
     ];
 }
 
-/// Generate a new AmazonS3Builder instance from a map of options
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
-pub fn get_s3_builder_from_options(
-    options: HashMap<String, String>,
-) -> (AmazonS3Builder, S3StorageOptions) {
-    let mut builder = AmazonS3Builder::new();
-    if let Some(val) = str_option(&options, s3_storage_options::AWS_STORAGE_ALLOW_HTTP) {
-        if str_is_truthy(&val) {
-            builder = builder.with_allow_http(true);
-        }
-    }
-
-    let s3_options = S3StorageOptions::from_map(options);
-    if let Some(endpoint) = &s3_options.endpoint_url {
-        builder = builder.with_endpoint(endpoint);
-    }
-    builder = builder.with_region(s3_options.region.name());
-
-    if let Some(profile) = &s3_options.profile {
-        builder = builder.with_profile(profile);
-    }
-
-    if let Some(access_key_id) = &s3_options.aws_access_key_id {
-        builder = builder.with_access_key_id(access_key_id);
-    }
-    if let Some(secret_access_key) = &s3_options.aws_secret_access_key {
-        builder = builder.with_secret_access_key(secret_access_key);
-    }
-    if let Some(session_token) = &s3_options.aws_session_token {
-        builder = builder.with_token(session_token);
-    }
-    if s3_options.virtual_hosted_style_request {
-        builder = builder.with_virtual_hosted_style_request(true);
-    }
-    // TODO AWS_WEB_IDENTITY_TOKEN_FILE and AWS_ROLE_ARN are not configurable on the builder, but picked
-    // up by the build function if set on the environment. If we have them in the map, should we set them in the env?
-    // In the default case, always instance credentials are used.
-    (builder, s3_options)
-}
-
 #[allow(dead_code)]
 pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<String> {
     map.get(key)
         .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
-}
-
-#[allow(dead_code)]
-pub(crate) fn str_is_truthy(val: &str) -> bool {
-    val == "1" || val.to_lowercase() == "true" || val.to_lowercase() == "on"
 }

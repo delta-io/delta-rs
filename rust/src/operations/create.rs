@@ -8,8 +8,8 @@ use crate::{DeltaTableBuilder, DeltaTableMetaData};
 use super::transaction::commit;
 use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
 use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
-use crate::builder::StorageUrl;
 use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
+use crate::storage::config::StorageLocation;
 use crate::storage::DeltaObjectStore;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
@@ -210,14 +210,14 @@ impl CreateBuilder {
         }
 
         let (table, storage_url) = if let Some(object_store) = self.object_store {
-            let storage_url = StorageUrl::parse(object_store.root_uri())?;
+            let storage_url = StorageLocation::parse(object_store.root_uri())?;
             (
                 DeltaTable::new(object_store, Default::default()),
                 storage_url,
             )
         } else {
             let storage_url =
-                StorageUrl::parse(self.location.ok_or(CreateError::MissingLocation)?)?;
+                StorageLocation::parse(self.location.ok_or(CreateError::MissingLocation)?)?;
             (
                 DeltaTableBuilder::from_uri(&storage_url)
                     .with_storage_options(self.storage_options.unwrap_or_default())
