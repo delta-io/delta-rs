@@ -26,8 +26,6 @@ def test_benchmark_write(benchmark, sample_table, tmp_path):
 
     dt = DeltaTable(str(tmp_path))
     assert dt.to_pyarrow_table().sort_by("i") == sample_table
-    import time
-    time.sleep(5)
 
 
 # TODO: support wrapping PyArrow filesystems
