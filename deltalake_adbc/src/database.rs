@@ -16,8 +16,8 @@ pub enum DeltalakeAdbcError {
     NotImplemented(String),
 }
 
-impl From<DeltalakeAdbcError> for AdbcError {
-    fn from(error: DeltalakeAdbcError) -> Self {
+impl From<&DeltalakeAdbcError> for AdbcError {
+    fn from(error: &DeltalakeAdbcError) -> Self {
         AdbcError {
             message: CString::new(error.to_string()).unwrap().into_raw(),
             vendor_code: -1,
@@ -37,12 +37,21 @@ pub unsafe extern "C" fn drop_adbc_error(error: *mut AdbcError) -> () {
     }
 }
 
-impl From<Result<(), DeltalakeAdbcError>> for AdbcStatusCode {
-    fn from(value: Result<(), DeltalakeAdbcError>) -> Self {
-        match value {
+impl From<&DeltalakeAdbcError> for AdbcStatusCode {
+    fn from(err: &DeltalakeAdbcError) -> Self {
+        match err {
+            DeltalakeAdbcError::NotImplemented(_) => AdbcStatusCode::NotImplemented,
+            // TODO: fill in other errors
+            _ => AdbcStatusCode::Unknown,
+        }
+    }
+}
+
+impl From<&Result<(), DeltalakeAdbcError>> for AdbcStatusCode {
+    fn from(res: &Result<(), DeltalakeAdbcError>) -> Self {
+        match res {
             Ok(()) => AdbcStatusCode::Ok,
-            // TODO: handle other errors.
-            Err(_) => AdbcStatusCode::Unknown,
+            Err(err) => AdbcStatusCode::from(err),
         }
     }
 }

@@ -1,6 +1,5 @@
 // TODO: remove this
 #[allow(unused_variables)]
-
 use std::ptr::null_mut;
 
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
@@ -418,5 +417,11 @@ pub unsafe extern "C" fn release_adbc_driver(
     driver: *mut AdbcDriver,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    // if let Some(driver) = driver.as_mut() {
+    //     driver.release = None;
+    // }
+    if !driver.is_null() {
+        driver.drop_in_place();
+    }
+    AdbcStatusCode::Ok
 }

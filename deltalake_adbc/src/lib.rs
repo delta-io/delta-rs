@@ -3,11 +3,28 @@
 mod database;
 mod ffi;
 
+use std::ffi::c_void;
 use std::sync::Arc;
 
 use arrow::ffi::{FFI_ArrowArray, FFI_ArrowSchema};
 use arrow::ffi_stream::FFI_ArrowArrayStream;
-use ffi::{AdbcConnection, AdbcDatabase, AdbcError, AdbcPartitions, AdbcStatement, AdbcStatusCode};
+use database::DeltalakeAdbcError;
+use ffi::{
+    AdbcConnection, AdbcDatabase, AdbcDriver, AdbcError, AdbcPartitions, AdbcStatement,
+    AdbcStatusCode,
+};
+
+macro_rules! check_err {
+    ($res:expr, $err_out:expr) => {
+        match $res {
+            Ok(x) => x,
+            Err(err) => {
+                let error = as_raw_pointer(AdbcError::from(&err));
+                return AdbcStatusCode::from(&err);
+            }
+        }
+    };
+}
 
 /// Allocate a new (but uninitialized) database.
 #[no_mangle]
@@ -16,8 +33,8 @@ pub extern "C" fn AdbcDatabaseNew(
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
     let db = Arc::new(database::DeltalakeAdbcDatabase::new());
-    database = Box::into_raw(Box::new(AdbcDatabase::from(db)));
-    Ok(()).into()
+    database = as_raw_pointer(AdbcDatabase::from(db));
+    AdbcStatusCode::Ok
 }
 
 /// Set a char* option.
@@ -33,7 +50,7 @@ pub extern "C" fn AdbcDatabaseSetOption(
     value: *const ::std::os::raw::c_char,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Finish setting options and initialize the database.
@@ -45,7 +62,7 @@ pub extern "C" fn AdbcDatabaseInit(
     database: *mut AdbcDatabase,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Destroy this database. No connections may exist.
@@ -57,7 +74,7 @@ pub extern "C" fn AdbcDatabaseRelease(
     database: *mut AdbcDatabase,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Allocate a new (but uninitialized) connection.
@@ -66,7 +83,7 @@ pub extern "C" fn AdbcConnectionNew(
     connection: *mut AdbcConnection,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Set a char* option.
@@ -82,7 +99,7 @@ pub extern "C" fn AdbcConnectionSetOption(
     value: *const ::std::os::raw::c_char,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Finish setting options and initialize the connection.
@@ -95,7 +112,7 @@ pub extern "C" fn AdbcConnectionInit(
     database: *mut AdbcDatabase,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Destroy this connection.
@@ -108,7 +125,7 @@ pub extern "C" fn AdbcConnectionRelease(
     connection: *mut AdbcConnection,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Get metadata about the database/driver.
@@ -151,7 +168,7 @@ pub extern "C" fn AdbcConnectionGetInfo(
     out: *mut FFI_ArrowArrayStream,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Get a hierarchical view of all catalogs, database schemas,
@@ -268,7 +285,7 @@ pub extern "C" fn AdbcConnectionGetObjects(
     out: *mut FFI_ArrowArrayStream,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Get the Arrow schema of a table.
@@ -288,7 +305,7 @@ pub extern "C" fn AdbcConnectionGetTableSchema(
     schema: *mut FFI_ArrowSchema,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Get a list of table types in the database.
@@ -308,7 +325,7 @@ pub extern "C" fn AdbcConnectionGetTableTypes(
     out: *mut FFI_ArrowArrayStream,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Construct a statement for a partition of a query. The
@@ -330,7 +347,7 @@ pub extern "C" fn AdbcConnectionReadPartition(
     out: *mut FFI_ArrowArrayStream,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Commit any pending transactions. Only used if autocommit is
@@ -343,7 +360,7 @@ pub extern "C" fn AdbcConnectionCommit(
     connection: *mut AdbcConnection,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Roll back any pending transactions. Only used if autocommit
@@ -356,7 +373,7 @@ pub extern "C" fn AdbcConnectionRollback(
     connection: *mut AdbcConnection,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Create a new statement for a given connection.
@@ -369,7 +386,7 @@ pub extern "C" fn AdbcStatementNew(
     statement: *mut AdbcStatement,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Destroy a statement.
@@ -381,7 +398,7 @@ pub extern "C" fn AdbcStatementRelease(
     statement: *mut AdbcStatement,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Execute a statement and get the results.
@@ -402,7 +419,7 @@ pub extern "C" fn AdbcStatementExecuteQuery(
     rows_affected: *mut i64,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Turn this statement into a prepared statement to be
@@ -414,7 +431,7 @@ pub extern "C" fn AdbcStatementPrepare(
     statement: *mut AdbcStatement,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Set the SQL query to execute.
@@ -432,7 +449,7 @@ pub extern "C" fn AdbcStatementSetSqlQuery(
     query: *const ::std::os::raw::c_char,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Set the Substrait plan to execute.
@@ -452,7 +469,7 @@ pub extern "C" fn AdbcStatementSetSubstraitPlan(
     length: usize,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Bind Arrow data. This can be used for bulk inserts or
@@ -472,7 +489,7 @@ pub extern "C" fn AdbcStatementBind(
     schema: *mut FFI_ArrowSchema,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Bind Arrow data. This can be used for bulk inserts or
@@ -489,7 +506,7 @@ pub extern "C" fn AdbcStatementBindStream(
     stream: *mut FFI_ArrowArrayStream,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Get the schema for bound parameters.
@@ -513,7 +530,7 @@ pub extern "C" fn AdbcStatementGetParameterSchema(
     schema: *mut FFI_ArrowSchema,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Set a string option on a statement.
@@ -524,7 +541,7 @@ pub extern "C" fn AdbcStatementSetOption(
     value: *const ::std::os::raw::c_char,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Execute a statement and get the results as a partitioned
@@ -547,7 +564,7 @@ pub extern "C" fn AdbcStatementExecutePartitions(
     rows_affected: *mut i64,
     error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    AdbcStatusCode::NotImplemented
 }
 
 /// Common entry point for drivers via the driver manager
@@ -571,10 +588,35 @@ pub extern "C" fn AdbcStatementExecutePartitions(
 #[no_mangle]
 pub extern "C" fn AdbcDriverInit(
     version: ::std::os::raw::c_int,
-    driver: *mut ::std::os::raw::c_void,
-    error: *mut AdbcError,
+    mut driver: *mut ::std::os::raw::c_void,
+    mut error: *mut AdbcError,
 ) -> AdbcStatusCode {
-    todo!()
+    let driver_raw = check_err!(DriverInitImpl(version), error);
+    unsafe {
+        std::ptr::copy_nonoverlapping(
+            &driver_raw as *const AdbcDriver,
+            // For copy_nonoverlapping to know how many bytes to copy, it needs to
+            // know the side of the type, so we cast the pointer to *mut AdbcDriver
+            // rather than keeping as c_void.
+            driver as *mut AdbcDriver,
+            1,
+        );
+    }
+    AdbcStatusCode::Ok
+}
+
+fn DriverInitImpl(version: ::std::os::raw::c_int) -> Result<AdbcDriver, DeltalakeAdbcError> {
+    if version == 1000000 {
+        Ok(AdbcDriver::new())
+    } else {
+        Err(DeltalakeAdbcError::NotImplemented(
+            "ADBC versions other than 1.0.0".to_string(),
+        ))
+    }
+}
+
+fn as_raw_pointer<T>(data: T) -> *mut T {
+    Box::into_raw(Box::new(data))
 }
 
 #[cfg(test)]
