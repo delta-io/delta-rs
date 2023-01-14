@@ -206,8 +206,7 @@ impl ObjectStoreKind {
             ObjectStoreKind::S3 => Err(DeltaTableError::MissingFeature {
                 feature: "s3",
                 url: storage_url.as_ref().into(),
-            }
-            .into()),
+            }),
             #[cfg(feature = "azure")]
             ObjectStoreKind::Azure => {
                 let store = MicrosoftAzureBuilder::new()
@@ -228,8 +227,7 @@ impl ObjectStoreKind {
             ObjectStoreKind::Azure => Err(DeltaTableError::MissingFeature {
                 feature: "azure",
                 url: storage_url.as_ref().into(),
-            }
-            .into()),
+            }),
             #[cfg(feature = "gcs")]
             ObjectStoreKind::Google => {
                 let store = GoogleCloudStorageBuilder::new()
@@ -248,8 +246,7 @@ impl ObjectStoreKind {
             ObjectStoreKind::Google => Err(DeltaTableError::MissingFeature {
                 feature: "gcs",
                 url: storage_url.as_ref().into(),
-            }
-            .into()),
+            }),
         }
     }
 }
