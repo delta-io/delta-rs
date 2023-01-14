@@ -157,7 +157,13 @@ impl DeltaObjectStore {
                 .replace("file://", "");
                 uri
             }
-            _ => format!("{}/{}", self.location.as_ref(), location.as_ref()),
+            _ => {
+                if location.as_ref().is_empty() || location.as_ref() == "/" {
+                    format!("{}", self.location.as_ref())
+                } else {
+                    format!("{}/{}", self.location.as_ref(), location.as_ref())
+                }
+            }
         }
     }
 

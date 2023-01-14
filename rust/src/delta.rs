@@ -1523,6 +1523,7 @@ mod tests {
     #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[test]
     fn normalize_table_uri_s3() {
+        std::env::set_var("AWS_DEFAULT_REGION", "us-east-1");
         for table_uri in [
             "s3://tests/data/delta-0.8.0/",
             "s3://tests/data/delta-0.8.0//",

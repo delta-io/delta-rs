@@ -220,7 +220,10 @@ impl DeltaTableBuilder {
     /// Build a delta storage backend for the given config
     pub fn build_storage(self) -> DeltaResult<ObjectStoreRef> {
         match self.options.storage_backend {
-            Some((storage, location)) => Ok(Arc::new(DeltaObjectStore::new(storage, location))),
+            Some((storage, location)) => Ok(Arc::new(DeltaObjectStore::new(
+                storage,
+                ensure_table_uri(location.as_str())?,
+            ))),
             None => {
                 let location = ensure_table_uri(&self.options.table_uri)?;
                 Ok(Arc::new(DeltaObjectStore::try_new(
@@ -389,7 +392,9 @@ mod tests {
         assert_eq!("file:///", uri.as_str());
         let uri = ensure_table_uri("memory://").unwrap();
         assert_eq!("memory://", uri.as_str());
-        let uri = ensure_table_uri("s3://tests/data/delta-0.8.0//").unwrap();
+        let uri = ensure_table_uri("s3://tests/data/delta-0.8.0/").unwrap();
+        assert_eq!("s3://tests/data/delta-0.8.0", uri.as_str());
+        let _uri = ensure_table_uri("s3://tests/data/delta-0.8.0//").unwrap();
         assert_eq!("s3://tests/data/delta-0.8.0", uri.as_str())
     }
 }
