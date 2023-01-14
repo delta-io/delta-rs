@@ -346,6 +346,17 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_create_table_local_path() {
+        let schema = get_delta_schema();
+        let table = CreateBuilder::new()
+            .with_location("./new-table")
+            .with_columns(schema.get_fields().clone())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+    }
+
+    #[tokio::test]
     async fn test_create_table_metadata() {
         let schema = get_delta_schema();
         let table = CreateBuilder::new()
