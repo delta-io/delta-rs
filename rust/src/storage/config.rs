@@ -1,19 +1,24 @@
 //! Configuration handling for defining Storage backends for DeltaTables.
+use super::file::FileStorageBackend;
+use super::utils::str_is_truthy;
+use crate::{DeltaResult, DeltaTableError};
+use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::{Error as ObjectStoreError, Result as ObjectStoreResult};
-use serde::de::{Error, SeqAccess, Visitor};
-use serde::ser::SerializeSeq;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
+use object_store::prefix::PrefixObjectStore;
+use object_store::DynObjectStore;
+use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::fmt;
+use std::sync::Arc;
 use url::Url;
 
 #[cfg(any(feature = "s3", feature = "s3-rustls"))]
-use object_store::aws::AmazonS3ConfigKey;
+use super::s3::{S3StorageBackend, S3StorageOptions};
+#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 #[cfg(feature = "azure")]
-use object_store::azure::AzureConfigKey;
+use object_store::azure::{AzureConfigKey, MicrosoftAzure, MicrosoftAzureBuilder};
 #[cfg(feature = "gcs")]
-use object_store::gcp::GoogleConfigKey;
+use object_store::gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder, GoogleConfigKey};
 #[cfg(any(
     feature = "s3",
     feature = "s3-rustls",
@@ -23,6 +28,7 @@ use object_store::gcp::GoogleConfigKey;
 use std::str::FromStr;
 
 /// Options used for configuring backend storage
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct StorageOptions(pub HashMap<String, String>);
 
 impl StorageOptions {
@@ -41,7 +47,7 @@ impl StorageOptions {
         Self(options)
     }
 
-    /// Denotes if unsecure connections are configures to be allowed
+    /// Denotes if unsecure connections via http are allowed
     pub fn allow_http(&self) -> bool {
         self.0.iter().any(|(key, value)| {
             key.to_ascii_lowercase().contains("allow_http") & str_is_truthy(value)
@@ -85,197 +91,165 @@ impl StorageOptions {
     }
 }
 
-/// A parsed URL identifying a storage location
-/// for more information on the supported expressions
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct StorageLocation {
-    /// A URL that identifies a file or directory to list files from
-    pub(crate) url: Url,
-    /// The path prefix
-    pub(crate) prefix: Path,
+impl From<HashMap<String, String>> for StorageOptions {
+    fn from(value: HashMap<String, String>) -> Self {
+        Self::new(value)
+    }
 }
 
-impl StorageLocation {
-    /// Parse a provided string as a `StorageLocation`
-    ///
-    /// # Paths without a Scheme
-    ///
-    /// If no scheme is provided, or the string is an absolute filesystem path
-    /// as determined [`std::path::Path::is_absolute`], the string will be
-    /// interpreted as a path on the local filesystem using the operating
-    /// system's standard path delimiter, i.e. `\` on Windows, `/` on Unix.
-    ///
-    /// Otherwise, the path will be resolved to an absolute path, returning
-    /// an error if it does not exist, and converted to a [file URI]
-    ///
-    /// If you wish to specify a path that does not exist on the local
-    /// machine you must provide it as a fully-qualified [file URI]
-    /// e.g. `file:///myfile.txt`
-    ///
-    /// [file URI]: https://en.wikipedia.org/wiki/File_URI_scheme
-    ///
-    /// # Well-known formats
-    ///
-    /// The lists below enumerates some well known uris, that are understood by the
-    /// parse function. We parse uris to refer to a specific storage location, which
-    /// is accessed using the internal storage backends.
-    ///
-    /// ## Azure
-    ///
-    /// URIs according to <https://github.com/fsspec/adlfs#filesystem-interface-to-azure-datalake-gen1-and-gen2-storage>:
-    ///
-    ///   * az://<container>/<path>
-    ///   * adl://<container>/<path>
-    ///   * abfs(s)://<container>/<path>
-    ///
-    /// URIs according to <https://docs.microsoft.com/en-us/azure/storage/blobs/data-lake-storage-introduction-abfs-uri>:
-    ///   
-    ///   * abfs(s)://<file_system>@<account_name>.dfs.core.windows.net/<path>
-    ///
-    /// and a custom one
-    ///
-    ///   * azure://<container>/<path>
-    ///
-    /// ## S3
-    ///   * s3://<bucket>/<path>
-    ///   * s3a://<bucket>/<path>
-    ///
-    /// ## GCS
-    ///   * gs://<bucket>/<path>
-    pub fn parse(s: impl AsRef<str>) -> ObjectStoreResult<Self> {
-        let s = s.as_ref();
+pub(crate) enum ObjectStoreImpl {
+    Local(FileStorageBackend),
+    InMemory(InMemory),
+    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    S3(S3StorageBackend),
+    #[cfg(feature = "gcs")]
+    Google(GoogleCloudStorage),
+    #[cfg(feature = "azure")]
+    Azure(MicrosoftAzure),
+}
 
-        // This is necessary to handle the case of a path starting with a drive letter
-        if std::path::Path::new(s).is_absolute() {
-            return Self::parse_path(s);
-        }
-
-        match Url::parse(s) {
-            Ok(url) => Ok(Self::new(url)),
-            Err(url::ParseError::RelativeUrlWithoutBase) => Self::parse_path(s),
-            Err(e) => Err(ObjectStoreError::Generic {
-                store: "DeltaObjectStore",
-                source: Box::new(e),
-            }),
+impl ObjectStoreImpl {
+    pub(crate) fn into_prefix(self, prefix: Path) -> Arc<DynObjectStore> {
+        match self {
+            ObjectStoreImpl::Local(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
+            ObjectStoreImpl::InMemory(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
+            #[cfg(feature = "azure")]
+            ObjectStoreImpl::Azure(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
+            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+            ObjectStoreImpl::S3(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
+            #[cfg(feature = "gcs")]
+            ObjectStoreImpl::Google(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
         }
     }
 
-    /// Creates a new [`StorageLocation`] from an url
-    pub fn new(url: Url) -> Self {
-        let prefix = Path::parse(url.path()).expect("should be URL safe");
-        Self { url, prefix }
-    }
-
-    /// Creates a new [`StorageUrl`] interpreting `s` as a filesystem path
-    fn parse_path(s: &str) -> ObjectStoreResult<Self> {
-        let path =
-            std::path::Path::new(s)
-                .canonicalize()
-                .map_err(|e| ObjectStoreError::Generic {
-                    store: "DeltaObjectStore",
-                    source: Box::new(e),
-                })?;
-        let url = match path.is_file() {
-            true => Url::from_file_path(path).unwrap(),
-            false => Url::from_directory_path(path).unwrap(),
-        };
-
-        Ok(Self::new(url))
-    }
-
-    /// Returns the URL scheme
-    pub fn scheme(&self) -> &str {
-        self.url.scheme()
-    }
-
-    /// Create the full path from a path relative to prefix
-    pub fn full_path(&self, location: &Path) -> Path {
-        self.prefix.parts().chain(location.parts()).collect()
-    }
-
-    /// Strip the constant prefix from a given path
-    pub fn strip_prefix(&self, path: &Path) -> Option<Path> {
-        Some(path.prefix_match(&self.prefix)?.collect())
-    }
-
-    /// convert a table [Path] to a fully qualified uri
-    pub fn to_uri(&self, location: &Path) -> String {
-        let uri = match self.scheme() {
-            "file" | "" => {
-                // On windows the drive (e.g. 'c:') is part of root and must not be prefixed.
-                #[cfg(windows)]
-                let os_uri = format!("{}/{}", self.prefix, location.as_ref());
-                #[cfg(unix)]
-                let os_uri = format!("/{}/{}", self.prefix, location.as_ref());
-                os_uri
-            }
-            _ => format!("{}/{}", self.as_ref(), location.as_ref()),
-        };
-        uri.trim_end_matches('/').into()
-    }
-}
-
-impl AsRef<str> for StorageLocation {
-    fn as_ref(&self) -> &str {
-        self.url.as_ref()
-    }
-}
-
-impl std::fmt::Display for StorageLocation {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.as_ref().fmt(f)
-    }
-}
-
-impl Serialize for StorageLocation {
-    fn serialize<S>(&self, serializer: S) -> Result<S::Ok, S::Error>
-    where
-        S: Serializer,
-    {
-        let mut seq = serializer.serialize_seq(None)?;
-        seq.serialize_element(self.url.as_str())?;
-        seq.serialize_element(&self.prefix.to_string())?;
-        seq.end()
-    }
-}
-
-impl<'de> Deserialize<'de> for StorageLocation {
-    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
-    where
-        D: Deserializer<'de>,
-    {
-        struct StorageLocationVisitor {}
-        impl<'de> Visitor<'de> for StorageLocationVisitor {
-            type Value = StorageLocation;
-
-            fn expecting(&self, formatter: &mut fmt::Formatter) -> fmt::Result {
-                formatter.write_str("struct StorageUrl")
-            }
-
-            fn visit_seq<V>(self, mut seq: V) -> Result<StorageLocation, V::Error>
-            where
-                V: SeqAccess<'de>,
-            {
-                let url = seq
-                    .next_element()?
-                    .ok_or_else(|| V::Error::invalid_length(0, &self))?;
-                let prefix: &str = seq
-                    .next_element()?
-                    .ok_or_else(|| V::Error::invalid_length(1, &self))?;
-                let url = Url::parse(url).map_err(|_| V::Error::missing_field("url"))?;
-                let prefix = Path::parse(prefix).map_err(|_| V::Error::missing_field("prefix"))?;
-                let url = StorageLocation { url, prefix };
-                Ok(url)
-            }
+    pub(crate) fn into_store(self) -> Arc<DynObjectStore> {
+        match self {
+            ObjectStoreImpl::Local(store) => Arc::new(store),
+            ObjectStoreImpl::InMemory(store) => Arc::new(store),
+            #[cfg(feature = "azure")]
+            ObjectStoreImpl::Azure(store) => Arc::new(store),
+            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+            ObjectStoreImpl::S3(store) => Arc::new(store),
+            #[cfg(feature = "gcs")]
+            ObjectStoreImpl::Google(store) => Arc::new(store),
         }
-        deserializer.deserialize_seq(StorageLocationVisitor {})
     }
 }
 
-pub(crate) fn str_is_truthy(val: &str) -> bool {
-    val.eq_ignore_ascii_case("1")
-        | val.eq_ignore_ascii_case("true")
-        | val.eq_ignore_ascii_case("on")
-        | val.eq_ignore_ascii_case("yes")
-        | val.eq_ignore_ascii_case("y")
+pub(crate) enum ObjectStoreKind {
+    Local,
+    InMemory,
+    S3,
+    Google,
+    Azure,
+}
+
+impl ObjectStoreKind {
+    pub fn parse_url(url: &Url) -> DeltaResult<Self> {
+        match url.scheme() {
+            "file" => Ok(ObjectStoreKind::Local),
+            "memory" => Ok(ObjectStoreKind::InMemory),
+            "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => Ok(ObjectStoreKind::Azure),
+            "s3" | "s3a" => Ok(ObjectStoreKind::S3),
+            "gs" => Ok(ObjectStoreKind::Google),
+            "https" => {
+                let host = url.host_str().unwrap_or_default();
+                if host.contains("amazonaws.com") {
+                    Ok(ObjectStoreKind::S3)
+                } else if host.contains("dfs.core.windows.net")
+                    || host.contains("blob.core.windows.net")
+                {
+                    Ok(ObjectStoreKind::Azure)
+                } else {
+                    Err(DeltaTableError::Generic(format!(
+                        "unsupported url: {}",
+                        url.as_str()
+                    )))
+                }
+            }
+            _ => Err(DeltaTableError::Generic(format!(
+                "unsupported url: {}",
+                url.as_str()
+            ))),
+        }
+    }
+
+    pub fn into_impl(
+        self,
+        storage_url: impl AsRef<str>,
+        options: impl Into<StorageOptions>,
+    ) -> DeltaResult<ObjectStoreImpl> {
+        let _options = options.into();
+        match self {
+            ObjectStoreKind::Local => Ok(ObjectStoreImpl::Local(FileStorageBackend::new())),
+            ObjectStoreKind::InMemory => Ok(ObjectStoreImpl::InMemory(InMemory::new())),
+            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+            ObjectStoreKind::S3 => {
+                let store = AmazonS3Builder::new()
+                    .with_url(storage_url.as_ref())
+                    .try_with_options(&_options.as_s3_options())?
+                    .with_allow_http(_options.allow_http())
+                    .build()
+                    .or_else(|_| {
+                        AmazonS3Builder::from_env()
+                            .with_url(storage_url.as_ref())
+                            .try_with_options(&_options.as_s3_options())?
+                            .with_allow_http(_options.allow_http())
+                            .build()
+                    })?;
+                Ok(ObjectStoreImpl::S3(S3StorageBackend::try_new(
+                    Arc::new(store),
+                    S3StorageOptions::from_map(&_options.0),
+                )?))
+            }
+            #[cfg(not(any(feature = "s3", feature = "s3-rustls")))]
+            ObjectStoreKind::S3 => Err(DeltaTableError::MissingFeature {
+                feature: "s3",
+                url: storage_url.as_ref().into(),
+            }
+            .into()),
+            #[cfg(feature = "azure")]
+            ObjectStoreKind::Azure => {
+                let store = MicrosoftAzureBuilder::new()
+                    .with_url(storage_url.as_ref())
+                    .try_with_options(&_options.as_azure_options())?
+                    .with_allow_http(_options.allow_http())
+                    .build()
+                    .or_else(|_| {
+                        MicrosoftAzureBuilder::from_env()
+                            .with_url(storage_url.as_ref())
+                            .try_with_options(&_options.as_azure_options())?
+                            .with_allow_http(_options.allow_http())
+                            .build()
+                    })?;
+                Ok(ObjectStoreImpl::Azure(store))
+            }
+            #[cfg(not(feature = "azure"))]
+            ObjectStoreKind::Azure => Err(DeltaTableError::MissingFeature {
+                feature: "azure",
+                url: storage_url.as_ref().into(),
+            }
+            .into()),
+            #[cfg(feature = "gcs")]
+            ObjectStoreKind::Google => {
+                let store = GoogleCloudStorageBuilder::new()
+                    .with_url(storage_url.as_ref())
+                    .try_with_options(&_options.as_gcs_options())?
+                    .build()
+                    .or_else(|_| {
+                        GoogleCloudStorageBuilder::from_env()
+                            .with_url(storage_url.as_ref())
+                            .try_with_options(&_options.as_gcs_options())?
+                            .build()
+                    })?;
+                Ok(ObjectStoreImpl::Google(store))
+            }
+            #[cfg(not(feature = "gcs"))]
+            ObjectStoreKind::Google => Err(DeltaTableError::MissingFeature {
+                feature: "gcs",
+                url: storage_url.as_ref().into(),
+            }
+            .into()),
+        }
+    }
 }

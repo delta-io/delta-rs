@@ -199,6 +199,17 @@ pub enum DeltaTableError {
     /// Error returned when user attempts to commit actions that don't belong to the next version.
     #[error("Delta transaction failed, version {0} does not follow {1}")]
     VersionMismatch(DeltaDataTypeVersion, DeltaDataTypeVersion),
+    /// A Feature is missing to perform operation
+    #[error("Delta-rs must be build with feature '{feature}' to support loading from: {url}.")]
+    MissingFeature {
+        /// Name of the missiing feature
+        feature: &'static str,
+        /// Storage location url
+        url: String,
+    },
+    /// A Feature is missing to perform operation
+    #[error("Cannot infer storage location from: {0}")]
+    InvalidTableLocation(String),
     /// Generic Delta Table error
     #[error("Generic DeltaTable error: {0}")]
     Generic(String),
