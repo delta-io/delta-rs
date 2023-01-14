@@ -314,6 +314,7 @@ mod tests {
     use crate::operations::DeltaOps;
     use crate::table_properties::APPEND_ONLY;
     use crate::writer::test_utils::get_delta_schema;
+    use rand::distributions::{Alphanumeric, DistString};
 
     #[tokio::test]
     async fn test_create() {
@@ -332,8 +333,8 @@ mod tests {
     #[tokio::test]
     async fn test_create_local_relative_path() {
         let table_schema = get_delta_schema();
-
-        let table = DeltaOps::try_from_uri("./table")
+        let name = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+        let table = DeltaOps::try_from_uri(format!("./{}", name))
             .await
             .unwrap()
             .create()
@@ -348,8 +349,9 @@ mod tests {
     #[tokio::test]
     async fn test_create_table_local_path() {
         let schema = get_delta_schema();
+        let name = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
         let table = CreateBuilder::new()
-            .with_location("./new-table")
+            .with_location(format!("./{}", name))
             .with_columns(schema.get_fields().clone())
             .await
             .unwrap();
