@@ -350,8 +350,8 @@ pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<Str
 pub(crate) fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     let table_uri = table_uri.as_ref();
     if let Ok(path) = std::fs::canonicalize(table_uri) {
-        return Ok(Url::from_directory_path(path)
-            .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri.to_string()))?);
+        return Url::from_directory_path(path)
+            .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri.to_string()));
     }
     if let Ok(url) = Url::parse(table_uri) {
         return Ok(url);

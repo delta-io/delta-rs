@@ -413,7 +413,7 @@ impl TableProvider for DeltaTable {
             .await?;
 
         Ok(Arc::new(DeltaScan {
-            url: ensure_table_uri(&self.table_uri())?.as_str().into(),
+            url: ensure_table_uri(self.table_uri())?.as_str().into(),
             parquet_scan,
         }))
     }
@@ -1006,8 +1006,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(&["a", "b", "c", "d"])),
-                Arc::new(arrow::array::Int32Array::from_slice(&[1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from_slice(["a", "b", "c", "d"])),
+                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
             ],
         )
         .unwrap();
