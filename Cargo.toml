@@ -6,6 +6,7 @@ members = [
     "glibc_version",
     "aws/delta-checkpoint",
     "dynamodb_lock",
+    "deltalake_adbc",
 ]
 exclude = ["proofs", "delta-inspect"]
 
