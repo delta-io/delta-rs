@@ -1535,20 +1535,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn normalize_table_uri() {
-        for table_uri in [
-            "file:///tests/data/delta-0.8.0/",
-            "file:///tests/data/delta-0.8.0//",
-            "file:///tests/data/delta-0.8.0",
-        ]
-        .iter()
-        {
-            let table = DeltaTableBuilder::from_uri(table_uri).build().unwrap();
-            assert_eq!(table.table_uri(), "/tests/data/delta-0.8.0");
-        }
-    }
-
     async fn create_test_table() -> (DeltaTableMetaData, Protocol, DeltaTable, TempDir) {
         // Setup
         let test_schema = Schema::new(vec![
