@@ -1522,16 +1522,30 @@ mod tests {
 
     #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[test]
-    fn normalize_table_uri() {
+    fn normalize_table_uri_s3() {
         for table_uri in [
             "s3://tests/data/delta-0.8.0/",
-            // "s3://tests/data/delta-0.8.0//",
+            "s3://tests/data/delta-0.8.0//",
             "s3://tests/data/delta-0.8.0",
         ]
         .iter()
         {
             let table = DeltaTableBuilder::from_uri(table_uri).build().unwrap();
             assert_eq!(table.table_uri(), "s3://tests/data/delta-0.8.0");
+        }
+    }
+
+    #[test]
+    fn normalize_table_uri() {
+        for table_uri in [
+            "file:///tests/data/delta-0.8.0/",
+            "file:///tests/data/delta-0.8.0//",
+            "file:///tests/data/delta-0.8.0",
+        ]
+        .iter()
+        {
+            let table = DeltaTableBuilder::from_uri(table_uri).build().unwrap();
+            assert_eq!(table.table_uri(), "/tests/data/delta-0.8.0");
         }
     }
 

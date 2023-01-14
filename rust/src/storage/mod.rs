@@ -159,6 +159,8 @@ impl DeltaObjectStore {
             }
             _ => format!("{}/{}", self.location.as_ref(), location.as_ref()),
         }
+        .trim_end_matches('/')
+        .into()
     }
 
     /// Deletes object by `paths`.
