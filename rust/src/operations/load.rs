@@ -79,8 +79,6 @@ impl std::future::IntoFuture for LoadBuilder {
             let object_store = this.object_store.unwrap();
             let url = url::Url::parse(&object_store.root_uri())
                 .map_err(|_| DeltaTableError::InvalidTableLocation(object_store.root_uri()))?;
-            let scheme = url.scheme();
-
             let store = object_store.storage_backend().clone();
             let mut table = DeltaTable::new(object_store, Default::default());
             table.load().await?;
@@ -88,7 +86,7 @@ impl std::future::IntoFuture for LoadBuilder {
             let ctx = SessionContext::new();
             ctx.state()
                 .runtime_env
-                .register_object_store(scheme, "", store);
+                .register_object_store(url.scheme(), "", store);
             let scan_plan = table.scan(&ctx.state(), None, &[], None).await?;
             let plan = CoalescePartitionsExec::new(scan_plan);
             let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
