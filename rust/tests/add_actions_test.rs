@@ -353,10 +353,12 @@ async fn test_only_struct_stats() {
 
     assert_eq!(
         actions
-            .get_field_at_path(&["null_count",
+            .get_field_at_path(&[
+                "null_count",
                 "nested_struct",
                 "struct_element",
-                "nested_struct_element"])
+                "nested_struct_element"
+            ])
             .unwrap()
             .as_any()
             .downcast_ref::<array::Int64Array>()
@@ -366,10 +368,12 @@ async fn test_only_struct_stats() {
 
     assert_eq!(
         actions
-            .get_field_at_path(&["min",
+            .get_field_at_path(&[
+                "min",
                 "nested_struct",
                 "struct_element",
-                "nested_struct_element"])
+                "nested_struct_element"
+            ])
             .unwrap()
             .as_any()
             .downcast_ref::<array::StringArray>()
@@ -379,10 +383,12 @@ async fn test_only_struct_stats() {
 
     assert_eq!(
         actions
-            .get_field_at_path(&["max",
+            .get_field_at_path(&[
+                "max",
                 "nested_struct",
                 "struct_element",
-                "nested_struct_element"])
+                "nested_struct_element"
+            ])
             .unwrap()
             .as_any()
             .downcast_ref::<array::StringArray>()
@@ -392,9 +398,7 @@ async fn test_only_struct_stats() {
 
     assert_eq!(
         actions
-            .get_field_at_path(&["null_count",
-                "struct_of_array_of_map",
-                "struct_element"])
+            .get_field_at_path(&["null_count", "struct_of_array_of_map", "struct_element"])
             .unwrap()
             .as_any()
             .downcast_ref::<array::Int64Array>()
