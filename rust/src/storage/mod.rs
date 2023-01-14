@@ -159,7 +159,7 @@ impl DeltaObjectStore {
             }
             _ => {
                 if location.as_ref().is_empty() || location.as_ref() == "/" {
-                    format!("{}", self.location.as_ref())
+                    self.location.as_ref().to_string()
                 } else {
                     format!("{}/{}", self.location.as_ref(), location.as_ref())
                 }
