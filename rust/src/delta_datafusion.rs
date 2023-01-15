@@ -56,6 +56,7 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
+use crate::builder::ensure_table_uri;
 use crate::Invariant;
 use crate::{action, open_table, open_table_with_storage_options};
 use crate::{schema, DeltaTableBuilder};
@@ -410,13 +411,11 @@ impl TableProvider for DeltaTable {
                 filters,
             )
             .await?;
-        let mut url = self.table_uri();
-        if url.ends_with(':') {
-            url += "//"; // table_uri() trims slashes from `memory://` so add them back
-        }
-        let delta_scan = DeltaScan { url, parquet_scan };
 
-        Ok(Arc::new(delta_scan))
+        Ok(Arc::new(DeltaScan {
+            url: ensure_table_uri(self.table_uri())?.as_str().into(),
+            parquet_scan,
+        }))
     }
 
     fn as_any(&self) -> &dyn Any {
@@ -467,15 +466,19 @@ impl ExecutionPlan for DeltaScan {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
-        let url = self.url.as_str();
-        let url = ListingTableUrl::parse(url)?;
-        let storage = context.runtime_env().object_store_registry.get_by_url(url);
-        let mut table = DeltaTableBuilder::from_uri(self.url.clone());
+        let df_url = ListingTableUrl::parse(self.url.as_str())?;
+        let storage = context
+            .runtime_env()
+            .object_store_registry
+            .get_by_url(df_url);
+        let mut table = DeltaTableBuilder::from_uri(&self.url);
         if let Ok(storage) = storage {
             // When running in ballista, the store will be deserialized and re-created
             // When testing with a MemoryStore, it will already be present and we should re-use it
-            let path = &Path::parse("")?;
-            table = table.with_storage_backend(storage, path);
+            table = table.with_storage_backend(
+                storage,
+                Url::parse(&self.url).map_err(|err| DataFusionError::Internal(err.to_string()))?,
+            );
         }
         let table = table.build()?;
         register_store(&table, context.runtime_env());
@@ -1003,8 +1006,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(&["a", "b", "c", "d"])),
-                Arc::new(arrow::array::Int32Array::from_slice(&[1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from_slice(["a", "b", "c", "d"])),
+                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
             ],
         )
         .unwrap();

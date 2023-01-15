@@ -199,6 +199,17 @@ pub enum DeltaTableError {
     /// Error returned when user attempts to commit actions that don't belong to the next version.
     #[error("Delta transaction failed, version {0} does not follow {1}")]
     VersionMismatch(DeltaDataTypeVersion, DeltaDataTypeVersion),
+    /// A Feature is missing to perform operation
+    #[error("Delta-rs must be build with feature '{feature}' to support loading from: {url}.")]
+    MissingFeature {
+        /// Name of the missiing feature
+        feature: &'static str,
+        /// Storage location url
+        url: String,
+    },
+    /// A Feature is missing to perform operation
+    #[error("Cannot infer storage location from: {0}")]
+    InvalidTableLocation(String),
     /// Generic Delta Table error
     #[error("Generic DeltaTable error: {0}")]
     Generic(String),
@@ -1511,10 +1522,11 @@ mod tests {
 
     #[cfg(any(feature = "s3", feature = "s3-rustls"))]
     #[test]
-    fn normalize_table_uri() {
+    fn normalize_table_uri_s3() {
+        std::env::set_var("AWS_DEFAULT_REGION", "us-east-1");
         for table_uri in [
             "s3://tests/data/delta-0.8.0/",
-            // "s3://tests/data/delta-0.8.0//",
+            "s3://tests/data/delta-0.8.0//",
             "s3://tests/data/delta-0.8.0",
         ]
         .iter()

@@ -1,6 +1,6 @@
 //! AWS S3 storage backend.
 
-use super::config::str_is_truthy;
+use super::utils::str_is_truthy;
 use crate::builder::{s3_storage_options, str_option};
 use bytes::Bytes;
 use dynamodb_lock::{DynamoError, LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};

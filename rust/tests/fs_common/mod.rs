@@ -15,7 +15,7 @@ pub fn cleanup_dir_except<P: AsRef<Path>>(path: P, ignore_files: Vec<String>) {
         let name = d.path().file_name().unwrap().to_str().unwrap().to_string();
 
         if !ignore_files.contains(&name) && !name.starts_with('.') {
-            fs::remove_file(&path).unwrap();
+            fs::remove_file(path).unwrap();
         }
     }
 }
