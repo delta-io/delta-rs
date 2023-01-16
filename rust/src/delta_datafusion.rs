@@ -50,7 +50,7 @@ use datafusion::physical_plan::{
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError, Result as DataFusionResult};
 use datafusion_expr::logical_plan::CreateExternalTable;
-use datafusion_expr::{Expr, Extension, LogicalPlan};
+use datafusion_expr::{Expr, Extension, LogicalPlan, TableProviderFilterPushDown};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::{path::Path, ObjectMeta};
@@ -321,6 +321,10 @@ fn register_store(table: &DeltaTable, env: Arc<RuntimeEnv>) {
 
 #[async_trait]
 impl TableProvider for DeltaTable {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn schema(&self) -> Arc<ArrowSchema> {
         Arc::new(
             <ArrowSchema as TryFrom<&schema::Schema>>::try_from(DeltaTable::schema(self).unwrap())
@@ -330,6 +334,14 @@ impl TableProvider for DeltaTable {
 
     fn table_type(&self) -> TableType {
         TableType::Base
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        None
+    }
+
+    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+        None
     }
 
     async fn scan(
@@ -343,7 +355,7 @@ impl TableProvider for DeltaTable {
             DeltaTable::schema(self).unwrap(),
         )?);
 
-        register_store(self, session.runtime_env.clone());
+        register_store(self, session.runtime_env().clone());
 
         // TODO we group files together by their partition values. If the table is partitioned
         // and partitions are somewhat evenly distributed, probably not the worst choice ...
@@ -358,8 +370,8 @@ impl TableProvider for DeltaTable {
                 .files()
                 .iter()
                 .zip(files_to_prune.into_iter())
-                .for_each(|(action, prune_file)| {
-                    if !prune_file {
+                .for_each(|(action, keep_file)| {
+                    if keep_file {
                         let part = partitioned_file_from_action(action, &schema);
                         file_groups
                             .entry(part.partition_values.clone())
@@ -387,8 +399,9 @@ impl TableProvider for DeltaTable {
                 .collect(),
         ));
 
-        let parquet_scan = ParquetFormat::new(session.config_options())
+        let parquet_scan = ParquetFormat::new()
             .create_physical_plan(
+                session,
                 FileScanConfig {
                     object_store_url: self.storage.object_store_url(),
                     file_schema,
@@ -406,7 +419,7 @@ impl TableProvider for DeltaTable {
                         })
                         .collect::<Result<Vec<_>, ArrowError>>()?,
                     output_ordering: None,
-                    config_options: Default::default(),
+                    infinite_source: false,
                 },
                 filters,
             )
@@ -418,8 +431,15 @@ impl TableProvider for DeltaTable {
         }))
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn supports_filter_pushdown(
+        &self,
+        _filter: &Expr,
+    ) -> DataFusionResult<TableProviderFilterPushDown> {
+        Ok(TableProviderFilterPushDown::Inexact)
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        Some(self.datafusion_table_statistics())
     }
 }
 
