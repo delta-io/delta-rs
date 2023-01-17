@@ -509,9 +509,25 @@ impl DeltaOperation {
         );
 
         if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(self) {
+            let all_operation_fields = map.values().next().unwrap().as_object().unwrap();
+            let converted_operation_fields: Map<String, Value> = all_operation_fields
+                .iter()
+                .filter(|item| !item.1.is_null())
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        serde_json::Value::String(if v.is_string() {
+                            String::from(v.as_str().unwrap())
+                        } else {
+                            v.to_string()
+                        }),
+                    )
+                })
+                .collect();
+
             commit_info.insert(
                 "operationParameters".to_string(),
-                map.values().next().unwrap().clone(),
+                serde_json::Value::Object(converted_operation_fields),
             );
         };
 

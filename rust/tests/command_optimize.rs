@@ -493,7 +493,7 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
     assert_eq!(last_commit["readVersion"], json!(version));
     assert_eq!(
         last_commit["operationParameters"]["targetSize"],
-        json!(2_000_000)
+        json!("2000000")
     );
     // TODO: Requires a string representation for PartitionFilter
     assert_eq!(last_commit["operationParameters"]["predicate"], Value::Null);
