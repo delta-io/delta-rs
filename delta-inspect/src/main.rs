@@ -6,7 +6,7 @@ async fn main() -> anyhow::Result<()> {
 
     let matches = App::new("Delta table inspector")
         .version(env!("CARGO_PKG_VERSION"))
-        .about("Utility to help inspect Delta talebs")
+        .about("Utility to help inspect Delta tables")
         .setting(AppSettings::SubcommandRequiredElseHelp)
         .subcommand(
             App::new("info")
@@ -17,7 +17,7 @@ async fn main() -> anyhow::Result<()> {
         .subcommand(
             App::new("files")
                 .setting(AppSettings::ArgRequiredElseHelp)
-                .about("output list of files for a given version, defalt to latest")
+                .about("output list of files for a given version, default to latest")
                 .args(&[
                     Arg::new("uri").help("Table URI").required(true),
                     Arg::new("full_uri")
