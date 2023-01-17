@@ -463,7 +463,7 @@ pub(crate) fn delta_log_schema_for_table(
             .for_each(|f| max_min_schema_for_fields(&mut max_min_vec, f));
 
         stats_parsed_fields.extend(
-            ["minValues", "maxValues"].iter().map(|name| {
+            ["minValues", "maxValues"].into_iter().map(|name| {
                 ArrowField::new(name, ArrowDataType::Struct(max_min_vec.clone()), true)
             }),
         );
