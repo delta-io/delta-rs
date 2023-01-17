@@ -35,7 +35,8 @@ devel = [
     "sphinx<=4.5",
     "sphinx-rtd-theme",
     "toml",
-    "wheel"
+    "wheel",
+    "pytest-benchmark"
 ]
 pyspark = [
     "pyspark",

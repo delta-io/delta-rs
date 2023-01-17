@@ -8,3 +8,7 @@ members = [
     "dynamodb_lock",
 ]
 exclude = ["proofs", "delta-inspect"]
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true
