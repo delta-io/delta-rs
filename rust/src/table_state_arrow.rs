@@ -402,7 +402,7 @@ impl DeltaTableState {
                     .flat_map(|sub_field| {
                         if let Some(values) = getter(sub_field) {
                             let field = Field::new(
-                                sub_field
+                                *sub_field
                                     .path
                                     .last()
                                     .expect("paths must have at least one element"),
