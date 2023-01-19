@@ -21,7 +21,7 @@ setup-dat: ## Download DAT test files
 	rm -rf dat-data/v$(DAT_VERSION)
 	curl -L --silent --output dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz \
 		https://github.com/delta-incubator/dat/releases/download/v$(DAT_VERSION)/deltalake-dat-v$(DAT_VERSION).tar.gz 
-	-tar -xzf dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz
+	tar --no-same-permissions -xzf dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz
 	mv out dat-data/v$(DAT_VERSION)
 	rm dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz
 
