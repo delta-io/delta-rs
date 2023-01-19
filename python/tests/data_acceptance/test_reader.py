@@ -42,12 +42,23 @@ for path in reader_case_path.iterdir():
 
         cases.append(ReadCase(path, version, metadata, version_metadata))
 
+failing_cases = {
+    "multi_partitioned_2": "Waiting for PyArrow 11.0.0 for decimal cast support (#1078)",
+    "nested_types": "Waiting for PyArrow 11.0.0 so we can ignore internal field names in equality",
+    "multi_partitioned": "Escaped characters in data file paths aren't yet handled (#1079)",
+    "no_stats": "We don't yet support files without stats (#582)",
+}
+
 
 @pytest.mark.parametrize(
     "case", cases, ids=lambda case: f"{case.case_info['name']} (version={case.version})"
 )
 def test_dat(case: ReadCase):
     root, version, case_info, version_metadata = case
+
+    if case_info["name"] in failing_cases:
+        msg = failing_cases[case_info["name"]]
+        pytest.skip(msg)
 
     # Get Delta Table path
     delta_root = root / "delta"
@@ -64,7 +75,7 @@ def test_dat(case: ReadCase):
         version_path = "latest" if version is None else f"v{version}"
         # TODO: fix the directory name here
         parquet_root = root / "expected" / version_path / "table_content.parquet"
-        expected = pq.read_table(parquet_root)
+        expected = pq.read_table(parquet_root, coerce_int96_timestamp_unit="us")
         actual = dt.to_pyarrow_table()
         assert_tables_equal(expected, actual)
     else:
