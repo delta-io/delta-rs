@@ -66,6 +66,7 @@ default-features = false
 optional = true
 
 [dev-dependencies]
+anyhow = "*"
 criterion = "0"
 dotenvy = "0"
 maplit = "1"
@@ -74,6 +75,7 @@ rand = "0.8"
 serial_test = "0"
 tempdir = "0"
 tempfile = "3"
+tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 utime = "0.3"
 
 [build-dependencies]
