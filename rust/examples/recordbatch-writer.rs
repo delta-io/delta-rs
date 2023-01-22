@@ -32,23 +32,17 @@ async fn main() -> Result<(), anyhow::Error> {
 
     let table_path = Path::new(&table_uri);
 
-    let mut table = match Path::join(table_path, "_delta_log").is_dir() {
-        true => {
-            /* The table has been created already */
-            info!("Opening the table for writing");
-            deltalake::open_table(
-                table_path
-                    .to_str()
-                    .expect("Could not convert table path to a str"),
-            )
-            .await?
-        }
-        false => {
-            /* The table directory has not been initialized as a Delta table */
+    let table = deltalake::open_table(table_path).await?;
+    let mut table = {
+        Ok(table) => table,
+        Err(DeltaTableError::NotAtable(_)) => {
             info!("It doesn't look like our delta table has been created");
             create_initialized_table(&table_path).await
+        },
+        Err(err) => {
+            err.unwra
         }
-    };
+    }
 
     let mut writer =
         RecordBatchWriter::for_table(&table).expect("Failed to make RecordBatchWriter");
