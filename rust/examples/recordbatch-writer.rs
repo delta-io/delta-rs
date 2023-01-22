@@ -16,7 +16,7 @@ use deltalake::*;
 use log::*;
 
 use std::collections::HashMap;
-use std::path::Path;
+use object_store::path::Path;
 use std::sync::Arc;
 
 /*
