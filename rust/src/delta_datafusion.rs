@@ -983,48 +983,21 @@ mod tests {
     }
 
     #[test]
-    fn test_to_scalar_value(){
+    fn test_to_scalar_value() {
         let reference_pairs = &[
             (
                 json!("val"),
                 Some(ScalarValue::Utf8(Some(String::from("val")))),
             ),
-            (
-                json!("2"),
-                Some(ScalarValue::Utf8(Some(String::from("2")))),
-            ),
-            (
-                json!(true),
-                Some(ScalarValue::Boolean(Some(true))),
-            ),
-            (
-                json!(false),
-                Some(ScalarValue::Boolean(Some(false))),
-            ),
-            (
-                json!(2),
-                Some(ScalarValue::Int64(Some(2))),
-            ),
-            (
-                json!(-2),
-                Some(ScalarValue::Int64(Some(-2))),
-            ),
-            (
-                json!(2.0),
-                Some(ScalarValue::Float64(Some(2.0))),
-            ),
-            (
-                json!(["1", "2"]),
-                None
-            ),
-            (
-                json!({"key": "val"}),
-                None
-            ),
-            (
-                json!(null),
-                None
-            )
+            (json!("2"), Some(ScalarValue::Utf8(Some(String::from("2"))))),
+            (json!(true), Some(ScalarValue::Boolean(Some(true)))),
+            (json!(false), Some(ScalarValue::Boolean(Some(false)))),
+            (json!(2), Some(ScalarValue::Int64(Some(2)))),
+            (json!(-2), Some(ScalarValue::Int64(Some(-2)))),
+            (json!(2.0), Some(ScalarValue::Float64(Some(2.0)))),
+            (json!(["1", "2"]), None),
+            (json!({"key": "val"}), None),
+            (json!(null), None),
         ];
         for (stat_val, scalar_val) in reference_pairs {
             assert_eq!(to_scalar_value(stat_val), *scalar_val)
