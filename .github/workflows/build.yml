@@ -44,8 +44,8 @@ jobs:
         run: cargo clippy --no-default-features --features s3-rustls,rustls
       - name: Check docs
         run: cargo doc --features azure,datafusion,s3,gcs,glue
-      - name: Check no default features
-        run: cargo check --no-default-features
+      - name: Check no default features (except native-tls)
+        run: cargo check --no-default-features --features native-tls
 
   test:
     strategy:
