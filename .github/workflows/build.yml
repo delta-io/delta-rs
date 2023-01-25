@@ -41,11 +41,11 @@ jobs:
       - name: build and lint with clippy
         run: cargo clippy --features azure,datafusion,s3,gcs,glue
       - name: Spot-check build for rustls features
-        run: cargo clippy --no-default-features --features s3-rustls,rustls
+        run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue-native-tls
       - name: Check docs
         run: cargo doc --features azure,datafusion,s3,gcs,glue
       - name: Check no default features (except native-tls)
-        run: cargo check --no-default-features --features native-tls
+        run: cargo check --no-default-features --features rustls
 
   test:
     strategy:

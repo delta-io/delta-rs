@@ -94,7 +94,7 @@ datafusion = [
 datafusion-ext = ["datafusion"]
 azure = ["object_store/azure"]
 gcs = ["object_store/gcp"]
-s3 = [
+s3-native-tls = [
     "rusoto_core/native-tls",
     "rusoto_credential",
     "rusoto_sts/native-tls",
@@ -103,7 +103,7 @@ s3 = [
     "object_store/aws",
     "object_store/aws_profile",
 ]
-s3-rustls = [
+s3 = [
     "rusoto_core/rustls",
     "rusoto_credential",
     "rusoto_sts/rustls",
@@ -112,9 +112,9 @@ s3-rustls = [
     "object_store/aws",
     "object_store/aws_profile",
 ]
-glue = ["s3", "rusoto_glue"]
-glue-rustls = [
-    "s3-rustls",
+glue-native-tls = ["s3-native-tls", "rusoto_glue"]
+glue = [
+    "s3",
     "rusoto_glue/rustls"
 ]
 python = ["arrow/pyarrow"]
