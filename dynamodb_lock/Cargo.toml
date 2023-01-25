@@ -20,6 +20,6 @@ maplit = "1"
 tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
 
 [features]
-default = ["native-tls"]
+default = ["rustls"]
 native-tls = ["rusoto_core/native-tls", "rusoto_dynamodb/native-tls"]
 rustls = ["rusoto_core/rustls", "rusoto_dynamodb/rustls"]

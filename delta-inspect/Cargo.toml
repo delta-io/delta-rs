@@ -17,4 +17,4 @@ env_logger = "0"
 [dependencies.deltalake]
 path = "../rust"
 version = "0"
-features = ["azure", "glue", "gcs"]
+features = ["s3", "azure", "glue", "gcs"]

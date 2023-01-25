@@ -113,6 +113,10 @@ s3-rustls = [
     "object_store/aws_profile",
 ]
 glue = ["s3", "rusoto_glue"]
+glue-rustls = [
+    "s3-rustls",
+    "rusoto_glue/rustls"
+]
 python = ["arrow/pyarrow"]
 
 # used only for integration testing

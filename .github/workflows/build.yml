@@ -122,4 +122,5 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
-        run: cargo test --no-default-features --features=parquet2
+        working-directory: rust
+        run: cargo test --no-default-features --features=parquet2,native-tls

@@ -30,7 +30,7 @@ rusoto_credential = "0.48"
 rusoto_s3 = { version = "0.48", default-features = false }
 
 [features]
-default = ["native-tls"]
+default = ["rustls"]
 native-tls = ["rusoto_core/native-tls", "rusoto_s3/native-tls"]
 rustls = ["deltalake/s3-rustls", "rusoto_core/rustls", "rusoto_s3/rustls"]
 
