@@ -3,7 +3,7 @@
 VENV := venv
 MATURIN_VERSION := $(shell grep 'requires =' pyproject.toml | cut -d= -f2- | tr -d '[ "]')
 PACKAGE_VERSION := $(shell grep version Cargo.toml | head -n 1 | awk '{print $$3}' | tr -d '"' )
-DAT_VERSION := 0.0.1
+DAT_VERSION := 0.0.2
 
 .PHONY: setup-venv
 setup-venv: ## Setup the virtualenv

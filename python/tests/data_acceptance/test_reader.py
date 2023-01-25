@@ -18,7 +18,7 @@ class ReadCase(NamedTuple):
 
 cases = []
 
-dat_version = "0.0.1"
+dat_version = "0.0.2"
 reader_case_path = Path("dat-data") / f"v{dat_version}" / "reader_tests" / "generated"
 
 if not reader_case_path.exists():
@@ -73,8 +73,7 @@ def test_dat(case: ReadCase):
     # If supported protocol version, try to read, load parquet, and compare
     if dt.protocol().min_reader_version <= 1:
         version_path = "latest" if version is None else f"v{version}"
-        # TODO: fix the directory name here
-        parquet_root = root / "expected" / version_path / "table_content.parquet"
+        parquet_root = root / "expected" / version_path / "table_content"
         expected = pq.read_table(parquet_root, coerce_int96_timestamp_unit="us")
         actual = dt.to_pyarrow_table()
         assert_tables_equal(expected, actual)
