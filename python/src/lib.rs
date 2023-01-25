@@ -368,7 +368,7 @@ impl RawDeltaTable {
         &mut self,
         partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
     ) -> PyResult<HashSet<(String, Option<String>)>> {
-        let converted_filters = convert_partition_filters(partitions_filters.unwrap_or(Vec::new()))
+        let converted_filters = convert_partition_filters(partitions_filters.unwrap_or_default())
             .map_err(PyDeltaTableError::from_raw)?;
 
         let add_actions = self
@@ -377,13 +377,12 @@ impl RawDeltaTable {
             .get_active_add_actions_by_partitions(&converted_filters)
             .map_err(PyDeltaTableError::from_raw)?;
         let active_partitions = add_actions
-            .map(|add| {
+            .flat_map(|add| {
                 add.partition_values
                     .iter()
                     .map(|i| (i.0.to_owned(), i.1.to_owned()))
                     .collect::<Vec<_>>()
             })
-            .flatten()
             .collect::<HashSet<_>>();
         Ok(active_partitions)
     }
@@ -414,7 +413,7 @@ impl RawDeltaTable {
         match mode {
             SaveMode::Overwrite => {
                 let converted_filters =
-                    convert_partition_filters(partitions_filters.unwrap_or(Vec::new()))
+                    convert_partition_filters(partitions_filters.unwrap_or_default())
                         .map_err(PyDeltaTableError::from_raw)?;
 
                 let add_actions = self
