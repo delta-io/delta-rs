@@ -15,3 +15,6 @@ __pycache__/
 docs/build
 
 *.so
+
+# dat data
+dat-data
