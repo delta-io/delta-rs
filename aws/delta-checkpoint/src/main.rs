@@ -11,7 +11,7 @@
 use deltalake::checkpoints;
 use deltalake::checkpoints::CheckpointError;
 use deltalake::DeltaDataTypeVersion;
-use lambda_runtime::{handler_fn, Context, Error};
+use lambda_runtime::{service_fn, Error, LambdaEvent};
 use lazy_static::lazy_static;
 use log::*;
 use regex::Regex;
@@ -23,17 +23,13 @@ use std::path::PathBuf;
 async fn main() -> Result<(), Error> {
     let _ = pretty_env_logger::try_init();
 
-    let func = handler_fn(func);
+    let func = service_fn(process_event);
     lambda_runtime::run(func).await?;
     Ok(())
 }
 
-async fn func(event: Value, _: Context) -> Result<(), CheckPointLambdaError> {
-    process_event(&event).await
-}
-
-async fn process_event(event: &Value) -> Result<(), CheckPointLambdaError> {
-    let (bucket, key) = bucket_and_key_from_event(event)?;
+async fn process_event(event: LambdaEvent<Value>) -> Result<(), CheckPointLambdaError> {
+    let (bucket, key) = bucket_and_key_from_event(&event.payload)?;
     let (path, version) = table_path_and_version_from_key(key.as_str())?;
     let table_uri = table_uri_from_parts(bucket.as_str(), path.as_str())?;
 

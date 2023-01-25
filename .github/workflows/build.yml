@@ -6,10 +6,6 @@ on:
   pull_request:
     branches: [main, "rust-v*"]
 
-defaults:
-  run:
-    working-directory: ./rust
-
 jobs:
   format:
     runs-on: ubuntu-latest
@@ -45,7 +41,7 @@ jobs:
       - name: build and lint with clippy
         run: cargo clippy --features azure,datafusion,s3,gcs,glue
       - name: Spot-check build for rustls features
-        run: cargo clippy --features s3-rustls
+        run: cargo clippy --no-default-features --features s3-rustls,rustls
       - name: Check docs
         run: cargo doc --features azure,datafusion,s3,gcs,glue
       - name: Check no default features
@@ -112,7 +108,7 @@ jobs:
           cargo test --features integration_test,azure,s3,gcs,datafusion
       - name: Run tests with rustls
         run: |
-          cargo test --features integration_test,s3-rustls,datafusion
+          cargo test --no-default-features --features integration_test,s3-rustls,rustls,datafusion
 
   parquet2_test:
     runs-on: ubuntu-latest
