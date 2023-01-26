@@ -29,7 +29,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.6.4
+                0.7.0
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -95,52 +95,81 @@
 </dd>
 </dl>
 <dl class="py method">
-<dt class="sig sig-object py" id="deltalake.table.DeltaTable.file_paths">
-<span class="sig-name descname"><span class="pre">file_paths</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.file_paths" title="Permalink to this definition"></a></dt>
-<dd><p>Get the list of files with an absolute path.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Returns</dt>
-<dd class="field-odd"><p>list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable</p>
-</dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p><em>List</em>[str]</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.file_uris">
-<span class="sig-name descname"><span class="pre">file_uris</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.file_uris" title="Permalink to this definition"></a></dt>
-<dd><p>Get the list of files with an absolute path.</p>
+<span class="sig-name descname"><span class="pre">file_uris</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.file_uris" title="Permalink to this definition"></a></dt>
+<dd><p>Get the list of files as absolute URIs, including the scheme (e.g. “s3://”).</p>
+<p>Local files will be just plain absolute paths, without a scheme. (That is,
+no ‘<a class="reference external" href="file://">file://</a>’ prefix.)</p>
+<p>Use the partition_filters parameter to retrieve a subset of files that match the
+given filters.</p>
 <dl class="field-list simple">
-<dt class="field-odd">Returns</dt>
-<dd class="field-odd"><p>list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable</p>
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>partition_filters</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – the partition filters that will be used for getting the matched files</p>
 </dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p><em>List</em>[str]</p>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><em>List</em>[str]</p>
 </dd>
 </dl>
+<p>Predicates are expressed in disjunctive normal form (DNF), like [(“x”, “=”, “a”), …].
+DNF allows arbitrary boolean logical combinations of single partition predicates.
+The innermost tuples each describe a single partition predicate. The list of inner
+predicates is interpreted as a conjunction (AND), forming a more selective and 
+multiple partition predicates. Each tuple has format: (key, op, value) and compares 
+the key with the value. The supported op are: <cite>=</cite>, <cite>!=</cite>, <cite>in</cite>, and <cite>not in</cite>. If 
+the op is in or not in, the value must be a collection such as a list, a set or a tuple.
+The supported type for value is str. Use empty string <cite>‘’</cite> for Null partition value.</p>
+<p>Examples:
+(“x”, “=”, “a”)
+(“x”, “!=”, “a”)
+(“y”, “in”, [“a”, “b”, “c”])
+(“z”, “not in”, [“a”,”b”])</p>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.files">
-<span class="sig-name descname"><span class="pre">files</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.files" title="Permalink to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">files</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.files" title="Permalink to this definition"></a></dt>
 <dd><p>Get the .parquet files of the DeltaTable.</p>
+<p>The paths are as they are saved in the delta log, which may either be
+relative to the table root or absolute URIs.</p>
 <dl class="field-list simple">
-<dt class="field-odd">Returns</dt>
-<dd class="field-odd"><p>list of the .parquet files referenced for the current version of the DeltaTable</p>
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>partition_filters</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – the partition filters that will be used for 
+getting the matched files</p>
 </dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p><em>List</em>[str]</p>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>list of the .parquet files referenced for the current version 
+of the DeltaTable</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><em>List</em>[str]</p>
 </dd>
 </dl>
+<p>Predicates are expressed in disjunctive normal form (DNF), like [(“x”, “=”, “a”), …].
+DNF allows arbitrary boolean logical combinations of single partition predicates.
+The innermost tuples each describe a single partition predicate. The list of inner
+predicates is interpreted as a conjunction (AND), forming a more selective and 
+multiple partition predicates. Each tuple has format: (key, op, value) and compares 
+the key with the value. The supported op are: <cite>=</cite>, <cite>!=</cite>, <cite>in</cite>, and <cite>not in</cite>. If 
+the op is in or not in, the value must be a collection such as a list, a set or a tuple.
+The supported type for value is str. Use empty string <cite>‘’</cite> for Null partition value.</p>
+<p>Examples:
+(“x”, “=”, “a”)
+(“x”, “!=”, “a”)
+(“y”, “in”, [“a”, “b”, “c”])
+(“z”, “not in”, [“a”,”b”])</p>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.files_by_partitions">
 <span class="sig-name descname"><span class="pre">files_by_partitions</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.files_by_partitions" title="Permalink to this definition"></a></dt>
-<dd><p>Get the files that match a given list of partitions filters.
-Partitions which do not match the filter predicate will be removed from scanned data.
+<dd><p>Get the files that match a given list of partitions filters.</p>
+<div class="deprecated">
+<p><span class="versionmodified deprecated">Deprecated since version 0.7.0: </span>Use <a class="reference internal" href="#deltalake.table.DeltaTable.file_uris" title="deltalake.table.DeltaTable.file_uris"><code class="xref py py-meth docutils literal notranslate"><span class="pre">file_uris()</span></code></a> instead.</p>
+</div>
+<p>Partitions which do not match the filter predicate will be removed from scanned data.
 Predicates are expressed in disjunctive normal form (DNF), like [(“x”, “=”, “a”), …].
 DNF allows arbitrary boolean logical combinations of single partition predicates.
 The innermost tuples each describe a single partition predicate.
@@ -185,6 +214,46 @@ The supported type for value is str. Use empty string <cite>‘’</cite> for Nu
 <dd class="field-even"><p><a class="reference internal" href="#deltalake.table.DeltaTable" title="deltalake.table.DeltaTable">deltalake.table.DeltaTable</a></p>
 </dd>
 </dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.DeltaTable.get_add_actions">
+<span class="sig-name descname"><span class="pre">get_add_actions</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">flatten</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.get_add_actions" title="Permalink to this definition"></a></dt>
+<dd><p>Return a dataframe with all current add actions.</p>
+<p>Add actions represent the files that currently make up the table. This
+data is a low-level representation parsed from the transaction log.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>flatten</strong> (<em>bool</em>) – whether to flatten the schema. Partition values columns are
+given the prefix <cite>partition.</cite>, statistics (null_count, min, and max) are
+given the prefix <cite>null_count.</cite>, <cite>min.</cite>, and <cite>max.</cite>, and tags the
+prefix <cite>tags.</cite>. Nested field names are concatenated with <cite>.</cite>.</p>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>a PyArrow RecordBatch containing the add action data.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v10.0.1)">pyarrow.lib.RecordBatch</a></p>
+</dd>
+</dl>
+<p>Examples:</p>
+<div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span><span class="p">,</span> <span class="n">write_deltalake</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow</span> <span class="k">as</span> <span class="nn">pa</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">data</span> <span class="o">=</span> <span class="n">pa</span><span class="o">.</span><span class="n">table</span><span class="p">({</span><span class="s2">&quot;x&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s2">&quot;y&quot;</span><span class="p">:</span> <span class="p">[</span><span class="mi">4</span><span class="p">,</span> <span class="mi">5</span><span class="p">,</span> <span class="mi">6</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">,</span> <span class="n">data</span><span class="p">,</span> <span class="n">partition_by</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;x&quot;</span><span class="p">])</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;tmp&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">get_add_actions_df</span><span class="p">()</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="go">                                                        path  size_bytes       modification_time  data_change partition_values  num_records null_count       min       max</span>
+<span class="go">0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {&#39;x&#39;: 2}            1   {&#39;y&#39;: 0}  {&#39;y&#39;: 5}  {&#39;y&#39;: 5}</span>
+<span class="go">1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {&#39;x&#39;: 3}            1   {&#39;y&#39;: 0}  {&#39;y&#39;: 6}  {&#39;y&#39;: 6}</span>
+<span class="go">2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {&#39;x&#39;: 1}            1   {&#39;y&#39;: 0}  {&#39;y&#39;: 4}  {&#39;y&#39;: 4}</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">get_add_actions_df</span><span class="p">(</span><span class="n">flatten</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="go">                                                        path  size_bytes       modification_time  data_change  partition.x  num_records  null_count.y  min.y  max.y</span>
+<span class="go">0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            2            1             0      5      5</span>
+<span class="go">1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            3            1             0      6      6</span>
+<span class="go">2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            1            1             0      4      4</span>
+</pre></div>
+</div>
 </dd></dl>
 
 <dl class="py method">
@@ -297,7 +366,7 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 <dd class="field-even"><p>a pandas dataframe</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.5.2)">pandas.DataFrame</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.5.3)">pandas.DataFrame</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -487,7 +556,7 @@ function will throw DeltaTableProtocolError.</p>
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>table_or_uri</strong> (<em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference internal" href="#deltalake.table.DeltaTable" title="deltalake.table.DeltaTable"><em>deltalake.table.DeltaTable</em></a><em>]</em>) – URI of a table or a DeltaTable object.</p></li>
-<li><p><strong>data</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.5.2)"><em>pandas.core.frame.DataFrame</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v10.0.1)"><em>pyarrow.lib.Table</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v10.0.1)"><em>pyarrow.lib.RecordBatch</em></a><em>, </em><em>Iterable</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v10.0.1)"><em>pyarrow.lib.RecordBatch</em></a><em>]</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader" title="(in Apache Arrow v10.0.1)"><em>pyarrow.lib.RecordBatchReader</em></a><em>]</em>) – Data to write. If passing iterable, the schema must also be given.</p></li>
+<li><p><strong>data</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v1.5.3)"><em>pandas.core.frame.DataFrame</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v10.0.1)"><em>pyarrow.lib.Table</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v10.0.1)"><em>pyarrow.lib.RecordBatch</em></a><em>, </em><em>Iterable</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v10.0.1)"><em>pyarrow.lib.RecordBatch</em></a><em>]</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader" title="(in Apache Arrow v10.0.1)"><em>pyarrow.lib.RecordBatchReader</em></a><em>]</em>) – Data to write. If passing iterable, the schema must also be given.</p></li>
 <li><p><strong>schema</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v10.0.1)"><em>pyarrow.lib.Schema</em></a><em>]</em>) – Optional schema to write.</p></li>
 <li><p><strong>partition_by</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>]</em>) – List of columns to partition the table by. Only required
 when creating a new table.</p></li>
@@ -536,7 +605,7 @@ If this value is set, then min_rows_per_group should also be set.</p></li>
 <p>Schemas, fields, and data types are provided in the <code class="docutils literal notranslate"><span class="pre">deltalake.schema</span></code> submodule.</p>
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.Schema">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">Schema</span></span><a class="headerlink" href="#deltalake.schema.Schema" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">Schema</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fields</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.Schema" title="Permalink to this definition"></a></dt>
 <dd><p>A Delta Lake schema</p>
 <p>Create using a list of <a class="reference internal" href="#deltalake.schema.Field" title="deltalake.schema.Field"><code class="xref py py-class docutils literal notranslate"><span class="pre">Field</span></code></a>:</p>
 <div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">Schema</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">),</span> <span class="n">Field</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="s2">&quot;string&quot;</span><span class="p">)])</span>
@@ -637,7 +706,7 @@ field path and the second is the SQL of the invariant.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.PrimitiveType">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">PrimitiveType</span></span><a class="headerlink" href="#deltalake.schema.PrimitiveType" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">PrimitiveType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_type</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.PrimitiveType" title="Permalink to this definition"></a></dt>
 <dd><p>A primitive datatype, such as a string or number.</p>
 <p>Can be initialized with a string value:</p>
 <div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">&quot;integer&quot;</span><span class="p">)</span>
@@ -737,7 +806,7 @@ field path and the second is the SQL of the invariant.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.ArrayType">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">ArrayType</span></span><a class="headerlink" href="#deltalake.schema.ArrayType" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">ArrayType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">element_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">contains_null</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.ArrayType" title="Permalink to this definition"></a></dt>
 <dd><p>An Array (List) DataType</p>
 <p>Can either pass the element type explicitly or can pass a string
 if it is a primitive type:</p>
@@ -845,7 +914,7 @@ if it is a primitive type:</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.MapType">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">MapType</span></span><a class="headerlink" href="#deltalake.schema.MapType" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">MapType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">key_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value_contains_null</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.MapType" title="Permalink to this definition"></a></dt>
 <dd><p>A map data type</p>
 <p><code class="docutils literal notranslate"><span class="pre">key_type</span></code> and <code class="docutils literal notranslate"><span class="pre">value_type</span></code> should be :class PrimitiveType:, :class ArrayType:,
 :class ListType:, or :class StructType:. A string can also be passed, which will be
@@ -966,7 +1035,7 @@ parsed as a primitive type:</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.Field">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">Field</span></span><a class="headerlink" href="#deltalake.schema.Field" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">Field</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ty</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nullable</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.Field" title="Permalink to this definition"></a></dt>
 <dd><p>A field in a Delta StructType or Schema</p>
 <p>Can create with just a name and a type:</p>
 <div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;my_int_col&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">)</span>
@@ -1095,7 +1164,7 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.StructType">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">StructType</span></span><a class="headerlink" href="#deltalake.schema.StructType" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">StructType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fields</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.StructType" title="Permalink to this definition"></a></dt>
 <dd><p>A struct datatype, containing one or more subfields</p>
 <p>Create with a list of <a class="reference internal" href="#deltalake.schema.Field" title="deltalake.schema.Field"><code class="xref py py-class docutils literal notranslate"><span class="pre">Field</span></code></a>:</p>
 <div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">StructType</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">),</span> <span class="n">Field</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="s2">&quot;string&quot;</span><span class="p">)])</span>
@@ -1197,129 +1266,8 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 <span id="deltastoragehandler"></span><h2>DeltaStorageHandler<a class="headerlink" href="#module-deltalake.fs" title="Permalink to this headline"></a></h2>
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.fs.</span></span><span class="sig-name descname"><span class="pre">DeltaStorageHandler</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">backend</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler" title="Permalink to this definition"></a></dt>
-<dd><p>DeltaStorageHander is a concrete implementations of a PyArrow FileSystemHandler.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>table_uri</strong> (<em>str</em>) – </p></li>
-<li><p><strong>options</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>]</em><em>]</em>) – </p></li>
-<li><p><strong>backend</strong> (<em>Optional</em><em>[</em><em>Any</em><em>]</em>) – </p></li>
-</ul>
-</dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p>None</p>
-</dd>
-</dl>
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.copy_file">
-<span class="sig-name descname"><span class="pre">copy_file</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dest</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.copy_file" title="Permalink to this definition"></a></dt>
-<dd><p>Copy a file.</p>
-<p>If the destination exists and is a directory, an error is returned.
-Otherwise, it is replaced.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>src</strong> (<em>str</em>) – The path of the file to be copied from.</p></li>
-<li><p><strong>dest</strong> (<em>str</em>) – The destination path where the file is copied to.</p></li>
-</ul>
-</dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p>None</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.create_dir">
-<span class="sig-name descname"><span class="pre">create_dir</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">recursive</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.create_dir" title="Permalink to this definition"></a></dt>
-<dd><p>Create a directory and subdirectories.</p>
-<p>This function succeeds if the directory already exists.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>path</strong> (<em>str</em>) – The path of the new directory.</p></li>
-<li><p><strong>recursive</strong> (<em>bool</em>) – Create nested directories as well.</p></li>
-</ul>
-</dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p>None</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.delete_dir">
-<span class="sig-name descname"><span class="pre">delete_dir</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.delete_dir" title="Permalink to this definition"></a></dt>
-<dd><p>Delete a directory and its contents, recursively.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>path</strong> (<em>str</em>) – The path of the directory to be deleted.</p>
-</dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p>None</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.delete_dir_contents">
-<span class="sig-name descname"><span class="pre">delete_dir_contents</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.delete_dir_contents" title="Permalink to this definition"></a></dt>
-<dd><p>Delete a directory’s contents, recursively.</p>
-<p>Like delete_dir, but doesn’t delete the directory itself.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>path</strong> (<em>str</em>) – The path of the directory to be deleted.</p>
-</dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p>None</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.delete_file">
-<span class="sig-name descname"><span class="pre">delete_file</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.delete_file" title="Permalink to this definition"></a></dt>
-<dd><p>Delete a file.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>path</strong> (<em>str</em>) – The path of the file to be deleted.</p>
-</dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p>None</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.delete_root_dir_contents">
-<span class="sig-name descname"><span class="pre">delete_root_dir_contents</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.delete_root_dir_contents" title="Permalink to this definition"></a></dt>
-<dd><p>Delete a directory’s contents, recursively.</p>
-<p>Like delete_dir_contents, but for the root directory (path is empty or “/”)</p>
-<dl class="field-list simple">
-<dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p>None</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.get_file_info">
-<span class="sig-name descname"><span class="pre">get_file_info</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">paths</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.get_file_info" title="Permalink to this definition"></a></dt>
-<dd><p>Get info for the given files.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>paths</strong> (<em>List</em><em>[</em><em>str</em><em>]</em>) – List of file paths</p>
-</dd>
-<dt class="field-even">Returns</dt>
-<dd class="field-even"><p>list of file info objects</p>
-</dd>
-<dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><em>List</em>[<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileInfo.html#pyarrow.fs.FileInfo" title="(in Apache Arrow v10.0.1)">pyarrow._fs.FileInfo</a>]</p>
-</dd>
-</dl>
-</dd></dl>
-
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.fs.</span></span><span class="sig-name descname"><span class="pre">DeltaStorageHandler</span></span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler" title="Permalink to this definition"></a></dt>
+<dd><p>DeltaStorageHandler is a concrete implementations of a PyArrow FileSystemHandler.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.get_file_info_selector">
 <span class="sig-name descname"><span class="pre">get_file_info_selector</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">selector</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.get_file_info_selector" title="Permalink to this definition"></a></dt>
@@ -1333,78 +1281,6 @@ Otherwise, it is replaced.</p>
 </dd>
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><em>List</em>[<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileInfo.html#pyarrow.fs.FileInfo" title="(in Apache Arrow v10.0.1)">pyarrow._fs.FileInfo</a>]</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.get_type_name">
-<span class="sig-name descname"><span class="pre">get_type_name</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.get_type_name" title="Permalink to this definition"></a></dt>
-<dd><p>The filesystem’s type name.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Returns</dt>
-<dd class="field-odd"><p>The filesystem’s type name.</p>
-</dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p>str</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.move">
-<span class="sig-name descname"><span class="pre">move</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">src</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dest</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.move" title="Permalink to this definition"></a></dt>
-<dd><p>Move / rename a file or directory.</p>
-<p>If the destination exists: - if it is a non-empty directory, an error is returned - otherwise,
-if it has the same type as the source, it is replaced - otherwise,
-behavior is unspecified (implementation-dependent).</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>src</strong> (<em>str</em>) – The path of the file or the directory to be moved.</p></li>
-<li><p><strong>dest</strong> (<em>str</em>) – The destination path where the file or directory is moved to.</p></li>
-</ul>
-</dd>
-<dt class="field-even">Return type</dt>
-<dd class="field-even"><p>None</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.normalize_path">
-<span class="sig-name descname"><span class="pre">normalize_path</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.normalize_path" title="Permalink to this definition"></a></dt>
-<dd><p>Normalize filesystem path.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>path</strong> (<em>str</em>) – the path to normalize</p>
-</dd>
-<dt class="field-even">Returns</dt>
-<dd class="field-even"><p>the normalized path</p>
-</dd>
-<dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p>str</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
-<dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.open_append_stream">
-<span class="sig-name descname"><span class="pre">open_append_stream</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">path</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler.open_append_stream" title="Permalink to this definition"></a></dt>
-<dd><p>DEPRECATED: Open an output stream for appending.</p>
-<p>If the target doesn’t exist, a new empty file is created.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>path</strong> (<em>str</em>) – The source to open for writing.</p></li>
-<li><p><strong>metadata</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em>) – If not None, a mapping of string keys to string values.</p></li>
-</ul>
-</dd>
-<dt class="field-even">Returns</dt>
-<dd class="field-even"><p>NativeFile</p>
-</dd>
-<dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.NativeFile.html#pyarrow.NativeFile" title="(in Apache Arrow v10.0.1)">pyarrow.lib.NativeFile</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1424,7 +1300,7 @@ behavior is unspecified (implementation-dependent).</p>
 <dd class="field-even"><p>NativeFile</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.NativeFile.html#pyarrow.NativeFile" title="(in Apache Arrow v10.0.1)">pyarrow.lib.NativeFile</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile" title="(in Apache Arrow v10.0.1)">pyarrow.lib.PythonFile</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1444,7 +1320,7 @@ behavior is unspecified (implementation-dependent).</p>
 <dd class="field-even"><p>NativeFile</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.NativeFile.html#pyarrow.NativeFile" title="(in Apache Arrow v10.0.1)">pyarrow.lib.NativeFile</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile" title="(in Apache Arrow v10.0.1)">pyarrow.lib.PythonFile</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1458,14 +1334,14 @@ behavior is unspecified (implementation-dependent).</p>
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>path</strong> (<em>str</em>) – The source to open for writing.</p></li>
-<li><p><strong>metadata</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em>) – If not None, a mapping of string keys to string values.</p></li>
+<li><p><strong>metadata</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>]</em><em>]</em>) – If not None, a mapping of string keys to string values.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
 <dd class="field-even"><p>NativeFile</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.NativeFile.html#pyarrow.NativeFile" title="(in Apache Arrow v10.0.1)">pyarrow.lib.NativeFile</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile" title="(in Apache Arrow v10.0.1)">pyarrow.lib.PythonFile</a></p>
 </dd>
 </dl>
 </dd></dl>

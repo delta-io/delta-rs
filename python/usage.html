@@ -30,7 +30,7 @@
             <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.6.4
+                0.7.0
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -112,7 +112,7 @@ of the table, and other metadata such as creation time.</p>
 </pre></div>
 </div>
 <p>Depending on your storage backend, you could use the <code class="docutils literal notranslate"><span class="pre">storage_options</span></code> parameter to provide some configuration.
-Configuration is defined for specific backends - <a class="reference external" href="https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L423-L491">s3 options</a>, <a class="reference external" href="https://github.com/delta-io/delta-rs/blob/17999d24a58fb4c98c6280b9e57842c346b4603a/rust/src/builder.rs#L524-L539">azure options</a>.</p>
+Configuration is defined for specific backends - <a class="reference external" href="https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants">s3 options</a>, <a class="reference external" href="https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants">azure options</a>, <a class="reference external" href="https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants">gcs options</a>.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">storage_options</span> <span class="o">=</span> <span class="p">{</span><span class="s2">&quot;AWS_ACCESS_KEY_ID&quot;</span><span class="p">:</span> <span class="s2">&quot;THE_AWS_ACCESS_KEY_ID&quot;</span><span class="p">,</span> <span class="s2">&quot;AWS_SECRET_ACCESS_KEY&quot;</span><span class="p">:</span><span class="s2">&quot;THE_AWS_SECRET_ACCESS_KEY&quot;</span><span class="p">}</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.2.0&quot;</span><span class="p">,</span> <span class="n">storage_options</span><span class="o">=</span><span class="n">storage_options</span><span class="p">)</span>
 </pre></div>
@@ -161,7 +161,7 @@ reading the bulk data.</p>
 <p><code class="docutils literal notranslate"><span class="pre">deltalake</span></code> will work with any storage compliant with <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v10.0.1)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.FileSystem</span></code></a>, however the root of the filesystem has
 to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into
 a <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.SubTreeFileSystem.html#pyarrow.fs.SubTreeFileSystem" title="(in Apache Arrow v10.0.1)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.SubTreeFileSystem</span></code></a>.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pyarrow.fs</span> <span class="kn">as</span> <span class="nn">fs</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pyarrow.fs</span> <span class="k">as</span> <span class="nn">fs</span>
 <span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 
 <span class="n">path</span> <span class="o">=</span> <span class="s2">&quot;&lt;path/to/table&gt;&quot;</span>
@@ -173,7 +173,7 @@ a <a class="reference external" href="https://arrow.apache.org/docs/python/gener
 </div>
 <p>When using the pyarrow factory method for file systems, the normalized path is provided
 on creation. In case of S3 this would look something like:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pyarrow.fs</span> <span class="kn">as</span> <span class="nn">fs</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pyarrow.fs</span> <span class="k">as</span> <span class="nn">fs</span>
 <span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 
 <span class="n">table_uri</span> <span class="o">=</span> <span class="s2">&quot;s3://&lt;bucket&gt;/&lt;path&gt;&quot;</span>
@@ -314,7 +314,7 @@ partition columns and load the result as a stream of batches rather than a singl
 table. Convert to a dataset using <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.to_pyarrow_dataset" title="deltalake.table.DeltaTable.to_pyarrow_dataset"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.to_pyarrow_dataset()</span></code></a>. Filters
 applied to datasets will use the partition values and file statistics from the
 Delta transaction log and push down any other filters to the scanning operation.</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow.dataset</span> <span class="kn">as</span> <span class="nn">ds</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">pyarrow.dataset</span> <span class="k">as</span> <span class="nn">ds</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">dataset</span> <span class="o">=</span> <span class="n">dt</span><span class="o">.</span><span class="n">to_pyarrow_dataset</span><span class="p">()</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">condition</span> <span class="o">=</span> <span class="p">(</span><span class="n">ds</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;year&quot;</span><span class="p">)</span> <span class="o">==</span> <span class="s2">&quot;2021&quot;</span><span class="p">)</span> <span class="o">&amp;</span> <span class="p">(</span><span class="n">ds</span><span class="o">.</span><span class="n">field</span><span class="p">(</span><span class="s2">&quot;value&quot;</span><span class="p">)</span> <span class="o">&gt;</span> <span class="s2">&quot;4&quot;</span><span class="p">)</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">dataset</span><span class="o">.</span><span class="n">to_table</span><span class="p">(</span><span class="nb">filter</span><span class="o">=</span><span class="n">condition</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">])</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
@@ -323,7 +323,7 @@ Delta transaction log and push down any other filters to the scanning operation.
 <span class="go">1     7</span>
 <span class="go">2     5</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">batch_iter</span> <span class="o">=</span> <span class="n">dataset</span><span class="o">.</span><span class="n">to_batches</span><span class="p">(</span><span class="nb">filter</span><span class="o">=</span><span class="n">condition</span><span class="p">,</span> <span class="n">columns</span><span class="o">=</span><span class="p">[</span><span class="s2">&quot;value&quot;</span><span class="p">],</span> <span class="n">batch_size</span><span class="o">=</span><span class="mi">2</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">batch_iter</span><span class="p">:</span> <span class="k">print</span><span class="p">(</span><span class="n">batch</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">())</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="k">for</span> <span class="n">batch</span> <span class="ow">in</span> <span class="n">batch_iter</span><span class="p">:</span> <span class="nb">print</span><span class="p">(</span><span class="n">batch</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">())</span>
 <span class="go">  value</span>
 <span class="go">0     6</span>
 <span class="go">1     7</span>
@@ -360,7 +360,7 @@ Delta transaction log and push down any other filters to the scanning operation.
 </div>
 <p>Finally, you can always pass the list of file paths to an engine. For example,
 you can pass them to <code class="docutils literal notranslate"><span class="pre">dask.dataframe.read_parquet</span></code>:</p>
-<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">dask.dataframe</span> <span class="kn">as</span> <span class="nn">dd</span>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">import</span> <span class="nn">dask.dataframe</span> <span class="k">as</span> <span class="nn">dd</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">dd</span><span class="o">.</span><span class="n">read_parquet</span><span class="p">(</span><span class="n">dt</span><span class="o">.</span><span class="n">file_uris</span><span class="p">())</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="n">df</span>
 <span class="go">Dask DataFrame Structure:</span>
@@ -403,7 +403,7 @@ only list the files to be deleted. Pass <code class="docutils literal notranslat
 <span class="go"> &#39;../rust/tests/data/simple_table/part-00190-8ac0ae67-fb1d-461d-a3d3-8dc112766ff5-c000.snappy.parquet&#39;,</span>
 <span class="go"> &#39;../rust/tests/data/simple_table/part-00164-bf40481c-4afd-4c02-befa-90f056c2d77a-c000.snappy.parquet&#39;,</span>
 <span class="go"> ...]</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="n">dry_run</span><span class="o">=</span><span class="bp">False</span><span class="p">)</span> <span class="c1"># Don&#39;t run this unless you are sure!</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">vacuum</span><span class="p">(</span><span class="n">dry_run</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span> <span class="c1"># Don&#39;t run this unless you are sure!</span>
 </pre></div>
 </div>
 </section>
