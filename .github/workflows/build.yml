@@ -39,7 +39,7 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v2
       - name: build and lint with clippy
-        run: cargo clippy --features azure,datafusion,s3,gcs,glue
+        run: cargo clippy --features azure,datafusion,s3,gcs,glue --tests
       - name: Spot-check build for rustls features
         run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue-native-tls
       - name: Check docs
@@ -103,12 +103,12 @@ jobs:
       - name: Start emulated services
         run: docker-compose up -d
 
-      - name: Run tests with default ssl
+      - name: Run tests with rustls (default)
         run: |
           cargo test --features integration_test,azure,s3,gcs,datafusion
-      - name: Run tests with rustls
+      - name: Run tests with native-tls
         run: |
-          cargo test --no-default-features --features integration_test,s3-rustls,rustls,datafusion
+          cargo test --no-default-features --features integration_test,s3-native-tls,native-tls,datafusion
 
   parquet2_test:
     runs-on: ubuntu-latest

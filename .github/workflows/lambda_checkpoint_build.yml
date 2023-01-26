@@ -33,7 +33,7 @@ jobs:
           toolchain: stable
           override: true
       - name: build and lint with clippy
-        run: cargo clippy -p lambda-delta-checkpoint
+        run: cargo clippy -p lambda-delta-checkpoint --features integration_test
 
   ## Temporarily disable test - the lambda isn't super useful with the current checkpoint memory pressure anyway.
   # test:

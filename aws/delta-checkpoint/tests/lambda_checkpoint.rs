@@ -1,3 +1,4 @@
+#![cfg(feature = "integration_test")]
 use rusoto_core::Region;
 use rusoto_s3::{GetObjectRequest, PutObjectRequest, S3Client, S3};
 

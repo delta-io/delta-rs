@@ -30,6 +30,6 @@ You must start the docker-compose before running tests. The tests include an int
 docker network create delta-checkpoint
 docker-compose up setup
 
-cargo test
+cargo test --features integration_test
 ```
 
