@@ -53,7 +53,6 @@ impl IntegrationContext {
             StorageIntegration::Google => format!("gs://{}", &bucket),
             StorageIntegration::Local => format!("file://{}", &bucket),
         };
-
         // the "storage_backend" will always point to the root ofg the object store.
         // TODO should we provide the store via object_Store builders?
         let store = match integration {
@@ -87,6 +86,12 @@ impl IntegrationContext {
             StorageIntegration::Google => format!("gs://{}", &self.bucket),
             StorageIntegration::Local => format!("file://{}", &self.bucket),
         }
+    }
+
+    pub fn table_builder(&self, table: TestTables) -> DeltaTableBuilder {
+        let name = table.as_name();
+        let table_uri = format!("{}/{}", self.root_uri(), &name);
+        DeltaTableBuilder::from_uri(table_uri).with_allow_http(true)
     }
 
     pub fn uri_for_table(&self, table: TestTables) -> String {

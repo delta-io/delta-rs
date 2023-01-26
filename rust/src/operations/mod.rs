@@ -8,11 +8,13 @@
 //! if the operation returns data as well.
 
 use self::create::CreateBuilder;
+use self::filesystem_check::FileSystemCheckBuilder;
 use self::vacuum::VacuumBuilder;
 use crate::builder::DeltaTableBuilder;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 pub mod create;
+pub mod filesystem_check;
 pub mod transaction;
 pub mod vacuum;
 
@@ -114,6 +116,12 @@ impl DeltaOps {
     #[must_use]
     pub fn vacuum(self) -> VacuumBuilder {
         VacuumBuilder::new(self.0.object_store(), self.0.state)
+    }
+
+    /// Audit active files with files present on the filesystem
+    #[must_use]
+    pub fn filesystem_check(self) -> FileSystemCheckBuilder {
+        FileSystemCheckBuilder::new(self.0.object_store(), self.0.state)
     }
 }
 
