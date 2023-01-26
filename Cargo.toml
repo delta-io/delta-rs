@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "ruby",
     "rust",
     "python",
     "glibc_version",
