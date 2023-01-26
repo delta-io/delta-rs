@@ -1,20 +1,18 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
-use std::collections::HashMap;
-use std::sync::Arc;
-
-use crate::{DeltaTableBuilder, DeltaTableMetaData};
-
 use super::transaction::commit;
 use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
 use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
-use crate::builder::StorageUrl;
+use crate::builder::ensure_table_uri;
 use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
 use crate::storage::DeltaObjectStore;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::{DeltaTableBuilder, DeltaTableMetaData};
 
 use futures::future::BoxFuture;
 use serde_json::{Map, Value};
+use std::collections::HashMap;
+use std::sync::Arc;
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
@@ -209,20 +207,20 @@ impl CreateBuilder {
             return Err(CreateError::MissingSchema.into());
         }
 
-        let (table, storage_url) = if let Some(object_store) = self.object_store {
-            let storage_url = StorageUrl::parse(object_store.root_uri())?;
+        let (storage_url, table) = if let Some(object_store) = self.object_store {
             (
+                ensure_table_uri(object_store.root_uri())?
+                    .as_str()
+                    .to_string(),
                 DeltaTable::new(object_store, Default::default()),
-                storage_url,
             )
         } else {
-            let storage_url =
-                StorageUrl::parse(self.location.ok_or(CreateError::MissingLocation)?)?;
+            let storage_url = ensure_table_uri(self.location.ok_or(CreateError::MissingLocation)?)?;
             (
+                storage_url.as_str().to_string(),
                 DeltaTableBuilder::from_uri(&storage_url)
                     .with_storage_options(self.storage_options.unwrap_or_default())
                     .build()?,
-                storage_url,
             )
         };
 
@@ -253,7 +251,7 @@ impl CreateBuilder {
         let operation = DeltaOperation::Create {
             mode: self.mode.clone(),
             metadata: metadata.clone(),
-            location: storage_url.to_string(),
+            location: storage_url,
             protocol: protocol.clone(),
         };
 
@@ -310,12 +308,13 @@ impl std::future::IntoFuture for CreateBuilder {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "parquet"))]
 mod tests {
     use super::*;
     use crate::operations::DeltaOps;
     use crate::table_properties::APPEND_ONLY;
     use crate::writer::test_utils::get_delta_schema;
+    use rand::distributions::{Alphanumeric, DistString};
 
     #[tokio::test]
     async fn test_create() {
@@ -329,6 +328,34 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         assert_eq!(table.get_metadata().unwrap().schema, table_schema)
+    }
+
+    #[tokio::test]
+    async fn test_create_local_relative_path() {
+        let table_schema = get_delta_schema();
+        let name = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+        let table = DeltaOps::try_from_uri(format!("./{}", name))
+            .await
+            .unwrap()
+            .create()
+            .with_columns(table_schema.get_fields().clone())
+            .with_save_mode(SaveMode::Ignore)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_metadata().unwrap().schema, table_schema)
+    }
+
+    #[tokio::test]
+    async fn test_create_table_local_path() {
+        let schema = get_delta_schema();
+        let name = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+        let table = CreateBuilder::new()
+            .with_location(format!("./{}", name))
+            .with_columns(schema.get_fields().clone())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
     }
 
     #[tokio::test]

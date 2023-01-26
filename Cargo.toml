@@ -1,6 +1,5 @@
 [workspace]
 members = [
-    "ruby",
     "rust",
     "python",
     "glibc_version",
@@ -8,3 +7,7 @@ members = [
     "dynamodb_lock",
 ]
 exclude = ["proofs", "delta-inspect"]
+
+[profile.release-with-debug]
+inherits = "release"
+debug = true

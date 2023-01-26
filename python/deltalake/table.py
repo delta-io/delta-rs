@@ -426,6 +426,9 @@ given filters.
         """
         self._table.update_incremental()
 
+    def create_checkpoint(self) -> None:
+        self._table.create_checkpoint()
+
     def __stringify_partition_values(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]]
     ) -> Optional[List[Tuple[str, str, Union[str, List[str]]]]]:
@@ -440,3 +443,37 @@ given filters.
                 str_value = str(value)
             out.append((field, op, str_value))
         return out
+
+    def get_add_actions(self, flatten: bool = False) -> pyarrow.RecordBatch:
+        """
+        Return a dataframe with all current add actions.
+
+        Add actions represent the files that currently make up the table. This
+        data is a low-level representation parsed from the transaction log.
+
+        :param flatten: whether to flatten the schema. Partition values columns are
+          given the prefix `partition.`, statistics (null_count, min, and max) are
+          given the prefix `null_count.`, `min.`, and `max.`, and tags the
+          prefix `tags.`. Nested field names are concatenated with `.`.
+
+        :returns: a PyArrow RecordBatch containing the add action data.
+
+        Examples:
+
+        >>> from deltalake import DeltaTable, write_deltalake
+        >>> import pyarrow as pa
+        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        >>> write_deltalake("tmp", data, partition_by=["x"])
+        >>> dt = DeltaTable("tmp")
+        >>> dt.get_add_actions_df().to_pandas()
+                                                                path  size_bytes       modification_time  data_change partition_values  num_records null_count       min       max
+        0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 2}            1   {'y': 0}  {'y': 5}  {'y': 5}
+        1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 3}            1   {'y': 0}  {'y': 6}  {'y': 6}
+        2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 1}            1   {'y': 0}  {'y': 4}  {'y': 4}
+        >>> dt.get_add_actions_df(flatten=True).to_pandas()
+                                                                path  size_bytes       modification_time  data_change  partition.x  num_records  null_count.y  min.y  max.y
+        0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            2            1             0      5      5
+        1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            3            1             0      6      6
+        2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            1            1             0      4      4
+        """
+        return self._table.get_add_actions(flatten)

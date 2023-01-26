@@ -109,7 +109,7 @@ mod delete_expired_delta_log_in_checkpoint {
         let set_file_last_modified = |version: usize, last_modified_millis: i64| {
             let last_modified_secs = last_modified_millis / 1000;
             let path = format!("{}/_delta_log/{:020}.json", &table_path, version);
-            utime::set_file_times(&path, last_modified_secs, last_modified_secs).unwrap();
+            utime::set_file_times(path, last_modified_secs, last_modified_secs).unwrap();
         };
 
         // create 2 commits

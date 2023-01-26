@@ -1,12 +1,15 @@
 //! The module for delta table state.
 
-use super::{
-    ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableMetaData,
-};
-use crate::action::{self, Action};
+use crate::action::{self, Action, Add};
 use crate::delta_config;
+use crate::partitions::{DeltaTablePartition, PartitionFilter};
+use crate::schema::SchemaDataType;
+use crate::{
+    ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
+    DeltaTableMetaData,
+};
 use chrono::Utc;
-use object_store::ObjectStore;
+use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
@@ -15,23 +18,29 @@ use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, Cursor};
 
 #[cfg(any(feature = "parquet", feature = "parquet2"))]
-use super::{CheckPoint, DeltaTableConfig, DeltaTableError};
+use super::{CheckPoint, DeltaTableConfig};
 
 /// State snapshot currently held by the Delta Table instance.
 #[derive(Default, Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
+    // current table version represented by this table state
     version: DeltaDataTypeVersion,
     // A remove action should remain in the state of the table as a tombstone until it has expired.
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: HashSet<action::Remove>,
+    // active files for table state
     files: Vec<action::Add>,
+    // Information added to individual commits
     commit_infos: Vec<Map<String, Value>>,
     app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
     min_reader_version: i32,
     min_writer_version: i32,
+    // table metadata corresponding to current version
     current_metadata: Option<DeltaTableMetaData>,
+    // retention period for tombstones in milli-seconds
     tombstone_retention_millis: DeltaDataTypeLong,
+    // retention period for log entries in milli-seconds
     log_retention_millis: DeltaDataTypeLong,
     enable_expired_log_cleanup: bool,
 }
@@ -192,6 +201,12 @@ impl DeltaTableState {
         self.files.as_ref()
     }
 
+    /// Returns an iterator of file names present in the loaded state
+    #[inline]
+    pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
+        self.files.iter().map(|add| Path::from(add.path.as_ref()))
+    }
+
     /// HashMap containing the last txn version stored for every app id writing txn
     /// actions.
     pub fn app_transaction_version(&self) -> &HashMap<String, DeltaDataTypeVersion> {
@@ -330,13 +345,45 @@ impl DeltaTableState {
 
         Ok(())
     }
+
+    /// Obtain Add actions for files that match the filter
+    pub fn get_active_add_actions_by_partitions<'a>(
+        &'a self,
+        filters: &'a [PartitionFilter<'a, &'a str>],
+    ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
+        let current_metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
+        if !filters
+            .iter()
+            .all(|f| current_metadata.partition_columns.contains(&f.key.into()))
+        {
+            return Err(DeltaTableError::InvalidPartitionFilter {
+                partition_filter: format!("{:?}", filters),
+            });
+        }
+
+        let partition_col_data_types: HashMap<&str, &SchemaDataType> = current_metadata
+            .get_partition_col_data_types()
+            .into_iter()
+            .collect();
+
+        let actions = self.files().iter().filter(move |add| {
+            let partitions = add
+                .partition_values
+                .iter()
+                .map(|p| DeltaTablePartition::from_partition_value(p, ""))
+                .collect::<Vec<DeltaTablePartition>>();
+            filters
+                .iter()
+                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
+        });
+        Ok(actions)
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
 
     #[test]
     fn state_round_trip() {

@@ -61,7 +61,7 @@ async fn prepare_table(
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
     let table_uri = table_path.to_str().unwrap().to_string();
-    let table_schema: Schema = batches[0].schema().clone().try_into().unwrap();
+    let table_schema: Schema = batches[0].schema().try_into().unwrap();
 
     let mut table = DeltaOps::try_from_uri(table_uri)
         .await

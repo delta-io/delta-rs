@@ -70,6 +70,7 @@
 
 #![deny(warnings)]
 #![deny(missing_docs)]
+#![allow(rustdoc::invalid_html_tags)]
 
 #[cfg(all(feature = "parquet", feature = "parquet2"))]
 compile_error!(
@@ -84,13 +85,16 @@ pub mod builder;
 pub mod data_catalog;
 pub mod delta;
 pub mod delta_config;
+pub mod operations;
 pub mod partitions;
 pub mod schema;
 pub mod storage;
 pub mod table_properties;
 pub mod table_state;
 pub mod time_utils;
-pub mod vacuum;
+
+#[cfg(all(feature = "arrow"))]
+pub mod table_state_arrow;
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod checkpoints;
@@ -98,8 +102,6 @@ pub mod checkpoints;
 pub mod delta_arrow;
 #[cfg(feature = "datafusion")]
 pub mod delta_datafusion;
-#[cfg(all(feature = "arrow", feature = "parquet"))]
-pub mod operations;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod optimize;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
@@ -111,14 +113,13 @@ pub use self::delta::*;
 pub use self::partitions::*;
 pub use self::schema::*;
 pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
+pub use operations::DeltaOps;
 
 // convenience exports for consumers to avoid aligning crate versions
 #[cfg(feature = "arrow")]
 pub use arrow;
 #[cfg(feature = "datafusion")]
 pub use datafusion;
-#[cfg(all(feature = "arrow", feature = "parquet"))]
-pub use operations::DeltaOps;
 #[cfg(feature = "parquet")]
 pub use parquet;
 #[cfg(feature = "parquet2")]

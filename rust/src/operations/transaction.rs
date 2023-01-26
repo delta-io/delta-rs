@@ -141,7 +141,7 @@ pub(crate) async fn commit(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "parquet"))]
 mod tests {
     use super::*;
     use crate::action::{DeltaOperation, Protocol, SaveMode};
@@ -159,7 +159,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_commits_writes_file() {
-        let metadata = get_delta_metadata(&vec![]);
+        let metadata = get_delta_metadata(&[]);
         let operation = DeltaOperation::Create {
             mode: SaveMode::Append,
             location: "memory://".into(),

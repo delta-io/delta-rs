@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::storage::DeltaObjectStore;
-use crate::{DeltaResult, DeltaTable};
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, TaskContext};
@@ -77,16 +77,16 @@ impl std::future::IntoFuture for LoadBuilder {
 
         Box::pin(async move {
             let object_store = this.object_store.unwrap();
-            let scheme = object_store.root_uri(); // underlying store, i.e. `memory:`
-            let scheme = scheme.trim_end_matches(':');
+            let url = url::Url::parse(&object_store.root_uri())
+                .map_err(|_| DeltaTableError::InvalidTableLocation(object_store.root_uri()))?;
             let store = object_store.storage_backend().clone();
             let mut table = DeltaTable::new(object_store, Default::default());
             table.load().await?;
 
             let ctx = SessionContext::new();
             ctx.state()
-                .runtime_env
-                .register_object_store(scheme, "", store);
+                .runtime_env()
+                .register_object_store(url.scheme(), "", store);
             let scan_plan = table.scan(&ctx.state(), None, &[], None).await?;
             let plan = CoalescePartitionsExec::new(scan_plan);
             let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
