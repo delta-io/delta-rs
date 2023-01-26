@@ -40,11 +40,11 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: build and lint with clippy
         run: cargo clippy --features azure,datafusion,s3,gcs,glue --tests
-      - name: Spot-check build for rustls features
+      - name: Spot-check build for native-tls features
         run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue-native-tls
       - name: Check docs
         run: cargo doc --features azure,datafusion,s3,gcs,glue
-      - name: Check no default features (except native-tls)
+      - name: Check no default features (except rustls)
         run: cargo check --no-default-features --features rustls
 
   test:
