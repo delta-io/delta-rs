@@ -32,7 +32,7 @@ else:
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
-from pyarrow.lib import BooleanScalar, RecordBatchReader
+from pyarrow.lib import RecordBatchReader
 
 from deltalake.schema import delta_arrow_schema_from_pandas
 
@@ -232,7 +232,7 @@ def write_deltalake(
             batch: pa.RecordBatch,
         ) -> None:
             def arrow_value_to_partition_string(val: Any) -> str:
-                if isinstance(val, BooleanScalar):
+                if val.type == "bool":
                     val = str(val).lower()
                 else:
                     val = str(val)
@@ -244,6 +244,7 @@ def write_deltalake(
             for column_index, column_name in enumerate(batch.schema.names):
                 if column_name in table.metadata().partition_columns:
                     for value in batch.column(column_index).unique():
+                        print(type(value))
                         if (
                             column_name,
                             arrow_value_to_partition_string(value),
