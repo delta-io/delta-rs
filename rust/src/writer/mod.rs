@@ -55,11 +55,11 @@ pub(crate) enum DeltaWriterError {
     },
 
     /// Serialization of delta log statistics failed.
-    #[error("Serialization of delta log statistics failed")]
+    #[error("Serialization of delta log statistics failed: {source}")]
     StatsSerializationFailed {
-        /// The stats object that failed serialization.
+        /// error raised during stats serialization.
         #[from]
-        stats: serde_json::Error,
+        source: serde_json::Error,
     },
 
     /// underlying object store returned an error.
