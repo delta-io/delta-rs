@@ -1,11 +1,9 @@
 #![cfg(all(feature = "integration_test"))]
 
-use arrow::array::Int64Array;
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
 use deltalake::DeltaOps;
 use deltalake::Path;
 use serial_test::serial;
-use std::sync::Arc;
 
 mod common;
 
