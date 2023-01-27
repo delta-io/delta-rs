@@ -336,6 +336,7 @@ pub mod s3_cli {
         set_env_if_not_set("DYNAMO_LOCK_TABLE_NAME", "test_table");
         set_env_if_not_set("DYNAMO_LOCK_REFRESH_PERIOD_MILLIS", "100");
         set_env_if_not_set("DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS", "100");
+        set_env_if_not_set("AWS_STORAGE_ALLOW_HTTP", "TRUE");
     }
 
     pub fn create_lock_table() -> std::io::Result<ExitStatus> {
