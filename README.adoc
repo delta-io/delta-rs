@@ -21,7 +21,7 @@ used with data processing frameworks like
 link:https://github.com/apache/arrow-datafusion[datafusion],
 link:https://github.com/apache/arrow-datafusion/tree/master/ballista[ballista],
 link:https://github.com/pola-rs/polars[polars],
-link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to other higher level languages such as link:https://delta-io.github.io/delta-rs/python/[Python] or Ruby.
+link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to other higher level language link:https://delta-io.github.io/delta-rs/python/[Python].
 
 === Features
 

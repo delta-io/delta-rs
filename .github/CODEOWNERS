@@ -3,5 +3,4 @@ proofs/ @houqp
 python/ @wjones127 @fvaleye @rtyler @roeap @houqp
 dynamodbb_lock/ @mosyp @houqp @xianwill
 aws/delta-checkpoint/ @xianwill @houqp @rtyler @mosyp
-ruby/ @rtyler
 tlaplus/ @houqp
