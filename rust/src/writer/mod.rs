@@ -1,7 +1,7 @@
 #![cfg(all(feature = "arrow", feature = "parquet"))]
 //! Abstractions and implementations for writing data to delta tables
 
-use crate::action::{Action, Add, ColumnCountStat, Stats};
+use crate::action::{Action, Add, ColumnCountStat};
 use crate::{DeltaDataTypeVersion, DeltaTable, DeltaTableError};
 
 use arrow::{datatypes::SchemaRef, datatypes::*, error::ArrowError};
@@ -54,12 +54,12 @@ pub(crate) enum DeltaWriterError {
         sample_error: ParquetError,
     },
 
-    // TODO: derive Debug for Stats in delta-rs
     /// Serialization of delta log statistics failed.
     #[error("Serialization of delta log statistics failed")]
     StatsSerializationFailed {
         /// The stats object that failed serialization.
-        stats: Stats,
+        #[from]
+        stats: serde_json::Error,
     },
 
     /// underlying object store returned an error.

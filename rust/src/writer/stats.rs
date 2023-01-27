@@ -93,8 +93,7 @@ pub(crate) fn create_add(
         null_count: null_counts,
     };
 
-    let stats_string = serde_json::to_string(&stats)
-        .or(Err(DeltaWriterError::StatsSerializationFailed { stats }))?;
+    let stats_string = serde_json::to_string(&stats)?;
 
     // Determine the modification timestamp to include in the add action - milliseconds since epoch
     // Err should be impossible in this case since `SystemTime::now()` is always greater than `UNIX_EPOCH`
