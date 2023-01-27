@@ -320,9 +320,9 @@ fn get_target_file_size(table: &DeltaTable) -> DeltaDataTypeLong {
 }
 
 /// Build a Plan on which files to merge together. See [`Optimize`]
-pub fn create_merge_plan<'a>(
+pub fn create_merge_plan(
     table: &mut DeltaTable,
-    filters: &[PartitionFilter<'a, &str>],
+    filters: &[PartitionFilter<'_, &str>],
     target_size: Option<DeltaDataTypeLong>,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| get_target_file_size(table));

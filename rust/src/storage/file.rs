@@ -352,8 +352,8 @@ mod tests {
         assert!(!c.exists());
         match rename_noreplace(a.to_str().unwrap(), c.to_str().unwrap()).await {
             Err(LocalFileSystemError::InvalidArgument {source, ..}) =>
-                panic!("expected success, got: {:?}. Note: atomically renaming Windows files from WSL2 is not supported.", source),
-            Err(e) => panic!("expected success, got: {:?}", e),
+                panic!("expected success, got: {source:?}. Note: atomically renaming Windows files from WSL2 is not supported."),
+            Err(e) => panic!("expected success, got: {e:?}"),
             _ => {}
         }
         assert!(!a.exists());

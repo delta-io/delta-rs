@@ -66,15 +66,15 @@ async fn main() -> anyhow::Result<()> {
             };
 
             if files_matches.is_present("full_uri") {
-                table.get_file_uris().for_each(|f| println!("{}", f));
+                table.get_file_uris().for_each(|f| println!("{f}"));
             } else {
-                table.get_files_iter().for_each(|f| println!("{}", f));
+                table.get_files_iter().for_each(|f| println!("{f}"));
             };
         }
         Some(("info", info_matches)) => {
             let table_uri = info_matches.value_of("uri").unwrap();
             let table = deltalake::open_table(table_uri).await?;
-            println!("{}", table);
+            println!("{table}");
         }
         Some(("vacuum", vacuum_matches)) => {
             let dry_run = !vacuum_matches.is_present("no_dry_run");
@@ -91,9 +91,9 @@ async fn main() -> anyhow::Result<()> {
                 )
                 .await?;
             if dry_run {
-                println!("Files to deleted: {:#?}", files);
+                println!("Files to deleted: {files:#?}");
             } else {
-                println!("Files deleted: {:#?}", files);
+                println!("Files deleted: {files:#?}");
             }
         }
         _ => unreachable!(),

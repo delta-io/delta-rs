@@ -701,29 +701,20 @@ mod tests {
 
     #[test]
     fn lock_options_default_test() {
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME,
-            "some_table".to_string(),
-        );
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME,
-            "some_owner".to_string(),
-        );
+        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME, "some_table");
+        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME, "some_owner");
         std::env::set_var(
             dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE,
-            "some_pk".to_string(),
+            "some_pk",
         );
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION,
-            "40".to_string(),
-        );
+        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION, "40");
         std::env::set_var(
             dynamo_lock_options::DYNAMO_LOCK_REFRESH_PERIOD_MILLIS,
-            "2000".to_string(),
+            "2000",
         );
         std::env::set_var(
             dynamo_lock_options::DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS,
-            "3000".to_string(),
+            "3000",
         );
 
         let options = DynamoDbOptions::default();
@@ -767,29 +758,20 @@ mod tests {
 
     #[test]
     fn lock_options_mixed_test() {
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME,
-            "some_table".to_string(),
-        );
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME,
-            "some_owner".to_string(),
-        );
+        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME, "some_table");
+        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME, "some_owner");
         std::env::set_var(
             dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE,
-            "some_pk".to_string(),
+            "some_pk",
         );
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION,
-            "40".to_string(),
-        );
+        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION, "40");
         std::env::set_var(
             dynamo_lock_options::DYNAMO_LOCK_REFRESH_PERIOD_MILLIS,
-            "2000".to_string(),
+            "2000",
         );
         std::env::set_var(
             dynamo_lock_options::DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS,
-            "3000".to_string(),
+            "3000",
         );
 
         let options = DynamoDbOptions::from_map(hashmap! {

@@ -53,7 +53,7 @@ impl DeltaFileSystemHandler {
     fn normalize_path(&self, path: String) -> PyResult<String> {
         let suffix = if path.ends_with('/') { "/" } else { "" };
         let path = Path::parse(path).unwrap();
-        Ok(format!("{}{}", path, suffix))
+        Ok(format!("{path}{suffix}"))
     }
 
     fn copy_file(&self, src: String, dest: String) -> PyResult<()> {
@@ -87,7 +87,7 @@ impl DeltaFileSystemHandler {
     }
 
     fn equals(&self, other: &DeltaFileSystemHandler) -> PyResult<bool> {
-        Ok(format!("{:?}", self) == format!("{:?}", other))
+        Ok(format!("{self:?}") == format!("{other:?}"))
     }
 
     fn get_file_info<'py>(&self, paths: Vec<String>, py: Python<'py>) -> PyResult<Vec<&'py PyAny>> {
@@ -313,14 +313,12 @@ impl ObjectInputFile {
     fn check_position(&self, position: i64, action: &str) -> PyResult<()> {
         if position < 0 {
             return Err(PyIOError::new_err(format!(
-                "Cannot {} for negative position.",
-                action
+                "Cannot {action} for negative position."
             )));
         }
         if position > self.content_length {
             return Err(PyIOError::new_err(format!(
-                "Cannot {} past end of file.",
-                action
+                "Cannot {action} past end of file."
             )));
         }
         Ok(())
