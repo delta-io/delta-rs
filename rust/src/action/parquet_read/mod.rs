@@ -30,8 +30,7 @@ fn populate_hashmap_with_option_from_parquet_map(
 
 fn gen_action_type_error(action: &str, field: &str, expected_type: &str) -> ActionError {
     ActionError::InvalidField(format!(
-        "type for {} in {} action should be {}",
-        field, action, expected_type
+        "type for {field} in {action} action should be {expected_type}"
     ))
 }
 
@@ -83,8 +82,7 @@ impl Add {
                     )
                     .map_err(|estr| {
                         ActionError::InvalidField(format!(
-                            "Invalid partitionValues for add action: {}",
-                            estr,
+                            "Invalid partitionValues for add action: {estr}",
                         ))
                     })?;
                 }
@@ -104,8 +102,7 @@ impl Add {
                         populate_hashmap_with_option_from_parquet_map(&mut tags, tags_map)
                             .map_err(|estr| {
                                 ActionError::InvalidField(format!(
-                                    "Invalid tags for add action: {}",
-                                    estr,
+                                    "Invalid tags for add action: {estr}",
                                 ))
                             })?;
                         re.tags = Some(tags);
@@ -352,8 +349,7 @@ impl MetaData {
                     )
                     .map_err(|estr| {
                         ActionError::InvalidField(format!(
-                            "Invalid configuration for metaData action: {}",
-                            estr,
+                            "Invalid configuration for metaData action: {estr}",
                         ))
                     })?;
                 }
@@ -377,8 +373,7 @@ impl MetaData {
                             )
                             .map_err(|estr| {
                                 ActionError::InvalidField(format!(
-                                    "Invalid format.options for metaData action: {}",
-                                    estr,
+                                    "Invalid format.options for metaData action: {estr}",
                                 ))
                             })?;
                             re.format.options = options;
@@ -443,8 +438,7 @@ impl Remove {
                         )
                         .map_err(|estr| {
                             ActionError::InvalidField(format!(
-                                "Invalid partitionValues for remove action: {}",
-                                estr,
+                                "Invalid partitionValues for remove action: {estr}",
                             ))
                         })?;
                         re.partition_values = Some(partition_values);
@@ -457,8 +451,7 @@ impl Remove {
                         populate_hashmap_with_option_from_parquet_map(&mut tags, tags_map)
                             .map_err(|estr| {
                                 ActionError::InvalidField(format!(
-                                    "Invalid tags for remove action: {}",
-                                    estr,
+                                    "Invalid tags for remove action: {estr}",
                                 ))
                             })?;
                         re.tags = Some(tags);
@@ -598,8 +591,7 @@ impl Action {
             "cdc" => Action::cdc(AddCDCFile::from_parquet_record(col_data)?),
             name => {
                 return Err(ActionError::InvalidField(format!(
-                    "Unexpected action from checkpoint: {}",
-                    name,
+                    "Unexpected action from checkpoint: {name}",
                 )));
             }
         })

@@ -151,7 +151,7 @@ impl<'a, T: std::fmt::Debug> TryFrom<(&'a str, &str, T)> for PartitionFilter<'a,
                 value: PartitionValue::LessThanOrEqual(value),
             }),
             (_, _, _) => Err(DeltaTableError::InvalidPartitionFilter {
-                partition_filter: format!("{:?}", filter),
+                partition_filter: format!("{filter:?}"),
             }),
         }
     }
@@ -174,7 +174,7 @@ impl<'a, T: std::fmt::Debug> TryFrom<(&'a str, &str, Vec<T>)> for PartitionFilte
                 value: PartitionValue::NotIn(value),
             }),
             (_, _, _) => Err(DeltaTableError::InvalidPartitionFilter {
-                partition_filter: format!("{:?}", filter),
+                partition_filter: format!("{filter:?}"),
             }),
         }
     }

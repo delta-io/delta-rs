@@ -100,8 +100,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                     decimal if DECIMAL_REGEX.is_match(decimal) => {
                         let extract = DECIMAL_REGEX.captures(decimal).ok_or_else(|| {
                             ArrowError::SchemaError(format!(
-                                "Invalid decimal type for Arrow: {}",
-                                decimal
+                                "Invalid decimal type for Arrow: {decimal}"
                             ))
                         })?;
                         let precision = extract.get(1).and_then(|v| v.as_str().parse::<u8>().ok());
@@ -110,8 +109,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                             // TODO how do we decide which variant (128 / 256) to use?
                             (Some(p), Some(s)) => Ok(ArrowDataType::Decimal128(p, s)),
                             _ => Err(ArrowError::SchemaError(format!(
-                                "Invalid precision or scale decimal type for Arrow: {}",
-                                decimal
+                                "Invalid precision or scale decimal type for Arrow: {decimal}"
                             ))),
                         }
                     }
@@ -125,8 +123,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                         Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
                     }
                     s => Err(ArrowError::SchemaError(format!(
-                        "Invalid data type for Arrow: {}",
-                        s
+                        "Invalid data type for Arrow: {s}"
                     ))),
                 }
             }
@@ -220,12 +217,10 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
             ArrowDataType::Boolean => Ok(schema::SchemaDataType::primitive("boolean".to_string())),
             ArrowDataType::Binary => Ok(schema::SchemaDataType::primitive("binary".to_string())),
             ArrowDataType::Decimal128(p, s) => Ok(schema::SchemaDataType::primitive(format!(
-                "decimal({},{})",
-                p, s
+                "decimal({p},{s})"
             ))),
             ArrowDataType::Decimal256(p, s) => Ok(schema::SchemaDataType::primitive(format!(
-                "decimal({},{})",
-                p, s
+                "decimal({p},{s})"
             ))),
             ArrowDataType::Date32 => Ok(schema::SchemaDataType::primitive("date".to_string())),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
@@ -270,8 +265,7 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
                 }
             }
             s => Err(ArrowError::SchemaError(format!(
-                "Invalid data type for Delta Lake: {}",
-                s
+                "Invalid data type for Delta Lake: {s}"
             ))),
         }
     }
@@ -689,7 +683,7 @@ mod tests {
     fn test_arrow_from_delta_decimal_type() {
         let precision = 20;
         let scale = 2;
-        let decimal_type = format!["decimal({p},{s})", p = precision, s = scale];
+        let decimal_type = format!["decimal({precision},{scale})"];
         let decimal_field = crate::SchemaDataType::primitive(decimal_type);
         assert_eq!(
             <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&decimal_field).unwrap(),
@@ -701,11 +695,8 @@ mod tests {
     fn test_arrow_from_delta_wrong_decimal_type() {
         let precision = 20;
         let scale = "wrong";
-        let decimal_type = format!["decimal({p},{s})", p = precision, s = scale];
-        let _error = format!(
-            "Invalid precision or scale decimal type for Arrow: {}",
-            scale
-        );
+        let decimal_type = format!["decimal({precision},{scale})"];
+        let _error = format!("Invalid precision or scale decimal type for Arrow: {scale}");
         let decimal_field = crate::SchemaDataType::primitive(decimal_type);
         assert!(matches!(
             <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&decimal_field)
