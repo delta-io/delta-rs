@@ -1,6 +1,8 @@
 #![cfg(all(feature = "integration_test"))]
 
-use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
+use deltalake::test_utils::{
+    set_env_if_not_set, IntegrationContext, StorageIntegration, TestResult, TestTables,
+};
 use deltalake::DeltaOps;
 use deltalake::Path;
 use serial_test::serial;
@@ -17,6 +19,7 @@ async fn test_filesystem_check_local() -> TestResult {
 #[tokio::test]
 #[serial]
 async fn test_filesystem_check_aws() -> TestResult {
+    set_env_if_not_set("AWS_S3_ALLOW_UNSAFE_RENAME", "true");
     Ok(test_filesystem_check(StorageIntegration::Amazon).await?)
 }
 
