@@ -140,7 +140,7 @@ async fn create_checkpoint_for(
     let size = parquet_bytes.len() as i64;
     let checkpoint = CheckPoint::new(version, size, None);
 
-    let file_name = format!("{:020}.checkpoint.parquet", version);
+    let file_name = format!("{version:020}.checkpoint.parquet");
     let checkpoint_path = storage.log_path().child(file_name);
 
     debug!("Writing checkpoint to {:?}.", checkpoint_path);

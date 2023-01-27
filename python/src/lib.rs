@@ -63,7 +63,7 @@ impl PyDeltaTableError {
     }
 
     fn from_chrono(err: chrono::ParseError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(format!("Parse date and time string failed: {}", err))
+        PyDeltaTableError::new_err(format!("Parse date and time string failed: {err}"))
     }
 
     fn from_checkpoint(err: deltalake::checkpoints::CheckpointError) -> pyo3::PyErr {
@@ -514,10 +514,7 @@ fn filestats_to_expression<'py>(
             schema
                 .field_with_name(column_name)
                 .map_err(|_| {
-                    PyDeltaTableError::new_err(format!(
-                        "Column not found in schema: {}",
-                        column_name
-                    ))
+                    PyDeltaTableError::new_err(format!("Column not found in schema: {column_name}"))
                 })?
                 .data_type()
                 .clone(),

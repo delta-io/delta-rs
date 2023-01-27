@@ -50,7 +50,7 @@ fn decode_path(raw_path: &str) -> Result<String, ActionError> {
     percent_decode(raw_path.as_bytes())
         .decode_utf8()
         .map(|c| c.to_string())
-        .map_err(|e| ActionError::InvalidField(format!("Decode path failed for action: {}", e)))
+        .map_err(|e| ActionError::InvalidField(format!("Decode path failed for action: {e}")))
 }
 
 /// Struct used to represent minValues and maxValues in add action statistics.

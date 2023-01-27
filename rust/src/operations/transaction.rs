@@ -46,7 +46,7 @@ impl From<TransactionError> for DeltaTableError {
 
 /// Return the uri of commit version.
 fn commit_uri_from_version(version: DeltaDataTypeVersion) -> Path {
-    let version = format!("{:020}.json", version);
+    let version = format!("{version:020}.json");
     Path::from_iter([DELTA_LOG_FOLDER, &version])
 }
 
@@ -92,7 +92,7 @@ async fn prepare_commit(
     // Write delta log entry as temporary file to storage. For the actual commit,
     // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
     let token = uuid::Uuid::new_v4().to_string();
-    let file_name = format!("_commit_{}.json.tmp", token);
+    let file_name = format!("_commit_{token}.json.tmp");
     let path = Path::from_iter([DELTA_LOG_FOLDER, &file_name]);
     storage.put(&path, log_entry).await?;
 

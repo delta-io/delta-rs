@@ -369,10 +369,7 @@ mod checkpoints_with_tombstones {
         version: i64,
     ) -> (HashSet<String>, Vec<Remove>) {
         checkpoints::create_checkpoint(table).await.unwrap();
-        let cp_path = format!(
-            "{}/_delta_log/0000000000000000000{}.checkpoint.parquet",
-            path, version
-        );
+        let cp_path = format!("{path}/_delta_log/0000000000000000000{version}.checkpoint.parquet");
         let (schema, actions) = read_checkpoint(&cp_path).await;
 
         let fields = schema

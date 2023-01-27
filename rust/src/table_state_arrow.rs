@@ -186,7 +186,7 @@ impl DeltaTableState {
                 .into_iter()
                 .zip(metadata.partition_columns.iter())
                 .map(|(array, name)| {
-                    let name: Cow<str> = Cow::Owned(format!("partition.{}", name));
+                    let name: Cow<str> = Cow::Owned(format!("partition.{name}"));
                     (name, array)
                 })
                 .collect()
@@ -257,7 +257,7 @@ impl DeltaTableState {
             Ok(arrow::record_batch::RecordBatch::try_from_iter(
                 arrays
                     .into_iter()
-                    .map(|(key, array)| (format!("tags.{}", key), array)),
+                    .map(|(key, array)| (format!("tags.{key}"), array)),
             )?)
         } else {
             Ok(arrow::record_batch::RecordBatch::try_from_iter(vec![(
