@@ -551,7 +551,7 @@ impl DeltaTable {
 
     /// Return the uri of commit version.
     pub fn commit_uri_from_version(&self, version: DeltaDataTypeVersion) -> Path {
-        let version = format!("{:020}.json", version);
+        let version = format!("{version:020}.json");
         Path::from_iter(["_delta_log", &version])
     }
 
@@ -563,7 +563,7 @@ impl DeltaTable {
 
         match check_point.parts {
             None => {
-                let path = log_path.child(&*format!("{}.checkpoint.parquet", checkpoint_prefix));
+                let path = log_path.child(&*format!("{checkpoint_prefix}.checkpoint.parquet"));
                 checkpoint_data_paths.push(path);
             }
             Some(parts) => {
@@ -1221,7 +1221,7 @@ impl fmt::Display for DeltaTable {
         writeln!(f, "\tversion: {}", self.version())?;
         match self.state.current_metadata() {
             Some(metadata) => {
-                writeln!(f, "\tmetadata: {}", metadata)?;
+                writeln!(f, "\tmetadata: {metadata}")?;
             }
             None => {
                 writeln!(f, "\tmetadata: None")?;
@@ -1402,7 +1402,7 @@ impl<'a> DeltaTransaction<'a> {
         // Write delta log entry as temporary file to storage. For the actual commit,
         // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
         let token = Uuid::new_v4().to_string();
-        let file_name = format!("_commit_{}.json.tmp", token);
+        let file_name = format!("_commit_{token}.json.tmp");
         let path = Path::from_iter(["_delta_log", &file_name]);
 
         self.delta_table.storage.put(&path, log_entry).await?;

@@ -10,7 +10,7 @@ mod fs_common;
 #[test]
 fn test_create_delta_table_partition() {
     let year = "2021";
-    let path = format!("year={}", year);
+    let path = format!("year={year}");
     assert_eq!(
         deltalake::DeltaTablePartition::try_from(path.as_ref()).unwrap(),
         deltalake::DeltaTablePartition {

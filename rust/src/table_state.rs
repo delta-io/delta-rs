@@ -357,7 +357,7 @@ impl DeltaTableState {
             .all(|f| current_metadata.partition_columns.contains(&f.key.into()))
         {
             return Err(DeltaTableError::InvalidPartitionFilter {
-                partition_filter: format!("{:?}", filters),
+                partition_filter: format!("{filters:?}"),
             });
         }
 
