@@ -17,13 +17,11 @@ FUTURE_RELEASE="0.6.0"
 
 # only consider tags of the correct language
 if [ "$LANGUAGE" == "rust" ]; then
-	EXCLUDED_LANGUAGES_REGEX="python.*|ruby.*"
+	EXCLUDED_LANGUAGES_REGEX="python.*"
 elif [ "$LANGUAGE" == "python" ]; then
-	EXCLUDED_LANGUAGES_REGEX="ruby.*|rust.*"
-elif [ "$LANGUAGE" == "ruby" ]; then
-	EXCLUDED_LANGUAGES_REGEX="python.*|rust.*"
+	EXCLUDED_LANGUAGES_REGEX="rust.*"
 else
-  echo "Language $LANGUAGE is invalid. Should be one of Python, Ruby and Rust."
+  echo "Language $LANGUAGE is invalid. Should be one of Python and Rust."
 fi
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

@@ -9,9 +9,6 @@ rust:
 binding/python:
   - python/**/*
 
-binding/ruby:
-  - ruby/**/*
-
 ci:
   - .github/**.*
 

@@ -1,5 +1,2 @@
 # This file is used by cargo-watch
-ruby/spec
-ruby/lib
-
 .idea
