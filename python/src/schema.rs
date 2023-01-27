@@ -135,8 +135,7 @@ impl PrimitiveType {
         if data_type.starts_with("decimal") {
             if try_parse_decimal_type(&data_type).is_none() {
                 Err(PyValueError::new_err(format!(
-                    "invalid decimal type: {}",
-                    data_type
+                    "invalid decimal type: {data_type}"
                 )))
             } else {
                 Ok(Self {
@@ -685,7 +684,7 @@ impl Field {
                 .metadata(py)?
                 .call_method0(py, "__repr__")?
                 .extract(py)?;
-            format!(", metadata={}", metadata_repr)
+            format!(", metadata={metadata_repr}")
         };
         Ok(format!(
             "Field({}, {}, nullable={}{})",
