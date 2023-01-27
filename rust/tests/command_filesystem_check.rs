@@ -20,6 +20,7 @@ async fn test_filesystem_check_local() -> TestResult {
 #[serial]
 async fn test_filesystem_check_aws() -> TestResult {
     set_env_if_not_set("AWS_S3_ALLOW_UNSAFE_RENAME", "true");
+    set_env_if_not_set("AWS_S3_LOCKING_PROVIDER", "none");
     Ok(test_filesystem_check(StorageIntegration::Amazon).await?)
 }
 
