@@ -109,8 +109,7 @@ const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
 const SECONDS_PER_WEEK: u64 = 7 * SECONDS_PER_DAY;
 
 fn parse_interval(value: &str) -> Result<Duration, DeltaConfigError> {
-    let not_an_interval =
-        || DeltaConfigError::Validation(format!("'{value}' is not an interval"));
+    let not_an_interval = || DeltaConfigError::Validation(format!("'{value}' is not an interval"));
 
     if !value.starts_with("interval ") {
         return Err(not_an_interval());
@@ -151,9 +150,9 @@ fn parse_int(value: &str) -> Result<i64, DeltaConfigError> {
 }
 
 fn parse_bool(value: &str) -> Result<bool, DeltaConfigError> {
-    value.parse().map_err(|e| {
-        DeltaConfigError::Validation(format!("Cannot parse '{value}' as bool: {e}"))
-    })
+    value
+        .parse()
+        .map_err(|e| DeltaConfigError::Validation(format!("Cannot parse '{value}' as bool: {e}")))
 }
 
 #[cfg(test)]

@@ -696,9 +696,7 @@ mod tests {
         let precision = 20;
         let scale = "wrong";
         let decimal_type = format!["decimal({precision},{scale})"];
-        let _error = format!(
-            "Invalid precision or scale decimal type for Arrow: {scale}"
-        );
+        let _error = format!("Invalid precision or scale decimal type for Arrow: {scale}");
         let decimal_field = crate::SchemaDataType::primitive(decimal_type);
         assert!(matches!(
             <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&decimal_field)

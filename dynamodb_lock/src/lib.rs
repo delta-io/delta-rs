@@ -701,22 +701,13 @@ mod tests {
 
     #[test]
     fn lock_options_default_test() {
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME,
-            "some_table",
-        );
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME,
-            "some_owner",
-        );
+        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME, "some_table");
+        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME, "some_owner");
         std::env::set_var(
             dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE,
             "some_pk",
         );
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION,
-            "40",
-        );
+        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION, "40");
         std::env::set_var(
             dynamo_lock_options::DYNAMO_LOCK_REFRESH_PERIOD_MILLIS,
             "2000",
@@ -767,22 +758,13 @@ mod tests {
 
     #[test]
     fn lock_options_mixed_test() {
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME,
-            "some_table",
-        );
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME,
-            "some_owner",
-        );
+        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME, "some_table");
+        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME, "some_owner");
         std::env::set_var(
             dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE,
             "some_pk",
         );
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION,
-            "40",
-        );
+        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION, "40");
         std::env::set_var(
             dynamo_lock_options::DYNAMO_LOCK_REFRESH_PERIOD_MILLIS,
             "2000",

@@ -88,9 +88,7 @@ pub(crate) fn next_data_path(
     let last_part = "c000";
 
     // NOTE: If we add a non-snappy option, file name must change
-    let file_name = format!(
-        "part-{first_part}-{uuid_part}-{last_part}.snappy.parquet"
-    );
+    let file_name = format!("part-{first_part}-{uuid_part}-{last_part}.snappy.parquet");
 
     if partition_columns.is_empty() {
         return Ok(Path::from(file_name));
