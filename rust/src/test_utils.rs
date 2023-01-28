@@ -191,6 +191,7 @@ pub enum TestTables {
     Simple,
     SimpleCommit,
     Golden,
+    Delta0_8_0Partitioned,
     Custom(String),
 }
 
@@ -209,6 +210,11 @@ impl TestTables {
                 .to_str()
                 .unwrap()
                 .to_owned(),
+            Self::Delta0_8_0Partitioned => data_path
+                .join("delta-0.8.0-partitioned")
+                .to_str()
+                .unwrap()
+                .to_owned(),
             // the data path for upload does not apply to custom tables.
             Self::Custom(_) => todo!(),
         }
@@ -219,6 +225,7 @@ impl TestTables {
             Self::Simple => "simple".into(),
             Self::SimpleCommit => "simple_commit".into(),
             Self::Golden => "golden".into(),
+            Self::Delta0_8_0Partitioned => "delta-0.8.0-partitioned".into(),
             Self::Custom(name) => name.to_owned(),
         }
     }
