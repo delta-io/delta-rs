@@ -30,19 +30,19 @@ async fn main() -> Result<(), anyhow::Error> {
     let table_uri = std::env::var("TABLE_URI")?;
     info!("Using the location of: {:?}", table_uri);
 
-    let table_path = Path::new(&table_uri);
+    let table_path = Path::from(table_uri.as_ref());
 
-    let table = deltalake::open_table(table_path).await?;
-    let mut table = {
+    let maybe_table = deltalake::open_table(&table_path).await;
+    let mut table = match maybe_table {
         Ok(table) => table,
-        Err(DeltaTableError::NotAtable(_)) => {
+        Err(DeltaTableError::NotATable(_)) => {
             info!("It doesn't look like our delta table has been created");
             create_initialized_table(&table_path).await
         },
         Err(err) => {
-            err.unwra
+            Err(err).unwrap()
         }
-    }
+    };
 
     let mut writer =
         RecordBatchWriter::for_table(&table).expect("Failed to make RecordBatchWriter");
@@ -191,7 +191,7 @@ fn convert_to_batch(table: &DeltaTable, records: &Vec<WeatherRecord>) -> RecordB
  * Table in an existing directory that doesn't currently contain a Delta table
  */
 async fn create_initialized_table(table_path: &Path) -> DeltaTable {
-    let mut table = DeltaTableBuilder::from_uri(table_path.to_str().unwrap())
+    let mut table = DeltaTableBuilder::from_uri(table_path)
         .build()
         .unwrap();
     let table_schema = WeatherRecord::schema();
