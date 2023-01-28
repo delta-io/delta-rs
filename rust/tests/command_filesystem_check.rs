@@ -77,3 +77,36 @@ async fn test_filesystem_check(storage: StorageIntegration) -> TestResult {
 
     Ok(())
 }
+
+#[tokio::test]
+#[serial]
+async fn test_filesystem_check_partitioned() -> TestResult {
+    let storage = StorageIntegration::Local;
+    let context = IntegrationContext::new(storage)?;
+    context
+        .load_table(TestTables::Delta0_8_0Partitioned)
+        .await?;
+    let file = "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet";
+    let path = Path::parse(TestTables::Delta0_8_0Partitioned.as_name() + "/" + file).unwrap();
+
+    // Delete an active file from underlying storage without an update to the log to simulate an external fault
+    context.object_store().delete(&path).await?;
+
+    let table = context
+        .table_builder(TestTables::Delta0_8_0Partitioned)
+        .load()
+        .await?;
+    let version = table.state.version();
+    let active = table.state.files().len();
+
+    // Validate a run updates the table version with proper remove actions
+    let op = DeltaOps::from(table);
+    let (table, metrics) = op.filesystem_check().await?;
+    assert_eq!(version + 1, table.state.version());
+    assert_eq!(active - 1, table.state.files().len());
+    assert_eq!(vec![file.to_string()], metrics.files_removed);
+
+    let remove = table.state.all_tombstones().get(file).unwrap();
+    assert_eq!(remove.data_change, true);
+    Ok(())
+}

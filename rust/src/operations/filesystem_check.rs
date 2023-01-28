@@ -10,11 +10,12 @@ use crate::operations::transaction::commit;
 use crate::storage::DeltaObjectStore;
 use crate::table_state::DeltaTableState;
 use crate::DeltaDataTypeVersion;
-use crate::{DeltaDataTypeLong, DeltaResult, DeltaTable, DeltaTableError};
+use crate::{DeltaDataTypeLong, DeltaResult, DeltaTable};
 use futures::future::BoxFuture;
+use futures::StreamExt;
 pub use object_store::path::Path;
-use object_store::Error as ObjectStoreError;
 use object_store::ObjectStore;
+use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::SystemTime;
@@ -68,17 +69,23 @@ impl FileSystemCheckBuilder {
 
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_to_remove = Vec::new();
+        let mut files_to_check: HashMap<String, &Add> = HashMap::new();
         let version = self.state.version();
         let store = self.store.clone();
 
-        for active in self.state.files() {
-            let res = self.store.head(&Path::from(active.path.as_str())).await;
-            if let Err(ObjectStoreError::NotFound { path: _, source: _ }) = res {
-                files_to_remove.push(active.to_owned());
-            } else {
-                res.map_err(DeltaTableError::from)?;
-            }
+        self.state.files().iter().for_each(|active| {
+            files_to_check.insert(active.path.to_owned(), active);
+        });
+
+        let mut files = self.store.list(None).await?;
+        while let Some(result) = files.next().await {
+            let file = result?;
+            files_to_check.remove(file.location.as_ref());
         }
+
+        files_to_check
+            .into_iter()
+            .for_each(|(_, file)| files_to_remove.push(file.to_owned()));
 
         Ok(FileSystemCheckPlan {
             files_to_remove,
