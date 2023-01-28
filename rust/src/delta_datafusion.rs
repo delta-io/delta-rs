@@ -1023,8 +1023,8 @@ mod tests {
                 ScalarValue::Float32(Some(2.0)),
             ),
         ];
-        for (smaller_val, larger_val) in incorrect_reference_pairs {
-            assert_eq!(left_larger_than_right(larger_val, smaller_val), None);
+        for (left, right) in incorrect_reference_pairs {
+            assert_eq!(left_larger_than_right(left, right), None);
         }
     }
 
