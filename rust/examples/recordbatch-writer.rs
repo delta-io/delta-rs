@@ -15,8 +15,8 @@ use deltalake::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake::*;
 use log::*;
 
-use std::collections::HashMap;
 use object_store::path::Path;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /*
@@ -38,10 +38,8 @@ async fn main() -> Result<(), anyhow::Error> {
         Err(DeltaTableError::NotATable(_)) => {
             info!("It doesn't look like our delta table has been created");
             create_initialized_table(&table_path).await
-        },
-        Err(err) => {
-            Err(err).unwrap()
         }
+        Err(err) => Err(err).unwrap(),
     };
 
     let mut writer =
@@ -191,9 +189,7 @@ fn convert_to_batch(table: &DeltaTable, records: &Vec<WeatherRecord>) -> RecordB
  * Table in an existing directory that doesn't currently contain a Delta table
  */
 async fn create_initialized_table(table_path: &Path) -> DeltaTable {
-    let mut table = DeltaTableBuilder::from_uri(table_path)
-        .build()
-        .unwrap();
+    let mut table = DeltaTableBuilder::from_uri(table_path).build().unwrap();
     let table_schema = WeatherRecord::schema();
     let mut commit_info = serde_json::Map::<String, serde_json::Value>::new();
     commit_info.insert(
