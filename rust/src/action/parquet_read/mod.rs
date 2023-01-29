@@ -128,7 +128,7 @@ impl Add {
                     }
                 },
                 _ => {
-                    log::warn!(
+                    log::debug!(
                         "Unexpected field name `{}` for add action: {:?}",
                         name,
                         record
@@ -187,7 +187,7 @@ impl Add {
                             log::error!("Expect type of stats_parsed field nullCount to be struct, got: {}", record);
                         }
                         _ => {
-                            log::warn!(
+                            log::debug!(
                                 "Unexpected field name `{}` for stats_parsed: {:?}",
                                 name,
                                 record,
@@ -384,7 +384,7 @@ impl MetaData {
                     }
                 }
                 _ => {
-                    log::warn!(
+                    log::debug!(
                         "Unexpected field name `{}` for metaData action: {:?}",
                         name,
                         record
@@ -465,7 +465,7 @@ impl Remove {
                 }
                 "numRecords" => {}
                 _ => {
-                    log::warn!(
+                    log::debug!(
                         "Unexpected field name `{}` for remove action: {:?}",
                         name,
                         record
@@ -501,7 +501,7 @@ impl Txn {
                     re.last_updated = record.get_long(i).map(Some).unwrap_or(None);
                 }
                 _ => {
-                    log::warn!(
+                    log::debug!(
                         "Unexpected field name `{}` for txn action: {:?}",
                         name,
                         record
@@ -533,7 +533,7 @@ impl Protocol {
                     })?;
                 }
                 _ => {
-                    log::warn!(
+                    log::debug!(
                         "Unexpected field name `{}` for protocol action: {:?}",
                         name,
                         record
