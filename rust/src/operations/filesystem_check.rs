@@ -1,5 +1,10 @@
-//! Audit the Delta Table for active files that do not exist in the underlying filesystem and remove them
+//! Audit the Delta Table for active files that do not exist in the underlying filesystem and remove them.
 //!
+//! Active files are ones that have an add action in the log, but no corresponding remove action.
+//! This operation creates a new transaction containing a remove action for each of the missing files.
+//!
+//! This can be used to repair tables where a data file has been deleted accidentally or 
+//! purposefully, if the file was corrupted.
 //! # Example
 //! ```rust ignore
 //! let mut table = open_table("../path/to/table")?;
@@ -69,13 +74,11 @@ impl FileSystemCheckBuilder {
 
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_to_remove = Vec::new();
-        let mut files_to_check: HashMap<String, &Add> = HashMap::new();
+        let mut files_to_check: HashMap<String, &Add> = self.state.files().iter()
+            .map(|active| (active.path.to_owned(), active))
+            .collect();
         let version = self.state.version();
         let store = self.store.clone();
-
-        self.state.files().iter().for_each(|active| {
-            files_to_check.insert(active.path.to_owned(), active);
-        });
 
         let mut files = self.store.list(None).await?;
         while let Some(result) = files.next().await {
@@ -83,9 +86,10 @@ impl FileSystemCheckBuilder {
             files_to_check.remove(file.location.as_ref());
         }
 
-        files_to_check
+        let files_to_remove: Vec<Add> = files_to_check
             .into_iter()
-            .for_each(|(_, file)| files_to_remove.push(file.to_owned()));
+            .map(|(_, file)| file.to_owned())
+            .collect();
 
         Ok(FileSystemCheckPlan {
             files_to_remove,
@@ -104,8 +108,8 @@ impl FileSystemCheckPlan {
             });
         }
 
-        let mut actions = Vec::new();
-        let mut removed_file_paths = Vec::new();
+        let mut actions = Vec::with_capacity(self.files_to_remove.len());
+        let mut removed_file_paths = Vec::with_capacity(self.files_to_remove.len());
         let version = self.version;
         let store = &self.store;
 
@@ -157,8 +161,8 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                     FileSystemCheckMetrics {
                         files_removed: plan
                             .files_to_remove
-                            .iter()
-                            .map(|f| f.path.clone())
+                            .into_iter()
+                            .map(|f| f.path)
                             .collect(),
                         dry_run: true,
                     },
