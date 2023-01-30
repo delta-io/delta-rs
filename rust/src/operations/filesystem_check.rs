@@ -109,8 +109,8 @@ impl FileSystemCheckBuilder {
         }
 
         let mut files_to_remove: Vec<Add> = files_relative
-            .into_iter()
-            .map(|(_, file)| file.to_owned())
+            .into_values()
+            .map(|file| file.to_owned())
             .collect();
 
         if !files_absolute.is_empty() {
