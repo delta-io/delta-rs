@@ -73,7 +73,6 @@ impl FileSystemCheckBuilder {
     }
 
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
-        let mut files_to_remove = Vec::new();
         let mut files_to_check: HashMap<String, &Add> = self.state.files().iter()
             .map(|active| (active.path.to_owned(), active))
             .collect();
