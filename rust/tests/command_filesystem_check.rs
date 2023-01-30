@@ -110,3 +110,28 @@ async fn test_filesystem_check_partitioned() -> TestResult {
     assert_eq!(remove.data_change, true);
     Ok(())
 }
+
+#[tokio::test]
+#[serial]
+async fn test_filesystem_check_outdated() -> TestResult {
+    // Validate failure when a non dry only executes on the latest version
+    let context = IntegrationContext::new(StorageIntegration::Local)?;
+    context.load_table(TestTables::Simple).await?;
+    let file = "part-00003-53f42606-6cda-4f13-8d07-599a21197296-c000.snappy.parquet";
+    let path = Path::from_iter([&TestTables::Simple.as_name(), file]);
+
+    // Delete an active file from underlying storage without an update to the log to simulate an external fault
+    context.object_store().delete(&path).await?;
+
+    let table = context
+        .table_builder(TestTables::Simple)
+        .with_version(2)
+        .load()
+        .await?;
+
+    let op = DeltaOps::from(table);
+    let res = op.filesystem_check().with_dry_run(false).await;
+    assert!(res.is_err());
+
+    Ok(())
+}
