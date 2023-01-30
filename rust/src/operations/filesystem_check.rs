@@ -87,7 +87,7 @@ impl FileSystemCheckBuilder {
                     &active.path
                 ))
             })?;
-            if url.scheme().len() == 0 {
+            if url.scheme().is_empty() {
                 files_relative.insert(active.path.as_str(), active);
             } else {
                 files_absolute.insert(active.path.as_str(), active);
