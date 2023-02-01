@@ -5,10 +5,11 @@
 //!
 //! This can be used to repair tables where a data file has been deleted accidentally or
 //! purposefully, if the file was corrupted.
+//!
 //! # Example
 //! ```rust ignore
 //! let mut table = open_table("../path/to/table")?;
-//! let (table, metrics) = FileSystemCheckBuilder::new(table.object_store(). table.state).await?;
+//! let (table, metrics) = FileSystemCheckBuilder::new(table.object_store(), table.state).await?;
 //! ````
 use crate::action::{Action, Add, DeltaOperation, Remove};
 use crate::operations::transaction::commit;
@@ -19,14 +20,13 @@ use crate::{DeltaDataTypeLong, DeltaResult, DeltaTable, DeltaTableError};
 use futures::future::BoxFuture;
 use futures::StreamExt;
 pub use object_store::path::Path;
-use object_store::Error as ObjectStoreError;
 use object_store::ObjectStore;
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
-use url::Url;
+use url::{ParseError, Url};
 
 /// Audit the Delta Table's active files with the underlying file system.
 /// See this module's documentaiton for more information
@@ -58,6 +58,17 @@ struct FileSystemCheckPlan {
     pub files_to_remove: Vec<Add>,
 }
 
+fn is_absolute_path(path: &str) -> DeltaResult<bool> {
+    match Url::parse(path) {
+        Ok(_) => Ok(true),
+        Err(ParseError::RelativeUrlWithoutBase) => Ok(false),
+        Err(_) => Err(DeltaTableError::Generic(format!(
+            "Unable to parse path: {}",
+            &path
+        ))),
+    }
+}
+
 impl FileSystemCheckBuilder {
     /// Create a new [`FileSystemCheckBuilder`]
     pub fn new(store: Arc<DeltaObjectStore>, state: DeltaTableState) -> Self {
@@ -68,7 +79,7 @@ impl FileSystemCheckBuilder {
         }
     }
 
-    /// Only determine which add actions should be removed
+    /// Only determine which add actions should be removed. A dry run will not commit actions to the Delta log
     pub fn with_dry_run(mut self, dry_run: bool) -> Self {
         self.dry_run = dry_run;
         self
@@ -77,52 +88,33 @@ impl FileSystemCheckBuilder {
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<&str, &Add> =
             HashMap::with_capacity(self.state.files().len());
-        let mut files_absolute: HashMap<&str, &Add> =
-            HashMap::with_capacity(self.state.files().len());
-
-        for active in self.state.files() {
-            let url = Url::parse(&active.path).map_err(|_| {
-                DeltaTableError::Generic(format!(
-                    "Unable to parse path from Delta log: {}",
-                    &active.path
-                ))
-            })?;
-            if url.scheme().is_empty() {
-                files_relative.insert(active.path.as_str(), active);
-            } else {
-                files_absolute.insert(active.path.as_str(), active);
-            }
-        }
         let version = self.state.version();
         let store = self.store.clone();
 
-        if !files_relative.is_empty() {
-            let mut files = self.store.list(None).await?;
-            while let Some(result) = files.next().await {
-                let file = result?;
-                files_relative.remove(file.location.as_ref());
-
-                if files_relative.is_empty() {
-                    break;
-                }
+        for active in self.state.files() {
+            if is_absolute_path(&active.path)? {
+                return Err(DeltaTableError::Generic(
+                    "Filesystem check does not support absolute paths".to_string(),
+                ));
+            } else {
+                files_relative.insert(&active.path, active);
             }
         }
 
-        let mut files_to_remove: Vec<Add> = files_relative
+        let mut files = self.store.list(None).await?;
+        while let Some(result) = files.next().await {
+            let file = result?;
+            files_relative.remove(file.location.as_ref());
+
+            if files_relative.is_empty() {
+                break;
+            }
+        }
+
+        let files_to_remove: Vec<Add> = files_relative
             .into_values()
             .map(|file| file.to_owned())
             .collect();
-
-        if !files_absolute.is_empty() {
-            for (_, file) in files_absolute {
-                let res = self.store.head(&Path::from(file.path.as_str())).await;
-                if let Err(ObjectStoreError::NotFound { .. }) = res {
-                    files_to_remove.push(file.to_owned());
-                } else {
-                    res.map_err(DeltaTableError::from)?;
-                }
-            }
-        }
 
         Ok(FileSystemCheckPlan {
             files_to_remove,
@@ -201,5 +193,29 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
             table.update().await?;
             Ok((table, metrics))
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn absolute_path() {
+        assert!(!is_absolute_path(
+            "part-00003-53f42606-6cda-4f13-8d07-599a21197296-c000.snappy.parquet"
+        )
+        .unwrap());
+        assert!(!is_absolute_path(
+            "x=9/y=9.9/part-00007-3c50fba1-4264-446c-9c67-d8e24a1ccf83.c000.snappy.parquet"
+        )
+        .unwrap());
+
+        assert!(is_absolute_path("abfss://container@account_name.blob.core.windows.net/full/part-00000-a72b1fb3-f2df-41fe-a8f0-e65b746382dd-c000.snappy.parquet").unwrap());
+        assert!(is_absolute_path("file:///C:/my_table/windows.parquet").unwrap());
+        assert!(is_absolute_path("file:///home/my_table/unix.parquet").unwrap());
+        assert!(is_absolute_path("s3://container/path/file.parquet").unwrap());
+        assert!(is_absolute_path("gs://container/path/file.parquet").unwrap());
+        assert!(is_absolute_path("scheme://table/file.parquet").unwrap());
     }
 }

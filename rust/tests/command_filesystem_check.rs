@@ -3,8 +3,8 @@
 use deltalake::test_utils::{
     set_env_if_not_set, IntegrationContext, StorageIntegration, TestResult, TestTables,
 };
-use deltalake::DeltaOps;
 use deltalake::Path;
+use deltalake::{DeltaOps, DeltaTableError};
 use serial_test::serial;
 
 mod common;
@@ -131,7 +131,12 @@ async fn test_filesystem_check_outdated() -> TestResult {
 
     let op = DeltaOps::from(table);
     let res = op.filesystem_check().with_dry_run(false).await;
-    assert!(res.is_err());
+
+    if let Err(DeltaTableError::VersionAlreadyExists(version)) = res {
+        assert!(version == 3);
+    } else {
+        assert!(false);
+    }
 
     Ok(())
 }
