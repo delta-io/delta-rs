@@ -163,7 +163,6 @@ class DeltaTable:
     def files(
         self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
     ) -> List[str]:
-
         return self._table.files(self.__stringify_partition_values(partition_filters))
 
     files.__doc__ = f"""
