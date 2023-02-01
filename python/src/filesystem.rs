@@ -106,10 +106,30 @@ impl DeltaFileSystemHandler {
                 .block_on(self.inner.list_with_delimiter(Some(&path)))
                 .map_err(PyDeltaTableError::from_object_store)?;
 
-            // TODO is there a better way to figure out if we are in a directory?
-            if listed.objects.is_empty() && listed.common_prefixes.is_empty() {
-                let maybe_meta = self.rt.block_on(self.inner.head(&path));
-                match maybe_meta {
+            if let Some(meta) = listed
+                .objects
+                .into_iter()
+                .find(|meta| meta.location == path)
+            {
+                let kwargs = HashMap::from([
+                    ("size", meta.size as i64),
+                    ("mtime_ns", meta.last_modified.timestamp_nanos()),
+                ]);
+                infos.push(to_file_info(
+                    meta.location.to_string(),
+                    file_types.getattr("File")?,
+                    kwargs,
+                )?);
+            } else if let Some(folder_path) =
+                listed.common_prefixes.into_iter().find(|p| p == &path)
+            {
+                infos.push(to_file_info(
+                    folder_path.to_string(),
+                    file_types.getattr("Directory")?,
+                    HashMap::new(),
+                )?);
+            } else {
+                match self.rt.block_on(self.inner.head(&path)) {
                     Ok(meta) => {
                         let kwargs = HashMap::from([
                             ("size", meta.size as i64),
@@ -117,7 +137,11 @@ impl DeltaFileSystemHandler {
                         ]);
                         infos.push(to_file_info(
                             meta.location.to_string(),
-                            file_types.getattr("File")?,
+                            if meta.size > 0 {
+                                file_types.getattr("File")?
+                            } else {
+                                file_types.getattr("Directory")?
+                            },
                             kwargs,
                         )?);
                     }
@@ -132,13 +156,7 @@ impl DeltaFileSystemHandler {
                         return Err(PyDeltaTableError::from_object_store(err));
                     }
                 }
-            } else {
-                infos.push(to_file_info(
-                    path.to_string(),
-                    file_types.getattr("Directory")?,
-                    HashMap::new(),
-                )?);
-            }
+            };
         }
 
         Ok(infos)
