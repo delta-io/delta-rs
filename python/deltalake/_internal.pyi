@@ -69,7 +69,7 @@ class MapType:
         key_type: DataType,
         value_type: DataType,
         *,
-        value_contains_null: bool = True
+        value_contains_null: bool = True,
     ) -> None: ...
     type: Literal["map"]
     key_type: DataType
@@ -90,7 +90,7 @@ class Field:
         type: DataType,
         *,
         nullable: bool = True,
-        metadata: Optional[Dict[str, Any]] = None
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> None: ...
     name: str
     type: DataType
