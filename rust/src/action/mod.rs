@@ -490,7 +490,11 @@ pub enum DeltaOperation {
         predicate: Option<String>,
         /// Target optimize size
         target_size: DeltaDataTypeLong,
-    }, // TODO: Add more operations
+    },
+    #[serde(rename_all = "camelCase")]
+    /// Represents a `FileSystemCheck` operation
+    FileSystemCheck {},
+    // TODO: Add more operations
 }
 
 impl DeltaOperation {
@@ -502,6 +506,7 @@ impl DeltaOperation {
             DeltaOperation::Write { .. } => "delta-rs.Write",
             DeltaOperation::StreamingUpdate { .. } => "delta-rs.StreamingUpdate",
             DeltaOperation::Optimize { .. } => "delta-rs.Optimize",
+            DeltaOperation::FileSystemCheck { .. } => "delta-rs.FileSystemCheck",
         };
         commit_info.insert(
             "operation".to_string(),
