@@ -6,6 +6,8 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
+use crate::DeltaTableError;
+
 /// Type alias for a string expected to match a GUID/UUID format
 pub type Guid = String;
 /// Type alias for i64/Delta long
@@ -64,25 +66,25 @@ impl SchemaTypeStruct {
     }
 
     /// Returns an immutable reference of a specific `Field` instance selected by name.
-    pub fn get_field_with_name(&self, name: &str) -> Result<&SchemaField, crate::DeltaTableError> {
+    pub fn get_field_with_name(&self, name: &str) -> Result<&SchemaField, DeltaTableError> {
         Ok(&self.fields[self.index_of(name)?])
     }
 
     /// Find the index of the column with the given name.
-    pub fn index_of(&self, name: &str) -> Result<usize, crate::DeltaTableError> {
+    pub fn index_of(&self, name: &str) -> Result<usize, DeltaTableError> {
         for i in 0..self.fields.len() {
             if self.fields[i].get_name() == name {
                 return Ok(i);
             }
         }
         let valid_fields: Vec<String> = self.fields.iter().map(|f| f.name.clone()).collect();
-        Err(crate::DeltaTableError::Generic(format!(
+        Err(DeltaTableError::Generic(format!(
             "Unable to get field named \"{name}\". Valid fields: {valid_fields:?}"
         )))
     }
 
     /// Get all invariants in the schemas
-    pub fn get_invariants(&self) -> Result<Vec<Invariant>, crate::DeltaTableError> {
+    pub fn get_invariants(&self) -> Result<Vec<Invariant>, DeltaTableError> {
         let mut remaining_fields: Vec<(String, SchemaField)> = self
             .get_fields()
             .iter()
@@ -135,7 +137,12 @@ impl SchemaTypeStruct {
             }
             // JSON format: {"expression": {"expression": "<SQL STRING>"} }
             if let Some(Value::String(invariant_json)) = field.metadata.get("delta.invariants") {
-                let json: Value = serde_json::from_str(invariant_json)?;
+                let json: Value = serde_json::from_str(invariant_json).map_err(|e| {
+                    DeltaTableError::InvalidInvariantJson {
+                        json_err: e,
+                        line: invariant_json.to_string(),
+                    }
+                })?;
                 if let Value::Object(json) = json {
                     if let Some(Value::Object(expr1)) = json.get("expression") {
                         if let Some(Value::String(sql)) = expr1.get("expression") {
