@@ -732,4 +732,63 @@ mod tests {
             crate::SchemaDataType::primitive("timestamp".to_string())
         );
     }
+
+    #[test]
+    fn test_max_min_schema_for_fields_simple_type() {
+        let mut dest: Vec<ArrowField> = Vec::new();
+        let f = ArrowField::new("simple", ArrowDataType::Int32, true);
+        let expected = vec![ArrowField::new("simple", ArrowDataType::Int32, true)];
+        max_min_schema_for_fields(&mut dest, &f);
+        assert_eq!(dest, expected)
+    }
+
+    #[test]
+    fn test_max_min_schema_for_fields_struct_type() {
+        let mut dest: Vec<ArrowField> = Vec::new();
+        let f = ArrowField::new(
+            "struct",
+            ArrowDataType::Struct(vec![ArrowField::new("simple", ArrowDataType::Int32, true)]),
+            true,
+        );
+        let expected = vec![ArrowField::new(
+            "struct",
+            ArrowDataType::Struct(vec![ArrowField::new("simple", ArrowDataType::Int32, true)]),
+            true,
+        )];
+        max_min_schema_for_fields(&mut dest, &f);
+        assert_eq!(dest, expected)
+    }
+
+    #[test]
+    fn test_max_min_schema_for_fields_list_and_map_type() {
+        let mut dest: Vec<ArrowField> = Vec::new();
+        let f1 = ArrowField::new(
+            "list",
+            ArrowDataType::List(Box::new(ArrowField::new(
+                "simple",
+                ArrowDataType::Int32,
+                true,
+            ))),
+            true,
+        );
+        let f2 = ArrowField::new(
+            "map",
+            ArrowDataType::Map(
+                Box::new(ArrowField::new(
+                    "struct",
+                    ArrowDataType::Struct(vec![
+                        ArrowField::new("key", ArrowDataType::Int32, true),
+                        ArrowField::new("value", ArrowDataType::Int32, true),
+                    ]),
+                    true,
+                )),
+                true,
+            ),
+            true,
+        );
+        let expected: Vec<ArrowField> = Vec::new();
+        max_min_schema_for_fields(&mut dest, &f1);
+        max_min_schema_for_fields(&mut dest, &f2);
+        assert_eq!(dest, expected)
+    }
 }
