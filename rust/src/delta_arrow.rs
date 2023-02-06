@@ -736,4 +736,49 @@ mod tests {
             crate::SchemaDataType::primitive("timestamp".to_string())
         );
     }
+
+    #[test]
+    fn test_max_min_schema_for_fields() {
+        let mut max_min_vec: Vec<ArrowField> = Vec::new();
+        let fields = [
+            ArrowField::new("simple", ArrowDataType::Int32, true),
+            ArrowField::new(
+                "struct",
+                ArrowDataType::Struct(vec![ArrowField::new("simple", ArrowDataType::Int32, true)]),
+                true,
+            ),
+            ArrowField::new(
+                "list",
+                ArrowDataType::List(Box::new(ArrowField::new(
+                    "simple",
+                    ArrowDataType::Int32,
+                    true,
+                ))),
+                true,
+            ),
+            ArrowField::new(
+                "map",
+                ArrowDataType::Map(
+                    Box::new(ArrowField::new(
+                        "struct",
+                        ArrowDataType::Struct(vec![
+                            ArrowField::new("key", ArrowDataType::Int32, true),
+                            ArrowField::new("value", ArrowDataType::Int32, true),
+                        ]),
+                        true,
+                    )),
+                    true,
+                ),
+                true,
+            ),
+        ];
+
+        let expected = vec![fields[0].clone(), fields[1].clone()];
+
+        fields
+            .iter()
+            .for_each(|f| max_min_schema_for_fields(&mut max_min_vec, f));
+
+        assert_eq!(max_min_vec, expected);
+    }
 }
