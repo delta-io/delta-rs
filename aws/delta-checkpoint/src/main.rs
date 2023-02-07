@@ -109,7 +109,7 @@ fn table_path_and_version_from_key(
 fn table_uri_from_parts(bucket: &str, path: &str) -> Result<String, CheckPointLambdaError> {
     let mut table_uri = PathBuf::new();
 
-    table_uri.push(format!("s3://{}", bucket));
+    table_uri.push(format!("s3://{bucket}"));
     table_uri.push(path);
 
     Ok(table_uri

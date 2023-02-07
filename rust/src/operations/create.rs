@@ -359,7 +359,7 @@ mod tests {
             tmp_dir.path().file_name().unwrap().to_str().unwrap()
         );
         let table = CreateBuilder::new()
-            .with_location(format!("./{}", relative_path))
+            .with_location(format!("./{relative_path}"))
             .with_columns(schema.get_fields().clone())
             .await
             .unwrap();
