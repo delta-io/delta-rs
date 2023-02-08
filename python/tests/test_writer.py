@@ -62,7 +62,7 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
         path = os.path.join(tmp_path, action["path"])
         actual_size = os.path.getsize(path)
         assert actual_size == action["size"]
-        
+
         modification_time = action["modificationTime"] / 1000  # convert back to seconds
         assert start_time < modification_time
         assert modification_time < end_time
