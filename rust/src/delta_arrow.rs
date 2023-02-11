@@ -781,4 +781,59 @@ mod tests {
 
         assert_eq!(max_min_vec, expected);
     }
+
+    #[test]
+    fn test_null_count_schema_for_fields() {
+        let mut null_count_vec: Vec<ArrowField> = Vec::new();
+        let fields = [
+            ArrowField::new("int32", ArrowDataType::Int32, true),
+            ArrowField::new("int64", ArrowDataType::Int64, true),
+            ArrowField::new("Utf8", ArrowDataType::Utf8, true),
+            ArrowField::new(
+                "list",
+                ArrowDataType::List(Box::new(ArrowField::new(
+                    "simple",
+                    ArrowDataType::Int32,
+                    true,
+                ))),
+                true,
+            ),
+            ArrowField::new(
+                "map",
+                ArrowDataType::Map(
+                    Box::new(ArrowField::new(
+                        "struct",
+                        ArrowDataType::Struct(vec![
+                            ArrowField::new("key", ArrowDataType::Int32, true),
+                            ArrowField::new("value", ArrowDataType::Int32, true),
+                        ]),
+                        true,
+                    )),
+                    true,
+                ),
+                true,
+            ),
+            ArrowField::new(
+                "struct",
+                ArrowDataType::Struct(vec![ArrowField::new("int32", ArrowDataType::Int32, true)]),
+                true,
+            ),
+        ];
+        let expected = vec![
+            ArrowField::new(fields[0].name(), ArrowDataType::Int64, true),
+            ArrowField::new(fields[1].name(), ArrowDataType::Int64, true),
+            ArrowField::new(fields[2].name(), ArrowDataType::Int64, true),
+            ArrowField::new(fields[3].name(), ArrowDataType::Int64, true),
+            ArrowField::new(fields[4].name(), ArrowDataType::Int64, true),
+            ArrowField::new(
+                fields[5].name(),
+                ArrowDataType::Struct(vec![ArrowField::new("int32", ArrowDataType::Int64, true)]),
+                true,
+            ),
+        ];
+        fields
+            .iter()
+            .for_each(|f| null_count_schema_for_fields(&mut null_count_vec, f));
+        assert_eq!(null_count_vec, expected);
+    }
 }
