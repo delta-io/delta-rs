@@ -16,11 +16,10 @@ enum TransactionError {
     VersionAlreadyExists(DeltaDataTypeVersion),
 
     /// Error returned when reading the delta log object failed.
-    #[error("Error serializing commit: {}", .source)]
-    Serialize {
-        /// Storage error details when reading the delta log object failed.
-        #[from]
-        source: serde_json::Error,
+    #[error("Error serializing commit log to json: {json_err}")]
+    SerializeLogJson {
+        /// Commit log record JSON serialization error.
+        json_err: serde_json::error::Error,
     },
 
     /// Error returned when reading the delta log object failed.
@@ -38,7 +37,9 @@ impl From<TransactionError> for DeltaTableError {
             TransactionError::VersionAlreadyExists(version) => {
                 DeltaTableError::VersionAlreadyExists(version)
             }
-            TransactionError::Serialize { source } => DeltaTableError::InvalidJson { source },
+            TransactionError::SerializeLogJson { json_err } => {
+                DeltaTableError::SerializeLogJson { json_err }
+            }
             TransactionError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
         }
     }
@@ -54,7 +55,8 @@ fn commit_uri_from_version(version: DeltaDataTypeVersion) -> Path {
 fn log_entry_from_actions(actions: &[Action]) -> Result<String, TransactionError> {
     let mut jsons = Vec::<String>::new();
     for action in actions {
-        let json = serde_json::to_string(action)?;
+        let json = serde_json::to_string(action)
+            .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
         jsons.push(json);
     }
     Ok(jsons.join("\n"))

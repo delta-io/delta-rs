@@ -283,7 +283,7 @@ impl DeltaTableState {
             .iter()
             .map(|f| {
                 f.get_stats()
-                    .map_err(|err| DeltaTableError::InvalidJson { source: err })
+                    .map_err(|err| DeltaTableError::InvalidStatsJson { json_err: err })
             })
             .collect::<Result<_, DeltaTableError>>()?;
 
