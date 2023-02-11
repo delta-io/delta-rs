@@ -14,8 +14,7 @@ async fn test_commit_tables_local() {
     commit_tables(StorageIntegration::Local).await.unwrap();
 }
 
-// rustls doesn't support http scheme, so we are skipping the test when s3-rustls is enabled.
-#[cfg(feature = "s3")]
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 #[tokio::test]
 #[serial]
 async fn test_commit_tables_aws() {
@@ -37,7 +36,7 @@ async fn test_commit_tables_gcp() {
     commit_tables(StorageIntegration::Google).await.unwrap();
 }
 
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 #[tokio::test]
 #[serial]
 async fn test_two_commits_s3_fails_with_no_lock() -> TestResult {

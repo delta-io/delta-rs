@@ -14,7 +14,7 @@ async fn test_datafusion_local() -> TestResult {
     Ok(test_datafusion(StorageIntegration::Local).await?)
 }
 
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 #[tokio::test]
 #[serial]
 async fn test_datafusion_aws() -> TestResult {

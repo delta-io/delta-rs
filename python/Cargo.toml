@@ -12,6 +12,7 @@ keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 [lib]
 name = "deltalake"
 crate-type = ["cdylib"]
+doc = false
 
 [package.metadata.maturin]
 name = "deltalake._internal"
@@ -38,4 +39,9 @@ features = ["extension-module", "abi3", "abi3-py37"]
 [dependencies.deltalake]
 path = "../rust"
 version = "0"
-features = ["s3", "azure", "glue", "gcs", "python", "datafusion"]
+features = ["azure", "gcs", "python", "datafusion"]
+
+[features]
+default = ["rustls"]
+native-tls = ["deltalake/s3-native-tls", "deltalake/glue-native-tls"]
+rustls = ["deltalake/s3", "deltalake/glue"]

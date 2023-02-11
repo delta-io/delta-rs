@@ -2,9 +2,9 @@
 
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
 use deltalake::DeltaTableBuilder;
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use dynamodb_lock::dynamo_lock_options;
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use maplit::hashmap;
 use object_store::path::Path;
 use serial_test::serial;
@@ -22,7 +22,7 @@ async fn test_read_tables_azure() -> TestResult {
     Ok(read_tables(StorageIntegration::Microsoft).await?)
 }
 
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 #[tokio::test]
 #[serial]
 async fn test_read_tables_aws() -> TestResult {
@@ -44,11 +44,11 @@ async fn read_tables(storage: StorageIntegration) -> TestResult {
 async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
     let table_uri = integration.uri_for_table(TestTables::Simple);
     // the s3 options don't hurt us for other integrations ...
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
     let table = DeltaTableBuilder::from_uri(table_uri).with_allow_http(true).with_storage_options(hashmap! {
         dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "s3::deltars/simple".to_string(),
     }).load().await?;
-    #[cfg(not(any(feature = "s3", feature = "s3-rustls")))]
+    #[cfg(not(any(feature = "s3", feature = "s3-native-tls")))]
     let table = DeltaTableBuilder::from_uri(table_uri)
         .with_allow_http(true)
         .load()
