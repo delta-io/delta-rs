@@ -12,14 +12,14 @@
 set -e
 
 LANGUAGE="rust"
-SINCE_VERSION="0.5.0"
-FUTURE_RELEASE="0.6.0"
+SINCE_VERSION="0.6.0"
+FUTURE_RELEASE="0.7.0"
 
 # only consider tags of the correct language
 if [ "$LANGUAGE" == "rust" ]; then
-	EXCLUDED_LANGUAGES_REGEX="python.*"
+	EXCLUDED_LANGUAGES_REGEX=".*python.*"
 elif [ "$LANGUAGE" == "python" ]; then
-	EXCLUDED_LANGUAGES_REGEX="rust.*"
+	EXCLUDED_LANGUAGES_REGEX=".*rust.*"
 else
   echo "Language $LANGUAGE is invalid. Should be one of Python and Rust."
 fi
@@ -31,11 +31,12 @@ OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md"
 OLD_OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG-old.md"
 
 # remove header so github-changelog-generator has a clean base to append
-sed -i '1d' "${OUTPUT_PATH}"
-sed -i '1d' "${OLD_OUTPUT_PATH}"
+sed -i.bak '1d' "${OUTPUT_PATH}"
+sed -i.bak '1d' "${OLD_OUTPUT_PATH}"
 # remove the github-changelog-generator footer from the old CHANGELOG.md
 LINE_COUNT=$(wc -l <"${OUTPUT_PATH}")
-sed -i "$(( $LINE_COUNT-3 )),$ d" "${OUTPUT_PATH}"
+
+sed -i.bak "$(( $LINE_COUNT-3 )),$ d" "${OUTPUT_PATH}"
 
 # Copy the previous CHANGELOG.md to CHANGELOG-old.md
 echo '# Historical Changelog
@@ -44,7 +45,8 @@ mv "${OLD_OUTPUT_PATH}".tmp "${OLD_OUTPUT_PATH}"
 
 # use exclude-tags-regex to filter out tags used in the wrong language
 pushd "${SOURCE_TOP_DIR}"
-docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$GITHUB_API_TOKEN" -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
+docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$GITHUB_API_TOKEN" \
+    -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
     --user delta-io \
     --project delta-rs \
     --cache-file=.githubchangeloggenerator.cache \
