@@ -218,24 +218,18 @@ mod tests {
         let mut md = dummy_metadata();
 
         // default value is true
-        assert_eq!(
-            ENABLE_EXPIRED_LOG_CLEANUP
-                .get_boolean_from_metadata(&md)
-                .unwrap(),
-            true,
-        );
+        assert!(ENABLE_EXPIRED_LOG_CLEANUP
+            .get_boolean_from_metadata(&md)
+            .unwrap(),);
 
         // change to false
         md.configuration.insert(
             ENABLE_EXPIRED_LOG_CLEANUP.key.to_string(),
             Some("false".to_string()),
         );
-        assert_eq!(
-            ENABLE_EXPIRED_LOG_CLEANUP
-                .get_boolean_from_metadata(&md)
-                .unwrap(),
-            false,
-        );
+        assert!(!ENABLE_EXPIRED_LOG_CLEANUP
+            .get_boolean_from_metadata(&md)
+            .unwrap());
     }
 
     #[test]

@@ -17,4 +17,10 @@ env_logger = "0"
 [dependencies.deltalake]
 path = "../rust"
 version = "0"
-features = ["s3", "azure", "glue", "gcs"]
+features = ["azure", "gcs"]
+
+
+[features]
+default = ["rustls"]
+native-tls = ["deltalake/s3-native-tls", "deltalake/glue-native-tls"]
+rustls = ["deltalake/s3", "deltalake/glue"]

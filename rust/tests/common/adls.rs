@@ -31,7 +31,7 @@ pub async fn setup_azure_gen2_context() -> TestContext {
 
     az_cli::create_container(&file_system_name).unwrap();
 
-    let table_uri = format!("azure://{}/", file_system_name);
+    let table_uri = format!("azure://{file_system_name}/");
 
     config.insert("URI".to_string(), table_uri);
     config.insert(
