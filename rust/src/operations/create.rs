@@ -314,7 +314,7 @@ mod tests {
     use crate::operations::DeltaOps;
     use crate::table_properties::APPEND_ONLY;
     use crate::writer::test_utils::get_delta_schema;
-    use rand::distributions::{Alphanumeric, DistString};
+    use tempdir::TempDir;
 
     #[tokio::test]
     async fn test_create() {
@@ -333,8 +333,12 @@ mod tests {
     #[tokio::test]
     async fn test_create_local_relative_path() {
         let table_schema = get_delta_schema();
-        let name = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
-        let table = DeltaOps::try_from_uri(format!("./{name}"))
+        let tmp_dir = TempDir::new_in(".", "tmp_").unwrap();
+        let relative_path = format!(
+            "./{}",
+            tmp_dir.path().file_name().unwrap().to_str().unwrap()
+        );
+        let table = DeltaOps::try_from_uri(relative_path)
             .await
             .unwrap()
             .create()
@@ -349,9 +353,13 @@ mod tests {
     #[tokio::test]
     async fn test_create_table_local_path() {
         let schema = get_delta_schema();
-        let name = Alphanumeric.sample_string(&mut rand::thread_rng(), 16);
+        let tmp_dir = TempDir::new_in(".", "tmp_").unwrap();
+        let relative_path = format!(
+            "./{}",
+            tmp_dir.path().file_name().unwrap().to_str().unwrap()
+        );
         let table = CreateBuilder::new()
-            .with_location(format!("./{name}"))
+            .with_location(format!("./{relative_path}"))
             .with_columns(schema.get_fields().clone())
             .await
             .unwrap();

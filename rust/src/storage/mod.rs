@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use url::Url;
 
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 pub mod s3;
 
 #[cfg(feature = "datafusion")]
