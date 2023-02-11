@@ -17,7 +17,6 @@ use log::*;
 use regex::Regex;
 use serde_json::Value;
 use std::num::ParseIntError;
-use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
@@ -31,7 +30,7 @@ async fn main() -> Result<(), Error> {
 async fn process_event(event: LambdaEvent<Value>) -> Result<(), CheckPointLambdaError> {
     let (bucket, key) = bucket_and_key_from_event(&event.payload)?;
     let (path, version) = table_path_and_version_from_key(key.as_str())?;
-    let table_uri = table_uri_from_parts(bucket.as_str(), path.as_str())?;
+    let table_uri = table_uri_from_parts(bucket.as_str(), path.as_str());
 
     // Checkpoints are created for every 10th delta log commit.
     // Follows the reference implementation described in the delta protocol doc.
@@ -106,23 +105,13 @@ fn table_path_and_version_from_key(
     }
 }
 
-fn table_uri_from_parts(bucket: &str, path: &str) -> Result<String, CheckPointLambdaError> {
-    let mut table_uri = PathBuf::new();
-
-    table_uri.push(format!("s3://{bucket}"));
-    table_uri.push(path);
-
-    Ok(table_uri
-        .to_str()
-        .ok_or_else(|| CheckPointLambdaError::InvalidTableUri(table_uri.clone()))?
-        .to_string())
+fn table_uri_from_parts(bucket: &str, path: &str) -> String {
+    let path = path.trim_start_matches('/');
+    format!("s3://{bucket}/{path}")
 }
 
 #[derive(thiserror::Error, Debug)]
 enum CheckPointLambdaError {
-    #[error("Invalid table uri: {0}")]
-    InvalidTableUri(PathBuf),
-
     #[error("Invalid event structure: {0}")]
     InvalidEventStructure(String),
 
@@ -190,7 +179,7 @@ mod tests {
 
     #[test]
     fn checkpoint_table_uri_from_parts_test() {
-        let table_uri = table_uri_from_parts("my_bucket", "database_name/table_name").unwrap();
+        let table_uri = table_uri_from_parts("my_bucket", "database_name/table_name");
 
         assert_eq!(
             "s3://my_bucket/database_name/table_name",
