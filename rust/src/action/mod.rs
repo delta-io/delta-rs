@@ -8,7 +8,7 @@ mod parquet_read;
 #[cfg(feature = "parquet2")]
 pub mod parquet2_read;
 
-use crate::{schema::*, DeltaTableMetaData};
+use crate::{schema::*, DeltaTableError, DeltaTableMetaData};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -329,6 +329,25 @@ impl MetaData {
     /// action.
     pub fn get_schema(&self) -> Result<Schema, serde_json::error::Error> {
         serde_json::from_str(&self.schema_string)
+    }
+}
+
+impl TryFrom<DeltaTableMetaData> for MetaData {
+    type Error = DeltaTableError;
+
+    fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
+        let schema_string = serde_json::to_string(&metadata.schema)
+            .map_err(|e| DeltaTableError::SerializeSchemaJson { json_err: e })?;
+        Ok(Self {
+            id: metadata.id,
+            name: metadata.name,
+            description: metadata.description,
+            format: metadata.format,
+            schema_string,
+            partition_columns: metadata.partition_columns,
+            created_time: metadata.created_time,
+            configuration: metadata.configuration,
+        })
     }
 }
 

@@ -115,11 +115,28 @@ pub enum DeltaTableError {
     },
 
     /// Error returned when the log record has an invalid JSON.
-    #[error("Invalid JSON in log record: {}", .source)]
-    InvalidJson {
-        /// JSON error details returned when the log record has an invalid JSON.
-        #[from]
-        source: serde_json::error::Error,
+    #[error("Invalid JSON in log record, version={}, line=`{}`, err=`{}`", .version, .line, .json_err)]
+    InvalidJsonLog {
+        /// JSON error details returned when parsing the record JSON.
+        json_err: serde_json::error::Error,
+        /// invalid log entry content.
+        line: String,
+        /// corresponding table version for the log file.
+        version: DeltaDataTypeVersion,
+    },
+    /// Error returned when the log contains invalid stats JSON.
+    #[error("Invalid JSON in file stats: {}", .json_err)]
+    InvalidStatsJson {
+        /// JSON error details returned when parsing the stats JSON.
+        json_err: serde_json::error::Error,
+    },
+    /// Error returned when the log contains invalid stats JSON.
+    #[error("Invalid JSON in invariant expression, line=`{line}`, err=`{json_err}`")]
+    InvalidInvariantJson {
+        /// JSON error details returned when parsing the invariant expression JSON.
+        json_err: serde_json::error::Error,
+        /// Invariant expression.
+        line: String,
     },
     /// Error returned when the DeltaTable has an invalid version.
     #[error("Invalid table version: {0}")]
@@ -210,6 +227,18 @@ pub enum DeltaTableError {
     /// A Feature is missing to perform operation
     #[error("Cannot infer storage location from: {0}")]
     InvalidTableLocation(String),
+    /// Generic Delta Table error
+    #[error("Log JSON serialization error: {json_err}")]
+    SerializeLogJson {
+        /// JSON serialization error
+        json_err: serde_json::error::Error,
+    },
+    /// Generic Delta Table error
+    #[error("Schema JSON serialization error: {json_err}")]
+    SerializeSchemaJson {
+        /// JSON serialization error
+        json_err: serde_json::error::Error,
+    },
     /// Generic Delta Table error
     #[error("Generic DeltaTable error: {0}")]
     Generic(String),
@@ -321,24 +350,6 @@ impl TryFrom<action::MetaData> for DeltaTableMetaData {
     }
 }
 
-impl TryFrom<DeltaTableMetaData> for action::MetaData {
-    type Error = serde_json::error::Error;
-
-    fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
-        let schema_string = serde_json::to_string(&metadata.schema)?;
-        Ok(Self {
-            id: metadata.id,
-            name: metadata.name,
-            description: metadata.description,
-            format: metadata.format,
-            schema_string,
-            partition_columns: metadata.partition_columns,
-            created_time: metadata.created_time,
-            configuration: metadata.configuration,
-        })
-    }
-}
-
 /// Error related to Delta log application
 #[derive(thiserror::Error, Debug)]
 pub enum ApplyLogError {
@@ -346,7 +357,7 @@ pub enum ApplyLogError {
     #[error("End of transaction log")]
     EndOfLog,
     /// Error returned when the JSON of the log record is invalid.
-    #[error("Invalid JSON in log record")]
+    #[error("Invalid JSON found when applying log record")]
     InvalidJson {
         /// JSON error details returned when reading the JSON log record.
         #[from]
@@ -612,6 +623,7 @@ impl DeltaTable {
 
     async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
         let last_checkpoint_path = Path::from_iter(["_delta_log", "_last_checkpoint"]);
+        debug!("loading checkpoint from {last_checkpoint_path}");
         match self.storage.get(&last_checkpoint_path).await {
             Ok(data) => Ok(serde_json::from_slice(&data.bytes().await?)?),
             Err(ObjectStoreError::NotFound { .. }) => {
@@ -711,6 +723,8 @@ impl DeltaTable {
             }
         };
 
+        debug!("start with latest checkpoint version: {version}");
+
         // scan logs after checkpoint
         loop {
             match self
@@ -772,11 +786,19 @@ impl DeltaTable {
             Ok(result) => result.bytes().await,
         }?;
 
+        debug!("parsing commit with version {next_version}...");
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
         let mut actions = Vec::new();
-        for line in reader.lines() {
-            let action: action::Action = serde_json::from_str(line?.as_str())?;
+        for re_line in reader.lines() {
+            let line = re_line?;
+            let lstr = line.as_str();
+            let action =
+                serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
+                    json_err: e,
+                    version: next_version,
+                    line,
+                })?;
             actions.push(action);
         }
         Ok(PeekCommit::New(next_version, actions))
@@ -788,6 +810,7 @@ impl DeltaTable {
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
+                debug!("update with latest checkpoint {last_check_point:?}");
                 if Some(last_check_point) == self.last_check_point {
                     self.update_incremental(None).await
                 } else {
@@ -796,7 +819,10 @@ impl DeltaTable {
                     self.update_incremental(None).await
                 }
             }
-            Err(LoadCheckpointError::NotFound) => self.update_incremental(None).await,
+            Err(LoadCheckpointError::NotFound) => {
+                debug!("update without checkpoint");
+                self.update_incremental(None).await
+            }
             Err(source) => Err(DeltaTableError::LoadCheckpoint { source }),
         }
     }
@@ -813,9 +839,15 @@ impl DeltaTable {
         &mut self,
         max_version: Option<DeltaDataTypeVersion>,
     ) -> Result<(), DeltaTableError> {
+        debug!(
+            "incremental update with version({}) and max_version({max_version:?})",
+            self.version(),
+        );
+
         while let PeekCommit::New(new_version, actions) =
             self.peek_next_commit(self.version()).await?
         {
+            debug!("merging table state with version: {new_version}");
             let s = DeltaTableState::from_actions(actions, new_version)?;
             self.state
                 .merge(s, self.config.require_tombstones, self.config.require_files);
@@ -864,6 +896,7 @@ impl DeltaTable {
             }
         }
 
+        debug!("update incrementally from version {version}");
         // 2. apply all logs starting from checkpoint
         self.update_incremental(Some(version)).await?;
 
@@ -1002,10 +1035,10 @@ impl DeltaTable {
 
     /// Returns statistics for files, in order
     pub fn get_stats(&self) -> impl Iterator<Item = Result<Option<Stats>, DeltaTableError>> + '_ {
-        self.state
-            .files()
-            .iter()
-            .map(|add| add.get_stats().map_err(DeltaTableError::from))
+        self.state.files().iter().map(|add| {
+            add.get_stats()
+                .map_err(|e| DeltaTableError::InvalidStatsJson { json_err: e })
+        })
     }
 
     /// Returns partition values for files, in order
@@ -1378,7 +1411,10 @@ impl<'a> DeltaTransaction<'a> {
         }
 
         // Serialize all actions that are part of this log entry.
-        let log_entry = bytes::Bytes::from(log_entry_from_actions(&self.actions)?);
+        let log_entry = bytes::Bytes::from(
+            log_entry_from_actions(&self.actions)
+                .map_err(|e| DeltaTableError::SerializeLogJson { json_err: e })?,
+        );
 
         // Write delta log entry as temporary file to storage. For the actual commit,
         // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
