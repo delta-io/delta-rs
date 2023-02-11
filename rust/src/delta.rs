@@ -1556,7 +1556,7 @@ mod tests {
         drop(tmp_dir);
     }
 
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
     #[test]
     fn normalize_table_uri_s3() {
         std::env::set_var("AWS_DEFAULT_REGION", "us-east-1");

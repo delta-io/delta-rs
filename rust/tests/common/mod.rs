@@ -18,7 +18,7 @@ pub mod adls;
 pub mod clock;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 pub mod s3;
 pub mod schemas;
 
@@ -45,7 +45,7 @@ impl TestContext {
             Ok("LOCALFS") | Err(std::env::VarError::NotPresent) => setup_local_context().await,
             #[cfg(feature = "azure")]
             Ok("AZURE_GEN2") => adls::setup_azure_gen2_context().await,
-            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+            #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
             Ok("S3_LOCAL_STACK") => s3::setup_s3_context().await,
             _ => panic!("Invalid backend for delta-rs tests"),
         }
