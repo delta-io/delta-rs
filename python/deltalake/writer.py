@@ -223,7 +223,7 @@ def write_deltalake(
                 path,
                 size,
                 partition_values,
-                int(datetime.now().timestamp()),
+                int(datetime.now().timestamp() * 1000),
                 True,
                 json.dumps(stats, cls=DeltaJSONEncoder),
             )
