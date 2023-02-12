@@ -7,7 +7,6 @@ from datetime import datetime
 from typing import Dict, Iterable, List
 from unittest.mock import Mock
 
-import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
@@ -505,9 +504,11 @@ def test_writer_with_options(tmp_path: pathlib.Path):
 
 
 def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
-    example_df = pd.DataFrame({"part": ["a", "a", "b", "b"], "value": [1, 2, 3, 4]})
+    data = pa.table({"vals": pa.array(["1", "2", "3"])})
+    write_deltalake(str(tmp_path), data)
+
     table_or_uri = str(tmp_path / "delta_table")
-    write_deltalake(table_or_uri, example_df)
+    write_deltalake(table_or_uri, data)
     delta_table = DeltaTable(table_or_uri)
 
     # table_or_uri as DeltaTable
