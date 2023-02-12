@@ -505,7 +505,7 @@ def test_writer_with_options(tmp_path: pathlib.Path):
 
 def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
     data = pa.table({"vals": pa.array(["1", "2", "3"])})
-    table_or_uri = str(tmp_path / "delta_table")
+    table_or_uri = tmp_path / "delta_table"
     write_deltalake(table_or_uri, data)
     delta_table = DeltaTable(table_or_uri)
 
@@ -518,21 +518,21 @@ def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
     # table_or_uri as str
     assert try_get_table_and_table_uri(str(tmp_path / "delta_table"), None) == (
         delta_table,
-        "file://" + str(tmp_path / "delta_table"),
+        str(tmp_path / "delta_table"),
     )
     assert try_get_table_and_table_uri(str(tmp_path / "str"), None) == (
         None,
-        "file://" + str(tmp_path / "str"),
+        str(tmp_path / "str"),
     )
 
     # table_or_uri as Path
     assert try_get_table_and_table_uri(tmp_path / "delta_table", None) == (
         delta_table,
-        "file://" + str(tmp_path / "delta_table"),
+        str(tmp_path / "delta_table"),
     )
     assert try_get_table_and_table_uri(tmp_path / "Path", None) == (
         None,
-        "file://" + str(tmp_path / "Path"),
+        str(tmp_path / "Path"),
     )
 
     # table_or_uri with invalid parameter type

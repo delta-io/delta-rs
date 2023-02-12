@@ -317,23 +317,33 @@ def try_get_table_and_table_uri(
     table_or_uri: Union[str, Path, DeltaTable],
     storage_options: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[DeltaTable], str]:
-    """Parses `table_or_uri` and returns `table` & `table_uri`.
+    """Parses the `table_or_uri`.
 
-    Raises a ValueError if `table_or_uri` is not of type `str`, `Path` or `DeltaTable`
+    Parameters
+    ----------
+    table_or_uri : str, Path or DeltaTable
+        URI of a table or a DeltaTable object.
+    storage_options : dict(str, str), optional
+        Options passed to the native delta filesystem.
+
+    Returns
+    -------
+    table: DeltaTable
+        DeltaTable object
+    table_uri: str
+        URI of the table
+
+    Raises
+    ------
+    ValueError
+        If `table_or_uri` is not of type str, Path or DeltaTable
     """
     if not isinstance(table_or_uri, (str, Path, DeltaTable)):
         raise ValueError("table_or_uri must be a str, Path or DeltaTable")
 
-    if isinstance(table_or_uri, str):
-        if "://" in table_or_uri:
-            table_uri = table_or_uri
-        else:
-            # Non-existant local paths are only accepted as fully-qualified URIs
-            table_uri = "file://" + str(Path(table_or_uri).absolute())
+    if isinstance(table_or_uri, (str, Path)):
         table = try_get_deltatable(table_or_uri, storage_options)
-    elif isinstance(table_or_uri, Path):
-        table_uri = "file://" + str(table_or_uri.absolute())
-        table = try_get_deltatable(table_uri, storage_options)
+        table_uri = str(table_or_uri)
     else:
         table = table_or_uri
         table_uri = table._table.table_uri()
@@ -342,7 +352,7 @@ def try_get_table_and_table_uri(
 
 
 def try_get_deltatable(
-    table_uri: str, storage_options: Optional[Dict[str, str]]
+    table_uri: Union[str, Path], storage_options: Optional[Dict[str, str]]
 ) -> Optional[DeltaTable]:
     try:
         return DeltaTable(table_uri, storage_options=storage_options)
