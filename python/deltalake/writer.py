@@ -63,7 +63,7 @@ class AddAction:
 
 
 def write_deltalake(
-    table_or_uri: Union[str, DeltaTable],
+    table_or_uri: Union[str, Path, DeltaTable],
     data: Union[
         "pd.DataFrame",
         pa.Table,
@@ -141,6 +141,8 @@ def write_deltalake(
         else:
             data, schema = delta_arrow_schema_from_pandas(data)
 
+    table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
+
     if schema is None:
         if isinstance(data, RecordBatchReader):
             schema = data.schema
@@ -151,17 +153,6 @@ def write_deltalake(
 
     if filesystem is not None:
         raise NotImplementedError("Filesystem support is not yet implemented.  #570")
-
-    if isinstance(table_or_uri, str):
-        if "://" in table_or_uri:
-            table_uri = table_or_uri
-        else:
-            # Non-existant local paths are only accepted as fully-qualified URIs
-            table_uri = "file://" + str(Path(table_or_uri).absolute())
-        table = try_get_deltatable(table_or_uri, storage_options)
-    else:
-        table = table_or_uri
-        table_uri = table._table.table_uri()
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
@@ -322,8 +313,33 @@ class DeltaJSONEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
+def try_get_table_and_table_uri(
+    table_or_uri: Union[str, Path, DeltaTable],
+    storage_options: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[DeltaTable], str]:
+    """Parses the `table_or_uri`.
+
+    :param table_or_uri: URI of a table or a DeltaTable object.
+    :param storage_options: Options passed to the native delta filesystem.
+    :raises ValueError: If `table_or_uri` is not of type str, Path or DeltaTable.
+    :returns table: DeltaTable object
+    :return table_uri: URI of the table
+    """
+    if not isinstance(table_or_uri, (str, Path, DeltaTable)):
+        raise ValueError("table_or_uri must be a str, Path or DeltaTable")
+
+    if isinstance(table_or_uri, (str, Path)):
+        table = try_get_deltatable(table_or_uri, storage_options)
+        table_uri = str(table_or_uri)
+    else:
+        table = table_or_uri
+        table_uri = table._table.table_uri()
+
+    return (table, table_uri)
+
+
 def try_get_deltatable(
-    table_uri: str, storage_options: Optional[Dict[str, str]]
+    table_uri: Union[str, Path], storage_options: Optional[Dict[str, str]]
 ) -> Optional[DeltaTable]:
     try:
         return DeltaTable(table_uri, storage_options=storage_options)

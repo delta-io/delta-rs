@@ -16,7 +16,7 @@ from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, write_deltalake
 from deltalake.table import ProtocolVersions
-from deltalake.writer import DeltaTableProtocolError
+from deltalake.writer import DeltaTableProtocolError, try_get_table_and_table_uri
 
 try:
     from pandas.testing import assert_frame_equal
@@ -501,3 +501,40 @@ def test_writer_with_options(tmp_path: pathlib.Path):
     )
 
     assert table == data
+
+
+def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
+    data = pa.table({"vals": pa.array(["1", "2", "3"])})
+    table_or_uri = tmp_path / "delta_table"
+    write_deltalake(table_or_uri, data)
+    delta_table = DeltaTable(table_or_uri)
+
+    # table_or_uri as DeltaTable
+    assert try_get_table_and_table_uri(delta_table, None) == (
+        delta_table,
+        str(tmp_path / "delta_table") + "/",
+    )
+
+    # table_or_uri as str
+    assert try_get_table_and_table_uri(str(tmp_path / "delta_table"), None) == (
+        delta_table,
+        str(tmp_path / "delta_table"),
+    )
+    assert try_get_table_and_table_uri(str(tmp_path / "str"), None) == (
+        None,
+        str(tmp_path / "str"),
+    )
+
+    # table_or_uri as Path
+    assert try_get_table_and_table_uri(tmp_path / "delta_table", None) == (
+        delta_table,
+        str(tmp_path / "delta_table"),
+    )
+    assert try_get_table_and_table_uri(tmp_path / "Path", None) == (
+        None,
+        str(tmp_path / "Path"),
+    )
+
+    # table_or_uri with invalid parameter type
+    with pytest.raises(ValueError):
+        try_get_table_and_table_uri(None, None)
