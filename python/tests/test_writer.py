@@ -7,6 +7,7 @@ from datetime import datetime
 from typing import Dict, Iterable, List
 from unittest.mock import Mock
 
+import pandas as pd
 import pyarrow as pa
 import pyarrow.compute as pc
 import pytest
@@ -16,7 +17,7 @@ from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, write_deltalake
 from deltalake.table import ProtocolVersions
-from deltalake.writer import DeltaTableProtocolError
+from deltalake.writer import DeltaTableProtocolError, try_get_table_and_table_uri
 
 try:
     from pandas.testing import assert_frame_equal
@@ -501,3 +502,40 @@ def test_writer_with_options(tmp_path: pathlib.Path):
     )
 
     assert table == data
+
+
+def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
+    example_df = pd.DataFrame({"part": ["a", "a", "b", "b"], "value": [1, 2, 3, 4]})
+    table_or_uri = str(tmp_path / "delta_table")
+    write_deltalake(table_or_uri, example_df)
+    delta_table = DeltaTable(table_or_uri)
+
+    # table_or_uri as DeltaTable
+    assert try_get_table_and_table_uri(delta_table, None) == (
+        delta_table,
+        str(tmp_path / "delta_table") + "/",
+    )
+
+    # table_or_uri as str
+    assert try_get_table_and_table_uri(str(tmp_path / "delta_table"), None) == (
+        delta_table,
+        "file://" + str(tmp_path / "delta_table"),
+    )
+    assert try_get_table_and_table_uri(str(tmp_path / "str"), None) == (
+        None,
+        "file://" + str(tmp_path / "str"),
+    )
+
+    # table_or_uri as Path
+    assert try_get_table_and_table_uri(tmp_path / "delta_table", None) == (
+        delta_table,
+        "file://" + str(tmp_path / "delta_table"),
+    )
+    assert try_get_table_and_table_uri(tmp_path / "Path", None) == (
+        None,
+        "file://" + str(tmp_path / "Path"),
+    )
+
+    # table_or_uri with invalid parameter type
+    with pytest.raises(ValueError):
+        try_get_table_and_table_uri(None, None)

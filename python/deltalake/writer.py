@@ -63,7 +63,7 @@ class AddAction:
 
 
 def write_deltalake(
-    table_or_uri: Union[str, DeltaTable],
+    table_or_uri: Union[str, Path, DeltaTable],
     data: Union[
         "pd.DataFrame",
         pa.Table,
@@ -141,6 +141,8 @@ def write_deltalake(
         else:
             data, schema = delta_arrow_schema_from_pandas(data)
 
+    table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
+
     if schema is None:
         if isinstance(data, RecordBatchReader):
             schema = data.schema
@@ -151,17 +153,6 @@ def write_deltalake(
 
     if filesystem is not None:
         raise NotImplementedError("Filesystem support is not yet implemented.  #570")
-
-    if isinstance(table_or_uri, str):
-        if "://" in table_or_uri:
-            table_uri = table_or_uri
-        else:
-            # Non-existant local paths are only accepted as fully-qualified URIs
-            table_uri = "file://" + str(Path(table_or_uri).absolute())
-        table = try_get_deltatable(table_or_uri, storage_options)
-    else:
-        table = table_or_uri
-        table_uri = table._table.table_uri()
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
@@ -320,6 +311,34 @@ class DeltaJSONEncoder(json.JSONEncoder):
             return str(obj)
         # Let the base class default method raise the TypeError
         return json.JSONEncoder.default(self, obj)
+
+
+def try_get_table_and_table_uri(
+    table_or_uri: Union[str, Path, DeltaTable],
+    storage_options: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[DeltaTable], str]:
+    """Parses `table_or_uri` and returns `table` & `table_uri`.
+
+    Raises a ValueError if `table_or_uri` is not of type `str`, `Path` or `DeltaTable`
+    """
+    if not isinstance(table_or_uri, (str, Path, DeltaTable)):
+        raise ValueError("table_or_uri must be a str, Path or DeltaTable")
+
+    if isinstance(table_or_uri, str):
+        if "://" in table_or_uri:
+            table_uri = table_or_uri
+        else:
+            # Non-existant local paths are only accepted as fully-qualified URIs
+            table_uri = "file://" + str(Path(table_or_uri).absolute())
+        table = try_get_deltatable(table_or_uri, storage_options)
+    elif isinstance(table_or_uri, Path):
+        table_uri = "file://" + str(table_or_uri.absolute())
+        table = try_get_deltatable(table_uri, storage_options)
+    else:
+        table = table_or_uri
+        table_uri = table._table.table_uri()
+
+    return (table, table_uri)
 
 
 def try_get_deltatable(
