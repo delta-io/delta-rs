@@ -24,10 +24,12 @@
 - Deltalake 0.5 crate s3 feature dynamodb version mismatch [\#973](https://github.com/delta-io/delta-rs/issues/973)
 - Overwrite mode does not work with Azure [\#939](https://github.com/delta-io/delta-rs/issues/939)
 - Use Chrono without default  features [\#914](https://github.com/delta-io/delta-rs/issues/914)
+- `cargo test` does not run due to tls conflict [\#985](https://github.com/delta-io/delta-rs/issues/985)
 - Azure SAS authorization fails with `<AuthenticationErrorDetail>Signature fields not well formed.` [\#910](https://github.com/delta-io/delta-rs/issues/910)
 
 **Merged pull requests:**
 
+- Make rustls default across all packages [\#1097](https://github.com/delta-io/delta-rs/pull/1097) ([wjones127](https://github.com/wjones127))
 - Implement filesystem check [\#1103](https://github.com/delta-io/delta-rs/pull/1103) ([Blajda](https://github.com/Blajda))
 - refactor: move vacuum command to operations module [\#1045](https://github.com/delta-io/delta-rs/pull/1045) ([roeap](https://github.com/roeap))
 - feat: enable passing storage options to Delta table builder via DataFusion's CREATE EXTERNAL TABLE [\#1043](https://github.com/delta-io/delta-rs/pull/1043) ([gruuya](https://github.com/gruuya))
