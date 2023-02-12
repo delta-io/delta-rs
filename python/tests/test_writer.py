@@ -505,8 +505,6 @@ def test_writer_with_options(tmp_path: pathlib.Path):
 
 def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
     data = pa.table({"vals": pa.array(["1", "2", "3"])})
-    write_deltalake(str(tmp_path), data)
-
     table_or_uri = str(tmp_path / "delta_table")
     write_deltalake(table_or_uri, data)
     delta_table = DeltaTable(table_or_uri)
