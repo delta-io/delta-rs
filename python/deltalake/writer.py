@@ -319,24 +319,11 @@ def try_get_table_and_table_uri(
 ) -> Tuple[Optional[DeltaTable], str]:
     """Parses the `table_or_uri`.
 
-    Parameters
-    ----------
-    table_or_uri : str, Path or DeltaTable
-        URI of a table or a DeltaTable object.
-    storage_options : dict(str, str), optional
-        Options passed to the native delta filesystem.
-
-    Returns
-    -------
-    table: DeltaTable
-        DeltaTable object
-    table_uri: str
-        URI of the table
-
-    Raises
-    ------
-    ValueError
-        If `table_or_uri` is not of type str, Path or DeltaTable
+    :param table_or_uri: URI of a table or a DeltaTable object.
+    :param storage_options: Options passed to the native delta filesystem.
+    :raises ValueError: If `table_or_uri` is not of type str, Path or DeltaTable.
+    :returns table: DeltaTable object
+    :return table_uri: URI of the table
     """
     if not isinstance(table_or_uri, (str, Path, DeltaTable)):
         raise ValueError("table_or_uri must be a str, Path or DeltaTable")
