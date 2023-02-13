@@ -237,7 +237,6 @@ def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
 def test_append_only_should_append_only_with_the_overwrite_mode(
     tmp_path: pathlib.Path, sample_data: pa.Table
 ):
-
     config = {"delta.appendOnly": "true"}
 
     write_deltalake(tmp_path, sample_data, mode="append", configuration=config)
