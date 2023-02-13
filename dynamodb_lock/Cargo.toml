@@ -17,7 +17,7 @@ uuid = { version = "1.2", features = ["serde", "v4"] }
 # Waiting on fix for regression in 0.48:
 # https://github.com/rusoto/rusoto/issues/1980
 rusoto_core = { version = "0.47", default-features = false }
-rusoto_dynamodb = { version = "0.47", default-features = false }
+rusoto_dynamodb = { version = "0.48", default-features = false }
 maplit = "1"
 tokio = { version = "1", features = ["fs", "macros", "rt", "io-util"] }
 
