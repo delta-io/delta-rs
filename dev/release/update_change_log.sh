@@ -12,16 +12,16 @@
 set -e
 
 LANGUAGE="rust"
-SINCE_VERSION="0.5.0"
-FUTURE_RELEASE="0.6.0"
+SINCE_VERSION="0.7.0"
+FUTURE_RELEASE="0.8.0"
 
 # only consider tags of the correct language
 if [ "$LANGUAGE" == "rust" ]; then
-	EXCLUDED_LANGUAGES_REGEX="python.*|ruby.*"
+	EXCLUDED_TAGS_REGEX="python.*"
+  INCLUDED_LABELS="rust"
 elif [ "$LANGUAGE" == "python" ]; then
-	EXCLUDED_LANGUAGES_REGEX="ruby.*|rust.*"
-elif [ "$LANGUAGE" == "ruby" ]; then
-	EXCLUDED_LANGUAGES_REGEX="python.*|rust.*"
+	EXCLUDED_TAGS_REGEX="rust.*"
+  INCLUDED_LABELS="python,binding/python"
 else
   echo "Language $LANGUAGE is invalid. Should be one of Python, Ruby and Rust."
 fi
@@ -53,8 +53,9 @@ docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$GITHUB_API_TOKEN" -v "$(pwd)":/u
     --cache-log=.githubchangeloggenerator.cache.log \
     --http-cache \
     --max-issues=300 \
+    --include-labels "${INCLUDED_LABELS}" \
     --exclude-labels dependencies \
-    --exclude-tags-regex "${EXCLUDED_LANGUAGES_REGEX}" \
+    --exclude-tags-regex "${EXCLUDED_TAGS_REGEX}" \
     --since-tag ${LANGUAGE}-v${SINCE_VERSION} \
     --future-release ${LANGUAGE}-v${FUTURE_RELEASE}
 
