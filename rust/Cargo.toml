@@ -47,7 +47,7 @@ rusoto_sts = { version = "0.47", default-features = false, optional = true }
 rusoto_dynamodb = { version = "0.47", default-features = false, optional = true }
 
 # Glue
-rusoto_glue = { version = "0.47", default-features = false, optional = true }
+rusoto_glue = { version = "0.48", default-features = false, optional = true }
 
 # Datafusion
 datafusion = { version = "17", optional = true }
