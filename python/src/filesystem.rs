@@ -94,7 +94,7 @@ impl DeltaFileSystemHandler {
         let fs = PyModule::import(py, "pyarrow.fs")?;
         let file_types = fs.getattr("FileType")?;
 
-        let to_file_info = |loc: String, type_: &PyAny, kwargs: HashMap<&str, i64>| {
+        let to_file_info = |loc: &str, type_: &PyAny, kwargs: HashMap<&str, i64>| {
             fs.call_method("FileInfo", (loc, type_), Some(kwargs.into_py_dict(py)))
         };
 
@@ -106,48 +106,27 @@ impl DeltaFileSystemHandler {
                 .block_on(self.inner.list_with_delimiter(Some(&path)))
                 .map_err(PyDeltaTableError::from_object_store)?;
 
-            if let Some(meta) = listed
-                .objects
-                .into_iter()
-                .find(|meta| meta.location == path)
-            {
-                let kwargs = HashMap::from([
-                    ("size", meta.size as i64),
-                    ("mtime_ns", meta.last_modified.timestamp_nanos()),
-                ]);
-                infos.push(to_file_info(
-                    meta.location.to_string(),
-                    file_types.getattr("File")?,
-                    kwargs,
-                )?);
-            } else if let Some(folder_path) =
-                listed.common_prefixes.into_iter().find(|p| p == &path)
-            {
-                infos.push(to_file_info(
-                    folder_path.to_string(),
-                    file_types.getattr("Directory")?,
-                    HashMap::new(),
-                )?);
-            } else {
-                match self.rt.block_on(self.inner.head(&path)) {
+            // NOTE there is an inconsistency in how list results are returned from object-store when working
+            // against a local filesystem or remote object store. Local file system will return an emapty result
+            // when the provided prefix points to a file, while remote stores will include that file within the
+            // objects return on ListResult.
+            if listed.objects.is_empty() && listed.common_prefixes.is_empty() {
+                let maybe_meta = self.rt.block_on(self.inner.head(&path));
+                match maybe_meta {
                     Ok(meta) => {
                         let kwargs = HashMap::from([
                             ("size", meta.size as i64),
                             ("mtime_ns", meta.last_modified.timestamp_nanos()),
                         ]);
                         infos.push(to_file_info(
-                            meta.location.to_string(),
-                            if meta.size > 0 {
-                                file_types.getattr("File")?
-                            } else {
-                                file_types.getattr("Directory")?
-                            },
+                            meta.location.as_ref(),
+                            file_types.getattr("File")?,
                             kwargs,
                         )?);
                     }
                     Err(ObjectStoreError::NotFound { .. }) => {
                         infos.push(to_file_info(
-                            path.to_string(),
+                            path.as_ref(),
                             file_types.getattr("NotFound")?,
                             HashMap::new(),
                         )?);
@@ -156,7 +135,26 @@ impl DeltaFileSystemHandler {
                         return Err(PyDeltaTableError::from_object_store(err));
                     }
                 }
-            };
+            } else {
+                // here we cover the remote store case where the path may be included within the objects.
+                if let Some(meta) = listed.objects.into_iter().find(|obj| obj.location == path) {
+                    let kwargs = HashMap::from([
+                        ("size", meta.size as i64),
+                        ("mtime_ns", meta.last_modified.timestamp_nanos()),
+                    ]);
+                    infos.push(to_file_info(
+                        meta.location.as_ref(),
+                        file_types.getattr("File")?,
+                        kwargs,
+                    )?);
+                } else {
+                    infos.push(to_file_info(
+                        path.as_ref(),
+                        file_types.getattr("Directory")?,
+                        HashMap::new(),
+                    )?);
+                }
+            }
         }
 
         Ok(infos)
