@@ -43,7 +43,7 @@ url = "2.3"
 # S3 lock client
 rusoto_core = { version = "0.47", default-features = false, optional = true }
 rusoto_credential = { version = "0.47", optional = true }
-rusoto_sts = { version = "0.47", default-features = false, optional = true }
+rusoto_sts = { version = "0.48", default-features = false, optional = true }
 rusoto_dynamodb = { version = "0.47", default-features = false, optional = true }
 
 # Glue
