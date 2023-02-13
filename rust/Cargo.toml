@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.6.0"
+version = "0.7.0"
 rust-version = "1.64"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta.rs"
@@ -18,7 +18,7 @@ async-trait = "0.1"
 bytes = "1"
 chrono = { version = "0.4.22", default-features = false, features = ["clock"] }
 cfg-if = "1"
-errno = "0.2"
+errno = "0.3"
 futures = "0.3"
 itertools = "0.10"
 lazy_static = "1"
@@ -41,13 +41,13 @@ uuid = { version = "1", features = ["serde", "v4"] }
 url = "2.3"
 
 # S3 lock client
-rusoto_core = { version = "0.48", default-features = false, optional = true }
-rusoto_credential = { version = "0.48", optional = true }
-rusoto_sts = { version = "0.48", default-features = false, optional = true }
-rusoto_dynamodb = { version = "0.48", default-features = false, optional = true }
+rusoto_core = { version = "0.47", default-features = false, optional = true }
+rusoto_credential = { version = "0.47", optional = true }
+rusoto_sts = { version = "0.47", default-features = false, optional = true }
+rusoto_dynamodb = { version = "0.47", default-features = false, optional = true }
 
 # Glue
-rusoto_glue = { version = "0.48", default-features = false, optional = true }
+rusoto_glue = { version = "0.47", default-features = false, optional = true }
 
 # Datafusion
 datafusion = { version = "17", optional = true }
@@ -66,7 +66,7 @@ default-features = false
 optional = true
 
 [dev-dependencies]
-anyhow = "*"
+anyhow = "1"
 criterion = "0"
 dotenvy = "0"
 maplit = "1"
@@ -94,7 +94,7 @@ datafusion = [
 datafusion-ext = ["datafusion"]
 azure = ["object_store/azure"]
 gcs = ["object_store/gcp"]
-s3 = [
+s3-native-tls = [
     "rusoto_core/native-tls",
     "rusoto_credential",
     "rusoto_sts/native-tls",
@@ -103,7 +103,7 @@ s3 = [
     "object_store/aws",
     "object_store/aws_profile",
 ]
-s3-rustls = [
+s3 = [
     "rusoto_core/rustls",
     "rusoto_credential",
     "rusoto_sts/rustls",
@@ -112,7 +112,11 @@ s3-rustls = [
     "object_store/aws",
     "object_store/aws_profile",
 ]
-glue = ["s3", "rusoto_glue"]
+glue-native-tls = ["s3-native-tls", "rusoto_glue"]
+glue = [
+    "s3",
+    "rusoto_glue/rustls"
+]
 python = ["arrow/pyarrow"]
 
 # used only for integration testing

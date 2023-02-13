@@ -1,6 +1,7 @@
 import json
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import pyarrow
@@ -100,7 +101,7 @@ class DeltaTable:
 
     def __init__(
         self,
-        table_uri: str,
+        table_uri: Union[str, Path],
         version: Optional[int] = None,
         storage_options: Optional[Dict[str, str]] = None,
         without_files: bool = False,
@@ -119,7 +120,7 @@ class DeltaTable:
         """
         self._storage_options = storage_options
         self._table = RawDeltaTable(
-            table_uri,
+            str(table_uri),
             version=version,
             storage_options=storage_options,
             without_files=without_files,

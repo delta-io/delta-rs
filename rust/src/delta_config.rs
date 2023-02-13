@@ -214,6 +214,25 @@ mod tests {
     }
 
     #[test]
+    fn get_boolean_from_metadata_test() {
+        let mut md = dummy_metadata();
+
+        // default value is true
+        assert!(ENABLE_EXPIRED_LOG_CLEANUP
+            .get_boolean_from_metadata(&md)
+            .unwrap(),);
+
+        // change to false
+        md.configuration.insert(
+            ENABLE_EXPIRED_LOG_CLEANUP.key.to_string(),
+            Some("false".to_string()),
+        );
+        assert!(!ENABLE_EXPIRED_LOG_CLEANUP
+            .get_boolean_from_metadata(&md)
+            .unwrap());
+    }
+
+    #[test]
     fn parse_interval_test() {
         assert_eq!(
             parse_interval("interval 123 nanosecond").unwrap(),

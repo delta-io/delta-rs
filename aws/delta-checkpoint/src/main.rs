@@ -11,31 +11,26 @@
 use deltalake::checkpoints;
 use deltalake::checkpoints::CheckpointError;
 use deltalake::DeltaDataTypeVersion;
-use lambda_runtime::{handler_fn, Context, Error};
+use lambda_runtime::{service_fn, Error, LambdaEvent};
 use lazy_static::lazy_static;
 use log::*;
 use regex::Regex;
 use serde_json::Value;
 use std::num::ParseIntError;
-use std::path::PathBuf;
 
 #[tokio::main]
 async fn main() -> Result<(), Error> {
     let _ = pretty_env_logger::try_init();
 
-    let func = handler_fn(func);
+    let func = service_fn(process_event);
     lambda_runtime::run(func).await?;
     Ok(())
 }
 
-async fn func(event: Value, _: Context) -> Result<(), CheckPointLambdaError> {
-    process_event(&event).await
-}
-
-async fn process_event(event: &Value) -> Result<(), CheckPointLambdaError> {
-    let (bucket, key) = bucket_and_key_from_event(event)?;
+async fn process_event(event: LambdaEvent<Value>) -> Result<(), CheckPointLambdaError> {
+    let (bucket, key) = bucket_and_key_from_event(&event.payload)?;
     let (path, version) = table_path_and_version_from_key(key.as_str())?;
-    let table_uri = table_uri_from_parts(bucket.as_str(), path.as_str())?;
+    let table_uri = table_uri_from_parts(bucket.as_str(), path.as_str());
 
     // Checkpoints are created for every 10th delta log commit.
     // Follows the reference implementation described in the delta protocol doc.
@@ -110,23 +105,13 @@ fn table_path_and_version_from_key(
     }
 }
 
-fn table_uri_from_parts(bucket: &str, path: &str) -> Result<String, CheckPointLambdaError> {
-    let mut table_uri = PathBuf::new();
-
-    table_uri.push(format!("s3://{}", bucket));
-    table_uri.push(path);
-
-    Ok(table_uri
-        .to_str()
-        .ok_or_else(|| CheckPointLambdaError::InvalidTableUri(table_uri.clone()))?
-        .to_string())
+fn table_uri_from_parts(bucket: &str, path: &str) -> String {
+    let path = path.trim_start_matches('/');
+    format!("s3://{bucket}/{path}")
 }
 
 #[derive(thiserror::Error, Debug)]
 enum CheckPointLambdaError {
-    #[error("Invalid table uri: {0}")]
-    InvalidTableUri(PathBuf),
-
     #[error("Invalid event structure: {0}")]
     InvalidEventStructure(String),
 
@@ -194,7 +179,7 @@ mod tests {
 
     #[test]
     fn checkpoint_table_uri_from_parts_test() {
-        let table_uri = table_uri_from_parts("my_bucket", "database_name/table_name").unwrap();
+        let table_uri = table_uri_from_parts("my_bucket", "database_name/table_name");
 
         assert_eq!(
             "s3://my_bucket/database_name/table_name",

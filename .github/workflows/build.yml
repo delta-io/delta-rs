@@ -6,10 +6,6 @@ on:
   pull_request:
     branches: [main, "rust-v*"]
 
-defaults:
-  run:
-    working-directory: ./rust
-
 jobs:
   format:
     runs-on: ubuntu-latest
@@ -39,17 +35,17 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.64.0" # Switch to "stable" when the 1.67.0 release of https://github.com/rust-lang/rust is published, more information: https://github.com/delta-io/delta-rs/pull/923
+          toolchain: stable
           override: true
       - uses: Swatinem/rust-cache@v2
       - name: build and lint with clippy
-        run: cargo clippy --features azure,datafusion,s3,gcs,glue
-      - name: Spot-check build for rustls features
-        run: cargo clippy --features s3-rustls
+        run: cargo clippy --features azure,datafusion,s3,gcs,glue --tests
+      - name: Spot-check build for native-tls features
+        run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue-native-tls --tests
       - name: Check docs
         run: cargo doc --features azure,datafusion,s3,gcs,glue
-      - name: Check no default features
-        run: cargo check --no-default-features
+      - name: Check no default features (except rustls)
+        run: cargo check --no-default-features --features rustls
 
   test:
     strategy:
@@ -107,12 +103,12 @@ jobs:
       - name: Start emulated services
         run: docker-compose up -d
 
-      - name: Run tests with default ssl
+      - name: Run tests with rustls (default)
         run: |
-          cargo test --features integration_test,azure,s3,gcs,datafusion
-      - name: Run tests with rustls
+          cargo test -p deltalake --features integration_test,azure,s3,gcs,datafusion
+      - name: Run tests with native-tls
         run: |
-          cargo test --features integration_test,s3-rustls,datafusion
+          cargo test -p deltalake --no-default-features --features integration_test,s3-native-tls,datafusion
 
   parquet2_test:
     runs-on: ubuntu-latest
@@ -126,4 +122,5 @@ jobs:
           override: true
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
+        working-directory: rust
         run: cargo test --no-default-features --features=parquet2

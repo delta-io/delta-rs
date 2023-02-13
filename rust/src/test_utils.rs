@@ -53,7 +53,6 @@ impl IntegrationContext {
             StorageIntegration::Google => format!("gs://{}", &bucket),
             StorageIntegration::Local => format!("file://{}", &bucket),
         };
-
         // the "storage_backend" will always point to the root ofg the object store.
         // TODO should we provide the store via object_Store builders?
         let store = match integration {
@@ -87,6 +86,12 @@ impl IntegrationContext {
             StorageIntegration::Google => format!("gs://{}", &self.bucket),
             StorageIntegration::Local => format!("file://{}", &self.bucket),
         }
+    }
+
+    pub fn table_builder(&self, table: TestTables) -> DeltaTableBuilder {
+        let name = table.as_name();
+        let table_uri = format!("{}/{}", self.root_uri(), &name);
+        DeltaTableBuilder::from_uri(table_uri).with_allow_http(true)
     }
 
     pub fn uri_for_table(&self, table: TestTables) -> String {
@@ -186,6 +191,7 @@ pub enum TestTables {
     Simple,
     SimpleCommit,
     Golden,
+    Delta0_8_0Partitioned,
     Custom(String),
 }
 
@@ -204,6 +210,11 @@ impl TestTables {
                 .to_str()
                 .unwrap()
                 .to_owned(),
+            Self::Delta0_8_0Partitioned => data_path
+                .join("delta-0.8.0-partitioned")
+                .to_str()
+                .unwrap()
+                .to_owned(),
             // the data path for upload does not apply to custom tables.
             Self::Custom(_) => todo!(),
         }
@@ -214,12 +225,14 @@ impl TestTables {
             Self::Simple => "simple".into(),
             Self::SimpleCommit => "simple_commit".into(),
             Self::Golden => "golden".into(),
+            Self::Delta0_8_0Partitioned => "delta-0.8.0-partitioned".into(),
             Self::Custom(name) => name.to_owned(),
         }
     }
 }
 
-fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
+/// Set environment variable if it is not set
+pub fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
     if std::env::var(key.as_ref()).is_err() {
         std::env::set_var(key.as_ref(), value.as_ref())
     };

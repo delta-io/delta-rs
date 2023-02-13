@@ -155,12 +155,18 @@ impl VacuumBuilder {
         let mut files_to_delete = vec![];
         let mut all_files = self.store.list(None).await.map_err(DeltaTableError::from)?;
 
+        let partition_columns = &self
+            .snapshot
+            .current_metadata()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .partition_columns;
+
         while let Some(obj_meta) = all_files.next().await {
             // TODO should we allow NotFound here in case we have a temporary commit file in the list
             let obj_meta = obj_meta.map_err(DeltaTableError::from)?;
             if valid_files.contains(&obj_meta.location) // file is still being tracked in table
             || !expired_tombstones.contains(obj_meta.location.as_ref()) // file is not an expired tombstone
-            || is_hidden_directory(&self.snapshot, &obj_meta.location)?
+            || is_hidden_directory(partition_columns, &obj_meta.location)?
             {
                 continue;
             }
@@ -236,15 +242,12 @@ impl VacuumPlan {
 /// Names of the form partitionCol=[value] are partition directories, and should be
 /// deleted even if they'd normally be hidden. The _db_index directory contains (bloom filter)
 /// indexes and these must be deleted when the data they are tied to is deleted.
-fn is_hidden_directory(snapshot: &DeltaTableState, path: &Path) -> Result<bool, DeltaTableError> {
+fn is_hidden_directory(partition_columns: &[String], path: &Path) -> Result<bool, DeltaTableError> {
     let path_name = path.to_string();
     Ok((path_name.starts_with('.') || path_name.starts_with('_'))
         && !path_name.starts_with("_delta_index")
         && !path_name.starts_with("_change_data")
-        && !snapshot
-            .current_metadata()
-            .ok_or(DeltaTableError::NoMetadata)?
-            .partition_columns
+        && !partition_columns
             .iter()
             .any(|partition_column| path_name.starts_with(partition_column)))
 }

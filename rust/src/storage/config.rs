@@ -11,9 +11,9 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use url::Url;
 
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use super::s3::{S3StorageBackend, S3StorageOptions};
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 #[cfg(feature = "azure")]
 use object_store::azure::{AzureConfigKey, MicrosoftAzure, MicrosoftAzureBuilder};
@@ -21,7 +21,7 @@ use object_store::azure::{AzureConfigKey, MicrosoftAzure, MicrosoftAzureBuilder}
 use object_store::gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder, GoogleConfigKey};
 #[cfg(any(
     feature = "s3",
-    feature = "s3-rustls",
+    feature = "s3-native-tls",
     feature = "gcs",
     feature = "azure"
 ))]
@@ -67,7 +67,7 @@ impl StorageOptions {
     }
 
     /// Subset of options relevant for s3 storage
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
     pub fn as_s3_options(&self) -> HashMap<AmazonS3ConfigKey, String> {
         self.0
             .iter()
@@ -100,7 +100,7 @@ impl From<HashMap<String, String>> for StorageOptions {
 pub(crate) enum ObjectStoreImpl {
     Local(FileStorageBackend),
     InMemory(InMemory),
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
     S3(S3StorageBackend),
     #[cfg(feature = "gcs")]
     Google(GoogleCloudStorage),
@@ -115,7 +115,7 @@ impl ObjectStoreImpl {
             ObjectStoreImpl::InMemory(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
             #[cfg(feature = "azure")]
             ObjectStoreImpl::Azure(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
-            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+            #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
             ObjectStoreImpl::S3(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
             #[cfg(feature = "gcs")]
             ObjectStoreImpl::Google(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
@@ -128,7 +128,7 @@ impl ObjectStoreImpl {
             ObjectStoreImpl::InMemory(store) => Arc::new(store),
             #[cfg(feature = "azure")]
             ObjectStoreImpl::Azure(store) => Arc::new(store),
-            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+            #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
             ObjectStoreImpl::S3(store) => Arc::new(store),
             #[cfg(feature = "gcs")]
             ObjectStoreImpl::Google(store) => Arc::new(store),
@@ -183,44 +183,30 @@ impl ObjectStoreKind {
         match self {
             ObjectStoreKind::Local => Ok(ObjectStoreImpl::Local(FileStorageBackend::new())),
             ObjectStoreKind::InMemory => Ok(ObjectStoreImpl::InMemory(InMemory::new())),
-            #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+            #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
             ObjectStoreKind::S3 => {
-                let store = AmazonS3Builder::new()
+                let store = AmazonS3Builder::from_env()
                     .with_url(storage_url.as_ref())
                     .try_with_options(&_options.as_s3_options())?
                     .with_allow_http(_options.allow_http())
-                    .build()
-                    .or_else(|_| {
-                        AmazonS3Builder::from_env()
-                            .with_url(storage_url.as_ref())
-                            .try_with_options(&_options.as_s3_options())?
-                            .with_allow_http(_options.allow_http())
-                            .build()
-                    })?;
+                    .build()?;
                 Ok(ObjectStoreImpl::S3(S3StorageBackend::try_new(
                     Arc::new(store),
                     S3StorageOptions::from_map(&_options.0),
                 )?))
             }
-            #[cfg(not(any(feature = "s3", feature = "s3-rustls")))]
+            #[cfg(not(any(feature = "s3", feature = "s3-native-tls")))]
             ObjectStoreKind::S3 => Err(DeltaTableError::MissingFeature {
                 feature: "s3",
                 url: storage_url.as_ref().into(),
             }),
             #[cfg(feature = "azure")]
             ObjectStoreKind::Azure => {
-                let store = MicrosoftAzureBuilder::new()
+                let store = MicrosoftAzureBuilder::from_env()
                     .with_url(storage_url.as_ref())
                     .try_with_options(&_options.as_azure_options())?
                     .with_allow_http(_options.allow_http())
-                    .build()
-                    .or_else(|_| {
-                        MicrosoftAzureBuilder::from_env()
-                            .with_url(storage_url.as_ref())
-                            .try_with_options(&_options.as_azure_options())?
-                            .with_allow_http(_options.allow_http())
-                            .build()
-                    })?;
+                    .build()?;
                 Ok(ObjectStoreImpl::Azure(store))
             }
             #[cfg(not(feature = "azure"))]
@@ -230,16 +216,10 @@ impl ObjectStoreKind {
             }),
             #[cfg(feature = "gcs")]
             ObjectStoreKind::Google => {
-                let store = GoogleCloudStorageBuilder::new()
+                let store = GoogleCloudStorageBuilder::from_env()
                     .with_url(storage_url.as_ref())
                     .try_with_options(&_options.as_gcs_options())?
-                    .build()
-                    .or_else(|_| {
-                        GoogleCloudStorageBuilder::from_env()
-                            .with_url(storage_url.as_ref())
-                            .try_with_options(&_options.as_gcs_options())?
-                            .build()
-                    })?;
+                    .build()?;
                 Ok(ObjectStoreImpl::Google(store))
             }
             #[cfg(not(feature = "gcs"))]

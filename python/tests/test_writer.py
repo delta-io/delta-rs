@@ -16,7 +16,7 @@ from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, write_deltalake
 from deltalake.table import ProtocolVersions
-from deltalake.writer import DeltaTableProtocolError
+from deltalake.writer import DeltaTableProtocolError, try_get_table_and_table_uri
 
 try:
     from pandas.testing import assert_frame_equal
@@ -42,8 +42,9 @@ def test_handle_existing(tmp_path: pathlib.Path, sample_data: pa.Table):
 def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
     # Check we can create the subdirectory
     tmp_path = tmp_path / "path" / "to" / "table"
-
+    start_time = datetime.now().timestamp()
     write_deltalake(str(tmp_path), sample_data)
+    end_time = datetime.now().timestamp()
 
     assert ("0" * 20 + ".json") in os.listdir(tmp_path / "_delta_log")
 
@@ -61,6 +62,10 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
         path = os.path.join(tmp_path, action["path"])
         actual_size = os.path.getsize(path)
         assert actual_size == action["size"]
+
+        modification_time = action["modificationTime"] / 1000  # convert back to seconds
+        assert start_time < modification_time
+        assert modification_time < end_time
 
 
 def test_roundtrip_nulls(tmp_path: pathlib.Path):
@@ -496,3 +501,40 @@ def test_writer_with_options(tmp_path: pathlib.Path):
     )
 
     assert table == data
+
+
+def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
+    data = pa.table({"vals": pa.array(["1", "2", "3"])})
+    table_or_uri = tmp_path / "delta_table"
+    write_deltalake(table_or_uri, data)
+    delta_table = DeltaTable(table_or_uri)
+
+    # table_or_uri as DeltaTable
+    assert try_get_table_and_table_uri(delta_table, None) == (
+        delta_table,
+        str(tmp_path / "delta_table") + "/",
+    )
+
+    # table_or_uri as str
+    assert try_get_table_and_table_uri(str(tmp_path / "delta_table"), None) == (
+        delta_table,
+        str(tmp_path / "delta_table"),
+    )
+    assert try_get_table_and_table_uri(str(tmp_path / "str"), None) == (
+        None,
+        str(tmp_path / "str"),
+    )
+
+    # table_or_uri as Path
+    assert try_get_table_and_table_uri(tmp_path / "delta_table", None) == (
+        delta_table,
+        str(tmp_path / "delta_table"),
+    )
+    assert try_get_table_and_table_uri(tmp_path / "Path", None) == (
+        None,
+        str(tmp_path / "Path"),
+    )
+
+    # table_or_uri with invalid parameter type
+    with pytest.raises(ValueError):
+        try_get_table_and_table_uri(None, None)
