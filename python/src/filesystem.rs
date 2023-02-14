@@ -94,7 +94,7 @@ impl DeltaFileSystemHandler {
         let fs = PyModule::import(py, "pyarrow.fs")?;
         let file_types = fs.getattr("FileType")?;
 
-        let to_file_info = |loc: &str, type_: &PyAny, kwargs: HashMap<&str, i64>| {
+        let to_file_info = |loc: &str, type_: &PyAny, kwargs: &HashMap<&str, i64>| {
             fs.call_method("FileInfo", (loc, type_), Some(kwargs.into_py_dict(py)))
         };
 
@@ -106,10 +106,7 @@ impl DeltaFileSystemHandler {
                 .block_on(self.inner.list_with_delimiter(Some(&path)))
                 .map_err(PyDeltaTableError::from_object_store)?;
 
-            // NOTE there is an inconsistency in how list results are returned from object-store when working
-            // against a local filesystem or remote object store. Local file system will return an emapty result
-            // when the provided prefix points to a file, while remote stores will include that file within the
-            // objects return on ListResult.
+            // TODO is there a better way to figure out if we are in a directory?
             if listed.objects.is_empty() && listed.common_prefixes.is_empty() {
                 let maybe_meta = self.rt.block_on(self.inner.head(&path));
                 match maybe_meta {
@@ -121,14 +118,14 @@ impl DeltaFileSystemHandler {
                         infos.push(to_file_info(
                             meta.location.as_ref(),
                             file_types.getattr("File")?,
-                            kwargs,
+                            &kwargs,
                         )?);
                     }
                     Err(ObjectStoreError::NotFound { .. }) => {
                         infos.push(to_file_info(
                             path.as_ref(),
                             file_types.getattr("NotFound")?,
-                            HashMap::new(),
+                            &HashMap::new(),
                         )?);
                     }
                     Err(err) => {
@@ -136,24 +133,11 @@ impl DeltaFileSystemHandler {
                     }
                 }
             } else {
-                // here we cover the remote store case where the path may be included within the objects.
-                if let Some(meta) = listed.objects.into_iter().find(|obj| obj.location == path) {
-                    let kwargs = HashMap::from([
-                        ("size", meta.size as i64),
-                        ("mtime_ns", meta.last_modified.timestamp_nanos()),
-                    ]);
-                    infos.push(to_file_info(
-                        meta.location.as_ref(),
-                        file_types.getattr("File")?,
-                        kwargs,
-                    )?);
-                } else {
-                    infos.push(to_file_info(
-                        path.as_ref(),
-                        file_types.getattr("Directory")?,
-                        HashMap::new(),
-                    )?);
-                }
+                infos.push(to_file_info(
+                    path.as_ref(),
+                    file_types.getattr("Directory")?,
+                    &HashMap::new(),
+                )?);
             }
         }
 
