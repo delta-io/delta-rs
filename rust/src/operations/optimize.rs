@@ -16,7 +16,7 @@
 //! # Example
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;
-//! let metrics = Optimize::default().execute(table).await?;
+//! let (table, metrics) = OptimizeBuilder::new(table.object_store(). table.state).await?;
 //! ````
 
 use super::transaction::commit;
