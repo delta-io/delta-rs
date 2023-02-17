@@ -475,7 +475,10 @@ pub fn create_merge_plan(
     let input_parameters = OptimizeInput { target_size };
     let file_schema = arrow_schema_without_partitions(
         &Arc::new(<ArrowSchema as TryFrom<&crate::schema::Schema>>::try_from(
-            &snapshot.current_metadata().unwrap().schema,
+            &snapshot
+                .current_metadata()
+                .ok_or(DeltaTableError::NoMetadata)?
+                .schema,
         )?),
         partitions_keys,
     );
