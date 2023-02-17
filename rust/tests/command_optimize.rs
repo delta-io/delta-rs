@@ -6,17 +6,17 @@ use arrow::{
     datatypes::{DataType, Field},
     record_batch::RecordBatch,
 };
-use deltalake::optimize::{MetricDetails, Metrics};
-use deltalake::DeltaTableError;
+use deltalake::operations::optimize::{create_merge_plan, MetricDetails, Metrics, Optimize};
 use deltalake::{
     action,
     action::Remove,
     builder::DeltaTableBuilder,
-    optimize::{create_merge_plan, Optimize},
     writer::{DeltaWriter, RecordBatchWriter},
-    DeltaTableMetaData, PartitionFilter,
 };
-use deltalake::{DeltaTable, Schema, SchemaDataType, SchemaField};
+use deltalake::{
+    DeltaTable, DeltaTableError, DeltaTableMetaData, PartitionFilter, Schema, SchemaDataType,
+    SchemaField,
+};
 use rand::prelude::*;
 use serde_json::{json, Map, Value};
 use std::time::SystemTime;

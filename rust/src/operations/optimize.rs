@@ -22,6 +22,7 @@
 
 use crate::action::DeltaOperation;
 use crate::action::{self, Action};
+use crate::table_properties;
 use crate::writer::utils::PartitionPath;
 use crate::writer::{DeltaWriter, RecordBatchWriter};
 use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter};
@@ -175,6 +176,7 @@ fn create_remove(
     partitions: &HashMap<String, Option<String>>,
     size: DeltaDataTypeLong,
 ) -> Result<Action, DeltaTableError> {
+    // NOTE unwrap is safe since UNIX_EPOCH will always be earlier then now.
     let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let deletion_time = deletion_time.as_millis() as i64;
 
@@ -301,7 +303,7 @@ fn get_target_file_size(table: &DeltaTable) -> DeltaDataTypeLong {
     let config = table.get_configurations();
     let mut target_size = 268_435_456;
     if let Ok(config) = config {
-        let config_str = config.get("delta.targetFileSize");
+        let config_str = config.get(table_properties::TARGET_FILE_SIZE);
         if let Some(s) = config_str {
             if let Some(s) = s {
                 let r = s.parse::<i64>();

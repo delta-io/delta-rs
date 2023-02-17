@@ -15,6 +15,8 @@ use crate::{DeltaResult, DeltaTable, DeltaTableError};
 
 pub mod create;
 pub mod filesystem_check;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod optimize;
 pub mod transaction;
 pub mod vacuum;
 
@@ -121,6 +123,12 @@ impl DeltaOps {
     /// Audit active files with files present on the filesystem
     #[must_use]
     pub fn filesystem_check(self) -> FileSystemCheckBuilder {
+        FileSystemCheckBuilder::new(self.0.object_store(), self.0.state)
+    }
+
+    /// Audit active files with files present on the filesystem
+    #[must_use]
+    pub fn optimize(self) -> FileSystemCheckBuilder {
         FileSystemCheckBuilder::new(self.0.object_store(), self.0.state)
     }
 }
