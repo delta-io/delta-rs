@@ -26,15 +26,15 @@ use self::{load::LoadBuilder, write::WriteBuilder};
 use arrow::record_batch::RecordBatch;
 #[cfg(feature = "datafusion")]
 pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+use optimize::OptimizeBuilder;
 
 #[cfg(feature = "datafusion")]
 mod load;
 #[cfg(feature = "datafusion")]
 pub mod write;
-// TODO the writer module does not actually depend on datafusion,
-// eventually we should consolidate with the record batch writer
-#[cfg(feature = "datafusion")]
-mod writer;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod writer;
 
 /// Maximum supported writer version
 pub const MAX_SUPPORTED_WRITER_VERSION: i32 = 1;
@@ -128,8 +128,8 @@ impl DeltaOps {
 
     /// Audit active files with files present on the filesystem
     #[must_use]
-    pub fn optimize(self) -> FileSystemCheckBuilder {
-        FileSystemCheckBuilder::new(self.0.object_store(), self.0.state)
+    pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
+        OptimizeBuilder::new(self.0.object_store(), self.0.state)
     }
 }
 
