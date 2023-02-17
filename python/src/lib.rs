@@ -108,6 +108,7 @@ struct RawDeltaTableMetaData {
 #[pymethods]
 impl RawDeltaTable {
     #[new]
+    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false))]
     fn new(
         table_uri: &str,
         version: Option<deltalake::DeltaDataTypeLong>,
@@ -282,7 +283,9 @@ impl RawDeltaTable {
         schema_to_pyobject(schema, py)
     }
 
-    /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
+    /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced
+    /// by the Delta table and are older than the retention threshold.
+    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true))]
     pub fn vacuum(
         &mut self,
         dry_run: bool,
@@ -334,8 +337,8 @@ impl RawDeltaTable {
     pub fn dataset_partitions<'py>(
         &mut self,
         py: Python<'py>,
-        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
         schema: PyArrowType<ArrowSchema>,
+        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
     ) -> PyResult<Vec<(String, Option<&'py PyAny>)>> {
         let path_set = match partition_filters {
             Some(filters) => Some(HashSet::<_>::from_iter(
