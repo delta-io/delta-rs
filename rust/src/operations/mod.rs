@@ -127,6 +127,7 @@ impl DeltaOps {
     }
 
     /// Audit active files with files present on the filesystem
+    #[cfg(all(feature = "arrow", feature = "parquet"))]
     #[must_use]
     pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
         OptimizeBuilder::new(self.0.object_store(), self.0.state)

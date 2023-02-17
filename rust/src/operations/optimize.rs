@@ -400,7 +400,7 @@ fn get_target_file_size(snapshot: &DeltaTableState) -> DeltaDataTypeLong {
     target_size
 }
 
-/// Build a Plan on which files to merge together. See [`Optimize`]
+/// Build a Plan on which files to merge together. See [`OptimizeBuilder`]
 pub fn create_merge_plan(
     snapshot: &DeltaTableState,
     filters: &[PartitionFilter<'_, &str>],
