@@ -20,7 +20,7 @@ use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use url::Url;
 
-#[cfg(any(feature = "s3", feature = "s3-rustls"))]
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 pub mod s3;
 
 #[cfg(feature = "datafusion")]
@@ -31,6 +31,7 @@ pub use object_store::{
     DynObjectStore, Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta,
     ObjectStore, Result as ObjectStoreResult,
 };
+pub use utils::*;
 
 lazy_static! {
     static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");

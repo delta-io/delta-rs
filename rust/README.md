@@ -41,8 +41,8 @@ cargo run --example read_delta_table
 
 ## Optional cargo package features
 
-- `s3` - enable the S3 storage backend to work with Delta Tables in AWS S3.
-- `s3-rustls` - enable the S3 storage backend but rely on [rustls](https://github.com/ctz/rustls) rather than OpenSSL (`native-tls`).
+- `s3` - enable the S3 storage backend to work with Delta Tables in AWS S3. Uses [rustls](https://github.com/ctz/rustls).
+- `s3-native-tls` - enable the S3 storage backend but rely on OpenSSL.
 - `glue` - enable the Glue data catalog to work with Delta Tables with AWS Glue.
 - `azure` - enable the Azure storage backend to work with Delta Tables in Azure Data Lake Storage Gen2 accounts.
 - `gcs` - enable the Google storage backend to work with Delta Tables in Google Cloud Storage.

@@ -16,7 +16,7 @@ from pyarrow.lib import RecordBatchReader
 
 from deltalake import DeltaTable, write_deltalake
 from deltalake.table import ProtocolVersions
-from deltalake.writer import DeltaTableProtocolError
+from deltalake.writer import DeltaTableProtocolError, try_get_table_and_table_uri
 
 try:
     from pandas.testing import assert_frame_equal
@@ -34,7 +34,7 @@ def test_handle_existing(tmp_path: pathlib.Path, sample_data: pa.Table):
     p.write_text("hello")
 
     with pytest.raises(OSError) as exception:
-        write_deltalake(str(tmp_path), sample_data, mode="overwrite")
+        write_deltalake(tmp_path, sample_data, mode="overwrite")
 
     assert "directory is not empty" in str(exception)
 
@@ -42,12 +42,13 @@ def test_handle_existing(tmp_path: pathlib.Path, sample_data: pa.Table):
 def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
     # Check we can create the subdirectory
     tmp_path = tmp_path / "path" / "to" / "table"
-
-    write_deltalake(str(tmp_path), sample_data)
+    start_time = datetime.now().timestamp()
+    write_deltalake(tmp_path, sample_data)
+    end_time = datetime.now().timestamp()
 
     assert ("0" * 20 + ".json") in os.listdir(tmp_path / "_delta_log")
 
-    delta_table = DeltaTable(str(tmp_path))
+    delta_table = DeltaTable(tmp_path)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
@@ -62,14 +63,18 @@ def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
         actual_size = os.path.getsize(path)
         assert actual_size == action["size"]
 
+        modification_time = action["modificationTime"] / 1000  # convert back to seconds
+        assert start_time < modification_time
+        assert modification_time < end_time
+
 
 def test_roundtrip_nulls(tmp_path: pathlib.Path):
     data = pa.table({"x": pa.array([None, None, 1, 2], type=pa.int64())})
     # One row group will have values, one will be all nulls.
     # The first will have None in min and max stats, so we need to handle that.
-    write_deltalake(str(tmp_path), data, min_rows_per_group=2, max_rows_per_group=2)
+    write_deltalake(tmp_path, data, min_rows_per_group=2, max_rows_per_group=2)
 
-    delta_table = DeltaTable(str(tmp_path))
+    delta_table = DeltaTable(tmp_path)
     assert delta_table.schema().to_pyarrow() == data.schema
 
     table = delta_table.to_pyarrow_table()
@@ -78,14 +83,14 @@ def test_roundtrip_nulls(tmp_path: pathlib.Path):
     data = pa.table({"x": pa.array([None, None, None, None], type=pa.int64())})
     # Will be all null, with two row groups
     write_deltalake(
-        str(tmp_path),
+        tmp_path,
         data,
         min_rows_per_group=2,
         max_rows_per_group=2,
         mode="overwrite",
     )
 
-    delta_table = DeltaTable(str(tmp_path))
+    delta_table = DeltaTable(tmp_path)
     assert delta_table.schema().to_pyarrow() == data.schema
 
     table = delta_table.to_pyarrow_table()
@@ -134,14 +139,14 @@ def test_local_path(tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch):
 
 def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
     write_deltalake(
-        str(tmp_path),
+        tmp_path,
         sample_data,
         name="test_name",
         description="test_desc",
         configuration={"configTest": "foobar"},
     )
 
-    delta_table = DeltaTable(str(tmp_path))
+    delta_table = DeltaTable(tmp_path)
 
     metadata = delta_table.metadata()
 
@@ -168,9 +173,9 @@ def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
 def test_roundtrip_partitioned(
     tmp_path: pathlib.Path, sample_data: pa.Table, column: str
 ):
-    write_deltalake(str(tmp_path), sample_data, partition_by=[column])
+    write_deltalake(tmp_path, sample_data, partition_by=[column])
 
-    delta_table = DeltaTable(str(tmp_path))
+    delta_table = DeltaTable(tmp_path)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
@@ -186,7 +191,7 @@ def test_roundtrip_null_partition(tmp_path: pathlib.Path, sample_data: pa.Table)
     sample_data = sample_data.add_column(
         0, "utf8_with_nulls", pa.array(["a"] * 4 + [None])
     )
-    write_deltalake(str(tmp_path), sample_data, partition_by=["utf8_with_nulls"])
+    write_deltalake(tmp_path, sample_data, partition_by=["utf8_with_nulls"])
 
     delta_table = DeltaTable(str(tmp_path))
     assert delta_table.schema().to_pyarrow() == sample_data.schema
@@ -197,9 +202,9 @@ def test_roundtrip_null_partition(tmp_path: pathlib.Path, sample_data: pa.Table)
 
 
 def test_roundtrip_multi_partitioned(tmp_path: pathlib.Path, sample_data: pa.Table):
-    write_deltalake(str(tmp_path), sample_data, partition_by=["int32", "bool"])
+    write_deltalake(tmp_path, sample_data, partition_by=["int32", "bool"])
 
-    delta_table = DeltaTable(str(tmp_path))
+    delta_table = DeltaTable(tmp_path)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
@@ -212,38 +217,34 @@ def test_roundtrip_multi_partitioned(tmp_path: pathlib.Path, sample_data: pa.Tab
 
 
 def test_write_modes(tmp_path: pathlib.Path, sample_data: pa.Table):
-    path = str(tmp_path)
-
-    write_deltalake(path, sample_data)
-    assert DeltaTable(path).to_pyarrow_table() == sample_data
+    write_deltalake(tmp_path, sample_data)
+    assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
     with pytest.raises(AssertionError):
-        write_deltalake(path, sample_data, mode="error")
+        write_deltalake(tmp_path, sample_data, mode="error")
 
-    write_deltalake(path, sample_data, mode="ignore")
+    write_deltalake(tmp_path, sample_data, mode="ignore")
     assert ("0" * 19 + "1.json") not in os.listdir(tmp_path / "_delta_log")
 
-    write_deltalake(path, sample_data, mode="append")
+    write_deltalake(tmp_path, sample_data, mode="append")
     expected = pa.concat_tables([sample_data, sample_data])
-    assert DeltaTable(path).to_pyarrow_table() == expected
+    assert DeltaTable(tmp_path).to_pyarrow_table() == expected
 
-    write_deltalake(path, sample_data, mode="overwrite")
-    assert DeltaTable(path).to_pyarrow_table() == sample_data
+    write_deltalake(tmp_path, sample_data, mode="overwrite")
+    assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 
 def test_append_only_should_append_only_with_the_overwrite_mode(
     tmp_path: pathlib.Path, sample_data: pa.Table
 ):
-    path = str(tmp_path)
-
     config = {"delta.appendOnly": "true"}
 
-    write_deltalake(path, sample_data, mode="append", configuration=config)
+    write_deltalake(tmp_path, sample_data, mode="append", configuration=config)
 
-    table = DeltaTable(path)
+    table = DeltaTable(tmp_path)
     write_deltalake(table, sample_data, mode="append")
 
-    data_store_types = [path, table]
+    data_store_types = [tmp_path, table]
     fail_modes = ["overwrite", "ignore", "error"]
 
     for data_store_type, mode in itertools.product(data_store_types, fail_modes):
@@ -281,8 +282,8 @@ def test_write_pandas(tmp_path: pathlib.Path, sample_data: pa.Table, schema_prov
         schema = sample_data.schema
     else:
         schema = None
-    write_deltalake(str(tmp_path), sample_pandas, schema=schema)
-    delta_table = DeltaTable(str(tmp_path))
+    write_deltalake(tmp_path, sample_pandas, schema=schema)
+    delta_table = DeltaTable(tmp_path)
     df = delta_table.to_pandas()
     assert_frame_equal(df, sample_pandas)
 
@@ -292,10 +293,10 @@ def test_write_iterator(
 ):
     batches = existing_table.to_pyarrow_dataset().to_batches()
     with pytest.raises(ValueError):
-        write_deltalake(str(tmp_path), batches, mode="overwrite")
+        write_deltalake(tmp_path, batches, mode="overwrite")
 
-    write_deltalake(str(tmp_path), batches, schema=sample_data.schema, mode="overwrite")
-    assert DeltaTable(str(tmp_path)).to_pyarrow_table() == sample_data
+    write_deltalake(tmp_path, batches, schema=sample_data.schema, mode="overwrite")
+    assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 
 def test_write_recordbatchreader(
@@ -304,8 +305,8 @@ def test_write_recordbatchreader(
     batches = existing_table.to_pyarrow_dataset().to_batches()
     reader = RecordBatchReader.from_batches(sample_data.schema, batches)
 
-    write_deltalake(str(tmp_path), reader, mode="overwrite")
-    assert DeltaTable(str(tmp_path)).to_pyarrow_table() == sample_data
+    write_deltalake(tmp_path, reader, mode="overwrite")
+    assert DeltaTable(tmp_path).to_pyarrow_table() == sample_data
 
 
 def test_writer_partitioning(tmp_path: pathlib.Path):
@@ -314,9 +315,9 @@ def test_writer_partitioning(tmp_path: pathlib.Path):
         {"p": pa.array(test_strings), "x": pa.array(range(len(test_strings)))}
     )
 
-    write_deltalake(str(tmp_path), data)
+    write_deltalake(tmp_path, data)
 
-    assert DeltaTable(str(tmp_path)).to_pyarrow_table() == data
+    assert DeltaTable(tmp_path).to_pyarrow_table() == data
 
 
 def get_log_path(table: DeltaTable) -> str:
@@ -413,10 +414,9 @@ def test_writer_null_stats(tmp_path: pathlib.Path):
             "str": pa.array([None] * 4, pa.string()),
         }
     )
-    path = str(tmp_path)
-    write_deltalake(path, data)
+    write_deltalake(tmp_path, data)
 
-    table = DeltaTable(path)
+    table = DeltaTable(tmp_path)
     stats = get_stats(table)
 
     expected_nulls = {"int32": 2, "float64": 3, "str": 4}
@@ -458,9 +458,8 @@ def test_writer_with_max_rows(
             ),
         }
     )
-    path = str(tmp_path)
     write_deltalake(
-        path,
+        tmp_path,
         data,
         file_options=ParquetFileFormat().make_write_options(),
         max_rows_per_file=rows_per_file,
@@ -468,9 +467,9 @@ def test_writer_with_max_rows(
         max_rows_per_group=rows_per_file,
     )
 
-    table = DeltaTable(path)
+    table = DeltaTable(tmp_path)
     stats = get_multifile_stats(table)
-    files_written = [f for f in os.listdir(path) if f != "_delta_log"]
+    files_written = [f for f in os.listdir(tmp_path) if f != "_delta_log"]
 
     assert sum([stat_entry["numRecords"] for stat_entry in stats]) == row_count
     assert len(files_written) == expected_files
@@ -479,16 +478,16 @@ def test_writer_with_max_rows(
 def test_writer_with_options(tmp_path: pathlib.Path):
     column_values = [datetime(year_, 1, 1, 0, 0, 0) for year_ in range(9000, 9010)]
     data = pa.table({"colA": pa.array(column_values, pa.timestamp("us"))})
-    path = str(tmp_path)
+
     opts = (
         ParquetFileFormat()
         .make_write_options()
         .update(compression="GZIP", coerce_timestamps="us")
     )
-    write_deltalake(path, data, file_options=opts)
+    write_deltalake(tmp_path, data, file_options=opts)
 
     table = (
-        DeltaTable(path)
+        DeltaTable(tmp_path)
         .to_pyarrow_dataset(
             parquet_read_options=ParquetReadOptions(coerce_int96_timestamp_unit="us")
         )
@@ -496,3 +495,40 @@ def test_writer_with_options(tmp_path: pathlib.Path):
     )
 
     assert table == data
+
+
+def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
+    data = pa.table({"vals": pa.array(["1", "2", "3"])})
+    table_or_uri = tmp_path / "delta_table"
+    write_deltalake(table_or_uri, data)
+    delta_table = DeltaTable(table_or_uri)
+
+    # table_or_uri as DeltaTable
+    assert try_get_table_and_table_uri(delta_table, None) == (
+        delta_table,
+        str(tmp_path / "delta_table") + "/",
+    )
+
+    # table_or_uri as str
+    assert try_get_table_and_table_uri(str(tmp_path / "delta_table"), None) == (
+        delta_table,
+        str(tmp_path / "delta_table"),
+    )
+    assert try_get_table_and_table_uri(str(tmp_path / "str"), None) == (
+        None,
+        str(tmp_path / "str"),
+    )
+
+    # table_or_uri as Path
+    assert try_get_table_and_table_uri(tmp_path / "delta_table", None) == (
+        delta_table,
+        str(tmp_path / "delta_table"),
+    )
+    assert try_get_table_and_table_uri(tmp_path / "Path", None) == (
+        None,
+        str(tmp_path / "Path"),
+    )
+
+    # table_or_uri with invalid parameter type
+    with pytest.raises(ValueError):
+        try_get_table_and_table_uri(None, None)

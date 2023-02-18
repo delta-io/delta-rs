@@ -5,11 +5,12 @@ use deltalake::action::{Action, DeltaOperation, SaveMode};
 
 use serde_json::{json, Value};
 use std::error::Error;
+use tempdir::TempDir;
 
 #[tokio::test]
 async fn test_operational_parameters() -> Result<(), Box<dyn Error>> {
-    let path = "./tests/data/operational_parameters";
-    let mut table = fs_common::create_table(path, None).await;
+    let path = TempDir::new("operational_parameters").unwrap();
+    let mut table = fs_common::create_table(path.path().to_str().unwrap(), None).await;
 
     let add = fs_common::add(0);
 

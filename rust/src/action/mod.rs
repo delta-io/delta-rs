@@ -8,7 +8,7 @@ mod parquet_read;
 #[cfg(feature = "parquet2")]
 pub mod parquet2_read;
 
-use crate::{schema::*, DeltaTableMetaData};
+use crate::{schema::*, DeltaTableError, DeltaTableMetaData};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -332,6 +332,25 @@ impl MetaData {
     }
 }
 
+impl TryFrom<DeltaTableMetaData> for MetaData {
+    type Error = DeltaTableError;
+
+    fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
+        let schema_string = serde_json::to_string(&metadata.schema)
+            .map_err(|e| DeltaTableError::SerializeSchemaJson { json_err: e })?;
+        Ok(Self {
+            id: metadata.id,
+            name: metadata.name,
+            description: metadata.description,
+            format: metadata.format,
+            schema_string,
+            partition_columns: metadata.partition_columns,
+            created_time: metadata.created_time,
+            configuration: metadata.configuration,
+        })
+    }
+}
+
 /// Represents a tombstone (deleted file) in the Delta log.
 /// This is a top-level action in Delta log entries.
 #[derive(Serialize, Deserialize, Clone, Eq, Debug, Default)]
@@ -490,7 +509,11 @@ pub enum DeltaOperation {
         predicate: Option<String>,
         /// Target optimize size
         target_size: DeltaDataTypeLong,
-    }, // TODO: Add more operations
+    },
+    #[serde(rename_all = "camelCase")]
+    /// Represents a `FileSystemCheck` operation
+    FileSystemCheck {},
+    // TODO: Add more operations
 }
 
 impl DeltaOperation {
@@ -502,6 +525,7 @@ impl DeltaOperation {
             DeltaOperation::Write { .. } => "delta-rs.Write",
             DeltaOperation::StreamingUpdate { .. } => "delta-rs.StreamingUpdate",
             DeltaOperation::Optimize { .. } => "delta-rs.Optimize",
+            DeltaOperation::FileSystemCheck { .. } => "delta-rs.FileSystemCheck",
         };
         commit_info.insert(
             "operation".to_string(),

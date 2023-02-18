@@ -279,7 +279,7 @@ impl TryFrom<SchemaDataType> for ArrayType {
 #[pymethods]
 impl ArrayType {
     #[new]
-    #[args(contains_null = true)]
+    #[pyo3(signature = (element_type, contains_null = true))]
     fn new(element_type: PyObject, contains_null: bool, py: Python) -> PyResult<Self> {
         let inner_type = SchemaTypeArray::new(
             Box::new(python_type_to_schema(element_type, py)?),
@@ -444,7 +444,7 @@ impl TryFrom<SchemaDataType> for MapType {
 #[pymethods]
 impl MapType {
     #[new]
-    #[args(value_contains_null = true)]
+    #[pyo3(signature = (key_type, value_type, value_contains_null = true))]
     fn new(
         key_type: PyObject,
         value_type: PyObject,
@@ -608,7 +608,7 @@ pub struct Field {
 #[pymethods]
 impl Field {
     #[new]
-    #[args(nullable = true)]
+    #[pyo3(signature = (name, ty, nullable = true, metadata = None))]
     fn new(
         name: String,
         ty: PyObject,

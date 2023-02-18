@@ -30,7 +30,7 @@ pub struct DeltaFileSystemHandler {
 #[pymethods]
 impl DeltaFileSystemHandler {
     #[new]
-    #[args(options = "None")]
+    #[pyo3(signature = (table_uri, options = None))]
     fn new(table_uri: &str, options: Option<HashMap<String, String>>) -> PyResult<Self> {
         let storage = DeltaTableBuilder::from_uri(table_uri)
             .with_storage_options(options.clone().unwrap_or_default())
@@ -144,7 +144,7 @@ impl DeltaFileSystemHandler {
         Ok(infos)
     }
 
-    #[args(allow_not_found = "false", recursive = "false")]
+    #[pyo3(signature = (base_dir, allow_not_found = false, recursive = false))]
     fn get_file_info_selector<'py>(
         &self,
         base_dir: String,
@@ -237,7 +237,7 @@ impl DeltaFileSystemHandler {
         Ok(file)
     }
 
-    #[args(metadata = "None")]
+    #[pyo3(signature = (path, metadata = None))]
     fn open_output_stream(
         &self,
         path: String,
@@ -358,7 +358,7 @@ impl ObjectInputFile {
         Ok(self.content_length)
     }
 
-    #[args(whence = "0")]
+    #[pyo3(signature = (offset, whence = 0))]
     fn seek(&mut self, offset: i64, whence: i64) -> PyResult<i64> {
         self.check_closed()?;
         self.check_position(offset, "seek")?;
@@ -384,7 +384,7 @@ impl ObjectInputFile {
         Ok(self.pos)
     }
 
-    #[args(nbytes = "None")]
+    #[pyo3(signature = (nbytes = None))]
     fn read(&mut self, nbytes: Option<i64>) -> PyResult<Py<PyBytes>> {
         self.check_closed()?;
         let range = match nbytes {
@@ -516,14 +516,16 @@ impl ObjectOutputStream {
         Err(PyNotImplementedError::new_err("'size' not implemented"))
     }
 
-    #[args(whence = "0")]
-    fn seek(&mut self, _offset: i64, _whence: i64) -> PyResult<i64> {
+    #[allow(unused_variables)]
+    #[pyo3(signature = (offset, whence = 0))]
+    fn seek(&mut self, offset: i64, whence: i64) -> PyResult<i64> {
         self.check_closed()?;
         Err(PyNotImplementedError::new_err("'seek' not implemented"))
     }
 
-    #[args(nbytes = "None")]
-    fn read(&mut self, _nbytes: Option<i64>) -> PyResult<()> {
+    #[allow(unused_variables)]
+    #[pyo3(signature = (nbytes = None))]
+    fn read(&mut self, nbytes: Option<i64>) -> PyResult<()> {
         self.check_closed()?;
         Err(PyNotImplementedError::new_err("'read' not implemented"))
     }

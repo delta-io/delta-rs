@@ -4,7 +4,7 @@
 //!
 //! # Example
 //!
-//! ```
+//! ```no_run
 //! let ver = glibc_version::get_version().unwrap();
 //! if ver.major >= 2 && ver.minor >= 28 {
 //!    println!("cargo:rustc-cfg=glibc_renameat2");
