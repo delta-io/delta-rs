@@ -250,7 +250,10 @@ def test_append_only_should_append_only_with_the_overwrite_mode(
     for data_store_type, mode in itertools.product(data_store_types, fail_modes):
         with pytest.raises(
             ValueError,
-            match=f"If configuration has delta.appendOnly = 'true', mode must be 'append'. Mode is currently {mode}",
+            match=(
+                "If configuration has delta.appendOnly = 'true', mode must be"
+                f" 'append'. Mode is currently {mode}"
+            ),
         ):
             write_deltalake(data_store_type, sample_data, mode=mode)
 
@@ -321,9 +324,7 @@ def test_writer_partitioning(tmp_path: pathlib.Path):
 
 
 def get_log_path(table: DeltaTable) -> str:
-    """
-    Returns _delta_log path for this delta table.
-    """
+    """Returns _delta_log path for this delta table."""
     return table._table.table_uri() + "/_delta_log/" + ("0" * 20 + ".json")
 
 

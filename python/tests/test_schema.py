@@ -1,17 +1,8 @@
-from array import array
-
 import pyarrow
 import pytest
 
 from deltalake import DeltaTable, Field
-from deltalake.schema import (
-    ArrayType,
-    DataType,
-    MapType,
-    PrimitiveType,
-    Schema,
-    StructType,
-)
+from deltalake.schema import ArrayType, MapType, PrimitiveType, Schema, StructType
 
 
 def test_table_schema():

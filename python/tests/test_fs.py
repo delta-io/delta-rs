@@ -4,7 +4,6 @@ import urllib
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from pyarrow.fs import S3FileSystem
 
 from deltalake import DeltaTable, PyDeltaTableError
 from deltalake.fs import DeltaStorageHandler
