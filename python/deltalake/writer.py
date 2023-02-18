@@ -87,13 +87,13 @@ def write_deltalake(
     storage_options: Optional[Dict[str, str]] = None,
     partitions_filters: Optional[List[Tuple[str, str, Any]]] = None,
 ) -> None:
-    """Write to a Delta Lake table (Experimental)
+    """Write to a Delta Lake table
 
     If the table does not already exist, it will be created.
 
-    This function only supports protocol version 1 currently. If an attempting
-    to write to an existing table with a higher min_writer_version, this
-    function will throw DeltaTableProtocolError.
+    This function only supports writer protocol version 2 currently. If an
+    attempting to write to an existing table with a higher min_writer_version,
+    this function will throw DeltaTableProtocolError.
 
     Note that this function does NOT register this table in a data catalog.
 

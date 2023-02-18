@@ -1,5 +1,4 @@
-Deltalake-python
-================
+# Deltalake-python
 
 [![PyPI](https://img.shields.io/pypi/v/deltalake.svg?style=flat-square)](https://pypi.org/project/deltalake/)
 [![userdoc](https://img.shields.io/badge/docs-user-blue)](https://delta-io.github.io/delta-rs/python/)
@@ -10,8 +9,22 @@ Native [Delta Lake](https://delta.io/) Python binding based on
 [Pandas](https://pandas.pydata.org/) integration.
 
 
-Installation
-------------
+## Example
+
+```python
+from deltalake import DeltaTable
+dt = DeltaTable("../rust/tests/data/delta-0.2.0")
+dt.version()
+3
+dt.files()
+['part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet',
+ 'part-00000-7c2deba3-1994-4fb8-bc07-d46c948aa415-c000.snappy.parquet',
+ 'part-00001-c373a5bd-85f0-4758-815e-7eb62007a15c-c000.snappy.parquet']
+```
+
+See the [user guide](https://delta-io.github.io/delta-rs/python/usage.html) for more examples.
+
+## Installation
 
 ```bash
 pip install deltalake
@@ -22,49 +35,65 @@ objection store communication. Please file Github issue to request for critical
 openssl upgrade.
 
 
-Develop
--------
+## Build custom wheels
 
-#### Setup your local environment with virtualenv
-```bash
-$ make setup-venv
+Sometimes you may wish to build custom wheels. Maybe you want to try out some
+unreleased features. Or maybe you want to tweak the optimization of the Rust code.
+
+To compile the package, you will need the Rust compiler and [maturin](https://github.com/PyO3/maturin):
+
+```sh
+curl https://sh.rustup.rs -sSf | sh -s
+pip install maturin
 ```
 
-#### Activate it
-```bash
-$ source ./venv/bin/activate
+Then you can build wheels for your own platform like so:
+
+```sh
+maturin build --release --out wheels
 ```
 
-#### Ready to develop with maturin
+For a build that is optimized for the system you are on (but sacrificing portability):
 
-[maturin](https://github.com/PyO3/maturin) is used to build the python package.
-Install delta-rs in the current virtualenv
-
-```bash
-$ make develop
+```sh
+RUSTFLAGS="-C target-cpu=native" maturin build --release --out wheels
 ```
 
-Then, list all the available tasks
+#### Cross compilation
 
-```bash
-$ make help
+The above command only works for your current platform. To create wheels for other
+platforms, you'll need to cross compile. Cross compilation requires installing
+two additional components: to cross compile Rust code, you will need to install
+the target with `rustup`; to cross compile the Python bindings, you will need
+to install `ziglang`.
+
+The following example is for manylinux2014. Other targets will require different
+Rust `target` and Python `compatibility` tags.
+
+```sh
+rustup target add x86_64-unknown-linux-gnu
+pip install ziglang
 ```
 
-Build manylinux wheels
-----------------------
+Then you can build the wheel with:
 
-```bash
-docker run -e PKG_CONFIG_PATH=/usr/local/lib64/pkgconfig -it -v `pwd`:/io apache/arrow-dev:amd64-centos-6.10-python-manylinux2010 bash
-curl https://sh.rustup.rs -sSf | sh -s -- -y
-source $HOME/.cargo/env
-rustup default stable
-cargo install --git https://github.com/PyO3/maturin.git --rev 98636cea89c328b3eba4ebb548124f75c8018200 maturin
-cd /io/python
-export PATH=/opt/python/cp37-cp37m/bin:/opt/python/cp38-cp38/bin:$PATH
-maturin publish -b pyo3 --target x86_64-unknown-linux-gnu --no-sdist
+```sh
+maturin build --release --zig \
+    --target x86_64-unknown-linux-gnu \
+    --compatibility manylinux2014 \
+    --out wheels
 ```
 
-#### PyPI release
+If you expect to only run on more modern system, you can set a newer `target-cpu`
+flag to Rust and use a newer compatibility tag for Linux. For example, here
+we set compatibility with CPUs newer than Haswell (2013) and Linux OS with 
+glibc version of at least 2.24:
 
-Publish a new GitHub release with name and tag version set to `python-vx.y.z`.
-This will trigger our automated release pipeline.
+```sh
+RUSTFLAGS="-C target-cpu=haswell" maturin build --release --zig \
+    --target x86_64-unknown-linux-gnu \
+    --compatibility manylinux_2_24 \
+    --out wheels
+```
+
+See note about `RUSTFLAGS` from [the arrow-rs readme](https://github.com/apache/arrow-rs/blob/master/arrow/README.md#performance-tips).

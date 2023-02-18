@@ -378,10 +378,6 @@ Writing Delta Tables
 
 .. py:currentmodule:: deltalake
 
-.. warning::
-    The writer is currently *experimental*. Please use on test data first, not
-    on production data. Report any issues at https://github.com/delta-io/delta-rs/issues.
-
 For overwrites and appends, use :py:func:`write_deltalake`. If the table does not
 already exist, it will be created. The ``data`` parameter will accept a Pandas
 DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.

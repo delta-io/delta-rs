@@ -1,7 +1,10 @@
-Python bindings documentation of delta-rs
+Python deltalake package
 =========================================================
 
-This is the documentation of the Python bindings of delta-rs, ``deltalake``.
+This is the documentation for the native Python implementation of deltalake. It
+is based on the delta-rs Rust library and requires no Spark or JVM dependencies.
+For the PySpark implementation, see `delta-pyspark`_ instead.
+
 This module provides the capability to read, write, and manage `Delta Lake`_
 tables from Python without Spark or Java. It uses `Apache Arrow`_ under the hood,
 so is compatible with other Arrow-native or integrated libraries such as
@@ -13,7 +16,7 @@ Pandas_, DuckDB_, and Polars_.
    It is not yet as feature-complete as the PySpark implementation of Delta
    Lake. If you encounter a bug, please let us know in our `GitHub repo`_.
 
-
+.. _delta-spark: https://docs.delta.io/latest/api/python/index.html
 .. _Delta Lake: https://delta.io/
 .. _Apache Arrow: https://arrow.apache.org/
 .. _Pandas: https://pandas.pydata.org/
