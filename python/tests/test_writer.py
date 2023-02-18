@@ -533,3 +533,90 @@ def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
     # table_or_uri with invalid parameter type
     with pytest.raises(ValueError):
         try_get_table_and_table_uri(None, None)
+
+
+def test_partition_overwrite(tmp_path: pathlib.Path):
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([1, 2, 1, 2], pa.int64()),
+            "val": pa.array([1, 1, 1, 1], pa.int64()),
+        }
+    )
+    write_deltalake(
+        str(tmp_path), sample_data, mode="overwrite", partition_by=["p1", "p2"]
+    )
+
+    delta_table = DeltaTable(str(tmp_path))
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == sample_data
+    )
+
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1", "1"], pa.string()),
+            "p2": pa.array([1, 2], pa.int64()),
+            "val": pa.array([2, 2], pa.int64()),
+        }
+    )
+    expected_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([1, 2, 1, 2], pa.int64()),
+            "val": pa.array([2, 2, 1, 1], pa.int64()),
+        }
+    )
+    write_deltalake(
+        str(tmp_path),
+        sample_data,
+        mode="overwrite",
+        partitions_filters=[("p1", "=", "1")],
+    )
+
+    delta_table.update_incremental()
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == expected_data
+    )
+
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1", "2"], pa.string()),
+            "p2": pa.array([2, 2], pa.int64()),
+            "val": pa.array([3, 3], pa.int64()),
+        }
+    )
+    expected_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([1, 2, 1, 2], pa.int64()),
+            "val": pa.array([2, 3, 1, 3], pa.int64()),
+        }
+    )
+
+    write_deltalake(
+        str(tmp_path),
+        sample_data,
+        mode="overwrite",
+        partitions_filters=[("p2", ">", "1")],
+    )
+    delta_table.update_incremental()
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == expected_data
+    )
+
+    with pytest.raises(ValueError):
+        write_deltalake(
+            str(tmp_path),
+            sample_data,
+            mode="overwrite",
+            partitions_filters=[("p2", "=", "1")],
+        )
