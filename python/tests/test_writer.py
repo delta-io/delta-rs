@@ -3,7 +3,7 @@ import json
 import os
 import pathlib
 import random
-from datetime import datetime
+from datetime import date, datetime
 from typing import Dict, Iterable, List
 from unittest.mock import Mock
 
@@ -535,14 +535,154 @@ def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
         try_get_table_and_table_uri(None, None)
 
 
-def test_partition_overwrite(tmp_path: pathlib.Path):
-    sample_data = pa.table(
+@pytest.mark.parametrize(
+    "cases_data",
+    [
         {
-            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
-            "p2": pa.array([1, 2, 1, 2], pa.int64()),
-            "val": pa.array([1, 1, 1, 1], pa.int64()),
-        }
-    )
+            "init": pa.table(
+                {
+                    "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+                    "p2": pa.array([1, 2, 1, 2], pa.int64()),
+                    "val": pa.array([1, 1, 1, 1], pa.int64()),
+                }
+            ),
+            "filter1": [("p1", "=", "1")],
+            "data_case1": pa.table(
+                {
+                    "p1": pa.array(["1", "1"], pa.string()),
+                    "p2": pa.array([1, 2], pa.int64()),
+                    "val": pa.array([2, 2], pa.int64()),
+                }
+            ),
+            "expected_case1": pa.table(
+                {
+                    "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+                    "p2": pa.array([1, 2, 1, 2], pa.int64()),
+                    "val": pa.array([2, 2, 1, 1], pa.int64()),
+                }
+            ),
+            "filter2": [("p2", ">", "1")],
+            "data_case2": pa.table(
+                {
+                    "p1": pa.array(["1", "2"], pa.string()),
+                    "p2": pa.array([2, 2], pa.int64()),
+                    "val": pa.array([3, 3], pa.int64()),
+                }
+            ),
+            "expected_case2": pa.table(
+                {
+                    "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+                    "p2": pa.array([1, 2, 1, 2], pa.int64()),
+                    "val": pa.array([2, 3, 1, 3], pa.int64()),
+                }
+            ),
+        },
+        {
+            "init": pa.table(
+                {
+                    "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+                    "p2": pa.array([False, True, False, True], pa.bool_()),
+                    "val": pa.array([1, 1, 1, 1], pa.int64()),
+                }
+            ),
+            "filter1": [("p1", "=", "1")],
+            "data_case1": pa.table(
+                {
+                    "p1": pa.array(["1", "1"], pa.string()),
+                    "p2": pa.array([True, False], pa.bool_()),
+                    "val": pa.array([2, 2], pa.int64()),
+                }
+            ),
+            "expected_case1": pa.table(
+                {
+                    "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+                    "p2": pa.array([False, True, False, True], pa.bool_()),
+                    "val": pa.array([2, 2, 1, 1], pa.int64()),
+                }
+            ),
+            "filter2": [("p2", "=", "true")],
+            "data_case2": pa.table(
+                {
+                    "p1": pa.array(["1", "2"], pa.string()),
+                    "p2": pa.array([True, True], pa.bool_()),
+                    "val": pa.array([3, 3], pa.int64()),
+                }
+            ),
+            "expected_case2": pa.table(
+                {
+                    "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+                    "p2": pa.array([False, True, False, True], pa.bool_()),
+                    "val": pa.array([2, 3, 1, 3], pa.int64()),
+                }
+            ),
+        },
+        {
+            "init": pa.table(
+                {
+                    "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+                    "p2": pa.array(
+                        [
+                            date(2022, 1, 1),
+                            date(2022, 1, 2),
+                            date(2022, 1, 1),
+                            date(2022, 1, 2),
+                        ],
+                        pa.date32(),
+                    ),
+                    "val": pa.array([1, 1, 1, 1], pa.int64()),
+                }
+            ),
+            "filter1": [("p1", "=", "1")],
+            "data_case1": pa.table(
+                {
+                    "p1": pa.array(["1", "1"], pa.string()),
+                    "p2": pa.array([date(2022, 1, 1), date(2022, 1, 2)], pa.date32()),
+                    "val": pa.array([2, 2], pa.int64()),
+                }
+            ),
+            "expected_case1": pa.table(
+                {
+                    "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+                    "p2": pa.array(
+                        [
+                            date(2022, 1, 1),
+                            date(2022, 1, 2),
+                            date(2022, 1, 1),
+                            date(2022, 1, 2),
+                        ],
+                        pa.date32(),
+                    ),
+                    "val": pa.array([2, 2, 1, 1], pa.int64()),
+                }
+            ),
+            "filter2": [("p2", ">", "2022-01-01")],
+            "data_case2": pa.table(
+                {
+                    "p1": pa.array(["1", "2"], pa.string()),
+                    "p2": pa.array([date(2022, 1, 2), date(2022, 1, 2)], pa.date32()),
+                    "val": pa.array([3, 3], pa.int64()),
+                }
+            ),
+            "expected_case2": pa.table(
+                {
+                    "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+                    "p2": pa.array(
+                        [
+                            date(2022, 1, 1),
+                            date(2022, 1, 2),
+                            date(2022, 1, 1),
+                            date(2022, 1, 2),
+                        ],
+                        pa.date32(),
+                    ),
+                    "val": pa.array([2, 3, 1, 3], pa.int64()),
+                }
+            ),
+        },
+    ],
+)
+def test_partition_overwrite(tmp_path: pathlib.Path, cases_data: Dict[str, pa.Array]):
+    sample_data = cases_data["init"]
     write_deltalake(
         str(tmp_path), sample_data, mode="overwrite", partition_by=["p1", "p2"]
     )
@@ -555,25 +695,13 @@ def test_partition_overwrite(tmp_path: pathlib.Path):
         == sample_data
     )
 
-    sample_data = pa.table(
-        {
-            "p1": pa.array(["1", "1"], pa.string()),
-            "p2": pa.array([1, 2], pa.int64()),
-            "val": pa.array([2, 2], pa.int64()),
-        }
-    )
-    expected_data = pa.table(
-        {
-            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
-            "p2": pa.array([1, 2, 1, 2], pa.int64()),
-            "val": pa.array([2, 2, 1, 1], pa.int64()),
-        }
-    )
+    sample_data = cases_data["data_case1"]
+    expected_data = cases_data["expected_case1"]
     write_deltalake(
         str(tmp_path),
         sample_data,
         mode="overwrite",
-        partitions_filters=[("p1", "=", "1")],
+        partitions_filters=cases_data["filter1"],
     )
 
     delta_table.update_incremental()
@@ -584,26 +712,14 @@ def test_partition_overwrite(tmp_path: pathlib.Path):
         == expected_data
     )
 
-    sample_data = pa.table(
-        {
-            "p1": pa.array(["1", "2"], pa.string()),
-            "p2": pa.array([2, 2], pa.int64()),
-            "val": pa.array([3, 3], pa.int64()),
-        }
-    )
-    expected_data = pa.table(
-        {
-            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
-            "p2": pa.array([1, 2, 1, 2], pa.int64()),
-            "val": pa.array([2, 3, 1, 3], pa.int64()),
-        }
-    )
+    sample_data = cases_data["data_case2"]
+    expected_data = cases_data["expected_case2"]
 
     write_deltalake(
         str(tmp_path),
         sample_data,
         mode="overwrite",
-        partitions_filters=[("p2", ">", "1")],
+        partitions_filters=cases_data["filter2"],
     )
     delta_table.update_incremental()
     assert (
@@ -613,6 +729,18 @@ def test_partition_overwrite(tmp_path: pathlib.Path):
         == expected_data
     )
 
+
+def test_partition_overwrite_unfiltered_data_fails(tmp_path: pathlib.Path):
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([1, 2, 1, 2], pa.int64()),
+            "val": pa.array([1, 1, 1, 1], pa.int64()),
+        }
+    )
+    write_deltalake(
+        str(tmp_path), sample_data, mode="overwrite", partition_by=["p1", "p2"]
+    )
     with pytest.raises(ValueError):
         write_deltalake(
             str(tmp_path),

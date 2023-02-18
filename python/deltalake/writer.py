@@ -32,7 +32,7 @@ else:
 import pyarrow as pa
 import pyarrow.dataset as ds
 import pyarrow.fs as pa_fs
-from pyarrow.lib import RecordBatchReader
+from pyarrow.lib import BooleanScalar, RecordBatchReader
 
 from deltalake.schema import delta_arrow_schema_from_pandas
 
@@ -231,13 +231,23 @@ def write_deltalake(
         def check_data_is_aligned_with_partition_filtering(
             batch: pa.RecordBatch,
         ) -> None:
+            def arrow_value_to_partition_string(val: Any) -> str:
+                if isinstance(val, BooleanScalar):
+                    val = str(val).lower()
+                else:
+                    val = str(val)
+                return val
+
             if table is None:
                 return
             allowed_partitions = table._table.get_active_partitions(partitions_filters)
             for column_index, column_name in enumerate(batch.schema.names):
                 if column_name in table.metadata().partition_columns:
                     for value in batch.column(column_index).unique():
-                        if (column_name, str(value)) not in allowed_partitions:
+                        if (
+                            column_name,
+                            arrow_value_to_partition_string(value),
+                        ) not in allowed_partitions:
                             raise ValueError(
                                 f"Data should be aligned with partitioning. "
                                 f"Partition '{column_name}'='{value}' should be filtered out from data."
