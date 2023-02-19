@@ -240,15 +240,19 @@ def write_deltalake(
 
             if table is None:
                 return
+            existed_partitions = table._table.get_active_partitions()
             allowed_partitions = table._table.get_active_partitions(partitions_filters)
             for column_index, column_name in enumerate(batch.schema.names):
                 if column_name in table.metadata().partition_columns:
                     for value in batch.column(column_index).unique():
-                        print(type(value))
-                        if (
+                        partition = (
                             column_name,
                             arrow_value_to_partition_string(value),
-                        ) not in allowed_partitions:
+                        )
+                        if (
+                            partition not in allowed_partitions
+                            and partition in existed_partitions
+                        ):
                             raise ValueError(
                                 f"Data should be aligned with partitioning. "
                                 f"Partition '{column_name}'='{value}' should be filtered out from data."
