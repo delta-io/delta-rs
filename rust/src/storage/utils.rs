@@ -4,12 +4,20 @@ use std::collections::HashMap;
 
 use crate::action::Add;
 use crate::builder::DeltaTableBuilder;
-use crate::{DeltaResult, DeltaTableError};
+use crate::{DeltaDataTypeVersion, DeltaResult, DeltaTableError};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectMeta, Result as ObjectStoreResult};
 use std::sync::Arc;
+
+const DELTA_LOG_FOLDER: &str = "_delta_log";
+
+/// Return the uri of commit version.
+pub(crate) fn commit_uri_from_version(version: DeltaDataTypeVersion) -> Path {
+    let version = format!("{version:020}.json");
+    Path::from_iter([DELTA_LOG_FOLDER, &version])
+}
 
 /// Copies the contents from the `from` location into the `to` location
 pub async fn copy_table(

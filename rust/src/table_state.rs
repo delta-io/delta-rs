@@ -4,6 +4,7 @@ use crate::action::{self, Action, Add};
 use crate::delta_config;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::schema::SchemaDataType;
+use crate::storage::commit_uri_from_version;
 use crate::{
     ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
     DeltaTableMetaData,
@@ -64,7 +65,7 @@ impl DeltaTableState {
         table: &DeltaTable,
         version: DeltaDataTypeVersion,
     ) -> Result<Self, ApplyLogError> {
-        let commit_uri = table.commit_uri_from_version(version);
+        let commit_uri = commit_uri_from_version(version);
         let commit_log_bytes = table.storage.get(&commit_uri).await?.bytes().await?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 

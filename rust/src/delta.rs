@@ -18,7 +18,7 @@ use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
 use crate::delta_config::DeltaConfigError;
 use crate::operations::vacuum::VacuumBuilder;
-use crate::storage::ObjectStoreRef;
+use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
 use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt;
@@ -560,12 +560,6 @@ impl DeltaTable {
         self.storage.root_uri()
     }
 
-    /// Return the uri of commit version.
-    pub fn commit_uri_from_version(&self, version: DeltaDataTypeVersion) -> Path {
-        let version = format!("{version:020}.json");
-        Path::from_iter(["_delta_log", &version])
-    }
-
     /// Return the list of paths of given checkpoint.
     pub fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<Path> {
         let checkpoint_prefix = format!("{:020}", check_point.version);
@@ -727,11 +721,7 @@ impl DeltaTable {
 
         // scan logs after checkpoint
         loop {
-            match self
-                .storage
-                .head(&self.commit_uri_from_version(version))
-                .await
-            {
+            match self.storage.head(&commit_uri_from_version(version)).await {
                 Ok(meta) => {
                     // also cache timestamp for version
                     self.version_timestamp
@@ -778,7 +768,7 @@ impl DeltaTable {
         current_version: DeltaDataTypeVersion,
     ) -> Result<PeekCommit, DeltaTableError> {
         let next_version = current_version + 1;
-        let commit_uri = self.commit_uri_from_version(next_version);
+        let commit_uri = commit_uri_from_version(next_version);
         let commit_log_bytes = self.storage.get(&commit_uri).await;
         let commit_log_bytes = match commit_log_bytes {
             Err(ObjectStoreError::NotFound { .. }) => return Ok(PeekCommit::UpToDate),
@@ -873,7 +863,7 @@ impl DeltaTable {
         version: DeltaDataTypeVersion,
     ) -> Result<(), DeltaTableError> {
         // check if version is valid
-        let commit_uri = self.commit_uri_from_version(version);
+        let commit_uri = commit_uri_from_version(version);
         match self.storage.head(&commit_uri).await {
             Ok(_) => {}
             Err(ObjectStoreError::NotFound { .. }) => {
@@ -910,10 +900,7 @@ impl DeltaTable {
         match self.version_timestamp.get(&version) {
             Some(ts) => Ok(*ts),
             None => {
-                let meta = self
-                    .storage
-                    .head(&self.commit_uri_from_version(version))
-                    .await?;
+                let meta = self.storage.head(&commit_uri_from_version(version)).await?;
                 let ts = meta.last_modified.timestamp();
                 // also cache timestamp for version
                 self.version_timestamp.insert(version, ts);
@@ -1145,7 +1132,7 @@ impl DeltaTable {
         // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
         self.storage
-            .rename_if_not_exists(&commit.uri, &self.commit_uri_from_version(version))
+            .rename_if_not_exists(&commit.uri, &commit_uri_from_version(version))
             .await
             .map_err(|e| match e {
                 ObjectStoreError::AlreadyExists { .. } => {
@@ -1318,7 +1305,6 @@ pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
     actions: Vec<Action>,
     options: DeltaTransactionOptions,
-    txn_id: String,
 }
 
 impl<'a> DeltaTransaction<'a> {
@@ -1330,7 +1316,6 @@ impl<'a> DeltaTransaction<'a> {
             delta_table,
             actions: vec![],
             options: options.unwrap_or_default(),
-            txn_id: Uuid::new_v4().to_string(),
         }
     }
 
@@ -1350,51 +1335,32 @@ impl<'a> DeltaTransaction<'a> {
     /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
     pub async fn commit(
         &mut self,
-        operation: DeltaOperation,
+        operation: Option<DeltaOperation>,
         app_metadata: Option<Map<String, Value>>,
     ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
-        // TODO(roeap) in the reference implementation this logic is implemented, which seems somewhat strange,
-        // as it seems we will never have "WriteSerializable" as level - probably need to check the table config ...
-        // https://github.com/delta-io/delta/blob/abb171c8401200e7772b27e3be6ea8682528ac72/core/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala#L964
-        let isolation_level = if self.can_downgrade_to_snapshot_isolation(&op) {
-            IsolationLevel::SnapshotIsolation
-        } else {
-            IsolationLevel::default_level()
-        };
+        // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action),
+        // but leaving it unused for now. `CommitInfo` is a fairly dynamic data structure so we should work
+        // out the data structure approach separately.
 
         // TODO: calculate isolation level to use when checking for conflicts.
         // Leaving conflict checking unimplemented for now to get the "single writer" implementation off the ground.
         // Leaving some commented code in place as a guidepost for the future.
 
-        // readPredicates.nonEmpty || readFiles.nonEmpty
-        // TODO revise logic if files are read
-        let depends_on_files = match operation {
-            DeltaOperation::Create { .. } | DeltaOperation::StreamingUpdate { .. } => false,
-            DeltaOperation::Optimize { .. } => true,
-            DeltaOperation::Write {
-                predicate: Some(_), ..
-            } => true,
-            _ => false,
-        };
+        // let no_data_changed = actions.iter().all(|a| match a {
+        //     Action::add(x) => !x.dataChange,
+        //     Action::remove(x) => !x.dataChange,
+        //     _ => false,
+        // });
+        // let isolation_level = if no_data_changed {
+        //     IsolationLevel::SnapshotIsolation
+        // } else {
+        //     IsolationLevel::Serializable
+        // };
 
-        let is_blind_append = only_add_files && !depends_on_files;
-
-        let commit_info = CommitInfo {
-            version: None,
-            timestamp: chrono::Utc::now().timestamp(),
-            read_version: Some(self.delta_table.version()),
-            isolation_level: Some(isolation_level),
-            operation: operation.name(),
-            operation_parameters: op.operation_parameters(),
-            user_id: None,
-            user_name: None,
-            is_blind_append: Some(is_blind_append),
-        };
-
-        let prepared_commit = self.prepare_commit(Some(op.clone()), app_metadata).await?;
+        let prepared_commit = self.prepare_commit(operation, app_metadata).await?;
 
         // try to commit in a loop in case other writers write the next version first
-        let version = self.try_commit_loop(&prepared_commit, op).await?;
+        let version = self.try_commit_loop(&prepared_commit).await?;
 
         Ok(version)
     }
@@ -1404,7 +1370,7 @@ impl<'a> DeltaTransaction<'a> {
     /// with `DeltaTable.try_commit_transaction`.
     pub async fn prepare_commit(
         &mut self,
-        operation: &DeltaOperation,
+        operation: Option<DeltaOperation>,
         app_metadata: Option<Map<String, Value>>,
     ) -> Result<PreparedCommit, DeltaTableError> {
         if !self
@@ -1421,8 +1387,10 @@ impl<'a> DeltaTransaction<'a> {
                 "clientVersion".to_string(),
                 Value::String(format!("delta-rs.{}", crate_version())),
             );
-            commit_info.append(&mut operation.get_commit_info());
 
+            if let Some(op) = &operation {
+                commit_info.append(&mut op.get_commit_info())
+            }
             if let Some(mut meta) = app_metadata {
                 commit_info.append(&mut meta)
             }
@@ -1449,7 +1417,6 @@ impl<'a> DeltaTransaction<'a> {
     async fn try_commit_loop(
         &mut self,
         commit: &PreparedCommit,
-        operation: DeltaOperation,
     ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         let mut attempt_number: u32 = 0;
         loop {
@@ -1468,14 +1435,6 @@ impl<'a> DeltaTransaction<'a> {
                 Err(e) => {
                     match e {
                         DeltaTableError::VersionAlreadyExists(_) => {
-                            let checker = ConflictChecker::try_new(
-                                self.delta_table,
-                                version,
-                                operation.clone(),
-                            )
-                            .await?;
-                            let _result = checker.check_conflicts()?;
-                            // TODO update prepared commit in case transaction info got updated.
                             if attempt_number > self.options.max_retry_commit_attempts + 1 {
                                 debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
                                 return Err(e);
@@ -1491,50 +1450,6 @@ impl<'a> DeltaTransaction<'a> {
                     }
                 }
             }
-        }
-    }
-
-    fn can_downgrade_to_snapshot_isolation(&self, operation: &DeltaOperation) -> bool {
-        let mut data_changed = false;
-        let mut has_non_file_actions = false;
-        for action in &self.actions {
-            match action {
-                Action::add(act) if act.data_change => data_changed = true,
-                Action::remove(rem) if rem.data_change => data_changed = true,
-                _ => has_non_file_actions = true,
-            }
-        }
-
-        if has_non_file_actions {
-            // if Non-file-actions are present (e.g. METADATA etc.), then don't downgrade the isolation
-            // level to SnapshotIsolation.
-            return false;
-        }
-
-        let default_isolation_level = IsolationLevel::default_level();
-        // Note-1: For no-data-change transactions such as OPTIMIZE/Auto Compaction/ZorderBY, we can
-        // change the isolation level to SnapshotIsolation. SnapshotIsolation allows reduced conflict
-        // detection by skipping the
-        // [[ConflictChecker.checkForAddedFilesThatShouldHaveBeenReadByCurrentTxn]] check i.e.
-        // don't worry about concurrent appends.
-        // Note-2:
-        // We can also use SnapshotIsolation for empty transactions. e.g. consider a commit:
-        // t0 - Initial state of table
-        // t1 - Q1, Q2 starts
-        // t2 - Q1 commits
-        // t3 - Q2 is empty and wants to commit.
-        // In this scenario, we can always allow Q2 to commit without worrying about new files
-        // generated by Q1.
-        // The final order which satisfies both Serializability and WriteSerializability is: Q2, Q1
-        // Note that Metadata only update transactions shouldn't be considered empty. If Q2 above has
-        // a Metadata update (say schema change/identity column high watermark update), then Q2 can't
-        // be moved above Q1 in the final SERIALIZABLE order. This is because if Q2 is moved above Q1,
-        // then Q1 should see the updates from Q2 - which actually didn't happen.
-
-        match default_isolation_level {
-            IsolationLevel::Serializable => !data_changed,
-            IsolationLevel::WriteSerializable => !data_changed && !operation.changes_data(),
-            _ => false, // This case should never happen
         }
     }
 }
