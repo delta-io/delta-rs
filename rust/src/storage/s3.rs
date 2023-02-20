@@ -103,7 +103,7 @@ impl From<S3LockError> for ObjectStoreError {
 pub struct LockData {
     /// Source object key
     pub source: String,
-    /// Destination object ket
+    /// Destination object key
     pub destination: String,
 }
 
