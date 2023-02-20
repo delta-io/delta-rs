@@ -4,24 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::str::FromStr;
 
-/// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
-/// However the reference implementation as well as delta-rs store useful information that may for instance
-/// allow us to be more permissive in commit conflict resolution.
-#[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(rename_all = "camelCase")]
-pub struct CommitInfo {
-    pub version: Option<DeltaDataTypeVersion>,
-    pub timestamp: DeltaDataTypeTimestamp,
-    pub user_id: Option<String>,
-    pub user_name: Option<String>,
-    pub operation: String,
-    pub operation_parameters: HashMap<String, String>,
-    pub read_version: Option<i64>,
-    pub isolation_level: Option<IsolationLevel>,
-    pub is_blind_append: Option<bool>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
 pub enum IsolationLevel {
     /// The strongest isolation level. It ensures that committed write operations
     /// and all reads are Serializable. Operations are allowed as long as there
@@ -68,4 +51,9 @@ impl FromStr for IsolationLevel {
             _ => todo!(),
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
 }

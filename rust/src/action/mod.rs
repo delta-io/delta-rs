@@ -8,6 +8,7 @@ mod parquet_read;
 #[cfg(feature = "parquet2")]
 pub mod parquet2_read;
 
+use crate::operations::transaction::IsolationLevel;
 use crate::{schema::*, DeltaResult, DeltaTableError, DeltaTableMetaData};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
@@ -435,7 +436,46 @@ pub struct Protocol {
     pub min_writer_version: DeltaDataTypeInt,
 }
 
-type CommitInfo = Map<String, Value>;
+/// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
+/// However the reference implementation as well as delta-rs store useful information that may for instance
+/// allow us to be more permissive in commit conflict resolution.
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct CommitInfo {
+    /// Version number the commit corresponds to
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub version: Option<DeltaDataTypeVersion>,
+    /// Timestamp in millis when the commit was created
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub timestamp: Option<DeltaDataTypeTimestamp>,
+    /// Id of the user invoking the commit
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_id: Option<String>,
+    /// Name of the user invoking the commit
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub user_name: Option<String>,
+    /// The operation performed during the
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation: Option<String>,
+    /// Parameters used for table operation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub operation_parameters: Option<HashMap<String, serde_json::Value>>,
+    /// Version of the table when the operation was started
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub read_version: Option<i64>,
+    /// The isolation level of the commit
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub isolation_level: Option<IsolationLevel>,
+    /// TODO
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub is_blind_append: Option<bool>,
+    /// Delta engine which created the commit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub engine_info: Option<String>,
+    /// Additional provenance information for the commit
+    #[serde(flatten, default)]
+    pub info: Map<String, serde_json::Value>,
+}
 
 /// Represents an action in the Delta log. The Delta log is an aggregate of all actions performed
 /// on the table, so the full list of actions is required to properly read a table.
@@ -457,6 +497,16 @@ pub enum Action {
     protocol(Protocol),
     /// Describes commit provenance information for the table.
     commitInfo(CommitInfo),
+}
+
+impl Action {
+    /// Create a commit info from a map
+    pub fn commit_info(info: Map<String, serde_json::Value>) -> Self {
+        Self::commitInfo(CommitInfo {
+            info,
+            ..Default::default()
+        })
+    }
 }
 
 /// Operation performed when creating a new log entry with one or more actions.
@@ -558,20 +608,13 @@ impl DeltaOperation {
     }
 
     /// Retrieve basic commit information to be added to Delta commits
-    pub fn get_commit_info(&self) -> Map<String, Value> {
-        let mut commit_info = Map::<String, Value>::new();
-        commit_info.insert(
-            "operation".to_string(),
-            serde_json::Value::String(self.name().into()),
-        );
-        if let Ok(fields) = self.operation_parameters() {
-            let operation_parameters: Map<String, Value> = fields.collect();
-            commit_info.insert(
-                "operationParameters".to_string(),
-                serde_json::Value::Object(operation_parameters),
-            );
+    pub fn get_commit_info(&self) -> CommitInfo {
+        // TODO infer additional info from operation parameters ...
+        CommitInfo {
+            operation: Some(self.name().into()),
+            operation_parameters: self.operation_parameters().ok().map(|iter| iter.collect()),
+            ..Default::default()
         }
-        commit_info
     }
 }
 
@@ -669,5 +712,66 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn test_read_commit_info() {
+        let raw = r#"
+        {
+            "timestamp": 1670892998177,
+            "operation": "WRITE",
+            "operationParameters": {
+                "mode": "Append",
+                "partitionBy": "[\"c1\",\"c2\"]"
+            },
+            "isolationLevel": "Serializable",
+            "isBlindAppend": true,
+            "operationMetrics": {
+                "numFiles": "3",
+                "numOutputRows": "3",
+                "numOutputBytes": "1356"
+            },
+            "engineInfo": "Apache-Spark/3.3.1 Delta-Lake/2.2.0",
+            "txnId": "046a258f-45e3-4657-b0bf-abfb0f76681c"
+        }"#;
+
+        let info = serde_json::from_str::<CommitInfo>(raw);
+        assert!(info.is_ok());
+
+        println!("{:?}", info);
+
+        // assert that commit info has no required filelds
+        let raw = "{}";
+        let info = serde_json::from_str::<CommitInfo>(raw);
+        assert!(info.is_ok());
+
+        // arbitrary field data may be added to commit
+        let raw = r#"
+        {
+            "timestamp": 1670892998177,
+            "operation": "WRITE",
+            "operationParameters": {
+                "mode": "Append",
+                "partitionBy": "[\"c1\",\"c2\"]"
+            },
+            "isolationLevel": "Serializable",
+            "isBlindAppend": true,
+            "operationMetrics": {
+                "numFiles": "3",
+                "numOutputRows": "3",
+                "numOutputBytes": "1356"
+            },
+            "engineInfo": "Apache-Spark/3.3.1 Delta-Lake/2.2.0",
+            "txnId": "046a258f-45e3-4657-b0bf-abfb0f76681c",
+            "additionalField": "more data",
+            "additionalStruct": {
+                "key": "value",
+                "otherKey": 123
+            }
+        }"#;
+
+        let info = serde_json::from_str::<CommitInfo>(raw).expect("should parse");
+        assert!(info.info.contains_key("additionalField"));
+        assert!(info.info.contains_key("additionalStruct"));
     }
 }

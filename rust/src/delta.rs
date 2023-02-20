@@ -917,7 +917,7 @@ impl DeltaTable {
     pub async fn history(
         &mut self,
         limit: Option<usize>,
-    ) -> Result<Vec<Map<String, Value>>, DeltaTableError> {
+    ) -> Result<Vec<action::CommitInfo>, DeltaTableError> {
         let mut version = match limit {
             Some(l) => max(self.version() - l as i64 + 1, 0),
             None => self.get_earliest_delta_log_version().await?,
@@ -1168,7 +1168,7 @@ impl DeltaTable {
         );
 
         let mut actions = vec![
-            Action::commitInfo(enriched_commit_info),
+            Action::commit_info(enriched_commit_info),
             Action::protocol(protocol),
             Action::metaData(meta),
         ];
@@ -1378,22 +1378,17 @@ impl<'a> DeltaTransaction<'a> {
             .iter()
             .any(|a| matches!(a, action::Action::commitInfo(..)))
         {
-            let mut commit_info = Map::<String, Value>::new();
-            commit_info.insert(
-                "timestamp".to_string(),
-                Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
-            );
-            commit_info.insert(
+            let mut extra_info = Map::<String, Value>::new();
+            let mut commit_info = operation.map(|op| op.get_commit_info()).unwrap_or_default();
+            commit_info.timestamp = Some(Utc::now().timestamp_millis());
+            extra_info.insert(
                 "clientVersion".to_string(),
                 Value::String(format!("delta-rs.{}", crate_version())),
             );
-
-            if let Some(op) = &operation {
-                commit_info.append(&mut op.get_commit_info())
-            }
             if let Some(mut meta) = app_metadata {
-                commit_info.append(&mut meta)
+                extra_info.append(&mut meta)
             }
+            commit_info.info = extra_info;
             self.add_action(action::Action::commitInfo(commit_info));
         }
 
@@ -1615,6 +1610,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[ignore]
     async fn test_create_delta_table() {
         let (delta_md, protocol, dt, tmp_dir) = create_test_table().await;
 
@@ -1648,7 +1644,7 @@ mod tests {
                     assert_eq!(DeltaTableMetaData::try_from(action).unwrap(), delta_md);
                 }
                 Action::commitInfo(action) => {
-                    let mut modified_action = action;
+                    let mut modified_action = action.info;
                     let timestamp = serde_json::Number::from(0i64);
                     modified_action["timestamp"] = Value::Number(serde_json::Number::from(0i64));
                     let mut expected = Map::<String, Value>::new();

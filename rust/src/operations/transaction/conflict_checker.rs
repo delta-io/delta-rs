@@ -1,7 +1,7 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
 use super::{CommitInfo, IsolationLevel};
 use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
-use crate::storage::commit_uri_from_version;
+use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 use crate::{
     table_state::DeltaTableState, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
     DeltaTableMetaData,
@@ -59,7 +59,7 @@ pub enum CommitConflictError {
 }
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
-pub(crate) struct CurrentTransactionInfo {
+pub(crate) struct TransactionInfo {
     pub(crate) txn_id: String,
     /// partition predicates by which files have been queried by the transaction
     pub(crate) read_predicates: Vec<String>,
@@ -79,9 +79,9 @@ pub(crate) struct CurrentTransactionInfo {
     pub(crate) commit_info: Option<Map<String, Value>>,
 }
 
-impl CurrentTransactionInfo {
+impl TransactionInfo {
     pub fn try_new(
-        _table: &DeltaTable,
+        _snapshot: &DeltaTableState,
         _operation: DeltaOperation,
     ) -> Result<Self, DeltaTableError> {
         todo!()
@@ -109,13 +109,9 @@ impl WinningCommitSummary {
             .find(|action| matches!(action, Action::commitInfo(_)))
             .map(|action| match action {
                 Action::commitInfo(info) => {
-                    // TODO remove panic
-                    let mut ci = serde_json::from_value::<CommitInfo>(serde_json::Value::Object(
-                        info.clone(),
-                    ))
-                    .unwrap();
-                    ci.version = Some(version);
-                    ci
+                    let mut updated = info.clone();
+                    updated.version = Some(version);
+                    updated
                 }
                 _ => unreachable!(),
             });
@@ -210,30 +206,31 @@ impl WinningCommitSummary {
     }
 }
 
-pub(crate) struct ConflictChecker {
+pub(crate) struct ConflictChecker<'a> {
     /// transaction information for current transaction at start of check
-    initial_current_transaction_info: CurrentTransactionInfo,
+    initial_current_transaction_info: TransactionInfo,
     winning_commit_version: DeltaDataTypeVersion,
     /// Summary of the transaction, that has been committed ahead of the current transaction
     winning_commit_summary: WinningCommitSummary,
     /// isolation level for the current transaction
     isolation_level: IsolationLevel,
     /// The state of the delta table at the base version from the current (not winning) commit
-    state: DeltaTableState,
+    snapshot: &'a DeltaTableState,
 }
 
-impl ConflictChecker {
+impl<'a> ConflictChecker<'a> {
     pub async fn try_new(
-        table: &DeltaTable,
+        snapshot: &'a DeltaTableState,
+        object_store: ObjectStoreRef,
         winning_commit_version: DeltaDataTypeVersion,
         operation: DeltaOperation,
-    ) -> Result<Self, DeltaTableError> {
+    ) -> Result<ConflictChecker<'_>, DeltaTableError> {
         // TODO raise proper error here
-        assert!(winning_commit_version == table.version() + 1);
+        assert!(winning_commit_version == snapshot.version() + 1);
 
         // create winning commit summary
         let commit_uri = commit_uri_from_version(winning_commit_version);
-        let commit_log_bytes = table.storage.get(&commit_uri).await?.bytes().await?;
+        let commit_log_bytes = object_store.get(&commit_uri).await?.bytes().await?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
         let mut commit_actions = Vec::new();
 
@@ -250,27 +247,26 @@ impl ConflictChecker {
         let winning_commit_summary =
             WinningCommitSummary::new(commit_actions, winning_commit_version);
 
-        let initial_current_transaction_info = CurrentTransactionInfo::try_new(table, operation)?;
+        let initial_current_transaction_info = TransactionInfo::try_new(snapshot, operation)?;
 
         Ok(Self {
             initial_current_transaction_info,
             winning_commit_summary,
             winning_commit_version,
             isolation_level: IsolationLevel::Serializable,
-            // TODO cloning the state is probably a bad idea, since it can be very large...
-            state: table.state.clone(),
+            snapshot,
         })
     }
 
-    fn current_transaction_info(&self) -> &CurrentTransactionInfo {
+    fn current_transaction_info(&self) -> &TransactionInfo {
         // TODO figure out when we need to update this
         &self.initial_current_transaction_info
     }
 
     /// This function checks conflict of the `initial_current_transaction_info` against the
-    /// `winning_commit_version` and returns an updated [CurrentTransactionInfo] that represents
+    /// `winning_commit_version` and returns an updated [`TransactionInfo`] that represents
     /// the transaction as if it had started while reading the `winning_commit_version`.
-    pub fn check_conflicts(&self) -> Result<CurrentTransactionInfo, CommitConflictError> {
+    pub fn check_conflicts(&self) -> Result<TransactionInfo, CommitConflictError> {
         self.check_protocol_compatibility()?;
         self.check_no_metadata_updates()?;
         self.check_for_added_files_that_should_have_been_read_by_current_txn()?;
@@ -284,8 +280,8 @@ impl ConflictChecker {
     /// to read and write against the protocol set by the committed transaction.
     fn check_protocol_compatibility(&self) -> Result<(), CommitConflictError> {
         for p in self.winning_commit_summary.protocol() {
-            if self.state.min_reader_version() < p.min_reader_version
-                || self.state.min_writer_version() < p.min_writer_version
+            if self.snapshot.min_reader_version() < p.min_reader_version
+                || self.snapshot.min_writer_version() < p.min_writer_version
             {
                 return Err(CommitConflictError::ProtocolChanged);
             };
@@ -426,4 +422,79 @@ impl ConflictChecker {
 }
 
 #[cfg(test)]
-mod tests {}
+mod tests {
+    use super::*;
+    use crate::action::{MetaData, Protocol};
+    use crate::schema::Schema;
+    use crate::table_state::DeltaTableState;
+    use crate::{DeltaTable, DeltaTableBuilder, DeltaTableMetaData, SchemaDataType, SchemaField};
+    use std::collections::HashMap;
+
+    fn get_table_actions() -> Vec<Action> {
+        let protocol = Protocol {
+            min_reader_version: 1,
+            min_writer_version: 1,
+        };
+        let table_schema = Schema::new(vec![
+            SchemaField::new(
+                "id".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "value".to_string(),
+                SchemaDataType::primitive("integer".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "modified".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+        ]);
+        let metadata =
+            DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
+        let raw = r#"
+            {
+                "timestamp": 1670892998177,
+                "operation": "WRITE",
+                "operationParameters": {
+                    "mode": "Append",
+                    "partitionBy": "[\"c1\",\"c2\"]"
+                },
+                "isolationLevel": "Serializable",
+                "isBlindAppend": true,
+                "operationMetrics": {
+                    "numFiles": "3",
+                    "numOutputRows": "3",
+                    "numOutputBytes": "1356"
+                },
+                "engineInfo": "Apache-Spark/3.3.1 Delta-Lake/2.2.0",
+                "txnId": "046a258f-45e3-4657-b0bf-abfb0f76681c"
+            }"#;
+
+        let commit_info = serde_json::from_str::<CommitInfo>(raw).unwrap();
+
+        vec![
+            Action::commitInfo(commit_info),
+            Action::protocol(protocol),
+            Action::metaData(MetaData::try_from(metadata).unwrap()),
+        ]
+    }
+
+    async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
+        let storage = DeltaTableBuilder::from_uri("memory://")
+            .build_storage()
+            .unwrap();
+        let state = DeltaTableState::from_actions(get_table_actions(), 0).unwrap();
+        DeltaTable::new_with_state(storage, state)
+    }
+
+    #[test]
+    fn test_append_only_commits() {
+        ()
+    }
+}

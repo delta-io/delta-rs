@@ -12,7 +12,6 @@ use crate::{
 use chrono::Utc;
 use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -33,7 +32,7 @@ pub struct DeltaTableState {
     // active files for table state
     files: Vec<action::Add>,
     // Information added to individual commits
-    commit_infos: Vec<Map<String, Value>>,
+    commit_infos: Vec<action::CommitInfo>,
     app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
     min_reader_version: i32,
     min_writer_version: i32,
@@ -163,7 +162,7 @@ impl DeltaTableState {
     }
 
     /// List of commit info maps.
-    pub fn commit_infos(&self) -> &Vec<Map<String, Value>> {
+    pub fn commit_infos(&self) -> &Vec<action::CommitInfo> {
         &self.commit_infos
     }
 

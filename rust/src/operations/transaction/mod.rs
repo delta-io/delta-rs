@@ -1,5 +1,5 @@
 //! Delta transactions
-use crate::action::{Action, DeltaOperation};
+use crate::action::{Action, CommitInfo, DeltaOperation};
 use crate::storage::{commit_uri_from_version, DeltaObjectStore};
 use crate::{crate_version, DeltaDataTypeVersion, DeltaResult, DeltaTableError};
 use chrono::Utc;
@@ -70,19 +70,17 @@ async fn prepare_commit(
     app_metadata: Option<Map<String, Value>>,
 ) -> Result<Path, TransactionError> {
     if !actions.iter().any(|a| matches!(a, Action::commitInfo(..))) {
-        let mut commit_info = Map::<String, Value>::new();
-        commit_info.insert(
-            "timestamp".to_string(),
-            Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
-        );
-        commit_info.insert(
+        let mut extra_info = Map::<String, Value>::new();
+        let mut commit_info = operation.get_commit_info();
+        commit_info.timestamp = Some(Utc::now().timestamp_millis());
+        extra_info.insert(
             "clientVersion".to_string(),
             Value::String(format!("delta-rs.{}", crate_version())),
         );
-        commit_info.append(&mut operation.get_commit_info());
         if let Some(mut meta) = app_metadata {
-            commit_info.append(&mut meta)
+            extra_info.append(&mut meta)
         }
+        commit_info.info = extra_info;
         actions.push(Action::commitInfo(commit_info));
     }
 
@@ -161,17 +159,16 @@ pub(crate) async fn commit(
 
     let commit_info = CommitInfo {
         version: None,
-        timestamp: chrono::Utc::now().timestamp(),
+        timestamp: Some(chrono::Utc::now().timestamp()),
         read_version,
         isolation_level: Some(isolation_level),
-        operation: operation.name().to_string(),
-        operation_parameters: operation
-            .operation_parameters()?
-            .map(|(k, v)| (k, v.to_string()))
-            .collect(),
+        operation: Some(operation.name().to_string()),
+        operation_parameters: Some(operation.operation_parameters()?.collect()),
         user_id: None,
         user_name: None,
         is_blind_append: Some(is_blind_append),
+        engine_info: Some(format!("Delta-RS/{}", crate_version())),
+        ..Default::default()
     };
 
     let tmp_commit = prepare_commit(storage, operation, actions, app_metadata).await?;
