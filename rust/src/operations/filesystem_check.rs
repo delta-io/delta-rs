@@ -158,6 +158,8 @@ impl FileSystemCheckPlan {
             version + 1,
             actions,
             DeltaOperation::FileSystemCheck {},
+            Some(version),
+            // TODO pass through metadata
             None,
         )
         .await?;

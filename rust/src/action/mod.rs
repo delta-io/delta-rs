@@ -8,7 +8,7 @@ mod parquet_read;
 #[cfg(feature = "parquet2")]
 pub mod parquet2_read;
 
-use crate::{schema::*, DeltaTableError, DeltaTableMetaData};
+use crate::{schema::*, DeltaResult, DeltaTableError, DeltaTableMetaData};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -517,44 +517,60 @@ pub enum DeltaOperation {
 }
 
 impl DeltaOperation {
-    /// Retrieve basic commit information to be added to Delta commits
-    pub fn get_commit_info(&self) -> Map<String, Value> {
-        let mut commit_info = Map::<String, Value>::new();
-        let operation = match &self {
+    /// A human readable name for the operation
+    pub fn name(&self) -> &str {
+        match &self {
             DeltaOperation::Create { .. } => "delta-rs.Create",
             DeltaOperation::Write { .. } => "delta-rs.Write",
             DeltaOperation::StreamingUpdate { .. } => "delta-rs.StreamingUpdate",
             DeltaOperation::Optimize { .. } => "delta-rs.Optimize",
             DeltaOperation::FileSystemCheck { .. } => "delta-rs.FileSystemCheck",
-        };
-        commit_info.insert(
-            "operation".to_string(),
-            serde_json::Value::String(operation.into()),
-        );
+        }
+    }
 
-        if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(self) {
-            let all_operation_fields = map.values().next().unwrap().as_object().unwrap();
-            let converted_operation_fields: Map<String, Value> = all_operation_fields
-                .iter()
+    /// Paraemters configured for operation.
+    pub fn operation_parameters(&self) -> DeltaResult<impl Iterator<Item = (String, Value)>> {
+        // TODO remove unwrap
+        let map2 = serde_json::to_value(self).unwrap();
+        if let serde_json::Value::Object(map) = map2 {
+            let all_operation_fields = map.values().next().unwrap().as_object().unwrap().clone();
+            Ok(all_operation_fields
+                .into_iter()
                 .filter(|item| !item.1.is_null())
                 .map(|(k, v)| {
                     (
-                        k.clone(),
+                        k,
                         serde_json::Value::String(if v.is_string() {
                             String::from(v.as_str().unwrap())
                         } else {
                             v.to_string()
                         }),
                     )
-                })
-                .collect();
+                }))
+        } else {
+            todo!()
+        }
+    }
 
+    /// Denotes if the operation changes the data contained in the table
+    pub fn changes_data(&self) -> bool {
+        todo!()
+    }
+
+    /// Retrieve basic commit information to be added to Delta commits
+    pub fn get_commit_info(&self) -> Map<String, Value> {
+        let mut commit_info = Map::<String, Value>::new();
+        commit_info.insert(
+            "operation".to_string(),
+            serde_json::Value::String(self.name().into()),
+        );
+        if let Ok(fields) = self.operation_parameters() {
+            let operation_parameters: Map<String, Value> = fields.collect();
             commit_info.insert(
                 "operationParameters".to_string(),
-                serde_json::Value::Object(converted_operation_fields),
+                serde_json::Value::Object(operation_parameters),
             );
-        };
-
+        }
         commit_info
     }
 }

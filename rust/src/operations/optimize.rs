@@ -371,6 +371,7 @@ impl MergePlan {
                 self.read_table_version + 1,
                 actions,
                 self.input_parameters.into(),
+                Some(self.read_table_version),
                 Some(metadata),
             )
             .await?;

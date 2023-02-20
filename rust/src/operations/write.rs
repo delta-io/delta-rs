@@ -437,6 +437,8 @@ impl std::future::IntoFuture for WriteBuilder {
                 table.version() + 1,
                 actions,
                 operation,
+                Some(table.version()),
+                // TODO pass through metadata
                 None,
             )
             .await?;
