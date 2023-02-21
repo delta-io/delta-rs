@@ -8,17 +8,19 @@ use crate::{
     table_state::DeltaTableState, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
     DeltaTableMetaData,
 };
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use object_store::ObjectStore;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Cursor};
 
+#[cfg(feature = "datafusion")]
+use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+
 /// Exceptions raised during commit conflict resolution
 #[derive(thiserror::Error, Debug)]
 pub enum CommitConflictError {
     /// This exception occurs when a concurrent operation adds files in the same partition
-    /// (or anywhere in an unpartitioned table) that your operation reads. The file additions
+    /// (or anywhere in an un-partitioned table) that your operation reads. The file additions
     /// can be caused by INSERT, DELETE, UPDATE, or MERGE operations.
     #[error("Concurrent append failed.")]
     ConcurrentAppend,
