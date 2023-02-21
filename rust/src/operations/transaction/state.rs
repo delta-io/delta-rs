@@ -36,11 +36,10 @@ impl DeltaTableState {
             (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
         {
             let pruning_predicate = PruningPredicate::try_new(predicate, self.arrow_schema()?)?;
-            let files_to_prune = pruning_predicate.prune(self)?;
             Ok(Either::Left(
                 self.files()
                     .iter()
-                    .zip(files_to_prune.into_iter())
+                    .zip(pruning_predicate.prune(self)?.into_iter())
                     .filter_map(
                         |(action, keep_file)| {
                             if keep_file {
@@ -219,11 +218,29 @@ impl ContextProvider for DummyContextProvider {
 mod tests {
     use super::*;
     use crate::operations::transaction::test_utils::init_table_actions;
+    use datafusion_expr::{col, lit};
 
     #[test]
     fn test_parse_expression() {
         let state = DeltaTableState::from_actions(init_table_actions(), 0).unwrap();
+
+        // parses simple expression
         let parsed = state.parse_predicate_expression("value > 10").unwrap();
+        let expected = col("value").gt(lit::<i64>(10));
+        assert_eq!(parsed, expected);
+
+        // fails for unknown column
+        let parsed = state.parse_predicate_expression("non_existent > 10");
+        assert!(parsed.is_err());
+
+        // parses complex expression
+        let parsed = state
+            .parse_predicate_expression("value > 10 OR value <= 0")
+            .unwrap();
+        let expected = col("value")
+            .gt(lit::<i64>(10))
+            .or(col("value").lt_eq(lit::<i64>(0)));
+        assert_eq!(parsed, expected);
 
         println!("{:?}", parsed)
     }

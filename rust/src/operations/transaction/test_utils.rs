@@ -17,8 +17,8 @@ pub fn create_add_action(path: impl Into<String>, data_change: bool) -> Add {
 
 pub fn init_table_actions() -> Vec<Action> {
     let protocol = Protocol {
-        min_reader_version: 1,
-        min_writer_version: 1,
+        min_reader_version: crate::operations::MAX_SUPPORTED_READER_VERSION,
+        min_writer_version: crate::operations::MAX_SUPPORTED_WRITER_VERSION,
     };
     let table_schema = Schema::new(vec![
         SchemaField::new(
