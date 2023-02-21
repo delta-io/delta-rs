@@ -1,7 +1,6 @@
 //! Types and structs used when commitind operations to a delta table
-use crate::{DeltaDataTypeTimestamp, DeltaDataTypeVersion, DeltaTableError};
+use crate::DeltaTableError;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::str::FromStr;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
@@ -48,12 +47,9 @@ impl FromStr for IsolationLevel {
             "serializable" => Ok(Self::Serializable),
             "writeserializable" | "write_serializable" => Ok(Self::WriteSerializable),
             "snapshotisolation" | "snapshot_isolation" => Ok(Self::SnapshotIsolation),
-            _ => todo!(),
+            _ => Err(DeltaTableError::Generic(
+                "Invalid string for IsolationLevel".into(),
+            )),
         }
     }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
 }

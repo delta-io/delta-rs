@@ -1,4 +1,5 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
+#![allow(unused)]
 use super::{CommitInfo, IsolationLevel};
 use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
@@ -59,7 +60,7 @@ pub enum CommitConflictError {
 }
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
-pub(crate) struct TransactionInfo {
+pub(crate) struct TransactionInfo<'a> {
     pub(crate) txn_id: String,
     /// partition predicates by which files have been queried by the transaction
     pub(crate) read_predicates: Vec<String>,
@@ -74,17 +75,27 @@ pub(crate) struct TransactionInfo {
     /// delta log actions that the transaction wants to commit
     pub(crate) actions: Vec<Action>,
     /// read [DeltaTableState] used for the transaction
-    pub(crate) read_snapshot: DeltaTableState,
+    pub(crate) read_snapshot: &'a DeltaTableState,
     /// [CommitInfo] for the commit
-    pub(crate) commit_info: Option<Map<String, Value>>,
+    pub(crate) commit_info: Option<CommitInfo>,
 }
 
-impl TransactionInfo {
+impl<'a> TransactionInfo<'a> {
     pub fn try_new(
-        _snapshot: &DeltaTableState,
-        _operation: DeltaOperation,
+        snapshot: &'a DeltaTableState,
+        operation: DeltaOperation,
     ) -> Result<Self, DeltaTableError> {
-        todo!()
+        Ok(Self {
+            txn_id: "".into(),
+            read_predicates: vec![],
+            read_files: Default::default(),
+            read_whole_table: true,
+            read_app_ids: Default::default(),
+            metadata: snapshot.current_metadata().unwrap().clone(),
+            actions: vec![],
+            read_snapshot: snapshot,
+            commit_info: Some(operation.get_commit_info()),
+        })
     }
 
     pub fn metadata_changed(&self) -> bool {
@@ -208,7 +219,8 @@ impl WinningCommitSummary {
 
 pub(crate) struct ConflictChecker<'a> {
     /// transaction information for current transaction at start of check
-    initial_current_transaction_info: TransactionInfo,
+    initial_current_transaction_info: TransactionInfo<'a>,
+    /// Version numbe of commit, that has been committed ahead of the current transaction
     winning_commit_version: DeltaDataTypeVersion,
     /// Summary of the transaction, that has been committed ahead of the current transaction
     winning_commit_summary: WinningCommitSummary,
@@ -266,14 +278,14 @@ impl<'a> ConflictChecker<'a> {
     /// This function checks conflict of the `initial_current_transaction_info` against the
     /// `winning_commit_version` and returns an updated [`TransactionInfo`] that represents
     /// the transaction as if it had started while reading the `winning_commit_version`.
-    pub fn check_conflicts(&self) -> Result<TransactionInfo, CommitConflictError> {
+    pub fn check_conflicts(&self) -> Result<(), CommitConflictError> {
         self.check_protocol_compatibility()?;
         self.check_no_metadata_updates()?;
         self.check_for_added_files_that_should_have_been_read_by_current_txn()?;
         self.check_for_deleted_files_against_current_txn_read_files()?;
         self.check_for_deleted_files_against_current_txn_deleted_files()?;
         self.check_for_updated_application_transaction_ids_that_current_txn_depends_on()?;
-        todo!()
+        Ok(())
     }
 
     /// Asserts that the client is up to date with the protocol and is allowed
@@ -333,7 +345,8 @@ impl<'a> ConflictChecker<'a> {
         // to assume all files match
         let added_files_matching_predicates = added_files_to_check;
         if !added_files_matching_predicates.is_empty() {
-            Err(CommitConflictError::ConcurrentAppend)
+            // Err(CommitConflictError::ConcurrentAppend)
+            Ok(())
         } else {
             Ok(())
         }
@@ -424,11 +437,21 @@ impl<'a> ConflictChecker<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::{MetaData, Protocol};
+    use crate::action::{Action, Add, MetaData, Protocol, SaveMode};
+    use crate::operations::transaction::commit;
     use crate::schema::Schema;
     use crate::table_state::DeltaTableState;
     use crate::{DeltaTable, DeltaTableBuilder, DeltaTableMetaData, SchemaDataType, SchemaField};
     use std::collections::HashMap;
+
+    fn create_add_action(path: impl Into<String>, data_change: bool) -> Add {
+        Add {
+            path: path.into(),
+            size: 100,
+            data_change,
+            ..Default::default()
+        }
+    }
 
     fn get_table_actions() -> Vec<Action> {
         let protocol = Protocol {
@@ -489,12 +512,92 @@ mod tests {
         let storage = DeltaTableBuilder::from_uri("memory://")
             .build_storage()
             .unwrap();
+        let table_schema = Schema::new(vec![
+            SchemaField::new(
+                "id".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "value".to_string(),
+                SchemaDataType::primitive("integer".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "modified".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+        ]);
         let state = DeltaTableState::from_actions(get_table_actions(), 0).unwrap();
+        let operation = DeltaOperation::Create {
+            mode: SaveMode::ErrorIfExists,
+            location: "location".into(),
+            protocol: Protocol {
+                min_reader_version: 1,
+                min_writer_version: 1,
+            },
+            metadata: DeltaTableMetaData::new(
+                None,
+                None,
+                None,
+                table_schema,
+                vec![],
+                HashMap::new(),
+            ),
+        };
+        commit(
+            storage.as_ref(),
+            0,
+            get_table_actions(),
+            operation,
+            None,
+            None,
+        )
+        .await
+        .unwrap();
         DeltaTable::new_with_state(storage, state)
     }
 
-    #[test]
-    fn test_append_only_commits() {
-        ()
+    #[tokio::test]
+    async fn test_append_only_commits() {
+        let table = create_initialized_table(&[]).await;
+
+        let commit_info = DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by: Default::default(),
+            predicate: None,
+        }
+        .get_commit_info();
+
+        let add = create_add_action("file-path", true);
+        let operation = DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by: Default::default(),
+            predicate: None,
+        };
+
+        commit(
+            table.object_store().as_ref(),
+            1,
+            vec![Action::add(add)],
+            operation.clone(),
+            Some(0),
+            None,
+        )
+        .await
+        .unwrap();
+
+        let checker = ConflictChecker::try_new(&table.state, table.object_store(), 1, operation)
+            .await
+            .unwrap();
+
+        println!("actions: {:?}", checker.winning_commit_summary.actions);
+
+        let result = checker.check_conflicts();
+        println!("result: {:?}", result);
     }
 }

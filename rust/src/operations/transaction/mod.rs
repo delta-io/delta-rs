@@ -8,6 +8,8 @@ use object_store::{Error as ObjectStoreError, ObjectStore};
 use serde_json::{Map, Value};
 
 mod conflict_checker;
+#[cfg(feature = "datafusion")]
+mod state;
 mod types;
 
 pub use types::*;
@@ -157,7 +159,7 @@ pub(crate) async fn commit(
     let only_add_files = false;
     let is_blind_append = only_add_files && !depends_on_files;
 
-    let commit_info = CommitInfo {
+    let _commit_info = CommitInfo {
         version: None,
         timestamp: Some(chrono::Utc::now().timestamp()),
         read_version,

@@ -1072,7 +1072,7 @@ impl DeltaTable {
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
     /// no metadata was found in the log.
     pub fn schema(&self) -> Option<&Schema> {
-        self.state.current_metadata().map(|m| &m.schema)
+        self.state.schema()
     }
 
     /// Return table schema parsed from transaction log. Return `DeltaTableError` if table hasn't

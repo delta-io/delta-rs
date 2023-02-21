@@ -17,7 +17,7 @@ pub mod create;
 pub mod filesystem_check;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod optimize;
-#[allow(missing_docs, unused)]
+#[allow(missing_docs)]
 pub mod transaction;
 pub mod vacuum;
 

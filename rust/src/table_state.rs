@@ -5,6 +5,7 @@ use crate::delta_config;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::schema::SchemaDataType;
 use crate::storage::commit_uri_from_version;
+use crate::Schema;
 use crate::{
     ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
     DeltaTableMetaData,
@@ -226,6 +227,11 @@ impl DeltaTableState {
     /// The most recent metadata of the table.
     pub fn current_metadata(&self) -> Option<&DeltaTableMetaData> {
         self.current_metadata.as_ref()
+    }
+
+    /// The table schema
+    pub fn schema(&self) -> Option<&Schema> {
+        self.current_metadata.as_ref().map(|m| &m.schema)
     }
 
     /// Merges new state information into our state
