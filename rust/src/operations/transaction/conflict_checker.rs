@@ -343,7 +343,14 @@ impl<'a> ConflictChecker<'a> {
         // TODO here we need to check if the current transaction would have read the
         // added files. for this we need to be able to evaluate predicates. Err on the safe side is
         // to assume all files match
-        let added_files_matching_predicates = added_files_to_check;
+        cfg_if::cfg_if! {
+            if #[cfg(feature = "datafusion")] {
+                let added_files_matching_predicates = added_files_to_check;
+            } else {
+                let added_files_matching_predicates = added_files_to_check;
+            }
+        }
+
         if !added_files_matching_predicates.is_empty() {
             // Err(CommitConflictError::ConcurrentAppend)
             Ok(())
@@ -368,6 +375,7 @@ impl<'a> ConflictChecker<'a> {
             .winning_commit_summary
             .removed_files()
             .iter()
+            // TODO remove cloned
             .cloned()
             .find(|f| read_file_path.contains(&f.path));
         if deleted_read_overlap.is_some()
@@ -436,135 +444,16 @@ impl<'a> ConflictChecker<'a> {
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_utils::{
+        create_add_action, create_initialized_table, init_table_actions,
+    };
     use super::*;
-    use crate::action::{Action, Add, MetaData, Protocol, SaveMode};
+    use crate::action::{Action, SaveMode};
     use crate::operations::transaction::commit;
-    use crate::schema::Schema;
-    use crate::table_state::DeltaTableState;
-    use crate::{DeltaTable, DeltaTableBuilder, DeltaTableMetaData, SchemaDataType, SchemaField};
-    use std::collections::HashMap;
-
-    fn create_add_action(path: impl Into<String>, data_change: bool) -> Add {
-        Add {
-            path: path.into(),
-            size: 100,
-            data_change,
-            ..Default::default()
-        }
-    }
-
-    fn get_table_actions() -> Vec<Action> {
-        let protocol = Protocol {
-            min_reader_version: 1,
-            min_writer_version: 1,
-        };
-        let table_schema = Schema::new(vec![
-            SchemaField::new(
-                "id".to_string(),
-                SchemaDataType::primitive("string".to_string()),
-                true,
-                HashMap::new(),
-            ),
-            SchemaField::new(
-                "value".to_string(),
-                SchemaDataType::primitive("integer".to_string()),
-                true,
-                HashMap::new(),
-            ),
-            SchemaField::new(
-                "modified".to_string(),
-                SchemaDataType::primitive("string".to_string()),
-                true,
-                HashMap::new(),
-            ),
-        ]);
-        let metadata =
-            DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
-        let raw = r#"
-            {
-                "timestamp": 1670892998177,
-                "operation": "WRITE",
-                "operationParameters": {
-                    "mode": "Append",
-                    "partitionBy": "[\"c1\",\"c2\"]"
-                },
-                "isolationLevel": "Serializable",
-                "isBlindAppend": true,
-                "operationMetrics": {
-                    "numFiles": "3",
-                    "numOutputRows": "3",
-                    "numOutputBytes": "1356"
-                },
-                "engineInfo": "Apache-Spark/3.3.1 Delta-Lake/2.2.0",
-                "txnId": "046a258f-45e3-4657-b0bf-abfb0f76681c"
-            }"#;
-
-        let commit_info = serde_json::from_str::<CommitInfo>(raw).unwrap();
-
-        vec![
-            Action::commitInfo(commit_info),
-            Action::protocol(protocol),
-            Action::metaData(MetaData::try_from(metadata).unwrap()),
-        ]
-    }
-
-    async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
-        let storage = DeltaTableBuilder::from_uri("memory://")
-            .build_storage()
-            .unwrap();
-        let table_schema = Schema::new(vec![
-            SchemaField::new(
-                "id".to_string(),
-                SchemaDataType::primitive("string".to_string()),
-                true,
-                HashMap::new(),
-            ),
-            SchemaField::new(
-                "value".to_string(),
-                SchemaDataType::primitive("integer".to_string()),
-                true,
-                HashMap::new(),
-            ),
-            SchemaField::new(
-                "modified".to_string(),
-                SchemaDataType::primitive("string".to_string()),
-                true,
-                HashMap::new(),
-            ),
-        ]);
-        let state = DeltaTableState::from_actions(get_table_actions(), 0).unwrap();
-        let operation = DeltaOperation::Create {
-            mode: SaveMode::ErrorIfExists,
-            location: "location".into(),
-            protocol: Protocol {
-                min_reader_version: 1,
-                min_writer_version: 1,
-            },
-            metadata: DeltaTableMetaData::new(
-                None,
-                None,
-                None,
-                table_schema,
-                vec![],
-                HashMap::new(),
-            ),
-        };
-        commit(
-            storage.as_ref(),
-            0,
-            get_table_actions(),
-            operation,
-            None,
-            None,
-        )
-        .await
-        .unwrap();
-        DeltaTable::new_with_state(storage, state)
-    }
 
     #[tokio::test]
     async fn test_append_only_commits() {
-        let table = create_initialized_table(&[]).await;
+        let table = create_initialized_table(&[], None).await;
 
         let commit_info = DeltaOperation::Write {
             mode: SaveMode::Append,

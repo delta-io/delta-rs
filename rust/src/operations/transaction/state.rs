@@ -1,20 +1,33 @@
 use crate::action::Add;
 use crate::delta_datafusion::to_correct_scalar_value;
-use crate::schema;
 use crate::table_state::DeltaTableState;
 use crate::DeltaResult;
+use crate::{schema, DeltaTableError};
 use arrow::array::ArrayRef;
-use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::Column;
-use datafusion_expr::Expr;
+use datafusion_common::{Column, DFSchema, Result as DFResult, TableReference};
+use datafusion_expr::{AggregateUDF, Expr, ScalarUDF, TableSource};
+use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use itertools::Either;
+use sqlparser::dialect::GenericDialect;
+use sqlparser::parser::Parser;
+use sqlparser::tokenizer::Tokenizer;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
 impl DeltaTableState {
+    pub fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        Ok(Arc::new(
+            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
+                self.schema().ok_or(DeltaTableError::NoMetadata)?,
+            )?,
+        ))
+    }
+
     pub fn files_matching_predicate(
         &self,
         filters: &[Expr],
@@ -22,11 +35,7 @@ impl DeltaTableState {
         if let Some(Some(predicate)) =
             (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
         {
-            let arrow_schema = Arc::new(<ArrowSchema as TryFrom<&schema::Schema>>::try_from(
-                self.schema().unwrap(),
-            )?);
-
-            let pruning_predicate = PruningPredicate::try_new(predicate, arrow_schema)?;
+            let pruning_predicate = PruningPredicate::try_new(predicate, self.arrow_schema()?)?;
             let files_to_prune = pruning_predicate.prune(self)?;
             Ok(Either::Left(
                 self.files()
@@ -45,6 +54,29 @@ impl DeltaTableState {
         } else {
             Ok(Either::Right(self.files().iter()))
         }
+    }
+
+    pub fn parse_predicate_expression(&self, expr: impl AsRef<str>) -> DeltaResult<Expr> {
+        let dialect = &GenericDialect {};
+        let mut tokenizer = Tokenizer::new(dialect, expr.as_ref());
+        let tokens = tokenizer
+            .tokenize()
+            .map_err(|err| DeltaTableError::GenericError {
+                source: Box::new(err),
+            })?;
+        let sql = Parser::new(dialect)
+            .with_tokens(tokens)
+            .parse_expr()
+            .map_err(|err| DeltaTableError::GenericError {
+                source: Box::new(err),
+            })?;
+
+        // TODO should we add the table name as qualifier when available?
+        let df_schema = DFSchema::try_from_qualified_schema("", self.arrow_schema()?.as_ref())?;
+        let context_provider = DummyContextProvider::default();
+        let sql_to_rel = SqlToRel::new(&context_provider);
+
+        Ok(sql_to_rel.sql_to_expr(sql, &df_schema, &mut Default::default())?)
     }
 }
 
@@ -129,20 +161,14 @@ impl PruningStatistics for DeltaTableState {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let arrow_schema = Arc::new(
-            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(self.schema().unwrap()).ok()?,
-        );
-        let container = AddContainer::new(self.files(), arrow_schema);
+        let container = AddContainer::new(self.files(), self.arrow_schema().ok()?);
         container.min_values(column)
     }
 
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let arrow_schema = Arc::new(
-            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(self.schema().unwrap()).ok()?,
-        );
-        let container = AddContainer::new(self.files(), arrow_schema);
+        let container = AddContainer::new(self.files(), self.arrow_schema().ok()?);
         container.max_values(column)
     }
 
@@ -157,10 +183,48 @@ impl PruningStatistics for DeltaTableState {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let arrow_schema = Arc::new(
-            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(self.schema().unwrap()).ok()?,
-        );
-        let container = AddContainer::new(self.files(), arrow_schema);
+        let container = AddContainer::new(self.files(), self.arrow_schema().ok()?);
         container.null_counts(column)
+    }
+}
+
+#[derive(Default)]
+struct DummyContextProvider {
+    options: ConfigOptions,
+}
+
+impl ContextProvider for DummyContextProvider {
+    fn get_table_provider(&self, _name: TableReference) -> DFResult<Arc<dyn TableSource>> {
+        unimplemented!()
+    }
+
+    fn get_function_meta(&self, _name: &str) -> Option<Arc<ScalarUDF>> {
+        unimplemented!()
+    }
+
+    fn get_aggregate_meta(&self, _name: &str) -> Option<Arc<AggregateUDF>> {
+        unimplemented!()
+    }
+
+    fn get_variable_type(&self, _: &[String]) -> Option<DataType> {
+        unimplemented!()
+    }
+
+    fn options(&self) -> &ConfigOptions {
+        &self.options
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::operations::transaction::test_utils::init_table_actions;
+
+    #[test]
+    fn test_parse_expression() {
+        let state = DeltaTableState::from_actions(init_table_actions(), 0).unwrap();
+        let parsed = state.parse_predicate_expression("value > 10").unwrap();
+
+        println!("{:?}", parsed)
     }
 }

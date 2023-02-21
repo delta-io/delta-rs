@@ -10,6 +10,8 @@ use serde_json::{Map, Value};
 mod conflict_checker;
 #[cfg(feature = "datafusion")]
 mod state;
+#[cfg(test)]
+pub(crate) mod test_utils;
 mod types;
 
 pub use types::*;
