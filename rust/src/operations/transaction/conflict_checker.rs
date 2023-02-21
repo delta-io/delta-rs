@@ -1,6 +1,6 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
 #![allow(unused)]
-use super::{state::AddContainer, CommitInfo, IsolationLevel};
+use super::{CommitInfo, IsolationLevel};
 use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
 use crate::operations::transaction::TransactionError;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
@@ -13,6 +13,8 @@ use serde_json::{Map, Value};
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Cursor};
 
+#[cfg(feature = "datafusion")]
+use super::state::AddContainer;
 #[cfg(feature = "datafusion")]
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 
@@ -384,7 +386,6 @@ impl<'a> ConflictChecker<'a> {
                             .map_err(|err| CommitConflictError::Predicate {
                                 source: Box::new(err),
                             })?;
-                        let container = AddContainer::new(&added_files_to_check, arrow_schema.clone());
                         AddContainer::new(&added_files_to_check, arrow_schema)
                             .predicate_matches(&[predicate])
                             .map_err(|err| CommitConflictError::Predicate {
