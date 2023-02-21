@@ -2,6 +2,7 @@
 #![allow(unused)]
 use super::{state::AddContainer, CommitInfo, IsolationLevel};
 use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
+use crate::operations::transaction::TransactionError;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 use crate::{
     table_state::DeltaTableState, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
@@ -58,6 +59,20 @@ pub enum CommitConflictError {
     /// Error returned when the table requires an unsupported writer version
     #[error("Delta-rs does not support reader version {0}")]
     UnsupportedReaderVersion(i32),
+
+    /// Error returned when the snapshot has missing or corrupted data
+    #[error("Snapshot is corrupted: {source}")]
+    CorruptedState {
+        /// Source error
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    /// Error returned when evaluating predicate
+    #[error("Error evaluating predicate: {source}")]
+    Predicate {
+        /// Source error
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
 }
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
@@ -221,8 +236,8 @@ impl WinningCommitSummary {
 
 pub(crate) struct ConflictChecker<'a> {
     /// transaction information for current transaction at start of check
-    initial_current_transaction_info: TransactionInfo<'a>,
-    /// Version numbe of commit, that has been committed ahead of the current transaction
+    transaction_info: TransactionInfo<'a>,
+    /// Version number of commit, that has been committed ahead of the current transaction
     winning_commit_version: DeltaDataTypeVersion,
     /// Summary of the transaction, that has been committed ahead of the current transaction
     winning_commit_summary: WinningCommitSummary,
@@ -261,10 +276,10 @@ impl<'a> ConflictChecker<'a> {
         let winning_commit_summary =
             WinningCommitSummary::new(commit_actions, winning_commit_version);
 
-        let initial_current_transaction_info = TransactionInfo::try_new(snapshot, operation)?;
+        let transaction_info = TransactionInfo::try_new(snapshot, operation)?;
 
         Ok(Self {
-            initial_current_transaction_info,
+            transaction_info,
             winning_commit_summary,
             winning_commit_version,
             isolation_level: IsolationLevel::Serializable,
@@ -274,7 +289,7 @@ impl<'a> ConflictChecker<'a> {
 
     fn current_transaction_info(&self) -> &TransactionInfo {
         // TODO figure out when we need to update this
-        &self.initial_current_transaction_info
+        &self.transaction_info
     }
 
     /// This function checks conflict of the `initial_current_transaction_info` against the
@@ -345,14 +360,23 @@ impl<'a> ConflictChecker<'a> {
         // TODO here we need to check if the current transaction would have read the
         // added files. for this we need to be able to evaluate predicates. Err on the safe side is
         // to assume all files match
-        // let container = AddContainer::new(
-        //     self.initial_current_transaction_info.read_snapshot.files(),
-        //     self.initial_current_transaction_info
-        //         .read_snapshot
-        //         .arrow_schema()
-        //         .unwrap(),
-        // );
-        // let pruning_predicate = PruningPredicate::try_new(predicate, self.arrow_schema()?)?;
+        let arrow_schema = self
+            .transaction_info
+            .read_snapshot
+            .arrow_schema()
+            .map_err(|err| CommitConflictError::CorruptedState {
+                source: Box::new(err),
+            })?;
+        let _container = AddContainer::new(
+            self.transaction_info.read_snapshot.files(),
+            arrow_schema.clone(),
+        );
+        // let pruning_predicate =
+        //     PruningPredicate::try_new(predicate, arrow_schema).map_err(|err| {
+        //         CommitConflictError::Predicate {
+        //             source: Box::new(err),
+        //         }
+        //     })?;
         // let added_files_matching_predicates = added_files_to_check;
         cfg_if::cfg_if! {
             if #[cfg(feature = "datafusion")] {
