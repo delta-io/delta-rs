@@ -20,6 +20,7 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 impl DeltaTableState {
+    /// Get the table schema as an [`ArrowSchemaRef`]
     pub fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
         Ok(Arc::new(
             <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
@@ -55,6 +56,7 @@ impl DeltaTableState {
         }
     }
 
+    /// Parse an expression string into a datafusion [`Expr`]
     pub fn parse_predicate_expression(&self, expr: impl AsRef<str>) -> DeltaResult<Expr> {
         let dialect = &GenericDialect {};
         let mut tokenizer = Tokenizer::new(dialect, expr.as_ref());
@@ -217,11 +219,12 @@ impl ContextProvider for DummyContextProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operations::transaction::test_utils::init_table_actions;
+    use crate::action::Action;
+    use crate::operations::transaction::test_utils::{create_add_action, init_table_actions};
     use datafusion_expr::{col, lit};
 
     #[test]
-    fn test_parse_expression() {
+    fn test_parse_predicate_expression() {
         let state = DeltaTableState::from_actions(init_table_actions(), 0).unwrap();
 
         // parses simple expression
@@ -243,5 +246,31 @@ mod tests {
         assert_eq!(parsed, expected);
 
         println!("{:?}", parsed)
+    }
+
+    #[test]
+    fn test_files_matching_predicate() {
+        let mut actions = init_table_actions();
+        actions.push(Action::add(create_add_action("excluded", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":10},\"nullCount\":{\"value\":0}}"))));
+        actions.push(Action::add(create_add_action("included-1", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":100},\"nullCount\":{\"value\":0}}"))));
+        actions.push(Action::add(create_add_action("included-2", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":-10},\"maxValues\":{\"value\":3},\"nullCount\":{\"value\":0}}"))));
+
+        let state = DeltaTableState::from_actions(actions, 0).unwrap();
+        let files = state
+            .files_matching_predicate(&[])
+            .unwrap()
+            .collect::<Vec<_>>();
+        assert_eq!(files.len(), 3);
+
+        let predictate = col("value")
+            .gt(lit::<i32>(10))
+            .or(col("value").lt_eq(lit::<i32>(0)));
+
+        let files = state
+            .files_matching_predicate(&[predictate])
+            .unwrap()
+            .collect::<Vec<_>>();
+        assert_eq!(files.len(), 2);
+        assert!(files.iter().all(|add| add.path.contains("included")));
     }
 }

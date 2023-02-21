@@ -6,11 +6,16 @@ use crate::{
 };
 use std::collections::HashMap;
 
-pub fn create_add_action(path: impl Into<String>, data_change: bool) -> Add {
+pub fn create_add_action(
+    path: impl Into<String>,
+    data_change: bool,
+    stats: Option<impl Into<String>>,
+) -> Add {
     Add {
         path: path.into(),
         size: 100,
         data_change,
+        stats: stats.map(|s| s.into()),
         ..Default::default()
     }
 }

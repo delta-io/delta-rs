@@ -1,12 +1,13 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
 #![allow(unused)]
-use super::{CommitInfo, IsolationLevel};
+use super::{state::AddContainer, CommitInfo, IsolationLevel};
 use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 use crate::{
     table_state::DeltaTableState, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
     DeltaTableMetaData,
 };
+use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use object_store::ObjectStore;
 use serde_json::{Map, Value};
 use std::collections::HashSet;
@@ -70,13 +71,11 @@ pub(crate) struct TransactionInfo<'a> {
     pub(crate) read_whole_table: bool,
     /// appIds that have been seen by the transaction
     pub(crate) read_app_ids: HashSet<String>,
-    /// table metadata for the transaction
-    pub(crate) metadata: DeltaTableMetaData,
     /// delta log actions that the transaction wants to commit
     pub(crate) actions: Vec<Action>,
-    /// read [DeltaTableState] used for the transaction
+    /// read [`DeltaTableState`] used for the transaction
     pub(crate) read_snapshot: &'a DeltaTableState,
-    /// [CommitInfo] for the commit
+    /// [`CommitInfo`] for the commit
     pub(crate) commit_info: Option<CommitInfo>,
 }
 
@@ -91,11 +90,14 @@ impl<'a> TransactionInfo<'a> {
             read_files: Default::default(),
             read_whole_table: true,
             read_app_ids: Default::default(),
-            metadata: snapshot.current_metadata().unwrap().clone(),
             actions: vec![],
             read_snapshot: snapshot,
             commit_info: Some(operation.get_commit_info()),
         })
+    }
+
+    pub fn metadata(&self) -> Option<&DeltaTableMetaData> {
+        self.read_snapshot.current_metadata()
     }
 
     pub fn metadata_changed(&self) -> bool {
@@ -237,7 +239,7 @@ impl<'a> ConflictChecker<'a> {
         winning_commit_version: DeltaDataTypeVersion,
         operation: DeltaOperation,
     ) -> Result<ConflictChecker<'_>, DeltaTableError> {
-        // TODO raise proper error here
+        // TODO raise proper error here or should we collect up so some max versions?
         assert!(winning_commit_version == snapshot.version() + 1);
 
         // create winning commit summary
@@ -343,8 +345,21 @@ impl<'a> ConflictChecker<'a> {
         // TODO here we need to check if the current transaction would have read the
         // added files. for this we need to be able to evaluate predicates. Err on the safe side is
         // to assume all files match
+        // let container = AddContainer::new(
+        //     self.initial_current_transaction_info.read_snapshot.files(),
+        //     self.initial_current_transaction_info
+        //         .read_snapshot
+        //         .arrow_schema()
+        //         .unwrap(),
+        // );
+        // let pruning_predicate = PruningPredicate::try_new(predicate, self.arrow_schema()?)?;
+        // let added_files_matching_predicates = added_files_to_check;
         cfg_if::cfg_if! {
             if #[cfg(feature = "datafusion")] {
+                // let container = AddContainer::new(
+                //     self.initial_current_transaction_info.read_snapshot.files(),
+                //     self.initial_current_transaction_info.read_snapshot.arrow_schema().unwrap()
+                // );
                 let added_files_matching_predicates = added_files_to_check;
             } else {
                 let added_files_matching_predicates = added_files_to_check;
@@ -462,7 +477,7 @@ mod tests {
         }
         .get_commit_info();
 
-        let add = create_add_action("file-path", true);
+        let add = create_add_action("file-path", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":10},\"nullCount\":{\"value\":0}}"));
         let operation = DeltaOperation::Write {
             mode: SaveMode::Append,
             partition_by: Default::default(),
