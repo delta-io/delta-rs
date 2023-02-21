@@ -616,6 +616,15 @@ impl DeltaOperation {
             ..Default::default()
         }
     }
+
+    /// Get predicate expression applien when the operation reads data from the table.
+    pub fn read_predicate(&self) -> Option<String> {
+        match self {
+            // TODO add more operations
+            Self::Write { predicate, .. } => predicate.clone(),
+            _ => None,
+        }
+    }
 }
 
 /// The SaveMode used when performing a DeltaOperation

@@ -97,7 +97,7 @@ pub(crate) struct TransactionInfo<'a> {
 impl<'a> TransactionInfo<'a> {
     pub fn try_new(
         snapshot: &'a DeltaTableState,
-        operation: DeltaOperation,
+        operation: &DeltaOperation,
     ) -> Result<Self, DeltaTableError> {
         Ok(Self {
             txn_id: "".into(),
@@ -245,6 +245,8 @@ pub(crate) struct ConflictChecker<'a> {
     isolation_level: IsolationLevel,
     /// The state of the delta table at the base version from the current (not winning) commit
     snapshot: &'a DeltaTableState,
+    /// The state of the delta table at the base version from the current (not winning) commit
+    operation: DeltaOperation,
 }
 
 impl<'a> ConflictChecker<'a> {
@@ -276,7 +278,7 @@ impl<'a> ConflictChecker<'a> {
         let winning_commit_summary =
             WinningCommitSummary::new(commit_actions, winning_commit_version);
 
-        let transaction_info = TransactionInfo::try_new(snapshot, operation)?;
+        let transaction_info = TransactionInfo::try_new(snapshot, &operation)?;
 
         Ok(Self {
             transaction_info,
@@ -284,6 +286,7 @@ impl<'a> ConflictChecker<'a> {
             winning_commit_version,
             isolation_level: IsolationLevel::Serializable,
             snapshot,
+            operation,
         })
     }
 
@@ -357,42 +360,46 @@ impl<'a> ConflictChecker<'a> {
             }
             IsolationLevel::SnapshotIsolation => vec![],
         };
-        // TODO here we need to check if the current transaction would have read the
+
+        // Here we need to check if the current transaction would have read the
         // added files. for this we need to be able to evaluate predicates. Err on the safe side is
         // to assume all files match
-        let arrow_schema = self
-            .transaction_info
-            .read_snapshot
-            .arrow_schema()
-            .map_err(|err| CommitConflictError::CorruptedState {
-                source: Box::new(err),
-            })?;
-        let _container = AddContainer::new(
-            self.transaction_info.read_snapshot.files(),
-            arrow_schema.clone(),
-        );
-        // let pruning_predicate =
-        //     PruningPredicate::try_new(predicate, arrow_schema).map_err(|err| {
-        //         CommitConflictError::Predicate {
-        //             source: Box::new(err),
-        //         }
-        //     })?;
-        // let added_files_matching_predicates = added_files_to_check;
         cfg_if::cfg_if! {
             if #[cfg(feature = "datafusion")] {
-                // let container = AddContainer::new(
-                //     self.initial_current_transaction_info.read_snapshot.files(),
-                //     self.initial_current_transaction_info.read_snapshot.arrow_schema().unwrap()
-                // );
-                let added_files_matching_predicates = added_files_to_check;
+                let added_files_matching_predicates =
+                    if let Some(predicate_str) = self.operation.read_predicate() {
+                        let arrow_schema =
+                            self.transaction_info
+                                .read_snapshot
+                                .arrow_schema()
+                                .map_err(|err| CommitConflictError::CorruptedState {
+                                    source: Box::new(err),
+                                })?;
+                        let predicate = self
+                            .transaction_info
+                            .read_snapshot
+                            .parse_predicate_expression(predicate_str)
+                            .map_err(|err| CommitConflictError::Predicate {
+                                source: Box::new(err),
+                            })?;
+                        let container = AddContainer::new(&added_files_to_check, arrow_schema.clone());
+                        AddContainer::new(&added_files_to_check, arrow_schema)
+                            .predicate_matches(&[predicate])
+                            .map_err(|err| CommitConflictError::Predicate {
+                                source: Box::new(err),
+                            })?
+                            .cloned()
+                            .collect::<Vec<_>>()
+                    } else {
+                        added_files_to_check
+                    };
             } else {
                 let added_files_matching_predicates = added_files_to_check;
             }
         }
 
         if !added_files_matching_predicates.is_empty() {
-            // Err(CommitConflictError::ConcurrentAppend)
-            Ok(())
+            Err(CommitConflictError::ConcurrentAppend)
         } else {
             Ok(())
         }
