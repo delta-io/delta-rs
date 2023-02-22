@@ -16,7 +16,7 @@ def wait_till_host_is_available(host: str, timeout_sec: int = 30):
     while True:
         try:
             subprocess.run(["curl", host], timeout=500, check=True)
-        except BaseException:
+        except Exception:
             pass
         else:
             break
