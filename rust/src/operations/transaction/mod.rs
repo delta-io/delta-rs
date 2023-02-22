@@ -1,8 +1,10 @@
 //! Delta transactions
 use crate::action::{Action, CommitInfo, DeltaOperation};
-use crate::storage::{commit_uri_from_version, DeltaObjectStore};
+use crate::storage::{commit_uri_from_version, DeltaObjectStore, ObjectStoreRef};
+use crate::table_state::DeltaTableState;
 use crate::{crate_version, DeltaDataTypeVersion, DeltaResult, DeltaTableError};
 use chrono::Utc;
+use conflict_checker::ConflictChecker;
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore};
 use serde_json::{Map, Value};
@@ -19,7 +21,7 @@ pub use types::*;
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 
 #[derive(thiserror::Error, Debug)]
-enum TransactionError {
+pub(crate) enum TransactionError {
     #[error("Tried committing existing table version: {0}")]
     VersionAlreadyExists(DeltaDataTypeVersion),
 
@@ -67,10 +69,10 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, TransactionError
 /// Low-level transaction API. Creates a temporary commit file. Once created,
 /// the transaction object could be dropped and the actual commit could be executed
 /// with `DeltaTable.try_commit_transaction`.
-async fn prepare_commit(
+pub(crate) async fn prepare_commit(
     storage: &DeltaObjectStore,
-    operation: DeltaOperation,
-    mut actions: Vec<Action>,
+    operation: &DeltaOperation,
+    actions: &mut Vec<Action>,
     app_metadata: Option<Map<String, Value>>,
 ) -> Result<Path, TransactionError> {
     if !actions.iter().any(|a| matches!(a, Action::commitInfo(..))) {
@@ -126,26 +128,14 @@ async fn try_commit_transaction(
 }
 
 pub(crate) async fn commit(
-    storage: &DeltaObjectStore,
-    version: DeltaDataTypeVersion,
-    actions: Vec<Action>,
+    storage: ObjectStoreRef,
+    // version: DeltaDataTypeVersion,
+    mut actions: Vec<Action>,
     operation: DeltaOperation,
-    read_version: Option<DeltaDataTypeVersion>,
+    // read_version: Option<DeltaDataTypeVersion>,
+    read_snapshot: &DeltaTableState,
     app_metadata: Option<Map<String, Value>>,
 ) -> DeltaResult<DeltaDataTypeVersion> {
-    // TODO(roeap) in the reference implementation this logic is implemented, which seems somewhat strange,
-    // as it seems we will never have "WriteSerializable" as level - probably need to check the table config ...
-    // https://github.com/delta-io/delta/blob/abb171c8401200e7772b27e3be6ea8682528ac72/core/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala#L964
-    let isolation_level = if can_downgrade_to_snapshot_isolation(&actions, &operation) {
-        IsolationLevel::SnapshotIsolation
-    } else {
-        IsolationLevel::default_level()
-    };
-
-    // TODO: calculate isolation level to use when checking for conflicts.
-    // Leaving conflict checking unimplemented for now to get the "single writer" implementation off the ground.
-    // Leaving some commented code in place as a guidepost for the future.
-
     // readPredicates.nonEmpty || readFiles.nonEmpty
     // TODO revise logic if files are read
     let depends_on_files = match operation {
@@ -159,87 +149,65 @@ pub(crate) async fn commit(
 
     // TODO actually get the prop from commit infos...
     let only_add_files = false;
-    let is_blind_append = only_add_files && !depends_on_files;
+    let _is_blind_append = only_add_files && !depends_on_files;
 
-    let _commit_info = CommitInfo {
-        version: None,
-        timestamp: Some(chrono::Utc::now().timestamp()),
-        read_version,
-        isolation_level: Some(isolation_level),
-        operation: Some(operation.name().to_string()),
-        operation_parameters: Some(operation.operation_parameters()?.collect()),
-        user_id: None,
-        user_name: None,
-        is_blind_append: Some(is_blind_append),
-        engine_info: Some(format!("Delta-RS/{}", crate_version())),
-        ..Default::default()
-    };
+    // let _commit_info = CommitInfo {
+    //     version: None,
+    //     timestamp: Some(chrono::Utc::now().timestamp()),
+    //     read_version,
+    //     isolation_level: Some(IsolationLevel::default_level()),
+    //     operation: Some(operation.name().to_string()),
+    //     operation_parameters: Some(operation.operation_parameters()?.collect()),
+    //     user_id: None,
+    //     user_name: None,
+    //     is_blind_append: Some(is_blind_append),
+    //     engine_info: Some(format!("Delta-RS/{}", crate_version())),
+    //     ..Default::default()
+    // };
 
-    let tmp_commit = prepare_commit(storage, operation, actions, app_metadata).await?;
-    match try_commit_transaction(storage, &tmp_commit, version).await {
-        Ok(version) => Ok(version),
-        Err(TransactionError::VersionAlreadyExists(version)) => {
-            storage.delete(&tmp_commit).await?;
-            Err(DeltaTableError::VersionAlreadyExists(version))
+    let tmp_commit =
+        prepare_commit(storage.as_ref(), &operation, &mut actions, app_metadata).await?;
+
+    let max_attempts = 5;
+    let mut attempt_number = 1;
+
+    while attempt_number <= max_attempts {
+        let version = read_snapshot.version() + attempt_number;
+        match try_commit_transaction(storage.as_ref(), &tmp_commit, version).await {
+            Ok(version) => return Ok(version),
+            Err(TransactionError::VersionAlreadyExists(version)) => {
+                let conflict_checker = ConflictChecker::try_new(
+                    read_snapshot,
+                    storage.clone(),
+                    version,
+                    operation.clone(),
+                    &actions,
+                )
+                .await?;
+                match conflict_checker.check_conflicts() {
+                    Ok(_) => {
+                        attempt_number += 1;
+                    }
+                    Err(_err) => {
+                        storage.delete(&tmp_commit).await?;
+                        return Err(DeltaTableError::VersionAlreadyExists(version));
+                    }
+                };
+            }
+            Err(err) => {
+                storage.delete(&tmp_commit).await?;
+                return Err(err.into());
+            }
         }
-        Err(err) => Err(err.into()),
-    }
-}
-
-fn can_downgrade_to_snapshot_isolation<'a>(
-    actions: impl IntoIterator<Item = &'a Action>,
-    operation: &DeltaOperation,
-) -> bool {
-    let mut data_changed = false;
-    let mut has_non_file_actions = false;
-    for action in actions {
-        match action {
-            Action::add(act) if act.data_change => data_changed = true,
-            Action::remove(rem) if rem.data_change => data_changed = true,
-            _ => has_non_file_actions = true,
-        }
     }
 
-    if has_non_file_actions {
-        // if Non-file-actions are present (e.g. METADATA etc.), then don't downgrade the isolation
-        // level to SnapshotIsolation.
-        return false;
-    }
-
-    let default_isolation_level = IsolationLevel::default_level();
-    // Note-1: For no-data-change transactions such as OPTIMIZE/Auto Compaction/ZorderBY, we can
-    // change the isolation level to SnapshotIsolation. SnapshotIsolation allows reduced conflict
-    // detection by skipping the
-    // [[ConflictChecker.checkForAddedFilesThatShouldHaveBeenReadByCurrentTxn]] check i.e.
-    // don't worry about concurrent appends.
-    // Note-2:
-    // We can also use SnapshotIsolation for empty transactions. e.g. consider a commit:
-    // t0 - Initial state of table
-    // t1 - Q1, Q2 starts
-    // t2 - Q1 commits
-    // t3 - Q2 is empty and wants to commit.
-    // In this scenario, we can always allow Q2 to commit without worrying about new files
-    // generated by Q1.
-    // The final order which satisfies both Serializability and WriteSerializability is: Q2, Q1
-    // Note that Metadata only update transactions shouldn't be considered empty. If Q2 above has
-    // a Metadata update (say schema change/identity column high watermark update), then Q2 can't
-    // be moved above Q1 in the final SERIALIZABLE order. This is because if Q2 is moved above Q1,
-    // then Q1 should see the updates from Q2 - which actually didn't happen.
-
-    match default_isolation_level {
-        IsolationLevel::Serializable => !data_changed,
-        IsolationLevel::WriteSerializable => !data_changed && !operation.changes_data(),
-        _ => false, // This case should never happen
-    }
+    // TODO max attempts error
+    Err(DeltaTableError::VersionAlreadyExists(-1))
 }
 
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
     use super::*;
-    use crate::action::{DeltaOperation, Protocol, SaveMode};
-    use crate::storage::utils::flatten_list_stream;
-    use crate::writer::test_utils::get_delta_metadata;
-    use crate::{DeltaTable, DeltaTableBuilder};
 
     #[test]
     fn test_commit_version() {
@@ -247,49 +215,5 @@ mod tests {
         assert_eq!(version, Path::from("_delta_log/00000000000000000000.json"));
         let version = commit_uri_from_version(123);
         assert_eq!(version, Path::from("_delta_log/00000000000000000123.json"))
-    }
-
-    #[tokio::test]
-    async fn test_commits_writes_file() {
-        let metadata = get_delta_metadata(&[]);
-        let operation = DeltaOperation::Create {
-            mode: SaveMode::Append,
-            location: "memory://".into(),
-            protocol: Protocol {
-                min_reader_version: 1,
-                min_writer_version: 1,
-            },
-            metadata,
-        };
-
-        let commit_path = Path::from("_delta_log/00000000000000000000.json");
-        let storage = DeltaTableBuilder::from_uri("memory://")
-            .build_storage()
-            .unwrap();
-
-        // successfully write in clean location
-        commit(storage.as_ref(), 0, vec![], operation.clone(), None, None)
-            .await
-            .unwrap();
-        let head = storage.head(&commit_path).await;
-        assert!(head.is_ok());
-        assert_eq!(head.as_ref().unwrap().location, commit_path);
-
-        // fail on overwriting
-        let failed_commit = commit(storage.as_ref(), 0, vec![], operation, None, None).await;
-        assert!(failed_commit.is_err());
-        assert!(matches!(
-            failed_commit.unwrap_err(),
-            DeltaTableError::VersionAlreadyExists(_)
-        ));
-
-        // check we clean up after ourselves
-        let objects = flatten_list_stream(storage.as_ref(), None).await.unwrap();
-        assert_eq!(objects.len(), 1);
-
-        // table can be loaded
-        let mut table = DeltaTable::new(storage, Default::default());
-        table.load().await.unwrap();
-        assert_eq!(table.version(), 0)
     }
 }

@@ -3,9 +3,9 @@
 use super::{CommitInfo, IsolationLevel};
 use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
 use crate::operations::transaction::TransactionError;
-use crate::storage::{commit_uri_from_version, ObjectStoreRef};
+use crate::storage::{commit_uri_from_version, DeltaObjectStore, ObjectStoreRef};
 use crate::{
-    table_state::DeltaTableState, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
+    table_state::DeltaTableState, DeltaDataTypeVersion, DeltaResult, DeltaTable, DeltaTableError,
     DeltaTableMetaData,
 };
 use object_store::ObjectStore;
@@ -80,7 +80,7 @@ pub enum CommitConflictError {
 }
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
-pub(crate) struct TransactionInfo<'a> {
+pub(crate) struct TransactionInfo<'a, 'b> {
     pub(crate) txn_id: String,
     /// partition predicates by which files have been queried by the transaction
     pub(crate) read_predicates: Vec<String>,
@@ -91,17 +91,18 @@ pub(crate) struct TransactionInfo<'a> {
     /// appIds that have been seen by the transaction
     pub(crate) read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
-    pub(crate) actions: Vec<Action>,
+    pub(crate) actions: &'b Vec<Action>,
     /// read [`DeltaTableState`] used for the transaction
     pub(crate) read_snapshot: &'a DeltaTableState,
     /// [`CommitInfo`] for the commit
     pub(crate) commit_info: Option<CommitInfo>,
 }
 
-impl<'a> TransactionInfo<'a> {
+impl<'a, 'b> TransactionInfo<'a, 'b> {
     pub fn try_new(
         snapshot: &'a DeltaTableState,
         operation: &DeltaOperation,
+        actions: &'b Vec<Action>,
     ) -> Result<Self, DeltaTableError> {
         Ok(Self {
             txn_id: "".into(),
@@ -109,7 +110,7 @@ impl<'a> TransactionInfo<'a> {
             read_files: Default::default(),
             read_whole_table: true,
             read_app_ids: Default::default(),
-            actions: vec![],
+            actions,
             read_snapshot: snapshot,
             commit_info: Some(operation.get_commit_info()),
         })
@@ -135,22 +136,48 @@ pub(crate) struct WinningCommitSummary {
 }
 
 impl WinningCommitSummary {
-    pub fn new(actions: Vec<Action>, version: DeltaDataTypeVersion) -> Self {
+    pub async fn try_new(
+        object_store: &DeltaObjectStore,
+        read_version: DeltaDataTypeVersion,
+        winning_commit_version: DeltaDataTypeVersion,
+    ) -> DeltaResult<Self> {
+        let mut actions = Vec::new();
+        let mut version_to_read = read_version + 1;
+
+        while version_to_read <= winning_commit_version {
+            let commit_uri = commit_uri_from_version(winning_commit_version);
+            let commit_log_bytes = object_store.get(&commit_uri).await?.bytes().await?;
+
+            let reader = BufReader::new(Cursor::new(commit_log_bytes));
+            for maybe_line in reader.lines() {
+                let line = maybe_line?;
+                actions.push(serde_json::from_str::<Action>(line.as_str()).map_err(|e| {
+                    DeltaTableError::InvalidJsonLog {
+                        json_err: e,
+                        version: winning_commit_version,
+                        line,
+                    }
+                })?);
+            }
+            version_to_read += 1;
+        }
+
+        // TODO how to handle commit info for multiple read commits?
         let commit_info = actions
             .iter()
             .find(|action| matches!(action, Action::commitInfo(_)))
             .map(|action| match action {
                 Action::commitInfo(info) => {
-                    let mut updated = info.clone();
-                    updated.version = Some(version);
-                    updated
+                    // let mut updated = info.clone();
+                    // updated.version = Some(version_to_read);
+                    info.clone()
                 }
                 _ => unreachable!(),
             });
-        Self {
+        Ok(Self {
             actions,
             commit_info,
-        }
+        })
     }
 
     pub fn metadata_updates(&self) -> Vec<MetaData> {
@@ -238,57 +265,40 @@ impl WinningCommitSummary {
     }
 }
 
-pub(crate) struct ConflictChecker<'a> {
+pub(crate) struct ConflictChecker<'a, 'b> {
     /// transaction information for current transaction at start of check
-    transaction_info: TransactionInfo<'a>,
+    transaction_info: TransactionInfo<'a, 'b>,
     /// Version number of commit, that has been committed ahead of the current transaction
     winning_commit_version: DeltaDataTypeVersion,
     /// Summary of the transaction, that has been committed ahead of the current transaction
     winning_commit_summary: WinningCommitSummary,
-    /// isolation level for the current transaction
-    isolation_level: IsolationLevel,
     /// The state of the delta table at the base version from the current (not winning) commit
     snapshot: &'a DeltaTableState,
     /// The state of the delta table at the base version from the current (not winning) commit
     operation: DeltaOperation,
 }
 
-impl<'a> ConflictChecker<'a> {
+impl<'a, 'b> ConflictChecker<'a, 'b> {
     pub async fn try_new(
         snapshot: &'a DeltaTableState,
         object_store: ObjectStoreRef,
         winning_commit_version: DeltaDataTypeVersion,
         operation: DeltaOperation,
-    ) -> Result<ConflictChecker<'_>, DeltaTableError> {
-        // TODO raise proper error here or should we collect up so some max versions?
-        assert!(winning_commit_version == snapshot.version() + 1);
+        actions: &'b Vec<Action>,
+    ) -> Result<ConflictChecker<'a, 'b>, DeltaTableError> {
+        let winning_commit_summary = WinningCommitSummary::try_new(
+            object_store.as_ref(),
+            snapshot.version(),
+            winning_commit_version,
+        )
+        .await?;
 
-        // create winning commit summary
-        let commit_uri = commit_uri_from_version(winning_commit_version);
-        let commit_log_bytes = object_store.get(&commit_uri).await?.bytes().await?;
-        let reader = BufReader::new(Cursor::new(commit_log_bytes));
-        let mut commit_actions = Vec::new();
-
-        for maybe_line in reader.lines() {
-            let line = maybe_line?;
-            commit_actions.push(serde_json::from_str::<Action>(line.as_str()).map_err(|e| {
-                DeltaTableError::InvalidJsonLog {
-                    json_err: e,
-                    version: winning_commit_version,
-                    line,
-                }
-            })?);
-        }
-        let winning_commit_summary =
-            WinningCommitSummary::new(commit_actions, winning_commit_version);
-
-        let transaction_info = TransactionInfo::try_new(snapshot, &operation)?;
+        let transaction_info = TransactionInfo::try_new(snapshot, &operation, actions)?;
 
         Ok(Self {
             transaction_info,
             winning_commit_summary,
             winning_commit_version,
-            isolation_level: IsolationLevel::Serializable,
             snapshot,
             operation,
         })
@@ -349,8 +359,20 @@ impl<'a> ConflictChecker<'a> {
     fn check_for_added_files_that_should_have_been_read_by_current_txn(
         &self,
     ) -> Result<(), CommitConflictError> {
+        // TODO(roeap) in the reference implementation this logic is implemented, which seems somewhat strange,
+        // as it seems we will never have "WriteSerializable" as level - probably need to check the table config ...
+        // https://github.com/delta-io/delta/blob/abb171c8401200e7772b27e3be6ea8682528ac72/core/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala#L964
+        let isolation_level = if can_downgrade_to_snapshot_isolation(
+            &self.winning_commit_summary.actions,
+            &self.operation,
+        ) {
+            IsolationLevel::SnapshotIsolation
+        } else {
+            IsolationLevel::default_level()
+        };
+
         // Fail if new files have been added that the txn should have read.
-        let added_files_to_check = match self.isolation_level {
+        let added_files_to_check = match isolation_level {
             IsolationLevel::WriteSerializable
                 if !self.current_transaction_info().metadata_changed() =>
             {
@@ -373,15 +395,13 @@ impl<'a> ConflictChecker<'a> {
                 let added_files_matching_predicates =
                     if let Some(predicate_str) = self.operation.read_predicate() {
                         let arrow_schema =
-                            self.transaction_info
-                                .read_snapshot
+                            self.snapshot
                                 .arrow_schema()
                                 .map_err(|err| CommitConflictError::CorruptedState {
                                     source: Box::new(err),
                                 })?;
                         let predicate = self
-                            .transaction_info
-                            .read_snapshot
+                            .snapshot
                             .parse_predicate_expression(predicate_str)
                             .map_err(|err| CommitConflictError::Predicate {
                                 source: Box::new(err),
@@ -491,6 +511,53 @@ impl<'a> ConflictChecker<'a> {
     }
 }
 
+fn can_downgrade_to_snapshot_isolation<'a>(
+    actions: impl IntoIterator<Item = &'a Action>,
+    operation: &DeltaOperation,
+) -> bool {
+    let mut data_changed = false;
+    let mut has_non_file_actions = false;
+    for action in actions {
+        match action {
+            Action::add(act) if act.data_change => data_changed = true,
+            Action::remove(rem) if rem.data_change => data_changed = true,
+            _ => has_non_file_actions = true,
+        }
+    }
+
+    if has_non_file_actions {
+        // if Non-file-actions are present (e.g. METADATA etc.), then don't downgrade the isolation
+        // level to SnapshotIsolation.
+        return false;
+    }
+
+    let default_isolation_level = IsolationLevel::default_level();
+    // Note-1: For no-data-change transactions such as OPTIMIZE/Auto Compaction/ZorderBY, we can
+    // change the isolation level to SnapshotIsolation. SnapshotIsolation allows reduced conflict
+    // detection by skipping the
+    // [[ConflictChecker.checkForAddedFilesThatShouldHaveBeenReadByCurrentTxn]] check i.e.
+    // don't worry about concurrent appends.
+    // Note-2:
+    // We can also use SnapshotIsolation for empty transactions. e.g. consider a commit:
+    // t0 - Initial state of table
+    // t1 - Q1, Q2 starts
+    // t2 - Q1 commits
+    // t3 - Q2 is empty and wants to commit.
+    // In this scenario, we can always allow Q2 to commit without worrying about new files
+    // generated by Q1.
+    // The final order which satisfies both Serializability and WriteSerializability is: Q2, Q1
+    // Note that Metadata only update transactions shouldn't be considered empty. If Q2 above has
+    // a Metadata update (say schema change/identity column high watermark update), then Q2 can't
+    // be moved above Q1 in the final SERIALIZABLE order. This is because if Q2 is moved above Q1,
+    // then Q1 should see the updates from Q2 - which actually didn't happen.
+
+    match default_isolation_level {
+        IsolationLevel::Serializable => !data_changed,
+        IsolationLevel::WriteSerializable => !data_changed && !operation.changes_data(),
+        _ => false, // This case should never happen
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::super::test_utils::{
@@ -517,21 +584,21 @@ mod tests {
             partition_by: Default::default(),
             predicate: None,
         };
-
+        let actions = vec![Action::add(add)];
         commit(
-            table.object_store().as_ref(),
-            1,
-            vec![Action::add(add)],
+            table.object_store().clone(),
+            actions.clone(),
             operation.clone(),
-            Some(0),
+            &table.state,
             None,
         )
         .await
         .unwrap();
 
-        let checker = ConflictChecker::try_new(&table.state, table.object_store(), 1, operation)
-            .await
-            .unwrap();
+        let checker =
+            ConflictChecker::try_new(&table.state, table.object_store(), 1, operation, &actions)
+                .await
+                .unwrap();
 
         println!("actions: {:?}", checker.winning_commit_summary.actions);
 

@@ -1,4 +1,4 @@
-use super::{commit, CommitInfo};
+use super::{prepare_commit, try_commit_transaction, CommitInfo};
 use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, SaveMode};
 use crate::table_state::DeltaTableState;
 use crate::{
@@ -118,15 +118,12 @@ pub async fn create_initialized_table(
             configuration.unwrap_or_default(),
         ),
     };
-    commit(
-        storage.as_ref(),
-        0,
-        init_table_actions(),
-        operation,
-        None,
-        None,
-    )
-    .await
-    .unwrap();
+    let mut actions = init_table_actions();
+    let prepared_commit = prepare_commit(storage.as_ref(), &operation, &mut actions, None)
+        .await
+        .unwrap();
+    try_commit_transaction(storage.as_ref(), &prepared_commit, 0)
+        .await
+        .unwrap();
     DeltaTable::new_with_state(storage, state)
 }

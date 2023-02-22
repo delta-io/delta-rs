@@ -278,7 +278,6 @@ impl std::future::IntoFuture for CreateBuilder {
 
         Box::pin(async move {
             let mode = this.mode.clone();
-            let metadata = this.metadata.clone();
             let (mut table, actions, operation) = this.into_table_and_actions()?;
             if table.object_store().is_delta_table_location().await? {
                 match mode {
@@ -293,15 +292,8 @@ impl std::future::IntoFuture for CreateBuilder {
                     }
                 }
             }
-            let version = commit(
-                table.object_store().as_ref(),
-                0,
-                actions,
-                operation,
-                None,
-                metadata,
-            )
-            .await?;
+            let version =
+                commit(table.object_store(), actions, operation, &table.state, None).await?;
             table.load_version(version).await?;
 
             Ok(table)
