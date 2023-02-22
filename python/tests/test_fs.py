@@ -4,7 +4,7 @@ import urllib
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
-from pyarrow.fs import S3FileSystem
+from pyarrow.fs import FileType
 
 from deltalake import DeltaTable, PyDeltaTableError
 from deltalake.fs import DeltaStorageHandler
@@ -26,6 +26,19 @@ def test_read_files(s3_localstack):
             table = pq.read_table(f_)
             assert isinstance(table, pa.Table)
             assert table.shape > (0, 0)
+
+
+@pytest.mark.s3
+@pytest.mark.integration
+@pytest.mark.timeout(timeout=15, method="thread")
+def test_read_file_info(s3_localstack):
+    table_path = "s3://deltars/simple"
+    handler = DeltaStorageHandler(table_path)
+    meta = handler.get_file_info(
+        ["part-00000-a72b1fb3-f2df-41fe-a8f0-e65b746382dd-c000.snappy.parquet"]
+    )
+    assert len(meta) == 1
+    assert meta[0].type == FileType.File
 
 
 @pytest.mark.s3
