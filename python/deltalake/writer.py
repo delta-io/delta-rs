@@ -1,5 +1,4 @@
 import json
-import os.path
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -43,7 +42,7 @@ from ._internal import write_new_deltalake as _write_new_deltalake
 from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable, DeltaTableProtocolError
 
 try:
-    import pandas as pd
+    import pandas as pd  # noqa: F811
 except ModuleNotFoundError:
     _has_pandas = False
 else:
@@ -134,7 +133,6 @@ def write_deltalake(
     :param overwrite_schema: If True, allows updating the schema of the table.
     :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
     """
-
     if _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
             data = pa.Table.from_pandas(data, schema=schema)
@@ -295,7 +293,8 @@ def __enforce_append_only(
     )
     if config_delta_append_only and mode != "append":
         raise ValueError(
-            f"If configuration has delta.appendOnly = 'true', mode must be 'append'. Mode is currently {mode}"
+            "If configuration has delta.appendOnly = 'true', mode must be 'append'."
+            f" Mode is currently {mode}"
         )
 
 

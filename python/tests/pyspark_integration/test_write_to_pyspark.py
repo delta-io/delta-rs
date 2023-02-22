@@ -1,4 +1,4 @@
-"""Tests that deltalake(delta-rs) can write to tables written by PySpark"""
+"""Tests that deltalake(delta-rs) can write to tables written by PySpark."""
 import pathlib
 
 import pyarrow as pa

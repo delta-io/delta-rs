@@ -1,6 +1,5 @@
-"""Test that pyspark can read tables written by deltalake(delta-rs)"""
+"""Test that pyspark can read tables written by deltalake(delta-rs)."""
 import pathlib
-from typing import List
 
 import pyarrow as pa
 import pytest
@@ -13,7 +12,6 @@ try:
     import delta
     import delta.pip_utils
     import delta.tables
-    import pyspark
 
     spark = get_spark()
 except ModuleNotFoundError:
