@@ -20,8 +20,7 @@ sys.path.insert(0, os.path.abspath("./_ext"))
 
 
 def get_release_version() -> str:
-    """
-    Get the release version from the Cargo.toml file
+    """Get the release version from the Cargo.toml file.
 
     :return:
     """
