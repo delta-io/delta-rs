@@ -437,11 +437,15 @@ fn extract_partition_values(
 
 #[cfg(test)]
 mod tests {
+    use super::*;
+    use crate::arrow::array::Int32Array;
+    use crate::arrow::datatypes::{
+        DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
+    };
     use crate::writer::test_utils::get_delta_schema;
     use crate::writer::DeltaWriter;
     use crate::writer::JsonWriter;
     use crate::Schema;
-    use arrow::datatypes::Schema as ArrowSchema;
     use parquet::file::reader::FileReader;
     use parquet::file::serialized_reader::SerializedFileReader;
     use std::fs::File;
@@ -487,5 +491,44 @@ mod tests {
             .map(|desc| desc.name().to_string())
             .collect::<Vec<String>>();
         assert_eq!(columns, vec!["id".to_string(), "value".to_string()]);
+    }
+
+    #[test]
+    fn test_extract_partition_values() {
+        let record_batch = RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                ArrowField::new("col1", ArrowDataType::Int32, false),
+                ArrowField::new("col2", ArrowDataType::Int32, false),
+                ArrowField::new("col3", ArrowDataType::Int32, true),
+            ])),
+            vec![
+                Arc::new(Int32Array::from(vec![1, 2])),
+                Arc::new(Int32Array::from(vec![2, 1])),
+                Arc::new(Int32Array::from(vec![None, None])),
+            ],
+        )
+        .unwrap();
+
+        assert_eq!(
+            extract_partition_values(
+                &[
+                    String::from("col1"),
+                    String::from("col2"),
+                    String::from("col3")
+                ],
+                &record_batch
+            )
+            .unwrap(),
+            HashMap::from([
+                (String::from("col1"), Some(String::from("1"))),
+                (String::from("col2"), Some(String::from("2"))),
+                (String::from("col3"), None),
+            ])
+        );
+        assert_eq!(
+            extract_partition_values(&[String::from("col1")], &record_batch).unwrap(),
+            HashMap::from([(String::from("col1"), Some(String::from("1"))),])
+        );
+        assert!(extract_partition_values(&[String::from("col4")], &record_batch).is_err())
     }
 }
