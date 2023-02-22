@@ -91,7 +91,7 @@ pub(crate) async fn prepare_commit(
     }
 
     // Serialize all actions that are part of this log entry.
-    let log_entry = bytes::Bytes::from(log_entry_from_actions(&actions)?);
+    let log_entry = bytes::Bytes::from(log_entry_from_actions(actions)?);
 
     // Write delta log entry as temporary file to storage. For the actual commit,
     // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
