@@ -105,8 +105,6 @@ pub mod delta_arrow;
 #[cfg(feature = "datafusion")]
 pub mod delta_datafusion;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
-pub mod optimize;
-#[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod writer;
 
 pub use self::builder::*;
