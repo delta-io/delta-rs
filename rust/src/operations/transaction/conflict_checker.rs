@@ -80,7 +80,7 @@ pub enum CommitConflictError {
 }
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
-pub(crate) struct TransactionInfo<'a, 'b> {
+pub(crate) struct TransactionInfo<'a> {
     pub(crate) txn_id: String,
     /// partition predicates by which files have been queried by the transaction
     pub(crate) read_predicates: Vec<String>,
@@ -91,18 +91,18 @@ pub(crate) struct TransactionInfo<'a, 'b> {
     /// appIds that have been seen by the transaction
     pub(crate) read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
-    pub(crate) actions: &'b Vec<Action>,
+    pub(crate) actions: &'a Vec<Action>,
     /// read [`DeltaTableState`] used for the transaction
     pub(crate) read_snapshot: &'a DeltaTableState,
     /// [`CommitInfo`] for the commit
     pub(crate) commit_info: Option<CommitInfo>,
 }
 
-impl<'a, 'b> TransactionInfo<'a, 'b> {
+impl<'a> TransactionInfo<'a> {
     pub fn try_new(
         snapshot: &'a DeltaTableState,
         operation: &DeltaOperation,
-        actions: &'b Vec<Action>,
+        actions: &'a Vec<Action>,
     ) -> Result<Self, DeltaTableError> {
         Ok(Self {
             txn_id: "".into(),
@@ -265,9 +265,10 @@ impl WinningCommitSummary {
     }
 }
 
-pub(crate) struct ConflictChecker<'a, 'b> {
+/// Checks if a failed commit may be committed after a conflicting winning commit
+pub(crate) struct ConflictChecker<'a> {
     /// transaction information for current transaction at start of check
-    transaction_info: TransactionInfo<'a, 'b>,
+    transaction_info: TransactionInfo<'a>,
     /// Version number of commit, that has been committed ahead of the current transaction
     winning_commit_version: DeltaDataTypeVersion,
     /// Summary of the transaction, that has been committed ahead of the current transaction
@@ -278,14 +279,14 @@ pub(crate) struct ConflictChecker<'a, 'b> {
     operation: DeltaOperation,
 }
 
-impl<'a, 'b> ConflictChecker<'a, 'b> {
+impl<'a> ConflictChecker<'a> {
     pub async fn try_new(
         snapshot: &'a DeltaTableState,
         object_store: ObjectStoreRef,
         winning_commit_version: DeltaDataTypeVersion,
         operation: DeltaOperation,
-        actions: &'b Vec<Action>,
-    ) -> Result<ConflictChecker<'a, 'b>, DeltaTableError> {
+        actions: &'a Vec<Action>,
+    ) -> Result<ConflictChecker<'a>, DeltaTableError> {
         let winning_commit_summary = WinningCommitSummary::try_new(
             object_store.as_ref(),
             snapshot.version(),
