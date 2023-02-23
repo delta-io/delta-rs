@@ -103,7 +103,7 @@ pub(crate) async fn prepare_commit(
     Ok(path)
 }
 
-/// Tries to commit a prepared commit file. Returns [`DeltaTableError::VersionAlreadyExists`]
+/// Tries to commit a prepared commit file. Returns [DeltaTableError::VersionAlreadyExists]
 /// if the given `version` already exists. The caller should handle the retry logic itself.
 /// This is low-level transaction API. If user does not want to maintain the commit loop then
 /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
@@ -129,10 +129,8 @@ async fn try_commit_transaction(
 
 pub(crate) async fn commit(
     storage: ObjectStoreRef,
-    // version: DeltaDataTypeVersion,
     mut actions: Vec<Action>,
     operation: DeltaOperation,
-    // read_version: Option<DeltaDataTypeVersion>,
     read_snapshot: &DeltaTableState,
     app_metadata: Option<Map<String, Value>>,
 ) -> DeltaResult<DeltaDataTypeVersion> {
@@ -150,20 +148,6 @@ pub(crate) async fn commit(
     // TODO actually get the prop from commit infos...
     let only_add_files = false;
     let _is_blind_append = only_add_files && !depends_on_files;
-
-    // let _commit_info = CommitInfo {
-    //     version: None,
-    //     timestamp: Some(chrono::Utc::now().timestamp()),
-    //     read_version,
-    //     isolation_level: Some(IsolationLevel::default_level()),
-    //     operation: Some(operation.name().to_string()),
-    //     operation_parameters: Some(operation.operation_parameters()?.collect()),
-    //     user_id: None,
-    //     user_name: None,
-    //     is_blind_append: Some(is_blind_append),
-    //     engine_info: Some(format!("Delta-RS/{}", crate_version())),
-    //     ..Default::default()
-    // };
 
     let tmp_commit =
         prepare_commit(storage.as_ref(), &operation, &mut actions, app_metadata).await?;

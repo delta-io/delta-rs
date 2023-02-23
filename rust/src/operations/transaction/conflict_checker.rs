@@ -567,25 +567,36 @@ mod tests {
     use super::*;
     use crate::action::{Action, SaveMode};
     use crate::operations::transaction::commit;
+    use serde_json::json;
+
+    fn get_stats(min: i64, max: i64) -> Option<String> {
+        let data = json!({
+            "numRecords": 18,
+            "minValues": {
+                "value": min
+            },
+            "maxValues": {
+                "value": max
+            },
+            "nullCount": {
+                "value": 0
+            }
+        });
+        Some(data.to_string())
+    }
 
     #[tokio::test]
     async fn test_append_only_commits() {
         let table = create_initialized_table(&[], None).await;
 
-        let commit_info = DeltaOperation::Write {
-            mode: SaveMode::Append,
-            partition_by: Default::default(),
-            predicate: None,
-        }
-        .get_commit_info();
-
-        let add = create_add_action("file-path", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":10},\"nullCount\":{\"value\":0}}"));
+        let add = create_add_action("file-path", true, get_stats(1, 10));
+        let actions = vec![Action::add(add)];
         let operation = DeltaOperation::Write {
             mode: SaveMode::Append,
             partition_by: Default::default(),
             predicate: None,
         };
-        let actions = vec![Action::add(add)];
+
         commit(
             table.object_store().clone(),
             actions.clone(),
