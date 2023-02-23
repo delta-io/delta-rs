@@ -408,7 +408,7 @@ impl<'a> ConflictChecker<'a> {
                                 source: Box::new(err),
                             })?;
                         AddContainer::new(&added_files_to_check, arrow_schema)
-                            .predicate_matches(&[predicate])
+                            .predicate_matches(predicate)
                             .map_err(|err| CommitConflictError::Predicate {
                                 source: Box::new(err),
                             })?

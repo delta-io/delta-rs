@@ -100,28 +100,21 @@ impl<'a> AddContainer<'a> {
     /// Expressions are evaluated for file statistics, essentially column-wise min max bounds,
     /// so evalutaing expressions is inexact. However exluded files are guaranteed (for a correct log)
     /// to not contain matches by the predicate expression.
-    pub fn predicate_matches(&self, filters: &[Expr]) -> DeltaResult<impl Iterator<Item = &Add>> {
-        if let Some(Some(predicate)) =
-            (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
-        {
-            let pruning_predicate = PruningPredicate::try_new(predicate, self.schema.clone())?;
-            Ok(Either::Left(
-                self.inner
-                    .iter()
-                    .zip(pruning_predicate.prune(self)?.into_iter())
-                    .filter_map(
-                        |(action, keep_file)| {
-                            if keep_file {
-                                Some(action)
-                            } else {
-                                None
-                            }
-                        },
-                    ),
+    pub fn predicate_matches(&self, predicate: Expr) -> DeltaResult<impl Iterator<Item = &Add>> {
+        let pruning_predicate = PruningPredicate::try_new(predicate, self.schema.clone())?;
+        Ok(self
+            .inner
+            .iter()
+            .zip(pruning_predicate.prune(self)?.into_iter())
+            .filter_map(
+                |(action, keep_file)| {
+                    if keep_file {
+                        Some(action)
+                    } else {
+                        None
+                    }
+                },
             ))
-        } else {
-            Ok(Either::Right(self.inner.iter()))
-        }
     }
 }
 
