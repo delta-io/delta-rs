@@ -339,16 +339,20 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
         }
 
         if !partial_writes.is_empty() {
-            let sample = partial_writes.first().map(|t| t.to_owned());
-            if let Some((_, e)) = sample {
-                return Err(DeltaWriterError::PartialParquetWrite {
-                    skipped_values: partial_writes,
-                    sample_error: e,
-                }
-                .into());
-            } else {
-                unreachable!()
+            return Err(DeltaWriterError::PartialParquetWrite {
+                sample_error: match &partial_writes[0].1 {
+                    ParquetError::General(msg) => ParquetError::General(msg.to_owned()),
+                    ParquetError::ArrowError(msg) => ParquetError::ArrowError(msg.to_owned()),
+                    ParquetError::EOF(msg) => ParquetError::EOF(msg.to_owned()),
+                    ParquetError::External(err) => ParquetError::General(err.to_string()),
+                    ParquetError::IndexOutOfBound(u, v) => {
+                        ParquetError::IndexOutOfBound(u.to_owned(), v.to_owned())
+                    }
+                    ParquetError::NYI(msg) => ParquetError::NYI(msg.to_owned()),
+                },
+                skipped_values: partial_writes,
             }
+            .into());
         }
 
         Ok(())
