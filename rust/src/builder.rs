@@ -54,7 +54,7 @@ impl Default for DeltaVersion {
 }
 
 /// Configuration options for delta table
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableConfig {
     /// Indicates whether our use case requires tracking tombstones.
