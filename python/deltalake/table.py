@@ -366,7 +366,7 @@ given filters.
                 partition_expression=part_expression,
             )
             for file, part_expression in self._table.dataset_partitions(
-                partitions, self.schema().to_pyarrow()
+                self.schema().to_pyarrow(), partitions
             )
         ]
 
