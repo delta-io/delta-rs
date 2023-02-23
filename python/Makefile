@@ -54,7 +54,7 @@ format: ## Format the code
 	cargo fmt
 	$(info --- Python format ---)
 	black .
-	isort .
+	ruff . --fix
 
 .PHONY: check-rust
 check-rust: ## Run check on Rust
@@ -65,10 +65,10 @@ check-rust: ## Run check on Rust
 
 .PHONY: check-python
 check-python: ## Run check on Python
-	$(info Check Python isort)
-	isort --diff --check-only .
 	$(info Check Python black)
 	black --check .
+	$(info Check Python ruff)
+	ruff check .
 	$(info Check Python mypy)
 	mypy
 

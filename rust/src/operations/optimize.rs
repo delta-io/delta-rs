@@ -16,7 +16,7 @@
 //! # Example
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;
-//! let (table, metrics) = OptimizeBuilder::new(table.object_store(). table.state).await?;
+//! let (table, metrics) = OptimizeBuilder::new(table.object_store(), table.state).await?;
 //! ````
 
 use super::transaction::commit;
@@ -146,7 +146,7 @@ impl<'a> OptimizeBuilder<'a> {
         self
     }
 
-    /// Additional metadata to be addedds to commit info
+    /// Additional metadata to be added to commit info
     pub fn with_metadata(
         mut self,
         metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
@@ -254,17 +254,17 @@ fn create_remove(
 /// Encapsulates the operations required to optimize a Delta Table
 pub struct MergePlan {
     operations: HashMap<PartitionPath, PartitionMergePlan>,
-    /// metrics collected during operation
+    /// Metrics collected during operation
     metrics: Metrics,
-    /// parameters passed to optimize operation
+    /// Parameters passed to optimize operation
     input_parameters: OptimizeInput,
     /// Schema of written files
     file_schema: ArrowSchemaRef,
-    /// Coulumn names the table si partitioned by
+    /// Column names the table is partitioned by.
     partition_columns: Vec<String>,
     /// Properties passed to parquet writer
     writer_properties: WriterProperties,
-    /// read table version
+    /// Version of the table at beginning of optimization. Used for conflict resolution.
     read_table_version: DeltaDataTypeVersion,
 }
 
@@ -404,7 +404,7 @@ fn get_target_file_size(snapshot: &DeltaTableState) -> DeltaDataTypeLong {
     target_size
 }
 
-/// Build a Plan on which files to merge together. See [`OptimizeBuilder`]
+/// Build a Plan on which files to merge together. See [OptimizeBuilder]
 pub fn create_merge_plan(
     snapshot: &DeltaTableState,
     filters: &[PartitionFilter<'_, &str>],

@@ -26,7 +26,7 @@ pandas = [
 devel = [
     "mypy",
     "black",
-    "isort",
+    "ruff",
     "packaging>=20",
     "pytest",
     "pytest-mock",
@@ -66,13 +66,28 @@ warn_return_any = false
 implicit_reexport = true
 strict_equality = true
 
-[tool.isort]
-profile = "black"
-src_paths = ["deltalake", "tests"]
 
 [tool.black]
 include = '\.pyi?$'
 exclude = "venv"
+
+[tool.ruff]
+select = [
+    # pycodestyle error
+    "E",
+    # pyflakes
+    "F",
+    # isort
+    "I"
+]
+unfixable = ["F401"]
+ignore = ["E501"]
+
+[tool.ruff.per-file-ignores]
+"deltalake/__init__.py" = ["F401"]
+
+[tool.ruff.isort]
+known-first-party = ["deltalake"]
 
 [tool.pytest.ini_options]
 addopts = "--cov=deltalake -v -m 'not integration'"

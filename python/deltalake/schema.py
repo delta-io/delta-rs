@@ -5,7 +5,12 @@ import pyarrow as pa
 if TYPE_CHECKING:
     import pandas as pd
 
-from ._internal import ArrayType, Field, MapType, PrimitiveType, Schema, StructType
+from ._internal import ArrayType as ArrayType
+from ._internal import Field as Field
+from ._internal import MapType as MapType
+from ._internal import PrimitiveType as PrimitiveType
+from ._internal import Schema as Schema
+from ._internal import StructType as StructType
 
 # Can't implement inheritance (see note in src/schema.rs), so this is next
 # best thing.

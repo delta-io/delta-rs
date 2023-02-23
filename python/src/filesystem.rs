@@ -94,7 +94,7 @@ impl DeltaFileSystemHandler {
         let fs = PyModule::import(py, "pyarrow.fs")?;
         let file_types = fs.getattr("FileType")?;
 
-        let to_file_info = |loc: String, type_: &PyAny, kwargs: HashMap<&str, i64>| {
+        let to_file_info = |loc: &str, type_: &PyAny, kwargs: &HashMap<&str, i64>| {
             fs.call_method("FileInfo", (loc, type_), Some(kwargs.into_py_dict(py)))
         };
 
@@ -116,16 +116,16 @@ impl DeltaFileSystemHandler {
                             ("mtime_ns", meta.last_modified.timestamp_nanos()),
                         ]);
                         infos.push(to_file_info(
-                            meta.location.to_string(),
+                            meta.location.as_ref(),
                             file_types.getattr("File")?,
-                            kwargs,
+                            &kwargs,
                         )?);
                     }
                     Err(ObjectStoreError::NotFound { .. }) => {
                         infos.push(to_file_info(
-                            path.to_string(),
+                            path.as_ref(),
                             file_types.getattr("NotFound")?,
-                            HashMap::new(),
+                            &HashMap::new(),
                         )?);
                     }
                     Err(err) => {
@@ -134,9 +134,9 @@ impl DeltaFileSystemHandler {
                 }
             } else {
                 infos.push(to_file_info(
-                    path.to_string(),
+                    path.as_ref(),
                     file_types.getattr("Directory")?,
-                    HashMap::new(),
+                    &HashMap::new(),
                 )?);
             }
         }

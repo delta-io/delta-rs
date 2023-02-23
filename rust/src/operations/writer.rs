@@ -84,7 +84,7 @@ pub struct WriterConfig {
 }
 
 impl WriterConfig {
-    /// create a new instalce of [`WriterConfig`]
+    /// Create a new instance of [WriterConfig].
     pub fn new(
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
@@ -199,7 +199,9 @@ impl DeltaWriter {
         Ok(())
     }
 
-    /// close the writer
+    /// Close the writer and get the new [Add] actions.
+    ///
+    /// This will flush all remaining data.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         let writers = std::mem::take(&mut self.partition_writers);
         let mut actions = Vec::new();

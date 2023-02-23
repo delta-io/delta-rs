@@ -350,17 +350,17 @@ def test_get_files_partitioned_table():
 
     partition_filters = [("day", "not in", ["3", "20"])]
     paths = [
-        f"year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet",
-        f"year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet",
-        f"year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
-        f"year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
+        "year=2020/month=1/day=1/part-00000-8eafa330-3be9-4a39-ad78-fd13c2027c7e.c000.snappy.parquet",
+        "year=2020/month=2/day=5/part-00000-89cdd4c8-2af7-4add-8ea3-3990b2f027b5.c000.snappy.parquet",
+        "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
+        "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
     ]
     assert_correct_files(dt, partition_filters, paths)
 
     partition_filters = [("day", "not in", ["3", "20"]), ("year", "=", "2021")]
     paths = [
-        f"year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
-        f"year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
+        "year=2021/month=12/day=4/part-00000-6dc763c0-3e8b-4d52-b19e-1f92af3fbb25.c000.snappy.parquet",
+        "year=2021/month=4/day=5/part-00000-c5856301-3439-4032-a6fc-22b7bc92bebb.c000.snappy.parquet",
     ]
     assert_correct_files(dt, partition_filters, paths)
 
@@ -385,7 +385,8 @@ def test_get_files_partitioned_table():
         dt.files(partition_filters)
     assert (
         str(exception.value)
-        == 'Invalid partition filter found: [PartitionFilter { key: "unknown", value: Equal("3") }].'
+        == 'Invalid partition filter found: [PartitionFilter { key: "unknown", value:'
+        ' Equal("3") }].'
     )
 
 
@@ -468,8 +469,7 @@ class ExcPassThroughThread(Thread):
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=5, method="thread")
 def test_read_multiple_tables_from_s3(s3_localstack):
-    """
-    Should be able to create multiple cloud storage based DeltaTable instances
+    """Should be able to create multiple cloud storage based DeltaTable instances
     without blocking on async rust function calls.
     """
     for path in ["s3://deltars/simple", "s3://deltars/simple"]:
