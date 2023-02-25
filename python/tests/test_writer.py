@@ -193,7 +193,7 @@ def test_roundtrip_null_partition(tmp_path: pathlib.Path, sample_data: pa.Table)
     )
     write_deltalake(tmp_path, sample_data, partition_by=["utf8_with_nulls"])
 
-    delta_table = DeltaTable(str(tmp_path))
+    delta_table = DeltaTable(tmp_path)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
@@ -547,8 +547,8 @@ def test_partition_overwrite(
     tmp_path: pathlib.Path,
     value_1: Any,
     value_2: Any,
-    value_type: Any,
-    filter_string: Any,
+    value_type: pa.DataType,
+    filter_string: str,
 ):
     sample_data = pa.table(
         {
@@ -558,10 +558,10 @@ def test_partition_overwrite(
         }
     )
     write_deltalake(
-        str(tmp_path), sample_data, mode="overwrite", partition_by=["p1", "p2"]
+        tmp_path, sample_data, mode="overwrite", partition_by=["p1", "p2"]
     )
 
-    delta_table = DeltaTable(str(tmp_path))
+    delta_table = DeltaTable(tmp_path)
     assert (
         delta_table.to_pyarrow_table().sort_by(
             [("p1", "ascending"), ("p2", "ascending")]
@@ -584,7 +584,7 @@ def test_partition_overwrite(
         }
     )
     write_deltalake(
-        str(tmp_path),
+        tmp_path,
         sample_data,
         mode="overwrite",
         partitions_filters=[("p1", "=", "1")],
@@ -614,7 +614,7 @@ def test_partition_overwrite(
     )
 
     write_deltalake(
-        str(tmp_path),
+        tmp_path,
         sample_data,
         mode="overwrite",
         partitions_filters=[("p2", ">", filter_string)],
@@ -643,14 +643,14 @@ def test_partition_overwrite_unfiltered_data_fails(
     tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
 ):
     write_deltalake(
-        str(tmp_path),
+        tmp_path,
         sample_data_for_partitioning,
         mode="overwrite",
         partition_by=["p1", "p2"],
     )
     with pytest.raises(ValueError):
         write_deltalake(
-            str(tmp_path),
+            tmp_path,
             sample_data_for_partitioning,
             mode="overwrite",
             partitions_filters=[("p2", "=", "1")],
@@ -661,7 +661,7 @@ def test_partition_overwrite_with_new_partition(
     tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
 ):
     write_deltalake(
-        str(tmp_path),
+        tmp_path,
         sample_data_for_partitioning,
         mode="overwrite",
         partition_by=["p1", "p2"],
@@ -682,12 +682,12 @@ def test_partition_overwrite_with_new_partition(
         }
     )
     write_deltalake(
-        str(tmp_path),
+        tmp_path,
         new_sample_data,
         mode="overwrite",
         partitions_filters=[("p2", "=", "2")],
     )
-    delta_table = DeltaTable(str(tmp_path))
+    delta_table = DeltaTable(tmp_path)
     assert (
         delta_table.to_pyarrow_table().sort_by(
             [("p1", "ascending"), ("p2", "ascending")]
@@ -699,11 +699,11 @@ def test_partition_overwrite_with_new_partition(
 def test_partition_overwrite_with_non_partitioned_data(
     tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
 ):
-    write_deltalake(str(tmp_path), sample_data_for_partitioning, mode="overwrite")
+    write_deltalake(tmp_path, sample_data_for_partitioning, mode="overwrite")
 
     with pytest.raises(PyDeltaTableError):
         write_deltalake(
-            str(tmp_path),
+            tmp_path,
             sample_data_for_partitioning,
             mode="overwrite",
             partitions_filters=[("p1", "=", "1")],
@@ -714,7 +714,7 @@ def test_partition_overwrite_with_wrong_partition(
     tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
 ):
     write_deltalake(
-        str(tmp_path),
+        tmp_path,
         sample_data_for_partitioning,
         mode="overwrite",
         partition_by=["p1", "p2"],
@@ -722,7 +722,7 @@ def test_partition_overwrite_with_wrong_partition(
 
     with pytest.raises(PyDeltaTableError):
         write_deltalake(
-            str(tmp_path),
+            tmp_path,
             sample_data_for_partitioning,
             mode="overwrite",
             partitions_filters=[("p999", "=", "1")],

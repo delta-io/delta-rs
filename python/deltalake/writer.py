@@ -231,13 +231,6 @@ def write_deltalake(
         def check_data_is_aligned_with_partition_filtering(
             batch: pa.RecordBatch,
         ) -> None:
-            def arrow_value_to_partition_string(val: Any) -> str:
-                if val.type == "bool":
-                    val = str(val).lower()
-                else:
-                    val = str(val)
-                return val
-
             if table is None:
                 return
             existed_partitions = table._table.get_active_partitions()
@@ -247,7 +240,7 @@ def write_deltalake(
                     for value in batch.column(column_index).unique():
                         partition = (
                             column_name,
-                            arrow_value_to_partition_string(value),
+                            json.dumps(value.as_py(), cls=DeltaJSONEncoder),
                         )
                         if (
                             partition not in allowed_partitions
