@@ -557,9 +557,7 @@ def test_partition_overwrite(
             "val": pa.array([1, 1, 1, 1], pa.int64()),
         }
     )
-    write_deltalake(
-        tmp_path, sample_data, mode="overwrite", partition_by=["p1", "p2"]
-    )
+    write_deltalake(tmp_path, sample_data, mode="overwrite", partition_by=["p1", "p2"])
 
     delta_table = DeltaTable(tmp_path)
     assert (
