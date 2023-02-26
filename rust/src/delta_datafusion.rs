@@ -575,11 +575,9 @@ fn get_null_of_arrow_type(t: &ArrowDataType) -> ScalarValue {
         | ArrowDataType::Time64(_)
         | ArrowDataType::Duration(_)
         | ArrowDataType::Interval(_)
+        | ArrowDataType::RunEndEncoded(_, _)
         | ArrowDataType::Map(_, _) => {
-            panic!(
-                "{}",
-                format!("Implement data type for Delta Lake {}", t.to_string())
-            );
+            panic!("{}", format!("Implement data type for Delta Lake {}", t));
         }
     }
 }
