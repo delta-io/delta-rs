@@ -541,7 +541,6 @@ fn get_null_of_arrow_type(t: &ArrowDataType) -> ScalarValue {
         ArrowDataType::UInt16 => ScalarValue::UInt16(None),
         ArrowDataType::UInt32 => ScalarValue::UInt32(None),
         ArrowDataType::UInt64 => ScalarValue::UInt64(None),
-        ArrowDataType::Float16 => panic!("Unsupported type"),
         ArrowDataType::Float32 => ScalarValue::Float32(None),
         ArrowDataType::Float64 => ScalarValue::Float64(None),
         ArrowDataType::Date32 => ScalarValue::Date32(None),
@@ -553,9 +552,19 @@ fn get_null_of_arrow_type(t: &ArrowDataType) -> ScalarValue {
         ArrowDataType::LargeUtf8 => ScalarValue::LargeUtf8(None),
         ArrowDataType::Decimal128(precision, scale) => {
             ScalarValue::Decimal128(None, precision.to_owned(), scale.to_owned())
-        }
+        },
+        ArrowDataType::Timestamp(unit, tz) => {
+            let tz = tz.to_owned();
+            match unit {
+                TimeUnit::Second => ScalarValue::TimestampSecond(None, tz),
+                TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(None, tz),
+                TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(None, tz),
+                TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(None, tz),
+            }
+        },
         //Unsupported types...
-        ArrowDataType::Decimal256(_, _)
+        ArrowDataType::Float16 
+        | ArrowDataType::Decimal256(_, _)
         | ArrowDataType::Union(_, _, _)
         | ArrowDataType::Dictionary(_, _)
         | ArrowDataType::LargeList(_)
@@ -565,10 +574,9 @@ fn get_null_of_arrow_type(t: &ArrowDataType) -> ScalarValue {
         | ArrowDataType::Time32(_)
         | ArrowDataType::Time64(_)
         | ArrowDataType::Duration(_)
-        | ArrowDataType::Timestamp(_, _)
         | ArrowDataType::Interval(_)
         | ArrowDataType::Map(_, _) => {
-            todo!("Implement remaining mappings");
+            panic!("{}", format!("Implement data type for Delta Lake {}", t.to_string()));
         }
     }
 }

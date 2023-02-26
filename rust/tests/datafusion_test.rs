@@ -337,7 +337,7 @@ async fn test_files_scanned() -> Result<()> {
 
     // Ensure that tables without stats and partition columns can be pruned for just partitions
     let table = deltalake::open_table(
-        "file:///home/david/programming/delta-rs/rust/tests/data/delta-0.8.0-null-partition",
+        "./tests/data/delta-0.8.0-null-partition",
     )
     .await?;
 
@@ -365,7 +365,7 @@ async fn test_files_scanned() -> Result<()> {
 
     // Ensure that tables with stats and partition columns can be pruned
     let table = deltalake::open_table(
-        "file:///home/david/programming/delta-rs/rust/tests/data/delta-2.2.0-partitioned-types",
+        "./tests/data/delta-2.2.0-partitioned-types",
     )
     .await?;
 
