@@ -236,49 +236,52 @@ impl DeltaTable {
     }
 }
 
+fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option<ArrayRef> {
+    let field = table
+        .get_schema()
+        .ok()
+        .map(|s| s.get_field_with_name(&column.name).ok())??;
+
+    let data_type = field.get_type().try_into().ok()?;
+    let partition_columns = &table.get_metadata().ok()?.partition_columns;
+
+    let values = table.get_state().files().iter().map(|add| {
+        if partition_columns.contains(&column.name) {
+            let value = add.partition_values.get(&column.name).unwrap();
+            let value = match value {
+                Some(v) => serde_json::Value::String(v.to_string()),
+                None => serde_json::Value::Null,
+            };
+            to_correct_scalar_value(&value, &data_type).unwrap_or(ScalarValue::Null)
+        } else if let Ok(Some(statistics)) = add.get_stats() {
+            let values = if get_max {
+                statistics.max_values
+            } else {
+                statistics.min_values
+            };
+
+            values
+                .get(&column.name)
+                .and_then(|f| to_correct_scalar_value(f.as_value()?, &data_type))
+                .unwrap_or(ScalarValue::Null)
+        } else {
+            ScalarValue::Null
+        }
+    });
+    ScalarValue::iter_to_array(values).ok()
+}
+
 impl PruningStatistics for DeltaTable {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let field = self
-            .get_schema()
-            .ok()
-            .map(|s| s.get_field_with_name(&column.name).ok())??;
-        let data_type = field.get_type().try_into().ok()?;
-        let values = self.get_state().files().iter().map(|add| {
-            if let Ok(Some(statistics)) = add.get_stats() {
-                statistics
-                    .min_values
-                    .get(&column.name)
-                    .and_then(|f| to_correct_scalar_value(f.as_value()?, &data_type))
-                    .unwrap_or(ScalarValue::Null)
-            } else {
-                ScalarValue::Null
-            }
-        });
-        ScalarValue::iter_to_array(values).ok()
+        get_prune_stats(self, column, false)
     }
 
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let field = self
-            .get_schema()
-            .ok()
-            .map(|s| s.get_field_with_name(&column.name).ok())??;
-        let data_type = field.get_type().try_into().ok()?;
-        let values = self.get_state().files().iter().map(|add| {
-            if let Ok(Some(statistics)) = add.get_stats() {
-                statistics
-                    .max_values
-                    .get(&column.name)
-                    .and_then(|f| to_correct_scalar_value(f.as_value()?, &data_type))
-                    .unwrap_or(ScalarValue::Null)
-            } else {
-                ScalarValue::Null
-            }
-        });
-        ScalarValue::iter_to_array(values).ok()
+        get_prune_stats(self, column, true)
     }
 
     /// return the number of containers (e.g. row groups) being
@@ -292,13 +295,29 @@ impl PruningStatistics for DeltaTable {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        let partition_columns = &self.get_metadata().ok()?.partition_columns;
+
         let values = self.get_state().files().iter().map(|add| {
             if let Ok(Some(statistics)) = add.get_stats() {
-                statistics
-                    .null_count
-                    .get(&column.name)
-                    .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
-                    .unwrap_or(ScalarValue::UInt64(None))
+                if partition_columns.contains(&column.name) {
+                    let value = add.partition_values.get(&column.name).unwrap();
+                    match value {
+                        Some(_) => ScalarValue::UInt64(Some(0)),
+                        None => ScalarValue::UInt64(Some(statistics.num_records as u64)),
+                    }
+                } else {
+                    statistics
+                        .null_count
+                        .get(&column.name)
+                        .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
+                        .unwrap_or(ScalarValue::UInt64(None))
+                }
+            } else if partition_columns.contains(&column.name) {
+                let value = add.partition_values.get(&column.name).unwrap();
+                match value {
+                    Some(_) => ScalarValue::UInt64(Some(0)),
+                    None => ScalarValue::UInt64(None),
+                }
             } else {
                 ScalarValue::UInt64(None)
             }
@@ -510,6 +529,50 @@ impl ExecutionPlan for DeltaScan {
     }
 }
 
+fn get_null_of_arrow_type(t: &ArrowDataType) -> ScalarValue {
+    match t {
+        ArrowDataType::Null => ScalarValue::Null,
+        ArrowDataType::Boolean => ScalarValue::Boolean(None),
+        ArrowDataType::Int8 => ScalarValue::Int8(None),
+        ArrowDataType::Int16 => ScalarValue::Int16(None),
+        ArrowDataType::Int32 => ScalarValue::Int32(None),
+        ArrowDataType::Int64 => ScalarValue::Int64(None),
+        ArrowDataType::UInt8 => ScalarValue::UInt8(None),
+        ArrowDataType::UInt16 => ScalarValue::UInt16(None),
+        ArrowDataType::UInt32 => ScalarValue::UInt32(None),
+        ArrowDataType::UInt64 => ScalarValue::UInt64(None),
+        ArrowDataType::Float16 => panic!("Unsupported type"),
+        ArrowDataType::Float32 => ScalarValue::Float32(None),
+        ArrowDataType::Float64 => ScalarValue::Float64(None),
+        ArrowDataType::Date32 => ScalarValue::Date32(None),
+        ArrowDataType::Date64 => ScalarValue::Date64(None),
+        ArrowDataType::Binary => ScalarValue::Binary(None),
+        ArrowDataType::FixedSizeBinary(size) => ScalarValue::FixedSizeBinary(size.to_owned(), None),
+        ArrowDataType::LargeBinary => ScalarValue::LargeBinary(None),
+        ArrowDataType::Utf8 => ScalarValue::Utf8(None),
+        ArrowDataType::LargeUtf8 => ScalarValue::LargeUtf8(None),
+        ArrowDataType::Decimal128(precision, scale) => {
+            ScalarValue::Decimal128(None, precision.to_owned(), scale.to_owned())
+        }
+        //Unsupported types...
+        ArrowDataType::Decimal256(_, _)
+        | ArrowDataType::Union(_, _, _)
+        | ArrowDataType::Dictionary(_, _)
+        | ArrowDataType::LargeList(_)
+        | ArrowDataType::Struct(_)
+        | ArrowDataType::List(_)
+        | ArrowDataType::FixedSizeList(_, _)
+        | ArrowDataType::Time32(_)
+        | ArrowDataType::Time64(_)
+        | ArrowDataType::Duration(_)
+        | ArrowDataType::Timestamp(_, _)
+        | ArrowDataType::Interval(_)
+        | ArrowDataType::Map(_, _) => {
+            todo!("Implement remaining mappings");
+        }
+    }
+}
+
 fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> PartitionedFile {
     let partition_values = schema
         .fields()
@@ -521,7 +584,7 @@ fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> P
                     f.data_type(),
                 )
                 .unwrap_or(ScalarValue::Null),
-                None => ScalarValue::Null,
+                None => get_null_of_arrow_type(f.data_type()),
             })
         })
         .collect::<Vec<_>>();
@@ -570,7 +633,7 @@ fn to_correct_scalar_value(
     match stat_val {
         serde_json::Value::Array(_) => None,
         serde_json::Value::Object(_) => None,
-        serde_json::Value::Null => None,
+        serde_json::Value::Null => Some(get_null_of_arrow_type(field_dt)),
         serde_json::Value::String(string_val) => match field_dt {
             ArrowDataType::Timestamp(_, _) => {
                 let time_nanos = ScalarValue::try_from_string(

@@ -10,12 +10,12 @@ use arrow::record_batch::RecordBatch;
 use common::datafusion::context_with_delta_table_factory;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::{SessionContext, TaskContext};
+use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{common::collect, file_format::ParquetExec, metrics::Label};
 use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor};
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::{Column, DataFusionError, Result};
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Expr;
 
 use deltalake::action::SaveMode;
@@ -284,8 +284,31 @@ async fn test_datafusion_stats() -> Result<()> {
     Ok(())
 }
 
+async fn get_scan_metrics(
+    table: &DeltaTable,
+    state: &SessionState,
+    e: &[Expr],
+) -> Result<ExecutionMetricsCollector> {
+    let mut metrics = ExecutionMetricsCollector::default();
+    let scan = table.scan(state, None, e, None).await?;
+    if scan.output_partitioning().partition_count() > 0 {
+        let plan = CoalescePartitionsExec::new(scan);
+        let task_ctx = Arc::new(TaskContext::from(state));
+        let _result = collect(plan.execute(0, task_ctx)?).await?;
+        visit_execution_plan(&plan, &mut metrics).unwrap();
+    }
+
+    return Ok(metrics);
+}
+
 #[tokio::test]
 async fn test_files_scanned() -> Result<()> {
+    // Validate that datafusion prunes files based on file statistics
+    // Do not scan files when we know it does not contain the requested records
+    use datafusion::prelude::*;
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+
     let arrow_schema = Arc::new(ArrowSchema::new(vec![
         ArrowField::new("id", ArrowDataType::Int32, true),
         ArrowField::new("string", ArrowDataType::Utf8, true),
@@ -305,29 +328,62 @@ async fn test_files_scanned() -> Result<()> {
     let (_temp_dir, table) = prepare_table(batches, SaveMode::Append).await;
     assert_eq!(table.version(), 2);
 
-    let ctx = SessionContext::new();
-    let plan = table.scan(&ctx.state(), None, &[], None).await?;
-    let plan = CoalescePartitionsExec::new(plan.clone());
-
-    let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
-    let _ = collect(plan.execute(0, task_ctx)?).await?;
-
-    let mut metrics = ExecutionMetricsCollector::default();
-    visit_execution_plan(&plan, &mut metrics).unwrap();
+    let metrics = get_scan_metrics(&table, &state, &[]).await?;
     assert!(metrics.num_scanned_files() == 2);
 
-    let filter = Expr::gt(
-        Expr::Column(Column::from_name("id")),
-        Expr::Literal(ScalarValue::Int32(Some(5))),
-    );
-
-    let plan = CoalescePartitionsExec::new(table.scan(&ctx.state(), None, &[filter], None).await?);
-    let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
-    let _result = collect(plan.execute(0, task_ctx)?).await?;
-
-    let mut metrics = ExecutionMetricsCollector::default();
-    visit_execution_plan(&plan, &mut metrics).unwrap();
+    let e = col("id").gt(lit(5));
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
     assert!(metrics.num_scanned_files() == 1);
+
+    // Ensure that tables without stats and partition columns can be pruned for just partitions
+    let table = deltalake::open_table(
+        "file:///home/david/programming/delta-rs/rust/tests/data/delta-0.8.0-null-partition",
+    )
+    .await?;
+
+    /*
+    // Logically this should prune... Might require an update on datafusion
+    let e = col("k").eq(lit("A")).and(col("k").is_not_null());
+    let metrics = get_scan_metrics(&table, &state, &[e]).await.unwrap();
+    println!("{:?}", metrics);
+    assert!(metrics.num_scanned_files() == 1);
+
+    let e = col("k").eq(lit("B"));
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert!(metrics.num_scanned_files() == 1);
+    */
+
+    // Check pruning for null partitions
+    let e = col("k").is_null();
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert!(metrics.num_scanned_files() == 1);
+
+    // Check pruning for null partitions. Since there are no record count statistics pruning cannot be done
+    let e = col("k").is_not_null();
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert!(metrics.num_scanned_files() == 2);
+
+    // Ensure that tables with stats and partition columns can be pruned
+    let table = deltalake::open_table(
+        "file:///home/david/programming/delta-rs/rust/tests/data/delta-2.2.0-partitioned-types",
+    )
+    .await?;
+
+    let e = col("c1").eq(lit(1));
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert!(metrics.num_scanned_files() == 0);
+
+    let e = col("c1").eq(lit(4));
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert!(metrics.num_scanned_files() == 1);
+
+    let e = col("c3").eq(lit(4));
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert!(metrics.num_scanned_files() == 1);
+
+    let e = col("c3").eq(lit(0));
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert!(metrics.num_scanned_files() == 0);
 
     Ok(())
 }
