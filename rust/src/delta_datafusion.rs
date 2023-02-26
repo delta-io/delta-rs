@@ -552,7 +552,7 @@ fn get_null_of_arrow_type(t: &ArrowDataType) -> ScalarValue {
         ArrowDataType::LargeUtf8 => ScalarValue::LargeUtf8(None),
         ArrowDataType::Decimal128(precision, scale) => {
             ScalarValue::Decimal128(None, precision.to_owned(), scale.to_owned())
-        },
+        }
         ArrowDataType::Timestamp(unit, tz) => {
             let tz = tz.to_owned();
             match unit {
@@ -561,9 +561,9 @@ fn get_null_of_arrow_type(t: &ArrowDataType) -> ScalarValue {
                 TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(None, tz),
                 TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(None, tz),
             }
-        },
+        }
         //Unsupported types...
-        ArrowDataType::Float16 
+        ArrowDataType::Float16
         | ArrowDataType::Decimal256(_, _)
         | ArrowDataType::Union(_, _, _)
         | ArrowDataType::Dictionary(_, _)
@@ -576,7 +576,10 @@ fn get_null_of_arrow_type(t: &ArrowDataType) -> ScalarValue {
         | ArrowDataType::Duration(_)
         | ArrowDataType::Interval(_)
         | ArrowDataType::Map(_, _) => {
-            panic!("{}", format!("Implement data type for Delta Lake {}", t.to_string()));
+            panic!(
+                "{}",
+                format!("Implement data type for Delta Lake {}", t.to_string())
+            );
         }
     }
 }

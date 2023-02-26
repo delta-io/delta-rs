@@ -336,10 +336,7 @@ async fn test_files_scanned() -> Result<()> {
     assert!(metrics.num_scanned_files() == 1);
 
     // Ensure that tables without stats and partition columns can be pruned for just partitions
-    let table = deltalake::open_table(
-        "./tests/data/delta-0.8.0-null-partition",
-    )
-    .await?;
+    let table = deltalake::open_table("./tests/data/delta-0.8.0-null-partition").await?;
 
     /*
     // Logically this should prune... Might require an update on datafusion
@@ -364,10 +361,7 @@ async fn test_files_scanned() -> Result<()> {
     assert!(metrics.num_scanned_files() == 2);
 
     // Ensure that tables with stats and partition columns can be pruned
-    let table = deltalake::open_table(
-        "./tests/data/delta-2.2.0-partitioned-types",
-    )
-    .await?;
+    let table = deltalake::open_table("./tests/data/delta-2.2.0-partitioned-types").await?;
 
     let e = col("c1").eq(lit(1));
     let metrics = get_scan_metrics(&table, &state, &[e]).await?;
