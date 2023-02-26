@@ -7,7 +7,9 @@ use std::sync::Arc;
 use crate::writer::DeltaWriterError;
 use crate::DeltaTableError;
 
-use arrow::array::{as_boolean_array, as_primitive_array, as_string_array, Array};
+use arrow::array::{
+    as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array, Array,
+};
 use arrow::datatypes::{
     DataType, Date32Type, Date64Type, Int16Type, Int32Type, Int64Type, Int8Type,
     Schema as ArrowSchema, SchemaRef as ArrowSchemaRef, TimeUnit, TimestampMicrosecondType,
@@ -179,6 +181,14 @@ pub(crate) fn stringified_partition_value(
                 .format(PARTITION_DATETIME_FORMAT)
                 .to_string()
         }
+        DataType::Binary => as_generic_binary_array::<i32>(arr)
+            .value(0)
+            .escape_ascii()
+            .to_string(),
+        DataType::LargeBinary => as_generic_binary_array::<i64>(arr)
+            .value(0)
+            .escape_ascii()
+            .to_string(),
         // TODO: handle more types
         _ => {
             unimplemented!("Unimplemented data type: {:?}", data_type);
@@ -277,9 +287,10 @@ impl Write for ShareableBuffer {
 mod tests {
     use super::*;
     use arrow::array::{
-        BooleanArray, Date32Array, Date64Array, Int16Array, Int32Array, Int64Array, Int8Array,
-        StringArray, TimestampSecondArray, UInt16Array, UInt32Array, UInt64Array, UInt8Array,
-        TimestampNanosecondArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+        BinaryArray, BooleanArray, Date32Array, Date64Array, Int16Array, Int32Array, Int64Array,
+        Int8Array, LargeBinaryArray, StringArray, TimestampMicrosecondArray,
+        TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
+        UInt32Array, UInt64Array, UInt8Array,
     };
 
     #[test]
@@ -347,12 +358,34 @@ mod tests {
                 Some(String::from("1970-01-01 00:00:01")),
             ),
             (
-                Arc::new(TimestampMicrosecondArray::from(vec![Some(1000000), Some(2)])),
+                Arc::new(TimestampMicrosecondArray::from(vec![
+                    Some(1000000),
+                    Some(2),
+                ])),
                 Some(String::from("1970-01-01 00:00:01")),
             ),
             (
-                Arc::new(TimestampNanosecondArray::from(vec![Some(1000000000), Some(2)])),
+                Arc::new(TimestampNanosecondArray::from(vec![
+                    Some(1000000000),
+                    Some(2),
+                ])),
                 Some(String::from("1970-01-01 00:00:01")),
+            ),
+            (
+                Arc::new(BinaryArray::from_vec(vec![b"1", b"2"])),
+                Some(String::from("1")),
+            ),
+            (
+                Arc::new(BinaryArray::from_vec(vec![b"\x00\\", b"2"])),
+                Some(String::from("\\x00\\\\")),
+            ),
+            (
+                Arc::new(LargeBinaryArray::from_vec(vec![b"1", b"2"])),
+                Some(String::from("1")),
+            ),
+            (
+                Arc::new(LargeBinaryArray::from_vec(vec![b"\x00\\", b"2"])),
+                Some(String::from("\\x00\\\\")),
             ),
         ];
         for (vals, result) in reference_pairs {
