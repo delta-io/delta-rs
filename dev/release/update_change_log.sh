@@ -16,8 +16,8 @@
 set -e
 
 LANGUAGE="rust"
-SINCE_VERSION="0.6.0"
-FUTURE_RELEASE="0.7.0"
+SINCE_VERSION="0.7.0"
+FUTURE_RELEASE="0.8.0"
 
 # only consider tags of the correct language
 if [ "$LANGUAGE" == "rust" ]; then
@@ -32,6 +32,7 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
 
 OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md"
+TEMP_OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md"
 
 # remove header so github-changelog-generator has a clean base to append
 sed -i '1d' "${OUTPUT_PATH}"
@@ -39,8 +40,8 @@ sed -i '1d' "${OUTPUT_PATH}"
 LINE_COUNT=$(wc -l <"${OUTPUT_PATH}")
 sed -i "$(( $LINE_COUNT-3 )),$ d" "${OUTPUT_PATH}"
 
-# Copy the previous CHANGELOG.md to CHANGELOG-old.md
-cat - "${OUTPUT_PATH}" > "${OUTPUT_PATH}".tmp
+# Copy the previous CHANGELOG.md to CHANGELOG.md.tmp
+cat - "${OUTPUT_PATH}" > ${TEMP_OUTPUT_PATH}
 
 # use exclude-tags-regex to filter out tags used in the wrong language
 pushd "${SOURCE_TOP_DIR}"
@@ -63,7 +64,7 @@ LINE_COUNT=$(wc -l <"${OUTPUT_PATH}")
 sed -i.bak "$(( $LINE_COUNT-3 )),$ d" "${OUTPUT_PATH}"
 
 # Add historical change log back in
-cat $HISTORIAL_PATH >> $OUTPUT_PATH
+cat ${TEMP_OUTPUT_PATH} >> $OUTPUT_PATH
 
 # Remove temporary files
-rm $HISTORIAL_PATH
+rm ${TEMP_OUTPUT_PATH}
