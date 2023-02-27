@@ -1,3 +1,4 @@
+#![cfg(feature = "integration_test")]
 use rusoto_core::Region;
 use rusoto_s3::{GetObjectRequest, PutObjectRequest, S3Client, S3};
 
@@ -9,7 +10,7 @@ async fn lambda_checkpoint_smoke_test() {
 
     // CI sets the endpoint URL differently.
     // Set to localhost if not present.
-    if let Err(_) = std::env::var("AWS_ENDPOINT_URL") {
+    if std::env::var("AWS_ENDPOINT_URL").is_err() {
         std::env::set_var("AWS_ENDPOINT_URL", "http://localhost:4566");
     }
     let region = Region::Custom {

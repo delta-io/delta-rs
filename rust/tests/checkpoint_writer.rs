@@ -109,7 +109,7 @@ mod delete_expired_delta_log_in_checkpoint {
         let set_file_last_modified = |version: usize, last_modified_millis: i64| {
             let last_modified_secs = last_modified_millis / 1000;
             let path = format!("{}/_delta_log/{:020}.json", &table_path, version);
-            utime::set_file_times(&path, last_modified_secs, last_modified_secs).unwrap();
+            utime::set_file_times(path, last_modified_secs, last_modified_secs).unwrap();
         };
 
         // create 2 commits
@@ -369,10 +369,7 @@ mod checkpoints_with_tombstones {
         version: i64,
     ) -> (HashSet<String>, Vec<Remove>) {
         checkpoints::create_checkpoint(table).await.unwrap();
-        let cp_path = format!(
-            "{}/_delta_log/0000000000000000000{}.checkpoint.parquet",
-            path, version
-        );
+        let cp_path = format!("{path}/_delta_log/0000000000000000000{version}.checkpoint.parquet");
         let (schema, actions) = read_checkpoint(&cp_path).await;
 
         let fields = schema

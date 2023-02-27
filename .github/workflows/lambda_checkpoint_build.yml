@@ -2,38 +2,38 @@ name: lambda_checkpoint_build
 
 on:
   push:
-    branches: [ main ]
+    branches: [main]
   pull_request:
-    branches: [ main ]
+    branches: [main]
 
 jobs:
   format:
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - name: Install minimal stable with clippy and rustfmt
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: default
-        toolchain: stable
-        override: true
-    - name: Format
-      run: cargo fmt -p lambda-delta-checkpoint -- --check
+      - uses: actions/checkout@v3
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: stable
+          override: true
+      - name: Format
+        run: cargo fmt -p lambda-delta-checkpoint -- --check
 
   build:
     strategy:
       fail-fast: false
     runs-on: ubuntu-latest
     steps:
-    - uses: actions/checkout@v2
-    - name: Install minimal stable with clippy and rustfmt
-      uses: actions-rs/toolchain@v1
-      with:
-        profile: default
-        toolchain: stable
-        override: true
-    - name: build and lint with clippy
-      run: cargo clippy -p lambda-delta-checkpoint
+      - uses: actions/checkout@v3
+      - name: Install minimal stable with clippy and rustfmt
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: stable
+          override: true
+      - name: build and lint with clippy
+        run: cargo clippy -p lambda-delta-checkpoint --features integration_test
 
   ## Temporarily disable test - the lambda isn't super useful with the current checkpoint memory pressure anyway.
   # test:
@@ -41,7 +41,7 @@ jobs:
   #     fail-fast: false
   #   runs-on: ubuntu-latest
   #   steps:
-  #   - uses: actions/checkout@v2
+  #   - uses: actions/checkout@v3
   #   - name: Build musl
   #     uses: docker://messense/rust-musl-cross:x86_64-musl
   #     with:
@@ -62,4 +62,3 @@ jobs:
   #         -v "$(pwd)":/home/rust/src \
   #         messense/rust-musl-cross:x86_64-musl \
   #         cargo test -p lambda-delta-checkpoint
-

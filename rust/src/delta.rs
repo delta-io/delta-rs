@@ -12,13 +12,13 @@ use std::{cmp::max, cmp::Ordering, collections::HashSet};
 
 use super::action;
 use super::action::{Action, DeltaOperation};
-use super::partitions::{DeltaTablePartition, PartitionFilter};
+use super::partitions::PartitionFilter;
 use super::schema::*;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
 use crate::delta_config::DeltaConfigError;
+use crate::operations::vacuum::VacuumBuilder;
 use crate::storage::ObjectStoreRef;
-use crate::vacuum::{Vacuum, VacuumError};
 
 use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt;
@@ -92,7 +92,7 @@ pub enum DeltaTableError {
     },
 
     /// Error returned when parsing checkpoint parquet.
-    // #[cfg(feature = "parquet")]
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     #[error("Failed to parse parquet: {}", .source)]
     Parquet {
         /// Parquet error details returned when reading the checkpoint failed.
@@ -115,11 +115,28 @@ pub enum DeltaTableError {
     },
 
     /// Error returned when the log record has an invalid JSON.
-    #[error("Invalid JSON in log record: {}", .source)]
-    InvalidJson {
-        /// JSON error details returned when the log record has an invalid JSON.
-        #[from]
-        source: serde_json::error::Error,
+    #[error("Invalid JSON in log record, version={}, line=`{}`, err=`{}`", .version, .line, .json_err)]
+    InvalidJsonLog {
+        /// JSON error details returned when parsing the record JSON.
+        json_err: serde_json::error::Error,
+        /// invalid log entry content.
+        line: String,
+        /// corresponding table version for the log file.
+        version: DeltaDataTypeVersion,
+    },
+    /// Error returned when the log contains invalid stats JSON.
+    #[error("Invalid JSON in file stats: {}", .json_err)]
+    InvalidStatsJson {
+        /// JSON error details returned when parsing the stats JSON.
+        json_err: serde_json::error::Error,
+    },
+    /// Error returned when the log contains invalid stats JSON.
+    #[error("Invalid JSON in invariant expression, line=`{line}`, err=`{json_err}`")]
+    InvalidInvariantJson {
+        /// JSON error details returned when parsing the invariant expression JSON.
+        json_err: serde_json::error::Error,
+        /// Invariant expression.
+        line: String,
     },
     /// Error returned when the DeltaTable has an invalid version.
     #[error("Invalid table version: {0}")]
@@ -199,6 +216,29 @@ pub enum DeltaTableError {
     /// Error returned when user attempts to commit actions that don't belong to the next version.
     #[error("Delta transaction failed, version {0} does not follow {1}")]
     VersionMismatch(DeltaDataTypeVersion, DeltaDataTypeVersion),
+    /// A Feature is missing to perform operation
+    #[error("Delta-rs must be build with feature '{feature}' to support loading from: {url}.")]
+    MissingFeature {
+        /// Name of the missiing feature
+        feature: &'static str,
+        /// Storage location url
+        url: String,
+    },
+    /// A Feature is missing to perform operation
+    #[error("Cannot infer storage location from: {0}")]
+    InvalidTableLocation(String),
+    /// Generic Delta Table error
+    #[error("Log JSON serialization error: {json_err}")]
+    SerializeLogJson {
+        /// JSON serialization error
+        json_err: serde_json::error::Error,
+    },
+    /// Generic Delta Table error
+    #[error("Schema JSON serialization error: {json_err}")]
+    SerializeSchemaJson {
+        /// JSON serialization error
+        json_err: serde_json::error::Error,
+    },
     /// Generic Delta Table error
     #[error("Generic DeltaTable error: {0}")]
     Generic(String),
@@ -310,24 +350,6 @@ impl TryFrom<action::MetaData> for DeltaTableMetaData {
     }
 }
 
-impl TryFrom<DeltaTableMetaData> for action::MetaData {
-    type Error = serde_json::error::Error;
-
-    fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
-        let schema_string = serde_json::to_string(&metadata.schema)?;
-        Ok(Self {
-            id: metadata.id,
-            name: metadata.name,
-            description: metadata.description,
-            format: metadata.format,
-            schema_string,
-            partition_columns: metadata.partition_columns,
-            created_time: metadata.created_time,
-            configuration: metadata.configuration,
-        })
-    }
-}
-
 /// Error related to Delta log application
 #[derive(thiserror::Error, Debug)]
 pub enum ApplyLogError {
@@ -335,7 +357,7 @@ pub enum ApplyLogError {
     #[error("End of transaction log")]
     EndOfLog,
     /// Error returned when the JSON of the log record is invalid.
-    #[error("Invalid JSON in log record")]
+    #[error("Invalid JSON found when applying log record")]
     InvalidJson {
         /// JSON error details returned when reading the JSON log record.
         #[from]
@@ -426,6 +448,7 @@ pub struct DeltaTable {
     pub state: DeltaTableState,
     /// the load options used during load
     pub config: DeltaTableConfig,
+    /// object store to access log and data files
     pub(crate) storage: ObjectStoreRef,
     /// file metadata for latest checkpoint
     last_check_point: Option<CheckPoint>,
@@ -512,6 +535,21 @@ impl DeltaTable {
         }
     }
 
+    /// Create a new [`DeltaTable`] from a [`DeltaTableState`] without loading any
+    /// data from backing storage.
+    ///
+    /// NOTE: This is for advanced users. If you don't know why you need to use this method,
+    /// please call one of the `open_table` helper methods instead.
+    pub(crate) fn new_with_state(storage: ObjectStoreRef, state: DeltaTableState) -> Self {
+        Self {
+            state,
+            storage,
+            config: Default::default(),
+            last_check_point: None,
+            version_timestamp: HashMap::new(),
+        }
+    }
+
     /// get a shared reference to the delta object store
     pub fn object_store(&self) -> ObjectStoreRef {
         self.storage.clone()
@@ -524,7 +562,7 @@ impl DeltaTable {
 
     /// Return the uri of commit version.
     pub fn commit_uri_from_version(&self, version: DeltaDataTypeVersion) -> Path {
-        let version = format!("{:020}.json", version);
+        let version = format!("{version:020}.json");
         Path::from_iter(["_delta_log", &version])
     }
 
@@ -536,7 +574,7 @@ impl DeltaTable {
 
         match check_point.parts {
             None => {
-                let path = log_path.child(&*format!("{}.checkpoint.parquet", checkpoint_prefix));
+                let path = log_path.child(&*format!("{checkpoint_prefix}.checkpoint.parquet"));
                 checkpoint_data_paths.push(path);
             }
             Some(parts) => {
@@ -585,6 +623,7 @@ impl DeltaTable {
 
     async fn get_last_checkpoint(&self) -> Result<CheckPoint, LoadCheckpointError> {
         let last_checkpoint_path = Path::from_iter(["_delta_log", "_last_checkpoint"]);
+        debug!("loading checkpoint from {last_checkpoint_path}");
         match self.storage.get(&last_checkpoint_path).await {
             Ok(data) => Ok(serde_json::from_slice(&data.bytes().await?)?),
             Err(ObjectStoreError::NotFound { .. }) => {
@@ -665,17 +704,7 @@ impl DeltaTable {
         Ok(cp)
     }
 
-    async fn apply_log(&mut self, version: DeltaDataTypeVersion) -> Result<(), ApplyLogError> {
-        let new_state = DeltaTableState::from_commit(self, version).await?;
-        self.state.merge(
-            new_state,
-            self.config.require_tombstones,
-            self.config.require_files,
-        );
-
-        Ok(())
-    }
-
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     async fn restore_checkpoint(&mut self, check_point: CheckPoint) -> Result<(), DeltaTableError> {
         self.state = DeltaTableState::from_checkpoint(self, &check_point).await?;
 
@@ -693,6 +722,8 @@ impl DeltaTable {
                 return Err(DeltaTableError::LoadCheckpoint { source: e });
             }
         };
+
+        debug!("start with latest checkpoint version: {version}");
 
         // scan logs after checkpoint
         loop {
@@ -755,59 +786,74 @@ impl DeltaTable {
             Ok(result) => result.bytes().await,
         }?;
 
+        debug!("parsing commit with version {next_version}...");
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
         let mut actions = Vec::new();
-        for line in reader.lines() {
-            let action: action::Action = serde_json::from_str(line?.as_str())?;
+        for re_line in reader.lines() {
+            let line = re_line?;
+            let lstr = line.as_str();
+            let action =
+                serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
+                    json_err: e,
+                    version: next_version,
+                    line,
+                })?;
             actions.push(action);
         }
         Ok(PeekCommit::New(next_version, actions))
     }
 
-    ///Apply any actions associated with the PeekCommit to the DeltaTable
-    pub fn apply_actions(
-        &mut self,
-        new_version: DeltaDataTypeVersion,
-        actions: Vec<Action>,
-    ) -> Result<(), DeltaTableError> {
-        if self.version() + 1 != new_version {
-            return Err(DeltaTableError::VersionMismatch(
-                new_version,
-                self.version(),
-            ));
-        }
-
-        let s = DeltaTableState::from_actions(actions, new_version)?;
-        self.state
-            .merge(s, self.config.require_tombstones, self.config.require_files);
-
-        Ok(())
-    }
-
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         match self.get_last_checkpoint().await {
             Ok(last_check_point) => {
+                debug!("update with latest checkpoint {last_check_point:?}");
                 if Some(last_check_point) == self.last_check_point {
-                    self.update_incremental().await
+                    self.update_incremental(None).await
                 } else {
                     self.last_check_point = Some(last_check_point);
                     self.restore_checkpoint(last_check_point).await?;
-                    self.update_incremental().await
+                    self.update_incremental(None).await
                 }
             }
-            Err(LoadCheckpointError::NotFound) => self.update_incremental().await,
-            Err(e) => Err(DeltaTableError::LoadCheckpoint { source: e }),
+            Err(LoadCheckpointError::NotFound) => {
+                debug!("update without checkpoint");
+                self.update_incremental(None).await
+            }
+            Err(source) => Err(DeltaTableError::LoadCheckpoint { source }),
         }
+    }
+
+    /// Updates the DeltaTable to the most recent state committed to the transaction log.
+    #[cfg(not(any(feature = "parquet", feature = "parquet2")))]
+    pub async fn update(&mut self) -> Result<(), DeltaTableError> {
+        self.update_incremental(None).await
     }
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
-    pub async fn update_incremental(&mut self) -> Result<(), DeltaTableError> {
-        while let PeekCommit::New(version, actions) = self.peek_next_commit(self.version()).await? {
-            self.apply_actions(version, actions)?;
+    pub async fn update_incremental(
+        &mut self,
+        max_version: Option<DeltaDataTypeVersion>,
+    ) -> Result<(), DeltaTableError> {
+        debug!(
+            "incremental update with version({}) and max_version({max_version:?})",
+            self.version(),
+        );
+
+        while let PeekCommit::New(new_version, actions) =
+            self.peek_next_commit(self.version()).await?
+        {
+            debug!("merging table state with version: {new_version}");
+            let s = DeltaTableState::from_actions(actions, new_version)?;
+            self.state
+                .merge(s, self.config.require_tombstones, self.config.require_files);
+            if Some(self.version()) == max_version {
+                return Ok(());
+            }
         }
 
         if self.version() == -1 {
@@ -838,25 +884,21 @@ impl DeltaTable {
             }
         }
 
-        let mut next_version;
         // 1. find latest checkpoint below version
+        #[cfg(any(feature = "parquet", feature = "parquet2"))]
         match self.find_latest_check_point_for_version(version).await? {
             Some(check_point) => {
                 self.restore_checkpoint(check_point).await?;
-                next_version = check_point.version + 1;
             }
             None => {
                 // no checkpoint found, clear table state and start from the beginning
-                self.state = DeltaTableState::with_version(0);
-                next_version = 0;
+                self.state = DeltaTableState::with_version(-1);
             }
         }
 
+        debug!("update incrementally from version {version}");
         // 2. apply all logs starting from checkpoint
-        while next_version <= version {
-            self.apply_log(next_version).await?;
-            next_version += 1;
-        }
+        self.update_incremental(Some(version)).await?;
 
         Ok(())
     }
@@ -940,35 +982,7 @@ impl DeltaTable {
         &'a self,
         filters: &'a [PartitionFilter<'a, &'a str>],
     ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
-        let current_metadata = self
-            .state
-            .current_metadata()
-            .ok_or(DeltaTableError::NoMetadata)?;
-        if !filters
-            .iter()
-            .all(|f| current_metadata.partition_columns.contains(&f.key.into()))
-        {
-            return Err(DeltaTableError::InvalidPartitionFilter {
-                partition_filter: format!("{:?}", filters),
-            });
-        }
-
-        let partition_col_data_types: HashMap<&str, &SchemaDataType> = current_metadata
-            .get_partition_col_data_types()
-            .into_iter()
-            .collect();
-
-        let actions = self.state.files().iter().filter(move |add| {
-            let partitions = add
-                .partition_values
-                .iter()
-                .map(|p| DeltaTablePartition::from_partition_value(p, ""))
-                .collect::<Vec<DeltaTablePartition>>();
-            filters
-                .iter()
-                .all(|filter| filter.match_partitions(&partitions, &partition_col_data_types))
-        });
-        Ok(actions)
+        self.state.get_active_add_actions_by_partitions(filters)
     }
 
     /// Returns the file list tracked in current table state filtered by provided
@@ -998,41 +1012,33 @@ impl DeltaTable {
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn get_files_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.state
-            .files()
-            .iter()
-            .map(|add| Path::from(add.path.as_ref()))
+        self.state.file_paths_iter()
     }
 
     /// Returns a collection of file names present in the loaded state
     #[inline]
     pub fn get_files(&self) -> Vec<Path> {
-        self.get_files_iter().collect()
+        self.state.file_paths_iter().collect()
     }
 
     /// Returns file names present in the loaded state in HashSet
     pub fn get_file_set(&self) -> HashSet<Path> {
-        self.state
-            .files()
-            .iter()
-            .map(|add| Path::from(add.path.as_ref()))
-            .collect()
+        self.state.file_paths_iter().collect()
     }
 
     /// Returns a URIs for all active files present in the current table version.
     pub fn get_file_uris(&self) -> impl Iterator<Item = String> + '_ {
         self.state
-            .files()
-            .iter()
-            .map(|add| self.storage.to_uri(&Path::from(add.path.as_ref())))
+            .file_paths_iter()
+            .map(|path| self.storage.to_uri(&path))
     }
 
     /// Returns statistics for files, in order
     pub fn get_stats(&self) -> impl Iterator<Item = Result<Option<Stats>, DeltaTableError>> + '_ {
-        self.state
-            .files()
-            .iter()
-            .map(|add| add.get_stats().map_err(DeltaTableError::from))
+        self.state.files().iter().map(|add| {
+            add.get_stats()
+                .map_err(|e| DeltaTableError::InvalidStatsJson { json_err: e })
+        })
     }
 
     /// Returns partition values for files, in order
@@ -1076,24 +1082,6 @@ impl DeltaTable {
         self.state.min_writer_version()
     }
 
-    /// Vacuum the delta table see [`Vacuum`] for more info
-    pub async fn vacuum(
-        &mut self,
-        retention_hours: Option<u64>,
-        dry_run: bool,
-        enforce_retention_duration: bool,
-    ) -> Result<Vec<String>, VacuumError> {
-        let mut plan = Vacuum::default()
-            .dry_run(dry_run)
-            .enforce_retention_duration(enforce_retention_duration);
-        if let Some(hours) = retention_hours {
-            plan = plan.with_retention_period(Duration::hours(hours as i64));
-        }
-
-        let res = plan.execute(self).await?;
-        Ok(res.files_deleted)
-    }
-
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
     /// no metadata was found in the log.
     pub fn schema(&self) -> Option<&Schema> {
@@ -1113,6 +1101,25 @@ impl DeltaTable {
             .current_metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .get_configuration())
+    }
+
+    /// Vacuum the delta table. See [`VacuumBuilder`] for more information.
+    pub async fn vacuum(
+        &mut self,
+        retention_hours: Option<u64>,
+        dry_run: bool,
+        enforce_retention_duration: bool,
+    ) -> Result<Vec<String>, DeltaTableError> {
+        let mut plan = VacuumBuilder::new(self.object_store(), self.state.clone())
+            .with_dry_run(dry_run)
+            .with_enforce_retention_duration(enforce_retention_duration);
+        if let Some(hours) = retention_hours {
+            plan = plan.with_retention_period(Duration::hours(hours as i64));
+        }
+
+        let (table, metrics) = plan.await?;
+        self.state = table.state;
+        Ok(metrics.files_deleted)
     }
 
     /// Creates a new DeltaTransaction for the DeltaTable.
@@ -1247,7 +1254,7 @@ impl fmt::Display for DeltaTable {
         writeln!(f, "\tversion: {}", self.version())?;
         match self.state.current_metadata() {
             Some(metadata) => {
-                writeln!(f, "\tmetadata: {}", metadata)?;
+                writeln!(f, "\tmetadata: {metadata}")?;
             }
             None => {
                 writeln!(f, "\tmetadata: None")?;
@@ -1404,12 +1411,15 @@ impl<'a> DeltaTransaction<'a> {
         }
 
         // Serialize all actions that are part of this log entry.
-        let log_entry = bytes::Bytes::from(log_entry_from_actions(&self.actions)?);
+        let log_entry = bytes::Bytes::from(
+            log_entry_from_actions(&self.actions)
+                .map_err(|e| DeltaTableError::SerializeLogJson { json_err: e })?,
+        );
 
         // Write delta log entry as temporary file to storage. For the actual commit,
         // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
         let token = Uuid::new_v4().to_string();
-        let file_name = format!("_commit_{}.json.tmp", token);
+        let file_name = format!("_commit_{token}.json.tmp");
         let path = Path::from_iter(["_delta_log", &file_name]);
 
         self.delta_table.storage.put(&path, log_entry).await?;
@@ -1482,6 +1492,19 @@ pub async fn open_table(table_uri: impl AsRef<str>) -> Result<DeltaTable, DeltaT
     Ok(table)
 }
 
+/// Same as `open_table`, but also accepts storage options to aid in building the table for a deduced
+/// `StorageService`.
+pub async fn open_table_with_storage_options(
+    table_uri: impl AsRef<str>,
+    storage_options: HashMap<String, String>,
+) -> Result<DeltaTable, DeltaTableError> {
+    let table = DeltaTableBuilder::from_uri(table_uri)
+        .with_storage_options(storage_options)
+        .load()
+        .await?;
+    Ok(table)
+}
+
 /// Creates a DeltaTable from the given path and loads it with the metadata from the given version.
 /// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table_with_version(
@@ -1533,12 +1556,13 @@ mod tests {
         drop(tmp_dir);
     }
 
-    #[cfg(any(feature = "s3", feature = "s3-rustls"))]
+    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
     #[test]
-    fn normalize_table_uri() {
+    fn normalize_table_uri_s3() {
+        std::env::set_var("AWS_DEFAULT_REGION", "us-east-1");
         for table_uri in [
             "s3://tests/data/delta-0.8.0/",
-            // "s3://tests/data/delta-0.8.0//",
+            "s3://tests/data/delta-0.8.0//",
             "s3://tests/data/delta-0.8.0",
         ]
         .iter()

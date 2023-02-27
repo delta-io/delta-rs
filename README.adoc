@@ -21,7 +21,7 @@ used with data processing frameworks like
 link:https://github.com/apache/arrow-datafusion[datafusion],
 link:https://github.com/apache/arrow-datafusion/tree/master/ballista[ballista],
 link:https://github.com/pola-rs/polars[polars],
-link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to other higher level languages such as link:https://delta-io.github.io/delta-rs/python/[Python] or Ruby.
+link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to other higher level language link:https://delta-io.github.io/delta-rs/python/[Python].
 
 === Features
 
@@ -34,52 +34,43 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 
 .Support features
 |===
-| Operation/Feature | Rust | Python | Ruby
+| Operation/Feature | Rust | Python
 
 | Read table
 | :heavy_check_mark: 
 | :heavy_check_mark: 
-| :heavy_check_mark:
 
 | Stream table update
 | :heavy_check_mark: 
 | :heavy_check_mark: 
-|
 
 | Filter files with partitions
 | :heavy_check_mark: 
 | :heavy_check_mark: 
-|
 
 | Vacuum (delete stale files)
 | :heavy_check_mark: 
 | :heavy_check_mark: 
-|
 
 | History
 | :heavy_check_mark:
 | :heavy_check_mark:
-|
 
 | Write transactions
 | :heavy_check_mark:
-|
 |
 
 | Checkpoint creation
 | :heavy_check_mark:
 |
-|
 
 | High-level file writer
 |
 | :heavy_check_mark: 
-|
 
 | Optimize
 | :heavy_check_mark: 
 | link:https://github.com/delta-io/delta-rs/issues/622[#622]
-|
 
 |===
 
@@ -109,7 +100,3 @@ The `rust/` directory contains core Rust APIs for accessing Delta Lake from Rust
 === Python
 
 The `python/` directory contains the `deltalake` Python package built on top of delta-rs
-
-=== Ruby
-
-The `ruby/` directory contains an early prototype of a Ruby library built on top of delta-rs

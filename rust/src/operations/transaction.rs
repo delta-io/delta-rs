@@ -16,11 +16,10 @@ enum TransactionError {
     VersionAlreadyExists(DeltaDataTypeVersion),
 
     /// Error returned when reading the delta log object failed.
-    #[error("Error serializing commit: {}", .source)]
-    Serialize {
-        /// Storage error details when reading the delta log object failed.
-        #[from]
-        source: serde_json::Error,
+    #[error("Error serializing commit log to json: {json_err}")]
+    SerializeLogJson {
+        /// Commit log record JSON serialization error.
+        json_err: serde_json::error::Error,
     },
 
     /// Error returned when reading the delta log object failed.
@@ -38,7 +37,9 @@ impl From<TransactionError> for DeltaTableError {
             TransactionError::VersionAlreadyExists(version) => {
                 DeltaTableError::VersionAlreadyExists(version)
             }
-            TransactionError::Serialize { source } => DeltaTableError::InvalidJson { source },
+            TransactionError::SerializeLogJson { json_err } => {
+                DeltaTableError::SerializeLogJson { json_err }
+            }
             TransactionError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
         }
     }
@@ -46,7 +47,7 @@ impl From<TransactionError> for DeltaTableError {
 
 /// Return the uri of commit version.
 fn commit_uri_from_version(version: DeltaDataTypeVersion) -> Path {
-    let version = format!("{:020}.json", version);
+    let version = format!("{version:020}.json");
     Path::from_iter([DELTA_LOG_FOLDER, &version])
 }
 
@@ -54,7 +55,8 @@ fn commit_uri_from_version(version: DeltaDataTypeVersion) -> Path {
 fn log_entry_from_actions(actions: &[Action]) -> Result<String, TransactionError> {
     let mut jsons = Vec::<String>::new();
     for action in actions {
-        let json = serde_json::to_string(action)?;
+        let json = serde_json::to_string(action)
+            .map_err(|e| TransactionError::SerializeLogJson { json_err: e })?;
         jsons.push(json);
     }
     Ok(jsons.join("\n"))
@@ -92,7 +94,7 @@ async fn prepare_commit(
     // Write delta log entry as temporary file to storage. For the actual commit,
     // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
     let token = uuid::Uuid::new_v4().to_string();
-    let file_name = format!("_commit_{}.json.tmp", token);
+    let file_name = format!("_commit_{token}.json.tmp");
     let path = Path::from_iter([DELTA_LOG_FOLDER, &file_name]);
     storage.put(&path, log_entry).await?;
 
@@ -141,7 +143,7 @@ pub(crate) async fn commit(
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "parquet"))]
 mod tests {
     use super::*;
     use crate::action::{DeltaOperation, Protocol, SaveMode};
@@ -159,7 +161,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_commits_writes_file() {
-        let metadata = get_delta_metadata(&vec![]);
+        let metadata = get_delta_metadata(&[]);
         let operation = DeltaOperation::Create {
             mode: SaveMode::Append,
             location: "memory://".into(),

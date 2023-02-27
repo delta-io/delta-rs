@@ -3,11 +3,25 @@ import pathlib
 import subprocess
 from datetime import date, datetime, timedelta
 from decimal import Decimal
+from time import sleep
 
 import pyarrow as pa
 import pytest
 
 from deltalake import DeltaTable, write_deltalake
+
+
+def wait_till_host_is_available(host: str, timeout_sec: int = 30):
+    spacing = 2
+    while True:
+        try:
+            subprocess.run(["curl", host], timeout=500, check=True)
+        except Exception:
+            pass
+        else:
+            break
+
+        sleep(spacing)
 
 
 @pytest.fixture(scope="session")
@@ -45,6 +59,8 @@ def s3_localstack_creds():
             endpoint_url,
         ],
     ]
+
+    wait_till_host_is_available(endpoint_url)
 
     try:
         for args in setup_commands:
@@ -104,12 +120,12 @@ def azurite_creds():
     env = os.environ.copy()
     env.update(config)
     env["AZURE_STORAGE_CONNECTION_STRING"] = (
-        f"DefaultEndpointsProtocol=http;"
+        "DefaultEndpointsProtocol=http;"
         f"AccountName={config['AZURE_STORAGE_ACCOUNT_NAME']};"
         f"AccountKey={config['AZURE_STORAGE_ACCOUNT_KEY']};"
         f"BlobEndpoint={endpoint_url};"
     )
-
+    wait_till_host_is_available(endpoint_url)
     try:
         subprocess.run(
             [
@@ -154,7 +170,7 @@ def azurite_sas_creds(azurite_creds):
     env = os.environ.copy()
     env.update(azurite_creds)
     env["AZURE_STORAGE_CONNECTION_STRING"] = (
-        f"DefaultEndpointsProtocol=http;"
+        "DefaultEndpointsProtocol=http;"
         f"AccountName={azurite_creds['AZURE_STORAGE_ACCOUNT_NAME']};"
         f"AccountKey={azurite_creds['AZURE_STORAGE_ACCOUNT_KEY']};"
         f"BlobEndpoint={endpoint_url};"

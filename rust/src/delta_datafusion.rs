@@ -50,14 +50,15 @@ use datafusion::physical_plan::{
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DataFusionError, Result as DataFusionResult};
 use datafusion_expr::logical_plan::CreateExternalTable;
-use datafusion_expr::{Expr, Extension, LogicalPlan};
+use datafusion_expr::{Expr, Extension, LogicalPlan, TableProviderFilterPushDown};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
+use crate::builder::ensure_table_uri;
 use crate::Invariant;
-use crate::{action, open_table};
+use crate::{action, open_table, open_table_with_storage_options};
 use crate::{schema, DeltaTableBuilder};
 use crate::{DeltaTable, DeltaTableError};
 
@@ -320,6 +321,10 @@ fn register_store(table: &DeltaTable, env: Arc<RuntimeEnv>) {
 
 #[async_trait]
 impl TableProvider for DeltaTable {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
     fn schema(&self) -> Arc<ArrowSchema> {
         Arc::new(
             <ArrowSchema as TryFrom<&schema::Schema>>::try_from(DeltaTable::schema(self).unwrap())
@@ -329,6 +334,14 @@ impl TableProvider for DeltaTable {
 
     fn table_type(&self) -> TableType {
         TableType::Base
+    }
+
+    fn get_table_definition(&self) -> Option<&str> {
+        None
+    }
+
+    fn get_logical_plan(&self) -> Option<&LogicalPlan> {
+        None
     }
 
     async fn scan(
@@ -342,7 +355,7 @@ impl TableProvider for DeltaTable {
             DeltaTable::schema(self).unwrap(),
         )?);
 
-        register_store(self, session.runtime_env.clone());
+        register_store(self, session.runtime_env().clone());
 
         // TODO we group files together by their partition values. If the table is partitioned
         // and partitions are somewhat evenly distributed, probably not the worst choice ...
@@ -357,8 +370,8 @@ impl TableProvider for DeltaTable {
                 .files()
                 .iter()
                 .zip(files_to_prune.into_iter())
-                .for_each(|(action, prune_file)| {
-                    if !prune_file {
+                .for_each(|(action, keep_file)| {
+                    if keep_file {
                         let part = partitioned_file_from_action(action, &schema);
                         file_groups
                             .entry(part.partition_values.clone())
@@ -386,8 +399,9 @@ impl TableProvider for DeltaTable {
                 .collect(),
         ));
 
-        let parquet_scan = ParquetFormat::new(session.config_options())
+        let parquet_scan = ParquetFormat::new()
             .create_physical_plan(
+                session,
                 FileScanConfig {
                     object_store_url: self.storage.object_store_url(),
                     file_schema,
@@ -405,22 +419,27 @@ impl TableProvider for DeltaTable {
                         })
                         .collect::<Result<Vec<_>, ArrowError>>()?,
                     output_ordering: None,
-                    config_options: Default::default(),
+                    infinite_source: false,
                 },
                 filters,
             )
             .await?;
-        let mut url = self.table_uri();
-        if url.ends_with(':') {
-            url += "//"; // table_uri() trims slashes from `memory://` so add them back
-        }
-        let delta_scan = DeltaScan { url, parquet_scan };
 
-        Ok(Arc::new(delta_scan))
+        Ok(Arc::new(DeltaScan {
+            url: ensure_table_uri(self.table_uri())?.as_str().into(),
+            parquet_scan,
+        }))
     }
 
-    fn as_any(&self) -> &dyn Any {
-        self
+    fn supports_filter_pushdown(
+        &self,
+        _filter: &Expr,
+    ) -> DataFusionResult<TableProviderFilterPushDown> {
+        Ok(TableProviderFilterPushDown::Inexact)
+    }
+
+    fn statistics(&self) -> Option<Statistics> {
+        Some(self.datafusion_table_statistics())
     }
 }
 
@@ -467,15 +486,19 @@ impl ExecutionPlan for DeltaScan {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
-        let url = self.url.as_str();
-        let url = ListingTableUrl::parse(url)?;
-        let storage = context.runtime_env().object_store_registry.get_by_url(url);
-        let mut table = DeltaTableBuilder::from_uri(self.url.clone());
+        let df_url = ListingTableUrl::parse(self.url.as_str())?;
+        let storage = context
+            .runtime_env()
+            .object_store_registry
+            .get_by_url(df_url);
+        let mut table = DeltaTableBuilder::from_uri(&self.url);
         if let Ok(storage) = storage {
             // When running in ballista, the store will be deserialized and re-created
             // When testing with a MemoryStore, it will already be present and we should re-use it
-            let path = &Path::parse("")?;
-            table = table.with_storage_backend(storage, path);
+            table = table.with_storage_backend(
+                storage,
+                Url::parse(&self.url).map_err(|err| DataFusionError::Internal(err.to_string()))?,
+            );
         }
         let table = table.build()?;
         register_store(&table, context.runtime_env());
@@ -663,39 +686,15 @@ fn correct_scalar_value_type(value: ScalarValue, field_dt: &ArrowDataType) -> Op
 }
 
 fn left_larger_than_right(left: ScalarValue, right: ScalarValue) -> Option<bool> {
-    match left {
-        ScalarValue::Float64(Some(v)) => {
-            let f_right = f64::try_from(right).ok()?;
-            Some(v > f_right)
-        }
-        ScalarValue::Float32(Some(v)) => {
-            let f_right = f32::try_from(right).ok()?;
-            Some(v > f_right)
-        }
-        ScalarValue::Int8(Some(v)) => {
-            let i_right = i8::try_from(right).ok()?;
-            Some(v > i_right)
-        }
-        ScalarValue::Int16(Some(v)) => {
-            let i_right = i16::try_from(right).ok()?;
-            Some(v > i_right)
-        }
-        ScalarValue::Int32(Some(v)) => {
-            let i_right = i32::try_from(right).ok()?;
-            Some(v > i_right)
-        }
-        ScalarValue::Int64(Some(v)) => {
-            let i_right = i64::try_from(right).ok()?;
-            Some(v > i_right)
-        }
-        ScalarValue::Boolean(Some(v)) => {
-            let b_right = bool::try_from(right).ok()?;
-            Some(v & !b_right)
-        }
-        ScalarValue::Utf8(Some(v)) => match right {
-            ScalarValue::Utf8(Some(s_right)) => Some(v > s_right),
-            _ => None,
-        },
+    match (&left, &right) {
+        (ScalarValue::Float64(Some(l)), ScalarValue::Float64(Some(r))) => Some(l > r),
+        (ScalarValue::Float32(Some(l)), ScalarValue::Float32(Some(r))) => Some(l > r),
+        (ScalarValue::Int8(Some(l)), ScalarValue::Int8(Some(r))) => Some(l > r),
+        (ScalarValue::Int16(Some(l)), ScalarValue::Int16(Some(r))) => Some(l > r),
+        (ScalarValue::Int32(Some(l)), ScalarValue::Int32(Some(r))) => Some(l > r),
+        (ScalarValue::Int64(Some(l)), ScalarValue::Int64(Some(r))) => Some(l > r),
+        (ScalarValue::Utf8(Some(l)), ScalarValue::Utf8(Some(r))) => Some(l > r),
+        (ScalarValue::Boolean(Some(l)), ScalarValue::Boolean(Some(r))) => Some(l & !r),
         _ => {
             log::error!(
                 "Scalar value comparison unimplemented for {:?} and {:?}",
@@ -866,7 +865,11 @@ impl TableProviderFactory for DeltaTableFactory {
         _ctx: &SessionState,
         cmd: &CreateExternalTable,
     ) -> datafusion::error::Result<Arc<dyn TableProvider>> {
-        let provider = open_table(cmd.to_owned().location).await.unwrap();
+        let provider = if cmd.options.is_empty() {
+            open_table(cmd.to_owned().location).await?
+        } else {
+            open_table_with_storage_options(cmd.to_owned().location, cmd.to_owned().options).await?
+        };
         Ok(Arc::new(provider))
     }
 }
@@ -884,7 +887,7 @@ mod tests {
     // test deserialization of serialized partition values.
     // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
     #[test]
-    fn test_parse_scalar_value() {
+    fn test_to_correct_scalar_value() {
         let reference_pairs = &[
             (
                 json!("2015"),
@@ -956,6 +959,76 @@ mod tests {
     }
 
     #[test]
+    fn test_to_scalar_value() {
+        let reference_pairs = &[
+            (
+                json!("val"),
+                Some(ScalarValue::Utf8(Some(String::from("val")))),
+            ),
+            (json!("2"), Some(ScalarValue::Utf8(Some(String::from("2"))))),
+            (json!(true), Some(ScalarValue::Boolean(Some(true)))),
+            (json!(false), Some(ScalarValue::Boolean(Some(false)))),
+            (json!(2), Some(ScalarValue::Int64(Some(2)))),
+            (json!(-2), Some(ScalarValue::Int64(Some(-2)))),
+            (json!(2.0), Some(ScalarValue::Float64(Some(2.0)))),
+            (json!(["1", "2"]), None),
+            (json!({"key": "val"}), None),
+            (json!(null), None),
+        ];
+        for (stat_val, scalar_val) in reference_pairs {
+            assert_eq!(to_scalar_value(stat_val), *scalar_val)
+        }
+    }
+
+    #[test]
+    fn test_left_larger_than_right() {
+        let correct_reference_pairs = vec![
+            (
+                ScalarValue::Float64(Some(1.0)),
+                ScalarValue::Float64(Some(2.0)),
+            ),
+            (
+                ScalarValue::Float32(Some(1.0)),
+                ScalarValue::Float32(Some(2.0)),
+            ),
+            (ScalarValue::Int8(Some(1)), ScalarValue::Int8(Some(2))),
+            (ScalarValue::Int16(Some(1)), ScalarValue::Int16(Some(2))),
+            (ScalarValue::Int32(Some(1)), ScalarValue::Int32(Some(2))),
+            (ScalarValue::Int64(Some(1)), ScalarValue::Int64(Some(2))),
+            (
+                ScalarValue::Boolean(Some(false)),
+                ScalarValue::Boolean(Some(true)),
+            ),
+            (
+                ScalarValue::Utf8(Some(String::from("1"))),
+                ScalarValue::Utf8(Some(String::from("2"))),
+            ),
+        ];
+        for (smaller_val, larger_val) in correct_reference_pairs {
+            assert_eq!(
+                left_larger_than_right(smaller_val.clone(), larger_val.clone()),
+                Some(false)
+            );
+            assert_eq!(left_larger_than_right(larger_val, smaller_val), Some(true));
+        }
+
+        let incorrect_reference_pairs = vec![
+            (
+                ScalarValue::Float64(Some(1.0)),
+                ScalarValue::Float32(Some(2.0)),
+            ),
+            (ScalarValue::Int32(Some(1)), ScalarValue::Float32(Some(2.0))),
+            (
+                ScalarValue::Boolean(Some(true)),
+                ScalarValue::Float32(Some(2.0)),
+            ),
+        ];
+        for (left, right) in incorrect_reference_pairs {
+            assert_eq!(left_larger_than_right(left, right), None);
+        }
+    }
+
+    #[test]
     fn test_partitioned_file_from_action() {
         let mut partition_values = std::collections::HashMap::new();
         partition_values.insert("month".to_string(), Some("1".to_string()));
@@ -999,8 +1072,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(&["a", "b", "c", "d"])),
-                Arc::new(arrow::array::Int32Array::from_slice(&[1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from_slice(["a", "b", "c", "d"])),
+                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
             ],
         )
         .unwrap();

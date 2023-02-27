@@ -3,6 +3,7 @@
 VENV := venv
 MATURIN_VERSION := $(shell grep 'requires =' pyproject.toml | cut -d= -f2- | tr -d '[ "]')
 PACKAGE_VERSION := $(shell grep version Cargo.toml | head -n 1 | awk '{print $$3}' | tr -d '"' )
+DAT_VERSION := 0.0.2
 
 .PHONY: setup-venv
 setup-venv: ## Setup the virtualenv
@@ -13,6 +14,16 @@ setup-venv: ## Setup the virtualenv
 setup: ## Setup the requirements
 	$(info --- Setup dependencies ---)
 	pip install "$(MATURIN_VERSION)"
+
+.PHONY: setup-dat
+setup-dat: ## Download DAT test files
+	mkdir -p dat-data
+	rm -rf dat-data/v$(DAT_VERSION)
+	curl -L --silent --output dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz \
+		https://github.com/delta-incubator/dat/releases/download/v$(DAT_VERSION)/deltalake-dat-v$(DAT_VERSION).tar.gz 
+	tar --no-same-permissions -xzf dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz
+	mv out dat-data/v$(DAT_VERSION)
+	rm dat-data/deltalake-dat-v$(DAT_VERSION).tar.gz
 
 .PHONY: build
 build: setup ## Build Python binding of delta-rs
@@ -43,7 +54,7 @@ format: ## Format the code
 	cargo fmt
 	$(info --- Python format ---)
 	black .
-	isort .
+	ruff . --fix
 
 .PHONY: check-rust
 check-rust: ## Run check on Rust
@@ -54,10 +65,10 @@ check-rust: ## Run check on Rust
 
 .PHONY: check-python
 check-python: ## Run check on Python
-	$(info Check Python isort)
-	isort --diff --check-only .
 	$(info Check Python black)
 	black --check .
+	$(info Check Python ruff)
+	ruff check .
 	$(info Check Python mypy)
 	mypy
 

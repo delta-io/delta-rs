@@ -6,8 +6,8 @@ use serde_json::json;
 use std::collections::HashMap;
 
 use crate::action::{
-    Action, ActionError, Add, ColumnCountStat, ColumnValueStat, MetaData, Protocol, Remove, Stats,
-    Txn,
+    Action, ActionError, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, MetaData, Protocol,
+    Remove, Stats, Txn,
 };
 
 fn populate_hashmap_with_option_from_parquet_map(
@@ -30,9 +30,17 @@ fn populate_hashmap_with_option_from_parquet_map(
 
 fn gen_action_type_error(action: &str, field: &str, expected_type: &str) -> ActionError {
     ActionError::InvalidField(format!(
-        "type for {} in {} action should be {}",
-        field, action, expected_type
+        "type for {field} in {action} action should be {expected_type}"
     ))
+}
+
+impl AddCDCFile {
+    fn from_parquet_record(_record: &parquet::record::Row) -> Result<Self, ActionError> {
+        let re = Self {
+            ..Default::default()
+        };
+        Ok(re)
+    }
 }
 
 impl Add {
@@ -74,8 +82,7 @@ impl Add {
                     )
                     .map_err(|estr| {
                         ActionError::InvalidField(format!(
-                            "Invalid partitionValues for add action: {}",
-                            estr,
+                            "Invalid partitionValues for add action: {estr}",
                         ))
                     })?;
                 }
@@ -95,8 +102,7 @@ impl Add {
                         populate_hashmap_with_option_from_parquet_map(&mut tags, tags_map)
                             .map_err(|estr| {
                                 ActionError::InvalidField(format!(
-                                    "Invalid tags for add action: {}",
-                                    estr,
+                                    "Invalid tags for add action: {estr}",
                                 ))
                             })?;
                         re.tags = Some(tags);
@@ -122,7 +128,7 @@ impl Add {
                     }
                 },
                 _ => {
-                    log::warn!(
+                    log::debug!(
                         "Unexpected field name `{}` for add action: {:?}",
                         name,
                         record
@@ -181,7 +187,7 @@ impl Add {
                             log::error!("Expect type of stats_parsed field nullCount to be struct, got: {}", record);
                         }
                         _ => {
-                            log::warn!(
+                            log::debug!(
                                 "Unexpected field name `{}` for stats_parsed: {:?}",
                                 name,
                                 record,
@@ -262,15 +268,15 @@ fn primitive_parquet_field_to_json_value(field: &Field) -> Result<serde_json::Va
     }
 }
 
-fn convert_timestamp_millis_to_string(value: u64) -> Result<String, &'static str> {
+fn convert_timestamp_millis_to_string(value: i64) -> Result<String, &'static str> {
     let dt = Utc
-        .timestamp_opt((value / 1000) as i64, ((value % 1000) * 1000000) as u32)
+        .timestamp_opt(value / 1000, ((value % 1000) * 1000000) as u32)
         .single()
         .ok_or("Value out of bounds")?;
     Ok(dt.to_rfc3339_opts(SecondsFormat::Millis, true))
 }
 
-fn convert_date_to_string(value: u32) -> Result<String, &'static str> {
+fn convert_date_to_string(value: i32) -> Result<String, &'static str> {
     static NUM_SECONDS_IN_DAY: i64 = 60 * 60 * 24;
     let dt = Utc
         .timestamp_opt(value as i64 * NUM_SECONDS_IN_DAY, 0)
@@ -343,8 +349,7 @@ impl MetaData {
                     )
                     .map_err(|estr| {
                         ActionError::InvalidField(format!(
-                            "Invalid configuration for metaData action: {}",
-                            estr,
+                            "Invalid configuration for metaData action: {estr}",
                         ))
                     })?;
                 }
@@ -368,8 +373,7 @@ impl MetaData {
                             )
                             .map_err(|estr| {
                                 ActionError::InvalidField(format!(
-                                    "Invalid format.options for metaData action: {}",
-                                    estr,
+                                    "Invalid format.options for metaData action: {estr}",
                                 ))
                             })?;
                             re.format.options = options;
@@ -380,7 +384,7 @@ impl MetaData {
                     }
                 }
                 _ => {
-                    log::warn!(
+                    log::debug!(
                         "Unexpected field name `{}` for metaData action: {:?}",
                         name,
                         record
@@ -434,8 +438,7 @@ impl Remove {
                         )
                         .map_err(|estr| {
                             ActionError::InvalidField(format!(
-                                "Invalid partitionValues for remove action: {}",
-                                estr,
+                                "Invalid partitionValues for remove action: {estr}",
                             ))
                         })?;
                         re.partition_values = Some(partition_values);
@@ -448,8 +451,7 @@ impl Remove {
                         populate_hashmap_with_option_from_parquet_map(&mut tags, tags_map)
                             .map_err(|estr| {
                                 ActionError::InvalidField(format!(
-                                    "Invalid tags for remove action: {}",
-                                    estr,
+                                    "Invalid tags for remove action: {estr}",
                                 ))
                             })?;
                         re.tags = Some(tags);
@@ -463,7 +465,7 @@ impl Remove {
                 }
                 "numRecords" => {}
                 _ => {
-                    log::warn!(
+                    log::debug!(
                         "Unexpected field name `{}` for remove action: {:?}",
                         name,
                         record
@@ -499,7 +501,7 @@ impl Txn {
                     re.last_updated = record.get_long(i).map(Some).unwrap_or(None);
                 }
                 _ => {
-                    log::warn!(
+                    log::debug!(
                         "Unexpected field name `{}` for txn action: {:?}",
                         name,
                         record
@@ -531,7 +533,7 @@ impl Protocol {
                     })?;
                 }
                 _ => {
-                    log::warn!(
+                    log::debug!(
                         "Unexpected field name `{}` for protocol action: {:?}",
                         name,
                         record
@@ -586,10 +588,10 @@ impl Action {
             "remove" => Action::remove(Remove::from_parquet_record(col_data)?),
             "txn" => Action::txn(Txn::from_parquet_record(col_data)?),
             "protocol" => Action::protocol(Protocol::from_parquet_record(col_data)?),
+            "cdc" => Action::cdc(AddCDCFile::from_parquet_record(col_data)?),
             name => {
                 return Err(ActionError::InvalidField(format!(
-                    "Unexpected action from checkpoint: {}",
-                    name,
+                    "Unexpected action from checkpoint: {name}",
                 )));
             }
         })

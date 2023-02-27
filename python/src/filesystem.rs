@@ -9,28 +9,40 @@ use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{IntoPyDict, PyBytes};
+use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Runtime;
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub(crate) struct FsConfig {
+    pub(crate) root_url: String,
+    pub(crate) options: HashMap<String, String>,
+}
 
 #[pyclass(subclass)]
 #[derive(Debug, Clone)]
 pub struct DeltaFileSystemHandler {
     pub(crate) inner: Arc<DynObjectStore>,
     pub(crate) rt: Arc<Runtime>,
+    pub(crate) config: FsConfig,
 }
 
 #[pymethods]
 impl DeltaFileSystemHandler {
     #[new]
-    #[args(options = "None")]
+    #[pyo3(signature = (table_uri, options = None))]
     fn new(table_uri: &str, options: Option<HashMap<String, String>>) -> PyResult<Self> {
         let storage = DeltaTableBuilder::from_uri(table_uri)
-            .with_storage_options(options.unwrap_or_default())
+            .with_storage_options(options.clone().unwrap_or_default())
             .build_storage()
             .map_err(PyDeltaTableError::from_raw)?;
         Ok(Self {
             inner: storage,
             rt: Arc::new(rt()?),
+            config: FsConfig {
+                root_url: table_uri.into(),
+                options: options.unwrap_or_default(),
+            },
         })
     }
 
@@ -41,7 +53,7 @@ impl DeltaFileSystemHandler {
     fn normalize_path(&self, path: String) -> PyResult<String> {
         let suffix = if path.ends_with('/') { "/" } else { "" };
         let path = Path::parse(path).unwrap();
-        Ok(format!("{}{}", path, suffix))
+        Ok(format!("{path}{suffix}"))
     }
 
     fn copy_file(&self, src: String, dest: String) -> PyResult<()> {
@@ -75,14 +87,14 @@ impl DeltaFileSystemHandler {
     }
 
     fn equals(&self, other: &DeltaFileSystemHandler) -> PyResult<bool> {
-        Ok(format!("{:?}", self) == format!("{:?}", other))
+        Ok(format!("{self:?}") == format!("{other:?}"))
     }
 
     fn get_file_info<'py>(&self, paths: Vec<String>, py: Python<'py>) -> PyResult<Vec<&'py PyAny>> {
         let fs = PyModule::import(py, "pyarrow.fs")?;
         let file_types = fs.getattr("FileType")?;
 
-        let to_file_info = |loc: String, type_: &PyAny, kwargs: HashMap<&str, i64>| {
+        let to_file_info = |loc: &str, type_: &PyAny, kwargs: &HashMap<&str, i64>| {
             fs.call_method("FileInfo", (loc, type_), Some(kwargs.into_py_dict(py)))
         };
 
@@ -104,16 +116,16 @@ impl DeltaFileSystemHandler {
                             ("mtime_ns", meta.last_modified.timestamp_nanos()),
                         ]);
                         infos.push(to_file_info(
-                            meta.location.to_string(),
+                            meta.location.as_ref(),
                             file_types.getattr("File")?,
-                            kwargs,
+                            &kwargs,
                         )?);
                     }
                     Err(ObjectStoreError::NotFound { .. }) => {
                         infos.push(to_file_info(
-                            path.to_string(),
+                            path.as_ref(),
                             file_types.getattr("NotFound")?,
-                            HashMap::new(),
+                            &HashMap::new(),
                         )?);
                     }
                     Err(err) => {
@@ -122,9 +134,9 @@ impl DeltaFileSystemHandler {
                 }
             } else {
                 infos.push(to_file_info(
-                    path.to_string(),
+                    path.as_ref(),
                     file_types.getattr("Directory")?,
-                    HashMap::new(),
+                    &HashMap::new(),
                 )?);
             }
         }
@@ -132,7 +144,7 @@ impl DeltaFileSystemHandler {
         Ok(infos)
     }
 
-    #[args(allow_not_found = "false", recursive = "false")]
+    #[pyo3(signature = (base_dir, allow_not_found = false, recursive = false))]
     fn get_file_info_selector<'py>(
         &self,
         base_dir: String,
@@ -217,7 +229,7 @@ impl DeltaFileSystemHandler {
         let file = self
             .rt
             .block_on(ObjectInputFile::try_new(
-                self.rt.clone(),
+                Arc::clone(&self.rt),
                 self.inner.clone(),
                 path,
             ))
@@ -225,7 +237,7 @@ impl DeltaFileSystemHandler {
         Ok(file)
     }
 
-    #[args(metadata = "None")]
+    #[pyo3(signature = (path, metadata = None))]
     fn open_output_stream(
         &self,
         path: String,
@@ -235,12 +247,19 @@ impl DeltaFileSystemHandler {
         let file = self
             .rt
             .block_on(ObjectOutputStream::try_new(
-                self.rt.clone(),
+                Arc::clone(&self.rt),
                 self.inner.clone(),
                 path,
             ))
             .map_err(PyDeltaTableError::from_object_store)?;
         Ok(file)
+    }
+
+    pub fn __getnewargs__(&self) -> PyResult<(String, Option<HashMap<String, String>>)> {
+        Ok((
+            self.config.root_url.clone(),
+            Some(self.config.options.clone()),
+        ))
     }
 }
 
@@ -294,14 +313,12 @@ impl ObjectInputFile {
     fn check_position(&self, position: i64, action: &str) -> PyResult<()> {
         if position < 0 {
             return Err(PyIOError::new_err(format!(
-                "Cannot {} for negative position.",
-                action
+                "Cannot {action} for negative position."
             )));
         }
         if position > self.content_length {
             return Err(PyIOError::new_err(format!(
-                "Cannot {} past end of file.",
-                action
+                "Cannot {action} past end of file."
             )));
         }
         Ok(())
@@ -341,7 +358,7 @@ impl ObjectInputFile {
         Ok(self.content_length)
     }
 
-    #[args(whence = "0")]
+    #[pyo3(signature = (offset, whence = 0))]
     fn seek(&mut self, offset: i64, whence: i64) -> PyResult<i64> {
         self.check_closed()?;
         self.check_position(offset, "seek")?;
@@ -367,7 +384,7 @@ impl ObjectInputFile {
         Ok(self.pos)
     }
 
-    #[args(nbytes = "None")]
+    #[pyo3(signature = (nbytes = None))]
     fn read(&mut self, nbytes: Option<i64>) -> PyResult<Py<PyBytes>> {
         self.check_closed()?;
         let range = match nbytes {
@@ -385,15 +402,14 @@ impl ObjectInputFile {
         };
         let nbytes = (range.end - range.start) as i64;
         self.pos += nbytes;
-        let obj = if nbytes > 0 {
+        let data = if nbytes > 0 {
             self.rt
                 .block_on(self.store.get_range(&self.path, range))
                 .map_err(PyDeltaTableError::from_object_store)?
-                .to_vec()
         } else {
-            Vec::new()
+            "".into()
         };
-        Python::with_gil(|py| Ok(PyBytes::new(py, &obj).into_py(py)))
+        Python::with_gil(|py| Ok(PyBytes::new(py, data.as_ref()).into_py(py)))
     }
 
     fn fileno(&self) -> PyResult<()> {
@@ -500,22 +516,24 @@ impl ObjectOutputStream {
         Err(PyNotImplementedError::new_err("'size' not implemented"))
     }
 
-    #[args(whence = "0")]
-    fn seek(&mut self, _offset: i64, _whence: i64) -> PyResult<i64> {
+    #[allow(unused_variables)]
+    #[pyo3(signature = (offset, whence = 0))]
+    fn seek(&mut self, offset: i64, whence: i64) -> PyResult<i64> {
         self.check_closed()?;
         Err(PyNotImplementedError::new_err("'seek' not implemented"))
     }
 
-    #[args(nbytes = "None")]
-    fn read(&mut self, _nbytes: Option<i64>) -> PyResult<()> {
+    #[allow(unused_variables)]
+    #[pyo3(signature = (nbytes = None))]
+    fn read(&mut self, nbytes: Option<i64>) -> PyResult<()> {
         self.check_closed()?;
         Err(PyNotImplementedError::new_err("'read' not implemented"))
     }
 
-    fn write(&mut self, data: Vec<u8>) -> PyResult<i64> {
+    fn write(&mut self, data: &PyBytes) -> PyResult<i64> {
         self.check_closed()?;
-        let len = data.len() as i64;
-        match self.rt.block_on(self.writer.write_all(&data)) {
+        let len = data.as_bytes().len() as i64;
+        match self.rt.block_on(self.writer.write_all(data.as_bytes())) {
             Ok(_) => Ok(len),
             Err(err) => {
                 self.rt

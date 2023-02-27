@@ -1,6 +1,7 @@
 import json
 import warnings
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, Union
 
 import pyarrow
@@ -76,13 +77,31 @@ class ProtocolVersions(NamedTuple):
     min_writer_version: int
 
 
+_DNF_filter_doc = """
+Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
+DNF allows arbitrary boolean logical combinations of single partition predicates.
+The innermost tuples each describe a single partition predicate. The list of inner
+predicates is interpreted as a conjunction (AND), forming a more selective and 
+multiple partition predicates. Each tuple has format: (key, op, value) and compares 
+the key with the value. The supported op are: `=`, `!=`, `in`, and `not in`. If 
+the op is in or not in, the value must be a collection such as a list, a set or a tuple.
+The supported type for value is str. Use empty string `''` for Null partition value.
+
+Examples:
+("x", "=", "a")
+("x", "!=", "a")
+("y", "in", ["a", "b", "c"])
+("z", "not in", ["a","b"])
+"""
+
+
 @dataclass(init=False)
 class DeltaTable:
     """Create a DeltaTable instance."""
 
     def __init__(
         self,
-        table_uri: str,
+        table_uri: Union[str, Path],
         version: Optional[int] = None,
         storage_options: Optional[Dict[str, str]] = None,
         without_files: bool = False,
@@ -101,7 +120,7 @@ class DeltaTable:
         """
         self._storage_options = storage_options
         self._table = RawDeltaTable(
-            table_uri,
+            str(table_uri),
             version=version,
             storage_options=storage_options,
             without_files=without_files,
@@ -142,19 +161,33 @@ class DeltaTable:
         """
         return self._table.version()
 
-    def files(self) -> List[str]:
-        """
-        Get the .parquet files of the DeltaTable.
+    def files(
+        self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
+    ) -> List[str]:
+        return self._table.files(self.__stringify_partition_values(partition_filters))
 
-        :return: list of the .parquet files referenced for the current version of the DeltaTable
-        """
-        return self._table.files()
+    files.__doc__ = f"""
+Get the .parquet files of the DeltaTable.
+    
+The paths are as they are saved in the delta log, which may either be
+relative to the table root or absolute URIs.
+
+:param partition_filters: the partition filters that will be used for 
+    getting the matched files
+:return: list of the .parquet files referenced for the current version 
+    of the DeltaTable
+{_DNF_filter_doc}
+    """
 
     def files_by_partitions(
         self, partition_filters: List[Tuple[str, str, Any]]
     ) -> List[str]:
         """
         Get the files that match a given list of partitions filters.
+
+        .. deprecated:: 0.7.0
+            Use :meth:`file_uris` instead.
+
         Partitions which do not match the filter predicate will be removed from scanned data.
         Predicates are expressed in disjunctive normal form (DNF), like [("x", "=", "a"), ...].
         DNF allows arbitrary boolean logical combinations of single partition predicates.
@@ -174,33 +207,33 @@ class DeltaTable:
         :param partition_filters: the partition filters that will be used for getting the matched files
         :return: list of the .parquet files after applying the partition filters referenced for the current version of the DeltaTable.
         """
-        try:
-            return self._table.files_by_partitions(partition_filters)
-        except TypeError:
-            raise ValueError(
-                "Only the type String is currently allowed inside the partition filters."
-            )
-
-    def file_paths(self) -> List[str]:
-        """
-        Get the list of files with an absolute path.
-
-        :return: list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
-        """
         warnings.warn(
-            "Call to deprecated method file_paths. Please use file_uris instead.",
+            "Call to deprecated method files_by_partitions. Please use file_uris instead.",
             category=DeprecationWarning,
             stacklevel=2,
         )
-        return self.file_uris()
+        return self.file_uris(partition_filters)
 
-    def file_uris(self) -> List[str]:
-        """
-        Get the list of files with an absolute path.
+    def file_uris(
+        self, partition_filters: Optional[List[Tuple[str, str, Any]]] = None
+    ) -> List[str]:
+        return self._table.file_uris(
+            self.__stringify_partition_values(partition_filters)
+        )
 
-        :return: list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
-        """
-        return self._table.file_uris()
+    file_uris.__doc__ = f"""
+Get the list of files as absolute URIs, including the scheme (e.g. "s3://").
+
+Local files will be just plain absolute paths, without a scheme. (That is,
+no 'file://' prefix.)
+
+Use the partition_filters parameter to retrieve a subset of files that match the
+given filters.
+
+:param partition_filters: the partition filters that will be used for getting the matched files
+:return: list of the .parquet files with an absolute URI referenced for the current version of the DeltaTable
+{_DNF_filter_doc}
+    """
 
     def load_version(self, version: int) -> None:
         """
@@ -223,6 +256,10 @@ class DeltaTable:
         :param datetime_string: the identifier of the datetime point of the DeltaTable to load
         """
         self._table.load_with_datetime(datetime_string)
+
+    @property
+    def table_uri(self) -> str:
+        return self._table.table_uri()
 
     def schema(self) -> Schema:
         """
@@ -317,7 +354,6 @@ class DeltaTable:
                 DeltaStorageHandler(
                     self._table.table_uri(),
                     self._storage_options,
-                    self._table.get_py_storage_backend(),
                 )
             )
 
@@ -330,7 +366,7 @@ class DeltaTable:
                 partition_expression=part_expression,
             )
             for file, part_expression in self._table.dataset_partitions(
-                partitions, self.schema().to_pyarrow()
+                self.schema().to_pyarrow(), partitions
             )
         ]
 
@@ -389,3 +425,55 @@ class DeltaTable:
         newer versions.
         """
         self._table.update_incremental()
+
+    def create_checkpoint(self) -> None:
+        self._table.create_checkpoint()
+
+    def __stringify_partition_values(
+        self, partition_filters: Optional[List[Tuple[str, str, Any]]]
+    ) -> Optional[List[Tuple[str, str, Union[str, List[str]]]]]:
+        if partition_filters is None:
+            return partition_filters
+        out = []
+        for field, op, value in partition_filters:
+            str_value: Union[str, List[str]]
+            if isinstance(value, (list, tuple)):
+                str_value = [str(val) for val in value]
+            else:
+                str_value = str(value)
+            out.append((field, op, str_value))
+        return out
+
+    def get_add_actions(self, flatten: bool = False) -> pyarrow.RecordBatch:
+        """
+        Return a dataframe with all current add actions.
+
+        Add actions represent the files that currently make up the table. This
+        data is a low-level representation parsed from the transaction log.
+
+        :param flatten: whether to flatten the schema. Partition values columns are
+          given the prefix `partition.`, statistics (null_count, min, and max) are
+          given the prefix `null_count.`, `min.`, and `max.`, and tags the
+          prefix `tags.`. Nested field names are concatenated with `.`.
+
+        :returns: a PyArrow RecordBatch containing the add action data.
+
+        Examples:
+
+        >>> from deltalake import DeltaTable, write_deltalake
+        >>> import pyarrow as pa
+        >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
+        >>> write_deltalake("tmp", data, partition_by=["x"])
+        >>> dt = DeltaTable("tmp")
+        >>> dt.get_add_actions_df().to_pandas()
+                                                                path  size_bytes       modification_time  data_change partition_values  num_records null_count       min       max
+        0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 2}            1   {'y': 0}  {'y': 5}  {'y': 5}
+        1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 3}            1   {'y': 0}  {'y': 6}  {'y': 6}
+        2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 1}            1   {'y': 0}  {'y': 4}  {'y': 4}
+        >>> dt.get_add_actions_df(flatten=True).to_pandas()
+                                                                path  size_bytes       modification_time  data_change  partition.x  num_records  null_count.y  min.y  max.y
+        0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            2            1             0      5      5
+        1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            3            1             0      6      6
+        2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            1            1             0      4      4
+        """
+        return self._table.get_add_actions(flatten)

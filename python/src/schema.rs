@@ -135,8 +135,7 @@ impl PrimitiveType {
         if data_type.starts_with("decimal") {
             if try_parse_decimal_type(&data_type).is_none() {
                 Err(PyValueError::new_err(format!(
-                    "invalid decimal type: {}",
-                    data_type
+                    "invalid decimal type: {data_type}"
                 )))
             } else {
                 Ok(Self {
@@ -280,7 +279,7 @@ impl TryFrom<SchemaDataType> for ArrayType {
 #[pymethods]
 impl ArrayType {
     #[new]
-    #[args(contains_null = true)]
+    #[pyo3(signature = (element_type, contains_null = true))]
     fn new(element_type: PyObject, contains_null: bool, py: Python) -> PyResult<Self> {
         let inner_type = SchemaTypeArray::new(
             Box::new(python_type_to_schema(element_type, py)?),
@@ -445,7 +444,7 @@ impl TryFrom<SchemaDataType> for MapType {
 #[pymethods]
 impl MapType {
     #[new]
-    #[args(value_contains_null = true)]
+    #[pyo3(signature = (key_type, value_type, value_contains_null = true))]
     fn new(
         key_type: PyObject,
         value_type: PyObject,
@@ -609,7 +608,7 @@ pub struct Field {
 #[pymethods]
 impl Field {
     #[new]
-    #[args(nullable = true)]
+    #[pyo3(signature = (name, ty, nullable = true, metadata = None))]
     fn new(
         name: String,
         ty: PyObject,
@@ -685,7 +684,7 @@ impl Field {
                 .metadata(py)?
                 .call_method0(py, "__repr__")?
                 .extract(py)?;
-            format!(", metadata={}", metadata_repr)
+            format!(", metadata={metadata_repr}")
         };
         Ok(format!(
             "Field({}, {}, nullable={}{})",

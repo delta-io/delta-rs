@@ -8,6 +8,10 @@
 #
 # Usage:
 # GITHUB_API_TOKEN=<TOKEN> ./update_change_log.sh
+#
+# Please edit the resulting change log to remove remaining irrelevant changes
+# and to put interesting changes (features, bugfixes) above all the minor 
+# changes (depandabot updates).
 
 set -e
 
@@ -17,13 +21,11 @@ FUTURE_RELEASE="0.7.0"
 
 # only consider tags of the correct language
 if [ "$LANGUAGE" == "rust" ]; then
-	EXCLUDED_TAGS_REGEX="python.*"
-  INCLUDED_LABELS="rust"
+	EXCLUDED_LANGUAGES_REGEX=".*python.*"
 elif [ "$LANGUAGE" == "python" ]; then
-	EXCLUDED_TAGS_REGEX="rust.*"
-  INCLUDED_LABELS="python,binding/python"
+	EXCLUDED_LANGUAGES_REGEX=".*rust.*"
 else
-  echo "Language $LANGUAGE is invalid. Should be Python or Rust."
+  echo "Language $LANGUAGE is invalid. Should be one of Python and Rust."
 fi
 
 SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,7 +44,8 @@ cat - "${OUTPUT_PATH}" > "${OUTPUT_PATH}".tmp
 
 # use exclude-tags-regex to filter out tags used in the wrong language
 pushd "${SOURCE_TOP_DIR}"
-docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$GITHUB_API_TOKEN" -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
+docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$GITHUB_API_TOKEN" \
+    -v "$(pwd)":/usr/local/src/your-app githubchangeloggenerator/github-changelog-generator \
     --user delta-io \
     --project delta-rs \
     --cache-file=.githubchangeloggenerator.cache \
@@ -55,4 +58,12 @@ docker run -it --rm -e CHANGELOG_GITHUB_TOKEN="$GITHUB_API_TOKEN" -v "$(pwd)":/u
     --since-tag ${LANGUAGE}-v${SINCE_VERSION} \
     --future-release ${LANGUAGE}-v${FUTURE_RELEASE}
 
-sed -i.bak "s/\\\n/\n\n/" "${OUTPUT_PATH}"
+# Remove footer from github-changelog-generator (we already have one at bottom)
+LINE_COUNT=$(wc -l <"${OUTPUT_PATH}")
+sed -i.bak "$(( $LINE_COUNT-3 )),$ d" "${OUTPUT_PATH}"
+
+# Add historical change log back in
+cat $HISTORIAL_PATH >> $OUTPUT_PATH
+
+# Remove temporary files
+rm $HISTORIAL_PATH

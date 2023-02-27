@@ -1,8 +1,9 @@
 //! Utility functions for converting time formats.
+#![allow(unused)]
 
 #[cfg(feature = "arrow")]
 use arrow::temporal_conversions;
-#[cfg(not(feature = "parquet2"))]
+#[cfg(feature = "parquet")]
 use parquet::basic::TimeUnit;
 #[cfg(feature = "parquet2")]
 use parquet2::schema::types::TimeUnit;
@@ -84,7 +85,7 @@ pub fn timestamp_micros_from_stats_string(s: &str) -> Result<i64, chrono::format
 }
 
 /// Convert the timestamp to a ISO-8601 style format suitable for JSON statistics.
-#[cfg(not(feature = "parquet2"))]
+#[cfg(feature = "parquet")]
 pub fn timestamp_to_delta_stats_string(n: i64, time_unit: &TimeUnit) -> Option<String> {
     let dt = match time_unit {
         TimeUnit::MILLIS(_) => temporal_conversions::timestamp_ms_to_datetime(n),

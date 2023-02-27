@@ -1,7 +1,7 @@
 //! AWS S3 storage backend.
 
+use super::utils::str_is_truthy;
 use crate::builder::{s3_storage_options, str_option};
-use crate::str_is_truthy;
 use bytes::Bytes;
 use dynamodb_lock::{DynamoError, LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};
 use futures::stream::BoxStream;
@@ -103,7 +103,7 @@ impl From<S3LockError> for ObjectStoreError {
 pub struct LockData {
     /// Source object key
     pub source: String,
-    /// Destination object ket
+    /// Destination object key
     pub destination: String,
 }
 
@@ -245,7 +245,7 @@ pub struct S3StorageOptions {
 
 impl S3StorageOptions {
     /// Creates an instance of S3StorageOptions from the given HashMap.
-    pub fn from_map(options: HashMap<String, String>) -> S3StorageOptions {
+    pub fn from_map(options: &HashMap<String, String>) -> S3StorageOptions {
         let extra_opts = options
             .iter()
             .filter(|(k, _)| !s3_storage_options::S3_OPTS.contains(&k.as_str()))
@@ -254,20 +254,20 @@ impl S3StorageOptions {
 
         // Copy web identity values provided in options but not the environment into the environment
         // to get picked up by the `from_k8s_env` call in `get_web_identity_provider`.
-        Self::ensure_env_var(&options, s3_storage_options::AWS_REGION);
-        Self::ensure_env_var(&options, s3_storage_options::AWS_PROFILE);
-        Self::ensure_env_var(&options, s3_storage_options::AWS_ACCESS_KEY_ID);
-        Self::ensure_env_var(&options, s3_storage_options::AWS_SECRET_ACCESS_KEY);
-        Self::ensure_env_var(&options, s3_storage_options::AWS_SESSION_TOKEN);
-        Self::ensure_env_var(&options, s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE);
-        Self::ensure_env_var(&options, s3_storage_options::AWS_ROLE_ARN);
-        Self::ensure_env_var(&options, s3_storage_options::AWS_ROLE_SESSION_NAME);
+        Self::ensure_env_var(options, s3_storage_options::AWS_REGION);
+        Self::ensure_env_var(options, s3_storage_options::AWS_PROFILE);
+        Self::ensure_env_var(options, s3_storage_options::AWS_ACCESS_KEY_ID);
+        Self::ensure_env_var(options, s3_storage_options::AWS_SECRET_ACCESS_KEY);
+        Self::ensure_env_var(options, s3_storage_options::AWS_SESSION_TOKEN);
+        Self::ensure_env_var(options, s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE);
+        Self::ensure_env_var(options, s3_storage_options::AWS_ROLE_ARN);
+        Self::ensure_env_var(options, s3_storage_options::AWS_ROLE_SESSION_NAME);
 
-        let endpoint_url = str_option(&options, s3_storage_options::AWS_ENDPOINT_URL);
+        let endpoint_url = str_option(options, s3_storage_options::AWS_ENDPOINT_URL);
         let region = if let Some(endpoint_url) = endpoint_url.as_ref() {
             Region::Custom {
                 name: Self::str_or_default(
-                    &options,
+                    options,
                     s3_storage_options::AWS_REGION,
                     "custom".to_string(),
                 ),
@@ -276,32 +276,32 @@ impl S3StorageOptions {
         } else {
             Region::default()
         };
-        let profile = str_option(&options, s3_storage_options::AWS_PROFILE);
+        let profile = str_option(options, s3_storage_options::AWS_PROFILE);
 
         let s3_pool_idle_timeout = Self::u64_or_default(
-            &options,
+            options,
             s3_storage_options::AWS_S3_POOL_IDLE_TIMEOUT_SECONDS,
             15,
         );
         let sts_pool_idle_timeout = Self::u64_or_default(
-            &options,
+            options,
             s3_storage_options::AWS_STS_POOL_IDLE_TIMEOUT_SECONDS,
             10,
         );
 
         let s3_get_internal_server_error_retries = Self::u64_or_default(
-            &options,
+            options,
             s3_storage_options::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES,
             10,
         ) as usize;
 
         let virtual_hosted_style_request: bool =
-            str_option(&options, s3_storage_options::AWS_S3_ADDRESSING_STYLE)
+            str_option(options, s3_storage_options::AWS_S3_ADDRESSING_STYLE)
                 .map(|addressing_style| addressing_style == "virtual")
                 .unwrap_or(false);
 
         let allow_unsafe_rename =
-            str_option(&options, s3_storage_options::AWS_S3_ALLOW_UNSAFE_RENAME)
+            str_option(options, s3_storage_options::AWS_S3_ALLOW_UNSAFE_RENAME)
                 .map(|val| str_is_truthy(&val))
                 .unwrap_or(false);
 
@@ -309,14 +309,14 @@ impl S3StorageOptions {
             endpoint_url,
             region,
             profile,
-            aws_access_key_id: str_option(&options, s3_storage_options::AWS_ACCESS_KEY_ID),
-            aws_secret_access_key: str_option(&options, s3_storage_options::AWS_SECRET_ACCESS_KEY),
-            aws_session_token: str_option(&options, s3_storage_options::AWS_SESSION_TOKEN),
+            aws_access_key_id: str_option(options, s3_storage_options::AWS_ACCESS_KEY_ID),
+            aws_secret_access_key: str_option(options, s3_storage_options::AWS_SECRET_ACCESS_KEY),
+            aws_session_token: str_option(options, s3_storage_options::AWS_SESSION_TOKEN),
             virtual_hosted_style_request,
-            locking_provider: str_option(&options, s3_storage_options::AWS_S3_LOCKING_PROVIDER),
-            assume_role_arn: str_option(&options, s3_storage_options::AWS_S3_ASSUME_ROLE_ARN),
+            locking_provider: str_option(options, s3_storage_options::AWS_S3_LOCKING_PROVIDER),
+            assume_role_arn: str_option(options, s3_storage_options::AWS_S3_ASSUME_ROLE_ARN),
             assume_role_session_name: str_option(
-                &options,
+                options,
                 s3_storage_options::AWS_S3_ROLE_SESSION_NAME,
             ),
             use_web_identity: std::env::var(s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE)
@@ -351,7 +351,7 @@ impl S3StorageOptions {
 impl Default for S3StorageOptions {
     /// Creates an instance of S3StorageOptions from environment variables.
     fn default() -> S3StorageOptions {
-        Self::from_map(HashMap::new())
+        Self::from_map(&HashMap::new())
     }
 }
 
@@ -599,7 +599,7 @@ mod tests {
     #[serial]
     fn storage_options_with_only_region_and_credentials() {
         std::env::remove_var(s3_storage_options::AWS_ENDPOINT_URL);
-        let options = S3StorageOptions::from_map(hashmap! {
+        let options = S3StorageOptions::from_map(&hashmap! {
             s3_storage_options::AWS_REGION.to_string() => "eu-west-1".to_string(),
             s3_storage_options::AWS_ACCESS_KEY_ID.to_string() => "test".to_string(),
             s3_storage_options::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret".to_string(),
@@ -620,7 +620,7 @@ mod tests {
     #[test]
     #[serial]
     fn storage_options_from_map_test() {
-        let options = S3StorageOptions::from_map(hashmap! {
+        let options = S3StorageOptions::from_map(&hashmap! {
             s3_storage_options::AWS_ENDPOINT_URL.to_string() => "http://localhost:1234".to_string(),
             s3_storage_options::AWS_REGION.to_string() => "us-west-2".to_string(),
             s3_storage_options::AWS_PROFILE.to_string() => "default".to_string(),
@@ -692,7 +692,7 @@ mod tests {
             s3_storage_options::AWS_S3_GET_INTERNAL_SERVER_ERROR_RETRIES,
             "3",
         );
-        let options = S3StorageOptions::from_map(hashmap! {
+        let options = S3StorageOptions::from_map(&hashmap! {
             s3_storage_options::AWS_ACCESS_KEY_ID.to_string() => "test_id_mixed".to_string(),
             s3_storage_options::AWS_SECRET_ACCESS_KEY.to_string() => "test_secret_mixed".to_string(),
             s3_storage_options::AWS_REGION.to_string() => "us-west-2".to_string(),
@@ -730,7 +730,7 @@ mod tests {
     #[test]
     #[serial]
     fn storage_options_web_identity_test() {
-        let _options = S3StorageOptions::from_map(hashmap! {
+        let _options = S3StorageOptions::from_map(&hashmap! {
             s3_storage_options::AWS_REGION.to_string() => "eu-west-1".to_string(),
             s3_storage_options::AWS_WEB_IDENTITY_TOKEN_FILE.to_string() => "web_identity_token_file".to_string(),
             s3_storage_options::AWS_ROLE_ARN.to_string() => "arn:aws:iam::123456789012:role/web_identity_role".to_string(),

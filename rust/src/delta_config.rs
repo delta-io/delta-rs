@@ -109,8 +109,7 @@ const SECONDS_PER_DAY: u64 = 24 * SECONDS_PER_HOUR;
 const SECONDS_PER_WEEK: u64 = 7 * SECONDS_PER_DAY;
 
 fn parse_interval(value: &str) -> Result<Duration, DeltaConfigError> {
-    let not_an_interval =
-        || DeltaConfigError::Validation(format!("'{}' is not an interval", value));
+    let not_an_interval = || DeltaConfigError::Validation(format!("'{value}' is not an interval"));
 
     if !value.starts_with("interval ") {
         return Err(not_an_interval());
@@ -120,8 +119,7 @@ fn parse_interval(value: &str) -> Result<Duration, DeltaConfigError> {
     let number = parse_int(it.next().ok_or_else(not_an_interval)?)?;
     if number < 0 {
         return Err(DeltaConfigError::Validation(format!(
-            "interval '{}' cannot be negative",
-            value
+            "interval '{value}' cannot be negative"
         )));
     }
     let number = number as u64;
@@ -137,8 +135,7 @@ fn parse_interval(value: &str) -> Result<Duration, DeltaConfigError> {
         "week" => Duration::from_secs(number * SECONDS_PER_WEEK),
         unit => {
             return Err(DeltaConfigError::Validation(format!(
-                "Unknown unit '{}'",
-                unit
+                "Unknown unit '{unit}'"
             )));
         }
     };
@@ -148,14 +145,14 @@ fn parse_interval(value: &str) -> Result<Duration, DeltaConfigError> {
 
 fn parse_int(value: &str) -> Result<i64, DeltaConfigError> {
     value.parse().map_err(|e| {
-        DeltaConfigError::Validation(format!("Cannot parse '{}' as integer: {}", value, e))
+        DeltaConfigError::Validation(format!("Cannot parse '{value}' as integer: {e}"))
     })
 }
 
 fn parse_bool(value: &str) -> Result<bool, DeltaConfigError> {
-    value.parse().map_err(|e| {
-        DeltaConfigError::Validation(format!("Cannot parse '{}' as bool: {}", value, e))
-    })
+    value
+        .parse()
+        .map_err(|e| DeltaConfigError::Validation(format!("Cannot parse '{value}' as bool: {e}")))
 }
 
 #[cfg(test)]
@@ -214,6 +211,25 @@ mod tests {
                 .unwrap(),
             10,
         )
+    }
+
+    #[test]
+    fn get_boolean_from_metadata_test() {
+        let mut md = dummy_metadata();
+
+        // default value is true
+        assert!(ENABLE_EXPIRED_LOG_CLEANUP
+            .get_boolean_from_metadata(&md)
+            .unwrap(),);
+
+        // change to false
+        md.configuration.insert(
+            ENABLE_EXPIRED_LOG_CLEANUP.key.to_string(),
+            Some("false".to_string()),
+        );
+        assert!(!ENABLE_EXPIRED_LOG_CLEANUP
+            .get_boolean_from_metadata(&md)
+            .unwrap());
     }
 
     #[test]

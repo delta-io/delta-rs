@@ -11,26 +11,31 @@
 //! optimized files. Optimize does not delete files from storage. To delete
 //! files that were removed, call `vacuum` on [`DeltaTable`].
 //!
-//! See [`Optimize`] for configuration.
+//! See [`OptimizeBuilder`] for configuration.
 //!
 //! # Example
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;
-//! let metrics = Optimize::default().execute(table).await?;
+//! let (table, metrics) = OptimizeBuilder::new(table.object_store(), table.state).await?;
 //! ````
-#![allow(deprecated)]
 
-use crate::action::DeltaOperation;
-use crate::action::{self, Action};
+use super::transaction::commit;
+use super::writer::{PartitionWriter, PartitionWriterConfig};
+use crate::action::{self, Action, DeltaOperation};
+use crate::storage::ObjectStoreRef;
+use crate::table_state::DeltaTableState;
+use crate::writer::utils::arrow_schema_without_partitions;
 use crate::writer::utils::PartitionPath;
-use crate::writer::{DeltaWriter, RecordBatchWriter};
-use crate::{DeltaDataTypeLong, DeltaTable, DeltaTableError, PartitionFilter};
-use log::debug;
-use log::error;
-use object_store::{path::Path, ObjectStore};
-use parquet::arrow::{ArrowReader, ParquetFileArrowReader};
-use parquet::file::reader::FileReader;
-use parquet::file::serialized_reader::SerializedFileReader;
+use crate::{table_properties, DeltaDataTypeVersion};
+use crate::{
+    DeltaDataTypeLong, DeltaResult, DeltaTable, DeltaTableError, ObjectMeta, PartitionFilter,
+};
+use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use futures::future::BoxFuture;
+use futures::StreamExt;
+use log::{debug, error};
+use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
 use std::collections::HashMap;
@@ -94,30 +99,85 @@ impl Default for MetricDetails {
 ///
 /// If a target file size is not provided then `delta.targetFileSize` from the
 /// table's configuration is read. Otherwise a default value is used.
-#[derive(Default)]
-pub struct Optimize<'a> {
+#[derive(Debug)]
+pub struct OptimizeBuilder<'a> {
+    /// A snapshot of the to-be-optimized table's state
+    snapshot: DeltaTableState,
+    /// Delta object store for handling data files
+    store: ObjectStoreRef,
+    /// Filters to select specific table partitions to be optimized
     filters: &'a [PartitionFilter<'a, &'a str>],
+    /// Desired file size after bin-packing files
     target_size: Option<i64>,
+    /// Properties passed to underlying parquet writer
+    writer_properties: Option<WriterProperties>,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<HashMap<String, serde_json::Value>>,
 }
 
-impl<'a> Optimize<'a> {
+impl<'a> OptimizeBuilder<'a> {
+    /// Create a new [`OptimizeBuilder`]
+    pub fn new(store: ObjectStoreRef, snapshot: DeltaTableState) -> Self {
+        Self {
+            snapshot,
+            store,
+            filters: &[],
+            target_size: None,
+            writer_properties: None,
+            app_metadata: None,
+        }
+    }
+
     /// Only optimize files that return true for the specified partition filter
-    pub fn filter(mut self, filters: &'a [PartitionFilter<'a, &'a str>]) -> Self {
+    pub fn with_filters(mut self, filters: &'a [PartitionFilter<'a, &'a str>]) -> Self {
         self.filters = filters;
         self
     }
 
     /// Set the target file size
-    pub fn target_size(mut self, target: DeltaDataTypeLong) -> Self {
+    pub fn with_target_size(mut self, target: DeltaDataTypeLong) -> Self {
         self.target_size = Some(target);
         self
     }
 
-    /// Perform the optimization. On completion, a summary of how many files were added and removed is returned
-    pub async fn execute(&self, table: &mut DeltaTable) -> Result<Metrics, DeltaTableError> {
-        let plan = create_merge_plan(table, self.filters, self.target_size.to_owned())?;
-        let metrics = plan.execute(table).await?;
-        Ok(metrics)
+    /// Writer properties passed to parquet writer
+    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
+        self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(HashMap::from_iter(metadata));
+        self
+    }
+}
+
+impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
+    type Output = DeltaResult<(DeltaTable, Metrics)>;
+    type IntoFuture = BoxFuture<'a, Self::Output>;
+
+    fn into_future(self) -> Self::IntoFuture {
+        let this = self;
+
+        Box::pin(async move {
+            let writer_properties = this
+                .writer_properties
+                .unwrap_or_else(|| WriterProperties::builder().build());
+            let plan = create_merge_plan(
+                &this.snapshot,
+                this.filters,
+                this.target_size.to_owned(),
+                writer_properties,
+            )?;
+            let metrics = plan.execute(this.store.clone()).await?;
+            let mut table = DeltaTable::new_with_state(this.store, this.snapshot);
+            table.update().await?;
+            Ok((table, metrics))
+        })
     }
 }
 
@@ -138,7 +198,7 @@ impl From<OptimizeInput> for DeltaOperation {
 /// A collection of bins for a particular partition
 #[derive(Debug)]
 struct MergeBin {
-    files: Vec<Path>,
+    files: Vec<ObjectMeta>,
     size_bytes: DeltaDataTypeLong,
 }
 
@@ -164,9 +224,9 @@ impl MergeBin {
         self.files.len()
     }
 
-    fn add(&mut self, file_path: Path, size: i64) {
-        self.files.push(file_path);
-        self.size_bytes += size;
+    fn add(&mut self, meta: ObjectMeta) {
+        self.size_bytes += meta.size as i64;
+        self.files.push(meta);
     }
 }
 
@@ -175,6 +235,7 @@ fn create_remove(
     partitions: &HashMap<String, Option<String>>,
     size: DeltaDataTypeLong,
 ) -> Result<Action, DeltaTableError> {
+    // NOTE unwrap is safe since UNIX_EPOCH will always be earlier then now.
     let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let deletion_time = deletion_time.as_millis() as i64;
 
@@ -193,17 +254,27 @@ fn create_remove(
 /// Encapsulates the operations required to optimize a Delta Table
 pub struct MergePlan {
     operations: HashMap<PartitionPath, PartitionMergePlan>,
+    /// Metrics collected during operation
     metrics: Metrics,
+    /// Parameters passed to optimize operation
     input_parameters: OptimizeInput,
+    /// Schema of written files
+    file_schema: ArrowSchemaRef,
+    /// Column names the table is partitioned by.
+    partition_columns: Vec<String>,
+    /// Properties passed to parquet writer
+    writer_properties: WriterProperties,
+    /// Version of the table at beginning of optimization. Used for conflict resolution.
+    read_table_version: DeltaDataTypeVersion,
 }
 
 impl MergePlan {
     /// Peform the operations outlined in the plan.
-    pub async fn execute(self, table: &mut DeltaTable) -> Result<Metrics, DeltaTableError> {
-        // Read files into memory and write into memory. Once a file is complete write to underlying storage.
+    pub async fn execute(self, object_store: ObjectStoreRef) -> Result<Metrics, DeltaTableError> {
         let mut actions = vec![];
         let mut metrics = self.metrics;
 
+        // TODO since we are now async in read and write, should we parallelize this?
         for (_partition_path, merge_partition) in self.operations.iter() {
             let partition_values = &merge_partition.partition_values;
             let bins = &merge_partition.bins;
@@ -211,35 +282,44 @@ impl MergePlan {
             debug!("{:?}", _partition_path);
 
             for bin in bins {
-                let mut writer = RecordBatchWriter::for_table(table)?;
+                let config = PartitionWriterConfig::try_new(
+                    self.file_schema.clone(),
+                    partition_values.clone(),
+                    self.partition_columns.clone(),
+                    Some(self.writer_properties.clone()),
+                    Some(self.input_parameters.target_size as usize),
+                    None,
+                )?;
+                let mut writer = PartitionWriter::try_with_config(object_store.clone(), config)?;
 
-                for path in &bin.files {
-                    //Read the file into memory and append it to the writer.
-                    let data = table.storage.get(path).await?.bytes().await?;
-                    let size: DeltaDataTypeLong = data.len().try_into().unwrap();
-                    let reader = SerializedFileReader::new(data)?;
-                    let records = reader.metadata().file_metadata().num_rows();
+                for file_meta in &bin.files {
+                    let file_reader =
+                        ParquetObjectReader::new(object_store.clone(), file_meta.clone());
+                    let mut batch_stream = ParquetRecordBatchStreamBuilder::new(file_reader)
+                        .await?
+                        .build()?;
 
-                    let mut arrow_reader = ParquetFileArrowReader::new(Arc::new(reader));
-
-                    let batch_reader =
-                        arrow_reader.get_record_reader(records.try_into().unwrap())?;
-                    for batch in batch_reader {
+                    while let Some(batch) = batch_stream.next().await {
                         let batch = batch?;
-                        writer.write_partition(batch, partition_values).await?;
+                        writer.write(&batch).await?;
                     }
 
-                    actions.push(create_remove(path.as_ref(), partition_values, size)?);
+                    let size = file_meta.size as i64;
+                    actions.push(create_remove(
+                        file_meta.location.as_ref(),
+                        partition_values,
+                        size,
+                    )?);
 
                     metrics.num_files_removed += 1;
                     metrics.files_removed.total_files += 1;
-                    metrics.files_removed.total_size += size;
+                    metrics.files_removed.total_size += file_meta.size as i64;
                     metrics.files_removed.max = std::cmp::max(metrics.files_removed.max, size);
                     metrics.files_removed.min = std::cmp::min(metrics.files_removed.min, size);
                 }
 
                 // Save the file to storage and create corresponding add and remove actions. Do not commit yet.
-                let add_actions = writer.flush().await?;
+                let add_actions = writer.close().await?;
                 if add_actions.len() != 1 {
                     // Ensure we don't deviate from the merge plan which may result in idempotency being violated
                     return Err(DeltaTableError::Generic(
@@ -280,28 +360,30 @@ impl MergePlan {
         // optimized partition was updated then abort the commit. Requires (#593).
         if !actions.is_empty() {
             let mut metadata = Map::new();
-            metadata.insert("readVersion".to_owned(), table.version().into());
+            metadata.insert("readVersion".to_owned(), self.read_table_version.into());
             let maybe_map_metrics = serde_json::to_value(metrics.clone());
             if let Ok(map) = maybe_map_metrics {
                 metadata.insert("operationMetrics".to_owned(), map);
             }
 
-            let mut dtx = table.create_transaction(None);
-            dtx.add_actions(actions);
-            // TODO: Add predicate information when we can convert the filter to a string representation
-            dtx.commit(Some(self.input_parameters.into()), Some(metadata))
-                .await?;
+            commit(
+                object_store.as_ref(),
+                self.read_table_version + 1,
+                actions,
+                self.input_parameters.into(),
+                Some(metadata),
+            )
+            .await?;
         }
 
         Ok(metrics)
     }
 }
 
-fn get_target_file_size(table: &DeltaTable) -> DeltaDataTypeLong {
-    let config = table.get_configurations();
+fn get_target_file_size(snapshot: &DeltaTableState) -> DeltaDataTypeLong {
     let mut target_size = 268_435_456;
-    if let Ok(config) = config {
-        let config_str = config.get("delta.targetFileSize");
+    if let Some(meta) = snapshot.current_metadata() {
+        let config_str = meta.configuration.get(table_properties::TARGET_FILE_SIZE);
         if let Some(s) = config_str {
             if let Some(s) = s {
                 let r = s.parse::<i64>();
@@ -315,24 +397,27 @@ fn get_target_file_size(table: &DeltaTable) -> DeltaDataTypeLong {
             }
         }
     }
-
     target_size
 }
 
-/// Build a Plan on which files to merge together. See [`Optimize`]
-pub fn create_merge_plan<'a>(
-    table: &mut DeltaTable,
-    filters: &[PartitionFilter<'a, &str>],
+/// Build a Plan on which files to merge together. See [OptimizeBuilder]
+pub fn create_merge_plan(
+    snapshot: &DeltaTableState,
+    filters: &[PartitionFilter<'_, &str>],
     target_size: Option<DeltaDataTypeLong>,
+    writer_properties: WriterProperties,
 ) -> Result<MergePlan, DeltaTableError> {
-    let target_size = target_size.unwrap_or_else(|| get_target_file_size(table));
+    let target_size = target_size.unwrap_or_else(|| get_target_file_size(snapshot));
     let mut candidates = HashMap::new();
     let mut operations: HashMap<PartitionPath, PartitionMergePlan> = HashMap::new();
     let mut metrics = Metrics::default();
-    let partitions_keys = &table.get_metadata()?.partition_columns;
+    let partitions_keys = &snapshot
+        .current_metadata()
+        .ok_or(DeltaTableError::NoMetadata)?
+        .partition_columns;
 
     //Place each add action into a bucket determined by the file's partition
-    for add in table.get_active_add_actions_by_partitions(filters)? {
+    for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         let path = PartitionPath::from_hashmap(partitions_keys, &add.partition_values)?;
         let v = candidates
             .entry(path)
@@ -358,7 +443,7 @@ pub fn create_merge_plan<'a>(
             }
 
             if file.size + curr_bin.get_total_file_size() < target_size {
-                curr_bin.add(Path::from(file.path.as_str()), file.size);
+                curr_bin.add((*file).try_into()?);
             } else {
                 if curr_bin.get_num_files() > 1 {
                     bins.push(curr_bin);
@@ -366,7 +451,7 @@ pub fn create_merge_plan<'a>(
                     metrics.total_files_skipped += curr_bin.get_num_files();
                 }
                 curr_bin = MergeBin::new();
-                curr_bin.add(Path::from(file.path.as_str()), file.size);
+                curr_bin.add((*file).try_into()?);
             }
         }
 
@@ -388,10 +473,23 @@ pub fn create_merge_plan<'a>(
     }
 
     let input_parameters = OptimizeInput { target_size };
+    let file_schema = arrow_schema_without_partitions(
+        &Arc::new(<ArrowSchema as TryFrom<&crate::schema::Schema>>::try_from(
+            &snapshot
+                .current_metadata()
+                .ok_or(DeltaTableError::NoMetadata)?
+                .schema,
+        )?),
+        partitions_keys,
+    );
 
     Ok(MergePlan {
         operations,
         metrics,
         input_parameters,
+        writer_properties,
+        file_schema,
+        partition_columns: partitions_keys.clone(),
+        read_table_version: snapshot.version(),
     })
 }

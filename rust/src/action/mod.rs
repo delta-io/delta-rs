@@ -8,7 +8,7 @@ mod parquet_read;
 #[cfg(feature = "parquet2")]
 pub mod parquet2_read;
 
-use crate::{schema::*, DeltaTableMetaData};
+use crate::{schema::*, DeltaTableError, DeltaTableMetaData};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -50,7 +50,7 @@ fn decode_path(raw_path: &str) -> Result<String, ActionError> {
     percent_decode(raw_path.as_bytes())
         .decode_utf8()
         .map(|c| c.to_string())
-        .map_err(|e| ActionError::InvalidField(format!("Decode path failed for action: {}", e)))
+        .map_err(|e| ActionError::InvalidField(format!("Decode path failed for action: {e}")))
 }
 
 /// Struct used to represent minValues and maxValues in add action statistics.
@@ -149,6 +149,23 @@ pub struct StatsParsed {
     pub null_count: HashMap<String, DeltaDataTypeLong>,
 }
 
+/// Delta AddCDCFile action that describes a parquet CDC data file.
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct AddCDCFile {
+    /// A relative path, from the root of the table, or an
+    /// absolute path to a CDC file
+    pub path: String,
+    /// The size of this file in bytes
+    pub size: DeltaDataTypeLong,
+    /// A map from partition column to value for this file
+    pub partition_values: HashMap<String, Option<String>>,
+    /// Should always be set to false because they do not change the underlying data of the table
+    pub data_change: bool,
+    /// Map containing metadata about this file
+    pub tags: Option<HashMap<String, Option<String>>>,
+}
+
 /// Delta log action that describes a parquet data file that is part of the table.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -209,6 +226,12 @@ pub struct Add {
     pub tags: Option<HashMap<String, Option<String>>>,
 }
 
+impl Hash for Add {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.path.hash(state);
+    }
+}
+
 impl Add {
     /// Returns the Add action with path decoded.
     pub fn path_decoded(self) -> Result<Self, ActionError> {
@@ -216,6 +239,7 @@ impl Add {
     }
 
     /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
         match self.get_stats_parsed() {
             Ok(Some(stats)) => Ok(Some(stats)),
@@ -228,6 +252,12 @@ impl Add {
                 self.get_json_stats()
             }
         }
+    }
+
+    /// Get whatever stats are available.
+    #[cfg(not(any(feature = "parquet", feature = "parquet2")))]
+    pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
+        self.get_json_stats()
     }
 
     /// Returns the serde_json representation of stats contained in the action if present.
@@ -299,6 +329,25 @@ impl MetaData {
     /// action.
     pub fn get_schema(&self) -> Result<Schema, serde_json::error::Error> {
         serde_json::from_str(&self.schema_string)
+    }
+}
+
+impl TryFrom<DeltaTableMetaData> for MetaData {
+    type Error = DeltaTableError;
+
+    fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
+        let schema_string = serde_json::to_string(&metadata.schema)
+            .map_err(|e| DeltaTableError::SerializeSchemaJson { json_err: e })?;
+        Ok(Self {
+            id: metadata.id,
+            name: metadata.name,
+            description: metadata.description,
+            format: metadata.format,
+            schema_string,
+            partition_columns: metadata.partition_columns,
+            created_time: metadata.created_time,
+            configuration: metadata.configuration,
+        })
     }
 }
 
@@ -395,6 +444,8 @@ pub enum Action {
     /// Changes the current metadata of the table. Must be present in the first version of a table.
     /// Subsequent `metaData` actions completely overwrite previous metadata.
     metaData(MetaData),
+    /// Adds CDC a file to the table state.
+    cdc(AddCDCFile),
     /// Adds a file to the table state.
     add(Add),
     /// Removes a file from the table state.
@@ -458,7 +509,11 @@ pub enum DeltaOperation {
         predicate: Option<String>,
         /// Target optimize size
         target_size: DeltaDataTypeLong,
-    }, // TODO: Add more operations
+    },
+    #[serde(rename_all = "camelCase")]
+    /// Represents a `FileSystemCheck` operation
+    FileSystemCheck {},
+    // TODO: Add more operations
 }
 
 impl DeltaOperation {
@@ -470,6 +525,7 @@ impl DeltaOperation {
             DeltaOperation::Write { .. } => "delta-rs.Write",
             DeltaOperation::StreamingUpdate { .. } => "delta-rs.StreamingUpdate",
             DeltaOperation::Optimize { .. } => "delta-rs.Optimize",
+            DeltaOperation::FileSystemCheck { .. } => "delta-rs.FileSystemCheck",
         };
         commit_info.insert(
             "operation".to_string(),
@@ -477,9 +533,25 @@ impl DeltaOperation {
         );
 
         if let Ok(serde_json::Value::Object(map)) = serde_json::to_value(self) {
+            let all_operation_fields = map.values().next().unwrap().as_object().unwrap();
+            let converted_operation_fields: Map<String, Value> = all_operation_fields
+                .iter()
+                .filter(|item| !item.1.is_null())
+                .map(|(k, v)| {
+                    (
+                        k.clone(),
+                        serde_json::Value::String(if v.is_string() {
+                            String::from(v.as_str().unwrap())
+                        } else {
+                            v.to_string()
+                        }),
+                    )
+                })
+                .collect();
+
             commit_info.insert(
                 "operationParameters".to_string(),
-                map.values().next().unwrap().clone(),
+                serde_json::Value::Object(converted_operation_fields),
             );
         };
 

@@ -1,5 +1,4 @@
 import json
-import os.path
 import uuid
 from dataclasses import dataclass
 from datetime import date, datetime
@@ -43,7 +42,7 @@ from ._internal import write_new_deltalake as _write_new_deltalake
 from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable, DeltaTableProtocolError
 
 try:
-    import pandas as pd
+    import pandas as pd  # noqa: F811
 except ModuleNotFoundError:
     _has_pandas = False
 else:
@@ -63,7 +62,7 @@ class AddAction:
 
 
 def write_deltalake(
-    table_or_uri: Union[str, DeltaTable],
+    table_or_uri: Union[str, Path, DeltaTable],
     data: Union[
         "pd.DataFrame",
         pa.Table,
@@ -86,6 +85,7 @@ def write_deltalake(
     configuration: Optional[Mapping[str, Optional[str]]] = None,
     overwrite_schema: bool = False,
     storage_options: Optional[Dict[str, str]] = None,
+    partitions_filters: Optional[List[Tuple[str, str, Any]]] = None,
 ) -> None:
     """Write to a Delta Lake table (Experimental)
 
@@ -133,13 +133,15 @@ def write_deltalake(
     :param configuration: A map containing configuration options for the metadata action.
     :param overwrite_schema: If True, allows updating the schema of the table.
     :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
+    :param partitions_filters: the partition filters that will be used for partition overwrite.
     """
-
     if _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
             data = pa.Table.from_pandas(data, schema=schema)
         else:
             data, schema = delta_arrow_schema_from_pandas(data)
+
+    table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
 
     if schema is None:
         if isinstance(data, RecordBatchReader):
@@ -151,17 +153,6 @@ def write_deltalake(
 
     if filesystem is not None:
         raise NotImplementedError("Filesystem support is not yet implemented.  #570")
-
-    if isinstance(table_or_uri, str):
-        if "://" in table_or_uri:
-            table_uri = table_or_uri
-        else:
-            # Non-existant local paths are only accepted as fully-qualified URIs
-            table_uri = "file://" + str(Path(table_or_uri).absolute())
-        table = try_get_deltatable(table_or_uri, storage_options)
-    else:
-        table = table_or_uri
-        table_uri = table._table.table_uri()
 
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
 
@@ -190,6 +181,8 @@ def write_deltalake(
 
         if partition_by:
             assert partition_by == table.metadata().partition_columns
+        else:
+            partition_by = table.metadata().partition_columns
 
         if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
             raise DeltaTableProtocolError(
@@ -223,7 +216,7 @@ def write_deltalake(
                 path,
                 size,
                 partition_values,
-                int(datetime.now().timestamp()),
+                int(datetime.now().timestamp() * 1000),
                 True,
                 json.dumps(stats, cls=DeltaJSONEncoder),
             )
@@ -235,8 +228,35 @@ def write_deltalake(
         invariants = table.schema().invariants
         checker = _DeltaDataChecker(invariants)
 
+        def check_data_is_aligned_with_partition_filtering(
+            batch: pa.RecordBatch,
+        ) -> None:
+            if table is None:
+                return
+            existed_partitions = table._table.get_active_partitions()
+            allowed_partitions = table._table.get_active_partitions(partitions_filters)
+            for column_index, column_name in enumerate(batch.schema.names):
+                if column_name in table.metadata().partition_columns:
+                    for value in batch.column(column_index).unique():
+                        partition = (
+                            column_name,
+                            json.dumps(value.as_py(), cls=DeltaJSONEncoder),
+                        )
+                        if (
+                            partition not in allowed_partitions
+                            and partition in existed_partitions
+                        ):
+                            raise ValueError(
+                                f"Data should be aligned with partitioning. "
+                                f"Partition '{column_name}'='{value}' should be filtered out from data."
+                            )
+
         def validate_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
             checker.check_batch(batch)
+
+            if mode == "overwrite" and partitions_filters:
+                check_data_is_aligned_with_partition_filtering(batch)
+
             return batch
 
         if isinstance(data, RecordBatchReader):
@@ -288,6 +308,7 @@ def write_deltalake(
             mode,
             partition_by or [],
             schema,
+            partitions_filters,
         )
 
 
@@ -304,7 +325,8 @@ def __enforce_append_only(
     )
     if config_delta_append_only and mode != "append":
         raise ValueError(
-            f"If configuration has delta.appendOnly = 'true', mode must be 'append'. Mode is currently {mode}"
+            "If configuration has delta.appendOnly = 'true', mode must be 'append'."
+            f" Mode is currently {mode}"
         )
 
 
@@ -322,8 +344,33 @@ class DeltaJSONEncoder(json.JSONEncoder):
         return json.JSONEncoder.default(self, obj)
 
 
+def try_get_table_and_table_uri(
+    table_or_uri: Union[str, Path, DeltaTable],
+    storage_options: Optional[Dict[str, str]] = None,
+) -> Tuple[Optional[DeltaTable], str]:
+    """Parses the `table_or_uri`.
+
+    :param table_or_uri: URI of a table or a DeltaTable object.
+    :param storage_options: Options passed to the native delta filesystem.
+    :raises ValueError: If `table_or_uri` is not of type str, Path or DeltaTable.
+    :returns table: DeltaTable object
+    :return table_uri: URI of the table
+    """
+    if not isinstance(table_or_uri, (str, Path, DeltaTable)):
+        raise ValueError("table_or_uri must be a str, Path or DeltaTable")
+
+    if isinstance(table_or_uri, (str, Path)):
+        table = try_get_deltatable(table_or_uri, storage_options)
+        table_uri = str(table_or_uri)
+    else:
+        table = table_or_uri
+        table_uri = table._table.table_uri()
+
+    return (table, table_uri)
+
+
 def try_get_deltatable(
-    table_uri: str, storage_options: Optional[Dict[str, str]]
+    table_uri: Union[str, Path], storage_options: Optional[Dict[str, str]]
 ) -> Optional[DeltaTable]:
     try:
         return DeltaTable(table_uri, storage_options=storage_options)

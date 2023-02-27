@@ -1,6 +1,6 @@
 [package]
 name = "deltalake-python"
-version = "0.6.4"
+version = "0.7.0"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta-rs"
 license = "Apache-2.0"
@@ -12,17 +12,19 @@ keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 [lib]
 name = "deltalake"
 crate-type = ["cdylib"]
+doc = false
 
 [package.metadata.maturin]
 name = "deltalake._internal"
 
 [dependencies]
-arrow-schema = { version = "28", features = ["serde"] }
+arrow-schema = { version = "32", features = ["serde"] }
 chrono = "0"
 env_logger = "0"
 futures = "0.3"
 lazy_static = "1"
 regex = "1"
+serde = "1"
 serde_json = "1"
 tokio = { version = "1", features = ["rt-multi-thread"] }
 
@@ -31,10 +33,15 @@ tokio = { version = "1", features = ["rt-multi-thread"] }
 reqwest = { version = "*", features = ["native-tls-vendored"] }
 
 [dependencies.pyo3]
-version = "0.17"
+version = "0.18"
 features = ["extension-module", "abi3", "abi3-py37"]
 
 [dependencies.deltalake]
 path = "../rust"
 version = "0"
-features = ["s3", "azure", "glue", "gcs", "python", "datafusion-ext"]
+features = ["azure", "gcs", "python", "datafusion"]
+
+[features]
+default = ["rustls"]
+native-tls = ["deltalake/s3-native-tls", "deltalake/glue-native-tls"]
+rustls = ["deltalake/s3", "deltalake/glue"]

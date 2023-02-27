@@ -38,11 +38,14 @@
 //! # Optional cargo package features
 //!
 //! - `s3`, `gcs`, `azure` - enable the storage backends for AWS S3, Google Cloud Storage (GCS),
-//!   or Azure Blob Storage / Azure Data Lake Storage Gen2 (ADLS2). Use `s3-rustls` to use Rust TLS
-//!   instead of native TLS implementation.
+//!   or Azure Blob Storage / Azure Data Lake Storage Gen2 (ADLS2). Use `s3-native-tls` to use native TLS
+//!   instead of Rust TLS implementation.
 //! - `glue` - enable the Glue data catalog to work with Delta Tables with AWS Glue.
-//! - `datafusion-ext` - enable the `datafusion::datasource::TableProvider` trait implementation
+//! - `datafusion` - enable the `datafusion::datasource::TableProvider` trait implementation
 //!   for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow-datafusion).
+//! - `datafusion-ext` - DEPRECATED: alias for `datafusion` feature.
+//! - `parquet2` - use parquet2 for checkpoint deserialization. Since `arrow` and `parquet` features
+//!   are enabled by default for backwards compatibility, this feature needs to be used with `--no-default-features`.
 //!
 //! # Querying Delta Tables with Datafusion
 //!
@@ -64,21 +67,19 @@
 //!       .await.unwrap();
 //! };
 //! ```
-//!
-//! It's important to note that the DataFusion library is evolving quickly, often with breaking api
-//! changes, and this may cause compilation issues as a result.  If you are having issues with the most
-//! recently released `delta-rs` you can set a specific branch or commit in your `Cargo.toml`.
-//!
-//! ```toml
-//! datafusion = { git = "https://github.com/apache/arrow-datafusion.git", rev = "07bc2c754805f536fe1cd873dbe6adfc0a21cbb3" }
-//! ```
 
 #![deny(warnings)]
 #![deny(missing_docs)]
+#![allow(rustdoc::invalid_html_tags)]
 
 #[cfg(all(feature = "parquet", feature = "parquet2"))]
 compile_error!(
-    "Feature parquet and parquet2 are mutually exclusive and cannot be enabled together"
+    "Features parquet and parquet2 are mutually exclusive and cannot be enabled together"
+);
+
+#[cfg(all(feature = "s3", feature = "s3-native-tls"))]
+compile_error!(
+    "Features s3 and s3-native-tls are mutually exclusive and cannot be enabled together"
 );
 
 pub mod action;
@@ -86,24 +87,23 @@ pub mod builder;
 pub mod data_catalog;
 pub mod delta;
 pub mod delta_config;
+pub mod operations;
 pub mod partitions;
 pub mod schema;
 pub mod storage;
 pub mod table_properties;
 pub mod table_state;
 pub mod time_utils;
-pub mod vacuum;
+
+#[cfg(all(feature = "arrow"))]
+pub mod table_state_arrow;
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod checkpoints;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod delta_arrow;
-#[cfg(feature = "datafusion-ext")]
+#[cfg(feature = "datafusion")]
 pub mod delta_datafusion;
-#[cfg(all(feature = "arrow", feature = "parquet"))]
-pub mod operations;
-#[cfg(feature = "parquet")]
-pub mod optimize;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod writer;
 
@@ -113,14 +113,13 @@ pub use self::delta::*;
 pub use self::partitions::*;
 pub use self::schema::*;
 pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
+pub use operations::DeltaOps;
 
 // convenience exports for consumers to avoid aligning crate versions
 #[cfg(feature = "arrow")]
 pub use arrow;
-#[cfg(feature = "datafusion-ext")]
+#[cfg(feature = "datafusion")]
 pub use datafusion;
-#[cfg(all(feature = "arrow", feature = "parquet"))]
-pub use operations::DeltaOps;
 #[cfg(feature = "parquet")]
 pub use parquet;
 #[cfg(feature = "parquet2")]

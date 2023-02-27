@@ -40,7 +40,7 @@ impl PartitionPath {
             let partition_value = partition_value
                 .as_deref()
                 .unwrap_or(NULL_PARTITION_VALUE_DATA_PATH);
-            let part = format!("{}={}", k, partition_value);
+            let part = format!("{k}={partition_value}");
 
             path_parts.push(part);
         }
@@ -80,7 +80,7 @@ pub(crate) fn next_data_path(
     // TODO (roeap): my understanding is, that the values are used as a counter - i.e. if a single batch of
     // data written to one partition needs to be split due to desired file size constraints.
     let first_part = match part {
-        Some(count) => format!("{:0>5}", count),
+        Some(count) => format!("{count:0>5}"),
         _ => "00000".to_string(),
     };
     let uuid_part = Uuid::new_v4();
@@ -88,17 +88,14 @@ pub(crate) fn next_data_path(
     let last_part = "c000";
 
     // NOTE: If we add a non-snappy option, file name must change
-    let file_name = format!(
-        "part-{}-{}-{}.snappy.parquet",
-        first_part, uuid_part, last_part
-    );
+    let file_name = format!("part-{first_part}-{uuid_part}-{last_part}.snappy.parquet");
 
     if partition_columns.is_empty() {
         return Ok(Path::from(file_name));
     }
 
     let partition_key = PartitionPath::from_hashmap(partition_columns, partition_values)?;
-    Ok(Path::from(format!("{}/{}", partition_key, file_name)))
+    Ok(Path::from(format!("{partition_key}/{file_name}")))
 }
 
 /// Convert a vector of json values to a RecordBatch

@@ -506,8 +506,9 @@ async fn test_poll_table_commits() {
     let path = "./tests/data/simple_table_with_checkpoint";
     let mut table = deltalake::open_table_with_version(path, 9).await.unwrap();
     let peek = table.peek_next_commit(table.version()).await.unwrap();
+    assert!(matches!(peek, PeekCommit::New(..)));
 
-    let is_new = if let PeekCommit::New(version, actions) = peek {
+    if let PeekCommit::New(version, actions) = peek {
         assert_eq!(table.version(), 9);
         assert!(!table.get_files_iter().any(|f| f
             == Path::from("part-00000-f0e955c5-a1e3-4eec-834e-dcc098fc9005-c000.snappy.parquet")));
@@ -515,17 +516,12 @@ async fn test_poll_table_commits() {
         assert_eq!(version, 10);
         assert_eq!(actions.len(), 2);
 
-        table.apply_actions(version, actions).unwrap();
+        table.update_incremental(None).await.unwrap();
 
         assert_eq!(table.version(), 10);
         assert!(table.get_files_iter().any(|f| f
             == Path::from("part-00000-f0e955c5-a1e3-4eec-834e-dcc098fc9005-c000.snappy.parquet")));
-
-        true
-    } else {
-        false
     };
-    assert!(is_new);
 
     let peek = table.peek_next_commit(table.version()).await.unwrap();
     assert!(matches!(peek, PeekCommit::UpToDate));
@@ -581,4 +577,18 @@ async fn read_empty_folder() {
         result.unwrap_err(),
         deltalake::DeltaTableError::NotATable(_),
     ));
+}
+
+#[tokio::test]
+async fn read_delta_table_with_cdc() {
+    let table = deltalake::open_table("./tests/data/simple_table_with_cdc")
+        .await
+        .unwrap();
+    assert_eq!(table.version(), 2);
+    assert_eq!(
+        table.get_files(),
+        vec![Path::from(
+            "part-00000-7444aec4-710a-4a4c-8abe-3323499043e9.c000.snappy.parquet"
+        ),]
+    );
 }

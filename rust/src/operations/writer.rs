@@ -1,3 +1,5 @@
+//! Abstractions and implementations for writing data to delta tables
+
 use std::collections::HashMap;
 
 use crate::action::Add;
@@ -66,7 +68,8 @@ impl From<WriteError> for DeltaTableError {
     }
 }
 
-pub(crate) struct WriterConfig {
+/// Configuration to write data into Delta tables
+pub struct WriterConfig {
     /// Schema of the delta table
     table_schema: ArrowSchemaRef,
     /// Column names for columns the table is partitioned by
@@ -81,6 +84,7 @@ pub(crate) struct WriterConfig {
 }
 
 impl WriterConfig {
+    /// Create a new instance of [WriterConfig].
     pub fn new(
         table_schema: ArrowSchemaRef,
         partition_columns: Vec<String>,
@@ -105,13 +109,14 @@ impl WriterConfig {
         }
     }
 
+    /// Schema of files written to disk
     pub fn file_schema(&self) -> ArrowSchemaRef {
         arrow_schema_without_partitions(&self.table_schema, &self.partition_columns)
     }
 }
 
 /// A parquet writer implementation tailored to the needs of writing data to a delta table.
-pub(crate) struct DeltaWriter {
+pub struct DeltaWriter {
     /// An object store pointing at Delta table root
     object_store: ObjectStoreRef,
     /// configuration for the writers
@@ -121,6 +126,7 @@ pub(crate) struct DeltaWriter {
 }
 
 impl DeltaWriter {
+    /// Create a new instance of [`DeltaWriter`]
     pub fn new(object_store: ObjectStoreRef, config: WriterConfig) -> Self {
         Self {
             object_store,
@@ -193,6 +199,9 @@ impl DeltaWriter {
         Ok(())
     }
 
+    /// Close the writer and get the new [Add] actions.
+    ///
+    /// This will flush all remaining data.
     pub async fn close(mut self) -> DeltaResult<Vec<Add>> {
         let writers = std::mem::take(&mut self.partition_writers);
         let mut actions = Vec::new();

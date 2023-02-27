@@ -6,11 +6,8 @@ rust:
   - proofs/**/*
   - rust/**/*
 
-python:
+binding/python:
   - python/**/*
-
-ruby:
-  - ruby/**/*
 
 ci:
   - .github/**.*
@@ -22,7 +19,7 @@ documentation:
   - CONTRIBUTING.md
   - python/docs/**/*
 
-aws:
+storage/aws:
   - aws/**/*
 
 delta-checkpoint:
@@ -31,7 +28,7 @@ delta-checkpoint:
 delta-inspect:
   - delta-inspect/**/*
 
-delta-rs-crate:
+binding/rust:
   - rust/**/*
 
 dynamodb_lock:

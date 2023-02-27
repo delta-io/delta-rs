@@ -4,7 +4,7 @@
 //!
 //! # Example
 //!
-//! ```
+//! ```no_run
 //! let ver = glibc_version::get_version().unwrap();
 //! if ver.major >= 2 && ver.minor >= 28 {
 //!    println!("cargo:rustc-cfg=glibc_renameat2");
@@ -33,7 +33,7 @@ mod imp {
         let version_str = ldd_output_to_version_str(output_str)?;
 
         parse_glibc_version(version_str)
-            .ok_or_else(|| format!("Invalid version string from ldd output: {}", version_str,))
+            .ok_or_else(|| format!("Invalid version string from ldd output: {version_str}",))
     }
 
     fn ldd_output_to_version_str(output_str: &str) -> Result<&str, String> {
@@ -42,8 +42,7 @@ mod imp {
             Ok(captures.get(1).unwrap().as_str())
         } else {
             Err(format!(
-                "ERROR: failed to detect glibc version. ldd output: {}",
-                output_str,
+                "ERROR: failed to detect glibc version. ldd output: {output_str}",
             ))
         }
     }

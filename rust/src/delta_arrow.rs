@@ -100,8 +100,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                     decimal if DECIMAL_REGEX.is_match(decimal) => {
                         let extract = DECIMAL_REGEX.captures(decimal).ok_or_else(|| {
                             ArrowError::SchemaError(format!(
-                                "Invalid decimal type for Arrow: {}",
-                                decimal
+                                "Invalid decimal type for Arrow: {decimal}"
                             ))
                         })?;
                         let precision = extract.get(1).and_then(|v| v.as_str().parse::<u8>().ok());
@@ -110,8 +109,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                             // TODO how do we decide which variant (128 / 256) to use?
                             (Some(p), Some(s)) => Ok(ArrowDataType::Decimal128(p, s)),
                             _ => Err(ArrowError::SchemaError(format!(
-                                "Invalid precision or scale decimal type for Arrow: {}",
-                                decimal
+                                "Invalid precision or scale decimal type for Arrow: {decimal}"
                             ))),
                         }
                     }
@@ -125,8 +123,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                         Ok(ArrowDataType::Timestamp(TimeUnit::Microsecond, None))
                     }
                     s => Err(ArrowError::SchemaError(format!(
-                        "Invalid data type for Arrow: {}",
-                        s
+                        "Invalid data type for Arrow: {s}"
                     ))),
                 }
             }
@@ -220,15 +217,18 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
             ArrowDataType::Boolean => Ok(schema::SchemaDataType::primitive("boolean".to_string())),
             ArrowDataType::Binary => Ok(schema::SchemaDataType::primitive("binary".to_string())),
             ArrowDataType::Decimal128(p, s) => Ok(schema::SchemaDataType::primitive(format!(
-                "decimal({},{})",
-                p, s
+                "decimal({p},{s})"
             ))),
             ArrowDataType::Decimal256(p, s) => Ok(schema::SchemaDataType::primitive(format!(
-                "decimal({},{})",
-                p, s
+                "decimal({p},{s})"
             ))),
             ArrowDataType::Date32 => Ok(schema::SchemaDataType::primitive("date".to_string())),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
+                Ok(schema::SchemaDataType::primitive("timestamp".to_string()))
+            }
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some(tz))
+                if tz.eq_ignore_ascii_case("utc") =>
+            {
                 Ok(schema::SchemaDataType::primitive("timestamp".to_string()))
             }
             ArrowDataType::Struct(fields) => {
@@ -265,8 +265,7 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
                 }
             }
             s => Err(ArrowError::SchemaError(format!(
-                "Invalid data type for Delta Lake: {}",
-                s
+                "Invalid data type for Delta Lake: {s}"
             ))),
         }
     }
@@ -454,7 +453,7 @@ pub(crate) fn delta_log_schema_for_table(
             .for_each(|f| max_min_schema_for_fields(&mut max_min_vec, f));
 
         stats_parsed_fields.extend(
-            ["minValues", "maxValues"].iter().map(|name| {
+            ["minValues", "maxValues"].into_iter().map(|name| {
                 ArrowField::new(name, ArrowDataType::Struct(max_min_vec.clone()), true)
             }),
         );
@@ -684,7 +683,7 @@ mod tests {
     fn test_arrow_from_delta_decimal_type() {
         let precision = 20;
         let scale = 2;
-        let decimal_type = format!["decimal({p},{s})", p = precision, s = scale];
+        let decimal_type = format!["decimal({precision},{scale})"];
         let decimal_field = crate::SchemaDataType::primitive(decimal_type);
         assert_eq!(
             <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&decimal_field).unwrap(),
@@ -696,16 +695,141 @@ mod tests {
     fn test_arrow_from_delta_wrong_decimal_type() {
         let precision = 20;
         let scale = "wrong";
-        let decimal_type = format!["decimal({p},{s})", p = precision, s = scale];
-        let _error = format!(
-            "Invalid precision or scale decimal type for Arrow: {}",
-            scale
-        );
+        let decimal_type = format!["decimal({precision},{scale})"];
+        let _error = format!("Invalid precision or scale decimal type for Arrow: {scale}");
         let decimal_field = crate::SchemaDataType::primitive(decimal_type);
         assert!(matches!(
             <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&decimal_field)
                 .unwrap_err(),
             arrow::error::ArrowError::SchemaError(_error),
         ));
+    }
+
+    #[test]
+    fn test_arrow_from_delta_timestamp_type() {
+        let timestamp_field = crate::SchemaDataType::primitive("timestamp".to_string());
+        assert_eq!(
+            <ArrowDataType as TryFrom<&crate::SchemaDataType>>::try_from(&timestamp_field).unwrap(),
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, None)
+        );
+    }
+
+    #[test]
+    fn test_delta_from_arrow_timestamp_type() {
+        let timestamp_field = ArrowDataType::Timestamp(TimeUnit::Microsecond, None);
+        assert_eq!(
+            <crate::SchemaDataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
+            crate::SchemaDataType::primitive("timestamp".to_string())
+        );
+    }
+
+    #[test]
+    fn test_delta_from_arrow_timestamp_type_with_tz() {
+        let timestamp_field =
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, Some("UTC".to_string()));
+        assert_eq!(
+            <crate::SchemaDataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
+            crate::SchemaDataType::primitive("timestamp".to_string())
+        );
+    }
+
+    #[test]
+    fn test_max_min_schema_for_fields() {
+        let mut max_min_vec: Vec<ArrowField> = Vec::new();
+        let fields = [
+            ArrowField::new("simple", ArrowDataType::Int32, true),
+            ArrowField::new(
+                "struct",
+                ArrowDataType::Struct(vec![ArrowField::new("simple", ArrowDataType::Int32, true)]),
+                true,
+            ),
+            ArrowField::new(
+                "list",
+                ArrowDataType::List(Box::new(ArrowField::new(
+                    "simple",
+                    ArrowDataType::Int32,
+                    true,
+                ))),
+                true,
+            ),
+            ArrowField::new(
+                "map",
+                ArrowDataType::Map(
+                    Box::new(ArrowField::new(
+                        "struct",
+                        ArrowDataType::Struct(vec![
+                            ArrowField::new("key", ArrowDataType::Int32, true),
+                            ArrowField::new("value", ArrowDataType::Int32, true),
+                        ]),
+                        true,
+                    )),
+                    true,
+                ),
+                true,
+            ),
+        ];
+
+        let expected = vec![fields[0].clone(), fields[1].clone()];
+
+        fields
+            .iter()
+            .for_each(|f| max_min_schema_for_fields(&mut max_min_vec, f));
+
+        assert_eq!(max_min_vec, expected);
+    }
+
+    #[test]
+    fn test_null_count_schema_for_fields() {
+        let mut null_count_vec: Vec<ArrowField> = Vec::new();
+        let fields = [
+            ArrowField::new("int32", ArrowDataType::Int32, true),
+            ArrowField::new("int64", ArrowDataType::Int64, true),
+            ArrowField::new("Utf8", ArrowDataType::Utf8, true),
+            ArrowField::new(
+                "list",
+                ArrowDataType::List(Box::new(ArrowField::new(
+                    "simple",
+                    ArrowDataType::Int32,
+                    true,
+                ))),
+                true,
+            ),
+            ArrowField::new(
+                "map",
+                ArrowDataType::Map(
+                    Box::new(ArrowField::new(
+                        "struct",
+                        ArrowDataType::Struct(vec![
+                            ArrowField::new("key", ArrowDataType::Int32, true),
+                            ArrowField::new("value", ArrowDataType::Int32, true),
+                        ]),
+                        true,
+                    )),
+                    true,
+                ),
+                true,
+            ),
+            ArrowField::new(
+                "struct",
+                ArrowDataType::Struct(vec![ArrowField::new("int32", ArrowDataType::Int32, true)]),
+                true,
+            ),
+        ];
+        let expected = vec![
+            ArrowField::new(fields[0].name(), ArrowDataType::Int64, true),
+            ArrowField::new(fields[1].name(), ArrowDataType::Int64, true),
+            ArrowField::new(fields[2].name(), ArrowDataType::Int64, true),
+            ArrowField::new(fields[3].name(), ArrowDataType::Int64, true),
+            ArrowField::new(fields[4].name(), ArrowDataType::Int64, true),
+            ArrowField::new(
+                fields[5].name(),
+                ArrowDataType::Struct(vec![ArrowField::new("int32", ArrowDataType::Int64, true)]),
+                true,
+            ),
+        ];
+        fields
+            .iter()
+            .for_each(|f| null_count_schema_for_fields(&mut null_count_vec, f));
+        assert_eq!(null_count_vec, expected);
     }
 }
