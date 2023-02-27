@@ -25,7 +25,7 @@ path = "../../rust"
 version = "0"
 
 [dev-dependencies]
-rusoto_core = { version = "0.47", default-features = false }
+rusoto_core = { version = "0.48", default-features = false }
 rusoto_credential = "0.47"
 rusoto_s3 = { version = "0.47", default-features = false }
 
