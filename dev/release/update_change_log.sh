@@ -13,7 +13,7 @@
 # and to put interesting changes (features, bugfixes) above all the minor 
 # changes (depandabot updates).
 
-set -e
+set -x
 
 LANGUAGE="rust"
 SINCE_VERSION="0.7.0"
@@ -32,7 +32,7 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SOURCE_TOP_DIR="$(cd "${SOURCE_DIR}/../../" && pwd)"
 
 OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md"
-TEMP_OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md"
+TEMP_OUTPUT_PATH="${SOURCE_TOP_DIR}/CHANGELOG.md.tmp"
 
 # remove header so github-changelog-generator has a clean base to append
 sed -i '1d' "${OUTPUT_PATH}"
