@@ -72,15 +72,16 @@ impl std::fmt::Display for DeltaObjectStore {
 impl DeltaObjectStore {
     /// Create a new instance of [`DeltaObjectStore`]
     ///
-    /// # Arguemnts
+    /// # Arguments
     ///
     /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with "/" pointing at delta table root (i.e. where `_delta_log` is located).
-    /// * `location` - A url corresponding to the storagle location of `storage`.
+    /// * `location` - A url corresponding to the storage location of `storage`.
     pub fn new(storage: Arc<DynObjectStore>, location: Url) -> Self {
+        let prefix = Path::from(location.path());
         Self {
             storage,
             location,
-            prefix: Path::from("/"),
+            prefix,
             options: HashMap::new().into(),
         }
     }
@@ -333,5 +334,37 @@ impl<'de> Deserialize<'de> for DeltaObjectStore {
         }
 
         deserializer.deserialize_seq(DeltaObjectStoreVisitor {})
+    }
+}
+
+#[cfg(feature = "datafusion")]
+#[cfg(test)]
+mod tests {
+    use crate::storage::DeltaObjectStore;
+    use object_store::local::LocalFileSystem;
+    use std::sync::Arc;
+    use tempdir::TempDir;
+    use url::Url;
+
+    #[tokio::test]
+    async fn test_unique_object_store_url() {
+        let tmp_dir_1 = TempDir::new("table_1").unwrap();
+        let location_1 = Url::from_file_path(tmp_dir_1.path()).unwrap();
+        let store_1 = DeltaObjectStore::new(
+            Arc::from(LocalFileSystem::new_with_prefix(tmp_dir_1.path()).unwrap()),
+            location_1.clone(),
+        );
+
+        let tmp_dir_2 = TempDir::new("table_2").unwrap();
+        let location_2 = Url::from_file_path(tmp_dir_2.path()).unwrap();
+        let store_2 = DeltaObjectStore::new(
+            Arc::from(LocalFileSystem::new_with_prefix(tmp_dir_2.path()).unwrap()),
+            location_2.clone(),
+        );
+
+        assert_ne!(
+            store_1.object_store_url().as_str(),
+            store_2.object_store_url().as_str(),
+        );
     }
 }

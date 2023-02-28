@@ -35,7 +35,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
-use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -451,10 +450,7 @@ impl TableProvider for DeltaTable {
             )
             .await?;
 
-        Ok(Arc::new(DeltaScan {
-            url: ensure_table_uri(self.table_uri())?.as_str().into(),
-            parquet_scan,
-        }))
+        Ok(Arc::new(DeltaScan { parquet_scan }))
     }
 
     fn supports_filter_pushdown(
@@ -470,11 +466,9 @@ impl TableProvider for DeltaTable {
 }
 
 // TODO: this will likely also need to perform column mapping later when we support reader protocol v2
-/// A wrapper for parquet scans that installs the required ObjectStore
+/// A wrapper for parquet scans
 #[derive(Debug)]
 pub struct DeltaScan {
-    /// The URL of the ObjectStore root
-    pub url: String,
     /// The parquet scan to wrap
     pub parquet_scan: Arc<dyn ExecutionPlan>,
 }
@@ -512,22 +506,6 @@ impl ExecutionPlan for DeltaScan {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
-        let df_url = ListingTableUrl::parse(self.url.as_str())?;
-        let storage = context
-            .runtime_env()
-            .object_store_registry
-            .get_by_url(df_url);
-        let mut table = DeltaTableBuilder::from_uri(&self.url);
-        if let Ok(storage) = storage {
-            // When running in ballista, the store will be deserialized and re-created
-            // When testing with a MemoryStore, it will already be present and we should re-use it
-            table = table.with_storage_backend(
-                storage,
-                Url::parse(&self.url).map_err(|err| DataFusionError::Internal(err.to_string()))?,
-            );
-        }
-        let table = table.build()?;
-        register_store(&table, context.runtime_env());
         self.parquet_scan.execute(partition, context)
     }
 
@@ -865,14 +843,11 @@ pub struct DeltaPhysicalCodec {}
 impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     fn try_decode(
         &self,
-        buf: &[u8],
+        _buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         _registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        let url: String = serde_json::from_reader(buf)
-            .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
         let delta_scan = DeltaScan {
-            url,
             parquet_scan: (*inputs)[0].clone(),
         };
         Ok(Arc::new(delta_scan))
@@ -881,14 +856,11 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     fn try_encode(
         &self,
         node: Arc<dyn ExecutionPlan>,
-        buf: &mut Vec<u8>,
+        _buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
-        let delta_scan = node
-            .as_any()
+        node.as_any()
             .downcast_ref::<DeltaScan>()
             .ok_or_else(|| DataFusionError::Internal("Not a delta scan!".to_string()))?;
-        serde_json::to_writer(buf, delta_scan.url.as_str())
-            .map_err(|_| DataFusionError::Internal("Unable to encode delta scan!".to_string()))?;
         Ok(())
     }
 }
@@ -964,7 +936,11 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
     use datafusion::from_slice::FromSlice;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion_proto::physical_plan::AsExecutionPlan;
+    use datafusion_proto::protobuf;
     use serde_json::json;
+    use std::ops::Deref;
 
     use super::*;
 
@@ -1209,5 +1185,28 @@ mod tests {
         let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
+    }
+
+    #[test]
+    fn roundtrip_test_delta_exec_plan() {
+        let ctx = SessionContext::new();
+        let codec = DeltaPhysicalCodec {};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let exec_plan = Arc::from(DeltaScan {
+            parquet_scan: Arc::from(EmptyExec::new(false, schema)),
+        });
+        let proto: protobuf::PhysicalPlanNode =
+            protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), &codec)
+                .expect("to proto");
+
+        let runtime = ctx.runtime_env();
+        let result_exec_plan: Arc<dyn ExecutionPlan> = proto
+            .try_into_physical_plan(&ctx, runtime.deref(), &codec)
+            .expect("from proto");
+        assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
     }
 }
