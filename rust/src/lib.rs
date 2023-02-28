@@ -52,10 +52,10 @@
 //! Querying from local filesystem:
 //! ```ignore
 //! use std::sync::Arc;
-//! use datafusion::execution::context::ExecutionContext;
+//! use datafusion::prelude::SessionContext;
 //!
 //! async {
-//!   let mut ctx = ExecutionContext::new();
+//!   let mut ctx = SessionContext::new();
 //!   let table = deltalake::open_table("./tests/data/simple_table")
 //!       .await
 //!       .unwrap();
