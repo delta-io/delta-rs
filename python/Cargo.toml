@@ -18,7 +18,7 @@ doc = false
 name = "deltalake._internal"
 
 [dependencies]
-arrow-schema = { version = "32", features = ["serde"] }
+arrow-schema = { version = "34", features = ["serde"] }
 chrono = "0"
 env_logger = "0"
 futures = "0.3"
