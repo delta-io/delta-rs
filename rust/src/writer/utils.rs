@@ -296,7 +296,7 @@ mod tests {
     #[test]
     fn test_stringified_partition_value() {
         let reference_pairs: Vec<(Arc<dyn Array>, Option<String>)> = vec![
-            (Arc::new(Int8Array::from(vec![None, Some(2)])), None),
+            (Arc::new(Int8Array::from(vec![None])), None),
             (
                 Arc::new(Int8Array::from(vec![Some(1), Some(2)])),
                 Some(String::from("1")),
