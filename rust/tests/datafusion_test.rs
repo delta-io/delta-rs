@@ -19,7 +19,11 @@ use datafusion_common::{Column, DataFusionError, Result};
 use datafusion_expr::Expr;
 
 use deltalake::action::SaveMode;
-use deltalake::{operations::DeltaOps, DeltaTable, Schema};
+use deltalake::operations::create::CreateBuilder;
+use deltalake::{
+    operations::{write::WriteBuilder, DeltaOps},
+    DeltaTable, Schema,
+};
 
 mod common;
 
@@ -134,6 +138,58 @@ async fn test_datafusion_simple_query_partitioned() -> Result<()> {
         batch.column(0).as_ref(),
         Arc::new(Int32Array::from(vec![4, 5, 20, 20])).as_ref(),
     );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_datafusion_write_from_delta_scan() -> Result<()> {
+    let ctx = SessionContext::new();
+    let state = ctx.state();
+
+    // Build an execution plan for scanning a DeltaTable
+    let source_table = deltalake::open_table("./tests/data/delta-0.8.0-date").await?;
+    let source_scan = source_table.scan(&state, None, &[], None).await?;
+
+    // Create target Delta Table
+    let target_table = CreateBuilder::new()
+        .with_location("memory://target")
+        .with_columns(source_table.schema().unwrap().get_fields().clone())
+        .with_table_name("target")
+        .await?;
+
+    // Trying to execute the write by providing only the Datafusion plan and not the session state
+    // results in an error due to missing object store in the runtime registry.
+    assert!(WriteBuilder::new()
+        .with_input_execution_plan(source_scan.clone())
+        .with_object_store(target_table.object_store())
+        .await
+        .unwrap_err()
+        .to_string()
+        .contains("No suitable object store found for delta-rs://"));
+
+    // Execute write to the target table with the proper state
+    let target_table = WriteBuilder::new()
+        .with_input_execution_plan(source_scan)
+        .with_input_session_state(state)
+        .with_object_store(target_table.object_store())
+        .await?;
+    ctx.register_table("target", Arc::new(target_table))?;
+
+    let batches = ctx.sql("SELECT * FROM target").await?.collect().await?;
+
+    let expected = vec![
+        "+------------+-----------+",
+        "| date       | dayOfYear |",
+        "+------------+-----------+",
+        "| 2021-01-01 | 1         |",
+        "| 2021-01-02 | 2         |",
+        "| 2021-01-03 | 3         |",
+        "| 2021-01-04 | 4         |",
+        "| 2021-01-05 | 5         |",
+        "+------------+-----------+",
+    ];
+    assert_batches_sorted_eq!(expected, &batches);
 
     Ok(())
 }
