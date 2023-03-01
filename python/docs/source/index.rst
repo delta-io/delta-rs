@@ -3,7 +3,7 @@ Python deltalake package
 
 This is the documentation for the native Python implementation of deltalake. It
 is based on the delta-rs Rust library and requires no Spark or JVM dependencies.
-For the PySpark implementation, see `delta-pyspark`_ instead.
+For the PySpark implementation, see `delta-spark`_ instead.
 
 This module provides the capability to read, write, and manage `Delta Lake`_
 tables from Python without Spark or Java. It uses `Apache Arrow`_ under the hood,
