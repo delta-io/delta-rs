@@ -66,15 +66,11 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, TransactionError
     Ok(jsons.join("\n"))
 }
 
-/// Low-level transaction API. Creates a temporary commit file. Once created,
-/// the transaction object could be dropped and the actual commit could be executed
-/// with `DeltaTable.try_commit_transaction`.
-pub(crate) async fn prepare_commit(
-    storage: &DeltaObjectStore,
+pub(crate) fn get_commit_bytes(
     operation: &DeltaOperation,
     actions: &mut Vec<Action>,
     app_metadata: Option<Map<String, Value>>,
-) -> Result<Path, TransactionError> {
+) -> Result<bytes::Bytes, TransactionError> {
     if !actions.iter().any(|a| matches!(a, Action::commitInfo(..))) {
         let mut extra_info = Map::<String, Value>::new();
         let mut commit_info = operation.get_commit_info();
@@ -91,7 +87,20 @@ pub(crate) async fn prepare_commit(
     }
 
     // Serialize all actions that are part of this log entry.
-    let log_entry = bytes::Bytes::from(log_entry_from_actions(actions)?);
+    Ok(bytes::Bytes::from(log_entry_from_actions(actions)?))
+}
+
+/// Low-level transaction API. Creates a temporary commit file. Once created,
+/// the transaction object could be dropped and the actual commit could be executed
+/// with `DeltaTable.try_commit_transaction`.
+pub(crate) async fn prepare_commit(
+    storage: &DeltaObjectStore,
+    operation: &DeltaOperation,
+    actions: &mut Vec<Action>,
+    app_metadata: Option<Map<String, Value>>,
+) -> Result<Path, TransactionError> {
+    // Serialize all actions that are part of this log entry.
+    let log_entry = get_commit_bytes(operation, actions, app_metadata)?;
 
     // Write delta log entry as temporary file to storage. For the actual commit,
     // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
