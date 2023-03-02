@@ -304,8 +304,8 @@ impl std::future::IntoFuture for CreateBuilder {
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
     use super::*;
+    use crate::delta_config::DeltaConfigKey;
     use crate::operations::DeltaOps;
-    use crate::table_properties::APPEND_ONLY;
     use crate::writer::test_utils::get_delta_schema;
     use tempdir::TempDir;
 
@@ -389,14 +389,14 @@ mod tests {
         let table = CreateBuilder::new()
             .with_location("memory://")
             .with_columns(schema.get_fields().clone())
-            .with_configuration_property(APPEND_ONLY, Some("true"))
+            .with_configuration_property(DeltaConfigKey::AppendOnly.as_ref(), Some("true"))
             .await
             .unwrap();
         let append = table
             .get_metadata()
             .unwrap()
             .configuration
-            .get(APPEND_ONLY)
+            .get(DeltaConfigKey::AppendOnly.as_ref())
             .unwrap()
             .as_ref()
             .unwrap()

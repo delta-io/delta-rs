@@ -34,7 +34,7 @@ lazy_static! {
 /// Typed property keys that can be defined on a delta table
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
 /// <https://learn.microsoft.com/en-us/azure/databricks/delta/table-properties>
-enum DeltaConfigKey {
+pub enum DeltaConfigKey {
     /// true for this Delta table to be append-only. If append-only,
     /// existing records cannot be deleted, and existing values cannot be updated.
     AppendOnly,
