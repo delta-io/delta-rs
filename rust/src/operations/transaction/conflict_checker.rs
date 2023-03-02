@@ -271,8 +271,6 @@ impl WinningCommitSummary {
 pub(crate) struct ConflictChecker<'a> {
     /// transaction information for current transaction at start of check
     transaction_info: TransactionInfo<'a>,
-    /// Version number of commit, that has been committed ahead of the current transaction
-    winning_commit_version: DeltaDataTypeVersion,
     /// Summary of the transaction, that has been committed ahead of the current transaction
     winning_commit_summary: WinningCommitSummary,
     /// The state of the delta table at the base version from the current (not winning) commit
@@ -284,24 +282,14 @@ pub(crate) struct ConflictChecker<'a> {
 impl<'a> ConflictChecker<'a> {
     pub async fn try_new(
         snapshot: &'a DeltaTableState,
-        object_store: ObjectStoreRef,
-        winning_commit_version: DeltaDataTypeVersion,
+        winning_commit_summary: WinningCommitSummary,
         operation: DeltaOperation,
         actions: &'a Vec<Action>,
     ) -> Result<ConflictChecker<'a>, DeltaTableError> {
-        let winning_commit_summary = WinningCommitSummary::try_new(
-            object_store.as_ref(),
-            snapshot.version(),
-            winning_commit_version,
-        )
-        .await?;
-
         let transaction_info = TransactionInfo::try_new(snapshot, &operation, actions)?;
-
         Ok(Self {
             transaction_info,
             winning_commit_summary,
-            winning_commit_version,
             snapshot,
             operation,
         })
@@ -541,7 +529,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_append_only_commits() {
+    // tests adopted from https://github.com/delta-io/delta/blob/24c025128612a4ae02d0ad958621f928cda9a3ec/core/src/test/scala/org/apache/spark/sql/delta/OptimisticTransactionSuite.scala#L40-L94
+    async fn test_allowed_concurrent_actions() {
         let table = create_initialized_table(&[], None).await;
 
         let add = create_add_action("file-path", true, get_stats(1, 10));
@@ -562,10 +551,14 @@ mod tests {
         .await
         .unwrap();
 
-        let checker =
-            ConflictChecker::try_new(&table.state, table.object_store(), 1, operation, &actions)
-                .await
-                .unwrap();
+        let summary = WinningCommitSummary {
+            actions: vec![],
+            commit_info: None,
+        };
+
+        let checker = ConflictChecker::try_new(&table.state, summary, operation, &actions)
+            .await
+            .unwrap();
 
         println!("actions: {:?}", checker.winning_commit_summary.actions);
 

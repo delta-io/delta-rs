@@ -18,6 +18,8 @@ mod types;
 
 pub use types::*;
 
+use self::conflict_checker::WinningCommitSummary;
+
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 
 #[derive(thiserror::Error, Debug)]
@@ -169,14 +171,15 @@ pub(crate) async fn commit(
         match try_commit_transaction(storage.as_ref(), &tmp_commit, version).await {
             Ok(version) => return Ok(version),
             Err(TransactionError::VersionAlreadyExists(version)) => {
-                let conflict_checker = ConflictChecker::try_new(
-                    read_snapshot,
-                    storage.clone(),
+                let summary = WinningCommitSummary::try_new(
+                    storage.as_ref(),
+                    read_snapshot.version(),
                     version,
-                    operation.clone(),
-                    &actions,
                 )
                 .await?;
+                let conflict_checker =
+                    ConflictChecker::try_new(read_snapshot, summary, operation.clone(), &actions)
+                        .await?;
                 match conflict_checker.check_conflicts() {
                     Ok(_) => {
                         attempt_number += 1;
