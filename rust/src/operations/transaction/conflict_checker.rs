@@ -123,7 +123,9 @@ impl<'a> TransactionInfo<'a> {
     }
 
     pub fn metadata_changed(&self) -> bool {
-        todo!()
+        self.actions
+            .iter()
+            .any(|a| matches!(a, Action::metaData(_)))
     }
 
     pub fn final_actions_to_commit(&self) -> Vec<Action> {
@@ -504,9 +506,8 @@ impl<'a> ConflictChecker<'a> {
 
 #[cfg(test)]
 mod tests {
-    use super::super::test_utils::{
-        create_add_action, create_initialized_table, init_table_actions,
-    };
+    use super::super::test_utils as tu;
+    use super::super::test_utils::{create_initialized_table, init_table_actions};
     use super::*;
     use crate::action::{Action, SaveMode};
     use crate::operations::transaction::commit;
@@ -531,38 +532,38 @@ mod tests {
     #[tokio::test]
     // tests adopted from https://github.com/delta-io/delta/blob/24c025128612a4ae02d0ad958621f928cda9a3ec/core/src/test/scala/org/apache/spark/sql/delta/OptimisticTransactionSuite.scala#L40-L94
     async fn test_allowed_concurrent_actions() {
-        let table = create_initialized_table(&[], None).await;
+        // check(
+        //     "append / append",
+        //     conflicts = false,
+        //     reads = Seq(
+        //       t => t.metadata
+        //     ),
+        //     concurrentWrites = Seq(
+        //       addA),
+        //     actions = Seq(
+        //       addB))
+        let state = DeltaTableState::from_actions(init_table_actions(), 0).unwrap();
 
-        let add = create_add_action("file-path", true, get_stats(1, 10));
-        let actions = vec![add];
+        let file1 = tu::create_add_action("file1", true, get_stats(1, 10));
+        let file2 = tu::create_add_action("file2", true, get_stats(1, 10));
+
+        let summary = WinningCommitSummary {
+            actions: vec![file1],
+            commit_info: None,
+        };
         let operation = DeltaOperation::Write {
             mode: SaveMode::Append,
             partition_by: Default::default(),
             predicate: None,
         };
 
-        commit(
-            table.object_store().clone(),
-            actions.clone(),
-            operation.clone(),
-            &table.state,
-            None,
-        )
-        .await
-        .unwrap();
-
-        let summary = WinningCommitSummary {
-            actions: vec![],
-            commit_info: None,
-        };
-
-        let checker = ConflictChecker::try_new(&table.state, summary, operation, &actions)
+        let actions = vec![file2];
+        let checker = ConflictChecker::try_new(&state, summary, operation, &actions)
             .await
             .unwrap();
 
-        println!("actions: {:?}", checker.winning_commit_summary.actions);
-
         let result = checker.check_conflicts();
-        println!("result: {:?}", result);
+        println!("{:?}", result);
+        assert!(result.is_ok());
     }
 }

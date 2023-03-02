@@ -604,10 +604,7 @@ impl DeltaOperation {
 
     /// Denotes if the operation changes the data contained in the table
     pub fn changes_data(&self) -> bool {
-        match self {
-            Self::Optimize { .. } => false,
-            _ => true,
-        }
+        !matches!(self, Self::Optimize { .. })
     }
 
     /// Retrieve basic commit information to be added to Delta commits
