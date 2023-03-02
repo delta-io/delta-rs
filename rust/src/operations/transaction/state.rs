@@ -243,7 +243,6 @@ impl ContextProvider for DummyContextProvider {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::Action;
     use crate::operations::transaction::test_utils::{create_add_action, init_table_actions};
     use datafusion_expr::{col, lit};
 
@@ -273,9 +272,9 @@ mod tests {
     #[test]
     fn test_files_matching_predicate() {
         let mut actions = init_table_actions();
-        actions.push(Action::add(create_add_action("excluded", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":10},\"nullCount\":{\"value\":0}}"))));
-        actions.push(Action::add(create_add_action("included-1", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":100},\"nullCount\":{\"value\":0}}"))));
-        actions.push(Action::add(create_add_action("included-2", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":-10},\"maxValues\":{\"value\":3},\"nullCount\":{\"value\":0}}"))));
+        actions.push(create_add_action("excluded", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":10},\"nullCount\":{\"value\":0}}".into())));
+        actions.push(create_add_action("included-1", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":1},\"maxValues\":{\"value\":100},\"nullCount\":{\"value\":0}}".into())));
+        actions.push(create_add_action("included-2", true, Some("{\"numRecords\":10,\"minValues\":{\"value\":-10},\"maxValues\":{\"value\":3},\"nullCount\":{\"value\":0}}".into())));
 
         let state = DeltaTableState::from_actions(actions, 0).unwrap();
         let files = state

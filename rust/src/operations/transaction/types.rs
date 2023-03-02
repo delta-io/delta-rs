@@ -70,6 +70,9 @@ impl FromStr for IsolationLevel {
     }
 }
 
+// implementation and comments adopted from
+// https://github.com/delta-io/delta/blob/1c18c1d972e37d314711b3a485e6fb7c98fce96d/core/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala#L1268
+//
 // For no-data-change transactions such as OPTIMIZE/Auto Compaction/ZorderBY, we can
 // change the isolation level to SnapshotIsolation. SnapshotIsolation allows reduced conflict
 // detection by skipping the
@@ -113,12 +116,13 @@ pub(super) fn can_downgrade_to_snapshot_isolation<'a>(
     match isolation_level {
         IsolationLevel::Serializable => !data_changed,
         IsolationLevel::WriteSerializable => !data_changed && !operation.changes_data(),
-        IsolationLevel::SnapshotIsolation => true,
+        IsolationLevel::SnapshotIsolation => false, // this case should never happen, since spanpshot isolation canot be configured on table
     }
 }
 
 #[cfg(test)]
 mod tests {
+    use super::super::test_utils;
     use super::*;
 
     #[test]
@@ -159,6 +163,13 @@ mod tests {
 
     #[test]
     fn test_can_downgrade_to_snapshot_isolation() {
-        assert!(true)
+        let isolation = IsolationLevel::WriteSerializable;
+        let operation = DeltaOperation::Optimize {
+            predicate: None,
+            target_size: 0,
+        };
+        let add = test_utils::create_add_action("p", false, None);
+        let res = can_downgrade_to_snapshot_isolation(&[add], &operation, &isolation);
+        assert!(!res)
     }
 }

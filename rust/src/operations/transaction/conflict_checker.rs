@@ -545,7 +545,7 @@ mod tests {
         let table = create_initialized_table(&[], None).await;
 
         let add = create_add_action("file-path", true, get_stats(1, 10));
-        let actions = vec![Action::add(add)];
+        let actions = vec![add];
         let operation = DeltaOperation::Write {
             mode: SaveMode::Append,
             partition_by: Default::default(),

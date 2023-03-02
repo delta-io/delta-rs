@@ -9,15 +9,15 @@ use std::collections::HashMap;
 pub fn create_add_action(
     path: impl Into<String>,
     data_change: bool,
-    stats: Option<impl Into<String>>,
-) -> Add {
-    Add {
+    stats: Option<String>,
+) -> Action {
+    Action::add(Add {
         path: path.into(),
         size: 100,
         data_change,
         stats: stats.map(|s| s.into()),
         ..Default::default()
-    }
+    })
 }
 
 pub fn init_table_actions() -> Vec<Action> {
