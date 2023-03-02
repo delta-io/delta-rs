@@ -85,6 +85,7 @@ def write_deltalake(
     configuration: Optional[Mapping[str, Optional[str]]] = None,
     overwrite_schema: bool = False,
     storage_options: Optional[Dict[str, str]] = None,
+    partitions_filters: Optional[List[Tuple[str, str, Any]]] = None,
 ) -> None:
     """Write to a Delta Lake table (Experimental)
 
@@ -132,6 +133,7 @@ def write_deltalake(
     :param configuration: A map containing configuration options for the metadata action.
     :param overwrite_schema: If True, allows updating the schema of the table.
     :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
+    :param partitions_filters: the partition filters that will be used for partition overwrite.
     """
     if _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
@@ -179,6 +181,8 @@ def write_deltalake(
 
         if partition_by:
             assert partition_by == table.metadata().partition_columns
+        else:
+            partition_by = table.metadata().partition_columns
 
         if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
             raise DeltaTableProtocolError(
@@ -224,8 +228,35 @@ def write_deltalake(
         invariants = table.schema().invariants
         checker = _DeltaDataChecker(invariants)
 
+        def check_data_is_aligned_with_partition_filtering(
+            batch: pa.RecordBatch,
+        ) -> None:
+            if table is None:
+                return
+            existed_partitions = table._table.get_active_partitions()
+            allowed_partitions = table._table.get_active_partitions(partitions_filters)
+            for column_index, column_name in enumerate(batch.schema.names):
+                if column_name in table.metadata().partition_columns:
+                    for value in batch.column(column_index).unique():
+                        partition = (
+                            column_name,
+                            json.dumps(value.as_py(), cls=DeltaJSONEncoder),
+                        )
+                        if (
+                            partition not in allowed_partitions
+                            and partition in existed_partitions
+                        ):
+                            raise ValueError(
+                                f"Data should be aligned with partitioning. "
+                                f"Partition '{column_name}'='{value}' should be filtered out from data."
+                            )
+
         def validate_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
             checker.check_batch(batch)
+
+            if mode == "overwrite" and partitions_filters:
+                check_data_is_aligned_with_partition_filtering(batch)
+
             return batch
 
         if isinstance(data, RecordBatchReader):
@@ -277,6 +308,7 @@ def write_deltalake(
             mode,
             partition_by or [],
             schema,
+            partitions_filters,
         )
 
 

@@ -364,12 +364,36 @@ impl RawDeltaTable {
             .collect()
     }
 
+    fn get_active_partitions(
+        &mut self,
+        partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+    ) -> PyResult<HashSet<(String, Option<String>)>> {
+        let converted_filters = convert_partition_filters(partitions_filters.unwrap_or_default())
+            .map_err(PyDeltaTableError::from_raw)?;
+
+        let add_actions = self
+            ._table
+            .get_state()
+            .get_active_add_actions_by_partitions(&converted_filters)
+            .map_err(PyDeltaTableError::from_raw)?;
+        let active_partitions = add_actions
+            .flat_map(|add| {
+                add.partition_values
+                    .iter()
+                    .map(|i| (i.0.to_owned(), i.1.to_owned()))
+                    .collect::<Vec<_>>()
+            })
+            .collect::<HashSet<_>>();
+        Ok(active_partitions)
+    }
+
     fn create_write_transaction(
         &mut self,
         add_actions: Vec<PyAddAction>,
         mode: &str,
         partition_by: Vec<String>,
         schema: PyArrowType<ArrowSchema>,
+        partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
     ) -> PyResult<()> {
         let mode = save_mode_from_str(mode)?;
         let schema: Schema = (&schema.0)
@@ -388,8 +412,17 @@ impl RawDeltaTable {
 
         match mode {
             SaveMode::Overwrite => {
-                // Remove all current files
-                for old_add in self._table.get_state().files().iter() {
+                let converted_filters =
+                    convert_partition_filters(partitions_filters.unwrap_or_default())
+                        .map_err(PyDeltaTableError::from_raw)?;
+
+                let add_actions = self
+                    ._table
+                    .get_state()
+                    .get_active_add_actions_by_partitions(&converted_filters)
+                    .map_err(PyDeltaTableError::from_raw)?;
+
+                for old_add in add_actions {
                     let remove_action = Action::remove(action::Remove {
                         path: old_add.path.clone(),
                         deletion_timestamp: Some(current_timestamp()),

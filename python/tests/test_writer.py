@@ -3,8 +3,8 @@ import json
 import os
 import pathlib
 import random
-from datetime import datetime
-from typing import Dict, Iterable, List
+from datetime import date, datetime
+from typing import Any, Dict, Iterable, List
 from unittest.mock import Mock
 
 import pyarrow as pa
@@ -14,7 +14,7 @@ from packaging import version
 from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
 from pyarrow.lib import RecordBatchReader
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, PyDeltaTableError, write_deltalake
 from deltalake.table import ProtocolVersions
 from deltalake.writer import DeltaTableProtocolError, try_get_table_and_table_uri
 
@@ -193,7 +193,7 @@ def test_roundtrip_null_partition(tmp_path: pathlib.Path, sample_data: pa.Table)
     )
     write_deltalake(tmp_path, sample_data, partition_by=["utf8_with_nulls"])
 
-    delta_table = DeltaTable(str(tmp_path))
+    delta_table = DeltaTable(tmp_path)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
 
     table = delta_table.to_pyarrow_table()
@@ -533,3 +533,195 @@ def test_try_get_table_and_table_uri(tmp_path: pathlib.Path):
     # table_or_uri with invalid parameter type
     with pytest.raises(ValueError):
         try_get_table_and_table_uri(None, None)
+
+
+@pytest.mark.parametrize(
+    "value_1,value_2,value_type,filter_string",
+    [
+        (1, 2, pa.int64(), "1"),
+        (False, True, pa.bool_(), "false"),
+        (date(2022, 1, 1), date(2022, 1, 2), pa.date32(), "2022-01-01"),
+    ],
+)
+def test_partition_overwrite(
+    tmp_path: pathlib.Path,
+    value_1: Any,
+    value_2: Any,
+    value_type: pa.DataType,
+    filter_string: str,
+):
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([value_1, value_2, value_1, value_2], value_type),
+            "val": pa.array([1, 1, 1, 1], pa.int64()),
+        }
+    )
+    write_deltalake(tmp_path, sample_data, mode="overwrite", partition_by=["p1", "p2"])
+
+    delta_table = DeltaTable(tmp_path)
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == sample_data
+    )
+
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1", "1"], pa.string()),
+            "p2": pa.array([value_2, value_1], value_type),
+            "val": pa.array([2, 2], pa.int64()),
+        }
+    )
+    expected_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([value_1, value_2, value_1, value_2], value_type),
+            "val": pa.array([2, 2, 1, 1], pa.int64()),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        sample_data,
+        mode="overwrite",
+        partitions_filters=[("p1", "=", "1")],
+    )
+
+    delta_table.update_incremental()
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == expected_data
+    )
+
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1", "2"], pa.string()),
+            "p2": pa.array([value_2, value_2], value_type),
+            "val": pa.array([3, 3], pa.int64()),
+        }
+    )
+    expected_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([value_1, value_2, value_1, value_2], value_type),
+            "val": pa.array([2, 3, 1, 3], pa.int64()),
+        }
+    )
+
+    write_deltalake(
+        tmp_path,
+        sample_data,
+        mode="overwrite",
+        partitions_filters=[("p2", ">", filter_string)],
+    )
+    delta_table.update_incremental()
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == expected_data
+    )
+
+
+@pytest.fixture()
+def sample_data_for_partitioning() -> pa.Table:
+    return pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([1, 2, 1, 2], pa.int64()),
+            "val": pa.array([1, 1, 1, 1], pa.int64()),
+        }
+    )
+
+
+def test_partition_overwrite_unfiltered_data_fails(
+    tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
+):
+    write_deltalake(
+        tmp_path,
+        sample_data_for_partitioning,
+        mode="overwrite",
+        partition_by=["p1", "p2"],
+    )
+    with pytest.raises(ValueError):
+        write_deltalake(
+            tmp_path,
+            sample_data_for_partitioning,
+            mode="overwrite",
+            partitions_filters=[("p2", "=", "1")],
+        )
+
+
+def test_partition_overwrite_with_new_partition(
+    tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
+):
+    write_deltalake(
+        tmp_path,
+        sample_data_for_partitioning,
+        mode="overwrite",
+        partition_by=["p1", "p2"],
+    )
+
+    new_sample_data = pa.table(
+        {
+            "p1": pa.array(["2", "1"], pa.string()),
+            "p2": pa.array([3, 2], pa.int64()),
+            "val": pa.array([2, 2], pa.int64()),
+        }
+    )
+    expected_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([1, 2, 1, 3], pa.int64()),
+            "val": pa.array([1, 2, 1, 2], pa.int64()),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        new_sample_data,
+        mode="overwrite",
+        partitions_filters=[("p2", "=", "2")],
+    )
+    delta_table = DeltaTable(tmp_path)
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == expected_data
+    )
+
+
+def test_partition_overwrite_with_non_partitioned_data(
+    tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
+):
+    write_deltalake(tmp_path, sample_data_for_partitioning, mode="overwrite")
+
+    with pytest.raises(PyDeltaTableError):
+        write_deltalake(
+            tmp_path,
+            sample_data_for_partitioning,
+            mode="overwrite",
+            partitions_filters=[("p1", "=", "1")],
+        )
+
+
+def test_partition_overwrite_with_wrong_partition(
+    tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
+):
+    write_deltalake(
+        tmp_path,
+        sample_data_for_partitioning,
+        mode="overwrite",
+        partition_by=["p1", "p2"],
+    )
+
+    with pytest.raises(PyDeltaTableError):
+        write_deltalake(
+            tmp_path,
+            sample_data_for_partitioning,
+            mode="overwrite",
+            partitions_filters=[("p999", "=", "1")],
+        )

@@ -35,7 +35,7 @@ use crate::writer::utils::PartitionPath;
 
 use arrow::datatypes::{DataType, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::RecordBatch;
-use datafusion::execution::context::{SessionContext, TaskContext};
+use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use futures::future::BoxFuture;
 use futures::StreamExt;
@@ -78,6 +78,8 @@ impl From<WriteError> for DeltaTableError {
 pub struct WriteBuilder {
     /// The input plan
     input: Option<Arc<dyn ExecutionPlan>>,
+    /// Datafusion session state relevant for executing the input plan
+    state: Option<SessionState>,
     /// Location where the table is stored
     location: Option<String>,
     /// SaveMode defines how to treat data already written to table location
@@ -109,6 +111,7 @@ impl WriteBuilder {
     pub fn new() -> Self {
         Self {
             input: None,
+            state: None,
             location: None,
             mode: SaveMode::Append,
             partition_columns: None,
@@ -153,6 +156,12 @@ impl WriteBuilder {
     /// Execution plan that produces the data to be written to the delta table
     pub fn with_input_execution_plan(mut self, plan: Arc<dyn ExecutionPlan>) -> Self {
         self.input = Some(plan);
+        self
+    }
+
+    /// A session state accompanying a given input plan, containing e.g. registered object stores
+    pub fn with_input_session_state(mut self, state: SessionState) -> Self {
+        self.state = Some(state);
         self
     }
 
@@ -346,8 +355,12 @@ impl std::future::IntoFuture for WriteBuilder {
             let mut tasks = vec![];
             for i in 0..plan.output_partitioning().partition_count() {
                 let inner_plan = plan.clone();
-                let state = SessionContext::new();
-                let task_ctx = Arc::new(TaskContext::from(&state));
+                let task_ctx = Arc::from(if let Some(state) = this.state.clone() {
+                    TaskContext::from(&state)
+                } else {
+                    let ctx = SessionContext::new();
+                    TaskContext::from(&ctx)
+                });
                 let config = WriterConfig::new(
                     inner_plan.schema(),
                     partition_columns.clone(),
