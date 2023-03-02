@@ -391,12 +391,7 @@ pub fn create_merge_plan(
     target_size: Option<DeltaDataTypeLong>,
     writer_properties: WriterProperties,
 ) -> Result<MergePlan, DeltaTableError> {
-    let target_size = target_size.unwrap_or_else(|| {
-        snapshot
-            .table_config()
-            .map(|conf| conf.target_file_size())
-            .unwrap_or(268_435_456)
-    });
+    let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
     let mut candidates = HashMap::new();
     let mut operations: HashMap<PartitionPath, PartitionMergePlan> = HashMap::new();
     let mut metrics = Metrics::default();

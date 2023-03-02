@@ -362,11 +362,7 @@ impl<'a> ConflictChecker<'a> {
     fn check_for_added_files_that_should_have_been_read_by_current_txn(
         &self,
     ) -> Result<(), CommitConflictError> {
-        let defaault_isolation_level = self
-            .snapshot
-            .table_config()
-            .map(|config| config.isolation_level())
-            .unwrap_or_default();
+        let defaault_isolation_level = self.snapshot.table_config().isolation_level();
 
         let isolation_level = if can_downgrade_to_snapshot_isolation(
             &self.winning_commit_summary.actions,

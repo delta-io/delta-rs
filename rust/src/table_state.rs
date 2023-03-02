@@ -11,6 +11,7 @@ use crate::{
     DeltaTableMetaData,
 };
 use chrono::Utc;
+use lazy_static::lazy_static;
 use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -235,10 +236,14 @@ impl DeltaTableState {
     }
 
     /// Well known table configuration
-    pub fn table_config(&self) -> Option<TableConfig<'_>> {
+    pub fn table_config(&self) -> TableConfig<'_> {
+        lazy_static! {
+            static ref DUMMY_CONF: HashMap<String, Option<String>> = HashMap::new();
+        }
         self.current_metadata
             .as_ref()
             .map(|meta| TableConfig(&meta.configuration))
+            .unwrap_or_else(|| TableConfig(&DUMMY_CONF))
     }
 
     /// Merges new state information into our state
