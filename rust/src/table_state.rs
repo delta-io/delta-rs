@@ -1,7 +1,7 @@
 //! The module for delta table state.
 
 use crate::action::{self, Action, Add};
-use crate::delta_config;
+use crate::delta_config::{self, TableConfig};
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::schema::SchemaDataType;
 use crate::storage::commit_uri_from_version;
@@ -232,6 +232,13 @@ impl DeltaTableState {
     /// The table schema
     pub fn schema(&self) -> Option<&Schema> {
         self.current_metadata.as_ref().map(|m| &m.schema)
+    }
+
+    /// Well known table configuration
+    pub fn table_config(&self) -> Option<TableConfig<'_>> {
+        self.current_metadata
+            .as_ref()
+            .map(|meta| TableConfig(&meta.configuration))
     }
 
     /// Merges new state information into our state
