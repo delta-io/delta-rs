@@ -1,6 +1,6 @@
 //! Delta transactions
 use crate::action::{Action, CommitInfo, DeltaOperation};
-use crate::storage::{commit_uri_from_version, DeltaObjectStore, ObjectStoreRef};
+use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 use crate::table_state::DeltaTableState;
 use crate::{crate_version, DeltaDataTypeVersion, DeltaResult, DeltaTableError};
 use chrono::Utc;
@@ -94,7 +94,7 @@ pub(crate) fn get_commit_bytes(
 /// the transaction object could be dropped and the actual commit could be executed
 /// with `DeltaTable.try_commit_transaction`.
 pub(crate) async fn prepare_commit(
-    storage: &DeltaObjectStore,
+    storage: &dyn ObjectStore,
     operation: &DeltaOperation,
     actions: &mut Vec<Action>,
     app_metadata: Option<Map<String, Value>>,
@@ -118,7 +118,7 @@ pub(crate) async fn prepare_commit(
 /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
 /// with retry logic.
 async fn try_commit_transaction(
-    storage: &DeltaObjectStore,
+    storage: &dyn ObjectStore,
     tmp_commit: &Path,
     version: DeltaDataTypeVersion,
 ) -> Result<DeltaDataTypeVersion, TransactionError> {
@@ -201,6 +201,7 @@ pub(crate) async fn commit(
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
     use super::*;
+    use object_store::memory::InMemory;
 
     #[test]
     fn test_commit_version() {
@@ -208,5 +209,22 @@ mod tests {
         assert_eq!(version, Path::from("_delta_log/00000000000000000000.json"));
         let version = commit_uri_from_version(123);
         assert_eq!(version, Path::from("_delta_log/00000000000000000123.json"))
+    }
+
+    #[tokio::test]
+    async fn test_try_commit_transaction() {
+        let store = InMemory::new();
+        let tmp_path = Path::from("_delta_log/tmp");
+        let version_path = Path::from("_delta_log/00000000000000000000.json");
+        store.put(&tmp_path, bytes::Bytes::new()).await.unwrap();
+        store.put(&version_path, bytes::Bytes::new()).await.unwrap();
+
+        // fails if file version already exists
+        let res = try_commit_transaction(&store, &tmp_path, 0).await;
+        assert!(res.is_err());
+
+        // succeeds for next version
+        let res = try_commit_transaction(&store, &tmp_path, 1).await.unwrap();
+        assert_eq!(res, 1);
     }
 }
