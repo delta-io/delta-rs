@@ -29,6 +29,7 @@ impl DeltaTableState {
         ))
     }
 
+    /// Iterate over all files in the log matching a predicate
     pub fn files_matching_predicate(
         &self,
         filters: &[Expr],
@@ -266,9 +267,7 @@ mod tests {
         let expected = col("value")
             .gt(lit::<i64>(10))
             .or(col("value").lt_eq(lit::<i64>(0)));
-        assert_eq!(parsed, expected);
-
-        println!("{:?}", parsed)
+        assert_eq!(parsed, expected)
     }
 
     #[test]

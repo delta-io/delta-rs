@@ -4,6 +4,7 @@ use serde::{Deserialize, Serialize};
 use std::str::FromStr;
 
 #[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+/// The isolation level applied during transaction
 pub enum IsolationLevel {
     /// The strongest isolation level. It ensures that committed write operations
     /// and all reads are Serializable. Operations are allowed as long as there
@@ -18,6 +19,7 @@ pub enum IsolationLevel {
     /// it provides great balance of data consistency and availability for most common operations.
     WriteSerializable,
 
+    /// SnapshotIsolation
     SnapshotIsolation,
 }
 
@@ -51,5 +53,38 @@ impl FromStr for IsolationLevel {
                 "Invalid string for IsolationLevel".into(),
             )),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_roundtrip_isolation_level() {
+        assert!(matches!(
+            "Serializable".parse().unwrap(),
+            IsolationLevel::Serializable
+        ));
+        assert!(matches!(
+            "WriteSerializable".parse().unwrap(),
+            IsolationLevel::WriteSerializable
+        ));
+        assert!(matches!(
+            "SnapshotIsolation".parse().unwrap(),
+            IsolationLevel::SnapshotIsolation
+        ));
+        assert!(matches!(
+            IsolationLevel::Serializable.as_ref().parse().unwrap(),
+            IsolationLevel::Serializable
+        ));
+        assert!(matches!(
+            IsolationLevel::WriteSerializable.as_ref().parse().unwrap(),
+            IsolationLevel::WriteSerializable
+        ));
+        assert!(matches!(
+            IsolationLevel::SnapshotIsolation.as_ref().parse().unwrap(),
+            IsolationLevel::SnapshotIsolation
+        ))
     }
 }

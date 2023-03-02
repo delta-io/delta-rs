@@ -200,15 +200,25 @@ pub(crate) async fn commit(
 
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
+    use self::test_utils::init_table_actions;
     use super::*;
     use object_store::memory::InMemory;
 
     #[test]
-    fn test_commit_version() {
+    fn test_commit_uri_from_version() {
         let version = commit_uri_from_version(0);
         assert_eq!(version, Path::from("_delta_log/00000000000000000000.json"));
         let version = commit_uri_from_version(123);
         assert_eq!(version, Path::from("_delta_log/00000000000000000123.json"))
+    }
+
+    #[test]
+    fn test_log_entry_from_actions() {
+        let actions = init_table_actions();
+        let entry = log_entry_from_actions(&actions).unwrap();
+        let lines: Vec<_> = entry.lines().collect();
+        // writes every action to a line
+        assert_eq!(actions.len(), lines.len())
     }
 
     #[tokio::test]
