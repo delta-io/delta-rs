@@ -91,7 +91,7 @@ def write_deltalake(
 
     If the table does not already exist, it will be created.
 
-    This function only supports writer protocol version 2 currently. If an
+    This function only supports writer protocol version 2 currently. When
     attempting to write to an existing table with a higher min_writer_version,
     this function will throw DeltaTableProtocolError.
 
