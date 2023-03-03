@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use crate::storage::DeltaObjectStore;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::{builder::ensure_table_uri, DeltaResult, DeltaTable};
 
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, TaskContext};
@@ -77,8 +77,7 @@ impl std::future::IntoFuture for LoadBuilder {
 
         Box::pin(async move {
             let object_store = this.object_store.unwrap();
-            let url = url::Url::parse(&object_store.root_uri())
-                .map_err(|_| DeltaTableError::InvalidTableLocation(object_store.root_uri()))?;
+            let url = ensure_table_uri(object_store.root_uri())?;
             let store = object_store.storage_backend().clone();
             let mut table = DeltaTable::new(object_store, Default::default());
             table.load().await?;
@@ -100,7 +99,33 @@ impl std::future::IntoFuture for LoadBuilder {
 mod tests {
     use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::writer::test_utils::{get_record_batch, TestResult};
+    use crate::DeltaTableBuilder;
     use datafusion::assert_batches_sorted_eq;
+
+    #[tokio::test]
+    async fn test_load_local() -> TestResult {
+        let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+            .load()
+            .await
+            .unwrap();
+
+        let (_table, stream) = DeltaOps(table).load().await?;
+        let data = collect_sendable_stream(stream).await?;
+
+        let expected = vec![
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 0     |",
+            "| 1     |",
+            "| 2     |",
+            "| 4     |",
+            "+-------+",
+        ];
+
+        assert_batches_sorted_eq!(&expected, &data);
+        Ok(())
+    }
 
     #[tokio::test]
     async fn test_write_load() -> TestResult {
