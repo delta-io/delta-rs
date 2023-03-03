@@ -77,7 +77,7 @@ impl std::future::IntoFuture for LoadBuilder {
 
         Box::pin(async move {
             let object_store = this.object_store.unwrap();
-            let url = ensure_table_uri(&object_store.root_uri())?;
+            let url = ensure_table_uri(object_store.root_uri())?;
             let store = object_store.storage_backend().clone();
             let mut table = DeltaTable::new(object_store, Default::default());
             table.load().await?;
