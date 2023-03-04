@@ -15,7 +15,7 @@ pub fn create_add_action(
         path: path.into(),
         size: 100,
         data_change,
-        stats: stats.map(|s| s.into()),
+        stats,
         ..Default::default()
     })
 }
