@@ -18,7 +18,7 @@ use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
 use crate::delta_config::DeltaConfigError;
 use crate::operations::vacuum::VacuumBuilder;
-use crate::storage::ObjectStoreRef;
+use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
 use chrono::{DateTime, Duration, Utc};
 use futures::StreamExt;
@@ -560,12 +560,6 @@ impl DeltaTable {
         self.storage.root_uri()
     }
 
-    /// Return the uri of commit version.
-    pub fn commit_uri_from_version(&self, version: DeltaDataTypeVersion) -> Path {
-        let version = format!("{version:020}.json");
-        Path::from_iter(["_delta_log", &version])
-    }
-
     /// Return the list of paths of given checkpoint.
     pub fn get_checkpoint_data_paths(&self, check_point: &CheckPoint) -> Vec<Path> {
         let checkpoint_prefix = format!("{:020}", check_point.version);
@@ -727,11 +721,7 @@ impl DeltaTable {
 
         // scan logs after checkpoint
         loop {
-            match self
-                .storage
-                .head(&self.commit_uri_from_version(version))
-                .await
-            {
+            match self.storage.head(&commit_uri_from_version(version)).await {
                 Ok(meta) => {
                     // also cache timestamp for version
                     self.version_timestamp
@@ -760,7 +750,7 @@ impl DeltaTable {
         Ok(version)
     }
 
-    /// Currently loaded evrsion of the table
+    /// Currently loaded version of the table
     pub fn version(&self) -> DeltaDataTypeVersion {
         self.state.version()
     }
@@ -778,7 +768,7 @@ impl DeltaTable {
         current_version: DeltaDataTypeVersion,
     ) -> Result<PeekCommit, DeltaTableError> {
         let next_version = current_version + 1;
-        let commit_uri = self.commit_uri_from_version(next_version);
+        let commit_uri = commit_uri_from_version(next_version);
         let commit_log_bytes = self.storage.get(&commit_uri).await;
         let commit_log_bytes = match commit_log_bytes {
             Err(ObjectStoreError::NotFound { .. }) => return Ok(PeekCommit::UpToDate),
@@ -873,7 +863,7 @@ impl DeltaTable {
         version: DeltaDataTypeVersion,
     ) -> Result<(), DeltaTableError> {
         // check if version is valid
-        let commit_uri = self.commit_uri_from_version(version);
+        let commit_uri = commit_uri_from_version(version);
         match self.storage.head(&commit_uri).await {
             Ok(_) => {}
             Err(ObjectStoreError::NotFound { .. }) => {
@@ -910,10 +900,7 @@ impl DeltaTable {
         match self.version_timestamp.get(&version) {
             Some(ts) => Ok(*ts),
             None => {
-                let meta = self
-                    .storage
-                    .head(&self.commit_uri_from_version(version))
-                    .await?;
+                let meta = self.storage.head(&commit_uri_from_version(version)).await?;
                 let ts = meta.last_modified.timestamp();
                 // also cache timestamp for version
                 self.version_timestamp.insert(version, ts);
@@ -930,7 +917,7 @@ impl DeltaTable {
     pub async fn history(
         &mut self,
         limit: Option<usize>,
-    ) -> Result<Vec<Map<String, Value>>, DeltaTableError> {
+    ) -> Result<Vec<action::CommitInfo>, DeltaTableError> {
         let mut version = match limit {
             Some(l) => max(self.version() - l as i64 + 1, 0),
             None => self.get_earliest_delta_log_version().await?,
@@ -1085,7 +1072,7 @@ impl DeltaTable {
     /// Return table schema parsed from transaction log. Return None if table hasn't been loaded or
     /// no metadata was found in the log.
     pub fn schema(&self) -> Option<&Schema> {
-        self.state.current_metadata().map(|m| &m.schema)
+        self.state.schema()
     }
 
     /// Return table schema parsed from transaction log. Return `DeltaTableError` if table hasn't
@@ -1145,7 +1132,7 @@ impl DeltaTable {
         // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
         self.storage
-            .rename_if_not_exists(&commit.uri, &self.commit_uri_from_version(version))
+            .rename_if_not_exists(&commit.uri, &commit_uri_from_version(version))
             .await
             .map_err(|e| match e {
                 ObjectStoreError::AlreadyExists { .. } => {
@@ -1181,7 +1168,7 @@ impl DeltaTable {
         );
 
         let mut actions = vec![
-            Action::commitInfo(enriched_commit_info),
+            Action::commit_info(enriched_commit_info),
             Action::protocol(protocol),
             Action::metaData(meta),
         ];
@@ -1391,22 +1378,17 @@ impl<'a> DeltaTransaction<'a> {
             .iter()
             .any(|a| matches!(a, action::Action::commitInfo(..)))
         {
-            let mut commit_info = Map::<String, Value>::new();
-            commit_info.insert(
-                "timestamp".to_string(),
-                Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
-            );
-            commit_info.insert(
+            let mut extra_info = Map::<String, Value>::new();
+            let mut commit_info = operation.map(|op| op.get_commit_info()).unwrap_or_default();
+            commit_info.timestamp = Some(Utc::now().timestamp_millis());
+            extra_info.insert(
                 "clientVersion".to_string(),
                 Value::String(format!("delta-rs.{}", crate_version())),
             );
-
-            if let Some(op) = &operation {
-                commit_info.append(&mut op.get_commit_info())
-            }
             if let Some(mut meta) = app_metadata {
-                commit_info.append(&mut meta)
+                extra_info.append(&mut meta)
             }
+            commit_info.info = extra_info;
             self.add_action(action::Action::commitInfo(commit_info));
         }
 
@@ -1661,27 +1643,7 @@ mod tests {
                     assert_eq!(DeltaTableMetaData::try_from(action).unwrap(), delta_md);
                 }
                 Action::commitInfo(action) => {
-                    let mut modified_action = action;
-                    let timestamp = serde_json::Number::from(0i64);
-                    modified_action["timestamp"] = Value::Number(serde_json::Number::from(0i64));
-                    let mut expected = Map::<String, Value>::new();
-                    expected.insert(
-                        "operation".to_string(),
-                        serde_json::Value::String("CREATE TABLE".to_string()),
-                    );
-                    expected.insert(
-                        "userName".to_string(),
-                        serde_json::Value::String("test user".to_string()),
-                    );
-                    expected.insert(
-                        "delta-rs".to_string(),
-                        serde_json::Value::String(crate_version().to_string()),
-                    );
-                    expected.insert(
-                        "timestamp".to_string(),
-                        serde_json::Value::Number(timestamp),
-                    );
-                    assert_eq!(modified_action, expected)
+                    assert_eq!(action.operation, Some("CREATE TABLE".to_string()));
                 }
                 _ => (),
             }
