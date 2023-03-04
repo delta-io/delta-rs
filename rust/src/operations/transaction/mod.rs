@@ -15,7 +15,7 @@ mod state;
 #[cfg(test)]
 pub(crate) mod test_utils;
 
-use self::conflict_checker::WinningCommitSummary;
+use self::conflict_checker::{CommitConflictError, WinningCommitSummary};
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 
@@ -38,6 +38,12 @@ pub(crate) enum TransactionError {
         #[from]
         source: ObjectStoreError,
     },
+    /// Error returned when a commit conflict ocurred
+    #[error("Failed to commit transaction: {0}")]
+    CommitConflict(#[from] CommitConflictError),
+    /// Error returned when maximum number of commit trioals is exceeded
+    #[error("Failed to commit transaction: {0}")]
+    MaxCommitAttempts(i32),
 }
 
 impl From<TransactionError> for DeltaTableError {
@@ -50,6 +56,9 @@ impl From<TransactionError> for DeltaTableError {
                 DeltaTableError::SerializeLogJson { json_err }
             }
             TransactionError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
+            other => DeltaTableError::GenericError {
+                source: Box::new(other),
+            },
         }
     }
 }
@@ -181,9 +190,9 @@ pub(crate) async fn commit(
                     Ok(_) => {
                         attempt_number += 1;
                     }
-                    Err(_err) => {
+                    Err(err) => {
                         storage.delete(&tmp_commit).await?;
-                        return Err(DeltaTableError::VersionAlreadyExists(version));
+                        return Err(TransactionError::CommitConflict(err).into());
                     }
                 };
             }
@@ -194,8 +203,7 @@ pub(crate) async fn commit(
         }
     }
 
-    // TODO max attempts error
-    Err(DeltaTableError::VersionAlreadyExists(-1))
+    Err(TransactionError::MaxCommitAttempts(max_attempts as i32).into())
 }
 
 #[cfg(all(test, feature = "parquet"))]
