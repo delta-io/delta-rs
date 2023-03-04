@@ -1610,7 +1610,6 @@ mod tests {
     }
 
     #[tokio::test]
-    #[ignore]
     async fn test_create_delta_table() {
         let (delta_md, protocol, dt, tmp_dir) = create_test_table().await;
 
@@ -1644,27 +1643,7 @@ mod tests {
                     assert_eq!(DeltaTableMetaData::try_from(action).unwrap(), delta_md);
                 }
                 Action::commitInfo(action) => {
-                    let mut modified_action = action.info;
-                    let timestamp = serde_json::Number::from(0i64);
-                    modified_action["timestamp"] = Value::Number(serde_json::Number::from(0i64));
-                    let mut expected = Map::<String, Value>::new();
-                    expected.insert(
-                        "operation".to_string(),
-                        serde_json::Value::String("CREATE TABLE".to_string()),
-                    );
-                    expected.insert(
-                        "userName".to_string(),
-                        serde_json::Value::String("test user".to_string()),
-                    );
-                    expected.insert(
-                        "delta-rs".to_string(),
-                        serde_json::Value::String(crate_version().to_string()),
-                    );
-                    expected.insert(
-                        "timestamp".to_string(),
-                        serde_json::Value::Number(timestamp),
-                    );
-                    assert_eq!(modified_action, expected)
+                    assert_eq!(action.operation, Some("CREATE TABLE".to_string()));
                 }
                 _ => (),
             }

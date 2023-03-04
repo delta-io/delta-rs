@@ -8,7 +8,7 @@ mod parquet_read;
 #[cfg(feature = "parquet2")]
 pub mod parquet2_read;
 
-use crate::operations::transaction::IsolationLevel;
+use crate::delta_config::IsolationLevel;
 use crate::{schema::*, DeltaResult, DeltaTableError, DeltaTableMetaData};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
@@ -44,6 +44,13 @@ pub enum ActionError {
         /// Parquet error details returned when parsing the checkpoint parquet
         #[from]
         source: parquet::errors::ParquetError,
+    },
+    /// Faild to serialize operation
+    #[error("Failed to serialize operation: {source}")]
+    SerializeOperation {
+        #[from]
+        /// The source error
+        source: serde_json::Error,
     },
 }
 
@@ -569,20 +576,25 @@ pub enum DeltaOperation {
 impl DeltaOperation {
     /// A human readable name for the operation
     pub fn name(&self) -> &str {
+        // operation names taken from https://learn.microsoft.com/en-us/azure/databricks/delta/history#--operation-metrics-keys
         match &self {
-            DeltaOperation::Create { .. } => "delta-rs.Create",
-            DeltaOperation::Write { .. } => "delta-rs.Write",
-            DeltaOperation::StreamingUpdate { .. } => "delta-rs.StreamingUpdate",
-            DeltaOperation::Optimize { .. } => "delta-rs.Optimize",
-            DeltaOperation::FileSystemCheck { .. } => "delta-rs.FileSystemCheck",
+            DeltaOperation::Create { mode, .. } if matches!(mode, SaveMode::Overwrite) => {
+                "CREATE OR REPLACE TABLE"
+            }
+            DeltaOperation::Create { .. } => "CREATE TABLE",
+            DeltaOperation::Write { .. } => "WRITE",
+            DeltaOperation::StreamingUpdate { .. } => "STREAMING UPDATE",
+            DeltaOperation::Optimize { .. } => "OPTIMIZE",
+            DeltaOperation::FileSystemCheck { .. } => "FSCK",
         }
     }
 
     /// Paraemters configured for operation.
     pub fn operation_parameters(&self) -> DeltaResult<impl Iterator<Item = (String, Value)>> {
         // TODO remove unwrap
-        let map2 = serde_json::to_value(self).unwrap();
-        if let serde_json::Value::Object(map) = map2 {
+        let serialized = serde_json::to_value(self)
+            .map_err(|err| ActionError::SerializeOperation { source: err })?;
+        if let serde_json::Value::Object(map) = serialized {
             let all_operation_fields = map.values().next().unwrap().as_object().unwrap().clone();
             Ok(all_operation_fields
                 .into_iter()
@@ -598,7 +610,10 @@ impl DeltaOperation {
                     )
                 }))
         } else {
-            todo!()
+            Err(ActionError::Generic(
+                "operation parameetrs serialized into unexpected shape".into(),
+            )
+            .into())
         }
     }
 

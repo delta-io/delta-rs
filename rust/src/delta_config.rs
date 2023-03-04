@@ -3,33 +3,9 @@ use std::time::Duration;
 use std::{collections::HashMap, str::FromStr};
 
 use lazy_static::lazy_static;
+use serde::{Deserialize, Serialize};
 
-use crate::operations::transaction::IsolationLevel;
-use crate::{DeltaDataTypeInt, DeltaDataTypeLong, DeltaTableError, DeltaTableMetaData};
-
-lazy_static! {
-    /// How often to checkpoint the delta log.
-    pub static ref CHECKPOINT_INTERVAL: DeltaConfig = DeltaConfig::new("checkpointInterval", "10");
-
-    /// The shortest duration we have to keep logically deleted data files around before deleting
-    /// them physically.
-    /// Note: this value should be large enough:
-    /// - It should be larger than the longest possible duration of a job if you decide to run "VACUUM"
-    ///   when there are concurrent readers or writers accessing the table.
-    ///- If you are running a streaming query reading from the table, you should make sure the query
-    ///  doesn't stop longer than this value. Otherwise, the query may not be able to restart as it
-    ///  still needs to read old files.
-    pub static ref TOMBSTONE_RETENTION: DeltaConfig =
-        DeltaConfig::new("deletedFileRetentionDuration", "interval 1 week");
-
-    /// The shortest duration we have to keep delta files around before deleting them. We can only
-    /// delete delta files that are before a compaction. We may keep files beyond this duration until
-    /// the next calendar day.
-    pub static ref LOG_RETENTION: DeltaConfig = DeltaConfig::new("logRetentionDuration", "interval 30 day");
-
-    /// Whether to clean up expired checkpoints and delta logs.
-    pub static ref ENABLE_EXPIRED_LOG_CLEANUP: DeltaConfig = DeltaConfig::new("enableExpiredLogCleanup", "true");
-}
+use crate::DeltaTableError;
 
 /// Typed property keys that can be defined on a delta table
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>
@@ -44,6 +20,9 @@ pub enum DeltaConfigKey {
 
     /// true for Delta Lake to automatically optimize the layout of the files for this Delta table during writes.
     AutoOptimizeOptimizeWrite,
+
+    /// Interval (number of commits) after which a new checkpoint should be created
+    CheckpointInterval,
 
     /// true for Delta Lake to write file statistics in checkpoints in JSON format for the stats column.
     CheckpointWriteStatsAsJson,
@@ -91,6 +70,9 @@ pub enum DeltaConfigKey {
     /// constant time. Operations on history are parallel but will become more expensive as the log size increases.
     LogRetentionDuration,
 
+    /// TODO I could not find this property in the documentation, but was defined here and makes sense..?
+    EnableExpiredLogCleanup,
+
     /// The minimum required protocol reader version for a reader that allows to read from this Delta table.
     MinReaderVersion,
 
@@ -123,6 +105,7 @@ impl AsRef<str> for DeltaConfigKey {
     fn as_ref(&self) -> &str {
         match self {
             Self::AppendOnly => "delta.appendOnly",
+            Self::CheckpointInterval => "delta.checkpointInterval",
             Self::AutoOptimizeAutoCompact => "delta.autoOptimize.autoCompact",
             Self::AutoOptimizeOptimizeWrite => "delta.autoOptimize.optimizeWrite",
             Self::CheckpointWriteStatsAsJson => "delta.checkpoint.writeStatsAsJson",
@@ -133,6 +116,7 @@ impl AsRef<str> for DeltaConfigKey {
             Self::EnableChangeDataFeed => "delta.enableChangeDataFeed",
             Self::IsolationLevel => "delta.isolationLevel",
             Self::LogRetentionDuration => "delta.logRetentionDuration",
+            Self::EnableExpiredLogCleanup => "delta.enableExpiredLogCleanup",
             Self::MinReaderVersion => "delta.minReaderVersion",
             Self::MinWriterVersion => "delta.minWriterVersion",
             Self::RandomizeFilePrefixes => "delta.randomizeFilePrefixes",
@@ -150,6 +134,7 @@ impl FromStr for DeltaConfigKey {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
             "delta.appendOnly" => Ok(Self::AppendOnly),
+            "delta.checkpointInterval" => Ok(Self::CheckpointInterval),
             "delta.autoOptimize.autoCompact" => Ok(Self::AutoOptimizeAutoCompact),
             "delta.autoOptimize.optimizeWrite" => Ok(Self::AutoOptimizeOptimizeWrite),
             "delta.checkpoint.writeStatsAsJson" => Ok(Self::CheckpointWriteStatsAsJson),
@@ -162,6 +147,9 @@ impl FromStr for DeltaConfigKey {
             "delta.enableChangeDataFeed" => Ok(Self::EnableChangeDataFeed),
             "delta.isolationLevel" => Ok(Self::IsolationLevel),
             "delta.logRetentionDuration" | "logRetentionDuration" => Ok(Self::LogRetentionDuration),
+            "delta.enableExpiredLogCleanup" | "enableExpiredLogCleanup" => {
+                Ok(Self::EnableExpiredLogCleanup)
+            }
             "delta.minReaderVersion" => Ok(Self::MinReaderVersion),
             "delta.minWriterVersion" => Ok(Self::MinWriterVersion),
             "delta.randomizeFilePrefixes" => Ok(Self::RandomizeFilePrefixes),
@@ -233,9 +221,58 @@ impl<'a> TableConfig<'a> {
             i32,
             32
         ),
+        (
+            DeltaConfigKey::EnableExpiredLogCleanup,
+            enable_expired_log_cleanup,
+            bool,
+            true
+        ),
+        (
+            DeltaConfigKey::CheckpointInterval,
+            checkpoint_interval,
+            i32,
+            10
+        ),
     );
 
-    /// Get the configured or default isolation level
+    /// The shortest duration for Delta Lake to keep logically deleted data files before deleting
+    /// them physically. This is to prevent failures in stale readers after compactions or partition overwrites.
+    ///
+    /// This value should be large enough to ensure that:
+    ///
+    /// * It is larger than the longest possible duration of a job if you run VACUUM when there are
+    ///   concurrent readers or writers accessing the Delta table.
+    /// * If you run a streaming query that reads from the table, that query does not stop for longer
+    ///   than this value. Otherwise, the query may not be able to restart, as it must still read old files.
+    pub fn deleted_file_retention_duration(&self) -> Duration {
+        lazy_static! {
+            static ref DEFAULT_DURATION: Duration = parse_interval("interval 1 week").unwrap();
+        }
+        self.0
+            .get(DeltaConfigKey::DeletedFileRetentionDuration.as_ref())
+            .and_then(|o| o.as_ref().and_then(|v| parse_interval(v).ok()))
+            .unwrap_or_else(|| DEFAULT_DURATION.to_owned())
+    }
+
+    /// How long the history for a Delta table is kept.
+    ///
+    /// Each time a checkpoint is written, Delta Lake automatically cleans up log entries older
+    /// than the retention interval. If you set this property to a large enough value, many log
+    /// entries are retained. This should not impact performance as operations against the log are
+    /// constant time. Operations on history are parallel but will become more expensive as the log size increases.
+    pub fn log_retention_duration(&self) -> Duration {
+        lazy_static! {
+            static ref DEFAULT_DURATION: Duration = parse_interval("interval 30 day").unwrap();
+        }
+        self.0
+            .get(DeltaConfigKey::LogRetentionDuration.as_ref())
+            .and_then(|o| o.as_ref().and_then(|v| parse_interval(v).ok()))
+            .unwrap_or_else(|| DEFAULT_DURATION.to_owned())
+    }
+
+    /// The degree to which a transaction must be isolated from modifications made by concurrent transactions.
+    ///
+    /// Valid values are `Serializable` and `WriteSerializable`.
     pub fn isolation_level(&self) -> IsolationLevel {
         self.0
             .get(DeltaConfigKey::IsolationLevel.as_ref())
@@ -244,70 +281,59 @@ impl<'a> TableConfig<'a> {
     }
 }
 
-/// Delta table's `metadata.configuration` entry.
-#[derive(Debug)]
-pub struct DeltaConfig {
-    /// The configuration name
-    pub key: String,
-    /// The default value if `key` is not set in `metadata.configuration`.
-    pub default: String,
+#[derive(Serialize, Deserialize, Debug, Clone, PartialEq)]
+/// The isolation level applied during transaction
+pub enum IsolationLevel {
+    /// The strongest isolation level. It ensures that committed write operations
+    /// and all reads are Serializable. Operations are allowed as long as there
+    /// exists a serial sequence of executing them one-at-a-time that generates
+    /// the same outcome as that seen in the table. For the write operations,
+    /// the serial sequence is exactly the same as that seen in the table’s history.
+    Serializable,
+
+    /// A weaker isolation level than Serializable. It ensures only that the write
+    /// operations (that is, not reads) are serializable. However, this is still stronger
+    /// than Snapshot isolation. WriteSerializable is the default isolation level because
+    /// it provides great balance of data consistency and availability for most common operations.
+    WriteSerializable,
+
+    /// SnapshotIsolation is a guarantee that all reads made in a transaction will see a consistent
+    /// snapshot of the database (in practice it reads the last committed values that existed at the
+    /// time it started), and the transaction itself will successfully commit only if no updates
+    /// it has made conflict with any concurrent updates made since that snapshot.
+    SnapshotIsolation,
 }
 
-impl DeltaConfig {
-    fn new(key: &str, default: &str) -> Self {
-        Self {
-            key: key.to_string(),
-            default: default.to_string(),
+// Spark assumes Serializable as default isolation level
+// https://github.com/delta-io/delta/blob/abb171c8401200e7772b27e3be6ea8682528ac72/core/src/main/scala/org/apache/spark/sql/delta/OptimisticTransaction.scala#L1023
+impl Default for IsolationLevel {
+    fn default() -> Self {
+        Self::Serializable
+    }
+}
+
+impl AsRef<str> for IsolationLevel {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::Serializable => "Serializable",
+            Self::WriteSerializable => "WriteSerializable",
+            Self::SnapshotIsolation => "SnapshotIsolation",
         }
     }
+}
 
-    /// Returns the value from `metadata.configuration` for `self.key` as DeltaDataTypeInt.
-    /// If it's missing in metadata then the `self.default` is used.
-    #[allow(dead_code)]
-    pub fn get_int_from_metadata(
-        &self,
-        metadata: &DeltaTableMetaData,
-    ) -> Result<DeltaDataTypeInt, DeltaConfigError> {
-        Ok(parse_int(&self.get_raw_from_metadata(metadata))? as i32)
-    }
+impl FromStr for IsolationLevel {
+    type Err = DeltaTableError;
 
-    /// Returns the value from `metadata.configuration` for `self.key` as DeltaDataTypeLong.
-    /// If it's missing in metadata then the `self.default` is used.
-    #[allow(dead_code)]
-    pub fn get_long_from_metadata(
-        &self,
-        metadata: &DeltaTableMetaData,
-    ) -> Result<DeltaDataTypeLong, DeltaConfigError> {
-        parse_int(&self.get_raw_from_metadata(metadata))
-    }
-
-    /// Returns the value from `metadata.configuration` for `self.key` as Duration type for the interval.
-    /// The string value of this config has to have the following format: interval <number> <unit>.
-    /// Where <unit> is either week, day, hour, second, millisecond, microsecond or nanosecond.
-    /// If it's missing in metadata then the `self.default` is used.
-    pub fn get_interval_from_metadata(
-        &self,
-        metadata: &DeltaTableMetaData,
-    ) -> Result<Duration, DeltaConfigError> {
-        parse_interval(&self.get_raw_from_metadata(metadata))
-    }
-
-    /// Returns the value from `metadata.configuration` for `self.key` as bool.
-    /// If it's missing in metadata then the `self.default` is used.
-    pub fn get_boolean_from_metadata(
-        &self,
-        metadata: &DeltaTableMetaData,
-    ) -> Result<bool, DeltaConfigError> {
-        parse_bool(&self.get_raw_from_metadata(metadata))
-    }
-
-    fn get_raw_from_metadata(&self, metadata: &DeltaTableMetaData) -> String {
-        metadata
-            .configuration
-            .get(&self.key)
-            .and_then(|opt| opt.as_deref())
-            .unwrap_or(self.default.as_str())
-            .to_string()
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_ascii_lowercase().as_str() {
+            "serializable" => Ok(Self::Serializable),
+            "writeserializable" | "write_serializable" => Ok(Self::WriteSerializable),
+            "snapshotisolation" | "snapshot_isolation" => Ok(Self::SnapshotIsolation),
+            _ => Err(DeltaTableError::Generic(
+                "Invalid string for IsolationLevel".into(),
+            )),
+        }
     }
 }
 
@@ -357,15 +383,10 @@ fn parse_int(value: &str) -> Result<i64, DeltaConfigError> {
     })
 }
 
-fn parse_bool(value: &str) -> Result<bool, DeltaConfigError> {
-    value
-        .parse()
-        .map_err(|e| DeltaConfigError::Validation(format!("Cannot parse '{value}' as bool: {e}")))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::DeltaTableMetaData;
     use crate::Schema;
     use std::collections::HashMap;
 
@@ -376,68 +397,55 @@ mod tests {
 
     #[test]
     fn get_interval_from_metadata_test() {
-        let mut md = dummy_metadata();
+        let md = dummy_metadata();
+        let config = TableConfig(&md.configuration);
 
         // default 1 week
         assert_eq!(
-            TOMBSTONE_RETENTION
-                .get_interval_from_metadata(&md)
-                .unwrap()
-                .as_secs(),
+            config.deleted_file_retention_duration().as_secs(),
             SECONDS_PER_WEEK,
         );
 
         // change to 2 day
+        let mut md = dummy_metadata();
         md.configuration.insert(
-            TOMBSTONE_RETENTION.key.to_string(),
+            DeltaConfigKey::DeletedFileRetentionDuration
+                .as_ref()
+                .to_string(),
             Some("interval 2 day".to_string()),
         );
+        let config = TableConfig(&md.configuration);
+
         assert_eq!(
-            TOMBSTONE_RETENTION
-                .get_interval_from_metadata(&md)
-                .unwrap()
-                .as_secs(),
+            config.deleted_file_retention_duration().as_secs(),
             2 * SECONDS_PER_DAY,
         );
     }
 
     #[test]
     fn get_long_from_metadata_test() {
-        assert_eq!(
-            CHECKPOINT_INTERVAL
-                .get_long_from_metadata(&dummy_metadata())
-                .unwrap(),
-            10,
-        )
-    }
-
-    #[test]
-    fn get_int_from_metadata_test() {
-        assert_eq!(
-            CHECKPOINT_INTERVAL
-                .get_int_from_metadata(&dummy_metadata())
-                .unwrap(),
-            10,
-        )
+        let md = dummy_metadata();
+        let config = TableConfig(&md.configuration);
+        assert_eq!(config.checkpoint_interval(), 10,)
     }
 
     #[test]
     fn get_boolean_from_metadata_test() {
-        let mut md = dummy_metadata();
+        let md = dummy_metadata();
+        let config = TableConfig(&md.configuration);
 
         // default value is true
-        assert!(ENABLE_EXPIRED_LOG_CLEANUP
-            .get_boolean_from_metadata(&md)
-            .unwrap(),);
+        assert!(config.enable_expired_log_cleanup());
 
         // change to false
+        let mut md = dummy_metadata();
         md.configuration.insert(
-            ENABLE_EXPIRED_LOG_CLEANUP.key.to_string(),
+            DeltaConfigKey::EnableExpiredLogCleanup.as_ref().into(),
             Some("false".to_string()),
         );
-        assert!(!ENABLE_EXPIRED_LOG_CLEANUP
-            .get_boolean_from_metadata(&md)
-            .unwrap());
+        let config = TableConfig(&md.configuration);
+
+        assert!(!config.enable_expired_log_cleanup());
     }
 
     #[test]
