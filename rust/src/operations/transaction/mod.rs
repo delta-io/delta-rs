@@ -14,9 +14,6 @@ mod conflict_checker;
 mod state;
 #[cfg(test)]
 pub(crate) mod test_utils;
-mod types;
-
-pub use types::*;
 
 use self::conflict_checker::WinningCommitSummary;
 
