@@ -632,12 +632,22 @@ impl DeltaOperation {
         }
     }
 
-    /// Get predicate expression applien when the operation reads data from the table.
+    /// Get predicate expression applied when the operation reads data from the table.
     pub fn read_predicate(&self) -> Option<String> {
         match self {
             // TODO add more operations
             Self::Write { predicate, .. } => predicate.clone(),
             _ => None,
+        }
+    }
+
+    /// Denotes if the operation reads the entire table
+    pub fn read_whole_table(&self) -> bool {
+        match self {
+            // TODO just adding one operation example, as currently none of the
+            // implemented operations scan the entire table.
+            Self::Write { predicate, .. } if predicate.is_none() => false,
+            _ => false,
         }
     }
 }

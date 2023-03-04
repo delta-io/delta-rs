@@ -365,6 +365,11 @@ impl<'a> ConflictChecker<'a> {
             defaault_isolation_level
         };
 
+        // Skip check, if the operation can be downgraded to snapshot isolation
+        if matches!(isolation_level, IsolationLevel::SnapshotIsolation) {
+            return Ok(());
+        }
+
         // Fail if new files have been added that the txn should have read.
         let added_files_to_check = match isolation_level {
             IsolationLevel::WriteSerializable
@@ -387,7 +392,7 @@ impl<'a> ConflictChecker<'a> {
         cfg_if::cfg_if! {
             if #[cfg(feature = "datafusion")] {
                 let added_files_matching_predicates =
-                    if let Some(predicate_str) = self.operation.read_predicate() {
+                    if let (Some(predicate_str), false) = (self.operation.read_predicate(), self.operation.read_whole_table()) {
                         let arrow_schema =
                             self.snapshot
                                 .arrow_schema()
@@ -408,10 +413,19 @@ impl<'a> ConflictChecker<'a> {
                             .cloned()
                             .collect::<Vec<_>>()
                     } else {
-                        added_files_to_check
+                        if  self.operation.read_whole_table() {
+                            added_files_to_check
+                        } else {
+                            vec![]
+                        }
+
                     };
             } else {
-                let added_files_matching_predicates = added_files_to_check;
+                let added_files_matching_predicates = if self.operation.read_whole_table() {
+                    added_files_to_check
+                } else {
+                    vec![]
+                };
             }
         }
 
@@ -592,41 +606,52 @@ mod tests {
         assert!(!res)
     }
 
+    // Check whether the test transaction conflict with the concurrent writes by executing the
+    // given params in the following order:
+    // - setup (including setting table isolation level
+    // - reads
+    // - concurrentWrites
+    // - actions
+    fn prepare_test(
+        setup: Option<Vec<Action>>,
+        reads: Vec<Action>,
+        concurrent: Vec<Action>,
+    ) -> (DeltaTableState, WinningCommitSummary) {
+        let setup_actions = setup.unwrap_or_else(|| init_table_actions());
+        let mut state = DeltaTableState::from_actions(setup_actions, 0).unwrap();
+        state.merge(DeltaTableState::from_actions(reads, 1).unwrap(), true, true);
+        let summary = WinningCommitSummary {
+            actions: concurrent,
+            commit_info: None,
+        };
+        (state, summary)
+    }
+
     #[tokio::test]
     // tests adopted from https://github.com/delta-io/delta/blob/24c025128612a4ae02d0ad958621f928cda9a3ec/core/src/test/scala/org/apache/spark/sql/delta/OptimisticTransactionSuite.scala#L40-L94
     async fn test_allowed_concurrent_actions() {
-        // check(
-        //     "append / append",
-        //     conflicts = false,
-        //     reads = Seq(
-        //       t => t.metadata
-        //     ),
-        //     concurrentWrites = Seq(
-        //       addA),
-        //     actions = Seq(
-        //       addB))
-        let state = DeltaTableState::from_actions(init_table_actions(), 0).unwrap();
-
+        // append - append
+        // append file to table while a concurrent writer also appends a file
         let file1 = tu::create_add_action("file1", true, get_stats(1, 10));
         let file2 = tu::create_add_action("file2", true, get_stats(1, 10));
 
-        let summary = WinningCommitSummary {
-            actions: vec![file1],
-            commit_info: None,
-        };
+        let (state, summary) = prepare_test(None, vec![], vec![file1]);
         let operation = DeltaOperation::Write {
             mode: SaveMode::Append,
             partition_by: Default::default(),
             predicate: None,
         };
-
         let actions = vec![file2];
         let checker = ConflictChecker::try_new(&state, summary, operation, &actions)
             .await
             .unwrap();
 
         let result = checker.check_conflicts();
-        println!("{:?}", result);
         assert!(result.is_ok());
+
+        // disjoint delete - read
+        // the concurrent transaction deletes a file that the current transaction did NOT read
+
+        // TODO disjoint transactions
     }
 }
