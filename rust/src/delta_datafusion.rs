@@ -57,9 +57,9 @@ use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
 use crate::builder::ensure_table_uri;
-use crate::Invariant;
 use crate::{action, open_table, open_table_with_storage_options};
 use crate::{schema, DeltaTableBuilder};
+use crate::{DeltaResult, Invariant};
 use crate::{DeltaTable, DeltaTableError};
 
 impl From<DeltaTableError> for DataFusionError {
@@ -529,38 +529,42 @@ impl ExecutionPlan for DeltaScan {
     }
 }
 
-fn get_null_of_arrow_type(t: &ArrowDataType) -> ScalarValue {
+fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
     match t {
-        ArrowDataType::Null => ScalarValue::Null,
-        ArrowDataType::Boolean => ScalarValue::Boolean(None),
-        ArrowDataType::Int8 => ScalarValue::Int8(None),
-        ArrowDataType::Int16 => ScalarValue::Int16(None),
-        ArrowDataType::Int32 => ScalarValue::Int32(None),
-        ArrowDataType::Int64 => ScalarValue::Int64(None),
-        ArrowDataType::UInt8 => ScalarValue::UInt8(None),
-        ArrowDataType::UInt16 => ScalarValue::UInt16(None),
-        ArrowDataType::UInt32 => ScalarValue::UInt32(None),
-        ArrowDataType::UInt64 => ScalarValue::UInt64(None),
-        ArrowDataType::Float32 => ScalarValue::Float32(None),
-        ArrowDataType::Float64 => ScalarValue::Float64(None),
-        ArrowDataType::Date32 => ScalarValue::Date32(None),
-        ArrowDataType::Date64 => ScalarValue::Date64(None),
-        ArrowDataType::Binary => ScalarValue::Binary(None),
-        ArrowDataType::FixedSizeBinary(size) => ScalarValue::FixedSizeBinary(size.to_owned(), None),
-        ArrowDataType::LargeBinary => ScalarValue::LargeBinary(None),
-        ArrowDataType::Utf8 => ScalarValue::Utf8(None),
-        ArrowDataType::LargeUtf8 => ScalarValue::LargeUtf8(None),
-        ArrowDataType::Decimal128(precision, scale) => {
-            ScalarValue::Decimal128(None, precision.to_owned(), scale.to_owned())
+        ArrowDataType::Null => Ok(ScalarValue::Null),
+        ArrowDataType::Boolean => Ok(ScalarValue::Boolean(None)),
+        ArrowDataType::Int8 => Ok(ScalarValue::Int8(None)),
+        ArrowDataType::Int16 => Ok(ScalarValue::Int16(None)),
+        ArrowDataType::Int32 => Ok(ScalarValue::Int32(None)),
+        ArrowDataType::Int64 => Ok(ScalarValue::Int64(None)),
+        ArrowDataType::UInt8 => Ok(ScalarValue::UInt8(None)),
+        ArrowDataType::UInt16 => Ok(ScalarValue::UInt16(None)),
+        ArrowDataType::UInt32 => Ok(ScalarValue::UInt32(None)),
+        ArrowDataType::UInt64 => Ok(ScalarValue::UInt64(None)),
+        ArrowDataType::Float32 => Ok(ScalarValue::Float32(None)),
+        ArrowDataType::Float64 => Ok(ScalarValue::Float64(None)),
+        ArrowDataType::Date32 => Ok(ScalarValue::Date32(None)),
+        ArrowDataType::Date64 => Ok(ScalarValue::Date64(None)),
+        ArrowDataType::Binary => Ok(ScalarValue::Binary(None)),
+        ArrowDataType::FixedSizeBinary(size) => {
+            Ok(ScalarValue::FixedSizeBinary(size.to_owned(), None))
         }
+        ArrowDataType::LargeBinary => Ok(ScalarValue::LargeBinary(None)),
+        ArrowDataType::Utf8 => Ok(ScalarValue::Utf8(None)),
+        ArrowDataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(None)),
+        ArrowDataType::Decimal128(precision, scale) => Ok(ScalarValue::Decimal128(
+            None,
+            precision.to_owned(),
+            scale.to_owned(),
+        )),
         ArrowDataType::Timestamp(unit, tz) => {
             let tz = tz.to_owned();
-            match unit {
+            Ok(match unit {
                 TimeUnit::Second => ScalarValue::TimestampSecond(None, tz),
                 TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(None, tz),
                 TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(None, tz),
                 TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(None, tz),
-            }
+            })
         }
         //Unsupported types...
         ArrowDataType::Float16
@@ -576,9 +580,10 @@ fn get_null_of_arrow_type(t: &ArrowDataType) -> ScalarValue {
         | ArrowDataType::Duration(_)
         | ArrowDataType::Interval(_)
         | ArrowDataType::RunEndEncoded(_, _)
-        | ArrowDataType::Map(_, _) => {
-            panic!("{}", format!("Implement data type for Delta Lake {}", t));
-        }
+        | ArrowDataType::Map(_, _) => Err(DeltaTableError::Generic(format!(
+            "Unsupported data type for Delta Lake {}",
+            t
+        ))),
     }
 }
 
@@ -593,7 +598,7 @@ fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> P
                     f.data_type(),
                 )
                 .unwrap_or(ScalarValue::Null),
-                None => get_null_of_arrow_type(f.data_type()),
+                None => get_null_of_arrow_type(f.data_type()).unwrap_or(ScalarValue::Null),
             })
         })
         .collect::<Vec<_>>();
@@ -642,7 +647,7 @@ fn to_correct_scalar_value(
     match stat_val {
         serde_json::Value::Array(_) => None,
         serde_json::Value::Object(_) => None,
-        serde_json::Value::Null => Some(get_null_of_arrow_type(field_dt)),
+        serde_json::Value::Null => get_null_of_arrow_type(field_dt).ok(),
         serde_json::Value::String(string_val) => match field_dt {
             ArrowDataType::Timestamp(_, _) => {
                 let time_nanos = ScalarValue::try_from_string(
