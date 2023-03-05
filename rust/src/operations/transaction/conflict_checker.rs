@@ -97,14 +97,14 @@ pub(crate) struct TransactionInfo<'a> {
     pub(crate) actions: &'a Vec<Action>,
     /// read [`DeltaTableState`] used for the transaction
     pub(crate) read_snapshot: &'a DeltaTableState,
-    /// [`CommitInfo`] for the commit
-    pub(crate) commit_info: Option<CommitInfo>,
+    /// operation during commit
+    pub(crate) operation: DeltaOperation,
 }
 
 impl<'a> TransactionInfo<'a> {
     pub fn try_new(
         snapshot: &'a DeltaTableState,
-        operation: &DeltaOperation,
+        operation: DeltaOperation,
         actions: &'a Vec<Action>,
     ) -> Result<Self, DeltaTableError> {
         Ok(Self {
@@ -115,7 +115,7 @@ impl<'a> TransactionInfo<'a> {
             read_app_ids: Default::default(),
             actions,
             read_snapshot: snapshot,
-            commit_info: Some(operation.get_commit_info()),
+            operation,
         })
     }
 
@@ -131,6 +131,16 @@ impl<'a> TransactionInfo<'a> {
 
     pub fn final_actions_to_commit(&self) -> Vec<Action> {
         todo!()
+    }
+
+    /// Denotes if the operation reads the entire table
+    pub fn read_whole_table(&self) -> bool {
+        match &self.operation {
+            // TODO just adding one operation example, as currently none of the
+            // implemented operations scan the entire table.
+            DeltaOperation::Write { predicate, .. } if predicate.is_none() => false,
+            _ => false,
+        }
     }
 }
 
@@ -278,8 +288,6 @@ pub(crate) struct ConflictChecker<'a> {
     winning_commit_summary: WinningCommitSummary,
     /// The state of the delta table at the base version from the current (not winning) commit
     snapshot: &'a DeltaTableState,
-    /// The state of the delta table at the base version from the current (not winning) commit
-    operation: DeltaOperation,
 }
 
 impl<'a> ConflictChecker<'a> {
@@ -289,12 +297,11 @@ impl<'a> ConflictChecker<'a> {
         operation: DeltaOperation,
         actions: &'a Vec<Action>,
     ) -> Result<ConflictChecker<'a>, DeltaTableError> {
-        let transaction_info = TransactionInfo::try_new(snapshot, &operation, actions)?;
+        let transaction_info = TransactionInfo::try_new(snapshot, operation, actions)?;
         Ok(Self {
             transaction_info,
             winning_commit_summary,
             snapshot,
-            operation,
         })
     }
 
@@ -357,7 +364,7 @@ impl<'a> ConflictChecker<'a> {
 
         let isolation_level = if can_downgrade_to_snapshot_isolation(
             &self.winning_commit_summary.actions,
-            &self.operation,
+            &self.transaction_info.operation,
             &defaault_isolation_level,
         ) {
             IsolationLevel::SnapshotIsolation
@@ -391,37 +398,36 @@ impl<'a> ConflictChecker<'a> {
         // to assume all files match
         cfg_if::cfg_if! {
             if #[cfg(feature = "datafusion")] {
-                let added_files_matching_predicates =
-                    if let (Some(predicate_str), false) = (self.operation.read_predicate(), self.operation.read_whole_table()) {
-                        let arrow_schema =
-                            self.snapshot
-                                .arrow_schema()
-                                .map_err(|err| CommitConflictError::CorruptedState {
-                                    source: Box::new(err),
-                                })?;
-                        let predicate = self
-                            .snapshot
-                            .parse_predicate_expression(predicate_str)
-                            .map_err(|err| CommitConflictError::Predicate {
-                                source: Box::new(err),
-                            })?;
-                        AddContainer::new(&added_files_to_check, arrow_schema)
-                            .predicate_matches(predicate)
-                            .map_err(|err| CommitConflictError::Predicate {
-                                source: Box::new(err),
-                            })?
-                            .cloned()
-                            .collect::<Vec<_>>()
-                    } else {
-                        if  self.operation.read_whole_table() {
-                            added_files_to_check
-                        } else {
-                            vec![]
+                let added_files_matching_predicates = if let (Some(predicate_str), false) = (
+                    self.transaction_info.operation.read_predicate(),
+                    self.transaction_info.operation.read_whole_table(),
+                ) {
+                    let arrow_schema = self.snapshot.arrow_schema().map_err(|err| {
+                        CommitConflictError::CorruptedState {
+                            source: Box::new(err),
                         }
-
-                    };
+                    })?;
+                    let predicate = self
+                        .snapshot
+                        .parse_predicate_expression(predicate_str)
+                        .map_err(|err| CommitConflictError::Predicate {
+                            source: Box::new(err),
+                        })?;
+                    AddContainer::new(&added_files_to_check, arrow_schema)
+                        .predicate_matches(predicate)
+                        .map_err(|err| CommitConflictError::Predicate {
+                            source: Box::new(err),
+                        })?
+                        .cloned()
+                        .collect::<Vec<_>>()
+                } else if self.transaction_info.operation.read_whole_table() {
+                    added_files_to_check
+                } else {
+                    vec![]
+                };
             } else {
-                let added_files_matching_predicates = if self.operation.read_whole_table() {
+                let added_files_matching_predicates = if self.transaction_info.operation.read_whole_table()
+                {
                     added_files_to_check
                 } else {
                     vec![]
@@ -617,7 +623,7 @@ mod tests {
         reads: Vec<Action>,
         concurrent: Vec<Action>,
     ) -> (DeltaTableState, WinningCommitSummary) {
-        let setup_actions = setup.unwrap_or_else(|| init_table_actions());
+        let setup_actions = setup.unwrap_or_else(init_table_actions);
         let mut state = DeltaTableState::from_actions(setup_actions, 0).unwrap();
         state.merge(DeltaTableState::from_actions(reads, 1).unwrap(), true, true);
         let summary = WinningCommitSummary {
