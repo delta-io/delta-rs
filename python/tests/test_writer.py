@@ -585,7 +585,7 @@ def test_partition_overwrite(
         tmp_path,
         sample_data,
         mode="overwrite",
-        partitions_filters=[("p1", "=", "1")],
+        partition_filters=[("p1", "=", "1")],
     )
 
     delta_table.update_incremental()
@@ -615,7 +615,7 @@ def test_partition_overwrite(
         tmp_path,
         sample_data,
         mode="overwrite",
-        partitions_filters=[("p2", ">", filter_string)],
+        partition_filters=[("p2", ">", filter_string)],
     )
     delta_table.update_incremental()
     assert (
@@ -651,7 +651,7 @@ def test_partition_overwrite_unfiltered_data_fails(
             tmp_path,
             sample_data_for_partitioning,
             mode="overwrite",
-            partitions_filters=[("p2", "=", "1")],
+            partition_filters=[("p2", "=", "1")],
         )
 
 
@@ -683,7 +683,7 @@ def test_partition_overwrite_with_new_partition(
         tmp_path,
         new_sample_data,
         mode="overwrite",
-        partitions_filters=[("p2", "=", "2")],
+        partition_filters=[("p2", "=", "2")],
     )
     delta_table = DeltaTable(tmp_path)
     assert (
@@ -704,7 +704,7 @@ def test_partition_overwrite_with_non_partitioned_data(
             tmp_path,
             sample_data_for_partitioning,
             mode="overwrite",
-            partitions_filters=[("p1", "=", "1")],
+            partition_filters=[("p1", "=", "1")],
         )
 
 
@@ -723,5 +723,15 @@ def test_partition_overwrite_with_wrong_partition(
             tmp_path,
             sample_data_for_partitioning,
             mode="overwrite",
-            partitions_filters=[("p999", "=", "1")],
+            partition_filters=[("p999", "=", "1")],
         )
+
+
+def test_handles_binary_data(tmp_path: pathlib.Path):
+    value = b"\x00\\"
+    table = pa.Table.from_pydict({"field_one": [value]})
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+    out = dt.to_pyarrow_table()
+    assert table == out
