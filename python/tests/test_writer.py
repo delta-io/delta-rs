@@ -725,3 +725,13 @@ def test_partition_overwrite_with_wrong_partition(
             mode="overwrite",
             partition_filters=[("p999", "=", "1")],
         )
+
+
+def test_handles_binary_data(tmp_path: pathlib.Path):
+    value = b"\x00\\"
+    table = pa.Table.from_pydict({"field_one": [value]})
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+    out = dt.to_pyarrow_table()
+    assert table == out
