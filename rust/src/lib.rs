@@ -91,7 +91,6 @@ pub mod operations;
 pub mod partitions;
 pub mod schema;
 pub mod storage;
-pub mod table_properties;
 pub mod table_state;
 pub mod time_utils;
 

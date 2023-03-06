@@ -26,14 +26,14 @@ use crate::storage::ObjectStoreRef;
 use crate::table_state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::writer::utils::PartitionPath;
-use crate::{table_properties, DeltaDataTypeVersion};
+use crate::DeltaDataTypeVersion;
 use crate::{
     DeltaDataTypeLong, DeltaResult, DeltaTable, DeltaTableError, ObjectMeta, PartitionFilter,
 };
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use futures::future::BoxFuture;
 use futures::StreamExt;
-use log::{debug, error};
+use log::debug;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
@@ -380,26 +380,6 @@ impl MergePlan {
     }
 }
 
-fn get_target_file_size(snapshot: &DeltaTableState) -> DeltaDataTypeLong {
-    let mut target_size = 268_435_456;
-    if let Some(meta) = snapshot.current_metadata() {
-        let config_str = meta.configuration.get(table_properties::TARGET_FILE_SIZE);
-        if let Some(s) = config_str {
-            if let Some(s) = s {
-                let r = s.parse::<i64>();
-                if let Ok(size) = r {
-                    target_size = size;
-                } else {
-                    error!("Unable to parse value of 'delta.targetFileSize'. Using default value");
-                }
-            } else {
-                error!("Check your configuration of 'delta.targetFileSize'. Using default value");
-            }
-        }
-    }
-    target_size
-}
-
 /// Build a Plan on which files to merge together. See [OptimizeBuilder]
 pub fn create_merge_plan(
     snapshot: &DeltaTableState,
@@ -407,7 +387,7 @@ pub fn create_merge_plan(
     target_size: Option<DeltaDataTypeLong>,
     writer_properties: WriterProperties,
 ) -> Result<MergePlan, DeltaTableError> {
-    let target_size = target_size.unwrap_or_else(|| get_target_file_size(snapshot));
+    let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
     let mut candidates = HashMap::new();
     let mut operations: HashMap<PartitionPath, PartitionMergePlan> = HashMap::new();
     let mut metrics = Metrics::default();
