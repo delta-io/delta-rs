@@ -4,6 +4,7 @@ use super::transaction::commit;
 use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
 use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
 use crate::builder::ensure_table_uri;
+use crate::delta_config::DeltaConfigKey;
 use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
 use crate::storage::DeltaObjectStore;
 use crate::{DeltaResult, DeltaTable, DeltaTableError};
@@ -152,19 +153,25 @@ impl CreateBuilder {
     }
 
     /// Set configuration on created table
-    pub fn with_configuration(mut self, configuration: HashMap<String, Option<String>>) -> Self {
-        self.configuration = configuration;
+    pub fn with_configuration(
+        mut self,
+        configuration: HashMap<DeltaConfigKey, Option<impl Into<String>>>,
+    ) -> Self {
+        self.configuration = configuration
+            .into_iter()
+            .map(|(k, v)| (k.as_ref().into(), v.map(|s| s.into())))
+            .collect();
         self
     }
 
     /// Specify a table property in the table configuration
     pub fn with_configuration_property(
         mut self,
-        key: impl Into<String>,
+        key: DeltaConfigKey,
         value: Option<impl Into<String>>,
     ) -> Self {
         self.configuration
-            .insert(key.into(), value.map(|v| v.into()));
+            .insert(key.as_ref().into(), value.map(|v| v.into()));
         self
     }
 
@@ -311,8 +318,8 @@ impl std::future::IntoFuture for CreateBuilder {
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
     use super::*;
+    use crate::delta_config::DeltaConfigKey;
     use crate::operations::DeltaOps;
-    use crate::table_properties::APPEND_ONLY;
     use crate::writer::test_utils::get_delta_schema;
     use tempdir::TempDir;
 
@@ -396,14 +403,14 @@ mod tests {
         let table = CreateBuilder::new()
             .with_location("memory://")
             .with_columns(schema.get_fields().clone())
-            .with_configuration_property(APPEND_ONLY, Some("true"))
+            .with_configuration_property(DeltaConfigKey::AppendOnly, Some("true"))
             .await
             .unwrap();
         let append = table
             .get_metadata()
             .unwrap()
             .configuration
-            .get(APPEND_ONLY)
+            .get(DeltaConfigKey::AppendOnly.as_ref())
             .unwrap()
             .as_ref()
             .unwrap()

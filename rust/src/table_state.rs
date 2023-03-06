@@ -1,14 +1,16 @@
 //! The module for delta table state.
 
 use crate::action::{self, Action, Add};
-use crate::delta_config;
+use crate::delta_config::TableConfig;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::schema::SchemaDataType;
+use crate::Schema;
 use crate::{
     ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
     DeltaTableMetaData,
 };
 use chrono::Utc;
+use lazy_static::lazy_static;
 use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -228,6 +230,22 @@ impl DeltaTableState {
         self.current_metadata.as_ref()
     }
 
+    /// The table schema
+    pub fn schema(&self) -> Option<&Schema> {
+        self.current_metadata.as_ref().map(|m| &m.schema)
+    }
+
+    /// Well known table configuration
+    pub fn table_config(&self) -> TableConfig<'_> {
+        lazy_static! {
+            static ref DUMMY_CONF: HashMap<String, Option<String>> = HashMap::new();
+        }
+        self.current_metadata
+            .as_ref()
+            .map(|meta| TableConfig(&meta.configuration))
+            .unwrap_or_else(|| TableConfig(&DUMMY_CONF))
+    }
+
     /// Merges new state information into our state
     ///
     /// The DeltaTableState also carries the version information for the given state,
@@ -322,14 +340,12 @@ impl DeltaTableState {
             action::Action::metaData(v) => {
                 let md = DeltaTableMetaData::try_from(v)
                     .map_err(|e| ApplyLogError::InvalidJson { source: e })?;
-                self.tombstone_retention_millis = delta_config::TOMBSTONE_RETENTION
-                    .get_interval_from_metadata(&md)?
-                    .as_millis() as i64;
-                self.log_retention_millis = delta_config::LOG_RETENTION
-                    .get_interval_from_metadata(&md)?
-                    .as_millis() as i64;
-                self.enable_expired_log_cleanup =
-                    delta_config::ENABLE_EXPIRED_LOG_CLEANUP.get_boolean_from_metadata(&md)?;
+                let table_config = TableConfig(&md.configuration);
+                self.tombstone_retention_millis =
+                    table_config.deleted_file_retention_duration().as_millis() as i64;
+                self.log_retention_millis =
+                    table_config.log_retention_duration().as_millis() as i64;
+                self.enable_expired_log_cleanup = table_config.enable_expired_log_cleanup();
                 self.current_metadata = Some(md);
             }
             action::Action::txn(v) => {
