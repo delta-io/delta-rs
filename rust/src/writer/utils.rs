@@ -295,100 +295,57 @@ mod tests {
 
     #[test]
     fn test_stringified_partition_value() {
-        let reference_pairs: Vec<(Arc<dyn Array>, Option<String>)> = vec![
-            (Arc::new(Int8Array::from(vec![None, Some(2)])), None),
+        let reference_pairs: Vec<(Arc<dyn Array>, Option<&str>)> = vec![
+            (Arc::new(Int8Array::from(vec![None])), None),
+            (Arc::new(Int8Array::from(vec![1])), Some("1")),
+            (Arc::new(Int16Array::from(vec![1])), Some("1")),
+            (Arc::new(Int32Array::from(vec![1])), Some("1")),
+            (Arc::new(Int64Array::from(vec![1])), Some("1")),
+            (Arc::new(UInt8Array::from(vec![1])), Some("1")),
+            (Arc::new(UInt16Array::from(vec![1])), Some("1")),
+            (Arc::new(UInt32Array::from(vec![1])), Some("1")),
+            (Arc::new(UInt64Array::from(vec![1])), Some("1")),
+            (Arc::new(UInt8Array::from(vec![1])), Some("1")),
+            (Arc::new(StringArray::from(vec!["1"])), Some("1")),
+            (Arc::new(BooleanArray::from(vec![true])), Some("true")),
+            (Arc::new(BooleanArray::from(vec![false])), Some("false")),
+            (Arc::new(Date32Array::from(vec![1])), Some("1970-01-02")),
             (
-                Arc::new(Int8Array::from(vec![Some(1), Some(2)])),
-                Some(String::from("1")),
+                Arc::new(Date64Array::from(vec![86400000])),
+                Some("1970-01-02"),
             ),
             (
-                Arc::new(Int16Array::from(vec![Some(1), Some(2)])),
-                Some(String::from("1")),
+                Arc::new(TimestampSecondArray::from(vec![1])),
+                Some("1970-01-01 00:00:01"),
             ),
             (
-                Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
-                Some(String::from("1")),
+                Arc::new(TimestampMillisecondArray::from(vec![1000])),
+                Some("1970-01-01 00:00:01"),
             ),
             (
-                Arc::new(Int64Array::from(vec![Some(1), Some(2)])),
-                Some(String::from("1")),
+                Arc::new(TimestampMicrosecondArray::from(vec![1000000])),
+                Some("1970-01-01 00:00:01"),
             ),
             (
-                Arc::new(UInt8Array::from(vec![Some(1), Some(2)])),
-                Some(String::from("1")),
+                Arc::new(TimestampNanosecondArray::from(vec![1000000000])),
+                Some("1970-01-01 00:00:01"),
             ),
+            (Arc::new(BinaryArray::from_vec(vec![b"1"])), Some("1")),
             (
-                Arc::new(UInt16Array::from(vec![Some(1), Some(2)])),
-                Some(String::from("1")),
+                Arc::new(BinaryArray::from_vec(vec![b"\x00\\"])),
+                Some("\\x00\\\\"),
             ),
+            (Arc::new(LargeBinaryArray::from_vec(vec![b"1"])), Some("1")),
             (
-                Arc::new(UInt32Array::from(vec![Some(1), Some(2)])),
-                Some(String::from("1")),
-            ),
-            (
-                Arc::new(UInt64Array::from(vec![Some(1), Some(2)])),
-                Some(String::from("1")),
-            ),
-            (
-                Arc::new(StringArray::from(vec![
-                    Some(String::from("1")),
-                    Some(String::from("2")),
-                ])),
-                Some(String::from("1")),
-            ),
-            (
-                Arc::new(BooleanArray::from(vec![Some(true), Some(false)])),
-                Some(String::from("true")),
-            ),
-            (
-                Arc::new(Date32Array::from(vec![Some(1), Some(2)])),
-                Some(String::from("1970-01-02")),
-            ),
-            (
-                Arc::new(Date64Array::from(vec![Some(86400000), Some(2)])),
-                Some(String::from("1970-01-02")),
-            ),
-            (
-                Arc::new(TimestampSecondArray::from(vec![Some(1), Some(2)])),
-                Some(String::from("1970-01-01 00:00:01")),
-            ),
-            (
-                Arc::new(TimestampMillisecondArray::from(vec![Some(1000), Some(2)])),
-                Some(String::from("1970-01-01 00:00:01")),
-            ),
-            (
-                Arc::new(TimestampMicrosecondArray::from(vec![
-                    Some(1000000),
-                    Some(2),
-                ])),
-                Some(String::from("1970-01-01 00:00:01")),
-            ),
-            (
-                Arc::new(TimestampNanosecondArray::from(vec![
-                    Some(1000000000),
-                    Some(2),
-                ])),
-                Some(String::from("1970-01-01 00:00:01")),
-            ),
-            (
-                Arc::new(BinaryArray::from_vec(vec![b"1", b"2"])),
-                Some(String::from("1")),
-            ),
-            (
-                Arc::new(BinaryArray::from_vec(vec![b"\x00\\", b"2"])),
-                Some(String::from("\\x00\\\\")),
-            ),
-            (
-                Arc::new(LargeBinaryArray::from_vec(vec![b"1", b"2"])),
-                Some(String::from("1")),
-            ),
-            (
-                Arc::new(LargeBinaryArray::from_vec(vec![b"\x00\\", b"2"])),
-                Some(String::from("\\x00\\\\")),
+                Arc::new(LargeBinaryArray::from_vec(vec![b"\x00\\"])),
+                Some("\\x00\\\\"),
             ),
         ];
         for (vals, result) in reference_pairs {
-            assert_eq!(stringified_partition_value(&vals).unwrap(), result)
+            assert_eq!(
+                stringified_partition_value(&vals).unwrap().as_deref(),
+                result
+            )
         }
     }
 }
