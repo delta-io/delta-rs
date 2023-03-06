@@ -333,7 +333,7 @@ def __enforce_append_only(
 class DeltaJSONEncoder(json.JSONEncoder):
     def default(self, obj: Any) -> Any:
         if isinstance(obj, bytes):
-            return obj.decode("unicode_escape")
+            return obj.decode("unicode_escape", "backslashreplace")
         elif isinstance(obj, date):
             return obj.isoformat()
         elif isinstance(obj, datetime):
