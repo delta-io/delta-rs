@@ -447,7 +447,7 @@ impl std::future::IntoFuture for WriteBuilder {
             };
             let _version = commit(
                 table.storage.clone(),
-                actions,
+                &actions,
                 operation,
                 &table.state,
                 // TODO pass through metadata

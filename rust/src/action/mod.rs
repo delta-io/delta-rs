@@ -449,9 +449,6 @@ pub struct Protocol {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitInfo {
-    /// Version number the commit corresponds to
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<DeltaDataTypeVersion>,
     /// Timestamp in millis when the commit was created
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<DeltaDataTypeTimestamp>,
@@ -589,29 +586,30 @@ impl DeltaOperation {
         }
     }
 
-    /// Paraemters configured for operation.
-    pub fn operation_parameters(&self) -> DeltaResult<impl Iterator<Item = (String, Value)>> {
-        // TODO remove unwrap
-        let serialized = serde_json::to_value(self)
-            .map_err(|err| ActionError::SerializeOperation { source: err })?;
-        if let serde_json::Value::Object(map) = serialized {
-            let all_operation_fields = map.values().next().unwrap().as_object().unwrap().clone();
-            Ok(all_operation_fields
-                .into_iter()
+    /// Parameters configured for operation.
+    pub fn operation_parameters(&self) -> DeltaResult<HashMap<String, Value>> {
+        if let Some(Some(Some(map))) = serde_json::to_value(self)
+            .map_err(|err| ActionError::SerializeOperation { source: err })?
+            .as_object()
+            .map(|p| p.values().next().map(|q| q.as_object()))
+        {
+            Ok(map
+                .iter()
                 .filter(|item| !item.1.is_null())
                 .map(|(k, v)| {
                     (
-                        k,
+                        k.to_owned(),
                         serde_json::Value::String(if v.is_string() {
                             String::from(v.as_str().unwrap())
                         } else {
                             v.to_string()
                         }),
                     )
-                }))
+                })
+                .collect())
         } else {
             Err(ActionError::Generic(
-                "operation parameetrs serialized into unexpected shape".into(),
+                "Operation parameters serialized into unexpected shape".into(),
             )
             .into())
         }
@@ -619,7 +617,13 @@ impl DeltaOperation {
 
     /// Denotes if the operation changes the data contained in the table
     pub fn changes_data(&self) -> bool {
-        !matches!(self, Self::Optimize { .. })
+        match self {
+            Self::Optimize { .. } => false,
+            Self::Create { .. }
+            | Self::FileSystemCheck {}
+            | Self::StreamingUpdate { .. }
+            | Self::Write { .. } => true,
+        }
     }
 
     /// Retrieve basic commit information to be added to Delta commits
@@ -627,7 +631,7 @@ impl DeltaOperation {
         // TODO infer additional info from operation parameters ...
         CommitInfo {
             operation: Some(self.name().into()),
-            operation_parameters: self.operation_parameters().ok().map(|iter| iter.collect()),
+            operation_parameters: self.operation_parameters().ok(),
             ..Default::default()
         }
     }
@@ -771,8 +775,6 @@ mod tests {
 
         let info = serde_json::from_str::<CommitInfo>(raw);
         assert!(info.is_ok());
-
-        println!("{:?}", info);
 
         // assert that commit info has no required filelds
         let raw = "{}";

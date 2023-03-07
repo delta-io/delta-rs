@@ -299,8 +299,14 @@ impl std::future::IntoFuture for CreateBuilder {
                     }
                 }
             }
-            let version =
-                commit(table.object_store(), actions, operation, &table.state, None).await?;
+            let version = commit(
+                table.object_store(),
+                &actions,
+                operation,
+                &table.state,
+                None,
+            )
+            .await?;
             table.load_version(version).await?;
 
             Ok(table)

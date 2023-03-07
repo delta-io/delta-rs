@@ -148,7 +148,7 @@ impl FileSystemCheckPlan {
 
         commit(
             self.store,
-            actions,
+            &actions,
             DeltaOperation::FileSystemCheck {},
             snapshot,
             // TODO pass through metadata

@@ -372,7 +372,7 @@ impl MergePlan {
 
             commit(
                 object_store,
-                actions,
+                &actions,
                 self.input_parameters.into(),
                 snapshot,
                 Some(metadata),

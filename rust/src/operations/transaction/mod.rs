@@ -64,7 +64,9 @@ impl From<TransactionError> for DeltaTableError {
 }
 
 // Convert actions to their json representation
-fn log_entry_from_actions(actions: &[Action]) -> Result<String, TransactionError> {
+fn log_entry_from_actions<'a>(
+    actions: impl IntoIterator<Item = &'a Action>,
+) -> Result<String, TransactionError> {
     let mut jsons = Vec::<String>::new();
     for action in actions {
         let json = serde_json::to_string(action)
@@ -76,7 +78,7 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, TransactionError
 
 pub(crate) fn get_commit_bytes(
     operation: &DeltaOperation,
-    actions: &mut Vec<Action>,
+    actions: &Vec<Action>,
     app_metadata: Option<Map<String, Value>>,
 ) -> Result<bytes::Bytes, TransactionError> {
     if !actions.iter().any(|a| matches!(a, Action::commitInfo(..))) {
@@ -91,20 +93,23 @@ pub(crate) fn get_commit_bytes(
             extra_info.append(&mut meta)
         }
         commit_info.info = extra_info;
-        actions.push(Action::commitInfo(commit_info));
+        Ok(bytes::Bytes::from(log_entry_from_actions(
+            actions
+                .iter()
+                .chain(std::iter::once(&Action::commitInfo(commit_info))),
+        )?))
+    } else {
+        Ok(bytes::Bytes::from(log_entry_from_actions(actions)?))
     }
-
-    // Serialize all actions that are part of this log entry.
-    Ok(bytes::Bytes::from(log_entry_from_actions(actions)?))
 }
 
 /// Low-level transaction API. Creates a temporary commit file. Once created,
 /// the transaction object could be dropped and the actual commit could be executed
 /// with `DeltaTable.try_commit_transaction`.
-pub(crate) async fn prepare_commit(
+pub(crate) async fn prepare_commit<'a>(
     storage: &dyn ObjectStore,
     operation: &DeltaOperation,
-    actions: &mut Vec<Action>,
+    actions: &Vec<Action>,
     app_metadata: Option<Map<String, Value>>,
 ) -> Result<Path, TransactionError> {
     // Serialize all actions that are part of this log entry.
@@ -146,7 +151,7 @@ async fn try_commit_transaction(
 
 pub(crate) async fn commit(
     storage: ObjectStoreRef,
-    mut actions: Vec<Action>,
+    actions: &Vec<Action>,
     operation: DeltaOperation,
     read_snapshot: &DeltaTableState,
     app_metadata: Option<Map<String, Value>>,
@@ -166,8 +171,7 @@ pub(crate) async fn commit(
     let only_add_files = false;
     let _is_blind_append = only_add_files && !depends_on_files;
 
-    let tmp_commit =
-        prepare_commit(storage.as_ref(), &operation, &mut actions, app_metadata).await?;
+    let tmp_commit = prepare_commit(storage.as_ref(), &operation, actions, app_metadata).await?;
 
     let max_attempts = 5;
     let mut attempt_number = 1;
@@ -184,7 +188,7 @@ pub(crate) async fn commit(
                 )
                 .await?;
                 let conflict_checker =
-                    ConflictChecker::try_new(read_snapshot, summary, operation.clone(), &actions)
+                    ConflictChecker::try_new(read_snapshot, summary, operation.clone(), actions)
                         .await?;
                 match conflict_checker.check_conflicts() {
                     Ok(_) => {
