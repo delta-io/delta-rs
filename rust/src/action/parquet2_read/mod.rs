@@ -223,7 +223,7 @@ impl ActionVariant for CommitInfo {
     type Variant = CommitInfo;
 
     fn default_action() -> Action {
-        Action::commitInfo(CommitInfo::new())
+        Action::commitInfo(CommitInfo::default())
     }
 
     fn try_mut_from_action(a: &mut Action) -> Result<&mut Self, ParseError> {

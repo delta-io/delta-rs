@@ -5,7 +5,7 @@ pub mod file;
 pub mod utils;
 
 use self::config::{ObjectStoreKind, StorageOptions};
-use crate::DeltaResult;
+use crate::{DeltaDataTypeVersion, DeltaResult};
 
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt};
@@ -35,6 +35,12 @@ pub use utils::*;
 
 lazy_static! {
     static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
+}
+
+/// Return the uri of commit version.
+pub(crate) fn commit_uri_from_version(version: DeltaDataTypeVersion) -> Path {
+    let version = format!("{version:020}.json");
+    DELTA_LOG_PATH.child(version.as_str())
 }
 
 /// Sharable reference to [`DeltaObjectStore`]
