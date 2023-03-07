@@ -449,9 +449,6 @@ pub struct Protocol {
 #[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
 #[serde(rename_all = "camelCase")]
 pub struct CommitInfo {
-    /// Version number the commit corresponds to
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub version: Option<DeltaDataTypeVersion>,
     /// Timestamp in millis when the commit was created
     #[serde(skip_serializing_if = "Option::is_none")]
     pub timestamp: Option<DeltaDataTypeTimestamp>,
