@@ -768,7 +768,6 @@ mod tests {
         let info = serde_json::from_str::<CommitInfo>(raw);
         assert!(info.is_ok());
 
-
         // assert that commit info has no required filelds
         let raw = "{}";
         let info = serde_json::from_str::<CommitInfo>(raw);
