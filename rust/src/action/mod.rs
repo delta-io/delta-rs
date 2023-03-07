@@ -590,25 +590,26 @@ impl DeltaOperation {
     }
 
     /// Parameters configured for operation.
-    pub fn operation_parameters(&self) -> DeltaResult<impl Iterator<Item = (String, Value)>> {
-        // TODO remove unwrap
-        let serialized = serde_json::to_value(self)
-            .map_err(|err| ActionError::SerializeOperation { source: err })?;
-        if let serde_json::Value::Object(map) = serialized {
-            let all_operation_fields = map.values().next().unwrap().as_object().unwrap().clone();
-            Ok(all_operation_fields
-                .into_iter()
+    pub fn operation_parameters(&self) -> DeltaResult<HashMap<String, Value>> {
+        if let Some(Some(Some(map))) = serde_json::to_value(self)
+            .map_err(|err| ActionError::SerializeOperation { source: err })?
+            .as_object()
+            .map(|p| p.values().next().map(|q| q.as_object()))
+        {
+            Ok(map
+                .iter()
                 .filter(|item| !item.1.is_null())
                 .map(|(k, v)| {
                     (
-                        k,
+                        k.to_owned(),
                         serde_json::Value::String(if v.is_string() {
                             String::from(v.as_str().unwrap())
                         } else {
                             v.to_string()
                         }),
                     )
-                }))
+                })
+                .collect())
         } else {
             Err(ActionError::Generic(
                 "Operation parameters serialized into unexpected shape".into(),
@@ -633,7 +634,7 @@ impl DeltaOperation {
         // TODO infer additional info from operation parameters ...
         CommitInfo {
             operation: Some(self.name().into()),
-            operation_parameters: self.operation_parameters().ok().map(|iter| iter.collect()),
+            operation_parameters: self.operation_parameters().ok(),
             ..Default::default()
         }
     }
