@@ -1,6 +1,6 @@
 //! Delta transactions
 use crate::action::{Action, CommitInfo, DeltaOperation};
-use crate::storage::{commit_uri_from_version, ObjectStoreRef};
+use crate::storage::commit_uri_from_version;
 use crate::table_state::DeltaTableState;
 use crate::{crate_version, DeltaDataTypeVersion, DeltaResult, DeltaTableError};
 use chrono::Utc;
@@ -150,7 +150,7 @@ async fn try_commit_transaction(
 }
 
 pub(crate) async fn commit(
-    storage: ObjectStoreRef,
+    storage: &dyn ObjectStore,
     actions: &Vec<Action>,
     operation: DeltaOperation,
     read_snapshot: &DeltaTableState,
@@ -171,22 +171,19 @@ pub(crate) async fn commit(
     let only_add_files = false;
     let _is_blind_append = only_add_files && !depends_on_files;
 
-    let tmp_commit = prepare_commit(storage.as_ref(), &operation, actions, app_metadata).await?;
+    let tmp_commit = prepare_commit(storage, &operation, actions, app_metadata).await?;
 
     let max_attempts = 5;
     let mut attempt_number = 1;
 
     while attempt_number <= max_attempts {
         let version = read_snapshot.version() + attempt_number;
-        match try_commit_transaction(storage.as_ref(), &tmp_commit, version).await {
+        match try_commit_transaction(storage, &tmp_commit, version).await {
             Ok(version) => return Ok(version),
             Err(TransactionError::VersionAlreadyExists(version)) => {
-                let summary = WinningCommitSummary::try_new(
-                    storage.as_ref(),
-                    read_snapshot.version(),
-                    version,
-                )
-                .await?;
+                let summary =
+                    WinningCommitSummary::try_new(storage, read_snapshot.version(), version)
+                        .await?;
                 let conflict_checker =
                     ConflictChecker::try_new(read_snapshot, summary, operation.clone(), actions)
                         .await?;

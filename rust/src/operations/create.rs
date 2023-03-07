@@ -300,7 +300,7 @@ impl std::future::IntoFuture for CreateBuilder {
                 }
             }
             let version = commit(
-                table.object_store(),
+                table.object_store().as_ref(),
                 &actions,
                 operation,
                 &table.state,

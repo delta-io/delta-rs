@@ -118,8 +118,8 @@ pub async fn create_initialized_table(
             configuration.unwrap_or_default(),
         ),
     };
-    let mut actions = init_table_actions();
-    let prepared_commit = prepare_commit(storage.as_ref(), &operation, &mut actions, None)
+    let actions = init_table_actions();
+    let prepared_commit = prepare_commit(storage.as_ref(), &operation, &actions, None)
         .await
         .unwrap();
     try_commit_transaction(storage.as_ref(), &prepared_commit, 0)

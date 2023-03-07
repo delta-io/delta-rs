@@ -147,7 +147,7 @@ impl FileSystemCheckPlan {
         }
 
         commit(
-            self.store,
+            self.store.as_ref(),
             &actions,
             DeltaOperation::FileSystemCheck {},
             snapshot,

@@ -152,7 +152,7 @@ pub(crate) struct WinningCommitSummary {
 
 impl WinningCommitSummary {
     pub async fn try_new(
-        object_store: &DeltaObjectStore,
+        object_store: &dyn ObjectStore,
         read_version: DeltaDataTypeVersion,
         winning_commit_version: DeltaDataTypeVersion,
     ) -> DeltaResult<Self> {

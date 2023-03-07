@@ -446,7 +446,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 predicate: this.predicate,
             };
             let _version = commit(
-                table.storage.clone(),
+                table.storage.as_ref(),
                 &actions,
                 operation,
                 &table.state,

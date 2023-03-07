@@ -371,7 +371,7 @@ impl MergePlan {
             }
 
             commit(
-                object_store,
+                object_store.as_ref(),
                 &actions,
                 self.input_parameters.into(),
                 snapshot,
