@@ -11,7 +11,7 @@ use serde_json::{Map, Value};
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 
 #[derive(thiserror::Error, Debug)]
-enum TransactionError {
+pub(crate) enum TransactionError {
     #[error("Tried committing existing table version: {0}")]
     VersionAlreadyExists(DeltaDataTypeVersion),
 
@@ -52,7 +52,9 @@ fn commit_uri_from_version(version: DeltaDataTypeVersion) -> Path {
 }
 
 // Convert actions to their json representation
-fn log_entry_from_actions(actions: &[Action]) -> Result<String, TransactionError> {
+fn log_entry_from_actions<'a>(
+    actions: impl IntoIterator<Item = &'a Action>,
+) -> Result<String, TransactionError> {
     let mut jsons = Vec::<String>::new();
     for action in actions {
         let json = serde_json::to_string(action)
@@ -62,34 +64,44 @@ fn log_entry_from_actions(actions: &[Action]) -> Result<String, TransactionError
     Ok(jsons.join("\n"))
 }
 
-/// Low-level transaction API. Creates a temporary commit file. Once created,
-/// the transaction object could be dropped and the actual commit could be executed
-/// with `DeltaTable.try_commit_transaction`.
-async fn prepare_commit(
-    storage: &DeltaObjectStore,
-    operation: DeltaOperation,
-    mut actions: Vec<Action>,
+pub(crate) fn get_commit_bytes(
+    operation: &DeltaOperation,
+    actions: &Vec<Action>,
     app_metadata: Option<Map<String, Value>>,
-) -> Result<Path, TransactionError> {
+) -> Result<bytes::Bytes, TransactionError> {
     if !actions.iter().any(|a| matches!(a, Action::commitInfo(..))) {
-        let mut commit_info = Map::<String, Value>::new();
-        commit_info.insert(
-            "timestamp".to_string(),
-            Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
-        );
-        commit_info.insert(
+        let mut extra_info = Map::<String, Value>::new();
+        let mut commit_info = operation.get_commit_info();
+        commit_info.timestamp = Some(Utc::now().timestamp_millis());
+        extra_info.insert(
             "clientVersion".to_string(),
             Value::String(format!("delta-rs.{}", crate_version())),
         );
-        commit_info.append(&mut operation.get_commit_info());
         if let Some(mut meta) = app_metadata {
-            commit_info.append(&mut meta)
+            extra_info.append(&mut meta)
         }
-        actions.push(Action::commitInfo(commit_info));
+        commit_info.info = extra_info;
+        Ok(bytes::Bytes::from(log_entry_from_actions(
+            actions
+                .iter()
+                .chain(std::iter::once(&Action::commitInfo(commit_info))),
+        )?))
+    } else {
+        Ok(bytes::Bytes::from(log_entry_from_actions(actions)?))
     }
+}
 
+/// Low-level transaction API. Creates a temporary commit file. Once created,
+/// the transaction object could be dropped and the actual commit could be executed
+/// with `DeltaTable.try_commit_transaction`.
+pub(crate) async fn prepare_commit<'a>(
+    storage: &dyn ObjectStore,
+    operation: &DeltaOperation,
+    actions: &Vec<Action>,
+    app_metadata: Option<Map<String, Value>>,
+) -> Result<Path, TransactionError> {
     // Serialize all actions that are part of this log entry.
-    let log_entry = bytes::Bytes::from(log_entry_from_actions(&actions)?);
+    let log_entry = get_commit_bytes(operation, actions, app_metadata)?;
 
     // Write delta log entry as temporary file to storage. For the actual commit,
     // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
@@ -128,11 +140,11 @@ async fn try_commit_transaction(
 pub(crate) async fn commit(
     storage: &DeltaObjectStore,
     version: DeltaDataTypeVersion,
-    actions: Vec<Action>,
+    actions: &Vec<Action>,
     operation: DeltaOperation,
     app_metadata: Option<Map<String, Value>>,
 ) -> DeltaResult<DeltaDataTypeVersion> {
-    let tmp_commit = prepare_commit(storage, operation, actions, app_metadata).await?;
+    let tmp_commit = prepare_commit(storage, &operation, actions, app_metadata).await?;
     match try_commit_transaction(storage, &tmp_commit, version).await {
         Ok(version) => Ok(version),
         Err(TransactionError::VersionAlreadyExists(version)) => {
@@ -178,7 +190,7 @@ mod tests {
             .unwrap();
 
         // successfully write in clean location
-        commit(storage.as_ref(), 0, vec![], operation.clone(), None)
+        commit(storage.as_ref(), 0, &vec![], operation.clone(), None)
             .await
             .unwrap();
         let head = storage.head(&commit_path).await;
@@ -186,7 +198,7 @@ mod tests {
         assert_eq!(head.as_ref().unwrap().location, commit_path);
 
         // fail on overwriting
-        let failed_commit = commit(storage.as_ref(), 0, vec![], operation, None).await;
+        let failed_commit = commit(storage.as_ref(), 0, &vec![], operation, None).await;
         assert!(failed_commit.is_err());
         assert!(matches!(
             failed_commit.unwrap_err(),

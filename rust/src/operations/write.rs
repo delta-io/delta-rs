@@ -448,7 +448,7 @@ impl std::future::IntoFuture for WriteBuilder {
             let _version = commit(
                 &table.storage,
                 table.version() + 1,
-                actions,
+                &actions,
                 operation,
                 None,
             )
