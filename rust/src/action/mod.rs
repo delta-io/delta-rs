@@ -589,7 +589,7 @@ impl DeltaOperation {
         }
     }
 
-    /// Paraemters configured for operation.
+    /// Parameters configured for operation.
     pub fn operation_parameters(&self) -> DeltaResult<impl Iterator<Item = (String, Value)>> {
         // TODO remove unwrap
         let serialized = serde_json::to_value(self)
@@ -611,7 +611,7 @@ impl DeltaOperation {
                 }))
         } else {
             Err(ActionError::Generic(
-                "operation parameetrs serialized into unexpected shape".into(),
+                "Operation parameters serialized into unexpected shape".into(),
             )
             .into())
         }
@@ -619,7 +619,13 @@ impl DeltaOperation {
 
     /// Denotes if the operation changes the data contained in the table
     pub fn changes_data(&self) -> bool {
-        !matches!(self, Self::Optimize { .. })
+        match self {
+            Self::Optimize { .. } => false,
+            Self::Create { .. }
+            | Self::FileSystemCheck {}
+            | Self::StreamingUpdate { .. }
+            | Self::Write { .. } => true,
+        }
     }
 
     /// Retrieve basic commit information to be added to Delta commits
@@ -632,7 +638,7 @@ impl DeltaOperation {
         }
     }
 
-    /// Get predicate expression applien when the operation reads data from the table.
+    /// Get predicate expression applied when the operation reads data from the table.
     pub fn read_predicate(&self) -> Option<String> {
         match self {
             // TODO add more operations
@@ -762,7 +768,6 @@ mod tests {
         let info = serde_json::from_str::<CommitInfo>(raw);
         assert!(info.is_ok());
 
-        println!("{:?}", info);
 
         // assert that commit info has no required filelds
         let raw = "{}";
