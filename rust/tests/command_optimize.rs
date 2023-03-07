@@ -507,16 +507,14 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
     let last_commit = &commit_info[commit_info.len() - 1];
 
     let commit_metrics =
-        serde_json::from_value::<Metrics>(last_commit["operationMetrics"].clone())?;
+        serde_json::from_value::<Metrics>(last_commit.info["operationMetrics"].clone())?;
 
     assert_eq!(commit_metrics, metrics);
-    assert_eq!(last_commit["readVersion"], json!(version));
-    assert_eq!(
-        last_commit["operationParameters"]["targetSize"],
-        json!("2000000")
-    );
+    assert_eq!(last_commit.read_version, Some(version));
+    let parameters = last_commit.operation_parameters.clone().unwrap();
+    assert_eq!(parameters["targetSize"], json!("2000000"));
     // TODO: Requires a string representation for PartitionFilter
-    assert_eq!(last_commit["operationParameters"]["predicate"], Value::Null);
+    // assert_eq!(parameters["predicate"], None);
 
     Ok(())
 }

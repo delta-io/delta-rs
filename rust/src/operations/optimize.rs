@@ -369,7 +369,7 @@ impl MergePlan {
             commit(
                 object_store.as_ref(),
                 self.read_table_version + 1,
-                actions,
+                &actions,
                 self.input_parameters.into(),
                 Some(metadata),
             )

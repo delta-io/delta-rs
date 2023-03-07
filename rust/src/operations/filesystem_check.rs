@@ -156,7 +156,7 @@ impl FileSystemCheckPlan {
         commit(
             store,
             version + 1,
-            actions,
+            &actions,
             DeltaOperation::FileSystemCheck {},
             None,
         )
