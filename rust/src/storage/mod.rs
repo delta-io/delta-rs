@@ -347,14 +347,14 @@ mod tests {
         let location_1 = Url::from_file_path(tmp_dir_1.path()).unwrap();
         let store_1 = DeltaObjectStore::new(
             Arc::from(LocalFileSystem::new_with_prefix(tmp_dir_1.path()).unwrap()),
-            location_1.clone(),
+            location_1,
         );
 
         let tmp_dir_2 = TempDir::new("table_2").unwrap();
         let location_2 = Url::from_file_path(tmp_dir_2.path()).unwrap();
         let store_2 = DeltaObjectStore::new(
             Arc::from(LocalFileSystem::new_with_prefix(tmp_dir_2.path()).unwrap()),
-            location_2.clone(),
+            location_2,
         );
 
         assert_ne!(
