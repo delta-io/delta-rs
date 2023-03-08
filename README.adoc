@@ -6,6 +6,7 @@ image:https://github.com/delta-io/delta-rs/workflows/build/badge.svg[Build Statu
 image:https://img.shields.io/crates/v/deltalake.svg?style=flat-square[Crate,link=https://crates.io/crates/deltalake]
 image:https://img.shields.io/badge/docs-rust-blue.svg?style=flat-square[Docs,link=https://docs.rs/deltalake]
 image:https://img.shields.io/pypi/v/deltalake.svg?style=flat-square[Python binding,link=https://pypi.org/project/deltalake]
+image:https://img.shields.io/pypi/dm/deltalake?style=flat-square[PyPI - Downloads,link=https://pypi.org/project/deltalake]
 image:https://img.shields.io/badge/docs-python-blue.svg?style=flat-square[Docs,link=https://delta-io.github.io/delta-rs/python]
 
 image::logo.png[Delta-rs logo]
