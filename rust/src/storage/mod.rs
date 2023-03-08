@@ -93,7 +93,7 @@ impl DeltaObjectStore {
         let root_store =
             ObjectStoreKind::parse_url(&location)?.into_impl(location.as_ref(), options.clone())?;
         let storage = if prefix != Path::from("/") {
-            root_store.into_prefix(prefix.clone())
+            root_store.into_prefix(prefix)
         } else {
             root_store.into_store()
         };
