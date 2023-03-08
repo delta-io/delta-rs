@@ -59,8 +59,6 @@ pub struct DeltaObjectStore {
     storage: Arc<dyn ObjectStore>,
     location: Url,
     options: StorageOptions,
-    #[allow(unused)]
-    prefix: Path,
 }
 
 impl std::fmt::Display for DeltaObjectStore {
@@ -77,11 +75,9 @@ impl DeltaObjectStore {
     /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storage location of `storage`.
     pub fn new(storage: Arc<DynObjectStore>, location: Url) -> Self {
-        let prefix = Path::from(location.path());
         Self {
             storage,
             location,
-            prefix,
             options: HashMap::new().into(),
         }
     }
@@ -104,7 +100,6 @@ impl DeltaObjectStore {
         Ok(Self {
             storage,
             location,
-            prefix,
             options: options.into(),
         })
     }
@@ -133,7 +128,7 @@ impl DeltaObjectStore {
             "delta-rs://{}",
             // NOTE We need to also replace colons, but its fine, since it just needs
             // to be a unique-ish identifier for the object store in datafusion
-            self.prefix
+            Path::from(self.location.path())
                 .as_ref()
                 .replace(DELIMITER, "-")
                 .replace(':', "-")
