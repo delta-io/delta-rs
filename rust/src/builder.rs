@@ -38,8 +38,10 @@ impl From<BuilderError> for DeltaTableError {
 
 /// possible version specifications for loading a delta table
 #[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Default)]
 pub enum DeltaVersion {
     /// load the newest version
+    #[default]
     Newest,
     /// specify the version to load
     Version(DeltaDataTypeVersion),
@@ -47,11 +49,7 @@ pub enum DeltaVersion {
     Timestamp(DateTime<Utc>),
 }
 
-impl Default for DeltaVersion {
-    fn default() -> Self {
-        DeltaVersion::Newest
-    }
-}
+
 
 /// Configuration options for delta table
 #[derive(Debug, Serialize, Deserialize)]
