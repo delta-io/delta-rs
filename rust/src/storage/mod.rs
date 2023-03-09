@@ -120,16 +120,20 @@ impl DeltaObjectStore {
     }
 
     #[cfg(feature = "datafusion")]
-    /// generate a unique enough url to identify the store in datafusion.
+    /// Generate a unique enough url to identify the store in datafusion.
+    /// The DF object store registry only cares about the scheme and the host of the url for
+    /// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
+    /// host we convert the location from this `DeltaObjectStore` to a valid name, combining the
+    /// original scheme, host and path with invalid characters replaced.
     pub(crate) fn object_store_url(&self) -> ObjectStoreUrl {
         // we are certain, that the URL can be parsed, since
         // we make sure when we are parsing the table uri
         ObjectStoreUrl::parse(format!(
-            "delta-rs://{}",
-            // NOTE We need to also replace colons, but its fine, since it just needs
-            // to be a unique-ish identifier for the object store in datafusion
-            Path::from(self.location.path())
-                .as_ref()
+            "delta-rs://{}-{}{}",
+            self.location.scheme(),
+            self.location.host_str().unwrap_or("-"),
+            self.location
+                .path()
                 .replace(DELIMITER, "-")
                 .replace(':', "-")
         ))
@@ -336,30 +340,32 @@ impl<'de> Deserialize<'de> for DeltaObjectStore {
 #[cfg(test)]
 mod tests {
     use crate::storage::DeltaObjectStore;
-    use object_store::local::LocalFileSystem;
+    use object_store::memory::InMemory;
     use std::sync::Arc;
-    use tempdir::TempDir;
     use url::Url;
 
     #[tokio::test]
     async fn test_unique_object_store_url() {
-        let tmp_dir_1 = TempDir::new("table_1").unwrap();
-        let location_1 = Url::from_file_path(tmp_dir_1.path()).unwrap();
-        let store_1 = DeltaObjectStore::new(
-            Arc::from(LocalFileSystem::new_with_prefix(tmp_dir_1.path()).unwrap()),
-            location_1,
-        );
+        // Just a dummy store to be passed for initialization
+        let inner_store = Arc::from(InMemory::new());
 
-        let tmp_dir_2 = TempDir::new("table_2").unwrap();
-        let location_2 = Url::from_file_path(tmp_dir_2.path()).unwrap();
-        let store_2 = DeltaObjectStore::new(
-            Arc::from(LocalFileSystem::new_with_prefix(tmp_dir_2.path()).unwrap()),
-            location_2,
-        );
+        for (location_1, location_2) in [
+            // Same scheme, no host, different path
+            ("file:///path/to/table_1", "file:///path/to/table_2"),
+            // Different scheme/host, same path
+            ("s3://my_bucket/path/to/table_1", "file:///path/to/table_1"),
+            // Same scheme, different host, same path
+            ("s3://bucket_1/table_1", "s3://bucket_2/table_2"),
+        ] {
+            let url_1 = Url::parse(location_1).unwrap();
+            let url_2 = Url::parse(location_2).unwrap();
+            let store_1 = DeltaObjectStore::new(inner_store.clone(), url_1);
+            let store_2 = DeltaObjectStore::new(inner_store.clone(), url_2);
 
-        assert_ne!(
-            store_1.object_store_url().as_str(),
-            store_2.object_store_url().as_str(),
-        );
+            assert_ne!(
+                store_1.object_store_url().as_str(),
+                store_2.object_store_url().as_str(),
+            );
+        }
     }
 }
