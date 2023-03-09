@@ -37,8 +37,7 @@ impl From<BuilderError> for DeltaTableError {
 }
 
 /// possible version specifications for loading a delta table
-#[derive(Debug, Clone, PartialEq, Eq)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum DeltaVersion {
     /// load the newest version
     #[default]
@@ -48,8 +47,6 @@ pub enum DeltaVersion {
     /// specify the timestamp in UTC
     Timestamp(DateTime<Utc>),
 }
-
-
 
 /// Configuration options for delta table
 #[derive(Debug, Serialize, Deserialize)]
