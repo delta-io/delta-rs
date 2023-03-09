@@ -19,8 +19,10 @@ use self::conflict_checker::{CommitConflictError, WinningCommitSummary};
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 
+/// Error raised while commititng transaction
 #[derive(thiserror::Error, Debug)]
-pub(crate) enum TransactionError {
+pub enum TransactionError {
+    /// Version already exists
     #[error("Tried committing existing table version: {0}")]
     VersionAlreadyExists(DeltaDataTypeVersion),
 
@@ -56,9 +58,7 @@ impl From<TransactionError> for DeltaTableError {
                 DeltaTableError::SerializeLogJson { json_err }
             }
             TransactionError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
-            other => DeltaTableError::GenericError {
-                source: Box::new(other),
-            },
+            other => DeltaTableError::Transaction { source: other },
         }
     }
 }

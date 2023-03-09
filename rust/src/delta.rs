@@ -17,6 +17,7 @@ use super::schema::*;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, Stats};
 use crate::delta_config::DeltaConfigError;
+use crate::operations::transaction::TransactionError;
 use crate::operations::vacuum::VacuumBuilder;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
@@ -209,6 +210,12 @@ pub enum DeltaTableError {
         /// Source error details returned while reading the log record.
         #[from]
         source: std::io::Error,
+    },
+    /// Error raised while commititng transaction
+    #[error("Transaction failed: {source}")]
+    Transaction {
+        /// The source error
+        source: TransactionError,
     },
     /// Error returned when transaction is failed to be committed because given version already exists.
     #[error("Delta transaction failed, version {0} already exists.")]

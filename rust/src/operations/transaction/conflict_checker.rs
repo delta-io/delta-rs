@@ -89,8 +89,6 @@ pub(crate) struct TransactionInfo<'a> {
     pub(crate) read_predicates: Vec<String>,
     /// files that have been seen by the transaction
     pub(crate) read_files: HashSet<Add>,
-    /// whether the whole table was read during the transaction
-    pub(crate) read_whole_table: bool,
     /// appIds that have been seen by the transaction
     pub(crate) read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
@@ -111,7 +109,6 @@ impl<'a> TransactionInfo<'a> {
             txn_id: "".into(),
             read_predicates: vec![],
             read_files: Default::default(),
-            read_whole_table: true,
             read_app_ids: Default::default(),
             actions,
             read_snapshot: snapshot,
@@ -133,7 +130,7 @@ impl<'a> TransactionInfo<'a> {
         todo!()
     }
 
-    /// Denotes if the operation reads the entire table
+    /// Whether the whole table was read during the transaction
     pub fn read_whole_table(&self) -> bool {
         match &self.operation {
             // TODO just adding one operation example, as currently none of the
@@ -463,7 +460,7 @@ impl<'a> ConflictChecker<'a> {
             .find(|f| read_file_path.contains(&f.path));
         if deleted_read_overlap.is_some()
             || (!self.winning_commit_summary.removed_files().is_empty()
-                && self.current_transaction_info().read_whole_table)
+                && self.current_transaction_info().read_whole_table())
         {
             Err(CommitConflictError::ConcurrentDeleteRead)
         } else {
@@ -497,6 +494,7 @@ impl<'a> ConflictChecker<'a> {
         let intersection: HashSet<&String> = txn_deleted_files
             .intersection(&winning_deleted_files)
             .collect();
+
         if !intersection.is_empty() {
             Err(CommitConflictError::ConcurrentDeleteDelete)
         } else {
