@@ -355,7 +355,7 @@ mod tests {
             // Different scheme/host, same path
             ("s3://my_bucket/path/to/table_1", "file:///path/to/table_1"),
             // Same scheme, different host, same path
-            ("s3://bucket_1/table_1", "s3://bucket_2/table_2"),
+            ("s3://bucket_1/table_1", "s3://bucket_2/table_1"),
         ] {
             let url_1 = Url::parse(location_1).unwrap();
             let url_2 = Url::parse(location_2).unwrap();
