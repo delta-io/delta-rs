@@ -57,7 +57,7 @@ use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
 use crate::builder::ensure_table_uri;
-use crate::{action, open_table, open_table_with_storage_options};
+use crate::{action, open_table, open_table_with_storage_options, SchemaDataType};
 use crate::{schema, DeltaTableBuilder};
 use crate::{DeltaResult, Invariant};
 use crate::{DeltaTable, DeltaTableError};
@@ -241,6 +241,13 @@ fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option
         .get_schema()
         .ok()
         .map(|s| s.get_field_with_name(&column.name).ok())??;
+
+    // See issue 1214. Binary type does not support natural order which is required for Datafusion to prune
+    if let SchemaDataType::primitive(t) = &field.get_type() {
+        if t == "binary" {
+            return None;
+        }
+    }
 
     let data_type = field.get_type().try_into().ok()?;
     let partition_columns = &table.get_metadata().ok()?.partition_columns;

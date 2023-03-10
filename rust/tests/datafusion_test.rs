@@ -485,7 +485,10 @@ async fn test_files_scanned() -> Result<()> {
             non_existent_value,
         } = test.to_owned();
         let column = column.to_owned();
-        //TODO: The following types don't have proper stats written.
+        // TODO: The following types don't have proper stats written.
+        // See issue #1208 for decimal type
+        // See issue #1209 for dates
+        // Min and Max is not calculated for binary columns. This matches the Spark writer
         if column == "decimal" || column == "date" || column == "binary" {
             continue;
         }
@@ -539,14 +542,10 @@ async fn test_files_scanned() -> Result<()> {
             file3_value,
             non_existent_value,
         } = test;
-        //TODO: Float, timestamp, decimal, date, binary partitions are not supported by the writer
-        if column == "float32"
-            || column == "float64"
-            || column == "timestamp"
-            || column == "decimal"
-            || column == "date"
-            || column == "binary"
-        {
+        // TODO: Float and decimal partitions are not supported by the writer
+        // binary fails since arrow does not implement a natural order
+        // The current Datafusion pruning implementation does not work for binary columns since they do not have a natural order. See #1214
+        if column == "float32" || column == "float64" || column == "decimal" || column == "binary" {
             continue;
         }
         println!("test {}", column);
