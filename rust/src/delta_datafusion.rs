@@ -20,11 +20,12 @@
 //! };
 //! ```
 
-use crate::builder::ensure_table_uri;
-use crate::Invariant;
-use crate::{action, open_table, open_table_with_storage_options};
-use crate::{schema, DeltaResult, DeltaTableBuilder};
-use crate::{DeltaTable, DeltaTableError, SchemaDataType};
+use std::any::Any;
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
@@ -54,12 +55,13 @@ use datafusion_expr::{Expr, Extension, LogicalPlan, TableProviderFilterPushDown}
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::{path::Path, ObjectMeta};
-use std::any::Any;
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::fmt::Debug;
-use std::sync::Arc;
 use url::Url;
+
+use crate::builder::ensure_table_uri;
+use crate::Invariant;
+use crate::{action, open_table, open_table_with_storage_options};
+use crate::{schema, DeltaResult, DeltaTableBuilder};
+use crate::{DeltaTable, DeltaTableError, SchemaDataType};
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
