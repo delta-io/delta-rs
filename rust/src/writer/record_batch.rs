@@ -382,7 +382,6 @@ pub(crate) fn divide_by_partition_values(
         // get row indices for current partition
         let idx: UInt32Array = (range.start..range.end)
             .map(|i| Some(indices.value(i)))
-            .into_iter()
             .collect();
 
         let partition_key_iter = sorted_partition_columns.iter().map(|c| {
