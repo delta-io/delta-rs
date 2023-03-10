@@ -1,8 +1,6 @@
-use crate::action::Add;
-use crate::delta_datafusion::to_correct_scalar_value;
-use crate::table_state::DeltaTableState;
-use crate::DeltaResult;
-use crate::{schema, DeltaTableError};
+use std::convert::TryFrom;
+use std::sync::Arc;
+
 use arrow::array::ArrayRef;
 use arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use datafusion::optimizer::utils::conjunction;
@@ -16,8 +14,12 @@ use itertools::Either;
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Tokenizer;
-use std::convert::TryFrom;
-use std::sync::Arc;
+
+use crate::action::Add;
+use crate::delta_datafusion::to_correct_scalar_value;
+use crate::table_state::DeltaTableState;
+use crate::DeltaResult;
+use crate::{schema, DeltaTableError};
 
 impl DeltaTableState {
     /// Get the table schema as an [`ArrowSchemaRef`]
@@ -84,16 +86,56 @@ impl DeltaTableState {
 
 pub struct AddContainer<'a> {
     inner: &'a Vec<Add>,
+    partition_columns: &'a Vec<String>,
     schema: ArrowSchemaRef,
 }
 
 impl<'a> AddContainer<'a> {
     /// Create a new instance of [`AddContainer`]
-    pub fn new(adds: &'a Vec<Add>, schema: ArrowSchemaRef) -> Self {
+    pub fn new(
+        adds: &'a Vec<Add>,
+        partition_columns: &'a Vec<String>,
+        schema: ArrowSchemaRef,
+    ) -> Self {
         Self {
             inner: adds,
+            partition_columns,
             schema,
         }
+    }
+
+    pub fn get_prune_stats(&self, column: &Column, get_max: bool) -> Option<ArrayRef> {
+        let (_, field) = self.schema.column_with_name(&column.name)?;
+
+        // See issue 1214. Binary type does not support natural order which is required for Datafusion to prune
+        if field.data_type() == &DataType::Binary {
+            return None;
+        }
+
+        let values = self.inner.iter().map(|add| {
+            if self.partition_columns.contains(&column.name) {
+                let value = add.partition_values.get(&column.name).unwrap();
+                let value = match value {
+                    Some(v) => serde_json::Value::String(v.to_string()),
+                    None => serde_json::Value::Null,
+                };
+                to_correct_scalar_value(&value, field.data_type()).unwrap_or(ScalarValue::Null)
+            } else if let Ok(Some(statistics)) = add.get_stats() {
+                let values = if get_max {
+                    statistics.max_values
+                } else {
+                    statistics.min_values
+                };
+
+                values
+                    .get(&column.name)
+                    .and_then(|f| to_correct_scalar_value(f.as_value()?, field.data_type()))
+                    .unwrap_or(ScalarValue::Null)
+            } else {
+                ScalarValue::Null
+            }
+        });
+        ScalarValue::iter_to_array(values).ok()
     }
 
     /// Get an iterator of add actions / files, that MAY containtain data mathcing the predicate.
@@ -123,37 +165,13 @@ impl<'a> PruningStatistics for AddContainer<'a> {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let data_type = self.schema.field_with_name(&column.name).ok()?.data_type();
-        let values = self.inner.iter().map(|add| {
-            if let Ok(Some(statistics)) = add.get_stats() {
-                statistics
-                    .min_values
-                    .get(&column.name)
-                    .and_then(|f| to_correct_scalar_value(f.as_value()?, data_type))
-                    .unwrap_or(ScalarValue::Null)
-            } else {
-                ScalarValue::Null
-            }
-        });
-        ScalarValue::iter_to_array(values).ok()
+        self.get_prune_stats(column, false)
     }
 
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let data_type = self.schema.field_with_name(&column.name).ok()?.data_type();
-        let values = self.inner.iter().map(|add| {
-            if let Ok(Some(statistics)) = add.get_stats() {
-                statistics
-                    .max_values
-                    .get(&column.name)
-                    .and_then(|f| to_correct_scalar_value(f.as_value()?, data_type))
-                    .unwrap_or(ScalarValue::Null)
-            } else {
-                ScalarValue::Null
-            }
-        });
-        ScalarValue::iter_to_array(values).ok()
+        self.get_prune_stats(column, true)
     }
 
     /// return the number of containers (e.g. row groups) being
@@ -169,11 +187,25 @@ impl<'a> PruningStatistics for AddContainer<'a> {
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
         let values = self.inner.iter().map(|add| {
             if let Ok(Some(statistics)) = add.get_stats() {
-                statistics
-                    .null_count
-                    .get(&column.name)
-                    .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
-                    .unwrap_or(ScalarValue::UInt64(None))
+                if self.partition_columns.contains(&column.name) {
+                    let value = add.partition_values.get(&column.name).unwrap();
+                    match value {
+                        Some(_) => ScalarValue::UInt64(Some(0)),
+                        None => ScalarValue::UInt64(Some(statistics.num_records as u64)),
+                    }
+                } else {
+                    statistics
+                        .null_count
+                        .get(&column.name)
+                        .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
+                        .unwrap_or(ScalarValue::UInt64(None))
+                }
+            } else if self.partition_columns.contains(&column.name) {
+                let value = add.partition_values.get(&column.name).unwrap();
+                match value {
+                    Some(_) => ScalarValue::UInt64(Some(0)),
+                    None => ScalarValue::UInt64(None),
+                }
             } else {
                 ScalarValue::UInt64(None)
             }
@@ -186,14 +218,18 @@ impl PruningStatistics for DeltaTableState {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let container = AddContainer::new(self.files(), self.arrow_schema().ok()?);
+        let partition_columns = &self.current_metadata()?.partition_columns;
+        let container =
+            AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
         container.min_values(column)
     }
 
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let container = AddContainer::new(self.files(), self.arrow_schema().ok()?);
+        let partition_columns = &self.current_metadata()?.partition_columns;
+        let container =
+            AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
         container.max_values(column)
     }
 
@@ -208,7 +244,9 @@ impl PruningStatistics for DeltaTableState {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
-        let container = AddContainer::new(self.files(), self.arrow_schema().ok()?);
+        let partition_columns = &self.current_metadata()?.partition_columns;
+        let container =
+            AddContainer::new(self.files(), partition_columns, self.arrow_schema().ok()?);
         container.null_counts(column)
     }
 }

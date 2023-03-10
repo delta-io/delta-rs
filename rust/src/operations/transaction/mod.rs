@@ -1,13 +1,14 @@
 //! Delta transactions
-use crate::action::{Action, CommitInfo, DeltaOperation};
-use crate::storage::commit_uri_from_version;
-use crate::table_state::DeltaTableState;
-use crate::{crate_version, DeltaDataTypeVersion, DeltaResult, DeltaTableError};
 use chrono::Utc;
 use conflict_checker::ConflictChecker;
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore};
 use serde_json::{Map, Value};
+
+use crate::action::{Action, CommitInfo, DeltaOperation};
+use crate::storage::commit_uri_from_version;
+use crate::table_state::DeltaTableState;
+use crate::{crate_version, DeltaDataTypeVersion, DeltaResult, DeltaTableError};
 
 mod conflict_checker;
 #[cfg(feature = "datafusion")]

@@ -80,6 +80,10 @@ pub enum CommitConflictError {
         /// Source error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+
+    /// Error returned when no metadata was found in the DeltaTable.
+    #[error("No metadata found, please make sure table is loaded.")]
+    NoMetadata,
 }
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
@@ -410,7 +414,13 @@ impl<'a> ConflictChecker<'a> {
                         .map_err(|err| CommitConflictError::Predicate {
                             source: Box::new(err),
                         })?;
-                    AddContainer::new(&added_files_to_check, arrow_schema)
+                    // TODO remove unwrap
+                    let partition_columns = &self
+                        .snapshot
+                        .current_metadata()
+                        .ok_or(CommitConflictError::NoMetadata)?
+                        .partition_columns;
+                    AddContainer::new(&added_files_to_check, partition_columns, arrow_schema)
                         .predicate_matches(predicate)
                         .map_err(|err| CommitConflictError::Predicate {
                             source: Box::new(err),
@@ -635,6 +645,34 @@ mod tests {
     // tests adopted from https://github.com/delta-io/delta/blob/24c025128612a4ae02d0ad958621f928cda9a3ec/core/src/test/scala/org/apache/spark/sql/delta/OptimisticTransactionSuite.scala#L40-L94
     async fn test_allowed_concurrent_actions() {
         // append - append
+        // append file to table while a concurrent writer also appends a file
+        let file1 = tu::create_add_action("file1", true, get_stats(1, 10));
+        let file2 = tu::create_add_action("file2", true, get_stats(1, 10));
+
+        let (state, summary) = prepare_test(None, vec![], vec![file1]);
+        let operation = DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by: Default::default(),
+            predicate: None,
+        };
+        let actions = vec![file2];
+        let checker = ConflictChecker::try_new(&state, summary, operation, &actions)
+            .await
+            .unwrap();
+
+        let result = checker.check_conflicts();
+        assert!(result.is_ok());
+
+        // disjoint delete - read
+        // the concurrent transaction deletes a file that the current transaction did NOT read
+
+        // TODO disjoint transactions
+    }
+
+    #[tokio::test]
+    // tests adopted from https://github.com/delta-io/delta/blob/24c025128612a4ae02d0ad958621f928cda9a3ec/core/src/test/scala/org/apache/spark/sql/delta/OptimisticTransactionSuite.scala#L40-L94
+    async fn test_disallowed_concurrent_actions() {
+        // delete - delete
         // append file to table while a concurrent writer also appends a file
         let file1 = tu::create_add_action("file1", true, get_stats(1, 10));
         let file2 = tu::create_add_action("file2", true, get_stats(1, 10));

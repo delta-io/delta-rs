@@ -42,8 +42,7 @@ use datafusion::execution::runtime_env::RuntimeEnv;
 use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
-use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_optimizer::pruning::PruningStatistics;
+use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion::physical_plan::file_format::{partition_type_wrap, FileScanConfig};
 use datafusion::physical_plan::{
     ColumnStatistics, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
@@ -58,10 +57,10 @@ use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
 use crate::builder::ensure_table_uri;
-use crate::Invariant;
-use crate::{action, open_table, open_table_with_storage_options};
-use crate::{schema, DeltaResult, DeltaTableBuilder};
-use crate::{DeltaTable, DeltaTableError, SchemaDataType};
+use crate::{
+    action, open_table, open_table_with_storage_options, schema, DeltaResult, DeltaTable,
+    DeltaTableBuilder, DeltaTableError, Invariant, SchemaDataType,
+};
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
