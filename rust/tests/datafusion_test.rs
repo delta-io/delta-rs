@@ -545,7 +545,8 @@ async fn test_files_scanned() -> Result<()> {
         // TODO: Float and decimal partitions are not supported by the writer
         // binary fails since arrow does not implement a natural order
         // The current Datafusion pruning implementation does not work for binary columns since they do not have a natural order. See #1214
-        if column == "float32" || column == "float64" || column == "decimal" || column == "binary" {
+        // Timestamp and date are disabled since the hive path contains illegal Windows values. see #1215
+        if column == "float32" || column == "float64" || column == "decimal" || column == "binary" || column == "timestamp" || column == "date" {
             continue;
         }
         println!("test {}", column);
