@@ -5,17 +5,20 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use arrow::array::*;
-use arrow::datatypes::{DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema};
+use arrow::datatypes::{
+    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
+};
 use arrow::record_batch::RecordBatch;
 use common::datafusion::context_with_delta_table_factory;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::TableProvider;
-use datafusion::execution::context::{SessionContext, TaskContext};
+use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{common::collect, file_format::ParquetExec, metrics::Label};
 use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor};
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::{Column, DataFusionError, Result};
+use datafusion_common::ScalarValue::*;
+use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Expr;
 
 use deltalake::action::SaveMode;
@@ -61,7 +64,8 @@ impl ExecutionPlanVisitor for ExecutionMetricsCollector {
 async fn prepare_table(
     batches: Vec<RecordBatch>,
     save_mode: SaveMode,
-) -> (tempfile::TempDir, Arc<DeltaTable>) {
+    partitions: Vec<String>,
+) -> (tempfile::TempDir, DeltaTable) {
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
     let table_uri = table_path.to_str().unwrap().to_string();
@@ -73,6 +77,7 @@ async fn prepare_table(
         .create()
         .with_save_mode(SaveMode::Ignore)
         .with_columns(table_schema.get_fields().clone())
+        .with_partition_columns(partitions)
         .await
         .unwrap();
 
@@ -84,7 +89,7 @@ async fn prepare_table(
             .unwrap();
     }
 
-    (table_dir, Arc::new(table))
+    (table_dir, table)
 }
 
 #[tokio::test]
@@ -284,50 +289,362 @@ async fn test_datafusion_stats() -> Result<()> {
     Ok(())
 }
 
+async fn get_scan_metrics(
+    table: &DeltaTable,
+    state: &SessionState,
+    e: &[Expr],
+) -> Result<ExecutionMetricsCollector> {
+    let mut metrics = ExecutionMetricsCollector::default();
+    let scan = table.scan(state, None, e, None).await?;
+    if scan.output_partitioning().partition_count() > 0 {
+        let plan = CoalescePartitionsExec::new(scan);
+        let task_ctx = Arc::new(TaskContext::from(state));
+        let _result = collect(plan.execute(0, task_ctx)?).await?;
+        visit_execution_plan(&plan, &mut metrics).unwrap();
+    }
+
+    return Ok(metrics);
+}
+
+fn create_all_types_batch(not_null_rows: usize, null_rows: usize, offset: usize) -> RecordBatch {
+    let mut decimal_builder = Decimal128Builder::with_capacity(not_null_rows + null_rows);
+    for x in 0..not_null_rows {
+        decimal_builder.append_value(((x + offset) * 100) as i128);
+    }
+    decimal_builder.append_nulls(null_rows);
+    let decimal = decimal_builder
+        .finish()
+        .with_precision_and_scale(10, 2)
+        .unwrap();
+
+    let data: Vec<ArrayRef> = vec![
+        Arc::new(StringArray::from_iter(
+            (0..not_null_rows)
+                .map(|x| Some((x + offset).to_string()))
+                .chain((0..null_rows).map(|_| None)),
+        )),
+        Arc::new(Int64Array::from_iter(
+            (0..not_null_rows)
+                .map(|x| Some((x + offset) as i64))
+                .chain((0..null_rows).map(|_| None)),
+        )),
+        Arc::new(Int32Array::from_iter(
+            (0..not_null_rows)
+                .map(|x| Some((x + offset) as i32))
+                .chain((0..null_rows).map(|_| None)),
+        )),
+        Arc::new(Int16Array::from_iter(
+            (0..not_null_rows)
+                .map(|x| Some((x + offset) as i16))
+                .chain((0..null_rows).map(|_| None)),
+        )),
+        Arc::new(Int8Array::from_iter(
+            (0..not_null_rows)
+                .map(|x| Some((x + offset) as i8))
+                .chain((0..null_rows).map(|_| None)),
+        )),
+        Arc::new(Float64Array::from_iter(
+            (0..not_null_rows)
+                .map(|x| Some((x + offset) as f64))
+                .chain((0..null_rows).map(|_| None)),
+        )),
+        Arc::new(Float32Array::from_iter(
+            (0..not_null_rows)
+                .map(|x| Some((x + offset) as f32))
+                .chain((0..null_rows).map(|_| None)),
+        )),
+        Arc::new(BooleanArray::from_iter(
+            (0..not_null_rows)
+                .map(|x| Some((x + offset) % 2 == 0))
+                .chain((0..null_rows).map(|_| None)),
+        )),
+        Arc::new(BinaryArray::from_iter(
+            (0..not_null_rows)
+                .map(|x| Some((x + offset).to_string().as_bytes().to_owned()))
+                .chain((0..null_rows).map(|_| None)),
+        )),
+        Arc::new(decimal),
+        //Convert to seconds
+        Arc::new(TimestampMicrosecondArray::from_iter(
+            (0..not_null_rows)
+                .map(|x| Some(((x + offset) * 1_000_000) as i64))
+                .chain((0..null_rows).map(|_| None)),
+        )),
+        Arc::new(Date32Array::from_iter(
+            (0..not_null_rows)
+                .map(|x| Some((x + offset) as i32))
+                .chain((0..null_rows).map(|_| None)),
+        )),
+    ];
+
+    let schema = Arc::new(ArrowSchema::new(vec![
+        ArrowField::new("utf8", ArrowDataType::Utf8, true),
+        ArrowField::new("int64", ArrowDataType::Int64, true),
+        ArrowField::new("int32", ArrowDataType::Int32, true),
+        ArrowField::new("int16", ArrowDataType::Int16, true),
+        ArrowField::new("int8", ArrowDataType::Int8, true),
+        ArrowField::new("float64", ArrowDataType::Float64, true),
+        ArrowField::new("float32", ArrowDataType::Float32, true),
+        ArrowField::new("boolean", ArrowDataType::Boolean, true),
+        ArrowField::new("binary", ArrowDataType::Binary, true),
+        ArrowField::new("decimal", ArrowDataType::Decimal128(10, 2), true),
+        ArrowField::new(
+            "timestamp",
+            ArrowDataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        ),
+        ArrowField::new("date", ArrowDataType::Date32, true),
+    ]));
+
+    RecordBatch::try_new(schema, data).unwrap()
+}
+
+struct TestCase {
+    column: &'static str,
+    file1_value: Expr,
+    file2_value: Expr,
+    file3_value: Expr,
+    non_existent_value: Expr,
+}
+
+impl TestCase {
+    fn new<F>(column: &'static str, expression_builder: F) -> Self
+    where
+        F: Fn(i64) -> Expr,
+    {
+        TestCase {
+            column,
+            file1_value: expression_builder(1),
+            file2_value: expression_builder(5),
+            file3_value: expression_builder(8),
+            non_existent_value: expression_builder(3),
+        }
+    }
+}
+
 #[tokio::test]
 async fn test_files_scanned() -> Result<()> {
-    let arrow_schema = Arc::new(ArrowSchema::new(vec![
-        ArrowField::new("id", ArrowDataType::Int32, true),
-        ArrowField::new("string", ArrowDataType::Utf8, true),
-    ]));
-    let columns_1: Vec<ArrayRef> = vec![
-        Arc::new(Int32Array::from(vec![Some(1), Some(2)])),
-        Arc::new(StringArray::from(vec![Some("hello"), Some("world")])),
-    ];
-    let columns_2: Vec<ArrayRef> = vec![
-        Arc::new(Int32Array::from(vec![Some(10), Some(20)])),
-        Arc::new(StringArray::from(vec![Some("hello"), Some("world")])),
-    ];
-    let batches = vec![
-        RecordBatch::try_new(arrow_schema.clone(), columns_1)?,
-        RecordBatch::try_new(arrow_schema.clone(), columns_2)?,
-    ];
-    let (_temp_dir, table) = prepare_table(batches, SaveMode::Append).await;
-    assert_eq!(table.version(), 2);
-
+    // Validate that datafusion prunes files based on file statistics
+    // Do not scan files when we know it does not contain the requested records
+    use datafusion::prelude::*;
     let ctx = SessionContext::new();
-    let plan = table.scan(&ctx.state(), None, &[], None).await?;
-    let plan = CoalescePartitionsExec::new(plan.clone());
+    let state = ctx.state();
 
-    let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
-    let _ = collect(plan.execute(0, task_ctx)?).await?;
+    async fn append_to_table(table: DeltaTable, batch: RecordBatch) -> DeltaTable {
+        DeltaOps(table)
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap()
+    }
 
-    let mut metrics = ExecutionMetricsCollector::default();
-    visit_execution_plan(&plan, &mut metrics).unwrap();
-    assert!(metrics.num_scanned_files() == 2);
+    let batch = create_all_types_batch(3, 0, 0);
+    let (_tmp, table) = prepare_table(vec![batch], SaveMode::Overwrite, vec![]).await;
 
-    let filter = Expr::gt(
-        Expr::Column(Column::from_name("id")),
-        Expr::Literal(ScalarValue::Int32(Some(5))),
-    );
+    let batch = create_all_types_batch(3, 0, 4);
+    let table = append_to_table(table, batch).await;
 
-    let plan = CoalescePartitionsExec::new(table.scan(&ctx.state(), None, &[filter], None).await?);
-    let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
-    let _result = collect(plan.execute(0, task_ctx)?).await?;
+    let batch = create_all_types_batch(3, 0, 7);
+    let table = append_to_table(table, batch).await;
 
-    let mut metrics = ExecutionMetricsCollector::default();
-    visit_execution_plan(&plan, &mut metrics).unwrap();
+    let metrics = get_scan_metrics(&table, &state, &[]).await?;
+    assert!(metrics.num_scanned_files() == 3);
+
+    // (Column name, value from file 1, value from file 2, value from file 3, non existant value)
+    let tests = [
+        TestCase::new("utf8", |value| lit(value.to_string())),
+        TestCase::new("int64", |value| lit(value)),
+        TestCase::new("int32", |value| lit(value as i32)),
+        TestCase::new("int16", |value| lit(value as i16)),
+        TestCase::new("int8", |value| lit(value as i8)),
+        TestCase::new("float64", |value| lit(value as f64)),
+        TestCase::new("float32", |value| lit(value as f32)),
+        TestCase::new("timestamp", |value| {
+            lit(ScalarValue::TimestampMicrosecond(
+                Some(value * 1_000_000),
+                None,
+            ))
+        }),
+        // TODO: I think decimal statistics are being written to the log incorrectly. The underlying i128 is written
+        // not the proper string representation as specified by the percision and scale
+        TestCase::new("decimal", |value| {
+            lit(Decimal128(Some((value * 100).into()), 10, 2))
+        }),
+        // TODO: The writer does not write complete statistiics for date columns
+        TestCase::new("date", |value| lit(ScalarValue::Date32(Some(value as i32)))),
+        // TODO: The writer does not write complete statistics for binary columns
+        TestCase::new("binary", |value| lit(value.to_string().as_bytes())),
+    ];
+
+    for test in &tests {
+        let TestCase {
+            column,
+            file1_value,
+            file2_value,
+            file3_value,
+            non_existent_value,
+        } = test.to_owned();
+        let column = column.to_owned();
+        // TODO: The following types don't have proper stats written.
+        // See issue #1208 for decimal type
+        // See issue #1209 for dates
+        // Min and Max is not calculated for binary columns. This matches the Spark writer
+        if column == "decimal" || column == "date" || column == "binary" {
+            continue;
+        }
+        println!("Test Column: {}", column);
+
+        // Equality
+        let e = col(column).eq(file1_value.clone());
+        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 1);
+
+        // Value does not exist
+        let e = col(column).eq(non_existent_value.clone());
+        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 0);
+
+        // Conjuction
+        let e = col(column)
+            .gt(file1_value.clone())
+            .and(col(column).lt(file2_value.clone()));
+        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 2);
+
+        // Disjunction
+        let e = col(column)
+            .lt(file1_value.clone())
+            .or(col(column).gt(file3_value.clone()));
+        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 2);
+    }
+
+    // Validate Boolean type
+    let batch = create_all_types_batch(1, 0, 0);
+    let (_tmp, table) = prepare_table(vec![batch], SaveMode::Overwrite, vec![]).await;
+    let batch = create_all_types_batch(1, 0, 1);
+    let table = append_to_table(table, batch).await;
+
+    let e = col("boolean").eq(lit(true));
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert_eq!(metrics.num_scanned_files(), 1);
+
+    let e = col("boolean").eq(lit(false));
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert_eq!(metrics.num_scanned_files(), 1);
+
+    // Ensure that tables with stats and partition columns can be pruned
+    for test in tests {
+        let TestCase {
+            column,
+            file1_value,
+            file2_value,
+            file3_value,
+            non_existent_value,
+        } = test;
+        // TODO: Float and decimal partitions are not supported by the writer
+        // binary fails since arrow does not implement a natural order
+        // The current Datafusion pruning implementation does not work for binary columns since they do not have a natural order. See #1214
+        // Timestamp and date are disabled since the hive path contains illegal Windows values. see #1215
+        if column == "float32"
+            || column == "float64"
+            || column == "decimal"
+            || column == "binary"
+            || column == "timestamp"
+            || column == "date"
+        {
+            continue;
+        }
+        println!("test {}", column);
+
+        let partitions = vec![column.to_owned()];
+        let batch = create_all_types_batch(3, 0, 0);
+        let (_tmp, table) = prepare_table(vec![batch], SaveMode::Overwrite, partitions).await;
+
+        let batch = create_all_types_batch(3, 0, 4);
+        let table = append_to_table(table, batch).await;
+
+        let batch = create_all_types_batch(3, 0, 7);
+        let table = append_to_table(table, batch).await;
+
+        // Equality
+        let e = col(column).eq(file1_value.clone());
+        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 1);
+
+        // Value does not exist
+        let e = col(column).eq(non_existent_value);
+        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 0);
+
+        // Conjuction
+        let e = col(column)
+            .gt(file1_value.clone())
+            .and(col(column).lt(file2_value));
+        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 2);
+
+        // Disjunction
+        let e = col(column).lt(file1_value).or(col(column).gt(file3_value));
+        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 2);
+
+        // Validate null pruning
+        let batch = create_all_types_batch(5, 2, 0);
+        let partitions = vec![column.to_owned()];
+        let (_tmp, table) = prepare_table(vec![batch], SaveMode::Overwrite, partitions).await;
+
+        let e = col(column).is_null();
+        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 1);
+
+        /*  logically we should be able to prune the null partition but Datafusion's current implementation prevents this */
+        /*
+        let e = col(column).is_not_null();
+        let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+        assert_eq!(metrics.num_scanned_files(), 5);
+        */
+    }
+
+    // Validate Boolean partition
+    let batch = create_all_types_batch(1, 0, 0);
+    let (_tmp, table) =
+        prepare_table(vec![batch], SaveMode::Overwrite, vec!["boolean".to_owned()]).await;
+    let batch = create_all_types_batch(1, 0, 1);
+    let table = append_to_table(table, batch).await;
+
+    let e = col("boolean").eq(lit(true));
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert_eq!(metrics.num_scanned_files(), 1);
+
+    let e = col("boolean").eq(lit(false));
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert_eq!(metrics.num_scanned_files(), 1);
+
+    // Ensure that tables without stats and partition columns can be pruned for just partitions
+    let table = deltalake::open_table("./tests/data/delta-0.8.0-null-partition").await?;
+
+    /*
+    // Logically this should prune. See above
+    let e = col("k").eq(lit("A")).and(col("k").is_not_null());
+    let metrics = get_scan_metrics(&table, &state, &[e]).await.unwrap();
+    println!("{:?}", metrics);
     assert!(metrics.num_scanned_files() == 1);
+
+    let e = col("k").eq(lit("B"));
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert!(metrics.num_scanned_files() == 1);
+    */
+
+    // Check pruning for null partitions
+    let e = col("k").is_null();
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert!(metrics.num_scanned_files() == 1);
+
+    // Check pruning for null partitions. Since there are no record count statistics pruning cannot be done
+    let e = col("k").is_not_null();
+    let metrics = get_scan_metrics(&table, &state, &[e]).await?;
+    assert!(metrics.num_scanned_files() == 2);
 
     Ok(())
 }
