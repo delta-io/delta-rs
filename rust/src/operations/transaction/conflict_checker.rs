@@ -673,27 +673,18 @@ mod tests {
     // tests adopted from https://github.com/delta-io/delta/blob/24c025128612a4ae02d0ad958621f928cda9a3ec/core/src/test/scala/org/apache/spark/sql/delta/OptimisticTransactionSuite.scala#L40-L94
     async fn test_disallowed_concurrent_actions() {
         // delete - delete
-        // append file to table while a concurrent writer also appends a file
-        let file1 = tu::create_add_action("file1", true, get_stats(1, 10));
-        let file2 = tu::create_add_action("file2", true, get_stats(1, 10));
-
-        let (state, summary) = prepare_test(None, vec![], vec![file1]);
-        let operation = DeltaOperation::Write {
-            mode: SaveMode::Append,
-            partition_by: Default::default(),
-            predicate: None,
-        };
-        let actions = vec![file2];
+        // remove file from table that has previously been removed
+        let removed_file = tu::create_remove_action("removed_file", true);
+        let (state, summary) = prepare_test(None, vec![], vec![removed_file.clone()]);
+        let operation = DeltaOperation::Delete { predicate: None };
+        let actions = vec![removed_file];
         let checker = ConflictChecker::try_new(&state, summary, operation, &actions)
             .await
             .unwrap();
 
-        let result = checker.check_conflicts();
-        assert!(result.is_ok());
-
-        // disjoint delete - read
-        // the concurrent transaction deletes a file that the current transaction did NOT read
-
-        // TODO disjoint transactions
+        assert!(matches!(
+            checker.check_conflicts(),
+            Err(CommitConflictError::ConcurrentDeleteDelete)
+        ));
     }
 }

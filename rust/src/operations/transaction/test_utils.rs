@@ -1,5 +1,5 @@
 use super::{prepare_commit, try_commit_transaction, CommitInfo};
-use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, SaveMode};
+use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove, SaveMode};
 use crate::table_state::DeltaTableState;
 use crate::{
     DeltaTable, DeltaTableBuilder, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
@@ -16,6 +16,14 @@ pub fn create_add_action(
         size: 100,
         data_change,
         stats,
+        ..Default::default()
+    })
+}
+
+pub fn create_remove_action(path: impl Into<String>, data_change: bool) -> Action {
+    Action::remove(Remove {
+        path: path.into(),
+        data_change,
         ..Default::default()
     })
 }
