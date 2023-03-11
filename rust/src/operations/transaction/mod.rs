@@ -185,9 +185,14 @@ pub(crate) async fn commit(
                 let summary =
                     WinningCommitSummary::try_new(storage, read_snapshot.version(), version)
                         .await?;
-                let conflict_checker =
-                    ConflictChecker::try_new(read_snapshot, summary, operation.clone(), actions)
-                        .await?;
+                let read_redicate = operation.read_predicate();
+                let conflict_checker = ConflictChecker::new(
+                    read_snapshot,
+                    summary,
+                    read_redicate,
+                    actions,
+                    Some(&operation),
+                );
                 match conflict_checker.check_conflicts() {
                     Ok(_) => {
                         attempt_number += 1;

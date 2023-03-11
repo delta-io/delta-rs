@@ -3,6 +3,7 @@
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Cursor};
 
+use itertools::Either;
 use object_store::ObjectStore;
 use serde_json::{Map, Value};
 
@@ -86,62 +87,86 @@ pub enum CommitConflictError {
     NoMetadata,
 }
 
+fn read_whole_table(operation: &DeltaOperation) -> bool {
+    match operation {
+        // TODO just adding one operation example, as currently none of the
+        // implemented operations scan the entire table.
+        DeltaOperation::Write { predicate, .. } if predicate.is_none() => false,
+        _ => false,
+    }
+}
+
 /// A struct representing different attributes of current transaction needed for conflict detection.
 pub(crate) struct TransactionInfo<'a> {
     pub(crate) txn_id: String,
     /// partition predicates by which files have been queried by the transaction
-    pub(crate) read_predicates: Vec<String>,
-    /// files that have been seen by the transaction
-    pub(crate) read_files: HashSet<Add>,
+    pub(crate) read_predicates: Option<String>,
     /// appIds that have been seen by the transaction
     pub(crate) read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
     pub(crate) actions: &'a Vec<Action>,
     /// read [`DeltaTableState`] used for the transaction
     pub(crate) read_snapshot: &'a DeltaTableState,
-    /// operation during commit
-    pub(crate) operation: DeltaOperation,
 }
 
 impl<'a> TransactionInfo<'a> {
-    pub fn try_new(
+    pub fn new(
         snapshot: &'a DeltaTableState,
-        operation: DeltaOperation,
+        read_predicates: Option<String>,
         actions: &'a Vec<Action>,
-    ) -> Result<Self, DeltaTableError> {
-        Ok(Self {
+    ) -> Self {
+        Self {
             txn_id: "".into(),
-            read_predicates: vec![],
-            read_files: Default::default(),
+            read_predicates,
             read_app_ids: Default::default(),
             actions,
             read_snapshot: snapshot,
-            operation,
-        })
+        }
     }
 
     pub fn metadata(&self) -> Option<&DeltaTableMetaData> {
         self.read_snapshot.current_metadata()
     }
 
+    /// Whether the transaction changed the tables metadatas
     pub fn metadata_changed(&self) -> bool {
         self.actions
             .iter()
             .any(|a| matches!(a, Action::metaData(_)))
     }
 
-    pub fn final_actions_to_commit(&self) -> Vec<Action> {
-        todo!()
+    #[cfg(feature = "datafusion")]
+    /// Files read by the transaction
+    pub fn read_files(&self) -> Result<impl Iterator<Item = &Add>, CommitConflictError> {
+        if let Some(predicate) = &self.read_predicates {
+            let pred = self
+                .read_snapshot
+                .parse_predicate_expression(predicate)
+                .map_err(|err| CommitConflictError::Predicate {
+                    source: Box::new(err),
+                })?;
+            Ok(Either::Left(
+                self.read_snapshot
+                    .files_matching_predicate(&[pred])
+                    .map_err(|err| CommitConflictError::Predicate {
+                        source: Box::new(err),
+                    })?,
+            ))
+        } else {
+            Ok(Either::Right(self.read_snapshot.files().iter()))
+        }
+    }
+
+    #[cfg(not(feature = "datafusion"))]
+    /// Files read by the transaction
+    pub fn read_files(&self) -> Result<impl Iterator<Item = &Add>, CommitConflictError> {
+        Ok(self.read_snapshot.files().iter())
     }
 
     /// Whether the whole table was read during the transaction
     pub fn read_whole_table(&self) -> bool {
-        match &self.operation {
-            // TODO just adding one operation example, as currently none of the
-            // implemented operations scan the entire table.
-            DeltaOperation::Write { predicate, .. } if predicate.is_none() => false,
-            _ => false,
-        }
+        // TODO actually check
+        self.read_predicates.is_some()
     }
 }
 
@@ -284,31 +309,46 @@ impl WinningCommitSummary {
 /// Checks if a failed commit may be committed after a conflicting winning commit
 pub(crate) struct ConflictChecker<'a> {
     /// transaction information for current transaction at start of check
-    transaction_info: TransactionInfo<'a>,
+    txn_info: TransactionInfo<'a>,
     /// Summary of the transaction, that has been committed ahead of the current transaction
     winning_commit_summary: WinningCommitSummary,
-    /// The state of the delta table at the base version from the current (not winning) commit
-    snapshot: &'a DeltaTableState,
+    /// Isolation level for the current transaction
+    isolation_level: IsolationLevel,
 }
 
 impl<'a> ConflictChecker<'a> {
-    pub async fn try_new(
-        snapshot: &'a DeltaTableState,
+    pub fn new(
+        read_snapshot: &'a DeltaTableState,
         winning_commit_summary: WinningCommitSummary,
-        operation: DeltaOperation,
+        read_predicates: Option<String>,
         actions: &'a Vec<Action>,
-    ) -> Result<ConflictChecker<'a>, DeltaTableError> {
-        let transaction_info = TransactionInfo::try_new(snapshot, operation, actions)?;
-        Ok(Self {
-            transaction_info,
+        operation: Option<&DeltaOperation>,
+    ) -> ConflictChecker<'a> {
+        let transaction_info = TransactionInfo::new(read_snapshot, read_predicates, actions);
+        let isolation_level = operation
+            .and_then(|op| {
+                if can_downgrade_to_snapshot_isolation(
+                    &winning_commit_summary.actions,
+                    op,
+                    &read_snapshot.table_config().isolation_level(),
+                ) {
+                    Some(IsolationLevel::SnapshotIsolation)
+                } else {
+                    None
+                }
+            })
+            .unwrap_or_else(|| read_snapshot.table_config().isolation_level());
+
+        Self {
+            txn_info: transaction_info,
             winning_commit_summary,
-            snapshot,
-        })
+            isolation_level,
+        }
     }
 
     fn current_transaction_info(&self) -> &TransactionInfo {
         // TODO figure out when we need to update this
-        &self.transaction_info
+        &self.txn_info
     }
 
     /// This function checks conflict of the `initial_current_transaction_info` against the
@@ -328,8 +368,8 @@ impl<'a> ConflictChecker<'a> {
     /// to read and write against the protocol set by the committed transaction.
     fn check_protocol_compatibility(&self) -> Result<(), CommitConflictError> {
         for p in self.winning_commit_summary.protocol() {
-            if self.snapshot.min_reader_version() < p.min_reader_version
-                || self.snapshot.min_writer_version() < p.min_writer_version
+            if self.txn_info.read_snapshot.min_reader_version() < p.min_reader_version
+                || self.txn_info.read_snapshot.min_writer_version() < p.min_writer_version
             {
                 return Err(CommitConflictError::ProtocolChanged);
             };
@@ -361,25 +401,13 @@ impl<'a> ConflictChecker<'a> {
     fn check_for_added_files_that_should_have_been_read_by_current_txn(
         &self,
     ) -> Result<(), CommitConflictError> {
-        let defaault_isolation_level = self.snapshot.table_config().isolation_level();
-
-        let isolation_level = if can_downgrade_to_snapshot_isolation(
-            &self.winning_commit_summary.actions,
-            &self.transaction_info.operation,
-            &defaault_isolation_level,
-        ) {
-            IsolationLevel::SnapshotIsolation
-        } else {
-            defaault_isolation_level
-        };
-
         // Skip check, if the operation can be downgraded to snapshot isolation
-        if matches!(isolation_level, IsolationLevel::SnapshotIsolation) {
+        if matches!(self.isolation_level, IsolationLevel::SnapshotIsolation) {
             return Ok(());
         }
 
         // Fail if new files have been added that the txn should have read.
-        let added_files_to_check = match isolation_level {
+        let added_files_to_check = match self.isolation_level {
             IsolationLevel::WriteSerializable
                 if !self.current_transaction_info().metadata_changed() =>
             {
@@ -400,23 +428,25 @@ impl<'a> ConflictChecker<'a> {
         cfg_if::cfg_if! {
             if #[cfg(feature = "datafusion")] {
                 let added_files_matching_predicates = if let (Some(predicate_str), false) = (
-                    self.transaction_info.operation.read_predicate(),
-                    self.transaction_info.operation.read_whole_table(),
+                    &self.txn_info.read_predicates,
+                    self.txn_info.read_whole_table(),
                 ) {
-                    let arrow_schema = self.snapshot.arrow_schema().map_err(|err| {
+                    let arrow_schema = self.txn_info.read_snapshot.arrow_schema().map_err(|err| {
                         CommitConflictError::CorruptedState {
                             source: Box::new(err),
                         }
                     })?;
                     let predicate = self
-                        .snapshot
+                        .txn_info
+                        .read_snapshot
                         .parse_predicate_expression(predicate_str)
                         .map_err(|err| CommitConflictError::Predicate {
                             source: Box::new(err),
                         })?;
                     // TODO remove unwrap
                     let partition_columns = &self
-                        .snapshot
+                        .txn_info
+                        .read_snapshot
                         .current_metadata()
                         .ok_or(CommitConflictError::NoMetadata)?
                         .partition_columns;
@@ -427,13 +457,13 @@ impl<'a> ConflictChecker<'a> {
                         })?
                         .cloned()
                         .collect::<Vec<_>>()
-                } else if self.transaction_info.operation.read_whole_table() {
+                } else if self.txn_info.read_whole_table() {
                     added_files_to_check
                 } else {
                     vec![]
                 };
             } else {
-                let added_files_matching_predicates = if self.transaction_info.operation.read_whole_table()
+                let added_files_matching_predicates = if self.txn_info.read_whole_table()
                 {
                     added_files_to_check
                 } else {
@@ -457,8 +487,7 @@ impl<'a> ConflictChecker<'a> {
         // Fail if files have been deleted that the txn read.
         let read_file_path: HashSet<String> = self
             .current_transaction_info()
-            .read_files
-            .iter()
+            .read_files()?
             .map(|f| f.path.clone())
             .collect();
         let deleted_read_overlap = self
@@ -571,8 +600,7 @@ pub(super) fn can_downgrade_to_snapshot_isolation<'a>(
     }
 
     if has_non_file_actions {
-        // if Non-file-actions are present (e.g. METADATA etc.), then don't downgrade the isolation
-        // level to SnapshotIsolation.
+        // if Non-file-actions are present (e.g. METADATA etc.), then don't downgrade the isolation level.
         return false;
     }
 
@@ -650,15 +678,8 @@ mod tests {
         let file2 = tu::create_add_action("file2", true, get_stats(1, 10));
 
         let (state, summary) = prepare_test(None, vec![], vec![file1]);
-        let operation = DeltaOperation::Write {
-            mode: SaveMode::Append,
-            partition_by: Default::default(),
-            predicate: None,
-        };
         let actions = vec![file2];
-        let checker = ConflictChecker::try_new(&state, summary, operation, &actions)
-            .await
-            .unwrap();
+        let checker = ConflictChecker::new(&state, summary, None, &actions, None);
 
         let result = checker.check_conflicts();
         assert!(result.is_ok());
@@ -676,11 +697,8 @@ mod tests {
         // remove file from table that has previously been removed
         let removed_file = tu::create_remove_action("removed_file", true);
         let (state, summary) = prepare_test(None, vec![], vec![removed_file.clone()]);
-        let operation = DeltaOperation::Delete { predicate: None };
         let actions = vec![removed_file];
-        let checker = ConflictChecker::try_new(&state, summary, operation, &actions)
-            .await
-            .unwrap();
+        let checker = ConflictChecker::new(&state, summary, None, &actions, None);
 
         assert!(matches!(
             checker.check_conflicts(),
