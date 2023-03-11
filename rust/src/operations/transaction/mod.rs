@@ -16,7 +16,7 @@ mod state;
 #[cfg(test)]
 pub(crate) mod test_utils;
 
-use self::conflict_checker::{CommitConflictError, WinningCommitSummary};
+use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 
@@ -185,14 +185,10 @@ pub(crate) async fn commit(
                 let summary =
                     WinningCommitSummary::try_new(storage, read_snapshot.version(), version)
                         .await?;
-                let read_redicate = operation.read_predicate();
-                let conflict_checker = ConflictChecker::new(
-                    read_snapshot,
-                    summary,
-                    read_redicate,
-                    actions,
-                    Some(&operation),
-                );
+                let transaction_info =
+                    TransactionInfo::try_new(read_snapshot, operation.read_predicate(), actions)?;
+                let conflict_checker =
+                    ConflictChecker::new(transaction_info, summary, Some(&operation));
                 match conflict_checker.check_conflicts() {
                     Ok(_) => {
                         attempt_number += 1;

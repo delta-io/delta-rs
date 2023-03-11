@@ -21,6 +21,8 @@ use crate::{
 use super::state::AddContainer;
 #[cfg(feature = "datafusion")]
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+#[cfg(feature = "datafusion")]
+use datafusion_expr::Expr;
 
 /// Exceptions raised during commit conflict resolution
 #[derive(thiserror::Error, Debug)]
@@ -100,7 +102,11 @@ fn read_whole_table(operation: &DeltaOperation) -> bool {
 pub(crate) struct TransactionInfo<'a> {
     pub(crate) txn_id: String,
     /// partition predicates by which files have been queried by the transaction
+    #[cfg(not(feature = "datafusion"))]
     pub(crate) read_predicates: Option<String>,
+    /// partition predicates by which files have been queried by the transaction
+    #[cfg(feature = "datafusion")]
+    pub(crate) read_predicates: Option<Expr>,
     /// appIds that have been seen by the transaction
     pub(crate) read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
@@ -110,9 +116,28 @@ pub(crate) struct TransactionInfo<'a> {
 }
 
 impl<'a> TransactionInfo<'a> {
-    pub fn new(
-        snapshot: &'a DeltaTableState,
+    #[cfg(feature = "datafusion")]
+    pub fn try_new(
+        read_snapshot: &'a DeltaTableState,
         read_predicates: Option<String>,
+        actions: &'a Vec<Action>,
+    ) -> DeltaResult<Self> {
+        let read_predicates = read_predicates
+            .map(|pred| read_snapshot.parse_predicate_expression(&pred))
+            .transpose()?;
+        Ok(Self {
+            txn_id: "".into(),
+            read_predicates,
+            read_app_ids: Default::default(),
+            actions,
+            read_snapshot,
+        })
+    }
+
+    #[cfg(feature = "datafusion")]
+    pub fn new(
+        read_snapshot: &'a DeltaTableState,
+        read_predicates: Option<Expr>,
         actions: &'a Vec<Action>,
     ) -> Self {
         Self {
@@ -120,8 +145,23 @@ impl<'a> TransactionInfo<'a> {
             read_predicates,
             read_app_ids: Default::default(),
             actions,
-            read_snapshot: snapshot,
+            read_snapshot,
         }
+    }
+
+    #[cfg(not(feature = "datafusion"))]
+    pub fn try_new(
+        read_snapshot: &'a DeltaTableState,
+        read_predicates: Option<String>,
+        actions: &'a Vec<Action>,
+    ) -> DeltaResult<Self> {
+        Ok(Self {
+            txn_id: "".into(),
+            read_predicates,
+            read_app_ids: Default::default(),
+            actions,
+            read_snapshot,
+        })
     }
 
     pub fn metadata(&self) -> Option<&DeltaTableMetaData> {
@@ -139,15 +179,9 @@ impl<'a> TransactionInfo<'a> {
     /// Files read by the transaction
     pub fn read_files(&self) -> Result<impl Iterator<Item = &Add>, CommitConflictError> {
         if let Some(predicate) = &self.read_predicates {
-            let pred = self
-                .read_snapshot
-                .parse_predicate_expression(predicate)
-                .map_err(|err| CommitConflictError::Predicate {
-                    source: Box::new(err),
-                })?;
             Ok(Either::Left(
                 self.read_snapshot
-                    .files_matching_predicate(&[pred])
+                    .files_matching_predicate(&[predicate.clone()])
                     .map_err(|err| CommitConflictError::Predicate {
                         source: Box::new(err),
                     })?,
@@ -318,26 +352,31 @@ pub(crate) struct ConflictChecker<'a> {
 
 impl<'a> ConflictChecker<'a> {
     pub fn new(
-        read_snapshot: &'a DeltaTableState,
+        transaction_info: TransactionInfo<'a>,
         winning_commit_summary: WinningCommitSummary,
-        read_predicates: Option<String>,
-        actions: &'a Vec<Action>,
         operation: Option<&DeltaOperation>,
     ) -> ConflictChecker<'a> {
-        let transaction_info = TransactionInfo::new(read_snapshot, read_predicates, actions);
         let isolation_level = operation
             .and_then(|op| {
                 if can_downgrade_to_snapshot_isolation(
                     &winning_commit_summary.actions,
                     op,
-                    &read_snapshot.table_config().isolation_level(),
+                    &transaction_info
+                        .read_snapshot
+                        .table_config()
+                        .isolation_level(),
                 ) {
                     Some(IsolationLevel::SnapshotIsolation)
                 } else {
                     None
                 }
             })
-            .unwrap_or_else(|| read_snapshot.table_config().isolation_level());
+            .unwrap_or_else(|| {
+                transaction_info
+                    .read_snapshot
+                    .table_config()
+                    .isolation_level()
+            });
 
         Self {
             txn_info: transaction_info,
@@ -427,7 +466,7 @@ impl<'a> ConflictChecker<'a> {
         // to assume all files match
         cfg_if::cfg_if! {
             if #[cfg(feature = "datafusion")] {
-                let added_files_matching_predicates = if let (Some(predicate_str), false) = (
+                let added_files_matching_predicates = if let (Some(predicate), false) = (
                     &self.txn_info.read_predicates,
                     self.txn_info.read_whole_table(),
                 ) {
@@ -436,14 +475,6 @@ impl<'a> ConflictChecker<'a> {
                             source: Box::new(err),
                         }
                     })?;
-                    let predicate = self
-                        .txn_info
-                        .read_snapshot
-                        .parse_predicate_expression(predicate_str)
-                        .map_err(|err| CommitConflictError::Predicate {
-                            source: Box::new(err),
-                        })?;
-                    // TODO remove unwrap
                     let partition_columns = &self
                         .txn_info
                         .read_snapshot
@@ -451,7 +482,7 @@ impl<'a> ConflictChecker<'a> {
                         .ok_or(CommitConflictError::NoMetadata)?
                         .partition_columns;
                     AddContainer::new(&added_files_to_check, partition_columns, arrow_schema)
-                        .predicate_matches(predicate)
+                        .predicate_matches(predicate.clone())
                         .map_err(|err| CommitConflictError::Predicate {
                             source: Box::new(err),
                         })?
@@ -656,17 +687,19 @@ mod tests {
     // - actions
     fn prepare_test(
         setup: Option<Vec<Action>>,
-        reads: Vec<Action>,
+        reads: Option<String>,
         concurrent: Vec<Action>,
-    ) -> (DeltaTableState, WinningCommitSummary) {
+        actions: Vec<Action>,
+    ) -> Result<(), CommitConflictError> {
         let setup_actions = setup.unwrap_or_else(init_table_actions);
-        let mut state = DeltaTableState::from_actions(setup_actions, 0).unwrap();
-        state.merge(DeltaTableState::from_actions(reads, 1).unwrap(), true, true);
+        let state = DeltaTableState::from_actions(setup_actions, 0).unwrap();
+        let transaction_info = TransactionInfo::try_new(&state, reads, &actions).unwrap();
         let summary = WinningCommitSummary {
             actions: concurrent,
             commit_info: None,
         };
-        (state, summary)
+        let checker = ConflictChecker::new(transaction_info, summary, None);
+        checker.check_conflicts()
     }
 
     #[tokio::test]
@@ -676,12 +709,7 @@ mod tests {
         // append file to table while a concurrent writer also appends a file
         let file1 = tu::create_add_action("file1", true, get_stats(1, 10));
         let file2 = tu::create_add_action("file2", true, get_stats(1, 10));
-
-        let (state, summary) = prepare_test(None, vec![], vec![file1]);
-        let actions = vec![file2];
-        let checker = ConflictChecker::new(&state, summary, None, &actions, None);
-
-        let result = checker.check_conflicts();
+        let result = prepare_test(None, None, vec![file1], vec![file2]);
         assert!(result.is_ok());
 
         // disjoint delete - read
@@ -696,12 +724,9 @@ mod tests {
         // delete - delete
         // remove file from table that has previously been removed
         let removed_file = tu::create_remove_action("removed_file", true);
-        let (state, summary) = prepare_test(None, vec![], vec![removed_file.clone()]);
-        let actions = vec![removed_file];
-        let checker = ConflictChecker::new(&state, summary, None, &actions, None);
-
+        let result = prepare_test(None, None, vec![removed_file.clone()], vec![removed_file]);
         assert!(matches!(
-            checker.check_conflicts(),
+            result,
             Err(CommitConflictError::ConcurrentDeleteDelete)
         ));
     }
