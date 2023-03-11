@@ -56,8 +56,8 @@ use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
 use crate::builder::ensure_table_uri;
+use crate::schema;
 use crate::{action, open_table, open_table_with_storage_options, SchemaDataType};
-use crate::{schema, DeltaTableBuilder};
 use crate::{DeltaResult, Invariant};
 use crate::{DeltaTable, DeltaTableError};
 
@@ -450,7 +450,10 @@ impl TableProvider for DeltaTable {
             )
             .await?;
 
-        Ok(Arc::new(DeltaScan { parquet_scan }))
+        Ok(Arc::new(DeltaScan {
+            table_uri: ensure_table_uri(self.table_uri())?.as_str().into(),
+            parquet_scan,
+        }))
     }
 
     fn supports_filter_pushdown(
@@ -469,6 +472,8 @@ impl TableProvider for DeltaTable {
 /// A wrapper for parquet scans
 #[derive(Debug)]
 pub struct DeltaScan {
+    /// The URL of the ObjectStore root
+    pub table_uri: String,
     /// The parquet scan to wrap
     pub parquet_scan: Arc<dyn ExecutionPlan>,
 }
@@ -843,11 +848,14 @@ pub struct DeltaPhysicalCodec {}
 impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     fn try_decode(
         &self,
-        _buf: &[u8],
+        buf: &[u8],
         inputs: &[Arc<dyn ExecutionPlan>],
         _registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
+        let table_uri: String = serde_json::from_reader(buf)
+            .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
         let delta_scan = DeltaScan {
+            table_uri,
             parquet_scan: (*inputs)[0].clone(),
         };
         Ok(Arc::new(delta_scan))
@@ -856,11 +864,14 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
     fn try_encode(
         &self,
         node: Arc<dyn ExecutionPlan>,
-        _buf: &mut Vec<u8>,
+        buf: &mut Vec<u8>,
     ) -> Result<(), DataFusionError> {
-        node.as_any()
+        let delta_scan = node
+            .as_any()
             .downcast_ref::<DeltaScan>()
             .ok_or_else(|| DataFusionError::Internal("Not a delta scan!".to_string()))?;
+        serde_json::to_writer(buf, delta_scan.table_uri.as_str())
+            .map_err(|_| DataFusionError::Internal("Unable to encode delta scan!".to_string()))?;
         Ok(())
     }
 }
@@ -1197,6 +1208,7 @@ mod tests {
             Field::new("b", DataType::Int32, false),
         ]));
         let exec_plan = Arc::from(DeltaScan {
+            table_uri: "s3://my_bucket/this/is/some/path".to_string(),
             parquet_scan: Arc::from(EmptyExec::new(false, schema)),
         });
         let proto: protobuf::PhysicalPlanNode =

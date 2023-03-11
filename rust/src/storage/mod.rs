@@ -125,7 +125,7 @@ impl DeltaObjectStore {
     /// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
     /// host we convert the location from this `DeltaObjectStore` to a valid name, combining the
     /// original scheme, host and path with invalid characters replaced.
-    pub(crate) fn object_store_url(&self) -> ObjectStoreUrl {
+    pub fn object_store_url(&self) -> ObjectStoreUrl {
         // we are certain, that the URL can be parsed, since
         // we make sure when we are parsing the table uri
         ObjectStoreUrl::parse(format!(
