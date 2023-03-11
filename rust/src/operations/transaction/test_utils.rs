@@ -29,11 +29,18 @@ pub fn create_remove_action(path: impl Into<String>, data_change: bool) -> Actio
     })
 }
 
-pub fn init_table_actions() -> Vec<Action> {
+pub fn create_protocol_action(max_reader: Option<i32>, max_writer: Option<i32>) -> Action {
     let protocol = Protocol {
-        min_reader_version: crate::operations::MAX_SUPPORTED_READER_VERSION,
-        min_writer_version: crate::operations::MAX_SUPPORTED_WRITER_VERSION,
+        min_reader_version: max_reader.unwrap_or(crate::operations::MAX_SUPPORTED_READER_VERSION),
+        min_writer_version: max_writer.unwrap_or(crate::operations::MAX_SUPPORTED_WRITER_VERSION),
     };
+    Action::protocol(protocol)
+}
+
+pub fn create_metadata_action(
+    parttiton_columns: Option<Vec<String>>,
+    configuration: Option<HashMap<String, Option<String>>>,
+) -> Action {
     let table_schema = Schema::new(vec![
         SchemaField::new(
             "id".to_string(),
@@ -54,7 +61,18 @@ pub fn init_table_actions() -> Vec<Action> {
             HashMap::new(),
         ),
     ]);
-    let metadata = DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
+    let metadata = DeltaTableMetaData::new(
+        None,
+        None,
+        None,
+        table_schema,
+        parttiton_columns.unwrap_or_default(),
+        configuration.unwrap_or_default(),
+    );
+    Action::metaData(MetaData::try_from(metadata).unwrap())
+}
+
+pub fn init_table_actions() -> Vec<Action> {
     let raw = r#"
         {
             "timestamp": 1670892998177,
@@ -75,11 +93,10 @@ pub fn init_table_actions() -> Vec<Action> {
         }"#;
 
     let commit_info = serde_json::from_str::<CommitInfo>(raw).unwrap();
-
     vec![
         Action::commitInfo(commit_info),
-        Action::protocol(protocol),
-        Action::metaData(MetaData::try_from(metadata).unwrap()),
+        create_protocol_action(None, None),
+        create_metadata_action(None, None),
     ]
 }
 

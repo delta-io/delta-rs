@@ -103,16 +103,18 @@ pub(crate) struct TransactionInfo<'a> {
     pub(crate) txn_id: String,
     /// partition predicates by which files have been queried by the transaction
     #[cfg(not(feature = "datafusion"))]
-    pub(crate) read_predicates: Option<String>,
+    read_predicates: Option<String>,
     /// partition predicates by which files have been queried by the transaction
     #[cfg(feature = "datafusion")]
-    pub(crate) read_predicates: Option<Expr>,
+    read_predicates: Option<Expr>,
     /// appIds that have been seen by the transaction
     pub(crate) read_app_ids: HashSet<String>,
     /// delta log actions that the transaction wants to commit
-    pub(crate) actions: &'a Vec<Action>,
+    actions: &'a Vec<Action>,
     /// read [`DeltaTableState`] used for the transaction
     pub(crate) read_snapshot: &'a DeltaTableState,
+    /// Whether the transaction tainted the whole table
+    read_whole_table: bool,
 }
 
 impl<'a> TransactionInfo<'a> {
@@ -121,6 +123,7 @@ impl<'a> TransactionInfo<'a> {
         read_snapshot: &'a DeltaTableState,
         read_predicates: Option<String>,
         actions: &'a Vec<Action>,
+        read_whole_table: bool,
     ) -> DeltaResult<Self> {
         let read_predicates = read_predicates
             .map(|pred| read_snapshot.parse_predicate_expression(pred))
@@ -131,6 +134,7 @@ impl<'a> TransactionInfo<'a> {
             read_app_ids: Default::default(),
             actions,
             read_snapshot,
+            read_whole_table,
         })
     }
 
@@ -139,6 +143,7 @@ impl<'a> TransactionInfo<'a> {
         read_snapshot: &'a DeltaTableState,
         read_predicates: Option<Expr>,
         actions: &'a Vec<Action>,
+        read_whole_table: bool,
     ) -> Self {
         Self {
             txn_id: "".into(),
@@ -146,6 +151,7 @@ impl<'a> TransactionInfo<'a> {
             read_app_ids: Default::default(),
             actions,
             read_snapshot,
+            read_whole_table,
         }
     }
 
@@ -154,6 +160,7 @@ impl<'a> TransactionInfo<'a> {
         read_snapshot: &'a DeltaTableState,
         read_predicates: Option<String>,
         actions: &'a Vec<Action>,
+        read_whole_table: bool,
     ) -> DeltaResult<Self> {
         Ok(Self {
             txn_id: "".into(),
@@ -161,6 +168,7 @@ impl<'a> TransactionInfo<'a> {
             read_app_ids: Default::default(),
             actions,
             read_snapshot,
+            read_whole_table,
         })
     }
 
@@ -187,7 +195,7 @@ impl<'a> TransactionInfo<'a> {
                     })?,
             ))
         } else {
-            Ok(Either::Right(self.read_snapshot.files().iter()))
+            Ok(Either::Right(std::iter::empty()))
         }
     }
 
@@ -199,9 +207,7 @@ impl<'a> TransactionInfo<'a> {
 
     /// Whether the whole table was read during the transaction
     pub fn read_whole_table(&self) -> bool {
-        // TODO actually check
-        // self.read_predicates.is_none()
-        false
+        self.read_whole_table
     }
 }
 
@@ -689,15 +695,16 @@ mod tests {
     // - concurrentWrites
     // - actions
     #[cfg(feature = "datafusion")]
-    fn prepare_test(
+    fn execute_test(
         setup: Option<Vec<Action>>,
         reads: Option<Expr>,
         concurrent: Vec<Action>,
         actions: Vec<Action>,
+        read_whole_table: bool,
     ) -> Result<(), CommitConflictError> {
         let setup_actions = setup.unwrap_or_else(init_table_actions);
         let state = DeltaTableState::from_actions(setup_actions, 0).unwrap();
-        let transaction_info = TransactionInfo::new(&state, reads, &actions);
+        let transaction_info = TransactionInfo::new(&state, reads, &actions, read_whole_table);
         let summary = WinningCommitSummary {
             actions: concurrent,
             commit_info: None,
@@ -714,23 +721,41 @@ mod tests {
         // append file to table while a concurrent writer also appends a file
         let file1 = tu::create_add_action("file1", true, get_stats(1, 10));
         let file2 = tu::create_add_action("file2", true, get_stats(1, 10));
-        let result = prepare_test(None, None, vec![file1], vec![file2]);
+        let result = execute_test(None, None, vec![file1], vec![file2], false);
         assert!(result.is_ok());
 
         // disjoint delete - read
         // the concurrent transaction deletes a file that the current transaction did NOT read
-        let file1 = tu::create_add_action("file1", true, get_stats(1, 10));
-        let file2 = tu::create_add_action("file2", true, get_stats(100, 10000));
+        let file_not_read = tu::create_add_action("file_not_read", true, get_stats(1, 10));
+        let file_read = tu::create_add_action("file_read", true, get_stats(100, 10000));
         let mut setup_actions = init_table_actions();
-        setup_actions.push(file1);
-        setup_actions.push(file2);
-        let result = prepare_test(
+        setup_actions.push(file_not_read);
+        setup_actions.push(file_read);
+        let result = execute_test(
             Some(setup_actions),
             Some(col("value").gt(lit::<i32>(10))),
-            vec![tu::create_remove_action("file1", true)],
+            vec![tu::create_remove_action("file_not_read", true)],
             vec![],
+            false,
         );
         assert!(result.is_ok());
+
+        // disjoint add - read
+        // concurrently add file, that the current transaction would not have read
+        let file_added = tu::create_add_action("file_added", true, get_stats(1, 10));
+        let file_read = tu::create_add_action("file_read", true, get_stats(100, 10000));
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_read);
+        let result = execute_test(
+            Some(setup_actions),
+            Some(col("value").gt(lit::<i32>(10))),
+            vec![file_added],
+            vec![],
+            false,
+        );
+        assert!(result.is_ok());
+
+        // TODO add / read + no write
 
         // TODO disjoint transactions
     }
@@ -742,10 +767,110 @@ mod tests {
         // delete - delete
         // remove file from table that has previously been removed
         let removed_file = tu::create_remove_action("removed_file", true);
-        let result = prepare_test(None, None, vec![removed_file.clone()], vec![removed_file]);
+        let result = execute_test(
+            None,
+            None,
+            vec![removed_file.clone()],
+            vec![removed_file],
+            false,
+        );
         assert!(matches!(
             result,
             Err(CommitConflictError::ConcurrentDeleteDelete)
         ));
+
+        // add / read + write
+        // a file is concurrently added that should have been read by the current transaction
+        let file_added = tu::create_add_action("file_added", true, get_stats(1, 10));
+        let file_should_have_read =
+            tu::create_add_action("file_should_have_read", true, get_stats(1, 10));
+        let result = execute_test(
+            None,
+            Some(col("value").lt_eq(lit::<i32>(10))),
+            vec![file_should_have_read],
+            vec![file_added],
+            false,
+        );
+        assert!(matches!(result, Err(CommitConflictError::ConcurrentAppend)));
+
+        // delete / read
+        // transaction reads a file that is removed by concurrent transaction
+        let file_read = tu::create_add_action("file_read", true, get_stats(1, 10));
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_read);
+        let result = execute_test(
+            Some(setup_actions),
+            Some(col("value").lt_eq(lit::<i32>(10))),
+            vec![tu::create_remove_action("file_read", true)],
+            vec![],
+            false,
+        );
+        assert!(matches!(
+            result,
+            Err(CommitConflictError::ConcurrentDeleteRead)
+        ));
+
+        // schema change
+        // concurrent transactions changes table metadata
+        let result = execute_test(
+            None,
+            None,
+            vec![tu::create_metadata_action(None, None)],
+            vec![],
+            false,
+        );
+        assert!(matches!(result, Err(CommitConflictError::MetadataChanged)));
+
+        // upgrade / upgrade
+        // current and concurrent transactions chnage the protocol version
+        let result = execute_test(
+            None,
+            None,
+            vec![tu::create_protocol_action(None, None)],
+            vec![tu::create_protocol_action(None, None)],
+            false,
+        );
+        assert!(matches!(result, Err(CommitConflictError::ProtocolChanged)));
+
+        // taint whole table
+        // `read_whole_table` should disallow any concurrent change, even if the change
+        // is disjoint with the earlier filter
+        let file_part1 = tu::create_add_action("file_part1", true, get_stats(1, 10));
+        let file_part2 = tu::create_add_action("file_part2", true, get_stats(11, 100));
+        let file_part3 = tu::create_add_action("file_part3", true, get_stats(101, 1000));
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_part1);
+        let result = execute_test(
+            Some(setup_actions),
+            // filter matches neither exisiting nor added files
+            Some(col("value").lt(lit::<i32>(0))),
+            vec![file_part2],
+            vec![file_part3],
+            true,
+        );
+        assert!(matches!(result, Err(CommitConflictError::ConcurrentAppend)));
+
+        // taint whole table + concurrent remove
+        // `read_whole_table` should disallow any concurrent remove actions
+        let file_part1 = tu::create_add_action("file_part1", true, get_stats(1, 10));
+        let file_part2 = tu::create_add_action("file_part2", true, get_stats(11, 100));
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file_part1);
+        let result = execute_test(
+            Some(setup_actions),
+            None,
+            vec![tu::create_remove_action("file_part1", true)],
+            vec![file_part2],
+            true,
+        );
+        println!("result: {:?}", result);
+        assert!(matches!(
+            result,
+            Err(CommitConflictError::ConcurrentDeleteRead)
+        ));
+
+        // TODO "add in part=2 / read from part=1,2 and write to part=1"
+
+        // TODO conflicting txns
     }
 }

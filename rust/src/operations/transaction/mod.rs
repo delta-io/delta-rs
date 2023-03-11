@@ -185,8 +185,13 @@ pub(crate) async fn commit(
                 let summary =
                     WinningCommitSummary::try_new(storage, read_snapshot.version(), version)
                         .await?;
-                let transaction_info =
-                    TransactionInfo::try_new(read_snapshot, operation.read_predicate(), actions)?;
+                let transaction_info = TransactionInfo::try_new(
+                    read_snapshot,
+                    operation.read_predicate(),
+                    actions,
+                    // TODO allow tainting whole table
+                    false,
+                )?;
                 let conflict_checker =
                     ConflictChecker::new(transaction_info, summary, Some(&operation));
                 match conflict_checker.check_conflicts() {
