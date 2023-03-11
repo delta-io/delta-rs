@@ -1,3 +1,4 @@
+#![allow(unused)]
 use super::{prepare_commit, try_commit_transaction, CommitInfo};
 use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove, SaveMode};
 use crate::table_state::DeltaTableState;

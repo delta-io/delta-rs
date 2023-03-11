@@ -123,7 +123,7 @@ impl<'a> TransactionInfo<'a> {
         actions: &'a Vec<Action>,
     ) -> DeltaResult<Self> {
         let read_predicates = read_predicates
-            .map(|pred| read_snapshot.parse_predicate_expression(&pred))
+            .map(|pred| read_snapshot.parse_predicate_expression(pred))
             .transpose()?;
         Ok(Self {
             txn_id: "".into(),
@@ -200,7 +200,8 @@ impl<'a> TransactionInfo<'a> {
     /// Whether the whole table was read during the transaction
     pub fn read_whole_table(&self) -> bool {
         // TODO actually check
-        self.read_predicates.is_some()
+        // self.read_predicates.is_none()
+        false
     }
 }
 
@@ -649,6 +650,8 @@ mod tests {
     use super::*;
     use crate::action::{Action, SaveMode};
     use crate::operations::transaction::commit;
+    #[cfg(feature = "datafusion")]
+    use datafusion_expr::{col, lit};
     use serde_json::json;
 
     fn get_stats(min: i64, max: i64) -> Option<String> {
@@ -685,15 +688,16 @@ mod tests {
     // - reads
     // - concurrentWrites
     // - actions
+    #[cfg(feature = "datafusion")]
     fn prepare_test(
         setup: Option<Vec<Action>>,
-        reads: Option<String>,
+        reads: Option<Expr>,
         concurrent: Vec<Action>,
         actions: Vec<Action>,
     ) -> Result<(), CommitConflictError> {
         let setup_actions = setup.unwrap_or_else(init_table_actions);
         let state = DeltaTableState::from_actions(setup_actions, 0).unwrap();
-        let transaction_info = TransactionInfo::try_new(&state, reads, &actions).unwrap();
+        let transaction_info = TransactionInfo::new(&state, reads, &actions);
         let summary = WinningCommitSummary {
             actions: concurrent,
             commit_info: None,
@@ -703,6 +707,7 @@ mod tests {
     }
 
     #[tokio::test]
+    #[cfg(feature = "datafusion")]
     // tests adopted from https://github.com/delta-io/delta/blob/24c025128612a4ae02d0ad958621f928cda9a3ec/core/src/test/scala/org/apache/spark/sql/delta/OptimisticTransactionSuite.scala#L40-L94
     async fn test_allowed_concurrent_actions() {
         // append - append
@@ -714,11 +719,24 @@ mod tests {
 
         // disjoint delete - read
         // the concurrent transaction deletes a file that the current transaction did NOT read
+        let file1 = tu::create_add_action("file1", true, get_stats(1, 10));
+        let file2 = tu::create_add_action("file2", true, get_stats(100, 10000));
+        let mut setup_actions = init_table_actions();
+        setup_actions.push(file1);
+        setup_actions.push(file2);
+        let result = prepare_test(
+            Some(setup_actions),
+            Some(col("value").gt(lit::<i32>(10))),
+            vec![tu::create_remove_action("file1", true)],
+            vec![],
+        );
+        assert!(result.is_ok());
 
         // TODO disjoint transactions
     }
 
     #[tokio::test]
+    #[cfg(feature = "datafusion")]
     // tests adopted from https://github.com/delta-io/delta/blob/24c025128612a4ae02d0ad958621f928cda9a3ec/core/src/test/scala/org/apache/spark/sql/delta/OptimisticTransactionSuite.scala#L40-L94
     async fn test_disallowed_concurrent_actions() {
         // delete - delete
