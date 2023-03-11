@@ -701,8 +701,7 @@ mod tests {
         concurrent: Vec<Action>,
         actions: Vec<Action>,
         read_whole_table: bool,
-        expected: Result<(), CommitConflictError>,
-    ) {
+    ) -> Result<(), CommitConflictError> {
         let setup_actions = setup.unwrap_or_else(init_table_actions);
         let state = DeltaTableState::from_actions(setup_actions, 0).unwrap();
         let transaction_info = TransactionInfo::new(&state, reads, &actions, read_whole_table);
@@ -711,8 +710,7 @@ mod tests {
             commit_info: None,
         };
         let checker = ConflictChecker::new(transaction_info, summary, None);
-        let result = checker.check_conflicts();
-        assert!(matches!(result, expected));
+        checker.check_conflicts()
     }
 
     #[tokio::test]
@@ -723,7 +721,8 @@ mod tests {
         // append file to table while a concurrent writer also appends a file
         let file1 = tu::create_add_action("file1", true, get_stats(1, 10));
         let file2 = tu::create_add_action("file2", true, get_stats(1, 10));
-        let result = execute_test(None, None, vec![file1], vec![file2], false, Ok(()));
+        let result = execute_test(None, None, vec![file1], vec![file2], false);
+        assert!(result.is_ok());
 
         // disjoint delete - read
         // the concurrent transaction deletes a file that the current transaction did NOT read
@@ -738,8 +737,8 @@ mod tests {
             vec![tu::create_remove_action("file_not_read", true)],
             vec![],
             false,
-            Ok(()),
         );
+        assert!(result.is_ok());
 
         // disjoint add - read
         // concurrently add file, that the current transaction would not have read
@@ -753,10 +752,22 @@ mod tests {
             vec![file_added],
             vec![],
             false,
-            Ok(()),
         );
+        assert!(result.is_ok());
 
-        // TODO add / read + no write
+        // TODO enable test once we have isolation level downcast
+        // add / read + no write
+        // transaction would have read file added by concurrent txn, but does not write data,
+        // so no real conflicting change even though data was added
+        // let file_added = tu::create_add_action("file_added", true, get_stats(1, 10));
+        // let result = execute_test(
+        //     None,
+        //     Some(col("value").gt(lit::<i32>(5))),
+        //     vec![file_added],
+        //     vec![],
+        //     false,
+        // );
+        // assert!(result.is_ok());
 
         // TODO disjoint transactions
     }
@@ -774,8 +785,11 @@ mod tests {
             vec![removed_file.clone()],
             vec![removed_file],
             false,
-            Err(CommitConflictError::ConcurrentDeleteDelete),
         );
+        assert!(matches!(
+            result,
+            Err(CommitConflictError::ConcurrentDeleteDelete)
+        ));
 
         // add / read + write
         // a file is concurrently added that should have been read by the current transaction
@@ -788,8 +802,8 @@ mod tests {
             vec![file_should_have_read],
             vec![file_added],
             false,
-            Err(CommitConflictError::ConcurrentAppend),
         );
+        assert!(matches!(result, Err(CommitConflictError::ConcurrentAppend)));
 
         // delete / read
         // transaction reads a file that is removed by concurrent transaction
@@ -802,8 +816,11 @@ mod tests {
             vec![tu::create_remove_action("file_read", true)],
             vec![],
             false,
-            Err(CommitConflictError::ConcurrentDeleteRead),
         );
+        assert!(matches!(
+            result,
+            Err(CommitConflictError::ConcurrentDeleteRead)
+        ));
 
         // schema change
         // concurrent transactions changes table metadata
@@ -813,8 +830,8 @@ mod tests {
             vec![tu::create_metadata_action(None, None)],
             vec![],
             false,
-            Err(CommitConflictError::MetadataChanged),
         );
+        assert!(matches!(result, Err(CommitConflictError::MetadataChanged)));
 
         // upgrade / upgrade
         // current and concurrent transactions chnage the protocol version
@@ -824,8 +841,8 @@ mod tests {
             vec![tu::create_protocol_action(None, None)],
             vec![tu::create_protocol_action(None, None)],
             false,
-            Err(CommitConflictError::ProtocolChanged),
         );
+        assert!(matches!(result, Err(CommitConflictError::ProtocolChanged)));
 
         // taint whole table
         // `read_whole_table` should disallow any concurrent change, even if the change
@@ -842,8 +859,8 @@ mod tests {
             vec![file_part2],
             vec![file_part3],
             true,
-            Err(CommitConflictError::ConcurrentAppend),
         );
+        assert!(matches!(result, Err(CommitConflictError::ConcurrentAppend)));
 
         // taint whole table + concurrent remove
         // `read_whole_table` should disallow any concurrent remove actions
@@ -857,8 +874,11 @@ mod tests {
             vec![tu::create_remove_action("file_part1", true)],
             vec![file_part2],
             true,
-            Err(CommitConflictError::ConcurrentDeleteRead),
         );
+        assert!(matches!(
+            result,
+            Err(CommitConflictError::ConcurrentDeleteRead)
+        ));
 
         // TODO "add in part=2 / read from part=1,2 and write to part=1"
 
