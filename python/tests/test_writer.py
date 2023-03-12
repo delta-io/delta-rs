@@ -782,7 +782,7 @@ def test_partition_overwrite_with_wrong_partition(
     with pytest.raises(
         ValueError,
         match="Data should be aligned with partitioning. "
-        "Data contained values for partition {'p1': '1', 'p2': '2'}",
+        "Data contained values for partition p1=1 p2=2",
     ):
         write_deltalake(
             tmp_path,

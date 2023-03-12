@@ -240,35 +240,34 @@ def write_deltalake(
             allowed_partitions: FrozenSet[
                 FrozenSet[Tuple[str, Optional[str]]]
             ] = table._table.get_active_partitions(partition_filters)
-            for column_name in batch.schema.names:
-                partition_values = pa.RecordBatch.from_arrays(
-                    [
-                        batch.column(column_name)
-                        for column_name in table.metadata().partition_columns
-                    ],
-                    table.metadata().partition_columns,
-                )
-                partition_values = batch_distinct(partition_values)
-                for i in range(partition_values.num_rows):
-                    partition = frozenset(
-                        {
-                            (
-                                column_name,
-                                __encode_partition_value(
-                                    batch.column(column_name)[i].as_py()
-                                ),
-                            )
-                            for column_name in table.metadata().partition_columns
-                        }
+            partition_values = pa.RecordBatch.from_arrays(
+                [
+                    batch.column(column_name)
+                    for column_name in table.metadata().partition_columns
+                ],
+                table.metadata().partition_columns,
+            )
+            partition_values = batch_distinct(partition_values)
+            for i in range(partition_values.num_rows):
+                # Map will maintain order of partition_columns
+                partition_map = {
+                    column_name: __encode_partition_value(
+                        batch.column(column_name)[i].as_py()
                     )
-                    if (
-                        partition not in allowed_partitions
-                        and partition in existed_partitions
-                    ):
-                        raise ValueError(
-                            f"Data should be aligned with partitioning. "
-                            f"Data contained values for partition {dict(partition)}"
-                        )
+                    for column_name in table.metadata().partition_columns
+                }
+                partition = frozenset(partition_map.items())
+                if (
+                    partition not in allowed_partitions
+                    and partition in existed_partitions
+                ):
+                    partition_repr = " ".join(
+                        f"{key}={value}" for key, value in partition_map.items()
+                    )
+                    raise ValueError(
+                        f"Data should be aligned with partitioning. "
+                        f"Data contained values for partition {partition_repr}"
+                    )
 
         def validate_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
             checker.check_batch(batch)
