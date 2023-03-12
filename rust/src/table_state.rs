@@ -368,14 +368,14 @@ impl DeltaTableState {
         filters: &'a [PartitionFilter<'a, &'a str>],
     ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
         let current_metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
-        if !filters
-            .iter()
-            .all(|f| current_metadata.partition_columns.contains(&f.key.into()))
-        {
-            return Err(DeltaTableError::InvalidPartitionFilter {
-                partition_filter: format!("{filters:?}"),
-            });
-        }
+
+        for f in filters {
+            if !current_metadata.partition_columns.contains(&f.key.into()) {
+                return Err(DeltaTableError::ColumnNotPartitioned {
+                    column: f.key.to_string()
+                })
+            }
+        };
 
         let partition_col_data_types: HashMap<&str, &SchemaDataType> = current_metadata
             .get_partition_col_data_types()
