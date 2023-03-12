@@ -625,6 +625,35 @@ def test_partition_overwrite(
         == expected_data
     )
 
+    # Overwrite a single partition
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1"], pa.string()),
+            "p2": pa.array([value_1], value_type),
+            "val": pa.array([5], pa.int64()),
+        }
+    )
+    expected_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([value_1, value_2, value_1, value_2], value_type),
+            "val": pa.array([5, 3, 1, 3], pa.int64()),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        sample_data,
+        mode="overwrite",
+        partition_filters=[("p1", "=", "1"), ("p2", "=", filter_string)],
+    )
+    delta_table.update_incremental()
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == expected_data
+    )
+
     with pytest.raises(ValueError, match="Data should be aligned with partitioning"):
         write_deltalake(
             tmp_path,
@@ -750,7 +779,11 @@ def test_partition_overwrite_with_wrong_partition(
         }
     )
 
-    with pytest.raises(ValueError, match="Data should be aligned with partitioning"):
+    with pytest.raises(
+        ValueError,
+        match="Data should be aligned with partitioning. "
+        "Data contained values for partition {'p1': '1', 'p2': '2'}",
+    ):
         write_deltalake(
             tmp_path,
             new_data,

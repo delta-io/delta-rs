@@ -8,6 +8,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
+    FrozenSet,
     Iterable,
     Iterator,
     List,
@@ -37,7 +38,7 @@ from pyarrow.lib import RecordBatchReader
 from deltalake.schema import delta_arrow_schema_from_pandas
 
 from ._internal import DeltaDataChecker as _DeltaDataChecker
-from ._internal import PyDeltaTableError
+from ._internal import PyDeltaTableError, batch_distinct
 from ._internal import write_new_deltalake as _write_new_deltalake
 from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable, DeltaTableProtocolError
 
@@ -233,23 +234,41 @@ def write_deltalake(
         ) -> None:
             if table is None:
                 return
-            existed_partitions = table._table.get_active_partitions()
-            allowed_partitions = table._table.get_active_partitions(partition_filters)
-            for column_index, column_name in enumerate(batch.schema.names):
-                if column_name in table.metadata().partition_columns:
-                    for value in batch.column(column_index).unique():
-                        partition = (
-                            column_name,
-                            __encode_partition_value(value.as_py()),
-                        )
-                        if (
-                            partition not in allowed_partitions
-                            and partition in existed_partitions
-                        ):
-                            raise ValueError(
-                                f"Data should be aligned with partitioning. "
-                                f"Partition '{column_name}'='{value}' should be filtered out from data."
+            existed_partitions: FrozenSet[
+                FrozenSet[Tuple[str, Optional[str]]]
+            ] = table._table.get_active_partitions()
+            allowed_partitions: FrozenSet[
+                FrozenSet[Tuple[str, Optional[str]]]
+            ] = table._table.get_active_partitions(partition_filters)
+            for column_name in batch.schema.names:
+                partition_values = pa.RecordBatch.from_arrays(
+                    [
+                        batch.column(column_name)
+                        for column_name in table.metadata().partition_columns
+                    ],
+                    table.metadata().partition_columns,
+                )
+                partition_values = batch_distinct(partition_values)
+                for i in range(partition_values.num_rows):
+                    partition = frozenset(
+                        {
+                            (
+                                column_name,
+                                __encode_partition_value(
+                                    batch.column(column_name)[i].as_py()
+                                ),
                             )
+                            for column_name in table.metadata().partition_columns
+                        }
+                    )
+                    if (
+                        partition not in allowed_partitions
+                        and partition in existed_partitions
+                    ):
+                        raise ValueError(
+                            f"Data should be aligned with partitioning. "
+                            f"Data contained values for partition {dict(partition)}"
+                        )
 
         def validate_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
             checker.check_batch(batch)
@@ -470,12 +489,12 @@ def get_file_stats_from_metadata(
 
 def __encode_partition_value(val: Any) -> str:
     # Rules based on: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
+    if isinstance(val, bool):
+        return str(val).lower()
     if isinstance(val, str):
         return val
     elif isinstance(val, (int, float)):
         return str(val)
-    elif isinstance(val, bool):
-        return str(val).lower()
     elif isinstance(val, date):
         return val.isoformat()
     elif isinstance(val, datetime):
