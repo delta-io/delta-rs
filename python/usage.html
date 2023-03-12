@@ -27,14 +27,18 @@
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-            <a href="index.html" class="icon icon-home"> delta-rs
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            delta-rs
           </a>
               <div class="version">
-                0.7.0
+                0.8.0
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
-    <input type="text" name="q" placeholder="Search docs" />
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
     <input type="hidden" name="check_keywords" value="yes" />
     <input type="hidden" name="area" value="default" />
   </form>
@@ -52,6 +56,7 @@
 <li class="toctree-l3"><a class="reference internal" href="#metadata">Metadata</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#schema">Schema</a></li>
 <li class="toctree-l3"><a class="reference internal" href="#history">History</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#current-add-actions">Current Add Actions</a></li>
 </ul>
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#querying-delta-tables">Querying Delta Tables</a></li>
@@ -60,7 +65,10 @@
 <li class="toctree-l3"><a class="reference internal" href="#optimizing-tables">Optimizing tables</a></li>
 </ul>
 </li>
-<li class="toctree-l2"><a class="reference internal" href="#writing-delta-tables">Writing Delta Tables</a></li>
+<li class="toctree-l2"><a class="reference internal" href="#writing-delta-tables">Writing Delta Tables</a><ul>
+<li class="toctree-l3"><a class="reference internal" href="#overwriting-a-partition">Overwriting a partition</a></li>
+</ul>
+</li>
 </ul>
 </li>
 <li class="toctree-l1"><a class="reference internal" href="api_reference.html">API Reference</a></li>
@@ -79,7 +87,7 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="index.html" class="icon icon-home"></a></li>
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
       <li class="breadcrumb-item active">Usage</li>
       <li class="wy-breadcrumbs-aside">
               <a href="https://github.com/delta-io/delta-rs/blob/main/python/docs/source/usage.rst" class="fa fa-github"> Edit on GitHub</a>
@@ -158,9 +166,9 @@ database and table name. Currently only AWS Glue is supported.</p>
 <p>While delta always needs its internal storage backend to work and be properly configured, in order to manage the delta log,
 it may sometime be advantageous - and is common practice in the arrow world - to customize the storage interface used for
 reading the bulk data.</p>
-<p><code class="docutils literal notranslate"><span class="pre">deltalake</span></code> will work with any storage compliant with <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v10.0.1)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.FileSystem</span></code></a>, however the root of the filesystem has
+<p><code class="docutils literal notranslate"><span class="pre">deltalake</span></code> will work with any storage compliant with <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v11.0.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.FileSystem</span></code></a>, however the root of the filesystem has
 to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into
-a <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.SubTreeFileSystem.html#pyarrow.fs.SubTreeFileSystem" title="(in Apache Arrow v10.0.1)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.SubTreeFileSystem</span></code></a>.</p>
+a <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.SubTreeFileSystem.html#pyarrow.fs.SubTreeFileSystem" title="(in Apache Arrow v11.0.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.SubTreeFileSystem</span></code></a>.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pyarrow.fs</span> <span class="k">as</span> <span class="nn">fs</span>
 <span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 
@@ -273,6 +281,29 @@ different schemas to encode the actions. For Spark’s format, see:
 <span class="go"> {&#39;timestamp&#39;: 1587968604143, &#39;operation&#39;: &#39;WRITE&#39;, &#39;operationParameters&#39;: {&#39;mode&#39;: &#39;Overwrite&#39;, &#39;partitionBy&#39;: &#39;[]&#39;}, &#39;readVersion&#39;: 1, &#39;isBlindAppend&#39;: False},</span>
 <span class="go"> {&#39;timestamp&#39;: 1587968596254, &#39;operation&#39;: &#39;MERGE&#39;, &#39;operationParameters&#39;: {&#39;predicate&#39;: &#39;(oldData.`id` = newData.`id`)&#39;}, &#39;readVersion&#39;: 0, &#39;isBlindAppend&#39;: False},</span>
 <span class="go"> {&#39;timestamp&#39;: 1587968586154, &#39;operation&#39;: &#39;WRITE&#39;, &#39;operationParameters&#39;: {&#39;mode&#39;: &#39;ErrorIfExists&#39;, &#39;partitionBy&#39;: &#39;[]&#39;}, &#39;isBlindAppend&#39;: True}]</span>
+</pre></div>
+</div>
+</section>
+<section id="current-add-actions">
+<h3>Current Add Actions<a class="headerlink" href="#current-add-actions" title="Permalink to this headline"></a></h3>
+<p>The active state for a delta table is determined by the Add actions, which
+provide the list of files that are part of the table and metadata about them,
+such as creation time, size, and statistics. You can get a data frame of
+the add actions data using <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.get_add_actions" title="deltalake.table.DeltaTable.get_add_actions"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.get_add_actions()</span></code></a>:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.8.0&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">get_add_actions</span><span class="p">(</span><span class="n">flatten</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="go">                                                    path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value</span>
+<span class="go">0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2</span>
+<span class="go">1  part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe...         440 2021-03-06 15:16:16         True            2                 0          2          4</span>
+</pre></div>
+</div>
+<p>This works even with past versions of the table:</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/delta-0.8.0&quot;</span><span class="p">,</span> <span class="n">version</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">get_add_actions</span><span class="p">(</span><span class="n">flatten</span><span class="o">=</span><span class="kc">True</span><span class="p">)</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="go">                                                path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value</span>
+<span class="go">0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2</span>
+<span class="go">1  part-00001-911a94a2-43f6-4acb-8620-5e68c265498...         445 2021-03-06 15:16:07         True            3                 0          2          4</span>
 </pre></div>
 </div>
 </section>
@@ -414,11 +445,6 @@ only list the files to be deleted. Pass <code class="docutils literal notranslat
 </section>
 <section id="writing-delta-tables">
 <h2>Writing Delta Tables<a class="headerlink" href="#writing-delta-tables" title="Permalink to this headline"></a></h2>
-<div class="admonition warning">
-<p class="admonition-title">Warning</p>
-<p>The writer is currently <em>experimental</em>. Please use on test data first, not
-on production data. Report any issues at <a class="reference external" href="https://github.com/delta-io/delta-rs/issues">https://github.com/delta-io/delta-rs/issues</a>.</p>
-</div>
 <p>For overwrites and appends, use <a class="reference internal" href="api_reference.html#deltalake.write_deltalake" title="deltalake.write_deltalake"><code class="xref py py-func docutils literal notranslate"><span class="pre">write_deltalake()</span></code></a>. If the table does not
 already exist, it will be created. The <code class="docutils literal notranslate"><span class="pre">data</span></code> parameter will accept a Pandas
 DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.</p>
@@ -430,7 +456,7 @@ DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p><a class="reference internal" href="api_reference.html#deltalake.write_deltalake" title="deltalake.write_deltalake"><code class="xref py py-func docutils literal notranslate"><span class="pre">write_deltalake()</span></code></a> accepts a Pandas DataFrame, but will convert it to
-a Arrow table before writing. See caveats in <a class="reference external" href="https://arrow.apache.org/docs/python/pandas.html" title="(in Apache Arrow v10.0.1)"><span>Pandas Integration</span></a>.</p>
+a Arrow table before writing. See caveats in <a class="reference external" href="https://arrow.apache.org/docs/python/pandas.html" title="(in Apache Arrow v11.0.0)"><span>Pandas Integration</span></a>.</p>
 </div>
 <p>By default, writes create a new table and error if it already exists. This is
 controlled by the <code class="docutils literal notranslate"><span class="pre">mode</span></code> parameter, which mirrors the behavior of Spark’s
@@ -443,6 +469,31 @@ to append pass in <code class="docutils literal notranslate"><span class="pre">m
 <p><a class="reference internal" href="api_reference.html#deltalake.write_deltalake" title="deltalake.write_deltalake"><code class="xref py py-meth docutils literal notranslate"><span class="pre">write_deltalake()</span></code></a> will raise <code class="xref py py-exc docutils literal notranslate"><span class="pre">ValueError</span></code> if the schema of
 the data passed to it differs from the existing table’s schema. If you wish to
 alter the schema as part of an overwrite pass in <code class="docutils literal notranslate"><span class="pre">overwrite_schema=True</span></code>.</p>
+<section id="overwriting-a-partition">
+<h3>Overwriting a partition<a class="headerlink" href="#overwriting-a-partition" title="Permalink to this headline"></a></h3>
+<p>You can overwrite a specific partition by using <code class="docutils literal notranslate"><span class="pre">mode=&quot;overwrite&quot;</span></code> together
+with <code class="docutils literal notranslate"><span class="pre">partition_filters</span></code>. This will remove all files within the matching
+partition and insert your data as new files. This can only be done on one
+partition at a time. All of the input data must belong to that partition or else
+the method will raise an error.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake.writer</span> <span class="kn">import</span> <span class="n">write_deltalake</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">df</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;x&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">1</span><span class="p">,</span> <span class="mi">2</span><span class="p">,</span> <span class="mi">3</span><span class="p">],</span> <span class="s1">&#39;y&#39;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;a&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">,</span> <span class="n">df</span><span class="p">,</span> <span class="n">partition_by</span><span class="o">=</span><span class="p">[</span><span class="s1">&#39;y&#39;</span><span class="p">])</span>
+
+<span class="gp">&gt;&gt;&gt; </span><span class="n">table</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s1">&#39;path/to/table&#39;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">df2</span> <span class="o">=</span> <span class="n">pd</span><span class="o">.</span><span class="n">DataFrame</span><span class="p">({</span><span class="s1">&#39;x&#39;</span><span class="p">:</span> <span class="p">[</span><span class="mi">100</span><span class="p">],</span> <span class="s1">&#39;y&#39;</span><span class="p">:</span> <span class="p">[</span><span class="s1">&#39;b&#39;</span><span class="p">]})</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">write_deltalake</span><span class="p">(</span><span class="n">table</span><span class="p">,</span> <span class="n">df2</span><span class="p">,</span> <span class="n">partition_filters</span><span class="o">=</span><span class="p">[(</span><span class="s1">&#39;y&#39;</span><span class="p">,</span> <span class="s1">&#39;=&#39;</span><span class="p">,</span> <span class="s1">&#39;b&#39;</span><span class="p">)],</span> <span class="n">mode</span><span class="o">=</span><span class="s2">&quot;overwrite&quot;</span><span class="p">)</span>
+
+<span class="gp">&gt;&gt;&gt; </span><span class="n">table</span><span class="o">.</span><span class="n">to_pandas</span><span class="p">()</span>
+<span class="go">     x  y</span>
+<span class="go">0    1  a</span>
+<span class="go">1    2  a</span>
+<span class="go">2  100  b</span>
+</pre></div>
+</div>
+<p>This method could also be used to insert a new partition if one doesn’t already
+exist, making this operation idempotent.</p>
+</section>
 </section>
 </section>
 

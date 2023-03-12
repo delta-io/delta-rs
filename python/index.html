@@ -4,7 +4,7 @@
   <meta charset="utf-8" /><meta name="generator" content="Docutils 0.17.1: http://docutils.sourceforge.net/" />
 
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Python bindings documentation of delta-rs &mdash; delta-rs  documentation</title>
+  <title>Python deltalake package &mdash; delta-rs  documentation</title>
       <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
       <link rel="stylesheet" href="_static/css/theme.css" type="text/css" />
   <!--[if lt IE 9]>
@@ -26,14 +26,18 @@
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-            <a href="#" class="icon icon-home"> delta-rs
+
+          
+          
+          <a href="#" class="icon icon-home">
+            delta-rs
           </a>
               <div class="version">
-                0.7.0
+                0.8.0
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
-    <input type="text" name="q" placeholder="Search docs" />
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
     <input type="hidden" name="check_keywords" value="yes" />
     <input type="hidden" name="area" value="default" />
   </form>
@@ -58,8 +62,8 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="#" class="icon icon-home"></a></li>
-      <li class="breadcrumb-item active">Python bindings documentation of delta-rs</li>
+      <li><a href="#" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Python deltalake package</li>
       <li class="wy-breadcrumbs-aside">
               <a href="https://github.com/delta-io/delta-rs/blob/main/python/docs/source/index.rst" class="fa fa-github"> Edit on GitHub</a>
       </li>
@@ -69,10 +73,12 @@
           <div role="main" class="document" itemscope="itemscope" itemtype="http://schema.org/Article">
            <div itemprop="articleBody">
              
-  <section id="python-bindings-documentation-of-delta-rs">
-<h1>Python bindings documentation of delta-rs<a class="headerlink" href="#python-bindings-documentation-of-delta-rs" title="Permalink to this headline"></a></h1>
-<p>This is the documentation of the Python bindings of delta-rs, <code class="docutils literal notranslate"><span class="pre">deltalake</span></code>.
-This module provides the capability to read, write, and manage <a class="reference external" href="https://delta.io/">Delta Lake</a>
+  <section id="python-deltalake-package">
+<h1>Python deltalake package<a class="headerlink" href="#python-deltalake-package" title="Permalink to this headline"></a></h1>
+<p>This is the documentation for the native Python implementation of deltalake. It
+is based on the delta-rs Rust library and requires no Spark or JVM dependencies.
+For the PySpark implementation, see <a class="reference external" href="https://docs.delta.io/latest/api/python/index.html">delta-spark</a> instead.</p>
+<p>This module provides the capability to read, write, and manage <a class="reference external" href="https://delta.io/">Delta Lake</a>
 tables from Python without Spark or Java. It uses <a class="reference external" href="https://arrow.apache.org/">Apache Arrow</a> under the hood,
 so is compatible with other Arrow-native or integrated libraries such as
 <a class="reference external" href="https://pandas.pydata.org/">Pandas</a>, <a class="reference external" href="https://duckdb.org/">DuckDB</a>, and <a class="reference external" href="https://www.pola.rs/">Polars</a>.</p>

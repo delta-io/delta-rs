@@ -220,6 +220,34 @@ To view the available history, use :meth:`DeltaTable.history`:
      {'timestamp': 1587968586154, 'operation': 'WRITE', 'operationParameters': {'mode': 'ErrorIfExists', 'partitionBy': '[]'}, 'isBlindAppend': True}]
 
 
+Current Add Actions
+~~~~~~~~~~~~~~~~~~~
+
+The active state for a delta table is determined by the Add actions, which 
+provide the list of files that are part of the table and metadata about them,
+such as creation time, size, and statistics. You can get a data frame of
+the add actions data using :meth:`DeltaTable.get_add_actions`:
+
+.. code-block:: python
+
+    >>> from deltalake import DeltaTable
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0")
+    >>> dt.get_add_actions(flatten=True).to_pandas()
+                                                        path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value
+    0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
+    1  part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe...         440 2021-03-06 15:16:16         True            2                 0          2          4
+
+This works even with past versions of the table:
+
+.. code-block:: python
+
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.8.0", version=0)
+    >>> dt.get_add_actions(flatten=True).to_pandas()
+                                                    path  size_bytes   modification_time  data_change  num_records  null_count.value  min.value  max.value
+    0  part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a...         440 2021-03-06 15:16:07         True            2                 0          0          2
+    1  part-00001-911a94a2-43f6-4acb-8620-5e68c265498...         445 2021-03-06 15:16:07         True            3                 0          2          4
+
+
 Querying Delta Tables
 ---------------------
 
@@ -378,10 +406,6 @@ Writing Delta Tables
 
 .. py:currentmodule:: deltalake
 
-.. warning::
-    The writer is currently *experimental*. Please use on test data first, not
-    on production data. Report any issues at https://github.com/delta-io/delta-rs/issues.
-
 For overwrites and appends, use :py:func:`write_deltalake`. If the table does not
 already exist, it will be created. The ``data`` parameter will accept a Pandas
 DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.
@@ -409,3 +433,32 @@ to append pass in ``mode='append'``:
 :py:meth:`write_deltalake` will raise :py:exc:`ValueError` if the schema of
 the data passed to it differs from the existing table's schema. If you wish to 
 alter the schema as part of an overwrite pass in ``overwrite_schema=True``.
+
+
+Overwriting a partition
+~~~~~~~~~~~~~~~~~~~~~~~
+
+You can overwrite a specific partition by using ``mode="overwrite"`` together
+with ``partition_filters``. This will remove all files within the matching
+partition and insert your data as new files. This can only be done on one
+partition at a time. All of the input data must belong to that partition or else
+the method will raise an error.
+
+.. code-block:: python
+
+    >>> from deltalake.writer import write_deltalake
+    >>> df = pd.DataFrame({'x': [1, 2, 3], 'y': ['a', 'a', 'b']})
+    >>> write_deltalake('path/to/table', df, partition_by=['y'])
+
+    >>> table = DeltaTable('path/to/table')
+    >>> df2 = pd.DataFrame({'x': [100], 'y': ['b']})
+    >>> write_deltalake(table, df2, partition_filters=[('y', '=', 'b')], mode="overwrite")
+
+    >>> table.to_pandas()
+         x  y
+    0    1  a
+    1    2  a
+    2  100  b
+
+This method could also be used to insert a new partition if one doesn't already
+exist, making this operation idempotent.
