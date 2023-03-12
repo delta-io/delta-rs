@@ -365,9 +365,53 @@ impl RawDeltaTable {
     }
 
     fn get_active_partitions(
-        &mut self,
+        &self,
         partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
     ) -> PyResult<HashSet<(String, Option<String>)>> {
+        let column_names: HashSet<&str> = self
+            ._table
+            .schema()
+            .ok_or(PyDeltaTableError::new_err(
+                "table does not yet have a schema",
+            ))?
+            .get_fields()
+            .iter()
+            .map(|field| field.get_name())
+            .collect();
+        let partition_columns: HashSet<&str> = self
+            ._table
+            .get_metadata()
+            .map_err(PyDeltaTableError::from_raw)?
+            .partition_columns
+            .iter()
+            .map(|col| col.as_str())
+            .collect();
+
+        if let Some(filters) = &partitions_filters {
+            let unknown_columns: Vec<&str> = filters
+                .iter()
+                .map(|(column_name, _, _)| *column_name)
+                .filter(|column_name| !column_names.contains(column_name))
+                .collect();
+            if !unknown_columns.is_empty() {
+                return Err(PyValueError::new_err(format!(
+                    "Filters include columns that are not in table schema: {unknown_columns:?}"
+                )));
+            }
+
+            let non_partition_columns: Vec<&str> = filters
+                .iter()
+                .map(|(column_name, _, _)| *column_name)
+                .filter(|column_name| !partition_columns.contains(column_name))
+                .collect();
+
+            if !non_partition_columns.is_empty() {
+                return Err(PyValueError::new_err(format!(
+                    "Filters include columns that are not partition columns: {non_partition_columns:?}"
+                )));
+            }
+        }
+
         let converted_filters = convert_partition_filters(partitions_filters.unwrap_or_default())
             .map_err(PyDeltaTableError::from_raw)?;
 
