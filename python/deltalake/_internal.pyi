@@ -31,6 +31,8 @@ write_new_deltalake: Callable[
     None,
 ]
 
+def batch_distinct(batch: pa.RecordBatch) -> pa.RecordBatch: ...
+
 # Can't implement inheritance (see note in src/schema.rs), so this is next
 # best thing.
 DataType = Union["PrimitiveType", "MapType", "StructType", "ArrayType"]
