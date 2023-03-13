@@ -372,10 +372,10 @@ impl DeltaTableState {
         for f in filters {
             if !current_metadata.partition_columns.contains(&f.key.into()) {
                 return Err(DeltaTableError::ColumnNotPartitioned {
-                    column: f.key.to_string()
-                })
+                    column: f.key.to_string(),
+                });
             }
-        };
+        }
 
         let partition_col_data_types: HashMap<&str, &SchemaDataType> = current_metadata
             .get_partition_col_data_types()
