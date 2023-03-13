@@ -371,8 +371,9 @@ impl DeltaTableState {
 
         for f in filters {
             if !current_metadata.partition_columns.contains(&f.key.into()) {
+                let column = f.key.to_string();
                 return Err(DeltaTableError::ColumnNotPartitioned {
-                    column: f.key.to_string(),
+                    column: format!("{column:?}"),
                 });
             }
         }
