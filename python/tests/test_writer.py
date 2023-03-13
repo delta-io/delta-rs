@@ -14,7 +14,7 @@ from packaging import version
 from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
 from pyarrow.lib import RecordBatchReader
 
-from deltalake import DeltaTable, PyDeltaTableError, write_deltalake
+from deltalake import DeltaTable, write_deltalake
 from deltalake.table import ProtocolVersions
 from deltalake.writer import DeltaTableProtocolError, try_get_table_and_table_uri
 
@@ -625,6 +625,43 @@ def test_partition_overwrite(
         == expected_data
     )
 
+    # Overwrite a single partition
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1"], pa.string()),
+            "p2": pa.array([value_1], value_type),
+            "val": pa.array([5], pa.int64()),
+        }
+    )
+    expected_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([value_1, value_2, value_1, value_2], value_type),
+            "val": pa.array([5, 3, 1, 3], pa.int64()),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        sample_data,
+        mode="overwrite",
+        partition_filters=[("p1", "=", "1"), ("p2", "=", filter_string)],
+    )
+    delta_table.update_incremental()
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == expected_data
+    )
+
+    with pytest.raises(ValueError, match="Data should be aligned with partitioning"):
+        write_deltalake(
+            tmp_path,
+            sample_data,
+            mode="overwrite",
+            partition_filters=[("p2", "<", filter_string)],
+        )
+
 
 @pytest.fixture()
 def sample_data_for_partitioning() -> pa.Table:
@@ -699,7 +736,7 @@ def test_partition_overwrite_with_non_partitioned_data(
 ):
     write_deltalake(tmp_path, sample_data_for_partitioning, mode="overwrite")
 
-    with pytest.raises(PyDeltaTableError):
+    with pytest.raises(ValueError, match=r'not partition columns: \["p1"\]'):
         write_deltalake(
             tmp_path,
             sample_data_for_partitioning,
@@ -718,12 +755,40 @@ def test_partition_overwrite_with_wrong_partition(
         partition_by=["p1", "p2"],
     )
 
-    with pytest.raises(PyDeltaTableError):
+    with pytest.raises(ValueError, match=r'not in table schema: \["p999"\]'):
         write_deltalake(
             tmp_path,
             sample_data_for_partitioning,
             mode="overwrite",
             partition_filters=[("p999", "=", "1")],
+        )
+
+    with pytest.raises(ValueError, match=r'not partition columns: \["val"\]'):
+        write_deltalake(
+            tmp_path,
+            sample_data_for_partitioning,
+            mode="overwrite",
+            partition_filters=[("val", "=", "1")],
+        )
+
+    new_data = pa.table(
+        {
+            "p1": pa.array(["1"], pa.string()),
+            "p2": pa.array([2], pa.int64()),
+            "val": pa.array([1], pa.int64()),
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Data should be aligned with partitioning. "
+        "Data contained values for partition p1=1 p2=2",
+    ):
+        write_deltalake(
+            tmp_path,
+            new_data,
+            mode="overwrite",
+            partition_filters=[("p1", "=", "1"), ("p2", "=", "1")],
         )
 
 
