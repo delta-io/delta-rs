@@ -447,6 +447,106 @@ mod tests {
         validate_partition_map(partitions, &partition_cols, expected_keys)
     }
 
+    /*
+     * This test is a little messy but demonstrates a bug when
+     * trying to write data to a Delta Table that has a map column and partition columns
+     *
+     * For readability the schema and data for the write are defined in JSON
+     */
+    #[tokio::test]
+    async fn test_divide_record_batch_with_map_single_partition() {
+        use crate::{action::Protocol, SchemaTypeStruct};
+        use arrow::json::reader::{Decoder, DecoderOptions};
+
+        let mut table = crate::writer::test_utils::create_bare_table();
+        let partition_cols = vec!["modified".to_string()];
+        let delta_schema = r#"
+        {"type" : "struct",
+        "fields" : [
+            {"name" : "id", "type" : "string", "nullable" : false, "metadata" : {}},
+            {"name" : "value", "type" : "integer", "nullable" : false, "metadata" : {}},
+            {"name" : "modified", "type" : "string", "nullable" : false, "metadata" : {}},
+            {"name" : "metadata", "type" :
+                {"type" : "map", "keyType" : "string", "valueType" : "string", "valueContainsNull" : true},
+                "nullable" : false, "metadata" : {}}
+            ]
+        }"#;
+
+        let delta_schema: SchemaTypeStruct =
+            serde_json::from_str(delta_schema).expect("Failed to parse schema");
+
+        let mut commit_info = serde_json::Map::<String, serde_json::Value>::new();
+        commit_info.insert(
+            "operation".to_string(),
+            serde_json::Value::String("CREATE TABLE".to_string()),
+        );
+        commit_info.insert(
+            "userName".to_string(),
+            serde_json::Value::String("test user".to_string()),
+        );
+
+        let protocol = Protocol {
+            min_reader_version: 1,
+            min_writer_version: 1,
+        };
+
+        let metadata = DeltaTableMetaData::new(
+            None,
+            None,
+            None,
+            delta_schema.clone(),
+            partition_cols.to_vec(),
+            HashMap::new(),
+        );
+
+        table
+            .create(metadata, protocol, Some(commit_info), None)
+            .await
+            .unwrap();
+
+        let data_as_json = r#"[
+            {"id" : "0xdeadbeef", "value" : 42, "modified" : "2021-02-01",
+                "metadata" : {"some-key" : "some-value"}},
+            {"id" : "0xdeadcaf", "value" : 3, "modified" : "2021-02-02",
+                "metadata" : {"some-key" : "some-value"}}
+        ]"#;
+
+        let deser_data: Vec<serde_json::Value> =
+            serde_json::from_str(data_as_json).expect("Failed to deserialize test record");
+        let mut data_iterable = deser_data.iter().map(|v| Ok(v.to_owned()));
+        /*
+         * This works
+        use arrow::datatypes::{DataType, Field};
+        let entries = DataType::Struct(vec![
+            Field::new("key", DataType::Utf8, false),
+            Field::new("value", DataType::Utf8, true),
+        ]);
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Utf8, true),
+            Field::new("value", DataType::Int32, true),
+            Field::new("modified", DataType::Utf8, true),
+            Field::new("metadata", DataType::Map(
+                    Box::new(Field::new("entries", entries, true)), false), true),
+        ]));
+        */
+
+        let schema: ArrowSchema =
+            <ArrowSchema as TryFrom<&Schema>>::try_from(&delta_schema).unwrap();
+        let options = DecoderOptions::new();
+        let decoder = Decoder::new(Arc::new(schema), options);
+        let batch = decoder.next_batch(&mut data_iterable).unwrap().unwrap();
+
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        let partitions = writer.divide_by_partition_values(&batch).unwrap();
+
+        let expected_keys = vec![
+            String::from("modified=2021-02-01"),
+            String::from("modified=2021-02-02"),
+        ];
+        validate_partition_map(partitions, &partition_cols, expected_keys)
+    }
+
     #[tokio::test]
     async fn test_divide_record_batch_multiple_partitions() {
         let batch = get_record_batch(None, false);
