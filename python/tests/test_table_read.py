@@ -386,7 +386,7 @@ def test_get_files_partitioned_table():
     assert (
         str(exception.value)
         == 'Tried to filter partitions on column "unknown", but that column'
-        ' is not partitioned.'
+        " is not partitioned."
     )
 
 
