@@ -625,6 +625,7 @@ pub(super) fn can_downgrade_to_snapshot_isolation<'a>(
 }
 
 #[cfg(test)]
+#[allow(unused)]
 mod tests {
     use super::super::test_utils as tu;
     use super::super::test_utils::init_table_actions;
