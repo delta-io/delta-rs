@@ -2,7 +2,6 @@
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Cursor};
 
-use itertools::Either;
 use object_store::ObjectStore;
 
 use super::CommitInfo;
@@ -15,6 +14,8 @@ use crate::{table_state::DeltaTableState, DeltaDataTypeVersion, DeltaResult, Del
 use super::state::AddContainer;
 #[cfg(feature = "datafusion")]
 use datafusion_expr::Expr;
+#[cfg(feature = "datafusion")]
+use itertools::Either;
 
 /// Exceptions raised during commit conflict resolution
 #[derive(thiserror::Error, Debug)]
@@ -82,8 +83,8 @@ pub enum CommitConflictError {
 }
 
 /// A struct representing different attributes of current transaction needed for conflict detection.
+#[allow(unused)]
 pub(crate) struct TransactionInfo<'a> {
-    #[allow(unused)]
     txn_id: String,
     /// partition predicates by which files have been queried by the transaction
     #[cfg(not(feature = "datafusion"))]
