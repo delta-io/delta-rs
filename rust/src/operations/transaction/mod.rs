@@ -157,21 +157,6 @@ pub(crate) async fn commit(
     read_snapshot: &DeltaTableState,
     app_metadata: Option<Map<String, Value>>,
 ) -> DeltaResult<DeltaDataTypeVersion> {
-    // readPredicates.nonEmpty || readFiles.nonEmpty
-    // TODO revise logic if files are read
-    let depends_on_files = match operation {
-        DeltaOperation::Create { .. } | DeltaOperation::StreamingUpdate { .. } => false,
-        DeltaOperation::Optimize { .. } => true,
-        DeltaOperation::Write {
-            predicate: Some(_), ..
-        } => true,
-        _ => false,
-    };
-
-    // TODO actually get the prop from commit infos...
-    let only_add_files = false;
-    let _is_blind_append = only_add_files && !depends_on_files;
-
     let tmp_commit = prepare_commit(storage, &operation, actions, app_metadata).await?;
 
     let max_attempts = 5;

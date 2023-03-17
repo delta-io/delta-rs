@@ -1,26 +1,18 @@
 //! Helper module to check if a transaction can be committed in case of conflicting commits.
-#![allow(unused)]
 use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Cursor};
 
 use itertools::Either;
 use object_store::ObjectStore;
-use serde_json::{Map, Value};
 
 use super::CommitInfo;
 use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
 use crate::delta_config::IsolationLevel;
-use crate::operations::transaction::TransactionError;
-use crate::storage::{commit_uri_from_version, DeltaObjectStore, ObjectStoreRef};
-use crate::{
-    table_state::DeltaTableState, DeltaDataTypeVersion, DeltaResult, DeltaTable, DeltaTableError,
-    DeltaTableMetaData,
-};
+use crate::storage::commit_uri_from_version;
+use crate::{table_state::DeltaTableState, DeltaDataTypeVersion, DeltaResult, DeltaTableError};
 
 #[cfg(feature = "datafusion")]
 use super::state::AddContainer;
-#[cfg(feature = "datafusion")]
-use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 #[cfg(feature = "datafusion")]
 use datafusion_expr::Expr;
 
@@ -89,18 +81,10 @@ pub enum CommitConflictError {
     NoMetadata,
 }
 
-fn read_whole_table(operation: &DeltaOperation) -> bool {
-    match operation {
-        // TODO just adding one operation example, as currently none of the
-        // implemented operations scan the entire table.
-        DeltaOperation::Write { predicate, .. } if predicate.is_none() => false,
-        _ => false,
-    }
-}
-
 /// A struct representing different attributes of current transaction needed for conflict detection.
 pub(crate) struct TransactionInfo<'a> {
-    pub(crate) txn_id: String,
+    #[allow(unused)]
+    txn_id: String,
     /// partition predicates by which files have been queried by the transaction
     #[cfg(not(feature = "datafusion"))]
     read_predicates: Option<String>,
@@ -139,6 +123,7 @@ impl<'a> TransactionInfo<'a> {
     }
 
     #[cfg(feature = "datafusion")]
+    #[allow(unused)]
     pub fn new(
         read_snapshot: &'a DeltaTableState,
         read_predicates: Option<Expr>,
@@ -170,10 +155,6 @@ impl<'a> TransactionInfo<'a> {
             read_snapshot,
             read_whole_table,
         })
-    }
-
-    pub fn metadata(&self) -> Option<&DeltaTableMetaData> {
-        self.read_snapshot.current_metadata()
     }
 
     /// Whether the transaction changed the tables metadatas
@@ -333,12 +314,12 @@ impl WinningCommitSummary {
         }
     }
 
-    pub fn only_add_files(&self) -> bool {
-        !self
-            .actions
-            .iter()
-            .any(|action| matches!(action, Action::remove(_)))
-    }
+    // pub fn only_add_files(&self) -> bool {
+    //     !self
+    //         .actions
+    //         .iter()
+    //         .any(|action| matches!(action, Action::remove(_)))
+    // }
 
     pub fn is_blind_append(&self) -> Option<bool> {
         self.commit_info
@@ -392,11 +373,6 @@ impl<'a> ConflictChecker<'a> {
         }
     }
 
-    fn current_transaction_info(&self) -> &TransactionInfo {
-        // TODO figure out when we need to update this
-        &self.txn_info
-    }
-
     /// This function checks conflict of the `initial_current_transaction_info` against the
     /// `winning_commit_version` and returns an updated [`TransactionInfo`] that represents
     /// the transaction as if it had started while reading the `winning_commit_version`.
@@ -422,7 +398,7 @@ impl<'a> ConflictChecker<'a> {
         }
         if !self.winning_commit_summary.protocol().is_empty()
             && self
-                .current_transaction_info()
+                .txn_info
                 .actions
                 .iter()
                 .any(|a| matches!(a, Action::protocol(_)))
@@ -454,9 +430,7 @@ impl<'a> ConflictChecker<'a> {
 
         // Fail if new files have been added that the txn should have read.
         let added_files_to_check = match self.isolation_level {
-            IsolationLevel::WriteSerializable
-                if !self.current_transaction_info().metadata_changed() =>
-            {
+            IsolationLevel::WriteSerializable if !self.txn_info.metadata_changed() => {
                 // don't conflict with blind appends
                 self.winning_commit_summary.changed_data_added_files()
             }
@@ -524,7 +498,7 @@ impl<'a> ConflictChecker<'a> {
     ) -> Result<(), CommitConflictError> {
         // Fail if files have been deleted that the txn read.
         let read_file_path: HashSet<String> = self
-            .current_transaction_info()
+            .txn_info
             .read_files()?
             .map(|f| f.path.clone())
             .collect();
@@ -537,7 +511,7 @@ impl<'a> ConflictChecker<'a> {
             .find(|f| read_file_path.contains(&f.path));
         if deleted_read_overlap.is_some()
             || (!self.winning_commit_summary.removed_files().is_empty()
-                && self.current_transaction_info().read_whole_table())
+                && self.txn_info.read_whole_table())
         {
             Err(CommitConflictError::ConcurrentDeleteRead)
         } else {
@@ -552,7 +526,7 @@ impl<'a> ConflictChecker<'a> {
     ) -> Result<(), CommitConflictError> {
         // Fail if a file is deleted twice.
         let txn_deleted_files: HashSet<String> = self
-            .current_transaction_info()
+            .txn_info
             .actions
             .iter()
             .cloned()
@@ -590,7 +564,7 @@ impl<'a> ConflictChecker<'a> {
         // multiple instances of the same streaming query are running at the same time.
         let winning_txns = self.winning_commit_summary.app_level_transactions();
         let txn_overlap: HashSet<&String> = winning_txns
-            .intersection(&self.current_transaction_info().read_app_ids)
+            .intersection(&self.txn_info.read_app_ids)
             .collect();
         if !txn_overlap.is_empty() {
             Err(CommitConflictError::ConcurrentTransaction)
@@ -652,10 +626,9 @@ pub(super) fn can_downgrade_to_snapshot_isolation<'a>(
 #[cfg(test)]
 mod tests {
     use super::super::test_utils as tu;
-    use super::super::test_utils::{create_initialized_table, init_table_actions};
+    use super::super::test_utils::init_table_actions;
     use super::*;
-    use crate::action::{Action, SaveMode};
-    use crate::operations::transaction::commit;
+    use crate::action::Action;
     #[cfg(feature = "datafusion")]
     use datafusion_expr::{col, lit};
     use serde_json::json;
