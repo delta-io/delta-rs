@@ -1,5 +1,37 @@
 # Changelog
 
+## [rust-v0.8.0](https://github.com/delta-io/delta-rs/tree/rust-v0.8.0) (2023-03-10)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.7.0...rust-v0.8.0)
+
+**Implemented enhancements:**
+
+- feat(rust): support additional types for partition values [\#1170](https://github.com/delta-io/delta-rs/issues/1170)
+
+**Fixed bugs:**
+
+- File pruning does not occur on partition columns [\#1175](https://github.com/delta-io/delta-rs/issues/1175)
+- Bug: Error loading Delta table locally [\#1157](https://github.com/delta-io/delta-rs/issues/1157)
+- Deltalake 0.7.0 with s3 feature compliation error due to rusoto_dynamodb version conflict [\#1191](https://github.com/delta-io/delta-rs/issues/1191)
+- Writing from a Delta table scan using WriteBuilder fails due to missing object store [\#1186](https://github.com/delta-io/delta-rs/issues/1186)
+
+**Merged pull requests:**
+
+- build(deps): bump datafusion [\#1217](https://github.com/delta-io/delta-rs/pull/1217) ([roeap](https://github.com/roeap))
+- Implement pruning on partition columns [\#1179](https://github.com/delta-io/delta-rs/pull/1179) ([Blajda](https://github.com/Blajda))
+- feat: enable passing storage options to Delta table builder via Datafusion's CREATE EXTERNAL TABLE [\#1043](https://github.com/delta-io/delta-rs/pull/1043) ([gruuya](https://github.com/gruuya))
+- feat: typed commit info [\#1207](https://github.com/delta-io/delta-rs/pull/1207) ([roeap](https://github.com/roeap))
+- add boolean, date, timestamp & binary partition types [\#1180](https://github.com/delta-io/delta-rs/pull/1180) ([marijncv](https://github.com/marijncv))
+- feat: extend configuration handling [\#1206](https://github.com/delta-io/delta-rs/pull/1206) ([marijncv](https://github.com/marijncv))
+- fix: load command for local tables [\#1205](https://github.com/delta-io/delta-rs/pull/1205) ([roeap](https://github.com/roeap))
+- Enable passing Datafusion session state to WriteBuilder [\#1187](https://github.com/delta-io/delta-rs/pull/1187) ([gruuya](https://github.com/gruuya))
+- chore: increment dynamodb_lock version [\#1202](https://github.com/delta-io/delta-rs/pull/1202) ([wjones127](https://github.com/wjones127))
+- fix: update out-of-date doc about datafusion [\#1183](https://github.com/delta-io/delta-rs/pull/1183) ([xudong963](https://github.com/xudong963))
+- feat: move and update Optimize operation [\#1154](https://github.com/delta-io/delta-rs/pull/1154) ([roeap](https://github.com/roeap))
+- add test for extract_partition_values [\#1159](https://github.com/delta-io/delta-rs/pull/1159) ([marijncv](https://github.com/marijncv))
+- fix typo [\#1166](https://github.com/delta-io/delta-rs/pull/1166) ([spebern](https://github.com/spebern))
+- chore: remove star dependencies [\#1139](https://github.com/delta-io/delta-rs/pull/1139) ([wjones127](https://github.com/wjones127))
+
 ## [rust-v0.7.0](https://github.com/delta-io/delta-rs/tree/rust-v0.7.0) (2023-02-11)
 
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.6.0...rust-v0.7.0)

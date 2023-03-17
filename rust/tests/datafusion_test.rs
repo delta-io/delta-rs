@@ -1,6 +1,6 @@
 #![cfg(feature = "datafusion")]
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 
@@ -20,9 +20,15 @@ use datafusion_common::scalar::ScalarValue;
 use datafusion_common::ScalarValue::*;
 use datafusion_common::{DataFusionError, Result};
 use datafusion_expr::Expr;
+use datafusion_proto::bytes::{
+    physical_plan_from_bytes_with_extension_codec, physical_plan_to_bytes_with_extension_codec,
+};
+use url::Url;
 
 use deltalake::action::SaveMode;
+use deltalake::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
 use deltalake::operations::create::CreateBuilder;
+use deltalake::storage::DeltaObjectStore;
 use deltalake::{
     operations::{write::WriteBuilder, DeltaOps},
     DeltaTable, Schema,
@@ -148,23 +154,40 @@ async fn test_datafusion_simple_query_partitioned() -> Result<()> {
 }
 
 #[tokio::test]
-async fn test_datafusion_write_from_delta_scan() -> Result<()> {
+async fn test_datafusion_write_from_serialized_delta_scan() -> Result<()> {
+    // Build an execution plan for scanning a DeltaTable and serialize it to bytes.
+    // We want to emulate that this occurs on another node, so that all we have access to is the
+    // plan byte serialization.
+    let source_scan_bytes = {
+        let ctx = SessionContext::new();
+        let state = ctx.state();
+        let source_table = deltalake::open_table("./tests/data/delta-0.8.0-date").await?;
+        let source_scan = source_table.scan(&state, None, &[], None).await?;
+        physical_plan_to_bytes_with_extension_codec(source_scan, &DeltaPhysicalCodec {})?
+    };
+
+    // Build a new context from scratch and deserialize the plan
     let ctx = SessionContext::new();
     let state = ctx.state();
-
-    // Build an execution plan for scanning a DeltaTable
-    let source_table = deltalake::open_table("./tests/data/delta-0.8.0-date").await?;
-    let source_scan = source_table.scan(&state, None, &[], None).await?;
+    let source_scan = physical_plan_from_bytes_with_extension_codec(
+        &source_scan_bytes,
+        &ctx,
+        &DeltaPhysicalCodec {},
+    )?;
+    let fields = Schema::try_from(source_scan.schema())
+        .unwrap()
+        .get_fields()
+        .clone();
 
     // Create target Delta Table
     let target_table = CreateBuilder::new()
         .with_location("memory://target")
-        .with_columns(source_table.schema().unwrap().get_fields().clone())
+        .with_columns(fields)
         .with_table_name("target")
         .await?;
 
-    // Trying to execute the write by providing only the Datafusion plan and not the session state
-    // results in an error due to missing object store in the runtime registry.
+    // Trying to execute the write from the input plan without providing Datafusion with a session
+    // state containing the referenced object store in the registry results in an error.
     assert!(WriteBuilder::new()
         .with_input_execution_plan(source_scan.clone())
         .with_object_store(target_table.object_store())
@@ -172,6 +195,23 @@ async fn test_datafusion_write_from_delta_scan() -> Result<()> {
         .unwrap_err()
         .to_string()
         .contains("No suitable object store found for delta-rs://"));
+
+    // Register the missing source table object store
+    let source_uri = source_scan
+        .as_any()
+        .downcast_ref::<DeltaScan>()
+        .unwrap()
+        .table_uri
+        .clone();
+    let source_location = Url::parse(&source_uri).unwrap();
+    let source_store = DeltaObjectStore::try_new(source_location, HashMap::new()).unwrap();
+    let object_store_url = source_store.object_store_url();
+    let source_store_url: &Url = object_store_url.as_ref();
+    state.runtime_env().register_object_store(
+        source_store_url.scheme(),
+        source_store_url.host_str().unwrap_or_default(),
+        Arc::from(source_store),
+    );
 
     // Execute write to the target table with the proper state
     let target_table = WriteBuilder::new()
@@ -181,8 +221,8 @@ async fn test_datafusion_write_from_delta_scan() -> Result<()> {
         .await?;
     ctx.register_table("target", Arc::new(target_table))?;
 
+    // Check results
     let batches = ctx.sql("SELECT * FROM target").await?.collect().await?;
-
     let expected = vec![
         "+------------+-----------+",
         "| date       | dayOfYear |",
