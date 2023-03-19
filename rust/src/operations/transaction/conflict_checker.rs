@@ -23,12 +23,12 @@ pub enum CommitConflictError {
     /// This exception occurs when a concurrent operation adds files in the same partition
     /// (or anywhere in an un-partitioned table) that your operation reads. The file additions
     /// can be caused by INSERT, DELETE, UPDATE, or MERGE operations.
-    #[error("Concurrent append failed.")]
+    #[error("Commit failed: a concurrent transactions added new files.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
     ConcurrentAppend,
 
     /// This exception occurs when a concurrent operation deleted a file that your operation read.
     /// Common causes are a DELETE, UPDATE, or MERGE operation that rewrites files.
-    #[error("Concurrent delete-read failed.")]
+    #[error("Commit failed: a concurrent transaction deleted a file this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
     ConcurrentDeleteRead,
 
     /// This exception occurs when a concurrent operation deleted a file that your operation also deletes.
@@ -87,6 +87,9 @@ pub enum CommitConflictError {
 pub(crate) struct TransactionInfo<'a> {
     txn_id: String,
     /// partition predicates by which files have been queried by the transaction
+    ///
+    /// If any new data files or removed data files match this predicate, the 
+    /// transaction should fail.
     #[cfg(not(feature = "datafusion"))]
     read_predicates: Option<String>,
     /// partition predicates by which files have been queried by the transaction
@@ -809,7 +812,7 @@ mod tests {
         assert!(matches!(result, Err(CommitConflictError::MetadataChanged)));
 
         // upgrade / upgrade
-        // current and concurrent transactions chnage the protocol version
+        // current and concurrent transactions change the protocol version
         let result = execute_test(
             None,
             None,

@@ -138,10 +138,10 @@ impl<'a> AddContainer<'a> {
         ScalarValue::iter_to_array(values).ok()
     }
 
-    /// Get an iterator of add actions / files, that MAY containtain data mathcing the predicate.
+    /// Get an iterator of add actions / files, that MAY contain data matching the predicate.
     ///
     /// Expressions are evaluated for file statistics, essentially column-wise min max bounds,
-    /// so evalutaing expressions is inexact. However exluded files are guaranteed (for a correct log)
+    /// so evaluating expressions is inexact. However, excluded files are guaranteed (for a correct log)
     /// to not contain matches by the predicate expression.
     pub fn predicate_matches(&self, predicate: Expr) -> DeltaResult<impl Iterator<Item = &Add>> {
         let pruning_predicate = PruningPredicate::try_new(predicate, self.schema.clone())?;
