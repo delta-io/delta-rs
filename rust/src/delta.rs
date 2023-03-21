@@ -203,8 +203,7 @@ pub enum DeltaTableError {
         /// The invalid partition filter used.
         partition_filter: String,
     },
-    /// Error returned when a partition filter uses a non-partitioned column
-    /// column.
+    /// Error returned when a partition filter uses a nonpartitioned column.
     #[error("Tried to filter partitions on non-partitioned columns: {:#?}", .nonpartitioned_columns)]
     ColumnsNotPartitioned {
         /// The columns used in the partition filter that is not partitioned
