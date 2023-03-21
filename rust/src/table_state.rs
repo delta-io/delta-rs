@@ -369,13 +369,16 @@ impl DeltaTableState {
     ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
         let current_metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
 
-        for f in filters {
-            if !current_metadata.partition_columns.contains(&f.key.into()) {
-                let column = f.key.to_string();
-                return Err(DeltaTableError::ColumnNotPartitioned {
-                    column: format!("{column:?}"),
-                });
-            }
+        let nonpartitioned_columns: Vec<String> = filters
+            .iter()
+            .filter(|f| !current_metadata.partition_columns.contains(&f.key.into()))
+            .map(|f| f.key.to_string())
+            .collect();
+
+        if !nonpartitioned_columns.is_empty() {
+            return Err(DeltaTableError::ColumnsNotPartitioned {
+                nonpartitioned_columns: { nonpartitioned_columns },
+            });
         }
 
         let partition_col_data_types: HashMap<&str, &SchemaDataType> = current_metadata

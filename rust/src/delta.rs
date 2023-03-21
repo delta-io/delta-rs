@@ -205,10 +205,10 @@ pub enum DeltaTableError {
     },
     /// Error returned when a partition filter uses a non-partitioned column
     /// column.
-    #[error("Tried to filter partitions on column {}, but that column is not partitioned.", .column)]
-    ColumnNotPartitioned {
-        /// The column used in the partition filter that is not partitioned
-        column: String,
+    #[error("Tried to filter partitions on non-partitioned columns: {:#?}", .nonpartitioned_columns)]
+    ColumnsNotPartitioned {
+        /// The columns used in the partition filter that is not partitioned
+        nonpartitioned_columns: Vec<String>,
     },
     /// Error returned when a line from log record is invalid.
     #[error("Failed to read line from log record")]
