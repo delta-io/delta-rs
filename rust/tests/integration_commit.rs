@@ -36,6 +36,13 @@ async fn test_commit_tables_gcp() {
     commit_tables(StorageIntegration::Google).await.unwrap();
 }
 
+#[cfg(feature = "hdfs")]
+#[tokio::test]
+#[serial]
+async fn test_commit_tables_hdfs() {
+    commit_tables(StorageIntegration::Hdfs).await.unwrap();
+}
+
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 #[tokio::test]
 #[serial]

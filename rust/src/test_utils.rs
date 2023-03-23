@@ -52,6 +52,7 @@ impl IntegrationContext {
             StorageIntegration::Microsoft => format!("az://{}", &bucket),
             StorageIntegration::Google => format!("gs://{}", &bucket),
             StorageIntegration::Local => format!("file://{}", &bucket),
+            StorageIntegration::Hdfs => format!("hdfs://localhost:9000/{}", &bucket),
         };
         // the "storage_backend" will always point to the root ofg the object store.
         // TODO should we provide the store via object_Store builders?
@@ -85,6 +86,7 @@ impl IntegrationContext {
             StorageIntegration::Microsoft => format!("az://{}", &self.bucket),
             StorageIntegration::Google => format!("gs://{}", &self.bucket),
             StorageIntegration::Local => format!("file://{}", &self.bucket),
+            StorageIntegration::Hdfs => format!("hdfs://localhost:9000/{}", &self.bucket),
         }
     }
 
@@ -140,6 +142,9 @@ impl Drop for IntegrationContext {
                 gs_cli::delete_bucket(&self.bucket).unwrap();
             }
             StorageIntegration::Local => (),
+            StorageIntegration::Hdfs => {
+                hdfs_cli::delete_dir(&self.bucket).unwrap();
+            },
         };
     }
 }
@@ -150,6 +155,7 @@ pub enum StorageIntegration {
     Microsoft,
     Google,
     Local,
+    Hdfs,
 }
 
 impl StorageIntegration {
@@ -159,6 +165,7 @@ impl StorageIntegration {
             Self::Amazon => s3_cli::prepare_env(),
             Self::Google => gs_cli::prepare_env(),
             Self::Local => (),
+            Self::Hdfs => (),
         }
     }
 
@@ -182,6 +189,10 @@ impl StorageIntegration {
                 Ok(())
             }
             Self::Local => Ok(()),
+            Self::Hdfs => {
+                hdfs_cli::create_dir(name)?;
+                Ok(())
+            }
         }
     }
 }
@@ -445,5 +456,38 @@ pub mod gs_cli {
     pub fn prepare_env() {
         set_env_if_not_set("GOOGLE_BASE_URL", "http://localhost:4443");
         set_env_if_not_set("GOOGLE_ENDPOINT_URL", "http://localhost:4443/storage/v1/b");
+    }
+}
+
+/// small wrapper around hdfs cli
+pub mod hdfs_cli {
+    use std::env;
+    use std::path::PathBuf;
+    // use super::set_env_if_not_set;
+    use std::process::{Command, ExitStatus};
+
+    fn hdfs_cli_path() -> PathBuf {
+        let hadoop_home = env::var("HADOOP_HOME").expect("HADOOP_HOME environment variable not set");
+        PathBuf::from(hadoop_home)
+            .join("bin")
+            .join("hdfs")
+    }
+
+    pub fn create_dir(dir_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
+        let path = hdfs_cli_path();
+        let mut child = Command::new(&path)
+            .args(["dfs", "-mkdir", "-p", format!("/{}", dir_name.as_ref()).as_str()])
+            .spawn()
+            .expect("hdfs command is installed");
+        child.wait()
+    }
+
+    pub fn delete_dir(dir_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
+        let path = hdfs_cli_path();
+        let mut child = Command::new(&path)
+            .args(["dfs", "-rm", "-r", "-f", format!("/{}", dir_name.as_ref()).as_str()])
+            .spawn()
+            .expect("hdfs command is installed");
+        child.wait()
     }
 }

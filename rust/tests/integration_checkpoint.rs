@@ -40,6 +40,15 @@ async fn cleanup_metadata_gcp_test() -> TestResult {
     Ok(())
 }
 
+#[cfg(feature = "hdfs")]
+#[tokio::test]
+#[serial]
+async fn cleanup_metadata_hdfs_test() -> TestResult {
+    let context = IntegrationContext::new(StorageIntegration::Hdfs)?;
+    cleanup_metadata_test(&context).await?;
+    Ok(())
+}
+
 // Last-Modified for S3 could not be altered by user, hence using system pauses which makes
 // test to run longer but reliable
 async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {

@@ -70,6 +70,8 @@ pub fn get_data_catalog(data_catalog: &str) -> Result<Box<dyn DataCatalog>, Data
         "gcp" => unimplemented!("GCP Data Catalog is not implemented"),
         #[cfg(feature = "azure")]
         "azure" => unimplemented!("Azure Data Catalog is not implemented"),
+        #[cfg(feature = "hdfs")]
+        "hdfs" => unimplemented!("HDFS Data Catalog is not implemented"),
         #[cfg(feature = "glue")]
         "glue" => Ok(Box::new(glue::GlueDataCatalog::new()?)),
         _ => Err(DataCatalogError::InvalidDataCatalog {

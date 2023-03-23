@@ -15,6 +15,8 @@ use tempdir::TempDir;
 
 #[cfg(feature = "azure")]
 pub mod adls;
+#[cfg(feature = "hdfs")]
+pub mod hdfs;
 pub mod clock;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;
@@ -47,6 +49,8 @@ impl TestContext {
             Ok("AZURE_GEN2") => adls::setup_azure_gen2_context().await,
             #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
             Ok("S3_LOCAL_STACK") => s3::setup_s3_context().await,
+            #[cfg(feature = "hdfs")]
+            Ok("HDFS") => hdfs::setup_hdfs_context(),
             _ => panic!("Invalid backend for delta-rs tests"),
         }
     }

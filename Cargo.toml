@@ -11,3 +11,7 @@ exclude = ["proofs", "delta-inspect"]
 [profile.release-with-debug]
 inherits = "release"
 debug = true
+
+[patch.crates-io]
+datafusion-objectstore-hdfs = { path = "../datafusion-objectstore-hdfs/hdfs" }
+fs-hdfs3 = { path = "../fs-hdfs" }

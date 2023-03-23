@@ -31,6 +31,7 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 * AWS S3
 * Azure Blob Storage / Azure Datalake Storage Gen2
 * Google Cloud Storage
+* HDFS
 
 .Support features
 |===
