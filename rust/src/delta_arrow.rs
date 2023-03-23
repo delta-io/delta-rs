@@ -217,8 +217,9 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
             ArrowDataType::Float64 => Ok(schema::SchemaDataType::primitive("double".to_string())),
             ArrowDataType::Boolean => Ok(schema::SchemaDataType::primitive("boolean".to_string())),
             ArrowDataType::Binary => Ok(schema::SchemaDataType::primitive("binary".to_string())),
-            ArrowDataType::FixedSizeBinary(_) =>
-                Ok(schema::SchemaDataType::primitive("binary".to_string())),
+            ArrowDataType::FixedSizeBinary(_) => {
+                Ok(schema::SchemaDataType::primitive("binary".to_string()))
+            }
             ArrowDataType::LargeBinary => {
                 Ok(schema::SchemaDataType::primitive("binary".to_string()))
             }
