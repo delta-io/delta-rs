@@ -87,6 +87,7 @@ def write_deltalake(
     overwrite_schema: bool = False,
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+    max_partitions: Optional[int] = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -135,6 +136,7 @@ def write_deltalake(
     :param overwrite_schema: If True, allows updating the schema of the table.
     :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
     :param partition_filters: the partition filters that will be used for partition overwrite.
+    :param max_partitions: the maximum number of partitions that will be used
     """
     if _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
@@ -306,6 +308,7 @@ def write_deltalake(
         min_rows_per_group=min_rows_per_group,
         max_rows_per_group=max_rows_per_group,
         filesystem=filesystem,
+        max_partitions=max_partitions,
     )
 
     if table is None:
