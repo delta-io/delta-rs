@@ -249,6 +249,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 }
 
 /// Helper container for partitioned record batches
+#[derive(Clone, Debug)]
 pub struct PartitionResult {
     /// values found in partition columns
     pub partition_values: HashMap<String, Option<String>>,
@@ -416,6 +417,7 @@ mod tests {
         test_utils::{create_initialized_table, get_record_batch},
         utils::PartitionPath,
     };
+    use arrow::json::RawReaderBuilder;
     use std::path::Path;
 
     #[tokio::test]
@@ -456,7 +458,6 @@ mod tests {
     #[tokio::test]
     async fn test_divide_record_batch_with_map_single_partition() {
         use crate::{action::Protocol, SchemaTypeStruct};
-        use arrow::json::reader::{Decoder, DecoderOptions};
 
         let mut table = crate::writer::test_utils::create_bare_table();
         let partition_cols = vec!["modified".to_string()];
@@ -504,47 +505,44 @@ mod tests {
             .await
             .unwrap();
 
-        let data_as_json = r#"[
+        let buf = r#"
             {"id" : "0xdeadbeef", "value" : 42, "modified" : "2021-02-01",
-                "metadata" : {"some-key" : "some-value"}},
-            {"id" : "0xdeadcaf", "value" : 3, "modified" : "2021-02-02",
                 "metadata" : {"some-key" : "some-value"}}
-        ]"#;
-
-        let deser_data: Vec<serde_json::Value> =
-            serde_json::from_str(data_as_json).expect("Failed to deserialize test record");
-        let mut data_iterable = deser_data.iter().map(|v| Ok(v.to_owned()));
-        /*
-         * This works
-        use arrow::datatypes::{DataType, Field};
-        let entries = DataType::Struct(vec![
-            Field::new("key", DataType::Utf8, false),
-            Field::new("value", DataType::Utf8, true),
-        ]);
-        let schema = Arc::new(ArrowSchema::new(vec![
-            Field::new("id", DataType::Utf8, true),
-            Field::new("value", DataType::Int32, true),
-            Field::new("modified", DataType::Utf8, true),
-            Field::new("metadata", DataType::Map(
-                    Box::new(Field::new("entries", entries, true)), false), true),
-        ]));
-        */
+            {"id" : "0xdeadcaf", "value" : 3, "modified" : "2021-02-02",
+                "metadata" : {"some-key" : "some-value"}}"#
+            .as_bytes();
 
         let schema: ArrowSchema =
             <ArrowSchema as TryFrom<&Schema>>::try_from(&delta_schema).unwrap();
-        let options = DecoderOptions::new();
-        let decoder = Decoder::new(Arc::new(schema), options);
-        let batch = decoder.next_batch(&mut data_iterable).unwrap().unwrap();
+
+        // Using a batch size of two since the buf above only has two records
+        let mut decoder = RawReaderBuilder::new(Arc::new(schema))
+            .with_batch_size(2)
+            .build_decoder()
+            .expect("Failed to build decoder");
+
+        decoder
+            .decode(buf)
+            .expect("Failed to deserialize the JSON in the buffer");
+        let batch = decoder.flush().expect("Failed to flush").unwrap();
 
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
-
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
+        println!("partitions: {:?}", partitions);
 
         let expected_keys = vec![
             String::from("modified=2021-02-01"),
             String::from("modified=2021-02-02"),
         ];
-        validate_partition_map(partitions, &partition_cols, expected_keys)
+
+        assert_eq!(partitions.len(), expected_keys.len());
+        for result in partitions {
+            let partition_key =
+                PartitionPath::from_hashmap(&partition_cols, &result.partition_values)
+                    .unwrap()
+                    .into();
+            assert!(expected_keys.contains(&partition_key));
+        }
     }
 
     #[tokio::test]
