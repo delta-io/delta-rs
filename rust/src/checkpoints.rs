@@ -1,11 +1,8 @@
 //! Implementation for writing delta checkpoints.
 
 use arrow::datatypes::Schema as ArrowSchema;
-// NOTE: Temporarily allowing these deprecated imports pending the completion of:
-// <https://github.com/apache/arrow-rs/pull/3979>
 use arrow::error::ArrowError;
-#[allow(deprecated)]
-use arrow::json::reader::{Decoder, DecoderOptions};
+use arrow::json::RawReaderBuilder;
 use chrono::{DateTime, Datelike, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -17,6 +14,7 @@ use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+use std::io::Write;
 use std::iter::Iterator;
 use std::ops::Add;
 
@@ -74,6 +72,13 @@ pub enum CheckpointError {
         /// The source serde_json::Error.
         #[from]
         source: serde_json::Error,
+    },
+    /// Passthrough error returned when doing std::io operations
+    #[error("std::io::Error: {source}")]
+    Io {
+        /// The source std::io::Error
+        #[from]
+        source: std::io::Error,
     },
 }
 
@@ -338,7 +343,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
     }
 
     // protocol
-    let mut jsons = std::iter::once(action::Action::protocol(action::Protocol {
+    let jsons = std::iter::once(action::Action::protocol(action::Protocol {
         min_reader_version: state.min_reader_version(),
         min_writer_version: state.min_writer_version(),
     }))
@@ -388,12 +393,28 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
     // Write the Checkpoint parquet file.
     let mut bytes = vec![];
     let mut writer = ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), None)?;
+    let mut decoder = RawReaderBuilder::new(arrow_schema)
+        .with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE)
+        .build_decoder()?;
 
-    let options = DecoderOptions::new().with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE);
-    let decoder = Decoder::new(arrow_schema, options);
-    while let Some(batch) = decoder.next_batch(&mut jsons)? {
-        writer.write(&batch)?;
+    let mut buf = vec![];
+    for res in jsons {
+        let json = res?;
+        buf.write_all(serde_json::to_string(&json)?.as_bytes())?;
     }
+    let mut consumed = 0;
+
+    loop {
+        let read_bytes = decoder.decode(&buf)?;
+        consumed += read_bytes;
+        if let Some(batch) = decoder.flush()? {
+            writer.write(&batch)?;
+        }
+        if consumed == buf.len() {
+            break;
+        }
+    }
+
     let _ = writer.close()?;
     debug!("Finished writing checkpoint parquet buffer.");
 
