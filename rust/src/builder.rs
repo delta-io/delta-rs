@@ -389,7 +389,10 @@ mod tests {
         assert_eq!("memory://", uri.as_str());
         let uri = ensure_table_uri("s3://tests/data/delta-0.8.0/").unwrap();
         assert_eq!("s3://tests/data/delta-0.8.0", uri.as_str());
-        let _uri = ensure_table_uri("s3://tests/data/delta-0.8.0//").unwrap();
-        assert_eq!("s3://tests/data/delta-0.8.0", uri.as_str())
+        let uri = ensure_table_uri("s3://tests/data/delta-0.8.0//").unwrap();
+        assert_eq!("s3://tests/data/delta-0.8.0", uri.as_str());
+
+        let uri = ensure_table_uri("file://test path/").unwrap();
+        assert_eq!("file://test path/", uri.as_str());
     }
 }
