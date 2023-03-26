@@ -251,6 +251,12 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
                     (*field).is_nullable(),
                 )))
             }
+            ArrowDataType::LargeList(field) => {
+                Ok(schema::SchemaDataType::array(schema::SchemaTypeArray::new(
+                    Box::new((*field).data_type().try_into()?),
+                    (*field).is_nullable(),
+                )))
+            }
             ArrowDataType::FixedSizeList(field, _) => {
                 Ok(schema::SchemaDataType::array(schema::SchemaTypeArray::new(
                     Box::new((*field).data_type().try_into()?),
