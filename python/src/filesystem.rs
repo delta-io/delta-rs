@@ -46,8 +46,14 @@ impl DeltaFileSystemHandler {
         })
     }
 
-    fn __repr__<'py>(self_: PyRef<Self>, py: Python<'py>) -> PyResult<String> {
-        // let self_: PyRef<Self> = py_self.extract(py)?;
+    fn __repr__(self_: PyRef<Self>) -> PyResult<String> {
+        let pyself = self_.clone().into_py(self_.py());
+        let class_name: String = pyself
+            .as_ref(self_.py())
+            .getattr("__class__")?
+            .getattr("__name__")?
+            .extract()?;
+
         let maybe_options = if self_.config.options.is_empty() {
             "".to_string()
         } else {
@@ -56,18 +62,14 @@ impl DeltaFileSystemHandler {
             let options_str = self_
                 .config
                 .options
-                .iter()
-                .map(|(key, _)| format!("'{key}': '***'"))
+                .keys()
+                .map(|key| format!("'{key}': '***'"))
                 .collect::<Vec<String>>()
                 .join(", ");
             format!(", options={{{options_str}}}")
         };
         let table_uri = self_.config.root_url.clone();
-        let class_name: String = self_
-            .into_py(py)
-            .getattr(py, "__class__")?
-            .getattr(py, "__name__")?
-            .extract(py)?;
+
         Ok(format!(
             "{class_name}(table_uri='{table_uri}'{maybe_options})",
         ))
