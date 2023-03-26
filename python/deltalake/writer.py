@@ -77,6 +77,7 @@ def write_deltalake(
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
     file_options: Optional[ds.ParquetFileWriteOptions] = None,
+    max_partitions: Optional[int] = None,
     max_open_files: int = 1024,
     max_rows_per_file: int = 10 * 1024 * 1024,
     min_rows_per_group: int = 64 * 1024,
@@ -87,7 +88,6 @@ def write_deltalake(
     overwrite_schema: bool = False,
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
-    max_partitions: Optional[int] = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -115,6 +115,7 @@ def write_deltalake(
         Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
         Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
         for the list of available options
+    :param max_partitions: the maximum number of partitions that will be used.
     :param max_open_files: Limits the maximum number of
         files that can be left open while writing. If an attempt is made to open
         too many files then the least recently used file will be closed.
@@ -136,7 +137,6 @@ def write_deltalake(
     :param overwrite_schema: If True, allows updating the schema of the table.
     :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
     :param partition_filters: the partition filters that will be used for partition overwrite.
-    :param max_partitions: the maximum number of partitions that will be used
     """
     if _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
