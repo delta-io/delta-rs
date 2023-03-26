@@ -11,6 +11,8 @@ import pyarrow.fs as fs
 
 from deltalake.writer import AddAction
 
+__version__: str
+
 RawDeltaTable: Any
 rust_core_version: Callable[[], str]
 
