@@ -1018,24 +1018,41 @@ impl PySchema {
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
-        fn convert_to_large_type(f: ArrowField, dt: ArrowDataType) -> ArrowField {
-            let f = f.clone();
+        fn convert_to_large_type(field: ArrowField, dt: ArrowDataType) -> ArrowField {
+            let field = field.clone();
 
             match dt {
-                ArrowDataType::Utf8 => f.with_data_type(ArrowDataType::LargeUtf8),
+                ArrowDataType::Utf8 => field.with_data_type(ArrowDataType::LargeUtf8),
 
                 ArrowDataType::Binary | ArrowDataType::FixedSizeBinary(_) => {
-                    f.with_data_type(ArrowDataType::LargeBinary)
+                    field.with_data_type(ArrowDataType::LargeBinary)
                 }
 
-                ArrowDataType::List(x) | ArrowDataType::FixedSizeList(x, _) => {
-                    let s_dt: ArrowDataType = x.data_type().clone();
-                    let s_f: ArrowField = *x.clone();
-                    let sub = convert_to_large_type(s_f, s_dt);
-                    f.with_data_type(ArrowDataType::LargeList(Box::from(sub)))
+                ArrowDataType::List(f) | ArrowDataType::FixedSizeList(f, _) => {
+                    let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
+                    field.with_data_type(ArrowDataType::LargeList(Box::from(sub_field)))
                 }
 
-                _ => f,
+                ArrowDataType::Map(f, sorted) => {
+                    let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
+                    field.with_data_type(ArrowDataType::Map(Box::from(sub_field), sorted))
+                }
+
+                ArrowDataType::Struct(fields) => {
+                    let sub_fields = fields
+                        .iter()
+                        .map(|f| {
+                            let dt: ArrowDataType = f.data_type().clone();
+                            let f: ArrowField = f.clone();
+
+                            convert_to_large_type(f, dt)
+                        })
+                        .collect();
+
+                    field.with_data_type(ArrowDataType::Struct(sub_fields))
+                }
+
+                _ => field,
             }
         }
 

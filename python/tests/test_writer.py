@@ -804,7 +804,7 @@ def test_handles_binary_data(tmp_path: pathlib.Path):
 
 def test_large_arrow_types(tmp_path: pathlib.Path):
     pylist = [
-        {"name": "Joey", "gender": b"M", "arr_type": ["x", "y"]},
+        {"name": "Joey", "gender": b"M", "arr_type": ["x", "y"], "dict": {"a": b"M"}},
         {"name": "Ivan", "gender": b"F", "arr_type": ["x", "z"]},
     ]
     schema = pa.schema(
@@ -812,6 +812,8 @@ def test_large_arrow_types(tmp_path: pathlib.Path):
             pa.field("name", pa.large_string()),
             pa.field("gender", pa.large_binary()),
             pa.field("arr_type", pa.large_list(pa.large_string())),
+            pa.field("map_type", pa.map_(pa.large_string(), pa.large_binary())),
+            pa.field("struct", pa.struct([pa.field("sub", pa.large_string())])),
         ]
     )
     table = pa.Table.from_pylist(pylist, schema=schema)
