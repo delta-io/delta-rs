@@ -11,6 +11,18 @@ from deltalake.fs import DeltaStorageHandler
 from deltalake.writer import write_deltalake
 
 
+def test_repr():
+    path = "file://my path/"
+    handler = DeltaStorageHandler(path)
+    assert repr(handler) == f"DeltaStorageHandler(table_uri='{path}')"
+
+    handler = DeltaStorageHandler(path, {"x": "y", "abc": "def"})
+    assert (
+        repr(handler)
+        == f"DeltaStorageHandler(table_uri='{path}', options={{'x': '***', 'abc': '***'}})"
+    )
+
+
 @pytest.mark.s3
 @pytest.mark.integration
 @pytest.mark.timeout(timeout=15, method="thread")

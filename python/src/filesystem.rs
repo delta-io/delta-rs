@@ -46,6 +46,33 @@ impl DeltaFileSystemHandler {
         })
     }
 
+    fn __repr__<'py>(self_: PyRef<Self>, py: Python<'py>) -> PyResult<String> {
+        // let self_: PyRef<Self> = py_self.extract(py)?;
+        let maybe_options = if self_.config.options.is_empty() {
+            "".to_string()
+        } else {
+            // Use *** for values since there might be secrets in there we don't
+            // want folks accidentally logging somewhere.
+            let options_str = self_
+                .config
+                .options
+                .iter()
+                .map(|(key, _)| format!("'{key}': '***'"))
+                .collect::<Vec<String>>()
+                .join(", ");
+            format!(", options={{{options_str}}}")
+        };
+        let table_uri = self_.config.root_url.clone();
+        let class_name: String = self_
+            .into_py(py)
+            .getattr(py, "__class__")?
+            .getattr(py, "__name__")?
+            .extract(py)?;
+        Ok(format!(
+            "{class_name}(table_uri='{table_uri}'{maybe_options})",
+        ))
+    }
+
     fn get_type_name(&self) -> String {
         "object-store".into()
     }
