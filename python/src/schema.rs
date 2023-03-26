@@ -950,7 +950,7 @@ pub fn schema_to_pyobject(schema: &Schema, py: Python) -> PyResult<PyObject> {
 /// >>> import pyarrow as pa
 /// >>> Schema.from_pyarrow(pa.schema({"x": pa.int32(), "y": pa.string()}))
 /// Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveType("string"), nullable=True)])
-#[pyclass(extends=StructType, name="Schema", module="deltalake.schema",
+#[pyclass(extends = StructType, name = "Schema", module = "deltalake.schema",
 text_signature = "(fields)")]
 pub struct PySchema;
 
@@ -1008,14 +1008,45 @@ impl PySchema {
     /// Return equivalent PyArrow schema
     ///
     /// :rtype: pyarrow.Schema
-    #[pyo3(text_signature = "($self)")]
-    fn to_pyarrow(self_: PyRef<'_, Self>) -> PyResult<PyArrowType<ArrowSchema>> {
+    #[pyo3(text_signature = "($self, as_large_types)")]
+    fn to_pyarrow(
+        self_: PyRef<'_, Self>,
+        as_large_types: Option<bool>,
+    ) -> PyResult<PyArrowType<ArrowSchema>> {
         let super_ = self_.as_ref();
-        Ok(PyArrowType(
-            (&super_.inner_type.clone())
-                .try_into()
-                .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?,
-        ))
+        let res: ArrowSchema = (&super_.inner_type.clone())
+            .try_into()
+            .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
+
+        if as_large_types.unwrap_or(false) {
+            let schema = ArrowSchema::new(
+                res.fields
+                    .iter()
+                    .map(|f| {
+                        let dt = f.data_type();
+                        let f = f.clone();
+
+                        match dt {
+                            ArrowDataType::Utf8 => f.with_data_type(ArrowDataType::LargeUtf8),
+
+                            ArrowDataType::Binary | ArrowDataType::FixedSizeBinary(_) => {
+                                f.with_data_type(ArrowDataType::LargeBinary)
+                            }
+
+                            ArrowDataType::List(x) | ArrowDataType::FixedSizeList(x, _) => {
+                                f.with_data_type(ArrowDataType::LargeList(x.clone()))
+                            }
+
+                            _ => f,
+                        }
+                    })
+                    .collect(),
+            );
+
+            Ok(PyArrowType(schema))
+        } else {
+            Ok(PyArrowType(res))
+        }
     }
 
     /// Create from a PyArrow schema

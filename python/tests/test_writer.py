@@ -14,7 +14,7 @@ from packaging import version
 from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
 from pyarrow.lib import RecordBatchReader
 
-from deltalake import DeltaTable, Schema, write_deltalake
+from deltalake import DeltaTable, write_deltalake
 from deltalake.table import ProtocolVersions
 from deltalake.writer import DeltaTableProtocolError, try_get_table_and_table_uri
 
@@ -803,13 +803,20 @@ def test_handles_binary_data(tmp_path: pathlib.Path):
 
 
 def test_large_arrow_types(tmp_path: pathlib.Path):
-    pylist = [{"name": "Joey", "gender": b"M"}, {"name": "Ivan", "gender": b"F"}]
+    pylist = [
+        {"name": "Joey", "gender": b"M", "arr_type": ["x", "y"]},
+        {"name": "Ivan", "gender": b"F", "arr_type": ["x", "z"]},
+    ]
     schema = pa.schema(
-        [pa.field("name", pa.large_string()), pa.field("gender", pa.large_binary())]
+        [
+            pa.field("name", pa.large_string()),
+            pa.field("gender", pa.large_binary()),
+            pa.field("arr_type", pa.large_list(pa.string())),
+        ]
     )
     table = pa.Table.from_pylist(pylist, schema=schema)
 
     write_deltalake(tmp_path, table)
 
     dt = DeltaTable(tmp_path)
-    assert Schema.from_pyarrow(table.schema) == dt.schema()
+    assert table.schema == dt.schema().to_pyarrow(as_large_types=True)
