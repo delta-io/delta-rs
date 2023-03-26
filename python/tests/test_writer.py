@@ -811,7 +811,7 @@ def test_large_arrow_types(tmp_path: pathlib.Path):
         [
             pa.field("name", pa.large_string()),
             pa.field("gender", pa.large_binary()),
-            pa.field("arr_type", pa.large_list(pa.string())),
+            pa.field("arr_type", pa.large_list(pa.large_string())),
         ]
     )
     table = pa.Table.from_pylist(pylist, schema=schema)
