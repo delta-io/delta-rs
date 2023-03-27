@@ -838,4 +838,3 @@ def test_large_arrow_types(tmp_path: pathlib.Path):
 
     dt = DeltaTable(tmp_path)
     assert table.schema == dt.schema().to_pyarrow(as_large_types=True)
-

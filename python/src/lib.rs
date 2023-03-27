@@ -379,9 +379,7 @@ impl RawDeltaTable {
         let column_names: HashSet<&str> = self
             ._table
             .schema()
-            .ok_or_else(|| PyDeltaTableError::new_err(
-                "table does not yet have a schema",
-            ))?
+            .ok_or_else(|| PyDeltaTableError::new_err("table does not yet have a schema"))?
             .get_fields()
             .iter()
             .map(|field| field.get_name())
