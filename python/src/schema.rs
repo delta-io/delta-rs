@@ -1019,8 +1019,6 @@ impl PySchema {
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
         fn convert_to_large_type(field: ArrowField, dt: ArrowDataType) -> ArrowField {
-            let field = field.clone();
-
             match dt {
                 ArrowDataType::Utf8 => field.with_data_type(ArrowDataType::LargeUtf8),
 
