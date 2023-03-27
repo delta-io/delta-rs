@@ -802,6 +802,22 @@ def test_handles_binary_data(tmp_path: pathlib.Path):
     assert table == out
 
 
+def test_max_partitions_exceeding_fragment_should_fail(
+    tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
+):
+    with pytest.raises(
+        ValueError,
+        match=r"Fragment would be written into \d+ partitions\. This exceeds the maximum of \d+",
+    ):
+        write_deltalake(
+            tmp_path,
+            sample_data_for_partitioning,
+            mode="overwrite",
+            max_partitions=1,
+            partition_by=["p1", "p2"],
+        )
+
+
 def test_large_arrow_types(tmp_path: pathlib.Path):
     pylist = [
         {"name": "Joey", "gender": b"M", "arr_type": ["x", "y"], "dict": {"a": b"M"}},
@@ -822,3 +838,4 @@ def test_large_arrow_types(tmp_path: pathlib.Path):
 
     dt = DeltaTable(tmp_path)
     assert table.schema == dt.schema().to_pyarrow(as_large_types=True)
+

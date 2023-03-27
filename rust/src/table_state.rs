@@ -368,12 +368,16 @@ impl DeltaTableState {
         filters: &'a [PartitionFilter<'a, &'a str>],
     ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
         let current_metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
-        if !filters
+
+        let nonpartitioned_columns: Vec<String> = filters
             .iter()
-            .all(|f| current_metadata.partition_columns.contains(&f.key.into()))
-        {
-            return Err(DeltaTableError::InvalidPartitionFilter {
-                partition_filter: format!("{filters:?}"),
+            .filter(|f| !current_metadata.partition_columns.contains(&f.key.into()))
+            .map(|f| f.key.to_string())
+            .collect();
+
+        if !nonpartitioned_columns.is_empty() {
+            return Err(DeltaTableError::ColumnsNotPartitioned {
+                nonpartitioned_columns: { nonpartitioned_columns },
             });
         }
 
