@@ -213,6 +213,10 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
             ArrowDataType::Int32 => Ok(schema::SchemaDataType::primitive("integer".to_string())),
             ArrowDataType::Int16 => Ok(schema::SchemaDataType::primitive("short".to_string())),
             ArrowDataType::Int8 => Ok(schema::SchemaDataType::primitive("byte".to_string())),
+            ArrowDataType::UInt64 => Ok(schema::SchemaDataType::primitive("long".to_string())), // undocumented type
+            ArrowDataType::UInt32 => Ok(schema::SchemaDataType::primitive("integer".to_string())),
+            ArrowDataType::UInt16 => Ok(schema::SchemaDataType::primitive("short".to_string())),
+            ArrowDataType::UInt8 => Ok(schema::SchemaDataType::primitive("byte".to_string())),
             ArrowDataType::Float32 => Ok(schema::SchemaDataType::primitive("float".to_string())),
             ArrowDataType::Float64 => Ok(schema::SchemaDataType::primitive("double".to_string())),
             ArrowDataType::Boolean => Ok(schema::SchemaDataType::primitive("boolean".to_string())),
