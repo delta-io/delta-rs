@@ -842,7 +842,7 @@ def test_large_arrow_types(tmp_path: pathlib.Path):
 
 def test_uint_arrow_types(tmp_path: pathlib.Path):
     pylist = [
-        {"num1": 3, "num2": 3, "num3": 3, "num4": 5},
+        {"num1": 3, "num2": 3, "num3": 3, "num4": 5, "float5": 5},
         {"num1": 1, "num2": 13, "num3": 35, "num4": 13},
     ]
     schema = pa.schema(
@@ -851,9 +851,9 @@ def test_uint_arrow_types(tmp_path: pathlib.Path):
             pa.field("num2", pa.uint16()),
             pa.field("num3", pa.uint32()),
             pa.field("num4", pa.uint64()),
+            pa.field("float5", pa.float16()),
         ]
     )
     table = pa.Table.from_pylist(pylist, schema=schema)
 
     write_deltalake(tmp_path, table)
-
