@@ -167,9 +167,7 @@ pub(crate) async fn commit(
         match try_commit_transaction(storage, &tmp_commit, version).await {
             Ok(version) => return Ok(version),
             Err(TransactionError::VersionAlreadyExists(version)) => {
-                let summary =
-                    WinningCommitSummary::try_new(storage, read_snapshot.version(), version)
-                        .await?;
+                let summary = WinningCommitSummary::try_new(storage, version - 1, version).await?;
                 let transaction_info = TransactionInfo::try_new(
                     read_snapshot,
                     operation.read_predicate(),

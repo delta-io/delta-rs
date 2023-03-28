@@ -88,7 +88,7 @@ pub(crate) struct TransactionInfo<'a> {
     txn_id: String,
     /// partition predicates by which files have been queried by the transaction
     ///
-    /// If any new data files or removed data files match this predicate, the 
+    /// If any new data files or removed data files match this predicate, the
     /// transaction should fail.
     #[cfg(not(feature = "datafusion"))]
     read_predicates: Option<String>,
@@ -208,39 +208,36 @@ impl WinningCommitSummary {
         read_version: DeltaDataTypeVersion,
         winning_commit_version: DeltaDataTypeVersion,
     ) -> DeltaResult<Self> {
-        let mut actions = Vec::new();
-        let mut version_to_read = read_version + 1;
+        // NOTE using asser, since a wrong version would right now mean a bug in our code.
+        assert_eq!(winning_commit_version, read_version + 1);
 
-        while version_to_read <= winning_commit_version {
-            let commit_uri = commit_uri_from_version(winning_commit_version);
-            let commit_log_bytes = object_store.get(&commit_uri).await?.bytes().await?;
+        let commit_uri = commit_uri_from_version(winning_commit_version);
+        let commit_log_bytes = object_store.get(&commit_uri).await?.bytes().await?;
 
-            let reader = BufReader::new(Cursor::new(commit_log_bytes));
-            for maybe_line in reader.lines() {
+        let reader = BufReader::new(Cursor::new(commit_log_bytes));
+
+        let actions = reader
+            .lines()
+            .map(|maybe_line| {
                 let line = maybe_line?;
-                actions.push(serde_json::from_str::<Action>(line.as_str()).map_err(|e| {
+                serde_json::from_str::<Action>(line.as_str()).map_err(|e| {
                     DeltaTableError::InvalidJsonLog {
                         json_err: e,
                         version: winning_commit_version,
                         line,
                     }
-                })?);
-            }
-            version_to_read += 1;
-        }
+                })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
 
-        // TODO how to handle commit info for multiple read commits?
         let commit_info = actions
             .iter()
             .find(|action| matches!(action, Action::commitInfo(_)))
             .map(|action| match action {
-                Action::commitInfo(info) => {
-                    // let mut updated = info.clone();
-                    // updated.version = Some(version_to_read);
-                    info.clone()
-                }
+                Action::commitInfo(info) => info.clone(),
                 _ => unreachable!(),
             });
+
         Ok(Self {
             actions,
             commit_info,
