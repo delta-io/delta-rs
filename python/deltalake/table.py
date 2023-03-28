@@ -465,12 +465,12 @@ given filters.
         >>> data = pa.table({"x": [1, 2, 3], "y": [4, 5, 6]})
         >>> write_deltalake("tmp", data, partition_by=["x"])
         >>> dt = DeltaTable("tmp")
-        >>> dt.get_add_actions_df().to_pandas()
+        >>> dt.get_add_actions().to_pandas()
                                                                 path  size_bytes       modification_time  data_change partition_values  num_records null_count       min       max
         0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 2}            1   {'y': 0}  {'y': 5}  {'y': 5}
         1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 3}            1   {'y': 0}  {'y': 6}  {'y': 6}
         2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True         {'x': 1}            1   {'y': 0}  {'y': 4}  {'y': 4}
-        >>> dt.get_add_actions_df(flatten=True).to_pandas()
+        >>> dt.get_add_actions(flatten=True).to_pandas()
                                                                 path  size_bytes       modification_time  data_change  partition.x  num_records  null_count.y  min.y  max.y
         0  x=2/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            2            1             0      5      5
         1  x=3/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            3            1             0      6      6
