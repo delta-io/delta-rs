@@ -1,8 +1,11 @@
 //! Implementation for writing delta checkpoints.
 
 use arrow::datatypes::Schema as ArrowSchema;
-use arrow::error::ArrowError;
+// NOTE: Temporarily allowing these deprecated imports pending the completion of:
+// <https://github.com/apache/arrow-rs/pull/3979>
+#[allow(deprecated)]
 use arrow::json::reader::{Decoder, DecoderOptions};
+use arrow::error::ArrowError;
 use chrono::{DateTime, Datelike, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -299,6 +302,9 @@ pub async fn cleanup_expired_logs_for(
     }
 }
 
+// NOTE: Temporarily allowing these deprecated imports pending the completion of:
+// <https://github.com/apache/arrow-rs/pull/3979>
+#[allow(deprecated)]
 fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, CheckpointError> {
     let current_metadata = state
         .current_metadata()
@@ -382,6 +388,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
     // Write the Checkpoint parquet file.
     let mut bytes = vec![];
     let mut writer = ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), None)?;
+
     let options = DecoderOptions::new().with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE);
     let decoder = Decoder::new(arrow_schema, options);
     while let Some(batch) = decoder.next_batch(&mut jsons)? {
