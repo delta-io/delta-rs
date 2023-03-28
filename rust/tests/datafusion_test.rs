@@ -500,10 +500,7 @@ async fn test_files_scanned() -> Result<()> {
         TestCase::new("float64", |value| lit(value as f64)),
         TestCase::new("float32", |value| lit(value as f32)),
         TestCase::new("timestamp", |value| {
-            lit(TimestampMicrosecond(
-                Some(value * 1_000_000),
-                None,
-            ))
+            lit(TimestampMicrosecond(Some(value * 1_000_000), None))
         }),
         // TODO: I think decimal statistics are being written to the log incorrectly. The underlying i128 is written
         // not the proper string representation as specified by the precision and scale

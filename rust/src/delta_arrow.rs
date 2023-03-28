@@ -235,6 +235,7 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
                 "decimal({p},{s})"
             ))),
             ArrowDataType::Date32 => Ok(schema::SchemaDataType::primitive("date".to_string())),
+            ArrowDataType::Date64 => Ok(schema::SchemaDataType::primitive("date".to_string())),
             ArrowDataType::Timestamp(TimeUnit::Microsecond, None) => {
                 Ok(schema::SchemaDataType::primitive("timestamp".to_string()))
             }
