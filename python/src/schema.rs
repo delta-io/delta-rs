@@ -1007,11 +1007,16 @@ impl PySchema {
 
     /// Return equivalent PyArrow schema
     ///
+    /// :param as_large_types: get schema with all variable size types (list,
+    ///   binary, string) as large variants (with int64 indices). This is for
+    ///   compatibility with systems like Polars that only support the large 
+    ///   versions of Arrow types.
+    ///
     /// :rtype: pyarrow.Schema
-    #[pyo3(text_signature = "($self, as_large_types)")]
+    #[pyo3(signature = "(as_large_types=false)")]
     fn to_pyarrow(
         self_: PyRef<'_, Self>,
-        as_large_types: Option<bool>,
+        as_large_types: bool,
     ) -> PyResult<PyArrowType<ArrowSchema>> {
         let super_ = self_.as_ref();
         let res: ArrowSchema = (&super_.inner_type.clone())
@@ -1054,7 +1059,7 @@ impl PySchema {
             }
         }
 
-        if as_large_types.unwrap_or(false) {
+        if as_large_types {
             let schema = ArrowSchema::new(
                 res.fields
                     .iter()
