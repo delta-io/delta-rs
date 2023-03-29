@@ -1009,11 +1009,11 @@ impl PySchema {
     ///
     /// :param as_large_types: get schema with all variable size types (list,
     ///   binary, string) as large variants (with int64 indices). This is for
-    ///   compatibility with systems like Polars that only support the large 
+    ///   compatibility with systems like Polars that only support the large
     ///   versions of Arrow types.
     ///
     /// :rtype: pyarrow.Schema
-    #[pyo3(signature = "(as_large_types=false)")]
+    #[pyo3(signature = (as_large_types = false))]
     fn to_pyarrow(
         self_: PyRef<'_, Self>,
         as_large_types: bool,
