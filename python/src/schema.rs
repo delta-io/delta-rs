@@ -1027,13 +1027,16 @@ impl PySchema {
             match dt {
                 ArrowDataType::Utf8 => field.with_data_type(ArrowDataType::LargeUtf8),
 
-                ArrowDataType::Binary | ArrowDataType::FixedSizeBinary(_) => {
-                    field.with_data_type(ArrowDataType::LargeBinary)
-                }
+                ArrowDataType::Binary => field.with_data_type(ArrowDataType::LargeBinary),
 
-                ArrowDataType::List(f) | ArrowDataType::FixedSizeList(f, _) => {
+                ArrowDataType::List(f) => {
                     let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
                     field.with_data_type(ArrowDataType::LargeList(Box::from(sub_field)))
+                }
+
+                ArrowDataType::FixedSizeList(f, size) => {
+                    let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
+                    field.with_data_type(ArrowDataType::FixedSizeList(Box::from(sub_field), size))
                 }
 
                 ArrowDataType::Map(f, sorted) => {
