@@ -950,7 +950,7 @@ pub fn schema_to_pyobject(schema: &Schema, py: Python) -> PyResult<PyObject> {
 /// >>> import pyarrow as pa
 /// >>> Schema.from_pyarrow(pa.schema({"x": pa.int32(), "y": pa.string()}))
 /// Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveType("string"), nullable=True)])
-#[pyclass(extends=StructType, name="Schema", module="deltalake.schema",
+#[pyclass(extends = StructType, name = "Schema", module = "deltalake.schema",
 text_signature = "(fields)")]
 pub struct PySchema;
 
@@ -1007,15 +1007,78 @@ impl PySchema {
 
     /// Return equivalent PyArrow schema
     ///
+    /// :param as_large_types: get schema with all variable size types (list,
+    ///   binary, string) as large variants (with int64 indices). This is for
+    ///   compatibility with systems like Polars that only support the large
+    ///   versions of Arrow types.
+    ///
     /// :rtype: pyarrow.Schema
-    #[pyo3(text_signature = "($self)")]
-    fn to_pyarrow(self_: PyRef<'_, Self>) -> PyResult<PyArrowType<ArrowSchema>> {
+    #[pyo3(signature = (as_large_types = false))]
+    fn to_pyarrow(
+        self_: PyRef<'_, Self>,
+        as_large_types: bool,
+    ) -> PyResult<PyArrowType<ArrowSchema>> {
         let super_ = self_.as_ref();
-        Ok(PyArrowType(
-            (&super_.inner_type.clone())
-                .try_into()
-                .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?,
-        ))
+        let res: ArrowSchema = (&super_.inner_type.clone())
+            .try_into()
+            .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
+
+        fn convert_to_large_type(field: ArrowField, dt: ArrowDataType) -> ArrowField {
+            match dt {
+                ArrowDataType::Utf8 => field.with_data_type(ArrowDataType::LargeUtf8),
+
+                ArrowDataType::Binary => field.with_data_type(ArrowDataType::LargeBinary),
+
+                ArrowDataType::List(f) => {
+                    let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
+                    field.with_data_type(ArrowDataType::LargeList(Box::from(sub_field)))
+                }
+
+                ArrowDataType::FixedSizeList(f, size) => {
+                    let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
+                    field.with_data_type(ArrowDataType::FixedSizeList(Box::from(sub_field), size))
+                }
+
+                ArrowDataType::Map(f, sorted) => {
+                    let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
+                    field.with_data_type(ArrowDataType::Map(Box::from(sub_field), sorted))
+                }
+
+                ArrowDataType::Struct(fields) => {
+                    let sub_fields = fields
+                        .iter()
+                        .map(|f| {
+                            let dt: ArrowDataType = f.data_type().clone();
+                            let f: ArrowField = f.clone();
+
+                            convert_to_large_type(f, dt)
+                        })
+                        .collect();
+
+                    field.with_data_type(ArrowDataType::Struct(sub_fields))
+                }
+
+                _ => field,
+            }
+        }
+
+        if as_large_types {
+            let schema = ArrowSchema::new(
+                res.fields
+                    .iter()
+                    .map(|f| {
+                        let dt: ArrowDataType = f.data_type().clone();
+                        let f: ArrowField = f.clone();
+
+                        convert_to_large_type(f, dt)
+                    })
+                    .collect(),
+            );
+
+            Ok(PyArrowType(schema))
+        } else {
+            Ok(PyArrowType(res))
+        }
     }
 
     /// Create from a PyArrow schema
