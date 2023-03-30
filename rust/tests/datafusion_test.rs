@@ -343,7 +343,7 @@ async fn get_scan_metrics(
         visit_execution_plan(&plan, &mut metrics).unwrap();
     }
 
-    return Ok(metrics);
+    Ok(metrics)
 }
 
 fn create_all_types_batch(not_null_rows: usize, null_rows: usize, offset: usize) -> RecordBatch {
@@ -488,30 +488,27 @@ async fn test_files_scanned() -> Result<()> {
     let table = append_to_table(table, batch).await;
 
     let metrics = get_scan_metrics(&table, &state, &[]).await?;
-    assert!(metrics.num_scanned_files() == 3);
+    assert_eq!(metrics.num_scanned_files(), 3);
 
-    // (Column name, value from file 1, value from file 2, value from file 3, non existant value)
+    // (Column name, value from file 1, value from file 2, value from file 3, non existent value)
     let tests = [
         TestCase::new("utf8", |value| lit(value.to_string())),
-        TestCase::new("int64", |value| lit(value)),
+        TestCase::new("int64", lit),
         TestCase::new("int32", |value| lit(value as i32)),
         TestCase::new("int16", |value| lit(value as i16)),
         TestCase::new("int8", |value| lit(value as i8)),
         TestCase::new("float64", |value| lit(value as f64)),
         TestCase::new("float32", |value| lit(value as f32)),
         TestCase::new("timestamp", |value| {
-            lit(ScalarValue::TimestampMicrosecond(
-                Some(value * 1_000_000),
-                None,
-            ))
+            lit(TimestampMicrosecond(Some(value * 1_000_000), None))
         }),
         // TODO: I think decimal statistics are being written to the log incorrectly. The underlying i128 is written
-        // not the proper string representation as specified by the percision and scale
+        // not the proper string representation as specified by the precision and scale
         TestCase::new("decimal", |value| {
             lit(Decimal128(Some((value * 100).into()), 10, 2))
         }),
-        // TODO: The writer does not write complete statistiics for date columns
-        TestCase::new("date", |value| lit(ScalarValue::Date32(Some(value as i32)))),
+        // TODO: The writer does not write complete statistics for date columns
+        TestCase::new("date", |value| lit(Date32(Some(value as i32)))),
         // TODO: The writer does not write complete statistics for binary columns
         TestCase::new("binary", |value| lit(value.to_string().as_bytes())),
     ];
@@ -544,7 +541,7 @@ async fn test_files_scanned() -> Result<()> {
         let metrics = get_scan_metrics(&table, &state, &[e]).await?;
         assert_eq!(metrics.num_scanned_files(), 0);
 
-        // Conjuction
+        // Conjunction
         let e = col(column)
             .gt(file1_value.clone())
             .and(col(column).lt(file2_value.clone()));
@@ -617,7 +614,7 @@ async fn test_files_scanned() -> Result<()> {
         let metrics = get_scan_metrics(&table, &state, &[e]).await?;
         assert_eq!(metrics.num_scanned_files(), 0);
 
-        // Conjuction
+        // Conjunction
         let e = col(column)
             .gt(file1_value.clone())
             .and(col(column).lt(file2_value));
@@ -679,12 +676,12 @@ async fn test_files_scanned() -> Result<()> {
     // Check pruning for null partitions
     let e = col("k").is_null();
     let metrics = get_scan_metrics(&table, &state, &[e]).await?;
-    assert!(metrics.num_scanned_files() == 1);
+    assert_eq!(metrics.num_scanned_files(), 1);
 
     // Check pruning for null partitions. Since there are no record count statistics pruning cannot be done
     let e = col("k").is_not_null();
     let metrics = get_scan_metrics(&table, &state, &[e]).await?;
-    assert!(metrics.num_scanned_files() == 2);
+    assert_eq!(metrics.num_scanned_files(), 2);
 
     Ok(())
 }

@@ -816,3 +816,43 @@ def test_max_partitions_exceeding_fragment_should_fail(
             max_partitions=1,
             partition_by=["p1", "p2"],
         )
+
+
+def test_large_arrow_types(tmp_path: pathlib.Path):
+    pylist = [
+        {"name": "Joey", "gender": b"M", "arr_type": ["x", "y"], "dict": {"a": b"M"}},
+        {"name": "Ivan", "gender": b"F", "arr_type": ["x", "z"]},
+    ]
+    schema = pa.schema(
+        [
+            pa.field("name", pa.large_string()),
+            pa.field("gender", pa.large_binary()),
+            pa.field("arr_type", pa.large_list(pa.large_string())),
+            pa.field("map_type", pa.map_(pa.large_string(), pa.large_binary())),
+            pa.field("struct", pa.struct([pa.field("sub", pa.large_string())])),
+        ]
+    )
+    table = pa.Table.from_pylist(pylist, schema=schema)
+
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+    assert table.schema == dt.schema().to_pyarrow(as_large_types=True)
+
+
+def test_uint_arrow_types(tmp_path: pathlib.Path):
+    pylist = [
+        {"num1": 3, "num2": 3, "num3": 3, "num4": 5},
+        {"num1": 1, "num2": 13, "num3": 35, "num4": 13},
+    ]
+    schema = pa.schema(
+        [
+            pa.field("num1", pa.uint8()),
+            pa.field("num2", pa.uint16()),
+            pa.field("num3", pa.uint32()),
+            pa.field("num4", pa.uint64()),
+        ]
+    )
+    table = pa.Table.from_pylist(pylist, schema=schema)
+
+    write_deltalake(tmp_path, table)
