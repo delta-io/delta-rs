@@ -53,11 +53,18 @@ rusoto_dynamodb = { version = "0.47", default-features = false, optional = true 
 rusoto_glue = { version = "0.47", default-features = false, optional = true }
 
 # Datafusion
-datafusion = { version = "21", optional = true }
-datafusion-expr = { version = "21", optional = true }
-datafusion-common = { version = "21", optional = true }
-datafusion-proto = { version = "21", optional = true }
-datafusion-sql = { version = "19", optional = true }
+#datafusion = { version = "21", optional = true }
+#datafusion-expr = { version = "21", optional = true }
+#datafusion-common = { version = "21", optional = true }
+#datafusion-proto = { version = "21", optional = true }
+#datafusion-sql = { version = "21", optional = true }
+
+datafusion = { git = "https://github.com/apache/arrow-datafusion", branch = "main", optional = true }
+datafusion-expr = { git = "https://github.com/apache/arrow-datafusion", branch = "main", optional = true }
+datafusion-common = { git = "https://github.com/apache/arrow-datafusion", branch = "main", optional = true }
+datafusion-proto = { git = "https://github.com/apache/arrow-datafusion", branch = "main", optional = true }
+datafusion-sql = { git = "https://github.com/apache/arrow-datafusion", branch = "main", optional = true }
+
 sqlparser = { version = "0.30", optional = true }
 
 # NOTE dependencies only for integration tests
