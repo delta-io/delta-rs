@@ -142,24 +142,24 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
             }
             schema::SchemaDataType::map(m) => Ok(ArrowDataType::Map(
                 Box::new(ArrowField::new(
-                    "key_value",
+                    "entries",
                     ArrowDataType::Struct(vec![
                         ArrowField::new(
-                            "key",
+                            "keys",
                             <ArrowDataType as TryFrom<&schema::SchemaDataType>>::try_from(
                                 m.get_key_type(),
                             )?,
                             false,
                         ),
                         ArrowField::new(
-                            "value",
+                            "values",
                             <ArrowDataType as TryFrom<&schema::SchemaDataType>>::try_from(
                                 m.get_value_type(),
                             )?,
                             m.get_value_contains_null(),
                         ),
                     ]),
-                    false,
+                    true,
                 )),
                 false,
             )),
