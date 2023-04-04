@@ -77,6 +77,7 @@ def write_deltalake(
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
     file_options: Optional[ds.ParquetFileWriteOptions] = None,
+    max_partitions: Optional[int] = None,
     max_open_files: int = 1024,
     max_rows_per_file: int = 10 * 1024 * 1024,
     min_rows_per_group: int = 64 * 1024,
@@ -114,6 +115,7 @@ def write_deltalake(
         Can be provided with defaults using ParquetFileWriteOptions().make_write_options().
         Please refer to https://github.com/apache/arrow/blob/master/python/pyarrow/_dataset_parquet.pyx#L492-L533
         for the list of available options
+    :param max_partitions: the maximum number of partitions that will be used.
     :param max_open_files: Limits the maximum number of
         files that can be left open while writing. If an attempt is made to open
         too many files then the least recently used file will be closed.
@@ -306,6 +308,7 @@ def write_deltalake(
         min_rows_per_group=min_rows_per_group,
         max_rows_per_group=max_rows_per_group,
         filesystem=filesystem,
+        max_partitions=max_partitions,
     )
 
     if table is None:

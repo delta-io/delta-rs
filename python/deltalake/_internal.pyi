@@ -11,6 +11,8 @@ import pyarrow.fs as fs
 
 from deltalake.writer import AddAction
 
+__version__: str
+
 RawDeltaTable: Any
 rust_core_version: Callable[[], str]
 
@@ -126,7 +128,7 @@ class Schema:
     def to_json(self) -> str: ...
     @staticmethod
     def from_json(json: str) -> "Schema": ...
-    def to_pyarrow(self) -> pa.Schema: ...
+    def to_pyarrow(self, as_large_types: bool = False) -> pa.Schema: ...
     @staticmethod
     def from_pyarrow(type: pa.Schema) -> "Schema": ...
 

@@ -379,9 +379,7 @@ impl RawDeltaTable {
         let column_names: HashSet<&str> = self
             ._table
             .schema()
-            .ok_or(PyDeltaTableError::new_err(
-                "table does not yet have a schema",
-            ))?
+            .ok_or_else(|| PyDeltaTableError::new_err("table does not yet have a schema"))?
             .get_fields()
             .iter()
             .map(|field| field.get_name())
@@ -822,7 +820,7 @@ impl PyDeltaDataChecker {
 // module name need to match project name
 fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_new_deltalake, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(batch_distinct, m)?)?;
