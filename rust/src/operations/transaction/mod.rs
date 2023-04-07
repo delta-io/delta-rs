@@ -1,17 +1,29 @@
 //! Delta transactions
-use crate::action::{Action, DeltaOperation};
-use crate::storage::DeltaObjectStore;
-use crate::{crate_version, DeltaDataTypeVersion, DeltaResult, DeltaTableError};
-
 use chrono::Utc;
+use conflict_checker::ConflictChecker;
 use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore};
 use serde_json::{Map, Value};
 
+use crate::action::{Action, CommitInfo, DeltaOperation};
+use crate::storage::commit_uri_from_version;
+use crate::table_state::DeltaTableState;
+use crate::{crate_version, DeltaDataTypeVersion, DeltaResult, DeltaTableError};
+
+mod conflict_checker;
+#[cfg(feature = "datafusion")]
+mod state;
+#[cfg(test)]
+pub(crate) mod test_utils;
+
+use self::conflict_checker::{CommitConflictError, TransactionInfo, WinningCommitSummary};
+
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 
+/// Error raised while commititng transaction
 #[derive(thiserror::Error, Debug)]
-pub(crate) enum TransactionError {
+pub enum TransactionError {
+    /// Version already exists
     #[error("Tried committing existing table version: {0}")]
     VersionAlreadyExists(DeltaDataTypeVersion),
 
@@ -29,6 +41,12 @@ pub(crate) enum TransactionError {
         #[from]
         source: ObjectStoreError,
     },
+    /// Error returned when a commit conflict ocurred
+    #[error("Failed to commit transaction: {0}")]
+    CommitConflict(#[from] CommitConflictError),
+    /// Error returned when maximum number of commit trioals is exceeded
+    #[error("Failed to commit transaction: {0}")]
+    MaxCommitAttempts(i32),
 }
 
 impl From<TransactionError> for DeltaTableError {
@@ -41,14 +59,9 @@ impl From<TransactionError> for DeltaTableError {
                 DeltaTableError::SerializeLogJson { json_err }
             }
             TransactionError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
+            other => DeltaTableError::Transaction { source: other },
         }
     }
-}
-
-/// Return the uri of commit version.
-fn commit_uri_from_version(version: DeltaDataTypeVersion) -> Path {
-    let version = format!("{version:020}.json");
-    Path::from_iter([DELTA_LOG_FOLDER, &version])
 }
 
 // Convert actions to their json representation
@@ -113,13 +126,13 @@ pub(crate) async fn prepare_commit<'a>(
     Ok(path)
 }
 
-/// Tries to commit a prepared commit file. Returns [`DeltaTableError::VersionAlreadyExists`]
+/// Tries to commit a prepared commit file. Returns [DeltaTableError::VersionAlreadyExists]
 /// if the given `version` already exists. The caller should handle the retry logic itself.
 /// This is low-level transaction API. If user does not want to maintain the commit loop then
 /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
 /// with retry logic.
 async fn try_commit_transaction(
-    storage: &DeltaObjectStore,
+    storage: &dyn ObjectStore,
     tmp_commit: &Path,
     version: DeltaDataTypeVersion,
 ) -> Result<DeltaDataTypeVersion, TransactionError> {
@@ -138,80 +151,89 @@ async fn try_commit_transaction(
 }
 
 pub(crate) async fn commit(
-    storage: &DeltaObjectStore,
-    version: DeltaDataTypeVersion,
+    storage: &dyn ObjectStore,
     actions: &Vec<Action>,
     operation: DeltaOperation,
+    read_snapshot: &DeltaTableState,
     app_metadata: Option<Map<String, Value>>,
 ) -> DeltaResult<DeltaDataTypeVersion> {
     let tmp_commit = prepare_commit(storage, &operation, actions, app_metadata).await?;
-    match try_commit_transaction(storage, &tmp_commit, version).await {
-        Ok(version) => Ok(version),
-        Err(TransactionError::VersionAlreadyExists(version)) => {
-            storage.delete(&tmp_commit).await?;
-            Err(DeltaTableError::VersionAlreadyExists(version))
+
+    let max_attempts = 5;
+    let mut attempt_number = 1;
+
+    while attempt_number <= max_attempts {
+        let version = read_snapshot.version() + attempt_number;
+        match try_commit_transaction(storage, &tmp_commit, version).await {
+            Ok(version) => return Ok(version),
+            Err(TransactionError::VersionAlreadyExists(version)) => {
+                let summary = WinningCommitSummary::try_new(storage, version - 1, version).await?;
+                let transaction_info = TransactionInfo::try_new(
+                    read_snapshot,
+                    operation.read_predicate(),
+                    actions,
+                    // TODO allow tainting whole table
+                    false,
+                )?;
+                let conflict_checker =
+                    ConflictChecker::new(transaction_info, summary, Some(&operation));
+                match conflict_checker.check_conflicts() {
+                    Ok(_) => {
+                        attempt_number += 1;
+                    }
+                    Err(err) => {
+                        storage.delete(&tmp_commit).await?;
+                        return Err(TransactionError::CommitConflict(err).into());
+                    }
+                };
+            }
+            Err(err) => {
+                storage.delete(&tmp_commit).await?;
+                return Err(err.into());
+            }
         }
-        Err(err) => Err(err.into()),
     }
+
+    Err(TransactionError::MaxCommitAttempts(max_attempts as i32).into())
 }
 
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
+    use self::test_utils::init_table_actions;
     use super::*;
-    use crate::action::{DeltaOperation, Protocol, SaveMode};
-    use crate::storage::utils::flatten_list_stream;
-    use crate::writer::test_utils::get_delta_metadata;
-    use crate::{DeltaTable, DeltaTableBuilder};
+    use object_store::memory::InMemory;
 
     #[test]
-    fn test_commit_version() {
+    fn test_commit_uri_from_version() {
         let version = commit_uri_from_version(0);
         assert_eq!(version, Path::from("_delta_log/00000000000000000000.json"));
         let version = commit_uri_from_version(123);
         assert_eq!(version, Path::from("_delta_log/00000000000000000123.json"))
     }
 
+    #[test]
+    fn test_log_entry_from_actions() {
+        let actions = init_table_actions();
+        let entry = log_entry_from_actions(&actions).unwrap();
+        let lines: Vec<_> = entry.lines().collect();
+        // writes every action to a line
+        assert_eq!(actions.len(), lines.len())
+    }
+
     #[tokio::test]
-    async fn test_commits_writes_file() {
-        let metadata = get_delta_metadata(&[]);
-        let operation = DeltaOperation::Create {
-            mode: SaveMode::Append,
-            location: "memory://".into(),
-            protocol: Protocol {
-                min_reader_version: 1,
-                min_writer_version: 1,
-            },
-            metadata,
-        };
+    async fn test_try_commit_transaction() {
+        let store = InMemory::new();
+        let tmp_path = Path::from("_delta_log/tmp");
+        let version_path = Path::from("_delta_log/00000000000000000000.json");
+        store.put(&tmp_path, bytes::Bytes::new()).await.unwrap();
+        store.put(&version_path, bytes::Bytes::new()).await.unwrap();
 
-        let commit_path = Path::from("_delta_log/00000000000000000000.json");
-        let storage = DeltaTableBuilder::from_uri("memory://")
-            .build_storage()
-            .unwrap();
+        // fails if file version already exists
+        let res = try_commit_transaction(&store, &tmp_path, 0).await;
+        assert!(res.is_err());
 
-        // successfully write in clean location
-        commit(storage.as_ref(), 0, &vec![], operation.clone(), None)
-            .await
-            .unwrap();
-        let head = storage.head(&commit_path).await;
-        assert!(head.is_ok());
-        assert_eq!(head.as_ref().unwrap().location, commit_path);
-
-        // fail on overwriting
-        let failed_commit = commit(storage.as_ref(), 0, &vec![], operation, None).await;
-        assert!(failed_commit.is_err());
-        assert!(matches!(
-            failed_commit.unwrap_err(),
-            DeltaTableError::VersionAlreadyExists(_)
-        ));
-
-        // check we clean up after ourselves
-        let objects = flatten_list_stream(storage.as_ref(), None).await.unwrap();
-        assert_eq!(objects.len(), 1);
-
-        // table can be loaded
-        let mut table = DeltaTable::new(storage, Default::default());
-        table.load().await.unwrap();
-        assert_eq!(table.version(), 0)
+        // succeeds for next version
+        let res = try_commit_transaction(&store, &tmp_path, 1).await.unwrap();
+        assert_eq!(res, 1);
     }
 }
