@@ -4,7 +4,7 @@ use super::utils::str_is_truthy;
 use crate::{DeltaResult, DeltaTableError};
 use object_store::memory::InMemory;
 use object_store::path::Path;
-use object_store::prefix::PrefixObjectStore;
+use object_store::prefix::PrefixStore;
 use object_store::DynObjectStore;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -111,14 +111,14 @@ pub(crate) enum ObjectStoreImpl {
 impl ObjectStoreImpl {
     pub(crate) fn into_prefix(self, prefix: Path) -> Arc<DynObjectStore> {
         match self {
-            ObjectStoreImpl::Local(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
-            ObjectStoreImpl::InMemory(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
+            ObjectStoreImpl::Local(store) => Arc::new(PrefixStore::new(store, prefix)),
+            ObjectStoreImpl::InMemory(store) => Arc::new(PrefixStore::new(store, prefix)),
             #[cfg(feature = "azure")]
-            ObjectStoreImpl::Azure(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
+            ObjectStoreImpl::Azure(store) => Arc::new(PrefixStore::new(store, prefix)),
             #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-            ObjectStoreImpl::S3(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
+            ObjectStoreImpl::S3(store) => Arc::new(PrefixStore::new(store, prefix)),
             #[cfg(feature = "gcs")]
-            ObjectStoreImpl::Google(store) => Arc::new(PrefixObjectStore::new(store, prefix)),
+            ObjectStoreImpl::Google(store) => Arc::new(PrefixStore::new(store, prefix)),
         }
     }
 

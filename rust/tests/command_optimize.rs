@@ -318,13 +318,12 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     transaction.add_action(Action::remove(remove));
     transaction.commit(None, None).await?;
 
-    let maybe_metrics = plan.execute(dt.object_store()).await;
+    let maybe_metrics = plan.execute(dt.object_store(), &dt.state).await;
     assert!(maybe_metrics.is_err());
     assert_eq!(dt.version(), version + 1);
     Ok(())
 }
 
-#[ignore = "we do not yet re-try in operations commits."]
 #[tokio::test]
 /// Validate that optimize succeeds when only add actions occur for a optimized partition
 async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
@@ -367,9 +366,11 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let metrics = plan.execute(dt.object_store()).await?;
+    let metrics = plan.execute(dt.object_store(), &dt.state).await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
+
+    dt.update().await.unwrap();
     assert_eq!(dt.version(), version + 2);
     Ok(())
 }
