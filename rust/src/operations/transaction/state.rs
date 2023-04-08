@@ -85,7 +85,10 @@ impl DeltaTableState {
         Ok(sql_to_rel.sql_to_expr(sql, &df_schema, &mut Default::default())?)
     }
 
-    /// Get the pysical schema for data files stored in the table.
+    /// Get the pysical table schema.
+    ///
+    /// This will construct a schema derived from the parqet schema of the latest data file,
+    /// and fields for partition columns from the schema defined in table meta data.
     pub async fn physical_arrow_schema(
         &self,
         object_store: Arc<dyn ObjectStore>,
@@ -98,11 +101,28 @@ impl DeltaTableState {
             .try_into()?;
 
         let file_reader = ParquetObjectReader::new(object_store, file_meta);
-        let batch_stream = ParquetRecordBatchStreamBuilder::new(file_reader)
+        let file_schema = ParquetRecordBatchStreamBuilder::new(file_reader)
             .await?
-            .build()?;
+            .build()?
+            .schema()
+            .clone();
 
-        Ok(batch_stream.schema().clone())
+        let schema = self.arrow_schema()?;
+        let table_schema = Arc::new(ArrowSchema::new(
+            schema
+                .fields
+                .clone()
+                .into_iter()
+                .map(|field| {
+                    file_schema
+                        .field_with_name(field.name())
+                        .cloned()
+                        .unwrap_or(field)
+                })
+                .collect(),
+        ));
+
+        Ok(table_schema)
     }
 }
 

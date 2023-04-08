@@ -376,28 +376,10 @@ impl TableProvider for DeltaTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let schema = Arc::new(<ArrowSchema as TryFrom<&schema::Schema>>::try_from(
-            DeltaTable::schema(self).unwrap(),
-        )?);
-
-        let file_schema = self
+        let schema = self
             .state
             .physical_arrow_schema(self.object_store())
             .await?;
-
-        let table_schema = Arc::new(ArrowSchema::new(
-            schema
-                .fields
-                .clone()
-                .into_iter()
-                .map(|field| {
-                    file_schema
-                        .field_with_name(field.name())
-                        .cloned()
-                        .unwrap_or(field)
-                })
-                .collect(),
-        ));
 
         register_store(self, session.runtime_env().clone());
 
@@ -408,7 +390,7 @@ impl TableProvider for DeltaTable {
         if let Some(Some(predicate)) =
             (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
         {
-            let pruning_predicate = PruningPredicate::try_new(predicate, table_schema.clone())?;
+            let pruning_predicate = PruningPredicate::try_new(predicate, schema.clone())?;
             let files_to_prune = pruning_predicate.prune(&self.state)?;
             self.get_state()
                 .files()
@@ -416,7 +398,7 @@ impl TableProvider for DeltaTable {
                 .zip(files_to_prune.into_iter())
                 .for_each(|(action, keep_file)| {
                     if keep_file {
-                        let part = partitioned_file_from_action(action, &table_schema);
+                        let part = partitioned_file_from_action(action, &schema);
                         file_groups
                             .entry(part.partition_values.clone())
                             .or_default()
@@ -425,7 +407,7 @@ impl TableProvider for DeltaTable {
                 });
         } else {
             self.get_state().files().iter().for_each(|action| {
-                let part = partitioned_file_from_action(action, &table_schema);
+                let part = partitioned_file_from_action(action, &schema);
                 file_groups
                     .entry(part.partition_values.clone())
                     .or_default()
@@ -434,6 +416,14 @@ impl TableProvider for DeltaTable {
         };
 
         let table_partition_cols = self.get_metadata()?.partition_columns.clone();
+        let file_schema = Arc::new(ArrowSchema::new(
+            schema
+                .fields()
+                .iter()
+                .filter(|f| !table_partition_cols.contains(f.name()))
+                .cloned()
+                .collect(),
+        ));
 
         let parquet_scan = ParquetFormat::new()
             .create_physical_plan(
@@ -450,9 +440,7 @@ impl TableProvider for DeltaTable {
                         .map(|c| {
                             Ok((
                                 c.to_owned(),
-                                partition_type_wrap(
-                                    table_schema.field_with_name(c)?.data_type().clone(),
-                                ),
+                                partition_type_wrap(schema.field_with_name(c)?.data_type().clone()),
                             ))
                         })
                         .collect::<Result<Vec<_>, ArrowError>>()?,
