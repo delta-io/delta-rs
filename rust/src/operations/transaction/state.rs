@@ -11,6 +11,8 @@ use datafusion_common::{Column, DFSchema, Result as DFResult, TableReference};
 use datafusion_expr::{AggregateUDF, Expr, ScalarUDF, TableSource};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use itertools::Either;
+use object_store::ObjectStore;
+use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Tokenizer;
@@ -81,6 +83,26 @@ impl DeltaTableState {
         let sql_to_rel = SqlToRel::new(&context_provider);
 
         Ok(sql_to_rel.sql_to_expr(sql, &df_schema, &mut Default::default())?)
+    }
+
+    /// Get the pysical schema for data files stored in the table.
+    pub async fn physical_arrow_schema(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<ArrowSchemaRef> {
+        let file_meta = self
+            .files()
+            .iter()
+            .max_by_key(|obj| obj.modification_time)
+            .ok_or(DeltaTableError::Generic("No active file actions to get physical schema. Maybe the current state has not yet been loaded?".into()))?
+            .try_into()?;
+
+        let file_reader = ParquetObjectReader::new(object_store, file_meta);
+        let batch_stream = ParquetRecordBatchStreamBuilder::new(file_reader)
+            .await?
+            .build()?;
+
+        Ok(batch_stream.schema().clone())
     }
 }
 

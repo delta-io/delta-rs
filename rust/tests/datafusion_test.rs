@@ -728,7 +728,16 @@ async fn test_datafusion_partitioned_types() -> Result<()> {
         ),
     ]);
 
-    assert_eq!(Arc::new(expected_schema), batches[0].schema());
+    assert_eq!(
+        Arc::new(expected_schema),
+        Arc::new(
+            batches[0]
+                .schema()
+                .as_ref()
+                .clone()
+                .with_metadata(Default::default())
+        )
+    );
 
     Ok(())
 }
