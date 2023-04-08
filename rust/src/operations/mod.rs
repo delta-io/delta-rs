@@ -102,7 +102,7 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn load(self) -> LoadBuilder {
-        LoadBuilder::default().with_object_store(self.0.object_store())
+        LoadBuilder::new(self.0.object_store(), self.0.state)
     }
 
     /// Write data to Delta table
