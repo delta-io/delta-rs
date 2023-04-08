@@ -107,9 +107,8 @@ impl DeltaTableState {
             .schema()
             .clone();
 
-        let schema = self.arrow_schema()?;
         let table_schema = Arc::new(ArrowSchema::new(
-            schema
+            self.arrow_schema()?
                 .fields
                 .clone()
                 .into_iter()
