@@ -754,7 +754,7 @@ mod tests {
 
     #[test]
     fn test_delta_from_arrow_map_type() {
-        let timestamp_field = ArrowDataType::Map(
+        let arrow_map = ArrowDataType::Map(
             Box::new(ArrowField::new(
                 "key_value",
                 ArrowDataType::Struct(vec![
@@ -765,8 +765,10 @@ mod tests {
             )),
             false,
         );
+        let converted_map: crate::SchemaDataType = (&arrow_map).try_into().unwrap();
+
         assert_eq!(
-            <crate::SchemaDataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
+            converted_map,
             crate::SchemaDataType::map(crate::SchemaTypeMap::new(
                 Box::new(crate::SchemaDataType::primitive("byte".to_string())),
                 Box::new(crate::SchemaDataType::primitive("binary".to_string())),
