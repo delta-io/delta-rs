@@ -142,24 +142,24 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
             }
             schema::SchemaDataType::map(m) => Ok(ArrowDataType::Map(
                 Box::new(ArrowField::new(
-                    "key_value",
+                    "entries",
                     ArrowDataType::Struct(vec![
                         ArrowField::new(
-                            "key",
+                            "keys",
                             <ArrowDataType as TryFrom<&schema::SchemaDataType>>::try_from(
                                 m.get_key_type(),
                             )?,
                             false,
                         ),
                         ArrowField::new(
-                            "value",
+                            "values",
                             <ArrowDataType as TryFrom<&schema::SchemaDataType>>::try_from(
                                 m.get_value_type(),
                             )?,
                             m.get_value_contains_null(),
                         ),
                     ]),
-                    false,
+                    true,
                 )),
                 false,
             )),
@@ -573,6 +573,7 @@ fn null_count_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
 mod tests {
     use super::*;
     use std::collections::HashMap;
+    use std::sync::Arc;
 
     #[test]
     fn delta_log_schema_for_table_test() {
@@ -749,6 +750,73 @@ mod tests {
             <crate::SchemaDataType as TryFrom<&ArrowDataType>>::try_from(&timestamp_field).unwrap(),
             crate::SchemaDataType::primitive("timestamp".to_string())
         );
+    }
+
+    #[test]
+    fn test_delta_from_arrow_map_type() {
+        let arrow_map = ArrowDataType::Map(
+            Box::new(ArrowField::new(
+                "key_value",
+                ArrowDataType::Struct(vec![
+                    ArrowField::new("key", ArrowDataType::Int8, false),
+                    ArrowField::new("value", ArrowDataType::Binary, true),
+                ]),
+                true,
+            )),
+            false,
+        );
+        let converted_map: crate::SchemaDataType = (&arrow_map).try_into().unwrap();
+
+        assert_eq!(
+            converted_map,
+            crate::SchemaDataType::map(crate::SchemaTypeMap::new(
+                Box::new(crate::SchemaDataType::primitive("byte".to_string())),
+                Box::new(crate::SchemaDataType::primitive("binary".to_string())),
+                true,
+            ))
+        );
+    }
+
+    #[test]
+    fn test_record_batch_from_map_type() {
+        let keys = vec!["0", "1", "5", "6", "7"];
+        let values: Vec<&[u8]> = vec![
+            b"test_val_1",
+            b"test_val_2",
+            b"long_test_val_3",
+            b"4",
+            b"test_val_5",
+        ];
+        let entry_offsets = vec![0u32, 1, 1, 4, 5, 5];
+        let num_rows = keys.len();
+
+        let map_array = arrow::array::MapArray::new_from_strings(
+            keys.into_iter(),
+            &arrow::array::BinaryArray::from(values),
+            entry_offsets.as_slice(),
+        )
+        .expect("Could not create a map array");
+
+        let schema = <arrow::datatypes::Schema as TryFrom<&crate::Schema>>::try_from(
+            &crate::Schema::new(vec![crate::SchemaField::new(
+                "example".to_string(),
+                crate::SchemaDataType::map(crate::SchemaTypeMap::new(
+                    Box::new(crate::SchemaDataType::primitive("string".to_string())),
+                    Box::new(crate::SchemaDataType::primitive("binary".to_string())),
+                    false,
+                )),
+                false,
+                HashMap::new(),
+            )]),
+        )
+        .expect("Could not get schema");
+
+        let record_batch =
+            arrow::record_batch::RecordBatch::try_new(Arc::new(schema), vec![Arc::new(map_array)])
+                .expect("Failed to create RecordBatch");
+
+        assert_eq!(record_batch.num_columns(), 1);
+        assert_eq!(record_batch.num_rows(), num_rows);
     }
 
     #[test]
