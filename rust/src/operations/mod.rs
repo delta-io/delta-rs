@@ -109,9 +109,7 @@ impl DeltaOps {
     #[cfg(feature = "datafusion")]
     #[must_use]
     pub fn write(self, batches: impl IntoIterator<Item = RecordBatch>) -> WriteBuilder {
-        WriteBuilder::default()
-            .with_input_batches(batches)
-            .with_object_store(self.0.object_store())
+        WriteBuilder::new(self.0.object_store(), self.0.state).with_input_batches(batches)
     }
 
     /// Vacuum stale files from delta table

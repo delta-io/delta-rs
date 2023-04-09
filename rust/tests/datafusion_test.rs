@@ -188,13 +188,14 @@ async fn test_datafusion_write_from_serialized_delta_scan() -> Result<()> {
 
     // Trying to execute the write from the input plan without providing Datafusion with a session
     // state containing the referenced object store in the registry results in an error.
-    assert!(WriteBuilder::new()
-        .with_input_execution_plan(source_scan.clone())
-        .with_object_store(target_table.object_store())
-        .await
-        .unwrap_err()
-        .to_string()
-        .contains("No suitable object store found for delta-rs://"));
+    assert!(
+        WriteBuilder::new(target_table.object_store(), target_table.state.clone())
+            .with_input_execution_plan(source_scan.clone())
+            .await
+            .unwrap_err()
+            .to_string()
+            .contains("No suitable object store found for delta-rs://")
+    );
 
     // Register the missing source table object store
     let source_uri = source_scan
@@ -212,10 +213,9 @@ async fn test_datafusion_write_from_serialized_delta_scan() -> Result<()> {
         .register_object_store(source_store_url, Arc::from(source_store));
 
     // Execute write to the target table with the proper state
-    let target_table = WriteBuilder::new()
+    let target_table = WriteBuilder::new(target_table.object_store(), target_table.state.clone())
         .with_input_execution_plan(source_scan)
         .with_input_session_state(state)
-        .with_object_store(target_table.object_store())
         .await?;
     ctx.register_table("target", Arc::new(target_table))?;
 
