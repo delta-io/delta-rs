@@ -53,7 +53,7 @@ rusoto_dynamodb = { version = "0.47", default-features = false, optional = true 
 rusoto_glue = { version = "0.47", default-features = false, optional = true }
 
 # Datafusion
-datafusion = { version = "19", optional = true }
+datafusion = { version = "21", optional = true }
 datafusion-expr = { version = "19", optional = true }
 datafusion-common = { version = "19", optional = true }
 datafusion-proto = { version = "19", optional = true }
