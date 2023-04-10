@@ -232,7 +232,7 @@ pub enum DeltaTableError {
     /// A Feature is missing to perform operation
     #[error("Delta-rs must be build with feature '{feature}' to support loading from: {url}.")]
     MissingFeature {
-        /// Name of the missiing feature
+        /// Name of the missing feature
         feature: &'static str,
         /// Storage location url
         url: String,
@@ -261,6 +261,14 @@ pub enum DeltaTableError {
         /// Source error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+}
+
+impl From<object_store::path::Error> for DeltaTableError {
+    fn from(err: object_store::path::Error) -> Self {
+        Self::GenericError {
+            source: Box::new(err),
+        }
+    }
 }
 
 /// Delta table metadata

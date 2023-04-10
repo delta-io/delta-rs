@@ -4,7 +4,7 @@ pub mod config;
 pub mod file;
 pub mod utils;
 
-use self::config::{ObjectStoreKind, StorageOptions};
+use self::config::StorageOptions;
 use crate::{DeltaDataTypeVersion, DeltaResult};
 
 use bytes::Bytes;
@@ -89,12 +89,12 @@ impl DeltaObjectStore {
     /// * `location` - A url pointing to the root of the delta table.
     /// * `options` - Options passed to underlying builders. See [`with_storage_options`](crate::builder::DeltaTableBuilder::with_storage_options)
     pub fn try_new(location: Url, options: impl Into<StorageOptions> + Clone) -> DeltaResult<Self> {
-        let storage =
-            ObjectStoreKind::parse_url(&location)?.into_impl(&location, options.clone())?;
+        let options = options.into();
+        let storage = config::configure_store(&location, &options)?;
         Ok(Self {
             storage,
             location,
-            options: options.into(),
+            options,
         })
     }
 

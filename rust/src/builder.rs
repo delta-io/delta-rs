@@ -352,14 +352,18 @@ pub(crate) fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
             .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri.to_string()));
     }
     if let Ok(url) = Url::parse(table_uri) {
-        return Ok(match url.scheme() {
-            "file" => url,
+        return match url.scheme() {
+            "file" => ensure_table_uri(
+                url.to_file_path()
+                    .and_then(|path| path.to_str().map(String::from).ok_or(()))
+                    .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri.to_string()))?,
+            ),
             _ => {
                 let mut new_url = url.clone();
                 new_url.set_path(url.path().trim_end_matches('/'));
-                new_url
+                Ok(new_url)
             }
-        });
+        };
     }
     // The table uri still might be a relative paths that does not exist.
     std::fs::create_dir_all(table_uri)

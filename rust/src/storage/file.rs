@@ -12,6 +12,7 @@ use object_store::{
 use std::ops::Range;
 use std::sync::Arc;
 use tokio::io::AsyncWrite;
+use url::Url;
 
 const STORE_NAME: &str = "DeltaLocalObjectStore";
 
@@ -93,17 +94,46 @@ impl From<LocalFileSystemError> for ObjectStoreError {
 /// * Darwin is supported but not fully tested.
 /// Patches welcome.
 /// * Support for other platforms are not implemented at the moment.
-#[derive(Debug, Default)]
+#[derive(Debug)]
 pub struct FileStorageBackend {
     inner: Arc<LocalFileSystem>,
+    root_url: Arc<Url>,
 }
 
 impl FileStorageBackend {
     /// Creates a new FileStorageBackend.
-    pub fn new() -> Self {
-        Self {
-            inner: Arc::new(LocalFileSystem::default()),
-        }
+    pub fn try_new(path: impl AsRef<std::path::Path>) -> ObjectStoreResult<Self> {
+        Ok(Self {
+            root_url: Arc::new(Self::path_to_root_url(path.as_ref())?),
+            inner: Arc::new(LocalFileSystem::new_with_prefix(path)?),
+        })
+    }
+
+    fn path_to_root_url(path: &std::path::Path) -> ObjectStoreResult<Url> {
+        let root_path =
+            std::fs::canonicalize(path).map_err(|e| object_store::Error::InvalidPath {
+                source: object_store::path::Error::Canonicalize {
+                    path: path.into(),
+                    source: e,
+                },
+            })?;
+
+        Url::from_file_path(root_path).map_err(|_| object_store::Error::InvalidPath {
+            source: object_store::path::Error::InvalidPath { path: path.into() },
+        })
+    }
+
+    /// Return an absolute filesystem path of the given location
+    fn path_to_filesystem(&self, location: &ObjectStorePath) -> String {
+        let mut url = self.root_url.as_ref().clone();
+        url.path_segments_mut()
+            .expect("url path")
+            // technically not necessary as Path ignores empty segments
+            // but avoids creating paths with "//" which look odd in error messages.
+            .pop_if_empty()
+            .extend(location.parts());
+
+        url.to_file_path().unwrap().to_str().unwrap().to_owned()
     }
 }
 
@@ -111,19 +141,6 @@ impl std::fmt::Display for FileStorageBackend {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "FileStorageBackend")
     }
-}
-
-/// Return an absolute filesystem path of the given location
-fn path_to_filesystem(location: &ObjectStorePath) -> String {
-    let mut url = url::Url::parse("file:///").unwrap();
-    url.path_segments_mut()
-        .expect("url path")
-        // technically not necessary as Path ignores empty segments
-        // but avoids creating paths with "//" which look odd in error messages.
-        .pop_if_empty()
-        .extend(location.parts());
-
-    url.to_file_path().unwrap().to_str().unwrap().to_owned()
 }
 
 #[async_trait::async_trait]
@@ -183,8 +200,8 @@ impl ObjectStore for FileStorageBackend {
         from: &ObjectStorePath,
         to: &ObjectStorePath,
     ) -> ObjectStoreResult<()> {
-        let path_from = path_to_filesystem(from);
-        let path_to = path_to_filesystem(to);
+        let path_from = self.path_to_filesystem(from);
+        let path_to = self.path_to_filesystem(to);
         Ok(rename_noreplace(path_from.as_ref(), path_to.as_ref()).await?)
     }
 
