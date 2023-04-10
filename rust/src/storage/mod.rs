@@ -89,8 +89,8 @@ impl DeltaObjectStore {
     /// * `location` - A url pointing to the root of the delta table.
     /// * `options` - Options passed to underlying builders. See [`with_storage_options`](crate::builder::DeltaTableBuilder::with_storage_options)
     pub fn try_new(location: Url, options: impl Into<StorageOptions> + Clone) -> DeltaResult<Self> {
-        let storage =
-            ObjectStoreKind::parse_url(&location)?.into_impl(&location, options.clone())?;
+        let store_kind: ObjectStoreKind = (&location).try_into()?;
+        let storage = store_kind.into_impl(&location, options.clone())?;
         Ok(Self {
             storage,
             location,
@@ -332,7 +332,7 @@ impl<'de> Deserialize<'de> for DeltaObjectStore {
 
 #[cfg(feature = "datafusion")]
 #[cfg(test)]
-mod tests {
+mod datafusion_tests {
     use crate::storage::DeltaObjectStore;
     use object_store::memory::InMemory;
     use std::sync::Arc;
@@ -361,5 +361,38 @@ mod tests {
                 store_2.object_store_url().as_str(),
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use crate::storage::DeltaObjectStore;
+    use bytes::Bytes;
+    use object_store::ObjectStore;
+    use std::collections::HashMap;
+    use tempdir::TempDir;
+    use url::Url;
+
+    /// This is testing error when path from configuration URL was doubly encoded.
+    /// When storage was initialized with URL "file:///data/dir with spaces" all files were created
+    /// in a directory named "/data/dir%2520with%2520spaces", which was obviously incorrect.
+    #[tokio::test]
+    async fn test_spaces_in_prefix() {
+        let tmp_dir = TempDir::new("test_spaces_in_prefix").unwrap();
+        let path = tmp_dir.into_path().join("dir with spaces");
+        let store_url =
+            Url::parse(format!("file://{}", path.as_path().display()).as_str()).unwrap();
+        let store = DeltaObjectStore::try_new(store_url, HashMap::new()).unwrap();
+
+        let file_name = "test with spaces.txt";
+        assert!(store
+            .put(&file_name.to_string().into(), Bytes::from("0123456789"))
+            .await
+            .is_ok());
+        assert!(
+            path.join(file_name).as_path().exists(),
+            "file {:?} not found",
+            path.join(file_name)
+        )
     }
 }
