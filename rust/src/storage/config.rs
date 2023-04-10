@@ -98,128 +98,158 @@ impl From<HashMap<String, String>> for StorageOptions {
         Self::new(value)
     }
 }
-
-pub(crate) enum ObjectStoreKind {
-    Local,
-    InMemory,
-    S3,
-    Google,
-    Azure,
-    Hdfs,
+pub(crate) fn configure_store(
+    url: &Url,
+    options: &StorageOptions,
+) -> DeltaResult<Arc<DynObjectStore>> {
+    match url.scheme() {
+        "file" => try_configure_local(
+            url.to_file_path()
+                .map_err(|_| DeltaTableError::InvalidTableLocation(url.to_string()))?
+                .to_str()
+                .ok_or_else(|| DeltaTableError::InvalidTableLocation(url.to_string()))?,
+        ),
+        "memory" => try_configure_memory(url),
+        "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => try_configure_azure(url, options),
+        "s3" | "s3a" => try_configure_s3(url, options),
+        "gs" => try_configure_gcs(url, options),
+        "hdfs" => try_configure_hdfs(url, options),
+        "https" => {
+            let host = url.host_str().unwrap_or_default();
+            if host.contains("amazonaws.com") {
+                try_configure_s3(url, options)
+            } else if host.contains("dfs.core.windows.net")
+                || host.contains("blob.core.windows.net")
+            {
+                try_configure_azure(url, options)
+            } else {
+                Err(DeltaTableError::Generic(format!(
+                    "unsupported url: {}",
+                    url.as_str()
+                )))
+            }
+        }
+        _ => Err(DeltaTableError::Generic(format!(
+            "unsupported url: {}",
+            url.as_str()
+        ))),
+    }
 }
 
-impl ObjectStoreKind {
-    pub fn parse_url(url: &Url) -> DeltaResult<Self> {
-        match url.scheme() {
-            "file" => Ok(ObjectStoreKind::Local),
-            "memory" => Ok(ObjectStoreKind::InMemory),
-            "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => Ok(ObjectStoreKind::Azure),
-            "s3" | "s3a" => Ok(ObjectStoreKind::S3),
-            "gs" => Ok(ObjectStoreKind::Google),
-            "hdfs" => Ok(ObjectStoreKind::Hdfs),
-            "https" => {
-                let host = url.host_str().unwrap_or_default();
-                if host.contains("amazonaws.com") {
-                    Ok(ObjectStoreKind::S3)
-                } else if host.contains("dfs.core.windows.net")
-                    || host.contains("blob.core.windows.net")
-                {
-                    Ok(ObjectStoreKind::Azure)
-                } else {
-                    Err(DeltaTableError::Generic(format!(
-                        "unsupported url: {}",
-                        url.as_str()
-                    )))
-                }
-            }
-            _ => Err(DeltaTableError::Generic(format!(
-                "unsupported url: {}",
-                url.as_str()
-            ))),
-        }
-    }
+fn try_configure_local<P: AsRef<str>>(path: P) -> Result<Arc<DynObjectStore>, DeltaTableError> {
+    Ok(Arc::new(FileStorageBackend::try_new(path.as_ref())?))
+}
 
-    pub fn into_impl(
-        self,
-        storage_url: &Url,
-        options: impl Into<StorageOptions>,
-    ) -> DeltaResult<Arc<DynObjectStore>> {
-        let _options = options.into();
-        match self {
-            ObjectStoreKind::Local => Ok(Self::url_prefix_handler(
-                FileStorageBackend::new(),
-                storage_url,
-            )),
-            ObjectStoreKind::InMemory => Ok(Self::url_prefix_handler(InMemory::new(), storage_url)),
-            #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-            ObjectStoreKind::S3 => {
-                let amazon_s3 = AmazonS3Builder::from_env()
-                    .with_url(storage_url.as_ref())
-                    .try_with_options(&_options.as_s3_options())?
-                    .with_allow_http(_options.allow_http())
-                    .build()?;
-                let store = S3StorageBackend::try_new(
-                    Arc::new(amazon_s3),
-                    S3StorageOptions::from_map(&_options.0),
-                )?;
-                Ok(Self::url_prefix_handler(store, storage_url))
-            }
-            #[cfg(not(any(feature = "s3", feature = "s3-native-tls")))]
-            ObjectStoreKind::S3 => Err(DeltaTableError::MissingFeature {
-                feature: "s3",
-                url: storage_url.as_ref().into(),
-            }),
-            #[cfg(feature = "azure")]
-            ObjectStoreKind::Azure => {
-                let store = MicrosoftAzureBuilder::from_env()
-                    .with_url(storage_url.as_ref())
-                    .try_with_options(&_options.as_azure_options())?
-                    .with_allow_http(_options.allow_http())
-                    .build()?;
-                Ok(Self::url_prefix_handler(store, storage_url))
-            }
-            #[cfg(not(feature = "azure"))]
-            ObjectStoreKind::Azure => Err(DeltaTableError::MissingFeature {
-                feature: "azure",
-                url: storage_url.as_ref().into(),
-            }),
-            #[cfg(feature = "gcs")]
-            ObjectStoreKind::Google => {
-                let store = GoogleCloudStorageBuilder::from_env()
-                    .with_url(storage_url.as_ref())
-                    .try_with_options(&_options.as_gcs_options())?
-                    .build()?;
-                Ok(Self::url_prefix_handler(store, storage_url))
-            }
-            #[cfg(not(feature = "gcs"))]
-            ObjectStoreKind::Google => Err(DeltaTableError::MissingFeature {
-                feature: "gcs",
-                url: storage_url.as_ref().into(),
-            }),
-            #[cfg(feature = "hdfs")]
-            ObjectStoreKind::Hdfs => {
-                let store = HadoopFileSystem::new(storage_url.as_ref()).ok_or_else(|| {
-                    DeltaTableError::Generic(format!(
-                        "failed to create HadoopFileSystem for {}",
-                        storage_url.as_ref()
-                    ))
-                })?;
-                Ok(Self::url_prefix_handler(store, storage_url))
-            }
-            #[cfg(not(feature = "hdfs"))]
-            ObjectStoreKind::Hdfs => Err(DeltaTableError::MissingFeature {
-                feature: "hdfs",
-                url: storage_url.as_ref().into(),
-            }),
-        }
-    }
+fn try_configure_memory(storage_url: &Url) -> DeltaResult<Arc<DynObjectStore>> {
+    url_prefix_handler(InMemory::new(), storage_url)
+}
 
-    fn url_prefix_handler<T: ObjectStore>(store: T, storage_url: &Url) -> Arc<DynObjectStore> {
-        let prefix = Path::from(storage_url.path());
-        if prefix != Path::from("/") {
-            Arc::new(PrefixStore::new(store, prefix))
-        } else {
-            Arc::new(store)
-        }
+#[cfg(feature = "gcs")]
+fn try_configure_gcs(
+    storage_url: &Url,
+    options: &StorageOptions,
+) -> DeltaResult<Arc<DynObjectStore>> {
+    let store = GoogleCloudStorageBuilder::from_env()
+        .with_url(storage_url.as_ref())
+        .try_with_options(&options.as_gcs_options())?
+        .build()?;
+    url_prefix_handler(store, storage_url)
+}
+
+#[cfg(not(feature = "gcs"))]
+fn try_configure_gcs(
+    storage_url: &Url,
+    _options: &StorageOptions,
+) -> DeltaResult<Arc<DynObjectStore>> {
+    Err(DeltaTableError::MissingFeature {
+        feature: "gcs",
+        url: storage_url.as_ref().into(),
+    })
+}
+
+#[cfg(feature = "azure")]
+fn try_configure_azure(
+    storage_url: &Url,
+    options: &StorageOptions,
+) -> DeltaResult<Arc<DynObjectStore>> {
+    let store = MicrosoftAzureBuilder::from_env()
+        .with_url(storage_url.as_ref())
+        .try_with_options(&options.as_azure_options())?
+        .with_allow_http(options.allow_http())
+        .build()?;
+    url_prefix_handler(store, storage_url)
+}
+
+#[cfg(not(feature = "azure"))]
+fn try_configure_azure(
+    storage_url: &Url,
+    _options: &StorageOptions,
+) -> DeltaResult<Arc<DynObjectStore>> {
+    Err(DeltaTableError::MissingFeature {
+        feature: "azure",
+        url: storage_url.as_ref().into(),
+    })
+}
+
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+fn try_configure_s3(
+    storage_url: &Url,
+    options: &StorageOptions,
+) -> DeltaResult<Arc<DynObjectStore>> {
+    let amazon_s3 = AmazonS3Builder::from_env()
+        .with_url(storage_url.as_ref())
+        .try_with_options(&options.as_s3_options())?
+        .with_allow_http(options.allow_http())
+        .build()?;
+    let store =
+        S3StorageBackend::try_new(Arc::new(amazon_s3), S3StorageOptions::from_map(&options.0))?;
+    url_prefix_handler(store, storage_url)
+}
+
+#[cfg(not(any(feature = "s3", feature = "s3-native-tls")))]
+fn try_configure_s3(
+    storage_url: &Url,
+    _options: &StorageOptions,
+) -> DeltaResult<Arc<DynObjectStore>> {
+    Err(DeltaTableError::MissingFeature {
+        feature: "s3",
+        url: storage_url.as_ref().into(),
+    })
+}
+
+#[cfg(feature = "hdfs")]
+fn try_configure_hdfs(
+    storage_url: &Url,
+    _options: &StorageOptions,
+) -> DeltaResult<Arc<DynObjectStore>> {
+    let store = HadoopFileSystem::new(storage_url.as_ref()).ok_or_else(|| {
+        DeltaTableError::Generic(format!(
+            "failed to create HadoopFileSystem for {}",
+            storage_url.as_ref()
+        ))
+    })?;
+    url_prefix_handler(store, storage_url)
+}
+
+#[cfg(not(feature = "hdfs"))]
+fn try_configure_hdfs(
+    storage_url: &Url,
+    _options: &StorageOptions,
+) -> DeltaResult<Arc<DynObjectStore>> {
+    Err(DeltaTableError::MissingFeature {
+        feature: "hdfs",
+        url: storage_url.as_ref().into(),
+    })
+}
+
+fn url_prefix_handler<T: ObjectStore>(
+    store: T,
+    storage_url: &Url,
+) -> DeltaResult<Arc<DynObjectStore>> {
+    let prefix = Path::from(storage_url.path().replace("%20", " ")); // allow spaces
+    if prefix != Path::from("/") {
+        Ok(Arc::new(PrefixStore::new(store, prefix)))
+    } else {
+        Ok(Arc::new(store))
     }
 }
