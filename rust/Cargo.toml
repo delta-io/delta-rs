@@ -57,7 +57,7 @@ datafusion = { version = "19", optional = true }
 datafusion-expr = { version = "19", optional = true }
 datafusion-common = { version = "19", optional = true }
 datafusion-proto = { version = "19", optional = true }
-datafusion-sql = { version = "19", optional = true }
+datafusion-sql = { version = "21", optional = true }
 sqlparser = { version = "0.30", optional = true }
 
 # NOTE dependencies only for integration tests
