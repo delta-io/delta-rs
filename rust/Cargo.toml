@@ -18,7 +18,7 @@ async-trait = "0.1"
 bytes = "1"
 chrono = { version = "0.4.22", default-features = false, features = ["clock"] }
 cfg-if = "1"
-datafusion-objectstore-hdfs = { version = "0.1.2", default-features = false, features = ["hdfs3", "try_spawn_blocking"], optional = true }
+datafusion-objectstore-hdfs = { version = "0.1.3", default-features = false, features = ["hdfs3", "try_spawn_blocking"], optional = true }
 errno = "0.3"
 futures = "0.3"
 itertools = "0.10"
