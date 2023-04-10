@@ -144,7 +144,7 @@ impl Drop for IntegrationContext {
             StorageIntegration::Local => (),
             StorageIntegration::Hdfs => {
                 hdfs_cli::delete_dir(&self.bucket).unwrap();
-            },
+            }
         };
     }
 }
@@ -467,16 +467,20 @@ pub mod hdfs_cli {
     use std::process::{Command, ExitStatus};
 
     fn hdfs_cli_path() -> PathBuf {
-        let hadoop_home = env::var("HADOOP_HOME").expect("HADOOP_HOME environment variable not set");
-        PathBuf::from(hadoop_home)
-            .join("bin")
-            .join("hdfs")
+        let hadoop_home =
+            env::var("HADOOP_HOME").expect("HADOOP_HOME environment variable not set");
+        PathBuf::from(hadoop_home).join("bin").join("hdfs")
     }
 
     pub fn create_dir(dir_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
         let path = hdfs_cli_path();
         let mut child = Command::new(&path)
-            .args(["dfs", "-mkdir", "-p", format!("/{}", dir_name.as_ref()).as_str()])
+            .args([
+                "dfs",
+                "-mkdir",
+                "-p",
+                format!("/{}", dir_name.as_ref()).as_str(),
+            ])
             .spawn()
             .expect("hdfs command is installed");
         child.wait()
@@ -485,7 +489,13 @@ pub mod hdfs_cli {
     pub fn delete_dir(dir_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
         let path = hdfs_cli_path();
         let mut child = Command::new(&path)
-            .args(["dfs", "-rm", "-r", "-f", format!("/{}", dir_name.as_ref()).as_str()])
+            .args([
+                "dfs",
+                "-rm",
+                "-r",
+                "-f",
+                format!("/{}", dir_name.as_ref()).as_str(),
+            ])
             .spawn()
             .expect("hdfs command is installed");
         child.wait()

@@ -4,6 +4,7 @@ use crate::action::{self, Action, Add};
 use crate::delta_config::TableConfig;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::schema::SchemaDataType;
+use crate::storage::commit_uri_from_version;
 use crate::Schema;
 use crate::{
     ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
@@ -13,7 +14,6 @@ use chrono::Utc;
 use lazy_static::lazy_static;
 use object_store::{path::Path, ObjectStore};
 use serde::{Deserialize, Serialize};
-use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
@@ -34,7 +34,7 @@ pub struct DeltaTableState {
     // active files for table state
     files: Vec<action::Add>,
     // Information added to individual commits
-    commit_infos: Vec<Map<String, Value>>,
+    commit_infos: Vec<action::CommitInfo>,
     app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
     min_reader_version: i32,
     min_writer_version: i32,
@@ -66,7 +66,7 @@ impl DeltaTableState {
         table: &DeltaTable,
         version: DeltaDataTypeVersion,
     ) -> Result<Self, ApplyLogError> {
-        let commit_uri = table.commit_uri_from_version(version);
+        let commit_uri = commit_uri_from_version(version);
         let commit_log_bytes = table.storage.get(&commit_uri).await?.bytes().await?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
@@ -164,7 +164,7 @@ impl DeltaTableState {
     }
 
     /// List of commit info maps.
-    pub fn commit_infos(&self) -> &Vec<Map<String, Value>> {
+    pub fn commit_infos(&self) -> &Vec<action::CommitInfo> {
         &self.commit_infos
     }
 
@@ -368,12 +368,16 @@ impl DeltaTableState {
         filters: &'a [PartitionFilter<'a, &'a str>],
     ) -> Result<impl Iterator<Item = &'a Add> + '_, DeltaTableError> {
         let current_metadata = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
-        if !filters
+
+        let nonpartitioned_columns: Vec<String> = filters
             .iter()
-            .all(|f| current_metadata.partition_columns.contains(&f.key.into()))
-        {
-            return Err(DeltaTableError::InvalidPartitionFilter {
-                partition_filter: format!("{filters:?}"),
+            .filter(|f| !current_metadata.partition_columns.contains(&f.key.into()))
+            .map(|f| f.key.to_string())
+            .collect();
+
+        if !nonpartitioned_columns.is_empty() {
+            return Err(DeltaTableError::ColumnsNotPartitioned {
+                nonpartitioned_columns: { nonpartitioned_columns },
             });
         }
 

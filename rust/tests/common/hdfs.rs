@@ -13,9 +13,7 @@ pub fn setup_hdfs_context() -> TestContext {
     config.insert("URI".to_owned(), name_node.clone());
 
     TestContext {
-        storage_context: Some(Box::new(Hdfs {
-            name_node,
-        })),
+        storage_context: Some(Box::new(Hdfs { name_node })),
         config,
         ..TestContext::default()
     }

@@ -446,10 +446,11 @@ impl std::future::IntoFuture for WriteBuilder {
                 predicate: this.predicate,
             };
             let _version = commit(
-                &table.storage,
-                table.version() + 1,
-                actions,
+                table.storage.as_ref(),
+                &actions,
                 operation,
+                &table.state,
+                // TODO pass through metadata
                 None,
             )
             .await?;

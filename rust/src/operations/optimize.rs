@@ -173,7 +173,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.target_size.to_owned(),
                 writer_properties,
             )?;
-            let metrics = plan.execute(this.store.clone()).await?;
+            let metrics = plan.execute(this.store.clone(), &this.snapshot).await?;
             let mut table = DeltaTable::new_with_state(this.store, this.snapshot);
             table.update().await?;
             Ok((table, metrics))
@@ -270,7 +270,11 @@ pub struct MergePlan {
 
 impl MergePlan {
     /// Peform the operations outlined in the plan.
-    pub async fn execute(self, object_store: ObjectStoreRef) -> Result<Metrics, DeltaTableError> {
+    pub async fn execute(
+        self,
+        object_store: ObjectStoreRef,
+        snapshot: &DeltaTableState,
+    ) -> Result<Metrics, DeltaTableError> {
         let mut actions = vec![];
         let mut metrics = self.metrics;
 
@@ -368,9 +372,9 @@ impl MergePlan {
 
             commit(
                 object_store.as_ref(),
-                self.read_table_version + 1,
-                actions,
+                &actions,
                 self.input_parameters.into(),
+                snapshot,
                 Some(metadata),
             )
             .await?;

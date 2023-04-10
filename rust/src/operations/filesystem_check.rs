@@ -15,7 +15,6 @@ use crate::action::{Action, Add, DeltaOperation, Remove};
 use crate::operations::transaction::commit;
 use crate::storage::DeltaObjectStore;
 use crate::table_state::DeltaTableState;
-use crate::DeltaDataTypeVersion;
 use crate::{DeltaDataTypeLong, DeltaResult, DeltaTable, DeltaTableError};
 use futures::future::BoxFuture;
 use futures::StreamExt;
@@ -50,8 +49,6 @@ pub struct FileSystemCheckMetrics {
 }
 
 struct FileSystemCheckPlan {
-    /// Version of the snapshot provided
-    version: DeltaDataTypeVersion,
     /// Delta object store for handling data files
     store: Arc<DeltaObjectStore>,
     /// Files that no longer exists in undlying ObjectStore but have active add actions
@@ -88,7 +85,6 @@ impl FileSystemCheckBuilder {
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<&str, &Add> =
             HashMap::with_capacity(self.state.files().len());
-        let version = self.state.version();
         let store = self.store.clone();
 
         for active in self.state.files() {
@@ -118,14 +114,13 @@ impl FileSystemCheckBuilder {
 
         Ok(FileSystemCheckPlan {
             files_to_remove,
-            version,
             store,
         })
     }
 }
 
 impl FileSystemCheckPlan {
-    pub async fn execute(self) -> DeltaResult<FileSystemCheckMetrics> {
+    pub async fn execute(self, snapshot: &DeltaTableState) -> DeltaResult<FileSystemCheckMetrics> {
         if self.files_to_remove.is_empty() {
             return Ok(FileSystemCheckMetrics {
                 dry_run: false,
@@ -135,8 +130,6 @@ impl FileSystemCheckPlan {
 
         let mut actions = Vec::with_capacity(self.files_to_remove.len());
         let mut removed_file_paths = Vec::with_capacity(self.files_to_remove.len());
-        let version = self.version;
-        let store = &self.store;
 
         for file in self.files_to_remove {
             let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
@@ -154,10 +147,11 @@ impl FileSystemCheckPlan {
         }
 
         commit(
-            store,
-            version + 1,
-            actions,
+            self.store.as_ref(),
+            &actions,
             DeltaOperation::FileSystemCheck {},
+            snapshot,
+            // TODO pass through metadata
             None,
         )
         .await?;
@@ -188,7 +182,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                 ));
             }
 
-            let metrics = plan.execute().await?;
+            let metrics = plan.execute(&this.state).await?;
             let mut table = DeltaTable::new_with_state(this.store, this.state);
             table.update().await?;
             Ok((table, metrics))

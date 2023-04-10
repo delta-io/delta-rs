@@ -5,7 +5,7 @@ use crate::{DeltaResult, DeltaTableError};
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::prefix::PrefixStore;
-use object_store::DynObjectStore;
+use object_store::{DynObjectStore, ObjectStore};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -18,9 +18,9 @@ use datafusion_objectstore_hdfs::object_store::hdfs::HadoopFileSystem;
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 #[cfg(feature = "azure")]
-use object_store::azure::{AzureConfigKey, MicrosoftAzure, MicrosoftAzureBuilder};
+use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
 #[cfg(feature = "gcs")]
-use object_store::gcp::{GoogleCloudStorage, GoogleCloudStorageBuilder, GoogleConfigKey};
+use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
 #[cfg(any(
     feature = "s3",
     feature = "s3-native-tls",
@@ -99,51 +99,6 @@ impl From<HashMap<String, String>> for StorageOptions {
     }
 }
 
-pub(crate) enum ObjectStoreImpl {
-    Local(FileStorageBackend),
-    InMemory(InMemory),
-    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-    S3(S3StorageBackend),
-    #[cfg(feature = "gcs")]
-    Google(GoogleCloudStorage),
-    #[cfg(feature = "azure")]
-    Azure(MicrosoftAzure),
-    #[cfg(feature = "hdfs")]
-    Hdfs(HadoopFileSystem),
-}
-
-impl ObjectStoreImpl {
-    pub(crate) fn into_prefix(self, prefix: Path) -> Arc<DynObjectStore> {
-        match self {
-            ObjectStoreImpl::Local(store) => Arc::new(PrefixStore::new(store, prefix)),
-            ObjectStoreImpl::InMemory(store) => Arc::new(PrefixStore::new(store, prefix)),
-            #[cfg(feature = "azure")]
-            ObjectStoreImpl::Azure(store) => Arc::new(PrefixStore::new(store, prefix)),
-            #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-            ObjectStoreImpl::S3(store) => Arc::new(PrefixStore::new(store, prefix)),
-            #[cfg(feature = "gcs")]
-            ObjectStoreImpl::Google(store) => Arc::new(PrefixStore::new(store, prefix)),
-            #[cfg(feature = "hdfs")]
-            ObjectStoreImpl::Hdfs(store) => Arc::new(PrefixStore::new(store, prefix)),
-        }
-    }
-
-    pub(crate) fn into_store(self) -> Arc<DynObjectStore> {
-        match self {
-            ObjectStoreImpl::Local(store) => Arc::new(store),
-            ObjectStoreImpl::InMemory(store) => Arc::new(store),
-            #[cfg(feature = "azure")]
-            ObjectStoreImpl::Azure(store) => Arc::new(store),
-            #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-            ObjectStoreImpl::S3(store) => Arc::new(store),
-            #[cfg(feature = "gcs")]
-            ObjectStoreImpl::Google(store) => Arc::new(store),
-            #[cfg(feature = "hdfs")]
-            ObjectStoreImpl::Hdfs(store) => Arc::new(store),
-        }
-    }
-}
-
 pub(crate) enum ObjectStoreKind {
     Local,
     InMemory,
@@ -186,24 +141,28 @@ impl ObjectStoreKind {
 
     pub fn into_impl(
         self,
-        storage_url: impl AsRef<str>,
+        storage_url: &Url,
         options: impl Into<StorageOptions>,
-    ) -> DeltaResult<ObjectStoreImpl> {
+    ) -> DeltaResult<Arc<DynObjectStore>> {
         let _options = options.into();
         match self {
-            ObjectStoreKind::Local => Ok(ObjectStoreImpl::Local(FileStorageBackend::new())),
-            ObjectStoreKind::InMemory => Ok(ObjectStoreImpl::InMemory(InMemory::new())),
+            ObjectStoreKind::Local => Ok(Self::url_prefix_handler(
+                FileStorageBackend::new(),
+                storage_url,
+            )),
+            ObjectStoreKind::InMemory => Ok(Self::url_prefix_handler(InMemory::new(), storage_url)),
             #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
             ObjectStoreKind::S3 => {
-                let store = AmazonS3Builder::from_env()
+                let amazon_s3 = AmazonS3Builder::from_env()
                     .with_url(storage_url.as_ref())
                     .try_with_options(&_options.as_s3_options())?
                     .with_allow_http(_options.allow_http())
                     .build()?;
-                Ok(ObjectStoreImpl::S3(S3StorageBackend::try_new(
-                    Arc::new(store),
+                let store = S3StorageBackend::try_new(
+                    Arc::new(amazon_s3),
                     S3StorageOptions::from_map(&_options.0),
-                )?))
+                )?;
+                Ok(Self::url_prefix_handler(store, storage_url))
             }
             #[cfg(not(any(feature = "s3", feature = "s3-native-tls")))]
             ObjectStoreKind::S3 => Err(DeltaTableError::MissingFeature {
@@ -217,7 +176,7 @@ impl ObjectStoreKind {
                     .try_with_options(&_options.as_azure_options())?
                     .with_allow_http(_options.allow_http())
                     .build()?;
-                Ok(ObjectStoreImpl::Azure(store))
+                Ok(Self::url_prefix_handler(store, storage_url))
             }
             #[cfg(not(feature = "azure"))]
             ObjectStoreKind::Azure => Err(DeltaTableError::MissingFeature {
@@ -230,7 +189,7 @@ impl ObjectStoreKind {
                     .with_url(storage_url.as_ref())
                     .try_with_options(&_options.as_gcs_options())?
                     .build()?;
-                Ok(ObjectStoreImpl::Google(store))
+                Ok(Self::url_prefix_handler(store, storage_url))
             }
             #[cfg(not(feature = "gcs"))]
             ObjectStoreKind::Google => Err(DeltaTableError::MissingFeature {
@@ -245,13 +204,22 @@ impl ObjectStoreKind {
                         storage_url.as_ref()
                     ))
                 })?;
-                Ok(ObjectStoreImpl::Hdfs(store))
+                Ok(Self::url_prefix_handler(store, storage_url))
             }
             #[cfg(not(feature = "hdfs"))]
             ObjectStoreKind::Hdfs => Err(DeltaTableError::MissingFeature {
                 feature: "hdfs",
                 url: storage_url.as_ref().into(),
             }),
+        }
+    }
+
+    fn url_prefix_handler<T: ObjectStore>(store: T, storage_url: &Url) -> Arc<DynObjectStore> {
+        let prefix = Path::from(storage_url.path());
+        if prefix != Path::from("/") {
+            Arc::new(PrefixStore::new(store, prefix))
+        } else {
+            Arc::new(store)
         }
     }
 }

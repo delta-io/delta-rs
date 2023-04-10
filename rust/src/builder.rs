@@ -37,20 +37,15 @@ impl From<BuilderError> for DeltaTableError {
 }
 
 /// possible version specifications for loading a delta table
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub enum DeltaVersion {
     /// load the newest version
+    #[default]
     Newest,
     /// specify the version to load
     Version(DeltaDataTypeVersion),
     /// specify the timestamp in UTC
     Timestamp(DateTime<Utc>),
-}
-
-impl Default for DeltaVersion {
-    fn default() -> Self {
-        DeltaVersion::Newest
-    }
 }
 
 /// Configuration options for delta table

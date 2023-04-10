@@ -35,7 +35,6 @@ use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
 use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
-use datafusion::datasource::listing::ListingTableUrl;
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -57,9 +56,9 @@ use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
 use crate::builder::ensure_table_uri;
-use crate::Invariant;
-use crate::{action, open_table, open_table_with_storage_options};
-use crate::{schema, DeltaTableBuilder};
+use crate::schema;
+use crate::{action, open_table, open_table_with_storage_options, SchemaDataType};
+use crate::{DeltaResult, Invariant};
 use crate::{DeltaTable, DeltaTableError};
 
 impl From<DeltaTableError> for DataFusionError {
@@ -236,49 +235,59 @@ impl DeltaTable {
     }
 }
 
+fn get_prune_stats(table: &DeltaTable, column: &Column, get_max: bool) -> Option<ArrayRef> {
+    let field = table
+        .get_schema()
+        .ok()
+        .map(|s| s.get_field_with_name(&column.name).ok())??;
+
+    // See issue 1214. Binary type does not support natural order which is required for Datafusion to prune
+    if let SchemaDataType::primitive(t) = &field.get_type() {
+        if t == "binary" {
+            return None;
+        }
+    }
+
+    let data_type = field.get_type().try_into().ok()?;
+    let partition_columns = &table.get_metadata().ok()?.partition_columns;
+
+    let values = table.get_state().files().iter().map(|add| {
+        if partition_columns.contains(&column.name) {
+            let value = add.partition_values.get(&column.name).unwrap();
+            let value = match value {
+                Some(v) => serde_json::Value::String(v.to_string()),
+                None => serde_json::Value::Null,
+            };
+            to_correct_scalar_value(&value, &data_type).unwrap_or(ScalarValue::Null)
+        } else if let Ok(Some(statistics)) = add.get_stats() {
+            let values = if get_max {
+                statistics.max_values
+            } else {
+                statistics.min_values
+            };
+
+            values
+                .get(&column.name)
+                .and_then(|f| to_correct_scalar_value(f.as_value()?, &data_type))
+                .unwrap_or(ScalarValue::Null)
+        } else {
+            ScalarValue::Null
+        }
+    });
+    ScalarValue::iter_to_array(values).ok()
+}
+
 impl PruningStatistics for DeltaTable {
     /// return the minimum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows
     fn min_values(&self, column: &Column) -> Option<ArrayRef> {
-        let field = self
-            .get_schema()
-            .ok()
-            .map(|s| s.get_field_with_name(&column.name).ok())??;
-        let data_type = field.get_type().try_into().ok()?;
-        let values = self.get_state().files().iter().map(|add| {
-            if let Ok(Some(statistics)) = add.get_stats() {
-                statistics
-                    .min_values
-                    .get(&column.name)
-                    .and_then(|f| to_correct_scalar_value(f.as_value()?, &data_type))
-                    .unwrap_or(ScalarValue::Null)
-            } else {
-                ScalarValue::Null
-            }
-        });
-        ScalarValue::iter_to_array(values).ok()
+        get_prune_stats(self, column, false)
     }
 
     /// return the maximum values for the named column, if known.
     /// Note: the returned array must contain `num_containers()` rows.
     fn max_values(&self, column: &Column) -> Option<ArrayRef> {
-        let field = self
-            .get_schema()
-            .ok()
-            .map(|s| s.get_field_with_name(&column.name).ok())??;
-        let data_type = field.get_type().try_into().ok()?;
-        let values = self.get_state().files().iter().map(|add| {
-            if let Ok(Some(statistics)) = add.get_stats() {
-                statistics
-                    .max_values
-                    .get(&column.name)
-                    .and_then(|f| to_correct_scalar_value(f.as_value()?, &data_type))
-                    .unwrap_or(ScalarValue::Null)
-            } else {
-                ScalarValue::Null
-            }
-        });
-        ScalarValue::iter_to_array(values).ok()
+        get_prune_stats(self, column, true)
     }
 
     /// return the number of containers (e.g. row groups) being
@@ -292,13 +301,29 @@ impl PruningStatistics for DeltaTable {
     ///
     /// Note: the returned array must contain `num_containers()` rows.
     fn null_counts(&self, column: &Column) -> Option<ArrayRef> {
+        let partition_columns = &self.get_metadata().ok()?.partition_columns;
+
         let values = self.get_state().files().iter().map(|add| {
             if let Ok(Some(statistics)) = add.get_stats() {
-                statistics
-                    .null_count
-                    .get(&column.name)
-                    .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
-                    .unwrap_or(ScalarValue::UInt64(None))
+                if partition_columns.contains(&column.name) {
+                    let value = add.partition_values.get(&column.name).unwrap();
+                    match value {
+                        Some(_) => ScalarValue::UInt64(Some(0)),
+                        None => ScalarValue::UInt64(Some(statistics.num_records as u64)),
+                    }
+                } else {
+                    statistics
+                        .null_count
+                        .get(&column.name)
+                        .map(|f| ScalarValue::UInt64(f.as_value().map(|val| val as u64)))
+                        .unwrap_or(ScalarValue::UInt64(None))
+                }
+            } else if partition_columns.contains(&column.name) {
+                let value = add.partition_values.get(&column.name).unwrap();
+                match value {
+                    Some(_) => ScalarValue::UInt64(Some(0)),
+                    None => ScalarValue::UInt64(None),
+                }
             } else {
                 ScalarValue::UInt64(None)
             }
@@ -365,7 +390,7 @@ impl TableProvider for DeltaTable {
             (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
         {
             let pruning_predicate = PruningPredicate::try_new(predicate, schema.clone())?;
-            let files_to_prune = pruning_predicate.prune(self)?;
+            let files_to_prune = pruning_predicate.prune(&self.state)?;
             self.get_state()
                 .files()
                 .iter()
@@ -426,7 +451,7 @@ impl TableProvider for DeltaTable {
             .await?;
 
         Ok(Arc::new(DeltaScan {
-            url: ensure_table_uri(self.table_uri())?.as_str().into(),
+            table_uri: ensure_table_uri(self.table_uri())?.as_str().into(),
             parquet_scan,
         }))
     }
@@ -444,11 +469,11 @@ impl TableProvider for DeltaTable {
 }
 
 // TODO: this will likely also need to perform column mapping later when we support reader protocol v2
-/// A wrapper for parquet scans that installs the required ObjectStore
+/// A wrapper for parquet scans
 #[derive(Debug)]
 pub struct DeltaScan {
     /// The URL of the ObjectStore root
-    pub url: String,
+    pub table_uri: String,
     /// The parquet scan to wrap
     pub parquet_scan: Arc<dyn ExecutionPlan>,
 }
@@ -486,27 +511,69 @@ impl ExecutionPlan for DeltaScan {
         partition: usize,
         context: Arc<TaskContext>,
     ) -> DataFusionResult<SendableRecordBatchStream> {
-        let df_url = ListingTableUrl::parse(self.url.as_str())?;
-        let storage = context
-            .runtime_env()
-            .object_store_registry
-            .get_by_url(df_url);
-        let mut table = DeltaTableBuilder::from_uri(&self.url);
-        if let Ok(storage) = storage {
-            // When running in ballista, the store will be deserialized and re-created
-            // When testing with a MemoryStore, it will already be present and we should re-use it
-            table = table.with_storage_backend(
-                storage,
-                Url::parse(&self.url).map_err(|err| DataFusionError::Internal(err.to_string()))?,
-            );
-        }
-        let table = table.build()?;
-        register_store(&table, context.runtime_env());
         self.parquet_scan.execute(partition, context)
     }
 
     fn statistics(&self) -> Statistics {
         self.parquet_scan.statistics()
+    }
+}
+
+fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
+    match t {
+        ArrowDataType::Null => Ok(ScalarValue::Null),
+        ArrowDataType::Boolean => Ok(ScalarValue::Boolean(None)),
+        ArrowDataType::Int8 => Ok(ScalarValue::Int8(None)),
+        ArrowDataType::Int16 => Ok(ScalarValue::Int16(None)),
+        ArrowDataType::Int32 => Ok(ScalarValue::Int32(None)),
+        ArrowDataType::Int64 => Ok(ScalarValue::Int64(None)),
+        ArrowDataType::UInt8 => Ok(ScalarValue::UInt8(None)),
+        ArrowDataType::UInt16 => Ok(ScalarValue::UInt16(None)),
+        ArrowDataType::UInt32 => Ok(ScalarValue::UInt32(None)),
+        ArrowDataType::UInt64 => Ok(ScalarValue::UInt64(None)),
+        ArrowDataType::Float32 => Ok(ScalarValue::Float32(None)),
+        ArrowDataType::Float64 => Ok(ScalarValue::Float64(None)),
+        ArrowDataType::Date32 => Ok(ScalarValue::Date32(None)),
+        ArrowDataType::Date64 => Ok(ScalarValue::Date64(None)),
+        ArrowDataType::Binary => Ok(ScalarValue::Binary(None)),
+        ArrowDataType::FixedSizeBinary(size) => {
+            Ok(ScalarValue::FixedSizeBinary(size.to_owned(), None))
+        }
+        ArrowDataType::LargeBinary => Ok(ScalarValue::LargeBinary(None)),
+        ArrowDataType::Utf8 => Ok(ScalarValue::Utf8(None)),
+        ArrowDataType::LargeUtf8 => Ok(ScalarValue::LargeUtf8(None)),
+        ArrowDataType::Decimal128(precision, scale) => Ok(ScalarValue::Decimal128(
+            None,
+            precision.to_owned(),
+            scale.to_owned(),
+        )),
+        ArrowDataType::Timestamp(unit, tz) => {
+            let tz = tz.to_owned();
+            Ok(match unit {
+                TimeUnit::Second => ScalarValue::TimestampSecond(None, tz),
+                TimeUnit::Millisecond => ScalarValue::TimestampMillisecond(None, tz),
+                TimeUnit::Microsecond => ScalarValue::TimestampMicrosecond(None, tz),
+                TimeUnit::Nanosecond => ScalarValue::TimestampNanosecond(None, tz),
+            })
+        }
+        //Unsupported types...
+        ArrowDataType::Float16
+        | ArrowDataType::Decimal256(_, _)
+        | ArrowDataType::Union(_, _, _)
+        | ArrowDataType::Dictionary(_, _)
+        | ArrowDataType::LargeList(_)
+        | ArrowDataType::Struct(_)
+        | ArrowDataType::List(_)
+        | ArrowDataType::FixedSizeList(_, _)
+        | ArrowDataType::Time32(_)
+        | ArrowDataType::Time64(_)
+        | ArrowDataType::Duration(_)
+        | ArrowDataType::Interval(_)
+        | ArrowDataType::RunEndEncoded(_, _)
+        | ArrowDataType::Map(_, _) => Err(DeltaTableError::Generic(format!(
+            "Unsupported data type for Delta Lake {}",
+            t
+        ))),
     }
 }
 
@@ -521,7 +588,7 @@ fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> P
                     f.data_type(),
                 )
                 .unwrap_or(ScalarValue::Null),
-                None => ScalarValue::Null,
+                None => get_null_of_arrow_type(f.data_type()).unwrap_or(ScalarValue::Null),
             })
         })
         .collect::<Vec<_>>();
@@ -563,14 +630,14 @@ fn to_scalar_value(stat_val: &serde_json::Value) -> Option<ScalarValue> {
     }
 }
 
-fn to_correct_scalar_value(
+pub(crate) fn to_correct_scalar_value(
     stat_val: &serde_json::Value,
     field_dt: &ArrowDataType,
 ) -> Option<ScalarValue> {
     match stat_val {
         serde_json::Value::Array(_) => None,
         serde_json::Value::Object(_) => None,
-        serde_json::Value::Null => None,
+        serde_json::Value::Null => get_null_of_arrow_type(field_dt).ok(),
         serde_json::Value::String(string_val) => match field_dt {
             ArrowDataType::Timestamp(_, _) => {
                 let time_nanos = ScalarValue::try_from_string(
@@ -785,10 +852,10 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         inputs: &[Arc<dyn ExecutionPlan>],
         _registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        let url: String = serde_json::from_reader(buf)
+        let table_uri: String = serde_json::from_reader(buf)
             .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
         let delta_scan = DeltaScan {
-            url,
+            table_uri,
             parquet_scan: (*inputs)[0].clone(),
         };
         Ok(Arc::new(delta_scan))
@@ -803,7 +870,7 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
             .as_any()
             .downcast_ref::<DeltaScan>()
             .ok_or_else(|| DataFusionError::Internal("Not a delta scan!".to_string()))?;
-        serde_json::to_writer(buf, delta_scan.url.as_str())
+        serde_json::to_writer(buf, delta_scan.table_uri.as_str())
             .map_err(|_| DataFusionError::Internal("Unable to encode delta scan!".to_string()))?;
         Ok(())
     }
@@ -880,7 +947,11 @@ mod tests {
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
     use datafusion::from_slice::FromSlice;
+    use datafusion::physical_plan::empty::EmptyExec;
+    use datafusion_proto::physical_plan::AsExecutionPlan;
+    use datafusion_proto::protobuf;
     use serde_json::json;
+    use std::ops::Deref;
 
     use super::*;
 
@@ -1125,5 +1196,29 @@ mod tests {
         let result = DeltaDataChecker::new(invariants).check_batch(&batch).await;
         assert!(result.is_err());
         assert!(matches!(result, Err(DeltaTableError::Generic { .. })));
+    }
+
+    #[test]
+    fn roundtrip_test_delta_exec_plan() {
+        let ctx = SessionContext::new();
+        let codec = DeltaPhysicalCodec {};
+
+        let schema = Arc::new(Schema::new(vec![
+            Field::new("a", DataType::Utf8, false),
+            Field::new("b", DataType::Int32, false),
+        ]));
+        let exec_plan = Arc::from(DeltaScan {
+            table_uri: "s3://my_bucket/this/is/some/path".to_string(),
+            parquet_scan: Arc::from(EmptyExec::new(false, schema)),
+        });
+        let proto: protobuf::PhysicalPlanNode =
+            protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), &codec)
+                .expect("to proto");
+
+        let runtime = ctx.runtime_env();
+        let result_exec_plan: Arc<dyn ExecutionPlan> = proto
+            .try_into_physical_plan(&ctx, runtime.deref(), &codec)
+            .expect("from proto");
+        assert_eq!(format!("{exec_plan:?}"), format!("{result_exec_plan:?}"));
     }
 }

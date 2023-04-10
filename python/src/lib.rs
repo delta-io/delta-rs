@@ -9,10 +9,12 @@ use chrono::{DateTime, Duration, FixedOffset, Utc};
 use deltalake::action::{
     self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
 };
+use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::builder::DeltaTableBuilder;
 use deltalake::checkpoints::create_checkpoint;
+use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
@@ -24,6 +26,7 @@ use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::exceptions::PyValueError;
 use pyo3::prelude::*;
+use pyo3::types::PyFrozenSet;
 use pyo3::types::PyType;
 use std::collections::HashMap;
 use std::collections::HashSet;
@@ -39,6 +42,10 @@ create_exception!(deltalake, PyDeltaTableError, PyException);
 
 impl PyDeltaTableError {
     fn from_arrow(err: arrow::error::ArrowError) -> pyo3::PyErr {
+        PyDeltaTableError::new_err(err.to_string())
+    }
+
+    fn from_datafusion(err: deltalake::datafusion::error::DataFusionError) -> pyo3::PyErr {
         PyDeltaTableError::new_err(err.to_string())
     }
 
@@ -364,27 +371,76 @@ impl RawDeltaTable {
             .collect()
     }
 
-    fn get_active_partitions(
-        &mut self,
+    fn get_active_partitions<'py>(
+        &self,
         partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
-    ) -> PyResult<HashSet<(String, Option<String>)>> {
+        py: Python<'py>,
+    ) -> PyResult<&'py PyFrozenSet> {
+        let column_names: HashSet<&str> = self
+            ._table
+            .schema()
+            .ok_or_else(|| PyDeltaTableError::new_err("table does not yet have a schema"))?
+            .get_fields()
+            .iter()
+            .map(|field| field.get_name())
+            .collect();
+        let partition_columns: HashSet<&str> = self
+            ._table
+            .get_metadata()
+            .map_err(PyDeltaTableError::from_raw)?
+            .partition_columns
+            .iter()
+            .map(|col| col.as_str())
+            .collect();
+
+        if let Some(filters) = &partitions_filters {
+            let unknown_columns: Vec<&str> = filters
+                .iter()
+                .map(|(column_name, _, _)| *column_name)
+                .filter(|column_name| !column_names.contains(column_name))
+                .collect();
+            if !unknown_columns.is_empty() {
+                return Err(PyValueError::new_err(format!(
+                    "Filters include columns that are not in table schema: {unknown_columns:?}"
+                )));
+            }
+
+            let non_partition_columns: Vec<&str> = filters
+                .iter()
+                .map(|(column_name, _, _)| *column_name)
+                .filter(|column_name| !partition_columns.contains(column_name))
+                .collect();
+
+            if !non_partition_columns.is_empty() {
+                return Err(PyValueError::new_err(format!(
+                    "Filters include columns that are not partition columns: {non_partition_columns:?}"
+                )));
+            }
+        }
+
         let converted_filters = convert_partition_filters(partitions_filters.unwrap_or_default())
             .map_err(PyDeltaTableError::from_raw)?;
 
-        let add_actions = self
+        let partition_columns: Vec<&str> = partition_columns.into_iter().collect();
+
+        let active_partitions: HashSet<Vec<(&str, Option<&str>)>> = self
             ._table
             .get_state()
             .get_active_add_actions_by_partitions(&converted_filters)
-            .map_err(PyDeltaTableError::from_raw)?;
-        let active_partitions = add_actions
-            .flat_map(|add| {
-                add.partition_values
+            .map_err(PyDeltaTableError::from_raw)?
+            .map(|add| {
+                partition_columns
                     .iter()
-                    .map(|i| (i.0.to_owned(), i.1.to_owned()))
-                    .collect::<Vec<_>>()
+                    .map(|col| (*col, add.partition_values.get(*col).unwrap().as_deref()))
+                    .collect()
             })
-            .collect::<HashSet<_>>();
-        Ok(active_partitions)
+            .collect();
+
+        let active_partitions: Vec<&'py PyFrozenSet> = active_partitions
+            .into_iter()
+            .map(|part| PyFrozenSet::new(py, part.iter()))
+            .collect::<Result<_, PyErr>>()?;
+        PyFrozenSet::new(py, active_partitions.into_iter())
     }
 
     fn create_write_transaction(
@@ -624,6 +680,21 @@ fn rust_core_version() -> &'static str {
     deltalake::crate_version()
 }
 
+#[pyfunction]
+fn batch_distinct(batch: PyArrowType<RecordBatch>) -> PyResult<PyArrowType<RecordBatch>> {
+    let ctx = SessionContext::new();
+    let schema = batch.0.schema();
+    ctx.register_batch("batch", batch.0)
+        .map_err(PyDeltaTableError::from_datafusion)?;
+    let batches = rt()?
+        .block_on(async { ctx.table("batch").await?.distinct()?.collect().await })
+        .map_err(PyDeltaTableError::from_datafusion)?;
+
+    Ok(PyArrowType(
+        concat_batches(&schema, &batches).map_err(PyDeltaTableError::from_arrow)?,
+    ))
+}
+
 fn save_mode_from_str(value: &str) -> PyResult<SaveMode> {
     match value {
         "append" => Ok(SaveMode::Append),
@@ -749,9 +820,10 @@ impl PyDeltaDataChecker {
 // module name need to match project name
 fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
-
+    m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;
     m.add_function(pyo3::wrap_pyfunction!(write_new_deltalake, m)?)?;
+    m.add_function(pyo3::wrap_pyfunction!(batch_distinct, m)?)?;
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<PyDeltaDataChecker>()?;

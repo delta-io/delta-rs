@@ -1,6 +1,6 @@
 [package]
 name = "delta-inspect"
-version = "0.7.0"
+version = "0.8.0"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta.rs"
 license = "Apache-2.0"

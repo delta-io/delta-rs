@@ -5,7 +5,7 @@ pub mod file;
 pub mod utils;
 
 use self::config::{ObjectStoreKind, StorageOptions};
-use crate::DeltaResult;
+use crate::{DeltaDataTypeVersion, DeltaResult};
 
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt};
@@ -37,6 +37,12 @@ lazy_static! {
     static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
 }
 
+/// Return the uri of commit version.
+pub(crate) fn commit_uri_from_version(version: DeltaDataTypeVersion) -> Path {
+    let version = format!("{version:020}.json");
+    DELTA_LOG_PATH.child(version.as_str())
+}
+
 /// Sharable reference to [`DeltaObjectStore`]
 pub type ObjectStoreRef = Arc<DeltaObjectStore>;
 
@@ -53,8 +59,6 @@ pub struct DeltaObjectStore {
     storage: Arc<dyn ObjectStore>,
     location: Url,
     options: StorageOptions,
-    #[allow(unused)]
-    prefix: Path,
 }
 
 impl std::fmt::Display for DeltaObjectStore {
@@ -66,15 +70,14 @@ impl std::fmt::Display for DeltaObjectStore {
 impl DeltaObjectStore {
     /// Create a new instance of [`DeltaObjectStore`]
     ///
-    /// # Arguemnts
+    /// # Arguments
     ///
     /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with "/" pointing at delta table root (i.e. where `_delta_log` is located).
-    /// * `location` - A url corresponding to the storagle location of `storage`.
+    /// * `location` - A url corresponding to the storage location of `storage`.
     pub fn new(storage: Arc<DynObjectStore>, location: Url) -> Self {
         Self {
             storage,
             location,
-            prefix: Path::from("/"),
             options: HashMap::new().into(),
         }
     }
@@ -86,18 +89,11 @@ impl DeltaObjectStore {
     /// * `location` - A url pointing to the root of the delta table.
     /// * `options` - Options passed to underlying builders. See [`with_storage_options`](crate::builder::DeltaTableBuilder::with_storage_options)
     pub fn try_new(location: Url, options: impl Into<StorageOptions> + Clone) -> DeltaResult<Self> {
-        let prefix = Path::from(location.path());
-        let root_store =
-            ObjectStoreKind::parse_url(&location)?.into_impl(location.as_ref(), options.clone())?;
-        let storage = if prefix != Path::from("/") {
-            root_store.into_prefix(prefix.clone())
-        } else {
-            root_store.into_store()
-        };
+        let storage =
+            ObjectStoreKind::parse_url(&location)?.into_impl(&location, options.clone())?;
         Ok(Self {
             storage,
             location,
-            prefix,
             options: options.into(),
         })
     }
@@ -107,7 +103,7 @@ impl DeltaObjectStore {
         self.storage.clone()
     }
 
-    /// Storage options used to intialize storage backend
+    /// Storage options used to initialize storage backend
     pub fn storage_options(&self) -> &StorageOptions {
         &self.options
     }
@@ -118,16 +114,20 @@ impl DeltaObjectStore {
     }
 
     #[cfg(feature = "datafusion")]
-    /// generate a unique enough url to identify the store in datafusion.
-    pub(crate) fn object_store_url(&self) -> ObjectStoreUrl {
+    /// Generate a unique enough url to identify the store in datafusion.
+    /// The DF object store registry only cares about the scheme and the host of the url for
+    /// registering/fetching. In our case the scheme is hard-coded to "delta-rs", so to get a unique
+    /// host we convert the location from this `DeltaObjectStore` to a valid name, combining the
+    /// original scheme, host and path with invalid characters replaced.
+    pub fn object_store_url(&self) -> ObjectStoreUrl {
         // we are certain, that the URL can be parsed, since
         // we make sure when we are parsing the table uri
         ObjectStoreUrl::parse(format!(
-            "delta-rs://{}",
-            // NOTE We need to also replace colons, but its fine, since it just needs
-            // to be a unique-ish identifier for the object store in datafusion
-            self.prefix
-                .as_ref()
+            "delta-rs://{}-{}{}",
+            self.location.scheme(),
+            self.location.host_str().unwrap_or("-"),
+            self.location
+                .path()
                 .replace(DELIMITER, "-")
                 .replace(':', "-")
         ))
@@ -327,5 +327,39 @@ impl<'de> Deserialize<'de> for DeltaObjectStore {
         }
 
         deserializer.deserialize_seq(DeltaObjectStoreVisitor {})
+    }
+}
+
+#[cfg(feature = "datafusion")]
+#[cfg(test)]
+mod tests {
+    use crate::storage::DeltaObjectStore;
+    use object_store::memory::InMemory;
+    use std::sync::Arc;
+    use url::Url;
+
+    #[tokio::test]
+    async fn test_unique_object_store_url() {
+        // Just a dummy store to be passed for initialization
+        let inner_store = Arc::from(InMemory::new());
+
+        for (location_1, location_2) in [
+            // Same scheme, no host, different path
+            ("file:///path/to/table_1", "file:///path/to/table_2"),
+            // Different scheme/host, same path
+            ("s3://my_bucket/path/to/table_1", "file:///path/to/table_1"),
+            // Same scheme, different host, same path
+            ("s3://bucket_1/table_1", "s3://bucket_2/table_1"),
+        ] {
+            let url_1 = Url::parse(location_1).unwrap();
+            let url_2 = Url::parse(location_2).unwrap();
+            let store_1 = DeltaObjectStore::new(inner_store.clone(), url_1);
+            let store_2 = DeltaObjectStore::new(inner_store.clone(), url_2);
+
+            assert_ne!(
+                store_1.object_store_url().as_str(),
+                store_2.object_store_url().as_str(),
+            );
+        }
     }
 }

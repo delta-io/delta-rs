@@ -15,11 +15,11 @@ use tempdir::TempDir;
 
 #[cfg(feature = "azure")]
 pub mod adls;
-#[cfg(feature = "hdfs")]
-pub mod hdfs;
 pub mod clock;
 #[cfg(feature = "datafusion")]
 pub mod datafusion;
+#[cfg(feature = "hdfs")]
+pub mod hdfs;
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 pub mod s3;
 pub mod schemas;

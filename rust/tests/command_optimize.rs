@@ -318,13 +318,12 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     transaction.add_action(Action::remove(remove));
     transaction.commit(None, None).await?;
 
-    let maybe_metrics = plan.execute(dt.object_store()).await;
+    let maybe_metrics = plan.execute(dt.object_store(), &dt.state).await;
     assert!(maybe_metrics.is_err());
     assert_eq!(dt.version(), version + 1);
     Ok(())
 }
 
-#[ignore = "we do not yet re-try in operations commits."]
 #[tokio::test]
 /// Validate that optimize succeeds when only add actions occur for a optimized partition
 async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
@@ -367,9 +366,11 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let metrics = plan.execute(dt.object_store()).await?;
+    let metrics = plan.execute(dt.object_store(), &dt.state).await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
+
+    dt.update().await.unwrap();
     assert_eq!(dt.version(), version + 2);
     Ok(())
 }
@@ -507,16 +508,14 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
     let last_commit = &commit_info[commit_info.len() - 1];
 
     let commit_metrics =
-        serde_json::from_value::<Metrics>(last_commit["operationMetrics"].clone())?;
+        serde_json::from_value::<Metrics>(last_commit.info["operationMetrics"].clone())?;
 
     assert_eq!(commit_metrics, metrics);
-    assert_eq!(last_commit["readVersion"], json!(version));
-    assert_eq!(
-        last_commit["operationParameters"]["targetSize"],
-        json!("2000000")
-    );
+    assert_eq!(last_commit.read_version, Some(version));
+    let parameters = last_commit.operation_parameters.clone().unwrap();
+    assert_eq!(parameters["targetSize"], json!("2000000"));
     // TODO: Requires a string representation for PartitionFilter
-    assert_eq!(last_commit["operationParameters"]["predicate"], Value::Null);
+    // assert_eq!(parameters["predicate"], None);
 
     Ok(())
 }

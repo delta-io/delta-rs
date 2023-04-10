@@ -14,7 +14,7 @@ from packaging import version
 from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
 from pyarrow.lib import RecordBatchReader
 
-from deltalake import DeltaTable, PyDeltaTableError, write_deltalake
+from deltalake import DeltaTable, write_deltalake
 from deltalake.table import ProtocolVersions
 from deltalake.writer import DeltaTableProtocolError, try_get_table_and_table_uri
 
@@ -625,6 +625,43 @@ def test_partition_overwrite(
         == expected_data
     )
 
+    # Overwrite a single partition
+    sample_data = pa.table(
+        {
+            "p1": pa.array(["1"], pa.string()),
+            "p2": pa.array([value_1], value_type),
+            "val": pa.array([5], pa.int64()),
+        }
+    )
+    expected_data = pa.table(
+        {
+            "p1": pa.array(["1", "1", "2", "2"], pa.string()),
+            "p2": pa.array([value_1, value_2, value_1, value_2], value_type),
+            "val": pa.array([5, 3, 1, 3], pa.int64()),
+        }
+    )
+    write_deltalake(
+        tmp_path,
+        sample_data,
+        mode="overwrite",
+        partition_filters=[("p1", "=", "1"), ("p2", "=", filter_string)],
+    )
+    delta_table.update_incremental()
+    assert (
+        delta_table.to_pyarrow_table().sort_by(
+            [("p1", "ascending"), ("p2", "ascending")]
+        )
+        == expected_data
+    )
+
+    with pytest.raises(ValueError, match="Data should be aligned with partitioning"):
+        write_deltalake(
+            tmp_path,
+            sample_data,
+            mode="overwrite",
+            partition_filters=[("p2", "<", filter_string)],
+        )
+
 
 @pytest.fixture()
 def sample_data_for_partitioning() -> pa.Table:
@@ -699,7 +736,7 @@ def test_partition_overwrite_with_non_partitioned_data(
 ):
     write_deltalake(tmp_path, sample_data_for_partitioning, mode="overwrite")
 
-    with pytest.raises(PyDeltaTableError):
+    with pytest.raises(ValueError, match=r'not partition columns: \["p1"\]'):
         write_deltalake(
             tmp_path,
             sample_data_for_partitioning,
@@ -718,12 +755,40 @@ def test_partition_overwrite_with_wrong_partition(
         partition_by=["p1", "p2"],
     )
 
-    with pytest.raises(PyDeltaTableError):
+    with pytest.raises(ValueError, match=r'not in table schema: \["p999"\]'):
         write_deltalake(
             tmp_path,
             sample_data_for_partitioning,
             mode="overwrite",
             partition_filters=[("p999", "=", "1")],
+        )
+
+    with pytest.raises(ValueError, match=r'not partition columns: \["val"\]'):
+        write_deltalake(
+            tmp_path,
+            sample_data_for_partitioning,
+            mode="overwrite",
+            partition_filters=[("val", "=", "1")],
+        )
+
+    new_data = pa.table(
+        {
+            "p1": pa.array(["1"], pa.string()),
+            "p2": pa.array([2], pa.int64()),
+            "val": pa.array([1], pa.int64()),
+        }
+    )
+
+    with pytest.raises(
+        ValueError,
+        match="Data should be aligned with partitioning. "
+        "Data contained values for partition p1=1 p2=2",
+    ):
+        write_deltalake(
+            tmp_path,
+            new_data,
+            mode="overwrite",
+            partition_filters=[("p1", "=", "1"), ("p2", "=", "1")],
         )
 
 
@@ -735,3 +800,59 @@ def test_handles_binary_data(tmp_path: pathlib.Path):
     dt = DeltaTable(tmp_path)
     out = dt.to_pyarrow_table()
     assert table == out
+
+
+def test_max_partitions_exceeding_fragment_should_fail(
+    tmp_path: pathlib.Path, sample_data_for_partitioning: pa.Table
+):
+    with pytest.raises(
+        ValueError,
+        match=r"Fragment would be written into \d+ partitions\. This exceeds the maximum of \d+",
+    ):
+        write_deltalake(
+            tmp_path,
+            sample_data_for_partitioning,
+            mode="overwrite",
+            max_partitions=1,
+            partition_by=["p1", "p2"],
+        )
+
+
+def test_large_arrow_types(tmp_path: pathlib.Path):
+    pylist = [
+        {"name": "Joey", "gender": b"M", "arr_type": ["x", "y"], "dict": {"a": b"M"}},
+        {"name": "Ivan", "gender": b"F", "arr_type": ["x", "z"]},
+    ]
+    schema = pa.schema(
+        [
+            pa.field("name", pa.large_string()),
+            pa.field("gender", pa.large_binary()),
+            pa.field("arr_type", pa.large_list(pa.large_string())),
+            pa.field("map_type", pa.map_(pa.large_string(), pa.large_binary())),
+            pa.field("struct", pa.struct([pa.field("sub", pa.large_string())])),
+        ]
+    )
+    table = pa.Table.from_pylist(pylist, schema=schema)
+
+    write_deltalake(tmp_path, table)
+
+    dt = DeltaTable(tmp_path)
+    assert table.schema == dt.schema().to_pyarrow(as_large_types=True)
+
+
+def test_uint_arrow_types(tmp_path: pathlib.Path):
+    pylist = [
+        {"num1": 3, "num2": 3, "num3": 3, "num4": 5},
+        {"num1": 1, "num2": 13, "num3": 35, "num4": 13},
+    ]
+    schema = pa.schema(
+        [
+            pa.field("num1", pa.uint8()),
+            pa.field("num2", pa.uint16()),
+            pa.field("num3", pa.uint32()),
+            pa.field("num4", pa.uint64()),
+        ]
+    )
+    table = pa.Table.from_pylist(pylist, schema=schema)
+
+    write_deltalake(tmp_path, table)
