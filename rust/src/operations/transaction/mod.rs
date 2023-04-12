@@ -151,7 +151,7 @@ async fn try_commit_transaction(
 }
 
 /// Commit a transaction, with up to 5 retries. This is low-level transaction API.
-/// 
+///
 /// Will error early if the a concurrent transaction has already been committed
 /// and conflicts with this transaction.
 pub async fn commit(
