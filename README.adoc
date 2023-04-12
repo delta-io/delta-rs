@@ -78,7 +78,7 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 
 == Get Involved
 
-Join link:https://dbricks.co/delta-users-slack[#delta-rs in the Delta Lake Slack workspace]
+Join link:https://join.slack.com/t/delta-users/shared_invite/zt-1t1ahwrpx-hIEXnP20PCDzcBSf5V3heA[#delta-rs in the Delta Lake Slack workspace]
 
 === Development Meeting
 
