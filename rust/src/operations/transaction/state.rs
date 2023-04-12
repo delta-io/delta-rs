@@ -87,7 +87,7 @@ impl DeltaTableState {
 
     /// Get the pysical table schema.
     ///
-    /// This will construct a schema derived from the parqet schema of the latest data file,
+    /// This will construct a schema derived from the parquet schema of the latest data file,
     /// and fields for partition columns from the schema defined in table meta data.
     pub async fn physical_arrow_schema(
         &self,
