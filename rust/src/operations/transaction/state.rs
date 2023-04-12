@@ -93,35 +93,33 @@ impl DeltaTableState {
         &self,
         object_store: Arc<dyn ObjectStore>,
     ) -> DeltaResult<ArrowSchemaRef> {
-        let file_meta = self
-            .files()
-            .iter()
-            .max_by_key(|obj| obj.modification_time)
-            .ok_or(DeltaTableError::Generic("No active file actions to get physical schema. Maybe the current state has not yet been loaded?".into()))?
-            .try_into()?;
+        if let Some(add) = self.files().iter().max_by_key(|obj| obj.modification_time) {
+            let file_meta = add.try_into()?;
+            let file_reader = ParquetObjectReader::new(object_store, file_meta);
+            let file_schema = ParquetRecordBatchStreamBuilder::new(file_reader)
+                .await?
+                .build()?
+                .schema()
+                .clone();
 
-        let file_reader = ParquetObjectReader::new(object_store, file_meta);
-        let file_schema = ParquetRecordBatchStreamBuilder::new(file_reader)
-            .await?
-            .build()?
-            .schema()
-            .clone();
+            let table_schema = Arc::new(ArrowSchema::new(
+                self.arrow_schema()?
+                    .fields
+                    .clone()
+                    .into_iter()
+                    .map(|field| {
+                        file_schema
+                            .field_with_name(field.name())
+                            .cloned()
+                            .unwrap_or(field)
+                    })
+                    .collect(),
+            ));
 
-        let table_schema = Arc::new(ArrowSchema::new(
-            self.arrow_schema()?
-                .fields
-                .clone()
-                .into_iter()
-                .map(|field| {
-                    file_schema
-                        .field_with_name(field.name())
-                        .cloned()
-                        .unwrap_or(field)
-                })
-                .collect(),
-        ));
-
-        Ok(table_schema)
+            Ok(table_schema)
+        } else {
+            self.arrow_schema()
+        }
     }
 }
 
