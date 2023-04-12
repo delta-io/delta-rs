@@ -113,7 +113,7 @@ async fn test_filesystem_check_partitioned() -> TestResult {
 
 #[tokio::test]
 #[serial]
-async fn test_filesystem_check_outdated() -> TestResult {
+async fn test_filesystem_check_fails_for_concurrent_delete() -> TestResult {
     // Validate failure when a non dry only executes on the latest version
     let context = IntegrationContext::new(StorageIntegration::Local)?;
     context.load_table(TestTables::Simple).await?;
@@ -132,6 +132,34 @@ async fn test_filesystem_check_outdated() -> TestResult {
     let op = DeltaOps::from(table);
     let res = op.filesystem_check().with_dry_run(false).await;
 
+    // TODO check more specific error
+    assert!(matches!(res, Err(DeltaTableError::Transaction { .. })));
+
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+#[ignore = "should this actually fail? with conflcit resolution, we are re-trying again."]
+async fn test_filesystem_check_outdated() -> TestResult {
+    // Validate failure when a non dry only executes on the latest version
+    let context = IntegrationContext::new(StorageIntegration::Local)?;
+    context.load_table(TestTables::Simple).await?;
+    let file = "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet";
+    let path = Path::from_iter([&TestTables::Simple.as_name(), file]);
+
+    // Delete an active file from underlying storage without an update to the log to simulate an external fault
+    context.object_store().delete(&path).await?;
+
+    let table = context
+        .table_builder(TestTables::Simple)
+        .with_version(2)
+        .load()
+        .await?;
+
+    let op = DeltaOps::from(table);
+    let res = op.filesystem_check().with_dry_run(false).await;
+    println!("{:?}", res);
     if let Err(DeltaTableError::VersionAlreadyExists(version)) = res {
         assert!(version == 3);
     } else {

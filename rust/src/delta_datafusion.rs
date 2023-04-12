@@ -390,7 +390,7 @@ impl TableProvider for DeltaTable {
             (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
         {
             let pruning_predicate = PruningPredicate::try_new(predicate, schema.clone())?;
-            let files_to_prune = pruning_predicate.prune(self)?;
+            let files_to_prune = pruning_predicate.prune(&self.state)?;
             self.get_state()
                 .files()
                 .iter()
@@ -630,7 +630,7 @@ fn to_scalar_value(stat_val: &serde_json::Value) -> Option<ScalarValue> {
     }
 }
 
-fn to_correct_scalar_value(
+pub(crate) fn to_correct_scalar_value(
     stat_val: &serde_json::Value,
     field_dt: &ArrowDataType,
 ) -> Option<ScalarValue> {

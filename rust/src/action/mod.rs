@@ -544,6 +544,13 @@ pub enum DeltaOperation {
         /// The predicate used during the write.
         predicate: Option<String>,
     },
+
+    /// Delete data matching predicate from delta table
+    Delete {
+        /// The condition the to be deleted data must match
+        predicate: Option<String>,
+    },
+
     /// Represents a Delta `StreamingUpdate` operation.
     #[serde(rename_all = "camelCase")]
     StreamingUpdate {
@@ -580,6 +587,7 @@ impl DeltaOperation {
             }
             DeltaOperation::Create { .. } => "CREATE TABLE",
             DeltaOperation::Write { .. } => "WRITE",
+            DeltaOperation::Delete { .. } => "DELETE",
             DeltaOperation::StreamingUpdate { .. } => "STREAMING UPDATE",
             DeltaOperation::Optimize { .. } => "OPTIMIZE",
             DeltaOperation::FileSystemCheck { .. } => "FSCK",
@@ -622,7 +630,8 @@ impl DeltaOperation {
             Self::Create { .. }
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }
-            | Self::Write { .. } => true,
+            | Self::Write { .. }
+            | Self::Delete { .. } => true,
         }
     }
 
@@ -641,7 +650,18 @@ impl DeltaOperation {
         match self {
             // TODO add more operations
             Self::Write { predicate, .. } => predicate.clone(),
+            Self::Delete { predicate, .. } => predicate.clone(),
             _ => None,
+        }
+    }
+
+    /// Denotes if the operation reads the entire table
+    pub fn read_whole_table(&self) -> bool {
+        match self {
+            // TODO just adding one operation example, as currently none of the
+            // implemented operations scan the entire table.
+            Self::Write { predicate, .. } if predicate.is_none() => false,
+            _ => false,
         }
     }
 }
