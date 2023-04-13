@@ -23,17 +23,17 @@ pub enum CommitConflictError {
     /// This exception occurs when a concurrent operation adds files in the same partition
     /// (or anywhere in an un-partitioned table) that your operation reads. The file additions
     /// can be caused by INSERT, DELETE, UPDATE, or MERGE operations.
-    #[error("Commit failed: a concurrent transactions added new files.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
+    #[error("Commit failed: a concurrent transactions added new data.\nHelp: This transaction's query must be rerun to include the new data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
     ConcurrentAppend,
 
     /// This exception occurs when a concurrent operation deleted a file that your operation read.
     /// Common causes are a DELETE, UPDATE, or MERGE operation that rewrites files.
-    #[error("Commit failed: a concurrent transaction deleted a file this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
+    #[error("Commit failed: a concurrent transaction deleted data this operation read.\nHelp: This transaction's query must be rerun to exclude the removed data. Also, if you don't care to require this check to pass in the future, the isolation level can be set to Snapshot Isolation.")]
     ConcurrentDeleteRead,
 
     /// This exception occurs when a concurrent operation deleted a file that your operation also deletes.
     /// This could be caused by two concurrent compaction operations rewriting the same files.
-    #[error("Concurrent delete-delete failed.")]
+    #[error("Commit failed: a concurrent transaction deleted the same data your transaction deletes.\nHelp: you should retry this write operation. If it was based on data contained in the table, you should rerun the query generating the data.")]
     ConcurrentDeleteDelete,
 
     /// This exception occurs when a concurrent transaction updates the metadata of a Delta table.
