@@ -3,6 +3,7 @@ import json
 import os
 import pathlib
 import random
+import threading
 from datetime import date, datetime
 from typing import Any, Dict, Iterable, List
 from unittest.mock import Mock
@@ -14,7 +15,7 @@ from packaging import version
 from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
 from pyarrow.lib import RecordBatchReader
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, PyDeltaTableError, write_deltalake
 from deltalake.table import ProtocolVersions
 from deltalake.writer import DeltaTableProtocolError, try_get_table_and_table_uri
 
@@ -258,6 +259,7 @@ def test_append_only_should_append_only_with_the_overwrite_mode(
             write_deltalake(data_store_type, sample_data, mode=mode)
 
     expected = pa.concat_tables([sample_data, sample_data])
+    table.update_incremental()
     assert table.to_pyarrow_table() == expected
     assert table.version() == 1
 
@@ -856,3 +858,35 @@ def test_uint_arrow_types(tmp_path: pathlib.Path):
     table = pa.Table.from_pylist(pylist, schema=schema)
 
     write_deltalake(tmp_path, table)
+
+
+def test_concurrency(existing_table: DeltaTable, sample_data: pa.Table):
+    exception = None
+
+    def comp():
+        nonlocal exception
+        dt = DeltaTable(existing_table.table_uri)
+        for _ in range(5):
+            # We should always be able to get a consistent table state
+            data = DeltaTable(dt.table_uri).to_pyarrow_table()
+            # If two overwrites delete the same file and then add their own
+            # concurrently, then this will fail.
+            assert data.num_rows == sample_data.num_rows
+            try:
+                write_deltalake(dt.table_uri, data, mode="overwrite")
+            except Exception as e:
+                exception = e
+
+    n_threads = 2
+    threads = [threading.Thread(target=comp) for _ in range(n_threads)]
+
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert isinstance(exception, PyDeltaTableError)
+    assert (
+        "a concurrent transaction deleted the same data your transaction deletes"
+        in str(exception)
+    )
