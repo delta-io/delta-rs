@@ -3,9 +3,9 @@
 use arrow::datatypes::Schema as ArrowSchema;
 // NOTE: Temporarily allowing these deprecated imports pending the completion of:
 // <https://github.com/apache/arrow-rs/pull/3979>
+use arrow::error::ArrowError;
 #[allow(deprecated)]
 use arrow::json::reader::{Decoder, DecoderOptions};
-use arrow::error::ArrowError;
 use chrono::{DateTime, Datelike, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;

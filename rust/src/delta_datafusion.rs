@@ -337,10 +337,7 @@ impl PruningStatistics for DeltaTable {
 fn register_store(table: &DeltaTable, env: Arc<RuntimeEnv>) {
     let object_store_url = table.storage.object_store_url();
     let url: &Url = object_store_url.as_ref();
-    env.register_object_store(
-        &url,
-        table.object_store(),
-    );
+    env.register_object_store(&url, table.object_store());
 }
 
 #[async_trait]
