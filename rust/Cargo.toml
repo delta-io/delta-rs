@@ -13,7 +13,7 @@ readme = "README.md"
 edition = "2021"
 
 [dependencies]
-arrow = { version = "36.0.0", optional = true }
+arrow = { version = "37.0.0", optional = true }
 async-trait = "0.1"
 bytes = "1"
 chrono = { version = "0.4.22", default-features = false, features = ["clock"] }
@@ -29,7 +29,7 @@ num-traits = "0.2.15"
 object_store = "0.5.6"
 once_cell = "1.16.0"
 parking_lot = "0.12"
-parquet = { version = "36", features = [
+parquet = { version = "37", features = [
     "async",
     "object_store",
 ], optional = true }
@@ -53,17 +53,11 @@ rusoto_dynamodb = { version = "0.47", default-features = false, optional = true 
 rusoto_glue = { version = "0.47", default-features = false, optional = true }
 
 # Datafusion
-#datafusion = { version = "21", optional = true }
-#datafusion-expr = { version = "21", optional = true }
-#datafusion-common = { version = "21", optional = true }
-#datafusion-proto = { version = "21", optional = true }
-#datafusion-sql = { version = "21", optional = true }
-
-datafusion = { git = "https://github.com/apache/arrow-datafusion", branch = "main", optional = true }
-datafusion-expr = { git = "https://github.com/apache/arrow-datafusion", branch = "main", optional = true }
-datafusion-common = { git = "https://github.com/apache/arrow-datafusion", branch = "main", optional = true }
-datafusion-proto = { git = "https://github.com/apache/arrow-datafusion", branch = "main", optional = true }
-datafusion-sql = { git = "https://github.com/apache/arrow-datafusion", branch = "main", optional = true }
+datafusion = { version = "22", optional = true }
+datafusion-expr = { version = "22", optional = true }
+datafusion-common = { version = "22", optional = true }
+datafusion-proto = { version = "22", optional = true }
+datafusion-sql = { version = "22", optional = true }
 
 sqlparser = { version = "0.30", optional = true }
 
