@@ -116,6 +116,14 @@ impl IntegrationContext {
                 std::fs::create_dir_all(&dest_path)?;
                 copy(table.as_path(), &dest_path, &options)?;
             }
+            StorageIntegration::Amazon => {
+                let dest = format!("{}/{}", self.root_uri(), name.as_ref());
+                s3_cli::copy_directory(table.as_path(), dest)?;
+            }
+            StorageIntegration::Microsoft => {
+                let dest = format!("{}/{}", self.bucket, name.as_ref());
+                az_cli::copy_directory(table.as_path(), dest)?;
+            }
             _ => {
                 let from = table.as_path().as_str().to_owned();
                 let to = format!("{}/{}", self.root_uri(), name.as_ref());
@@ -192,6 +200,7 @@ pub enum TestTables {
     SimpleCommit,
     Golden,
     Delta0_8_0Partitioned,
+    Delta0_8_0SpecialPartitioned,
     Custom(String),
 }
 
@@ -215,6 +224,11 @@ impl TestTables {
                 .to_str()
                 .unwrap()
                 .to_owned(),
+            Self::Delta0_8_0SpecialPartitioned => data_path
+                .join("delta-0.8.0-special-partition")
+                .to_str()
+                .unwrap()
+                .to_owned(),
             // the data path for upload does not apply to custom tables.
             Self::Custom(_) => todo!(),
         }
@@ -226,6 +240,7 @@ impl TestTables {
             Self::SimpleCommit => "simple_commit".into(),
             Self::Golden => "golden".into(),
             Self::Delta0_8_0Partitioned => "delta-0.8.0-partitioned".into(),
+            Self::Delta0_8_0SpecialPartitioned => "delta-0.8.0-special-partition".into(),
             Self::Custom(name) => name.to_owned(),
         }
     }
@@ -267,6 +282,26 @@ pub mod az_cli {
                 "delete",
                 "-n",
                 container_name.as_ref(),
+            ])
+            .spawn()
+            .expect("az command is installed");
+        child.wait()
+    }
+
+    /// copy directory
+    pub fn copy_directory(
+        source: impl AsRef<str>,
+        destination: impl AsRef<str>,
+    ) -> std::io::Result<ExitStatus> {
+        let mut child = Command::new("az")
+            .args([
+                "storage",
+                "blob",
+                "upload-batch",
+                "-s",
+                source.as_ref(),
+                "-d",
+                destination.as_ref(),
             ])
             .spawn()
             .expect("az command is installed");
@@ -324,6 +359,28 @@ pub mod s3_cli {
                 "--endpoint-url",
                 &endpoint,
                 "--force",
+            ])
+            .spawn()
+            .expect("aws command is installed");
+        child.wait()
+    }
+
+    /// copy directory
+    pub fn copy_directory(
+        source: impl AsRef<str>,
+        destination: impl AsRef<str>,
+    ) -> std::io::Result<ExitStatus> {
+        let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
+            .expect("variable ENDPOINT must be set to connect to S3");
+        let mut child = Command::new("aws")
+            .args([
+                "s3",
+                "cp",
+                source.as_ref(),
+                destination.as_ref(),
+                "--endpoint-url",
+                &endpoint,
+                "--recursive",
             ])
             .spawn()
             .expect("aws command is installed");

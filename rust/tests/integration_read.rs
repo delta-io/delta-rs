@@ -12,31 +12,83 @@ use serial_test::serial;
 #[tokio::test]
 #[serial]
 async fn test_read_tables_local() -> TestResult {
-    Ok(read_tables(StorageIntegration::Local).await?)
+    read_tables(StorageIntegration::Local).await?;
+
+    let valid_local_prefixes = &["my table", "my-table/with%2F/", "你好/😊"];
+
+    for prefix in valid_local_prefixes {
+        read_table_paths(StorageIntegration::Local, prefix).await?;
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "azure")]
 #[tokio::test]
 #[serial]
 async fn test_read_tables_azure() -> TestResult {
-    Ok(read_tables(StorageIntegration::Microsoft).await?)
+    read_tables(StorageIntegration::Microsoft).await?;
+
+    let valid_azure_prefixes = &["my-table", "my-table/with%2F/"];
+
+    for prefix in valid_azure_prefixes {
+        read_table_paths(StorageIntegration::Microsoft, prefix).await?;
+    }
+
+    Ok(())
 }
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 #[tokio::test]
 #[serial]
 async fn test_read_tables_aws() -> TestResult {
-    Ok(read_tables(StorageIntegration::Amazon).await?)
+    read_tables(StorageIntegration::Amazon).await?;
+
+    let valid_s3_prefixes = &["my table", "my-table/with%2F/"];
+
+    for prefix in valid_s3_prefixes {
+        read_table_paths(StorageIntegration::Amazon, prefix).await?;
+    }
+
+    Ok(())
 }
 
 async fn read_tables(storage: StorageIntegration) -> TestResult {
     let context = IntegrationContext::new(storage)?;
     context.load_table(TestTables::Simple).await?;
     context.load_table(TestTables::Golden).await?;
+    context
+        .load_table(TestTables::Delta0_8_0SpecialPartitioned)
+        .await?;
 
     read_simple_table(&context).await?;
     read_simple_table_with_version(&context).await?;
     read_golden(&context).await?;
+
+    Ok(())
+}
+
+async fn read_table_paths(storage: StorageIntegration, root_path: &str) -> TestResult {
+    let context = IntegrationContext::new(storage)?;
+    context
+        .load_table_with_name(TestTables::Delta0_8_0SpecialPartitioned, root_path)
+        .await?;
+
+    read_encoded_table(&context, root_path).await?;
+
+    Ok(())
+}
+
+async fn read_encoded_table(integration: &IntegrationContext, root_path: &str) -> TestResult {
+    let table_uri = format!("{}/{}", integration.root_uri(), root_path);
+
+    let table = DeltaTableBuilder::from_uri(table_uri)
+        .with_allow_http(true)
+        .load()
+        .await?;
+
+    assert_eq!(table.version(), 0);
+    assert_eq!(table.get_files().len(), 2);
 
     Ok(())
 }
