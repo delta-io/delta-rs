@@ -102,6 +102,10 @@ jobs:
         with:
           distribution: 'zulu'
           java-version: '17'
+      
+      - uses: beyondstorage/setup-hdfs@master
+        with:
+          hdfs-version: '3.3.2'
 
       - uses: Swatinem/rust-cache@v2
 
