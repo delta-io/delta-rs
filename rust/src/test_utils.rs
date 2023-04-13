@@ -463,7 +463,6 @@ pub mod gs_cli {
 pub mod hdfs_cli {
     use std::env;
     use std::path::PathBuf;
-    // use super::set_env_if_not_set;
     use std::process::{Command, ExitStatus};
 
     fn hdfs_cli_path() -> PathBuf {
