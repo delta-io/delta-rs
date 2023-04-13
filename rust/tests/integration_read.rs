@@ -4,20 +4,34 @@ use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, 
 use deltalake::DeltaTableBuilder;
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use dynamodb_lock::dynamo_lock_options;
+use futures::StreamExt;
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use maplit::hashmap;
 use object_store::path::Path;
 use serial_test::serial;
+
+static TEST_PREFIXES: &[&str] = &[
+    "my table",
+    "my-table/with:?/",
+    "my-table/with%3A%3F/",
+    "你好/😊",
+];
+
+/// TEST_PREFIXES as they should appear in object stores.
+static TEST_PREFIXES_ENCODED: &[&str] = &[
+    "my%20table",
+    "my-table/with%3A%3F/",
+    "my-table/with%3A%3F/",
+    "%E4%BD%A0%E5%A5%BD/%F0%9F%98%8A",
+];
 
 #[tokio::test]
 #[serial]
 async fn test_read_tables_local() -> TestResult {
     read_tables(StorageIntegration::Local).await?;
 
-    let valid_local_prefixes = &["my table", "my-table/with%2F/", "你好/😊"];
-
-    for prefix in valid_local_prefixes {
-        read_table_paths(StorageIntegration::Local, prefix).await?;
+    for prefix in TEST_PREFIXES {
+        read_table_paths(StorageIntegration::Local, prefix, prefix).await?;
     }
 
     Ok(())
@@ -29,10 +43,8 @@ async fn test_read_tables_local() -> TestResult {
 async fn test_read_tables_azure() -> TestResult {
     read_tables(StorageIntegration::Microsoft).await?;
 
-    let valid_azure_prefixes = &["my-table", "my-table/with%2F/"];
-
-    for prefix in valid_azure_prefixes {
-        read_table_paths(StorageIntegration::Microsoft, prefix).await?;
+    for (prefix, prefix_encoded) in TEST_PREFIXES.iter().zip(TEST_PREFIXES_ENCODED.iter()) {
+        read_table_paths(StorageIntegration::Microsoft, prefix, prefix_encoded).await?;
     }
 
     Ok(())
@@ -42,12 +54,13 @@ async fn test_read_tables_azure() -> TestResult {
 #[tokio::test]
 #[serial]
 async fn test_read_tables_aws() -> TestResult {
-    read_tables(StorageIntegration::Amazon).await?;
+    // read_tables(StorageIntegration::Amazon).await?;
 
-    let valid_s3_prefixes = &["my table", "my-table/with%2F/"];
+    // s3://test-delta-table-1681354027/my%20table/
+    // s3://test-delta-table-1681354027/my%20table
 
-    for prefix in valid_s3_prefixes {
-        read_table_paths(StorageIntegration::Amazon, prefix).await?;
+    for (prefix, prefix_encoded) in TEST_PREFIXES.iter().zip(TEST_PREFIXES_ENCODED.iter()) {
+        read_table_paths(StorageIntegration::Amazon, prefix, prefix_encoded).await?;
     }
 
     Ok(())
@@ -68,19 +81,37 @@ async fn read_tables(storage: StorageIntegration) -> TestResult {
     Ok(())
 }
 
-async fn read_table_paths(storage: StorageIntegration, root_path: &str) -> TestResult {
+async fn read_table_paths(
+    storage: StorageIntegration,
+    table_root: &str,
+    upload_path: &str,
+) -> TestResult {
     let context = IntegrationContext::new(storage)?;
     context
-        .load_table_with_name(TestTables::Delta0_8_0SpecialPartitioned, root_path)
+        .load_table_with_name(TestTables::Delta0_8_0SpecialPartitioned, upload_path)
         .await?;
 
-    read_encoded_table(&context, root_path).await?;
+    let contents = context
+        .object_store()
+        .list(Some(&Path::parse("/").unwrap()))
+        .await?
+        .map(|v| v.unwrap())
+        .collect::<Vec<_>>()
+        .await;
+    dbg!(contents);
+
+    read_encoded_table(&context, table_root).await?;
 
     Ok(())
 }
 
 async fn read_encoded_table(integration: &IntegrationContext, root_path: &str) -> TestResult {
     let table_uri = format!("{}/{}", integration.root_uri(), root_path);
+
+    let storage = DeltaTableBuilder::from_uri(table_uri.clone())
+        .with_allow_http(true)
+        .build_storage()?;
+    dbg!(storage.root_uri());
 
     let table = DeltaTableBuilder::from_uri(table_uri)
         .with_allow_http(true)

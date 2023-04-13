@@ -347,6 +347,7 @@ pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<Str
 
 pub(crate) fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     let table_uri = table_uri.as_ref();
+    dbg!(&table_uri);
     if let Ok(path) = std::fs::canonicalize(table_uri) {
         return Url::from_directory_path(path)
             .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri.to_string()));
@@ -357,6 +358,7 @@ pub(crate) fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
             _ => {
                 let mut new_url = url.clone();
                 new_url.set_path(url.path().trim_end_matches('/'));
+                dbg!(&new_url);
                 new_url
             }
         });
@@ -383,13 +385,29 @@ mod tests {
         assert!(uri.is_ok());
         let uri = ensure_table_uri("s3://container/path");
         assert!(uri.is_ok());
-        let uri = ensure_table_uri("file:///").unwrap();
-        assert_eq!("file:///", uri.as_str());
-        let uri = ensure_table_uri("memory://").unwrap();
-        assert_eq!("memory://", uri.as_str());
-        let uri = ensure_table_uri("s3://tests/data/delta-0.8.0/").unwrap();
-        assert_eq!("s3://tests/data/delta-0.8.0", uri.as_str());
-        let _uri = ensure_table_uri("s3://tests/data/delta-0.8.0//").unwrap();
-        assert_eq!("s3://tests/data/delta-0.8.0", uri.as_str())
+
+        // These cases should all roundtrip to themselves
+        let roundtrip_cases = &["s3://tests/data/delta-0.8.0", "memory://", "file:///"];
+
+        for case in roundtrip_cases {
+            let uri = ensure_table_uri(case).unwrap();
+            assert_eq!(case, &uri.as_str());
+        }
+
+        // Other cases
+        let map_cases = &[
+            // extra slashes are removed
+            (
+                "s3://tests/data/delta-0.8.0//",
+                "s3://tests/data/delta-0.8.0",
+            ),
+            ("s3://bucket/my table", "s3://bucket/my%20table"),
+            ("s3://bucket/my%20table", "s3://bucket/my%20table"), // ???
+        ];
+
+        for (case, expected) in map_cases {
+            let uri = ensure_table_uri(case).unwrap();
+            assert_eq!(expected, &uri.as_str());
+        }
     }
 }

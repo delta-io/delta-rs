@@ -169,7 +169,12 @@ impl ObjectStoreKind {
         store: T,
         storage_url: &Url,
     ) -> DeltaResult<Arc<DynObjectStore>> {
-        let prefix = Path::from(urlencoding::decode(storage_url.path())?.as_ref());
+        dbg!(storage_url.path());
+        let tmp = urlencoding::decode(storage_url.path())?;
+        // dbg!(&tmp);
+        let prefix = Path::from(tmp.as_ref());
+        // let prefix = Path::from(storage_url.path());
+        dbg!(&prefix);
         if prefix != Path::from("/") {
             Ok(Arc::new(PrefixStore::new(store, prefix)))
         } else {
