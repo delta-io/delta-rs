@@ -16,12 +16,10 @@ use deltalake::builder::DeltaTableBuilder;
 use deltalake::checkpoints::create_checkpoint;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
+use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
-use deltalake::{
-    DeltaDataTypeLong, DeltaDataTypeTimestamp, DeltaTableMetaData, DeltaTransactionOptions,
-    Invariant, Schema,
-};
+use deltalake::{DeltaDataTypeLong, DeltaDataTypeTimestamp, DeltaTableMetaData, Invariant, Schema};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::exceptions::PyValueError;
@@ -512,17 +510,19 @@ impl RawDeltaTable {
             }
         }
 
-        let mut transaction = self
-            ._table
-            .create_transaction(Some(DeltaTransactionOptions::new(3)));
-        transaction.add_actions(actions);
+        let operation = DeltaOperation::Write {
+            mode,
+            partition_by: Some(partition_by),
+            predicate: None,
+        };
+        let store = self._table.object_store();
+
         rt()?
-            .block_on(transaction.commit(
-                Some(DeltaOperation::Write {
-                    mode,
-                    partition_by: Some(partition_by),
-                    predicate: None,
-                }),
+            .block_on(commit(
+                &*store,
+                &actions,
+                operation,
+                self._table.get_state(),
                 None,
             ))
             .map_err(PyDeltaTableError::from_raw)?;
