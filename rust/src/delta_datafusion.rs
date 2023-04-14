@@ -376,9 +376,10 @@ impl TableProvider for DeltaTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let schema = Arc::new(<ArrowSchema as TryFrom<&schema::Schema>>::try_from(
-            DeltaTable::schema(self).unwrap(),
-        )?);
+        let schema = self
+            .state
+            .physical_arrow_schema(self.object_store())
+            .await?;
 
         register_store(self, session.runtime_env().clone());
 

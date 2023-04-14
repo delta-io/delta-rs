@@ -11,6 +11,8 @@ use datafusion_common::{Column, DFSchema, Result as DFResult, TableReference};
 use datafusion_expr::{AggregateUDF, Expr, ScalarUDF, TableSource};
 use datafusion_sql::planner::{ContextProvider, SqlToRel};
 use itertools::Either;
+use object_store::ObjectStore;
+use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Tokenizer;
@@ -81,6 +83,43 @@ impl DeltaTableState {
         let sql_to_rel = SqlToRel::new(&context_provider);
 
         Ok(sql_to_rel.sql_to_expr(sql, &df_schema, &mut Default::default())?)
+    }
+
+    /// Get the pysical table schema.
+    ///
+    /// This will construct a schema derived from the parquet schema of the latest data file,
+    /// and fields for partition columns from the schema defined in table meta data.
+    pub async fn physical_arrow_schema(
+        &self,
+        object_store: Arc<dyn ObjectStore>,
+    ) -> DeltaResult<ArrowSchemaRef> {
+        if let Some(add) = self.files().iter().max_by_key(|obj| obj.modification_time) {
+            let file_meta = add.try_into()?;
+            let file_reader = ParquetObjectReader::new(object_store, file_meta);
+            let file_schema = ParquetRecordBatchStreamBuilder::new(file_reader)
+                .await?
+                .build()?
+                .schema()
+                .clone();
+
+            let table_schema = Arc::new(ArrowSchema::new(
+                self.arrow_schema()?
+                    .fields
+                    .clone()
+                    .into_iter()
+                    .map(|field| {
+                        file_schema
+                            .field_with_name(field.name())
+                            .cloned()
+                            .unwrap_or(field)
+                    })
+                    .collect(),
+            ));
+
+            Ok(table_schema)
+        } else {
+            self.arrow_schema()
+        }
     }
 }
 

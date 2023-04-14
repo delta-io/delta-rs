@@ -728,7 +728,40 @@ async fn test_datafusion_partitioned_types() -> Result<()> {
         ),
     ]);
 
-    assert_eq!(Arc::new(expected_schema), batches[0].schema());
+    assert_eq!(
+        Arc::new(expected_schema),
+        Arc::new(
+            batches[0]
+                .schema()
+                .as_ref()
+                .clone()
+                .with_metadata(Default::default())
+        )
+    );
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_datafusion_scan_timestamps() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table = deltalake::open_table("./tests/data/table_with_edge_timestamps")
+        .await
+        .unwrap();
+    ctx.register_table("demo", Arc::new(table))?;
+
+    let batches = ctx.sql("SELECT * FROM demo").await?.collect().await?;
+
+    let expected = vec![
+        "+-------------------------------+---------------------+------------+",
+        "| BIG_DATE                      | NORMAL_DATE         | SOME_VALUE |",
+        "+-------------------------------+---------------------+------------+",
+        "| 1816-03-28T05:56:08.066277376 | 2022-02-01T00:00:00 | 2          |",
+        "| 1816-03-29T05:56:08.066277376 | 2022-01-01T00:00:00 | 1          |",
+        "+-------------------------------+---------------------+------------+",
+    ];
+
+    assert_batches_sorted_eq!(&expected, &batches);
 
     Ok(())
 }
