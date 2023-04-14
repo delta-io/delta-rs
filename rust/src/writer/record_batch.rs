@@ -413,7 +413,7 @@ pub(crate) fn divide_by_partition_values(
 mod tests {
     use super::*;
     use crate::writer::{
-        test_utils::{create_initialized_table, get_record_batch},
+        test_utils::{create_initialized_table, create_initialized_table_with, get_record_batch},
         utils::PartitionPath,
     };
     use std::path::Path;
@@ -470,6 +470,49 @@ mod tests {
         let batch = get_record_batch(None, false);
         let partition_cols = vec![];
         let table = create_initialized_table(&partition_cols).await;
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        writer.write(batch).await.unwrap();
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
+    }
+
+    /*
+     * This is a test case to address:
+     *  <https://github.com/delta-io/delta-rs/issues/1286>
+     */
+    #[tokio::test]
+    async fn test_write_batch_with_timestamps() {
+        use crate::{SchemaDataType, SchemaField};
+        use arrow::array::*;
+        use arrow::datatypes::{Field, TimeUnit, DataType as ArrowDataType};
+
+        let schema = Schema::new(vec![
+            SchemaField::new(
+                "id".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "timestamp".to_string(),
+                SchemaDataType::primitive("timestamp".to_string()),
+                true,
+                HashMap::new(),
+            ),
+        ]);
+
+        let batch_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("timestamp", ArrowDataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+
+        let table = create_initialized_table_with(schema, &vec![]).await;
+
+        let id_values = Arc::new(StringArray::from(vec![Some("Hi")]));
+        let timestamp_values = Arc::new(TimestampNanosecondArray::from(vec![1]));
+        let batch = RecordBatch::try_new(batch_schema, vec![id_values, timestamp_values])
+            .unwrap();
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         writer.write(batch).await.unwrap();
