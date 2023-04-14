@@ -28,6 +28,15 @@ async fn test_concurrent_writes_azure() -> TestResult {
     Ok(())
 }
 
+// tracked via https://github.com/datafusion-contrib/datafusion-objectstore-hdfs/issues/13
+#[ignore]
+#[cfg(feature = "hdfs")]
+#[tokio::test]
+async fn test_concurrent_writes_hdfs() -> TestResult {
+    test_concurrent_writes(StorageIntegration::Hdfs).await?;
+    Ok(())
+}
+
 async fn test_concurrent_writes(integration: StorageIntegration) -> TestResult {
     let context = IntegrationContext::new(integration)?;
     let (_table, table_uri) = prepare_table(&context).await?;

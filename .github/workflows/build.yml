@@ -62,7 +62,7 @@ jobs:
         uses: actions-rs/toolchain@v1
         with:
           profile: default
-          toolchain: "1.64.0" # Switch to "stable" when the 1.67.0 release of https://github.com/rust-lang/rust is published, more information: https://github.com/delta-io/delta-rs/pull/923
+          toolchain: "stable"
           override: true
       - uses: Swatinem/rust-cache@v2
       - name: Run tests
@@ -97,6 +97,20 @@ jobs:
           profile: default
           toolchain: stable
           override: true
+      
+      - uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+      
+      - uses: beyondstorage/setup-hdfs@master
+        with:
+          hdfs-version: '3.3.2'
+      
+      - name: Set Hadoop env
+        run: |
+          echo "CLASSPATH=$CLASSPATH:`hadoop classpath --glob`" >> $GITHUB_ENV
+          echo "LD_LIBRARY_PATH=$JAVA_HOME/lib/server" >> $GITHUB_ENV
 
       - uses: Swatinem/rust-cache@v2
 
@@ -105,10 +119,10 @@ jobs:
 
       - name: Run tests with rustls (default)
         run: |
-          cargo test -p deltalake --features integration_test,azure,s3,gcs,datafusion
+          cargo test -p deltalake --features integration_test,azure,s3,gcs,datafusion,hdfs
       - name: Run tests with native-tls
         run: |
-          cargo test -p deltalake --no-default-features --features integration_test,s3-native-tls,datafusion
+          cargo test -p deltalake --no-default-features --features integration_test,s3-native-tls,datafusion,hdfs
 
   parquet2_test:
     runs-on: ubuntu-latest

@@ -39,6 +39,14 @@ async fn test_object_store_google() -> TestResult {
     Ok(())
 }
 
+#[cfg(feature = "hdfs")]
+#[tokio::test]
+#[serial]
+async fn test_object_store_hdfs() -> TestResult {
+    test_object_store(StorageIntegration::Hdfs, false).await?;
+    Ok(())
+}
+
 async fn test_object_store(integration: StorageIntegration, skip_copy: bool) -> TestResult {
     let context = IntegrationContext::new(integration)?;
     let delta_store = DeltaTableBuilder::from_uri(&context.root_uri())

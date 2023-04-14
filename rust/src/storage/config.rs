@@ -13,6 +13,8 @@ use url::Url;
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use super::s3::{S3StorageBackend, S3StorageOptions};
+#[cfg(feature = "hdfs")]
+use datafusion_objectstore_hdfs::object_store::hdfs::HadoopFileSystem;
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 #[cfg(feature = "azure")]
@@ -103,6 +105,7 @@ pub(crate) enum ObjectStoreKind {
     S3,
     Google,
     Azure,
+    Hdfs,
 }
 
 impl ObjectStoreKind {
@@ -113,6 +116,7 @@ impl ObjectStoreKind {
             "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => Ok(ObjectStoreKind::Azure),
             "s3" | "s3a" => Ok(ObjectStoreKind::S3),
             "gs" => Ok(ObjectStoreKind::Google),
+            "hdfs" => Ok(ObjectStoreKind::Hdfs),
             "https" => {
                 let host = url.host_str().unwrap_or_default();
                 if host.contains("amazonaws.com") {
@@ -190,6 +194,21 @@ impl ObjectStoreKind {
             #[cfg(not(feature = "gcs"))]
             ObjectStoreKind::Google => Err(DeltaTableError::MissingFeature {
                 feature: "gcs",
+                url: storage_url.as_ref().into(),
+            }),
+            #[cfg(feature = "hdfs")]
+            ObjectStoreKind::Hdfs => {
+                let store = HadoopFileSystem::new(storage_url.as_ref()).ok_or_else(|| {
+                    DeltaTableError::Generic(format!(
+                        "failed to create HadoopFileSystem for {}",
+                        storage_url.as_ref()
+                    ))
+                })?;
+                Ok(Self::url_prefix_handler(store, storage_url))
+            }
+            #[cfg(not(feature = "hdfs"))]
+            ObjectStoreKind::Hdfs => Err(DeltaTableError::MissingFeature {
+                feature: "hdfs",
                 url: storage_url.as_ref().into(),
             }),
         }

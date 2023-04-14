@@ -35,6 +35,13 @@ async fn test_datafusion_gcp() -> TestResult {
     Ok(test_datafusion(StorageIntegration::Google).await?)
 }
 
+#[cfg(feature = "hdfs")]
+#[tokio::test]
+#[serial]
+async fn test_datafusion_hdfs() -> TestResult {
+    Ok(test_datafusion(StorageIntegration::Hdfs).await?)
+}
+
 async fn test_datafusion(storage: StorageIntegration) -> TestResult {
     let context = IntegrationContext::new(storage)?;
     context.load_table(TestTables::Simple).await?;
