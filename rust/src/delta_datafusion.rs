@@ -42,14 +42,16 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion::physical_plan::file_format::{partition_type_wrap, FileScanConfig};
+use datafusion::physical_plan::file_format::{wrap_partition_type_in_dict, FileScanConfig};
 use datafusion::physical_plan::{
     ColumnStatistics, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::{Column, DataFusionError, Result as DataFusionResult};
+use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ToDFSchema};
 use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::{Expr, Extension, LogicalPlan, TableProviderFilterPushDown};
+use datafusion_physical_expr::execution_props::ExecutionProps;
+use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::{path::Path, ObjectMeta};
@@ -337,11 +339,7 @@ impl PruningStatistics for DeltaTable {
 fn register_store(table: &DeltaTable, env: Arc<RuntimeEnv>) {
     let object_store_url = table.storage.object_store_url();
     let url: &Url = object_store_url.as_ref();
-    env.register_object_store(
-        url.scheme(),
-        url.host_str().unwrap_or_default(),
-        table.object_store(),
-    );
+    env.register_object_store(url, table.object_store());
 }
 
 #[async_trait]
@@ -383,14 +381,15 @@ impl TableProvider for DeltaTable {
 
         register_store(self, session.runtime_env().clone());
 
+        let filter_expr = conjunction(filters.iter().cloned())
+            .map(|expr| logical_expr_to_physical_expr(&expr, &schema));
+
         // TODO we group files together by their partition values. If the table is partitioned
         // and partitions are somewhat evenly distributed, probably not the worst choice ...
         // However we may want to do some additional balancing in case we are far off from the above.
         let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-        if let Some(Some(predicate)) =
-            (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
-        {
-            let pruning_predicate = PruningPredicate::try_new(predicate, schema.clone())?;
+        if let Some(predicate) = &filter_expr {
+            let pruning_predicate = PruningPredicate::try_new(predicate.clone(), schema.clone())?;
             let files_to_prune = pruning_predicate.prune(&self.state)?;
             self.get_state()
                 .files()
@@ -440,14 +439,16 @@ impl TableProvider for DeltaTable {
                         .map(|c| {
                             Ok((
                                 c.to_owned(),
-                                partition_type_wrap(schema.field_with_name(c)?.data_type().clone()),
+                                wrap_partition_type_in_dict(
+                                    schema.field_with_name(c)?.data_type().clone(),
+                                ),
                             ))
                         })
                         .collect::<Result<Vec<_>, ArrowError>>()?,
                     output_ordering: None,
                     infinite_source: false,
                 },
-                filters,
+                filter_expr.as_ref(),
             )
             .await?;
 
@@ -772,6 +773,15 @@ fn left_larger_than_right(left: ScalarValue, right: ScalarValue) -> Option<bool>
             None
         }
     }
+}
+
+pub(crate) fn logical_expr_to_physical_expr(
+    expr: &Expr,
+    schema: &ArrowSchema,
+) -> Arc<dyn PhysicalExpr> {
+    let df_schema = schema.clone().to_dfschema().unwrap();
+    let execution_props = ExecutionProps::new();
+    create_physical_expr(expr, &df_schema, schema, &execution_props).unwrap()
 }
 
 /// Responsible for checking batches of data conform to table's invariants.

@@ -1,16 +1,16 @@
-use datafusion::datasource::datasource::TableProviderFactory;
-use datafusion::execution::context::SessionContext;
+use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
 use datafusion::prelude::SessionConfig;
 use deltalake::delta_datafusion::DeltaTableFactory;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 pub fn context_with_delta_table_factory() -> SessionContext {
-    let mut table_factories: HashMap<String, Arc<dyn TableProviderFactory>> = HashMap::new();
-    table_factories.insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
-    let cfg = RuntimeConfig::new().with_table_factories(table_factories);
+    let cfg = RuntimeConfig::new();
     let env = RuntimeEnv::new(cfg).unwrap();
     let ses = SessionConfig::new();
-    SessionContext::with_config_rt(ses, Arc::new(env))
+    let mut state = SessionState::with_config_rt(ses, Arc::new(env));
+    state
+        .table_factories_mut()
+        .insert("DELTATABLE".to_string(), Arc::new(DeltaTableFactory {}));
+    SessionContext::with_state(state)
 }

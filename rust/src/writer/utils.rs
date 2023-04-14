@@ -16,6 +16,9 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
     UInt64Type, UInt8Type,
 };
+// NOTE: Temporarily allowing these deprecated imports pending the completion of:
+// <https://github.com/apache/arrow-rs/pull/3979>
+#[allow(deprecated)]
 use arrow::json::reader::{Decoder, DecoderOptions};
 use arrow::record_batch::*;
 use object_store::path::Path;
@@ -104,6 +107,9 @@ pub(crate) fn next_data_path(
     Ok(Path::from(format!("{partition_key}/{file_name}")))
 }
 
+// NOTE: Temporarily allowing these deprecated imports pending the completion of:
+// <https://github.com/apache/arrow-rs/pull/3979>
+#[allow(deprecated)]
 /// Convert a vector of json values to a RecordBatch
 pub fn record_batch_from_message(
     arrow_schema: Arc<ArrowSchema>,

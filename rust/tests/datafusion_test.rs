@@ -207,11 +207,9 @@ async fn test_datafusion_write_from_serialized_delta_scan() -> Result<()> {
     let source_store = DeltaObjectStore::try_new(source_location, HashMap::new()).unwrap();
     let object_store_url = source_store.object_store_url();
     let source_store_url: &Url = object_store_url.as_ref();
-    state.runtime_env().register_object_store(
-        source_store_url.scheme(),
-        source_store_url.host_str().unwrap_or_default(),
-        Arc::from(source_store),
-    );
+    state
+        .runtime_env()
+        .register_object_store(source_store_url, Arc::from(source_store));
 
     // Execute write to the target table with the proper state
     let target_table = WriteBuilder::new()
