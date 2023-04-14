@@ -1,5 +1,34 @@
 # Changelog
 
+## [rust-v0.9.0](https://github.com/delta-io/delta-rs/tree/rust-v0.9.0) (2023-04-14)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.8.0...rust-v0.9.0)
+
+**Implemented enhancements:**
+
+- hdfs support [\#300](https://github.com/delta-io/delta-rs/issues/300)
+- Add decimal primitive type to document [\#1280](https://github.com/delta-io/delta-rs/issues/1280)
+- Improve error message when filtering on non-existant partition columns [\#1218](https://github.com/delta-io/delta-rs/issues/1218)
+
+**Fixed bugs:**
+
+- Datafusion table provider: issues with timestamp types [\#441](https://github.com/delta-io/delta-rs/issues/441)
+- Not matching column names when creating a RecordBatch from MapArray [\#1257](https://github.com/delta-io/delta-rs/issues/1257)
+- All stores created using `DeltaObjectStore::new` have an identical `object_store_url` [\#1188](https://github.com/delta-io/delta-rs/issues/1188)
+
+**Merged pull requests:**
+
+- chore: df / arrow changes after update [\#1288](https://github.com/delta-io/delta-rs/pull/1288) ([roeap](https://github.com/roeap))
+- feat: read schema from parquet files in datafusion scans [\#1266](https://github.com/delta-io/delta-rs/pull/1266) ([roeap](https://github.com/roeap))
+- HDFS storage support via datafusion-objectstore-hdfs [\#1279](https://github.com/delta-io/delta-rs/pull/1279) ([iajoiner](https://github.com/iajoiner))
+- Add description of decimal primitive to SchemaDataType [\#1281](https://github.com/delta-io/delta-rs/pull/1281) ([ognis1205](https://github.com/ognis1205))
+- Fix names and nullability when creating RecordBatch from MapArray [\#1258](https://github.com/delta-io/delta-rs/pull/1258) ([balbok0](https://github.com/balbok0))
+- Simplify the Store Backend Configuration code [\#1265](https://github.com/delta-io/delta-rs/pull/1265) ([mrjoe7](https://github.com/mrjoe7))
+- feat: optimistic transaction protocol [\#632](https://github.com/delta-io/delta-rs/pull/632) ([roeap](https://github.com/roeap))
+- Write support for additional Arrow datatypes [\#1044](https://github.com/delta-io/delta-rs/pull/1044)([chitralverma](https://github.com/chitralverma))
+- Unique delta object store url [\#1212](https://github.com/delta-io/delta-rs/pull/1212) ([gruuya](https://github.com/gruuya))
+- improve err msg on use of non-partitioned column [\#1221](https://github.com/delta-io/delta-rs/pull/1221) ([marijncv](https://github.com/marijncv))
+
 ## [rust-v0.8.0](https://github.com/delta-io/delta-rs/tree/rust-v0.8.0) (2023-03-10)
 
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.7.0...rust-v0.8.0)
