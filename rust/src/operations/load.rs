@@ -1,8 +1,4 @@
-use std::collections::HashMap;
 use std::sync::Arc;
-
-use crate::storage::DeltaObjectStore;
-use crate::{builder::ensure_table_uri, DeltaResult, DeltaTable};
 
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, TaskContext};
@@ -10,60 +6,33 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
+use crate::storage::DeltaObjectStore;
+use crate::table_state::DeltaTableState;
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
+
 #[derive(Debug, Clone)]
 pub struct LoadBuilder {
-    location: Option<String>,
+    /// A snapshot of the to-be-loaded table's state
+    snapshot: DeltaTableState,
+    /// Delta object store for handling data files
+    store: Arc<DeltaObjectStore>,
+    /// A sub-selection of columns to be loaded
     columns: Option<Vec<String>>,
-    storage_options: Option<HashMap<String, String>>,
-    object_store: Option<Arc<DeltaObjectStore>>,
-}
-
-impl Default for LoadBuilder {
-    fn default() -> Self {
-        Self::new()
-    }
 }
 
 impl LoadBuilder {
     /// Create a new [`LoadBuilder`]
-    pub fn new() -> Self {
+    pub fn new(store: Arc<DeltaObjectStore>, snapshot: DeltaTableState) -> Self {
         Self {
-            location: None,
+            snapshot,
+            store,
             columns: None,
-            storage_options: None,
-            object_store: None,
         }
-    }
-
-    /// Specify the path to the location where table data is stored,
-    /// which could be a path on distributed storage.
-    pub fn with_location(mut self, location: impl Into<String>) -> Self {
-        self.location = Some(location.into());
-        self
     }
 
     /// Specify column selection to load
     pub fn with_columns(mut self, columns: impl IntoIterator<Item = impl Into<String>>) -> Self {
         self.columns = Some(columns.into_iter().map(|s| s.into()).collect());
-        self
-    }
-
-    /// Set options used to initialize storage backend
-    ///
-    /// Options may be passed in the HashMap or set as environment variables.
-    ///
-    /// [crate::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
-    /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
-    /// [crate::builder::azure_storage_options] describes the available options for the Azure backend.
-    /// [crate::builder::gcp_storage_options] describes the available options for the Google Cloud Platform backend.
-    pub fn with_storage_options(mut self, storage_options: HashMap<String, String>) -> Self {
-        self.storage_options = Some(storage_options);
-        self
-    }
-
-    /// Provide a [`DeltaObjectStore`] instance, that points at table location
-    pub fn with_object_store(mut self, object_store: Arc<DeltaObjectStore>) -> Self {
-        self.object_store = Some(object_store);
         self
     }
 }
@@ -76,18 +45,31 @@ impl std::future::IntoFuture for LoadBuilder {
         let this = self;
 
         Box::pin(async move {
-            let object_store = this.object_store.unwrap();
-            let url = ensure_table_uri(object_store.root_uri())?;
-            let store = object_store.storage_backend().clone();
-            let mut table = DeltaTable::new(object_store, Default::default());
-            table.load().await?;
+            let table = DeltaTable::new_with_state(this.store, this.snapshot);
+            let schema = table.state.arrow_schema()?;
+            let projection = this
+                .columns
+                .map(|cols| {
+                    cols.iter()
+                        .map(|col| {
+                            schema.column_with_name(col).map(|(idx, _)| idx).ok_or(
+                                DeltaTableError::SchemaMismatch {
+                                    msg: format!("Column '{col}' does not exist in table schema."),
+                                },
+                            )
+                        })
+                        .collect::<Result<_, _>>()
+                })
+                .transpose()?;
 
             let ctx = SessionContext::new();
-            ctx.state().runtime_env().register_object_store(&url, store);
-            let scan_plan = table.scan(&ctx.state(), None, &[], None).await?;
+            let scan_plan = table
+                .scan(&ctx.state(), projection.as_ref(), &[], None)
+                .await?;
             let plan = CoalescePartitionsExec::new(scan_plan);
             let task_ctx = Arc::new(TaskContext::from(&ctx.state()));
             let stream = plan.execute(0, task_ctx)?;
+
             Ok((table, stream))
         })
     }
@@ -153,6 +135,36 @@ mod tests {
 
         assert_batches_sorted_eq!(&expected, &data);
         assert_eq!(batch.schema(), data[0].schema());
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_load_with_columns() -> TestResult {
+        let batch = get_record_batch(None, false);
+        let table = DeltaOps::new_in_memory().write(vec![batch.clone()]).await?;
+
+        let (_table, stream) = DeltaOps(table).load().with_columns(["id", "value"]).await?;
+        let data = collect_sendable_stream(stream).await?;
+
+        let expected = vec![
+            "+----+-------+",
+            "| id | value |",
+            "+----+-------+",
+            "| A  | 1     |",
+            "| B  | 2     |",
+            "| A  | 3     |",
+            "| B  | 4     |",
+            "| A  | 5     |",
+            "| A  | 6     |",
+            "| A  | 7     |",
+            "| B  | 8     |",
+            "| B  | 9     |",
+            "| A  | 10    |",
+            "| A  | 11    |",
+            "+----+-------+",
+        ];
+
+        assert_batches_sorted_eq!(&expected, &data);
         Ok(())
     }
 }

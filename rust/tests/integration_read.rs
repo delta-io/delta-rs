@@ -22,6 +22,13 @@ async fn test_read_tables_azure() -> TestResult {
     Ok(read_tables(StorageIntegration::Microsoft).await?)
 }
 
+#[cfg(feature = "hdfs")]
+#[tokio::test]
+#[serial]
+async fn test_read_tables_hdfs() -> TestResult {
+    Ok(read_tables(StorageIntegration::Hdfs).await?)
+}
+
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 #[tokio::test]
 #[serial]

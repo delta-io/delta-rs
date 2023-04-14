@@ -38,6 +38,13 @@ async fn test_filesystem_check_gcp() -> TestResult {
     Ok(test_filesystem_check(StorageIntegration::Google).await?)
 }
 
+#[cfg(feature = "hdfs")]
+#[tokio::test]
+#[serial]
+async fn test_filesystem_check_hdfs() -> TestResult {
+    Ok(test_filesystem_check(StorageIntegration::Hdfs).await?)
+}
+
 async fn test_filesystem_check(storage: StorageIntegration) -> TestResult {
     let context = IntegrationContext::new(storage)?;
     context.load_table(TestTables::Simple).await?;
