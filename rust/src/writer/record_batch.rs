@@ -45,6 +45,7 @@ use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
+use log::*;
 use object_store::ObjectStore;
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
@@ -297,7 +298,15 @@ impl PartitionWriter {
     /// This method buffers the write stream internally so it can be invoked for many
     /// record batches and flushed after the appropriate number of bytes has been written.
     pub fn write(&mut self, record_batch: &RecordBatch) -> Result<(), DeltaWriterError> {
+        /*
+         * This schema check is redundant with one which ArrowWriter
+         * performs itself
+         */
         if record_batch.schema() != self.arrow_schema {
+            debug!("Attempting to write RecordBatch which does not match self.arrow_schema");
+            let new_batch = RecordBatch::try_new(self.arrow_schema.clone(), record_batch.columns().iter().map(|c| c.clone()).collect())?;
+
+            println!("record batch mismatch, new: {:?}", new_batch);
             return Err(DeltaWriterError::SchemaMismatch {
                 record_batch_schema: record_batch.schema(),
                 expected_schema: self.arrow_schema.clone(),
