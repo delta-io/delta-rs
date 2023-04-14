@@ -16,7 +16,7 @@ use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Tokenizer;
 
 use crate::action::Add;
-use crate::delta_datafusion::to_correct_scalar_value;
+use crate::delta_datafusion::{logical_expr_to_physical_expr, to_correct_scalar_value};
 use crate::table_state::DeltaTableState;
 use crate::DeltaResult;
 use crate::{schema, DeltaTableError};
@@ -39,7 +39,8 @@ impl DeltaTableState {
         if let Some(Some(predicate)) =
             (!filters.is_empty()).then_some(conjunction(filters.iter().cloned()))
         {
-            let pruning_predicate = PruningPredicate::try_new(predicate, self.arrow_schema()?)?;
+            let expr = logical_expr_to_physical_expr(&predicate, self.arrow_schema()?.as_ref());
+            let pruning_predicate = PruningPredicate::try_new(expr, self.arrow_schema()?)?;
             Ok(Either::Left(
                 self.files()
                     .iter()
@@ -144,7 +145,8 @@ impl<'a> AddContainer<'a> {
     /// so evaluating expressions is inexact. However, excluded files are guaranteed (for a correct log)
     /// to not contain matches by the predicate expression.
     pub fn predicate_matches(&self, predicate: Expr) -> DeltaResult<impl Iterator<Item = &Add>> {
-        let pruning_predicate = PruningPredicate::try_new(predicate, self.schema.clone())?;
+        let expr = logical_expr_to_physical_expr(&predicate, &self.schema);
+        let pruning_predicate = PruningPredicate::try_new(expr, self.schema.clone())?;
         Ok(self
             .inner
             .iter()

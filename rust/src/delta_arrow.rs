@@ -9,7 +9,6 @@ use arrow::error::ArrowError;
 use lazy_static::lazy_static;
 use regex::Regex;
 use std::convert::TryFrom;
-use std::sync::Arc;
 
 impl TryFrom<&schema::Schema> for ArrowSchema {
     type Error = ArrowError;
@@ -65,17 +64,14 @@ impl TryFrom<&schema::SchemaTypeMap> for ArrowField {
     fn try_from(a: &schema::SchemaTypeMap) -> Result<Self, ArrowError> {
         Ok(ArrowField::new(
             "entries",
-            ArrowDataType::Struct(
-                vec![
-                    ArrowField::new("key", ArrowDataType::try_from(a.get_key_type())?, false),
-                    ArrowField::new(
-                        "value",
-                        ArrowDataType::try_from(a.get_value_type())?,
-                        a.get_value_contains_null(),
-                    ),
-                ]
-                .into(),
-            ),
+            ArrowDataType::Struct(vec![
+                ArrowField::new("key", ArrowDataType::try_from(a.get_key_type())?, false),
+                ArrowField::new(
+                    "value",
+                    ArrowDataType::try_from(a.get_value_type())?,
+                    a.get_value_contains_null(),
+                ),
+            ]),
             false, // always non-null
         ))
     }
@@ -135,38 +131,34 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                 s.get_fields()
                     .iter()
                     .map(<ArrowField as TryFrom<&schema::SchemaField>>::try_from)
-                    .collect::<Result<Vec<ArrowField>, ArrowError>>()?
-                    .into(),
+                    .collect::<Result<Vec<ArrowField>, ArrowError>>()?,
             )),
             schema::SchemaDataType::array(a) => {
-                Ok(ArrowDataType::List(Arc::new(<ArrowField as TryFrom<
+                Ok(ArrowDataType::List(Box::new(<ArrowField as TryFrom<
                     &schema::SchemaTypeArray,
                 >>::try_from(
                     a
                 )?)))
             }
             schema::SchemaDataType::map(m) => Ok(ArrowDataType::Map(
-                Arc::new(ArrowField::new(
+                Box::new(ArrowField::new(
                     "entries",
-                    ArrowDataType::Struct(
-                        vec![
-                            ArrowField::new(
-                                "keys",
-                                <ArrowDataType as TryFrom<&schema::SchemaDataType>>::try_from(
-                                    m.get_key_type(),
-                                )?,
-                                false,
-                            ),
-                            ArrowField::new(
-                                "values",
-                                <ArrowDataType as TryFrom<&schema::SchemaDataType>>::try_from(
-                                    m.get_value_type(),
-                                )?,
-                                m.get_value_contains_null(),
-                            ),
-                        ]
-                        .into(),
-                    ),
+                    ArrowDataType::Struct(vec![
+                        ArrowField::new(
+                            "keys",
+                            <ArrowDataType as TryFrom<&schema::SchemaDataType>>::try_from(
+                                m.get_key_type(),
+                            )?,
+                            false,
+                        ),
+                        ArrowField::new(
+                            "values",
+                            <ArrowDataType as TryFrom<&schema::SchemaDataType>>::try_from(
+                                m.get_value_type(),
+                            )?,
+                            m.get_value_contains_null(),
+                        ),
+                    ]),
                     true,
                 )),
                 false,
@@ -183,7 +175,7 @@ impl TryFrom<&ArrowSchema> for schema::Schema {
             .iter()
             .map(|field| field.try_into())
             .collect();
-        Ok(schema::Schema::new(new_fields?.into()))
+        Ok(schema::Schema::new(new_fields?))
     }
 }
 
@@ -314,101 +306,75 @@ pub(crate) fn delta_log_schema_for_table(
         static ref SCHEMA_FIELDS: Vec<ArrowField> = vec![
             ArrowField::new(
                 "metaData",
-                ArrowDataType::Struct(
-                    vec![
-                        ArrowField::new("id", ArrowDataType::Utf8, true),
-                        ArrowField::new("name", ArrowDataType::Utf8, true),
-                        ArrowField::new("description", ArrowDataType::Utf8, true),
-                        ArrowField::new("schemaString", ArrowDataType::Utf8, true),
-                        ArrowField::new("createdTime", ArrowDataType::Int64, true),
-                        ArrowField::new(
-                            "partitionColumns",
-                            ArrowDataType::List(Arc::new(ArrowField::new(
-                                "element",
-                                ArrowDataType::Utf8,
-                                true
-                            ))),
+                ArrowDataType::Struct(vec![
+                    ArrowField::new("id", ArrowDataType::Utf8, true),
+                    ArrowField::new("name", ArrowDataType::Utf8, true),
+                    ArrowField::new("description", ArrowDataType::Utf8, true),
+                    ArrowField::new("schemaString", ArrowDataType::Utf8, true),
+                    ArrowField::new("createdTime", ArrowDataType::Int64, true),
+                    ArrowField::new(
+                        "partitionColumns",
+                        ArrowDataType::List(Box::new(ArrowField::new(
+                            "element",
+                            ArrowDataType::Utf8,
                             true
+                        ))),
+                        true
+                    ),
+                    ArrowField::new(
+                        "configuration",
+                        ArrowDataType::Map(
+                            Box::new(ArrowField::new(
+                                "key_value",
+                                ArrowDataType::Struct(vec![
+                                    ArrowField::new("key", ArrowDataType::Utf8, false),
+                                    ArrowField::new("value", ArrowDataType::Utf8, true),
+                                ]),
+                                false
+                            )),
+                            false
                         ),
-                        ArrowField::new(
-                            "configuration",
-                            ArrowDataType::Map(
-                                Arc::new(ArrowField::new(
-                                    "key_value",
-                                    ArrowDataType::Struct(
-                                        vec![
+                        true
+                    ),
+                    ArrowField::new(
+                        "format",
+                        ArrowDataType::Struct(vec![
+                            ArrowField::new("provider", ArrowDataType::Utf8, true),
+                            ArrowField::new(
+                                "options",
+                                ArrowDataType::Map(
+                                    Box::new(ArrowField::new(
+                                        "key_value",
+                                        ArrowDataType::Struct(vec![
                                             ArrowField::new("key", ArrowDataType::Utf8, false),
                                             ArrowField::new("value", ArrowDataType::Utf8, true),
-                                        ]
-                                        .into()
-                                    ),
-                                    false
-                                )),
-                                false
-                            ),
-                            true
-                        ),
-                        ArrowField::new(
-                            "format",
-                            ArrowDataType::Struct(
-                                vec![
-                                    ArrowField::new("provider", ArrowDataType::Utf8, true),
-                                    ArrowField::new(
-                                        "options",
-                                        ArrowDataType::Map(
-                                            Arc::new(ArrowField::new(
-                                                "key_value",
-                                                ArrowDataType::Struct(
-                                                    vec![
-                                                        ArrowField::new(
-                                                            "key",
-                                                            ArrowDataType::Utf8,
-                                                            false
-                                                        ),
-                                                        ArrowField::new(
-                                                            "value",
-                                                            ArrowDataType::Utf8,
-                                                            true
-                                                        ),
-                                                    ]
-                                                    .into()
-                                                ),
-                                                false
-                                            )),
-                                            false
-                                        ),
+                                        ]),
                                         false
-                                    )
-                                ]
-                                .into()
-                            ),
-                            true
-                        ),
-                    ]
-                    .into()
-                ),
+                                    )),
+                                    false
+                                ),
+                                false
+                            )
+                        ]),
+                        true
+                    ),
+                ]),
                 true
             ),
             ArrowField::new(
                 "protocol",
-                ArrowDataType::Struct(
-                    vec![
-                        ArrowField::new("minReaderVersion", ArrowDataType::Int32, true),
-                        ArrowField::new("minWriterVersion", ArrowDataType::Int32, true),
-                    ]
-                    .into()
-                ),
+                ArrowDataType::Struct(vec![
+                    ArrowField::new("minReaderVersion", ArrowDataType::Int32, true),
+                    ArrowField::new("minWriterVersion", ArrowDataType::Int32, true),
+                ]),
                 true
             ),
             ArrowField::new(
                 "txn",
-                ArrowDataType::Struct(
-                    vec![
-                        ArrowField::new("appId", ArrowDataType::Utf8, true),
-                        ArrowField::new("version", ArrowDataType::Int64, true),
-                    ]
-                    .into()
-                ),
+                ArrowDataType::Struct(vec![
+                    ArrowField::new("appId", ArrowDataType::Utf8, true),
+                    ArrowField::new("version", ArrowDataType::Int64, true),
+                ]),
                 true
             ),
         ];
@@ -421,15 +387,12 @@ pub(crate) fn delta_log_schema_for_table(
             ArrowField::new(
                 "partitionValues",
                 ArrowDataType::Map(
-                    Arc::new(ArrowField::new(
+                    Box::new(ArrowField::new(
                         "key_value",
-                        ArrowDataType::Struct(
-                            vec![
-                                ArrowField::new("key", ArrowDataType::Utf8, false),
-                                ArrowField::new("value", ArrowDataType::Utf8, true),
-                            ]
-                            .into()
-                        ),
+                        ArrowDataType::Struct(vec![
+                            ArrowField::new("key", ArrowDataType::Utf8, false),
+                            ArrowField::new("value", ArrowDataType::Utf8, true),
+                        ]),
                         false
                     )),
                     false
@@ -439,15 +402,12 @@ pub(crate) fn delta_log_schema_for_table(
             ArrowField::new(
                 "tags",
                 ArrowDataType::Map(
-                    Arc::new(ArrowField::new(
+                    Box::new(ArrowField::new(
                         "key_value",
-                        ArrowDataType::Struct(
-                            vec![
-                                ArrowField::new("key", ArrowDataType::Utf8, false),
-                                ArrowField::new("value", ArrowDataType::Utf8, true),
-                            ]
-                            .into()
-                        ),
+                        ArrowDataType::Struct(vec![
+                            ArrowField::new("key", ArrowDataType::Utf8, false),
+                            ArrowField::new("value", ArrowDataType::Utf8, true),
+                        ]),
                         false
                     )),
                     false
@@ -466,15 +426,12 @@ pub(crate) fn delta_log_schema_for_table(
             ArrowField::new(
                 "partitionValues",
                 ArrowDataType::Map(
-                    Arc::new(ArrowField::new(
+                    Box::new(ArrowField::new(
                         "key_value",
-                        ArrowDataType::Struct(
-                            vec![
-                                ArrowField::new("key", ArrowDataType::Utf8, false),
-                                ArrowField::new("value", ArrowDataType::Utf8, true),
-                            ]
-                            .into()
-                        ),
+                        ArrowDataType::Struct(vec![
+                            ArrowField::new("key", ArrowDataType::Utf8, false),
+                            ArrowField::new("value", ArrowDataType::Utf8, true),
+                        ]),
                         false
                     )),
                     false
@@ -484,15 +441,12 @@ pub(crate) fn delta_log_schema_for_table(
             ArrowField::new(
                 "tags",
                 ArrowDataType::Map(
-                    Arc::new(ArrowField::new(
+                    Box::new(ArrowField::new(
                         "key_value",
-                        ArrowDataType::Struct(
-                            vec![
-                                ArrowField::new("key", ArrowDataType::Utf8, false),
-                                ArrowField::new("value", ArrowDataType::Utf8, true),
-                            ]
-                            .into()
-                        ),
+                        ArrowDataType::Struct(vec![
+                            ArrowField::new("key", ArrowDataType::Utf8, false),
+                            ArrowField::new("value", ArrowDataType::Utf8, true),
+                        ]),
                         false
                     )),
                     false
@@ -516,36 +470,31 @@ pub(crate) fn delta_log_schema_for_table(
             .iter()
             .for_each(|f| max_min_schema_for_fields(&mut max_min_vec, f));
 
-        stats_parsed_fields.extend(["minValues", "maxValues"].into_iter().map(|name| {
-            ArrowField::new(
-                name,
-                ArrowDataType::Struct(max_min_vec.clone().into()),
-                true,
-            )
-        }));
+        stats_parsed_fields.extend(
+            ["minValues", "maxValues"].into_iter().map(|name| {
+                ArrowField::new(name, ArrowDataType::Struct(max_min_vec.clone()), true)
+            }),
+        );
 
         let mut null_count_vec = Vec::new();
         non_partition_fields
             .iter()
             .for_each(|f| null_count_schema_for_fields(&mut null_count_vec, f));
-        let null_count_struct = ArrowField::new(
-            "nullCount",
-            ArrowDataType::Struct(null_count_vec.into()),
-            true,
-        );
+        let null_count_struct =
+            ArrowField::new("nullCount", ArrowDataType::Struct(null_count_vec), true);
 
         stats_parsed_fields.push(null_count_struct);
     }
     let mut add_fields = ADD_FIELDS.clone();
     add_fields.push(ArrowField::new(
         "stats_parsed",
-        ArrowDataType::Struct(stats_parsed_fields.into()),
+        ArrowDataType::Struct(stats_parsed_fields),
         true,
     ));
     if !partition_fields.is_empty() {
         add_fields.push(ArrowField::new(
             "partitionValues_parsed",
-            ArrowDataType::Struct(partition_fields.into()),
+            ArrowDataType::Struct(partition_fields),
             true,
         ));
     }
@@ -560,12 +509,12 @@ pub(crate) fn delta_log_schema_for_table(
     let mut schema_fields = SCHEMA_FIELDS.clone();
     schema_fields.push(ArrowField::new(
         "add",
-        ArrowDataType::Struct(add_fields.into()),
+        ArrowDataType::Struct(add_fields),
         true,
     ));
     schema_fields.push(ArrowField::new(
         "remove",
-        ArrowDataType::Struct(remove_fields.into()),
+        ArrowDataType::Struct(remove_fields),
         true,
     ));
 
@@ -585,7 +534,7 @@ fn max_min_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
 
             dest.push(ArrowField::new(
                 f.name(),
-                ArrowDataType::Struct(child_dest.into()),
+                ArrowDataType::Struct(child_dest),
                 true,
             ));
         }
@@ -609,7 +558,7 @@ fn null_count_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
 
             dest.push(ArrowField::new(
                 f.name(),
-                ArrowDataType::Struct(child_dest.into()),
+                ArrowDataType::Struct(child_dest),
                 true,
             ));
         }
