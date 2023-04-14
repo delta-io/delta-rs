@@ -18,6 +18,7 @@
 
 **Merged pull requests:**
 
+- Upgrade datafusion to 22 which brings arrow upgrades with it [\#1249](https://github.com/delta-io/delta-rs/pull/1249) ([rtyler](https://github.com/rtyler))
 - chore: df / arrow changes after update [\#1288](https://github.com/delta-io/delta-rs/pull/1288) ([roeap](https://github.com/roeap))
 - feat: read schema from parquet files in datafusion scans [\#1266](https://github.com/delta-io/delta-rs/pull/1266) ([roeap](https://github.com/roeap))
 - HDFS storage support via datafusion-objectstore-hdfs [\#1279](https://github.com/delta-io/delta-rs/pull/1279) ([iajoiner](https://github.com/iajoiner))
