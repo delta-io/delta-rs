@@ -763,3 +763,34 @@ async fn test_datafusion_scan_timestamps() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_issue_1292_datafusion_sql_projection() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table = deltalake::open_table("./tests/data/http_requests")
+        .await
+        .unwrap();
+    ctx.register_table("http_requests", Arc::new(table))?;
+
+    let batches = ctx
+        .sql("SELECT \"ClientRequestURI\" FROM http_requests LIMIT 5")
+        .await?
+        .collect()
+        .await?;
+
+    let expected = vec![
+        "+------------------+",
+        "| ClientRequestURI |",
+        "+------------------+",
+        "| /                |",
+        "| /                |",
+        "| /                |",
+        "| /                |",
+        "| /                |",
+        "+------------------+",
+    ];
+
+    assert_batches_sorted_eq!(&expected, &batches);
+
+    Ok(())
+}
