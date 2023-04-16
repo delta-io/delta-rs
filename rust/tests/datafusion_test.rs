@@ -794,3 +794,34 @@ async fn test_issue_1292_datafusion_sql_projection() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_issue_1291_datafusion_sql_partitioned_data() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table = deltalake::open_table("./tests/data/http_requests")
+        .await
+        .unwrap();
+    ctx.register_table("http_requests", Arc::new(table))?;
+
+    let batches = ctx
+        .sql("SELECT * FROM http_requests WHERE date >= '2023-04-13' LIMIT 5")
+        .await?
+        .collect()
+        .await?;
+
+    let expected = vec![
+        "+------------------+",
+        "| ClientRequestURI |",
+        "+------------------+",
+        "| /                |",
+        "| /                |",
+        "| /                |",
+        "| /                |",
+        "| /                |",
+        "+------------------+",
+    ];
+
+    assert_batches_sorted_eq!(&expected, &batches);
+
+    Ok(())
+}
