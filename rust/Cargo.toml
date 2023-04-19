@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.9.0"
+version = "0.9.1"
 rust-version = "1.64"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta.rs"
@@ -32,6 +32,7 @@ once_cell = "1.16.0"
 parking_lot = "0.12"
 parquet = { version = "36", features = [
     "async",
+    "json",
     "object_store",
 ], optional = true }
 parquet2 = { version = "0.17", optional = true }
