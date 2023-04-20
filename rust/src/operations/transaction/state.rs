@@ -1,4 +1,3 @@
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
@@ -7,6 +6,7 @@ use arrow::datatypes::{
 };
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_plan::file_format::wrap_partition_type_in_dict;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DFSchema, Result as DFResult, TableReference};
@@ -23,16 +23,38 @@ use crate::action::Add;
 use crate::delta_datafusion::{logical_expr_to_physical_expr, to_correct_scalar_value};
 use crate::table_state::DeltaTableState;
 use crate::DeltaResult;
-use crate::{schema, DeltaTableError};
+use crate::DeltaTableError;
 
 impl DeltaTableState {
     /// Get the table schema as an [`ArrowSchemaRef`]
     pub fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        Ok(Arc::new(
-            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
-                self.schema().ok_or(DeltaTableError::NoMetadata)?,
-            )?,
-        ))
+        let meta = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let fields = meta
+            .schema
+            .get_fields()
+            .iter()
+            .filter(|f| !meta.partition_columns.contains(&f.get_name().to_string()))
+            .map(|f| f.try_into())
+            .chain(
+                meta.schema
+                    .get_fields()
+                    .iter()
+                    .filter(|f| meta.partition_columns.contains(&f.get_name().to_string()))
+                    .map(|f| {
+                        let field = ArrowField::try_from(f)?;
+                        let corrected = match field.data_type() {
+                            // TODO Datafusion seems to currently not implement comparsion kernes for booleans in
+                            // dict arrays, so we have to omit converting that type for now.
+                            DataType::Boolean => field.data_type().clone(),
+                            _ => wrap_partition_type_in_dict(field.data_type().clone()),
+                        };
+                        // let dict_type = wrap_partition_type_in_dict(field.data_type().clone());
+                        Ok(field.with_data_type(corrected))
+                    }),
+            )
+            .collect::<Result<Vec<ArrowField>, _>>()?;
+
+        Ok(Arc::new(ArrowSchema::new(fields)))
     }
 
     /// Iterate over all files in the log matching a predicate
