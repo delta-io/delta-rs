@@ -42,7 +42,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion::physical_plan::file_format::{wrap_partition_type_in_dict, FileScanConfig};
+use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
     ColumnStatistics, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -58,7 +58,6 @@ use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
 use crate::builder::ensure_table_uri;
-use crate::schema;
 use crate::{action, open_table, open_table_with_storage_options, SchemaDataType};
 use crate::{DeltaResult, Invariant};
 use crate::{DeltaTable, DeltaTableError};
@@ -349,10 +348,7 @@ impl TableProvider for DeltaTable {
     }
 
     fn schema(&self) -> Arc<ArrowSchema> {
-        Arc::new(
-            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(DeltaTable::schema(self).unwrap())
-                .unwrap(),
-        )
+        self.state.arrow_schema().unwrap()
     }
 
     fn table_type(&self) -> TableType {
@@ -424,6 +420,11 @@ impl TableProvider for DeltaTable {
                 .collect::<Vec<arrow::datatypes::FieldRef>>(),
         ));
 
+        let table_partition_cols = table_partition_cols
+            .iter()
+            .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
+            .collect::<Result<Vec<_>, ArrowError>>()?;
+
         let parquet_scan = ParquetFormat::new()
             .create_physical_plan(
                 session,
@@ -434,17 +435,7 @@ impl TableProvider for DeltaTable {
                     statistics: self.datafusion_table_statistics(),
                     projection: projection.cloned(),
                     limit,
-                    table_partition_cols: table_partition_cols
-                        .iter()
-                        .map(|c| {
-                            Ok((
-                                c.to_owned(),
-                                wrap_partition_type_in_dict(
-                                    schema.field_with_name(c)?.data_type().clone(),
-                                ),
-                            ))
-                        })
-                        .collect::<Result<Vec<_>, ArrowError>>()?,
+                    table_partition_cols,
                     output_ordering: None,
                     infinite_source: false,
                 },
