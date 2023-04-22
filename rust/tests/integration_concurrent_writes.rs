@@ -57,7 +57,7 @@ async fn prepare_table(
         Some("Azure Test Table".to_string()),
         None,
         None,
-        schema,
+        Some(schema),
         vec![],
         HashMap::new(),
     );
