@@ -328,10 +328,14 @@ impl MetaData {
                     }
                 }
                 "schemaString" => {
-                    re.schema_string = record
-                        .get_string(i)
-                        .map_err(|_| gen_action_type_error("metaData", "schemaString", "string"))?
-                        .clone();
+                    re.schema_string = Some(
+                        record
+                            .get_string(i)
+                            .map_err(|_| {
+                                gen_action_type_error("metaData", "schemaString", "string")
+                            })?
+                            .clone(),
+                    );
                 }
                 "createdTime" => {
                     re.created_time =

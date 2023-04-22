@@ -60,7 +60,7 @@ async fn setup_test(partitioned: bool) -> Result<Context, Box<dyn Error>> {
         Some("opt_table".to_owned()),
         Some("Table for optimize tests".to_owned()),
         None,
-        schema.clone(),
+        Some(schema.clone()),
         p,
         HashMap::new(),
     );

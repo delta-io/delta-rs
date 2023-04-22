@@ -592,3 +592,11 @@ async fn read_delta_table_with_cdc() {
         ),]
     );
 }
+
+// test for: https://github.com/delta-io/delta-rs/issues/1302
+#[tokio::test]
+async fn read_delta_table_from_dlt() {
+    let table = deltalake::open_table("./tests/data/dlt_log").await.unwrap();
+    assert_eq!(table.version(), 1);
+    assert!(table.schema().is_some());
+}

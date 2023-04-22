@@ -15,7 +15,7 @@ use super::action::{Action, DeltaOperation};
 use super::partitions::PartitionFilter;
 use super::schema::*;
 use super::table_state::DeltaTableState;
-use crate::action::{Add, Stats};
+use crate::action::{ActionError, Add, Stats};
 use crate::delta_config::DeltaConfigError;
 use crate::operations::transaction::TransactionError;
 use crate::operations::vacuum::VacuumBuilder;
@@ -275,7 +275,7 @@ pub struct DeltaTableMetaData {
     /// Specification of the encoding for the files stored in the table
     pub format: action::Format,
     /// Schema of the table
-    pub schema: Schema,
+    pub schema: Option<Schema>,
     /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
@@ -290,7 +290,7 @@ impl DeltaTableMetaData {
         name: Option<String>,
         description: Option<String>,
         format: Option<action::Format>,
-        schema: Schema,
+        schema: Option<Schema>,
         partition_columns: Vec<String>,
         configuration: HashMap<String, Option<String>>,
     ) -> Self {
@@ -317,21 +317,25 @@ impl DeltaTableMetaData {
     pub fn get_partition_col_data_types(&self) -> Vec<(&str, &SchemaDataType)> {
         // JSON add actions contain a `partitionValues` field which is a map<string, string>.
         // When loading `partitionValues_parsed` we have to convert the stringified partition values back to the correct data type.
-        self.schema
-            .get_fields()
-            .iter()
-            .filter_map(|f| {
-                if self
-                    .partition_columns
-                    .iter()
-                    .any(|s| s.as_str() == f.get_name())
-                {
-                    Some((f.get_name(), f.get_type()))
-                } else {
-                    None
-                }
-            })
-            .collect()
+        if let Some(schema) = self.schema.as_ref() {
+            schema
+                .get_fields()
+                .iter()
+                .filter_map(|f| {
+                    if self
+                        .partition_columns
+                        .iter()
+                        .any(|s| s.as_str() == f.get_name())
+                    {
+                        Some((f.get_name(), f.get_type()))
+                    } else {
+                        None
+                    }
+                })
+                .collect()
+        } else {
+            Default::default()
+        }
     }
 }
 
@@ -346,10 +350,10 @@ impl fmt::Display for DeltaTableMetaData {
 }
 
 impl TryFrom<action::MetaData> for DeltaTableMetaData {
-    type Error = serde_json::error::Error;
+    type Error = ActionError;
 
     fn try_from(action_metadata: action::MetaData) -> Result<Self, Self::Error> {
-        let schema = action_metadata.get_schema()?;
+        let schema = action_metadata.get_schema().ok();
         Ok(Self {
             id: action_metadata.id,
             name: action_metadata.name,
@@ -1588,7 +1592,7 @@ mod tests {
             Some("Test Table Create".to_string()),
             Some("This table is made to test the create function for a DeltaTable".to_string()),
             None,
-            test_schema,
+            Some(test_schema),
             vec![],
             HashMap::new(),
         );

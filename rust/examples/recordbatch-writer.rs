@@ -157,7 +157,7 @@ fn convert_to_batch(table: &DeltaTable, records: &Vec<WeatherRecord>) -> RecordB
         .get_metadata()
         .expect("Failed to get metadata for the table");
     let arrow_schema = <deltalake::arrow::datatypes::Schema as TryFrom<&Schema>>::try_from(
-        &metadata.schema.clone(),
+        &metadata.schema.clone().unwrap(),
     )
     .expect("Failed to convert to arrow schema");
     let arrow_schema_ref = Arc::new(arrow_schema);
@@ -206,7 +206,8 @@ async fn create_initialized_table(table_path: &Path) -> DeltaTable {
         min_writer_version: 1,
     };
 
-    let metadata = DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
+    let metadata =
+        DeltaTableMetaData::new(None, None, None, Some(table_schema), vec![], HashMap::new());
 
     table
         .create(metadata, protocol, Some(commit_info), None)

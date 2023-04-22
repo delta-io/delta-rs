@@ -250,7 +250,7 @@ impl CreateBuilder {
             self.name,
             self.comment,
             None,
-            SchemaTypeStruct::new(self.columns),
+            Some(SchemaTypeStruct::new(self.columns)),
             self.partition_columns.unwrap_or_default(),
             self.configuration,
         );
@@ -333,7 +333,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_metadata().unwrap().schema, table_schema)
+        assert_eq!(
+            table.get_metadata().unwrap().schema.clone().unwrap(),
+            table_schema
+        )
     }
 
     #[tokio::test]
@@ -353,7 +356,10 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        assert_eq!(table.get_metadata().unwrap().schema, table_schema)
+        assert_eq!(
+            table.get_metadata().unwrap().schema.clone().unwrap(),
+            table_schema
+        )
     }
 
     #[tokio::test]

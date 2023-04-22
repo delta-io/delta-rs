@@ -232,7 +232,9 @@ impl DeltaTableState {
 
     /// The table schema
     pub fn schema(&self) -> Option<&Schema> {
-        self.current_metadata.as_ref().map(|m| &m.schema)
+        self.current_metadata
+            .as_ref()
+            .and_then(|m| m.schema.as_ref())
     }
 
     /// Well known table configuration
@@ -338,8 +340,7 @@ impl DeltaTableState {
                 self.min_writer_version = v.min_writer_version;
             }
             action::Action::metaData(v) => {
-                let md = DeltaTableMetaData::try_from(v)
-                    .map_err(|e| ApplyLogError::InvalidJson { source: e })?;
+                let md = DeltaTableMetaData::try_from(v)?;
                 let table_config = TableConfig(&md.configuration);
                 self.tombstone_retention_millis =
                     table_config.deleted_file_retention_duration().as_millis() as i64;

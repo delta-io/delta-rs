@@ -9,7 +9,7 @@ mod parquet_read;
 pub mod parquet2_read;
 
 use crate::delta_config::IsolationLevel;
-use crate::{schema::*, DeltaResult, DeltaTableError, DeltaTableMetaData};
+use crate::{schema::*, DeltaResult, DeltaTableMetaData};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -52,6 +52,9 @@ pub enum ActionError {
         /// The source error
         source: serde_json::Error,
     },
+    /// Table metadata does not contain schema info
+    #[error("Table metadata does not contain schema info.")]
+    NoSchema,
 }
 
 fn decode_path(raw_path: &str) -> Result<String, ActionError> {
@@ -323,7 +326,7 @@ pub struct MetaData {
     /// Specification of the encoding for the files stored in the table
     pub format: Format,
     /// Schema of the table
-    pub schema_string: String,
+    pub schema_string: Option<String>,
     /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
@@ -335,17 +338,18 @@ pub struct MetaData {
 impl MetaData {
     /// Returns the table schema from the embedded schema string contained within the metadata
     /// action.
-    pub fn get_schema(&self) -> Result<Schema, serde_json::error::Error> {
-        serde_json::from_str(&self.schema_string)
+    pub fn get_schema(&self) -> Result<Schema, ActionError> {
+        Ok(serde_json::from_str(
+            self.schema_string.as_ref().ok_or(ActionError::NoSchema)?,
+        )?)
     }
 }
 
 impl TryFrom<DeltaTableMetaData> for MetaData {
-    type Error = DeltaTableError;
+    type Error = ActionError;
 
     fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
-        let schema_string = serde_json::to_string(&metadata.schema)
-            .map_err(|e| DeltaTableError::SerializeSchemaJson { json_err: e })?;
+        let schema_string = Some(serde_json::to_string(&metadata.schema)?);
         Ok(Self {
             id: metadata.id,
             name: metadata.name,

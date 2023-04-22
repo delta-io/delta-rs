@@ -392,7 +392,7 @@ mod tests {
 
     fn dummy_metadata() -> DeltaTableMetaData {
         let schema = Schema::new(Vec::new());
-        DeltaTableMetaData::new(None, None, None, schema, Vec::new(), HashMap::new())
+        DeltaTableMetaData::new(None, None, None, Some(schema), Vec::new(), HashMap::new())
     }
 
     #[test]

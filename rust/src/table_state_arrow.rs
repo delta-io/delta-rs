@@ -140,7 +140,11 @@ impl DeltaTableState {
             .iter()
             .map(
                 |name| -> Result<arrow::datatypes::DataType, DeltaTableError> {
-                    let field = metadata.schema.get_field_with_name(name)?;
+                    let field = metadata
+                        .schema
+                        .as_ref()
+                        .ok_or(DeltaTableError::NoSchema)?
+                        .get_field_with_name(name)?;
                     Ok(field.get_type().try_into()?)
                 },
             )
@@ -304,65 +308,66 @@ impl DeltaTableState {
             max_values: Option<ArrayRef>,
         }
 
-        let mut columnar_stats: Vec<ColStats> = SchemaLeafIterator::new(schema)
-            .filter(|(_path, datatype)| !matches!(datatype, SchemaDataType::r#struct(_)))
-            .map(|(path, datatype)| -> Result<ColStats, DeltaTableError> {
-                let null_count: Option<ArrayRef> = stats
-                    .iter()
-                    .flat_map(|maybe_stat| {
-                        maybe_stat
-                            .as_ref()
-                            .map(|stat| resolve_column_count_stat(&stat.null_count, &path))
+        let mut columnar_stats: Vec<ColStats> =
+            SchemaLeafIterator::new(schema.as_ref().ok_or(DeltaTableError::NoSchema)?)
+                .filter(|(_path, datatype)| !matches!(datatype, SchemaDataType::r#struct(_)))
+                .map(|(path, datatype)| -> Result<ColStats, DeltaTableError> {
+                    let null_count: Option<ArrayRef> = stats
+                        .iter()
+                        .flat_map(|maybe_stat| {
+                            maybe_stat
+                                .as_ref()
+                                .map(|stat| resolve_column_count_stat(&stat.null_count, &path))
+                        })
+                        .collect::<Option<Vec<DeltaDataTypeLong>>>()
+                        .map(arrow::array::Int64Array::from)
+                        .map(|arr| -> ArrayRef { Arc::new(arr) });
+
+                    let arrow_type: arrow::datatypes::DataType = datatype.try_into()?;
+
+                    // Min and max are collected for primitive values, not list or maps
+                    let min_values = if matches!(datatype, SchemaDataType::primitive(_)) {
+                        stats
+                            .iter()
+                            .flat_map(|maybe_stat| {
+                                maybe_stat
+                                    .as_ref()
+                                    .map(|stat| resolve_column_value_stat(&stat.min_values, &path))
+                            })
+                            .collect::<Option<Vec<&serde_json::Value>>>()
+                            .map(|min_values| {
+                                json_value_to_array_general(&arrow_type, min_values.into_iter())
+                            })
+                            .transpose()?
+                    } else {
+                        None
+                    };
+
+                    let max_values = if matches!(datatype, SchemaDataType::primitive(_)) {
+                        stats
+                            .iter()
+                            .flat_map(|maybe_stat| {
+                                maybe_stat
+                                    .as_ref()
+                                    .map(|stat| resolve_column_value_stat(&stat.max_values, &path))
+                            })
+                            .collect::<Option<Vec<&serde_json::Value>>>()
+                            .map(|max_values| {
+                                json_value_to_array_general(&arrow_type, max_values.into_iter())
+                            })
+                            .transpose()?
+                    } else {
+                        None
+                    };
+
+                    Ok(ColStats {
+                        path,
+                        null_count,
+                        min_values,
+                        max_values,
                     })
-                    .collect::<Option<Vec<DeltaDataTypeLong>>>()
-                    .map(arrow::array::Int64Array::from)
-                    .map(|arr| -> ArrayRef { Arc::new(arr) });
-
-                let arrow_type: arrow::datatypes::DataType = datatype.try_into()?;
-
-                // Min and max are collected for primitive values, not list or maps
-                let min_values = if matches!(datatype, SchemaDataType::primitive(_)) {
-                    stats
-                        .iter()
-                        .flat_map(|maybe_stat| {
-                            maybe_stat
-                                .as_ref()
-                                .map(|stat| resolve_column_value_stat(&stat.min_values, &path))
-                        })
-                        .collect::<Option<Vec<&serde_json::Value>>>()
-                        .map(|min_values| {
-                            json_value_to_array_general(&arrow_type, min_values.into_iter())
-                        })
-                        .transpose()?
-                } else {
-                    None
-                };
-
-                let max_values = if matches!(datatype, SchemaDataType::primitive(_)) {
-                    stats
-                        .iter()
-                        .flat_map(|maybe_stat| {
-                            maybe_stat
-                                .as_ref()
-                                .map(|stat| resolve_column_value_stat(&stat.max_values, &path))
-                        })
-                        .collect::<Option<Vec<&serde_json::Value>>>()
-                        .map(|max_values| {
-                            json_value_to_array_general(&arrow_type, max_values.into_iter())
-                        })
-                        .transpose()?
-                } else {
-                    None
-                };
-
-                Ok(ColStats {
-                    path,
-                    null_count,
-                    min_values,
-                    max_values,
                 })
-            })
-            .collect::<Result<_, DeltaTableError>>()?;
+                .collect::<Result<_, DeltaTableError>>()?;
 
         let mut out_columns: Vec<(Cow<str>, ArrayRef)> =
             vec![(Cow::Borrowed("num_records"), Arc::new(num_records))];

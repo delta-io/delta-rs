@@ -65,7 +65,7 @@ pub fn create_metadata_action(
         None,
         None,
         None,
-        table_schema,
+        Some(table_schema),
         parttiton_columns.unwrap_or_default(),
         configuration.unwrap_or_default(),
     );
@@ -139,7 +139,7 @@ pub async fn create_initialized_table(
             None,
             None,
             None,
-            table_schema,
+            Some(table_schema),
             partition_cols.to_vec(),
             configuration.unwrap_or_default(),
         ),

@@ -75,6 +75,14 @@ pub enum CheckpointError {
         #[from]
         source: serde_json::Error,
     },
+
+    /// Passthrough error returned by serde_json.
+    #[error("error handling log action: {source}")]
+    Action {
+        /// The source serde_json::Error.
+        #[from]
+        source: action::ActionError,
+    },
 }
 
 /// The record batch size for checkpoint parquet file
@@ -314,7 +322,16 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
 
     // Collect a map of paths that require special stats conversion.
     let mut stats_conversions: Vec<(SchemaPath, SchemaDataType)> = Vec::new();
-    collect_stats_conversions(&mut stats_conversions, current_metadata.schema.get_fields());
+    collect_stats_conversions(
+        &mut stats_conversions,
+        current_metadata
+            .schema
+            .as_ref()
+            .ok_or(CheckpointError::Action {
+                source: action::ActionError::NoSchema,
+            })?
+            .get_fields(),
+    );
 
     let mut tombstones = state.unexpired_tombstones().cloned().collect::<Vec<_>>();
 
@@ -379,7 +396,11 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
 
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
-        <ArrowSchema as TryFrom<&Schema>>::try_from(&current_metadata.schema)?,
+        <ArrowSchema as TryFrom<&Schema>>::try_from(current_metadata.schema.as_ref().ok_or(
+            CheckpointError::Action {
+                source: action::ActionError::NoSchema,
+            },
+        )?)?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
     );

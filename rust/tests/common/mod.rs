@@ -86,7 +86,7 @@ impl TestContext {
             Some("delta-rs_test_table".to_owned()),
             Some("Table created by delta-rs tests".to_owned()),
             None,
-            schema.clone(),
+            Some(schema.clone()),
             p,
             HashMap::new(),
         );

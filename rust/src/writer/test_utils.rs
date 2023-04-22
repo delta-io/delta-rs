@@ -158,7 +158,7 @@ pub fn get_delta_metadata(partition_cols: &[String]) -> DeltaTableMetaData {
         None,
         None,
         None,
-        table_schema,
+        Some(table_schema),
         partition_cols.to_vec(),
         HashMap::new(),
     )
@@ -195,7 +195,7 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
         None,
         None,
         None,
-        table_schema,
+        Some(table_schema),
         partition_cols.to_vec(),
         HashMap::new(),
     );

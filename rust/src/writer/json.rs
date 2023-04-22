@@ -206,7 +206,9 @@ impl JsonWriter {
     pub fn for_table(table: &DeltaTable) -> Result<JsonWriter, DeltaTableError> {
         // Initialize an arrow schema ref from the delta table schema
         let metadata = table.get_metadata()?;
-        let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
+        let arrow_schema = <ArrowSchema as TryFrom<&Schema>>::try_from(
+            metadata.schema.as_ref().ok_or(DeltaTableError::NoSchema)?,
+        )?;
         let arrow_schema_ref = Arc::new(arrow_schema);
         let partition_columns = metadata.partition_columns.clone();
 
@@ -232,7 +234,9 @@ impl JsonWriter {
         &mut self,
         metadata: &DeltaTableMetaData,
     ) -> Result<bool, DeltaTableError> {
-        let schema: ArrowSchema = <ArrowSchema as TryFrom<&Schema>>::try_from(&metadata.schema)?;
+        let schema: ArrowSchema = <ArrowSchema as TryFrom<&Schema>>::try_from(
+            metadata.schema.as_ref().ok_or(DeltaTableError::NoSchema)?,
+        )?;
 
         let schema_updated = self.arrow_schema_ref.as_ref() != &schema
             || self.partition_columns != metadata.partition_columns;

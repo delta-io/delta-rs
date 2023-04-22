@@ -496,7 +496,7 @@ impl RawDeltaTable {
                         .get_metadata()
                         .map_err(PyDeltaTableError::from_raw)?
                         .clone();
-                    metadata.schema = schema;
+                    metadata.schema = Some(schema);
                     let metadata_action = action::MetaData::try_from(metadata)
                         .map_err(|_| PyDeltaTableError::new_err("Failed to reparse metadata"))?;
                     actions.push(Action::metaData(metadata_action));
@@ -761,9 +761,11 @@ fn write_new_deltalake(
         name,
         description,
         None, // Format
-        (&schema.0)
-            .try_into()
-            .map_err(PyDeltaTableError::from_arrow)?,
+        Some(
+            (&schema.0)
+                .try_into()
+                .map_err(PyDeltaTableError::from_arrow)?,
+        ),
         partition_by,
         configuration.unwrap_or_default(),
     );

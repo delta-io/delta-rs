@@ -297,7 +297,9 @@ impl std::future::IntoFuture for WriteBuilder {
                         // NOTE the schema generated from the delta schema will have the delta field metadata included,
                         // so we need to compare the field names and datatypes instead.
                         // TODO update comparison logic, once we have column mappings supported.
-                        let curr_schema: ArrowSchemaRef = Arc::new((&meta.schema).try_into()?);
+                        let curr_schema: ArrowSchemaRef = Arc::new(
+                            (meta.schema.as_ref().ok_or(DeltaTableError::NoSchema)?).try_into()?,
+                        );
 
                         if !schema_eq(curr_schema, schema.clone()) {
                             return Err(DeltaTableError::Generic(
@@ -347,7 +349,12 @@ impl std::future::IntoFuture for WriteBuilder {
 
             let invariants = table
                 .get_metadata()
-                .and_then(|meta| meta.schema.get_invariants())
+                .and_then(|meta| {
+                    meta.schema
+                        .as_ref()
+                        .ok_or(DeltaTableError::NoSchema)?
+                        .get_invariants()
+                })
                 .unwrap_or_default();
             let checker = DeltaDataChecker::new(invariants);
 
