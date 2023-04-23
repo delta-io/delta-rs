@@ -32,7 +32,6 @@ once_cell = "1.16.0"
 parking_lot = "0.12"
 parquet = { version = "36", features = [
     "async",
-    "json",
     "object_store",
 ], optional = true }
 parquet2 = { version = "0.17", optional = true }
@@ -111,6 +110,7 @@ glue-native-tls = ["s3-native-tls", "rusoto_glue"]
 hdfs = ["datafusion-objectstore-hdfs"]
 # used only for integration testing
 integration_test = ["fs_extra", "tempdir"]
+json = ["parquet/json"]
 python = ["arrow/pyarrow"]
 s3-native-tls = [
     "rusoto_core/native-tls",
