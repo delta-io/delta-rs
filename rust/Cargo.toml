@@ -91,6 +91,7 @@ utime = "0.3"
 glibc_version = { path = "../glibc_version", version = "0.1" }
 
 [features]
+azure = ["object_store/azure"]
 default = ["arrow", "parquet"]
 datafusion = [
     "dep:datafusion",
@@ -104,8 +105,13 @@ datafusion = [
     "parquet",
 ]
 datafusion-ext = ["datafusion"]
-azure = ["object_store/azure"]
 gcs = ["object_store/gcp"]
+glue = ["s3", "rusoto_glue/rustls"]
+glue-native-tls = ["s3-native-tls", "rusoto_glue"]
+hdfs = ["datafusion-objectstore-hdfs"]
+# used only for integration testing
+integration_test = ["fs_extra", "tempdir"]
+python = ["arrow/pyarrow"]
 s3-native-tls = [
     "rusoto_core/native-tls",
     "rusoto_credential",
@@ -124,13 +130,6 @@ s3 = [
     "object_store/aws",
     "object_store/aws_profile",
 ]
-hdfs = ["datafusion-objectstore-hdfs"]
-glue-native-tls = ["s3-native-tls", "rusoto_glue"]
-glue = ["s3", "rusoto_glue/rustls"]
-python = ["arrow/pyarrow"]
-
-# used only for integration testing
-integration_test = ["fs_extra", "tempdir"]
 
 [[bench]]
 name = "read_checkpoint"
