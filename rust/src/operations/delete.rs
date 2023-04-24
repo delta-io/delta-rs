@@ -99,13 +99,12 @@ async fn find_files<'a>(
     candidates: Vec<&'a Add>,
     state: &SessionState,
     expression: &Expr,
-    task_ctx: Arc<TaskContext>,
 ) -> DeltaResult<Vec<&'a Add>> {
     // This solution is temporary until Datafusion can expose which path a file came from
     let mut files = Vec::new();
     for action in candidates {
         let mut file_group: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-        let part = partitioned_file_from_action(action, &schema);
+        let part = partitioned_file_from_action(action, schema);
         file_group
             .entry(part.partition_values.clone())
             .or_default()
@@ -115,9 +114,9 @@ async fn find_files<'a>(
             snapshot,
             store.clone(),
             &[action.to_owned()],
-            &schema,
+            schema,
             None,
-            &state,
+            state,
             None,
             None,
         )
@@ -136,15 +135,16 @@ async fn find_files<'a>(
         let filter = Arc::new(FilterExec::try_new(predicate_expr, parquet_scan)?);
         let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(filter, 0, Some(1)));
 
+        let task_ctx = Arc::new(TaskContext::from(state));
         for i in 0..limit.output_partitioning().partition_count() {
             let mut stream = limit.execute(i, task_ctx.clone())?;
-            if let Some(_) = stream.next().await {
+            if (stream.next().await).is_some() {
                 files.push(action);
                 break;
             }
         }
     }
-    return Ok(files);
+    Ok(files)
 }
 
 struct ExprProperties {
@@ -169,7 +169,6 @@ fn validate_expr(
             if !partition_columns.contains(&c.name) {
                 properties.partition_only = false;
             }
-            ()
         }
         Expr::BinaryExpr(bin) => {
             validate_expr(&bin.left, partition_columns, properties)?;
@@ -215,8 +214,6 @@ fn validate_expr(
                 validate_expr(when, partition_columns, properties)?;
                 validate_expr(then, partition_columns, properties)?;
             }
-
-            ()
         }
         Expr::Cast(cast) => validate_expr(&cast.expr, partition_columns, properties)?,
         Expr::TryCast(try_cast) => validate_expr(&try_cast.expr, partition_columns, properties)?,
@@ -230,7 +227,6 @@ fn validate_expr(
                 for e in args {
                     validate_expr(e, partition_columns, properties)?;
                 }
-                ()
             }
             _ => {
                 return Err(DeltaTableError::Generic(
@@ -243,7 +239,6 @@ fn validate_expr(
                 for e in args {
                     validate_expr(e, partition_columns, properties)?;
                 }
-                ()
             }
             _ => {
                 return Err(DeltaTableError::Generic(
@@ -271,7 +266,6 @@ fn validate_expr(
             for e in list {
                 validate_expr(e, partition_columns, properties)?;
             }
-            ()
         }
         Expr::Exists { .. } => {
             return Err(DeltaTableError::Generic(
@@ -379,8 +373,6 @@ async fn excute_non_empty_expr(
     writer_properties: WriterProperties,
     expr_properties: ExprProperties,
 ) -> DeltaResult<(Vec<Add>, Vec<Add>)> {
-    let task_ctx = Arc::new(TaskContext::from(state));
-
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
 
@@ -401,7 +393,7 @@ async fn excute_non_empty_expr(
             .cloned()
             .collect(),
     ));
-    let expr = logical_expr_to_physical_expr(&expression, &schema);
+    let expr = logical_expr_to_physical_expr(expression, &schema);
 
     let pruning_predicate = PruningPredicate::try_new(expr, schema.clone())?;
     let files_to_prune = pruning_predicate.prune(snapshot).unwrap();
@@ -429,9 +421,8 @@ async fn excute_non_empty_expr(
         &schema,
         file_schema.clone(),
         files,
-        &state,
+        state,
         expression,
-        task_ctx.clone(),
     )
     .await?;
 
@@ -444,7 +435,7 @@ async fn excute_non_empty_expr(
         &rewrite,
         &schema,
         None,
-        &state,
+        state,
         None,
         None,
     )
@@ -537,7 +528,7 @@ async fn execute(
         .unwrap()
         .as_millis() as i64;
 
-    let mut actions: Vec<Action> = add_actions.into_iter().map(|a| Action::add(a)).collect();
+    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::add).collect();
     metrics.num_removed_files = to_delete.len();
     metrics.num_added_files = actions.len();
 
@@ -589,7 +580,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 let session = SessionContext::new();
 
                 // If a user provides their own their DF state then they must register the store themselves
-                register_store(this.store.clone(), session.runtime_env().clone());
+                register_store(this.store.clone(), session.runtime_env());
 
                 session.state()
             });

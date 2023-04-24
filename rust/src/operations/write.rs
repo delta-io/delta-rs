@@ -200,6 +200,7 @@ impl WriteBuilder {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn write_execution_plan(
     snapshot: &DeltaTableState,
     state: SessionState,
@@ -212,7 +213,8 @@ pub(crate) async fn write_execution_plan(
 ) -> DeltaResult<Vec<Add>> {
     let invariants = snapshot
         .current_metadata()
-        .and_then(|meta| Some(meta.schema.get_invariants().unwrap()))
+        .ok_or(DeltaTableError::NoMetadata)
+        .and_then(|meta| meta.schema.get_invariants())
         .unwrap_or_default();
     let checker = DeltaDataChecker::new(invariants);
 
@@ -423,7 +425,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 None,
             )
             .await?;
-            actions.extend(add_actions.into_iter().map(|a| Action::add(a)));
+            actions.extend(add_actions.into_iter().map(Action::add));
 
             // Collect remove actions if we are overwriting the table
             if matches!(this.mode, SaveMode::Overwrite) {

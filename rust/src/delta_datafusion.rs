@@ -349,6 +349,7 @@ pub(crate) fn register_store(store: ObjectStoreRef, env: Arc<RuntimeEnv>) {
 }
 
 /// Create a Parquet scan limited to a set of files
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn parquet_scan_from_actions(
     snapshot: &DeltaTableState,
     object_store: ObjectStoreRef,
@@ -364,7 +365,7 @@ pub(crate) async fn parquet_scan_from_actions(
     // However we may want to do some additional balancing in case we are far off from the above.
     let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
     for action in actions {
-        let part = partitioned_file_from_action(action, &schema);
+        let part = partitioned_file_from_action(action, schema);
         file_groups
             .entry(part.partition_values.clone())
             .or_default()
@@ -385,7 +386,7 @@ pub(crate) async fn parquet_scan_from_actions(
             .collect(),
     ));
 
-    Ok(ParquetFormat::new()
+    ParquetFormat::new()
         .create_physical_plan(
             state,
             FileScanConfig {
@@ -411,7 +412,7 @@ pub(crate) async fn parquet_scan_from_actions(
             },
             filters.as_ref(),
         )
-        .await?)
+        .await
 }
 
 #[async_trait]
