@@ -57,7 +57,14 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::{path::Path, ObjectMeta};
 use url::Url;
 
+use crate::action::Add;
 use crate::builder::ensure_table_uri;
+<<<<<<< HEAD
+=======
+use crate::schema;
+use crate::storage::ObjectStoreRef;
+use crate::table_state::DeltaTableState;
+>>>>>>> 56907ec (Rebase delete operation on main)
 use crate::{action, open_table, open_table_with_storage_options, SchemaDataType};
 use crate::{DeltaResult, Invariant};
 use crate::{DeltaTable, DeltaTableError};
@@ -86,11 +93,10 @@ impl From<DataFusionError> for DeltaTableError {
     }
 }
 
-impl DeltaTable {
+impl DeltaTableState {
     /// Return statistics for Datafusion Table
     pub fn datafusion_table_statistics(&self) -> Statistics {
         let stats = self
-            .get_state()
             .files()
             .iter()
             .fold(
@@ -211,8 +217,9 @@ impl DeltaTable {
                     .iter()
                     .zip(fields)
                     .map(|(col_states, field)| {
-                        let dt = (self as &dyn TableProvider)
-                            .schema()
+                        let dt = self
+                            .arrow_schema()
+                            .unwrap()
                             .field_with_name(field.get_name())
                             .unwrap()
                             .data_type()
@@ -335,10 +342,76 @@ impl PruningStatistics for DeltaTable {
 
 // each delta table must register a specific object store, since paths are internally
 // handled relative to the table root.
-fn register_store(table: &DeltaTable, env: Arc<RuntimeEnv>) {
-    let object_store_url = table.storage.object_store_url();
+pub(crate) fn register_store(store: ObjectStoreRef, env: Arc<RuntimeEnv>) {
+    let object_store_url = store.object_store_url();
     let url: &Url = object_store_url.as_ref();
-    env.register_object_store(url, table.object_store());
+    env.register_object_store(url, store);
+}
+
+/// Create a Parquet scan limited to a set of files
+pub(crate) async fn parquet_scan_from_actions(
+    snapshot: &DeltaTableState,
+    object_store: ObjectStoreRef,
+    actions: &[Add],
+    schema: &ArrowSchema,
+    filters: Option<Arc<dyn PhysicalExpr>>,
+    state: &SessionState,
+    projection: Option<&Vec<usize>>,
+    limit: Option<usize>,
+) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
+    // TODO we group files together by their partition values. If the table is partitioned
+    // and partitions are somewhat evenly distributed, probably not the worst choice ...
+    // However we may want to do some additional balancing in case we are far off from the above.
+    let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
+    for action in actions {
+        let part = partitioned_file_from_action(action, &schema);
+        file_groups
+            .entry(part.partition_values.clone())
+            .or_default()
+            .push(part);
+    }
+
+    let table_partition_cols = snapshot
+        .current_metadata()
+        .ok_or(DeltaTableError::NoMetadata)?
+        .partition_columns
+        .clone();
+    let file_schema = Arc::new(ArrowSchema::new(
+        schema
+            .fields()
+            .iter()
+            .filter(|f| !table_partition_cols.contains(f.name()))
+            .cloned()
+            .collect(),
+    ));
+
+    Ok(ParquetFormat::new()
+        .create_physical_plan(
+            state,
+            FileScanConfig {
+                object_store_url: object_store.object_store_url(),
+                file_schema,
+                file_groups: file_groups.into_values().collect(),
+                statistics: snapshot.datafusion_table_statistics(),
+                projection: projection.cloned(),
+                limit,
+                table_partition_cols: table_partition_cols
+                    .iter()
+                    .map(|c| {
+                        Ok((
+                            c.to_owned(),
+                            wrap_partition_type_in_dict(
+                                schema.field_with_name(c)?.data_type().clone(),
+                            ),
+                        ))
+                    })
+                    .collect::<Result<Vec<_>, ArrowError>>()?,
+                output_ordering: None,
+                infinite_source: false,
+            },
+            filters.as_ref(),
+        )
+        .await?)
 }
 
 #[async_trait]
@@ -375,41 +448,33 @@ impl TableProvider for DeltaTable {
             .physical_arrow_schema(self.object_store())
             .await?;
 
-        register_store(self, session.runtime_env().clone());
+        register_store(self.object_store(), session.runtime_env().clone());
 
         let filter_expr = conjunction(filters.iter().cloned())
             .map(|expr| logical_expr_to_physical_expr(&expr, &schema));
 
-        // TODO we group files together by their partition values. If the table is partitioned
-        // and partitions are somewhat evenly distributed, probably not the worst choice ...
-        // However we may want to do some additional balancing in case we are far off from the above.
-        let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-        if let Some(predicate) = &filter_expr {
+        let actions = if let Some(predicate) = &filter_expr {
             let pruning_predicate = PruningPredicate::try_new(predicate.clone(), schema.clone())?;
             let files_to_prune = pruning_predicate.prune(&self.state)?;
             self.get_state()
                 .files()
                 .iter()
                 .zip(files_to_prune.into_iter())
-                .for_each(|(action, keep_file)| {
-                    if keep_file {
-                        let part = partitioned_file_from_action(action, &schema);
-                        file_groups
-                            .entry(part.partition_values.clone())
-                            .or_default()
-                            .push(part);
-                    };
-                });
+                .filter_map(
+                    |(action, keep)| {
+                        if keep {
+                            Some(action.to_owned())
+                        } else {
+                            None
+                        }
+                    },
+                )
+                .collect()
         } else {
-            self.get_state().files().iter().for_each(|action| {
-                let part = partitioned_file_from_action(action, &schema);
-                file_groups
-                    .entry(part.partition_values.clone())
-                    .or_default()
-                    .push(part);
-            });
+            self.get_state().files().to_owned()
         };
 
+<<<<<<< HEAD
         let table_partition_cols = self.get_metadata()?.partition_columns.clone();
         let file_schema = Arc::new(ArrowSchema::new(
             schema
@@ -442,6 +507,19 @@ impl TableProvider for DeltaTable {
                 filter_expr.as_ref(),
             )
             .await?;
+=======
+        let parquet_scan = parquet_scan_from_actions(
+            &self.state,
+            self.object_store(),
+            &actions,
+            &schema,
+            filter_expr,
+            session,
+            projection,
+            limit,
+        )
+        .await?;
+>>>>>>> 56907ec (Rebase delete operation on main)
 
         Ok(Arc::new(DeltaScan {
             table_uri: ensure_table_uri(self.table_uri())?.as_str().into(),
@@ -457,7 +535,7 @@ impl TableProvider for DeltaTable {
     }
 
     fn statistics(&self) -> Option<Statistics> {
-        Some(self.datafusion_table_statistics())
+        Some(self.state.datafusion_table_statistics())
     }
 }
 
@@ -570,7 +648,10 @@ fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
     }
 }
 
-fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> PartitionedFile {
+pub(crate) fn partitioned_file_from_action(
+    action: &action::Add,
+    schema: &ArrowSchema,
+) -> PartitionedFile {
     let partition_values = schema
         .fields()
         .iter()

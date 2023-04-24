@@ -21,7 +21,7 @@ pub mod transaction;
 pub mod vacuum;
 
 #[cfg(feature = "datafusion")]
-use self::{load::LoadBuilder, write::WriteBuilder};
+use self::{delete::DeleteBuilder, load::LoadBuilder, write::WriteBuilder};
 #[cfg(feature = "datafusion")]
 use arrow::record_batch::RecordBatch;
 #[cfg(feature = "datafusion")]
@@ -29,6 +29,8 @@ pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 use optimize::OptimizeBuilder;
 
+#[cfg(feature = "datafusion")]
+pub mod delete;
 #[cfg(feature = "datafusion")]
 mod load;
 #[cfg(feature = "datafusion")]
@@ -131,6 +133,13 @@ impl DeltaOps {
     #[must_use]
     pub fn optimize<'a>(self) -> OptimizeBuilder<'a> {
         OptimizeBuilder::new(self.0.object_store(), self.0.state)
+    }
+
+    /// Delete data from Delta table
+    #[cfg(feature = "datafusion")]
+    #[must_use]
+    pub fn delete(self) -> DeleteBuilder {
+        DeleteBuilder::new(self.0.object_store(), self.0.state)
     }
 }
 

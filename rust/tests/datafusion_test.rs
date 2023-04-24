@@ -264,7 +264,7 @@ async fn test_datafusion_stats() -> Result<()> {
     let table = deltalake::open_table("./tests/data/delta-0.8.0")
         .await
         .unwrap();
-    let statistics = table.datafusion_table_statistics();
+    let statistics = table.state.datafusion_table_statistics();
 
     assert_eq!(statistics.num_rows, Some(4),);
 
