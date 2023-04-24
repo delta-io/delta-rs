@@ -799,6 +799,7 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_deleted_rows, None);
         assert_eq!(metrics.num_copied_rows, None);
+        assert_eq!(metrics.rewrite_time_ms, 0);
     }
 
     #[tokio::test]
