@@ -623,7 +623,7 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
-        return table;
+        table
     }
 
     #[tokio::test]
@@ -634,9 +634,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(&["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice(&[1, 10, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice(&[
+                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from_slice([
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-02",
@@ -688,9 +688,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(&["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice(&[1, 10, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice(&[
+                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from_slice([
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-02",
@@ -712,9 +712,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(&["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice(&[0, 20, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice(&[
+                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from_slice([0, 20, 10, 100])),
+                Arc::new(arrow::array::StringArray::from_slice([
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-02",
@@ -757,9 +757,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(&["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice(&[0, 20, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice(&[
+                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from_slice([0, 20, 10, 100])),
+                Arc::new(arrow::array::StringArray::from_slice([
                     "2021-02-02",
                     "2021-02-03",
                     "2021-02-02",
