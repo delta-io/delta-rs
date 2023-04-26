@@ -32,14 +32,20 @@ use crate::DeltaTable;
 use crate::DeltaTableError;
 
 use crate::action::{Action, Add, Remove};
+use arrow::array::StringArray;
+use arrow::datatypes::DataType;
 use arrow::datatypes::Schema as ArrowSchema;
+use arrow::error::ArrowError;
+use arrow::record_batch::RecordBatch;
+use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_optimizer::pruning::PruningPredicate;
+use datafusion::physical_plan::file_format::{wrap_partition_type_in_dict, FileScanConfig};
 use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::limit::GlobalLimitExec;
+use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::ExecutionPlan;
 use datafusion::prelude::Expr;
 use datafusion_common::scalar::ScalarValue;
@@ -100,47 +106,103 @@ async fn find_files<'a>(
     state: &SessionState,
     expression: &Expr,
 ) -> DeltaResult<Vec<&'a Add>> {
-    // This solution is temporary until Datafusion can expose which path a file came from
     let mut files = Vec::new();
+    let mut candidate_map: HashMap<String, &'a Add> = HashMap::new();
+    const PATH_COLUMN: &str = "__delta_rs_path";
+
+    let table_partition_cols = snapshot
+        .current_metadata()
+        .ok_or(DeltaTableError::NoMetadata)?
+        .partition_columns
+        .clone();
+
+    let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
     for action in candidates {
-        let mut file_group: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-        let part = partitioned_file_from_action(action, schema);
-        file_group
+        let mut part = partitioned_file_from_action(action, schema);
+        part.partition_values
+            .push(ScalarValue::Utf8(Some(action.path.clone())));
+
+        file_groups
             .entry(part.partition_values.clone())
             .or_default()
             .push(part);
 
-        let parquet_scan = parquet_scan_from_actions(
-            snapshot,
-            store.clone(),
-            &[action.to_owned()],
-            schema,
-            None,
+        candidate_map.insert(action.path.to_owned(), action);
+    }
+
+    let mut table_partition_cols = table_partition_cols
+        .iter()
+        .map(|c| {
+            Ok((
+                c.to_owned(),
+                wrap_partition_type_in_dict(schema.field_with_name(c)?.data_type().clone()),
+            ))
+        })
+        .collect::<Result<Vec<_>, ArrowError>>()?;
+    // Append a column called __delta_rs_path to track the file path
+    table_partition_cols.push((PATH_COLUMN.to_owned(), DataType::Utf8));
+
+    let physical_schema = file_schema.clone();
+    let logical_schema: DFSchema = file_schema.as_ref().clone().try_into()?;
+    let execution_props = ExecutionProps::new();
+
+    let predicate_expr = create_physical_expr(
+        expression,
+        &logical_schema,
+        &physical_schema,
+        &execution_props,
+    )?;
+    let parquet_scan = ParquetFormat::new()
+        .create_physical_plan(
             state,
-            None,
+            FileScanConfig {
+                object_store_url: store.object_store_url(),
+                file_schema,
+                file_groups: file_groups.into_values().collect(),
+                statistics: snapshot.datafusion_table_statistics(),
+                projection: None,
+                limit: None,
+                table_partition_cols,
+                infinite_source: false,
+                output_ordering: None,
+            },
             None,
         )
         .await?;
 
-        let physical_schema = file_schema.clone();
-        let logical_schema: DFSchema = file_schema.as_ref().clone().try_into()?;
-        let execution_props = ExecutionProps::new();
+    let filter: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(predicate_expr, parquet_scan.clone())?);
+    let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(filter, 1));
 
-        let predicate_expr = create_physical_expr(
-            expression,
-            &logical_schema,
-            &physical_schema,
-            &execution_props,
-        )?;
-        let filter = Arc::new(FilterExec::try_new(predicate_expr, parquet_scan)?);
-        let limit: Arc<dyn ExecutionPlan> = Arc::new(GlobalLimitExec::new(filter, 0, Some(1)));
+    let task_ctx = Arc::new(TaskContext::from(state));
+    for i in 0..limit.output_partitioning().partition_count() {
+        let mut stream = limit.execute(i, task_ctx.clone())?;
 
-        let task_ctx = Arc::new(TaskContext::from(state));
-        for i in 0..limit.output_partitioning().partition_count() {
-            let mut stream = limit.execute(i, task_ctx.clone())?;
-            if (stream.next().await).is_some() {
-                files.push(action);
-                break;
+        while let Some(res) = stream.next().await {
+            let batch: RecordBatch = res?;
+            let array = batch
+                .column_by_name(PATH_COLUMN)
+                .unwrap()
+                .as_any()
+                .downcast_ref::<StringArray>()
+                .ok_or(DeltaTableError::Generic(format!(
+                    "Unable to downcast column {}",
+                    PATH_COLUMN
+                )))?;
+
+            for path in array.into_iter() {
+                let path = path.ok_or(DeltaTableError::Generic(format!(
+                    "{} cannot be null",
+                    PATH_COLUMN
+                )))?;
+                match candidate_map.remove(path) {
+                    Some(action) => files.push(action),
+                    None => {
+                        return Err(DeltaTableError::Generic(
+                            "Unable to map __delta_rs_path to action.".to_owned(),
+                        ))
+                    }
+                }
             }
         }
     }
@@ -370,7 +432,7 @@ async fn excute_non_empty_expr(
     state: &SessionState,
     expression: &Expr,
     metrics: &mut DeleteMetrics,
-    writer_properties: WriterProperties,
+    writer_properties: Option<WriterProperties>,
     expr_properties: ExprProperties,
 ) -> DeltaResult<(Vec<Add>, Vec<Add>)> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
@@ -466,7 +528,7 @@ async fn excute_non_empty_expr(
         object_store.clone(),
         None,
         None,
-        Some(writer_properties),
+        writer_properties,
     )
     .await?;
     metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis();
@@ -484,7 +546,7 @@ async fn execute(
     object_store: ObjectStoreRef,
     snapshot: &DeltaTableState,
     state: SessionState,
-    writer_properties: WriterProperties,
+    writer_properties: Option<WriterProperties>,
     app_metadata: Option<Map<String, Value>>,
 ) -> DeltaResult<DeleteMetrics> {
     // TODO:
@@ -572,10 +634,6 @@ impl std::future::IntoFuture for DeleteBuilder {
         let this = self;
 
         Box::pin(async move {
-            let writer_properties = this
-                .writer_properties
-                .unwrap_or_else(|| WriterProperties::builder().build());
-
             let state = this.state.unwrap_or_else(|| {
                 let session = SessionContext::new();
 
@@ -590,7 +648,7 @@ impl std::future::IntoFuture for DeleteBuilder {
                 this.store.clone(),
                 &this.snapshot,
                 state,
-                writer_properties,
+                this.writer_properties,
                 None,
             )
             .await?;
@@ -609,6 +667,7 @@ mod tests {
     use crate::writer::test_utils::{get_arrow_schema, get_delta_schema};
     use crate::DeltaTable;
     use arrow::record_batch::RecordBatch;
+    use datafusion::assert_batches_sorted_eq;
     use datafusion::from_slice::FromSlice;
     use datafusion::prelude::*;
     use std::sync::Arc;
@@ -624,6 +683,18 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         table
+    }
+
+    async fn get_data(table: DeltaTable) -> Vec<RecordBatch> {
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(table)).unwrap();
+        ctx
+            .sql("select * from test")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap()
     }
 
     #[tokio::test]
@@ -745,6 +816,23 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_deleted_rows, Some(1));
         assert_eq!(metrics.num_copied_rows, Some(3));
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 0     | 2021-02-02 |",
+            "| A  | 10    | 2021-02-02 |",
+            "| A  | 10    | 2021-02-02 |",
+            "| A  | 100   | 2021-02-02 |",
+            "| A  | 100   | 2021-02-02 |",
+            "| B  | 10    | 2021-02-02 |",
+            "| B  | 20    | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+
+        let actual = get_data(table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]
@@ -791,6 +879,18 @@ mod tests {
         assert_eq!(metrics.num_deleted_rows, None);
         assert_eq!(metrics.num_copied_rows, None);
         assert_eq!(metrics.rewrite_time_ms, 0);
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 0     | 2021-02-02 |",
+            "| A  | 10    | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+
+        let actual = get_data(table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]
