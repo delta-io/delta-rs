@@ -33,6 +33,8 @@ jobs:
   commitlint:
     name: PR title / description conforms to semantic-release
     runs-on: ubuntu-latest
+    permissions:
+      pull-requests: write
     steps:
       - uses: actions/setup-node@v3
         with:
