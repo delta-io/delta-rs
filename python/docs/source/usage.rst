@@ -399,7 +399,23 @@ only list the files to be deleted. Pass ``dry_run=False`` to actually delete fil
 Optimizing tables
 ~~~~~~~~~~~~~~~~~
 
-Optimizing tables is not currently supported.
+Optimizing a table will perform bin-packing on a Delta Table which merges small files
+into a large file. Bin-packing reduces the number of API calls required for read operations.
+Optimizing will increments the table's version and creates remove actions for optimized files.
+Optimize does not delete files from storage. To delete files that were removed, call :meth:`DeltaTable.vacuum`.
+
+Use :meth:`DeltaTable.optimize` to perform the optimize operation. Note that currently optimize only supports
+append-only workflows. Use with other workflows may corrupt your table state.
+
+.. code-block:: python
+
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.optimize()
+    {'numFilesAdded': 1, 'numFilesRemoved': 5,
+     'filesAdded': {'min': 555, 'max': 555, 'avg': 555.0, 'totalFiles': 1, 'totalSize': 555},
+     'filesRemoved': {'min': 262, 'max': 429, 'avg': 362.2, 'totalFiles': 5, 'totalSize': 1811},
+     'partitionsOptimized': 1, 'numBatches': 1, 'totalConsideredFiles': 5,
+     'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
 
 Writing Delta Tables
 --------------------
