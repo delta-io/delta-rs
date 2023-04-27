@@ -313,6 +313,19 @@ given filters.
 
         return self._table.vacuum(dry_run, retention_hours, enforce_retention_duration)
 
+    def optimize(
+            self,
+            partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+            target_size: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        :param partition_filters: the partition filters that will be used for getting the matched files
+        :param target_size: desired file size after bin-packing files
+        :return: the metrics from optimize
+        """
+        metrics = self._table.optimize(partition_filters, target_size)
+        return json.loads(metrics)
+
     def pyarrow_schema(self) -> pyarrow.Schema:
         """
         Get the current schema of the DeltaTable with the Parquet PyArrow format.
