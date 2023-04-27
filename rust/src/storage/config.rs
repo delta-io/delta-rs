@@ -30,7 +30,7 @@ use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
 use std::str::FromStr;
 
 /// Options used for configuring backend storage
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, Serialize, Deserialize, Default)]
 pub struct StorageOptions(pub HashMap<String, String>);
 
 impl StorageOptions {
@@ -246,10 +246,44 @@ fn url_prefix_handler<T: ObjectStore>(
     store: T,
     storage_url: &Url,
 ) -> DeltaResult<Arc<DynObjectStore>> {
-    let prefix = Path::from(storage_url.path().replace("%20", " ")); // allow spaces
+    let prefix = Path::parse(storage_url.path())?;
     if prefix != Path::from("/") {
         Ok(Arc::new(PrefixStore::new(store, prefix)))
     } else {
         Ok(Arc::new(store))
+    }
+}
+
+#[cfg(test)]
+mod test {
+    use crate::ensure_table_uri;
+
+    use super::*;
+
+    #[tokio::test]
+    async fn test_configure_store_local() -> Result<(), Box<dyn std::error::Error + 'static>> {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_dir_path = temp_dir.path();
+        let path = temp_dir_path.join("test space 😁");
+
+        let table_uri = ensure_table_uri(path.as_os_str().to_str().unwrap()).unwrap();
+
+        let store = configure_store(&table_uri, &StorageOptions::default()).unwrap();
+
+        let contents = b"test";
+        let key = "test.txt";
+        let file_path = path.join(key);
+        std::fs::write(&file_path, contents).unwrap();
+
+        let res = store
+            .get(&object_store::path::Path::from(key))
+            .await
+            .unwrap()
+            .bytes()
+            .await
+            .unwrap();
+        assert_eq!(res.as_ref(), contents);
+
+        Ok(())
     }
 }

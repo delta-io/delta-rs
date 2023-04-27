@@ -1,6 +1,7 @@
 //! Create or load DeltaTables
 
 use std::collections::HashMap;
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
@@ -345,38 +346,75 @@ pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<Str
         .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
 }
 
+/// Attempt to create a Url from given table location.
+///
+/// The location could be:
+///  * A valid URL, which will be parsed and returned
+///  * A path to a directory, which will be created and then converted to a URL.
+///
+/// If it is a local path, it will be created if it doesn't exist.
+///
+/// Extra slashes will be removed from the end path as well.
+///
+/// Will return an error if the location is not valid. For example,
 pub(crate) fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     let table_uri = table_uri.as_ref();
-    if let Ok(path) = std::fs::canonicalize(table_uri) {
-        return Url::from_directory_path(path)
-            .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri.to_string()));
+
+    enum UriType {
+        LocalPath(PathBuf),
+        Url(Url),
     }
-    if let Ok(url) = Url::parse(table_uri) {
-        return match url.scheme() {
-            "file" => ensure_table_uri(
-                url.to_file_path()
-                    .and_then(|path| path.to_str().map(String::from).ok_or(()))
-                    .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri.to_string()))?,
-            ),
-            _ => {
-                let mut new_url = url.clone();
-                new_url.set_path(url.path().trim_end_matches('/'));
-                Ok(new_url)
+
+    let uri_type: UriType = if let Ok(url) = Url::parse(table_uri) {
+        if url.scheme() == "file" {
+            UriType::LocalPath(url.to_file_path().map_err(|err| {
+                let msg = format!("Invalid table location: {}\nError: {:?}", table_uri, err);
+                DeltaTableError::InvalidTableLocation(msg)
+            })?)
+        } else {
+            UriType::Url(url)
+        }
+    } else {
+        UriType::LocalPath(PathBuf::from(table_uri))
+    };
+
+    // If it is a local path, we need to create it if it does not exist.
+    let mut url = match uri_type {
+        UriType::LocalPath(path) => {
+            if !path.exists() {
+                std::fs::create_dir_all(&path).map_err(|err| {
+                    let msg = format!(
+                        "Could not create local directory: {}\nError: {:?}",
+                        table_uri, err
+                    );
+                    DeltaTableError::InvalidTableLocation(msg)
+                })?;
             }
-        };
-    }
-    // The table uri still might be a relative paths that does not exist.
-    std::fs::create_dir_all(table_uri)
-        .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri.to_string()))?;
-    let path = std::fs::canonicalize(table_uri)
-        .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri.to_string()))?;
-    Url::from_directory_path(path)
-        .map_err(|_| DeltaTableError::InvalidTableLocation(table_uri.to_string()))
+            let path = std::fs::canonicalize(path).map_err(|err| {
+                let msg = format!("Invalid table location: {}\nError: {:?}", table_uri, err);
+                DeltaTableError::InvalidTableLocation(msg)
+            })?;
+            Url::from_directory_path(path).map_err(|_| {
+                let msg = format!(
+                    "Could not construct a URL from canonicalized path: {}.\n\
+                    Something must be very wrong with the table path.",
+                    table_uri
+                );
+                DeltaTableError::InvalidTableLocation(msg)
+            })?
+        }
+        UriType::Url(url) => url,
+    };
+
+    let trimmed_path = url.path().trim_end_matches('/').to_owned();
+    url.set_path(&trimmed_path);
+    Ok(url)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::Path;
 
     #[test]
     fn test_ensure_table_uri() {
@@ -387,13 +425,74 @@ mod tests {
         assert!(uri.is_ok());
         let uri = ensure_table_uri("s3://container/path");
         assert!(uri.is_ok());
-        let uri = ensure_table_uri("file:///").unwrap();
-        assert_eq!("file:///", uri.as_str());
-        let uri = ensure_table_uri("memory://").unwrap();
-        assert_eq!("memory://", uri.as_str());
-        let uri = ensure_table_uri("s3://tests/data/delta-0.8.0/").unwrap();
-        assert_eq!("s3://tests/data/delta-0.8.0", uri.as_str());
-        let _uri = ensure_table_uri("s3://tests/data/delta-0.8.0//").unwrap();
-        assert_eq!("s3://tests/data/delta-0.8.0", uri.as_str())
+
+        // These cases should all roundtrip to themselves
+        let roundtrip_cases = &[
+            "s3://tests/data/delta-0.8.0",
+            "memory://",
+            "file:///",
+            "s3://bucket/my%20table", // Doesn't double-encode
+        ];
+
+        for case in roundtrip_cases {
+            let uri = ensure_table_uri(case).unwrap();
+            assert_eq!(case, &uri.as_str());
+        }
+
+        // Other cases
+        let map_cases = &[
+            // extra slashes are removed
+            (
+                "s3://tests/data/delta-0.8.0//",
+                "s3://tests/data/delta-0.8.0",
+            ),
+            ("s3://bucket/my table", "s3://bucket/my%20table"),
+        ];
+
+        for (case, expected) in map_cases {
+            let uri = ensure_table_uri(case).unwrap();
+            assert_eq!(expected, &uri.as_str());
+        }
+    }
+
+    #[test]
+    fn test_ensure_table_uri_path() {
+        let tmp_dir = tempdir::TempDir::new("test").unwrap();
+        let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
+        let paths = &[
+            tmp_path.join("data/delta-0.8.0"),
+            tmp_path.join("space in path"),
+            tmp_path.join("special&chars/你好/😊"),
+        ];
+
+        for path in paths {
+            assert!(!path.exists());
+            let expected = Url::parse(&format!("file://{}", path.to_str().unwrap())).unwrap();
+            let uri = ensure_table_uri(path.as_os_str().to_str().unwrap()).unwrap();
+            assert_eq!(expected, uri);
+            assert!(path.exists());
+        }
+
+        // Creates non-existent relative directories
+        let relative_path = Path::new("_tmp/test %3F");
+        assert!(!relative_path.exists());
+        ensure_table_uri(relative_path.as_os_str().to_str().unwrap()).unwrap();
+        assert!(relative_path.exists());
+        std::fs::remove_dir_all(relative_path).unwrap();
+    }
+
+    #[test]
+    fn test_ensure_table_uri_url() {
+        // Urls should round trips as-is
+        let expected = Url::parse("s3://tests/data/delta-0.8.0").unwrap();
+        let url = ensure_table_uri(&expected).unwrap();
+        assert_eq!(expected, url);
+
+        let tmp_dir = tempdir::TempDir::new("test").unwrap();
+        let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
+        let path = tmp_path.join("data/delta-0.8.0");
+        let expected = Url::parse(&format!("file://{}", path.to_str().unwrap())).unwrap();
+        let url = ensure_table_uri(&expected).unwrap();
+        assert_eq!(expected, url);
     }
 }
