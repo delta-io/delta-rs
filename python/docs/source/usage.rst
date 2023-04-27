@@ -404,8 +404,8 @@ into a large file. Bin-packing reduces the number of API calls required for read
 Optimizing will increments the table's version and creates remove actions for optimized files.
 Optimize does not delete files from storage. To delete files that were removed, call :meth:`DeltaTable.vacuum`.
 
-Use :meth:`DeltaTable.optimize` to perform the optimize operation. Note that currently optimize only supports
-append-only workflows. Use with other workflows may corrupt your table state.
+Use :meth:`DeltaTable.optimize` to perform the optimize operation. Note that this method will fail if a
+concurrent writer performs an operation that removes any files (such as an overwrite).
 
 .. code-block:: python
 

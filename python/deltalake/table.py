@@ -319,8 +319,18 @@ given filters.
             target_size: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
+        Compacts small files to reduce the total number of files in the table.
+
+        This operation is idempotent; if run twice on the same table (assuming it has
+        not been updated) it will do nothing the second time.
+
+        If this operation happens concurrently with any operations other than append,
+        it will fail.
+
         :param partition_filters: the partition filters that will be used for getting the matched files
-        :param target_size: desired file size after bin-packing files
+        :param target_size: desired file size after bin-packing files, in bytes. If not
+          provided, will attempt to read the table configuration value ``delta.targetFileSize``.
+          If that value isn't set, will use default value of 256MB.
         :return: the metrics from optimize
         """
         metrics = self._table.optimize(partition_filters, target_size)
