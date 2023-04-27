@@ -28,6 +28,7 @@ use crate::operations::write::write_execution_plan;
 use crate::storage::DeltaObjectStore;
 use crate::storage::ObjectStoreRef;
 use crate::table_state::DeltaTableState;
+use crate::DeltaDataTypeVersion;
 use crate::DeltaTable;
 use crate::DeltaTableError;
 
@@ -47,6 +48,7 @@ use datafusion::physical_plan::file_format::{wrap_partition_type_in_dict, FileSc
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::ExecutionPlan;
+use datafusion::physical_plan::RecordBatchStream;
 use datafusion::prelude::Expr;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::DFSchema;
@@ -57,8 +59,11 @@ use parquet::file::properties::WriterProperties;
 use serde_json::Map;
 use serde_json::Value;
 use std::collections::HashMap;
+use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+const PATH_COLUMN: &str = "__delta_rs_path";
 
 /// Delete Records from the Delta Table.
 /// See this module's documentaiton for more information
@@ -74,7 +79,7 @@ pub struct DeleteBuilder {
     /// Properties passed to underlying parquet writer for when files are rewritten
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
-    app_metadata: Option<HashMap<String, serde_json::Value>>,
+    app_metadata: Option<Map<String, serde_json::Value>>,
 }
 
 #[derive(Default, Debug)]
@@ -108,7 +113,6 @@ async fn find_files<'a>(
 ) -> DeltaResult<Vec<&'a Add>> {
     let mut files = Vec::new();
     let mut candidate_map: HashMap<String, &'a Add> = HashMap::new();
-    const PATH_COLUMN: &str = "__delta_rs_path";
 
     let table_partition_cols = snapshot
         .current_metadata()
@@ -175,38 +179,63 @@ async fn find_files<'a>(
     let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(filter, 1));
 
     let task_ctx = Arc::new(TaskContext::from(state));
-    for i in 0..limit.output_partitioning().partition_count() {
-        let mut stream = limit.execute(i, task_ctx.clone())?;
+    let partitions = limit.output_partitioning().partition_count();
+    let mut tasks = Vec::with_capacity(partitions);
 
-        while let Some(res) = stream.next().await {
-            let batch: RecordBatch = res?;
-            let array = batch
-                .column_by_name(PATH_COLUMN)
-                .unwrap()
-                .as_any()
-                .downcast_ref::<StringArray>()
-                .ok_or(DeltaTableError::Generic(format!(
-                    "Unable to downcast column {}",
-                    PATH_COLUMN
-                )))?;
+    for i in 0..partitions {
+        let stream = limit.execute(i, task_ctx.clone())?;
+        tasks.push(handle_stream(stream));
+    }
 
-            for path in array.into_iter() {
-                let path = path.ok_or(DeltaTableError::Generic(format!(
-                    "{} cannot be null",
-                    PATH_COLUMN
-                )))?;
-                match candidate_map.remove(path) {
-                    Some(action) => files.push(action),
-                    None => {
-                        return Err(DeltaTableError::Generic(
-                            "Unable to map __delta_rs_path to action.".to_owned(),
-                        ))
-                    }
+    for res in futures::future::join_all(tasks).await.into_iter() {
+        let path = res?;
+        if let Some(path) = path {
+            match candidate_map.remove(&path) {
+                Some(action) => files.push(action),
+                None => {
+                    return Err(DeltaTableError::Generic(
+                        "Unable to map __delta_rs_path to action.".to_owned(),
+                    ))
                 }
             }
         }
     }
+
     Ok(files)
+}
+
+async fn handle_stream(
+    mut stream: Pin<Box<dyn RecordBatchStream + Send>>,
+) -> Result<Option<String>, DeltaTableError> {
+    if let Some(maybe_batch) = stream.next().await {
+        let batch: RecordBatch = maybe_batch?;
+        if batch.num_rows() > 1 {
+            return Err(DeltaTableError::Generic(
+                "Find files returned multiple records for batch".to_owned(),
+            ));
+        }
+        let array = batch
+            .column_by_name(PATH_COLUMN)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or(DeltaTableError::Generic(format!(
+                "Unable to downcast column {}",
+                PATH_COLUMN
+            )))?;
+
+        let path = array
+            .into_iter()
+            .next()
+            .unwrap()
+            .ok_or(DeltaTableError::Generic(format!(
+                "{} cannot be null",
+                PATH_COLUMN
+            )))?;
+        return Ok(Some(path.to_string()));
+    }
+
+    Ok(None)
 }
 
 struct ExprProperties {
@@ -415,7 +444,7 @@ impl DeleteBuilder {
         mut self,
         metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
     ) -> Self {
-        self.app_metadata = Some(HashMap::from_iter(metadata));
+        self.app_metadata = Some(Map::from_iter(metadata));
         self
     }
 
@@ -548,7 +577,7 @@ async fn execute(
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     app_metadata: Option<Map<String, Value>>,
-) -> DeltaResult<DeleteMetrics> {
+) -> DeltaResult<((Vec<Action>, DeltaDataTypeVersion), DeleteMetrics)> {
     // TODO:
     // Metrics for records written and deleted
     let mut metrics = DeleteMetrics::default();
@@ -591,6 +620,7 @@ async fn execute(
         .as_millis() as i64;
 
     let mut actions: Vec<Action> = add_actions.into_iter().map(Action::add).collect();
+    let mut version = snapshot.version();
     metrics.num_removed_files = to_delete.len();
     metrics.num_added_files = actions.len();
 
@@ -613,7 +643,7 @@ async fn execute(
         let operation = DeltaOperation::Delete {
             predicate: Some(predicate.canonical_name()),
         };
-        commit(
+        version = commit(
             object_store.as_ref(),
             &actions,
             operation,
@@ -623,7 +653,7 @@ async fn execute(
         .await?;
     }
 
-    Ok(metrics)
+    Ok(((actions, version), metrics))
 }
 
 impl std::future::IntoFuture for DeleteBuilder {
@@ -631,7 +661,7 @@ impl std::future::IntoFuture for DeleteBuilder {
     type IntoFuture = BoxFuture<'static, Self::Output>;
 
     fn into_future(self) -> Self::IntoFuture {
-        let this = self;
+        let mut this = self;
 
         Box::pin(async move {
             let state = this.state.unwrap_or_else(|| {
@@ -643,17 +673,20 @@ impl std::future::IntoFuture for DeleteBuilder {
                 session.state()
             });
 
-            let metrics = execute(
+            let ((actions, version), metrics) = execute(
                 this.predicate,
                 this.store.clone(),
                 &this.snapshot,
                 state,
                 this.writer_properties,
-                None,
+                this.app_metadata,
             )
             .await?;
-            let mut table = DeltaTable::new_with_state(this.store, this.snapshot);
-            table.update().await?;
+
+            this.snapshot
+                .merge(DeltaTableState::from_actions(actions, version)?, true, true);
+            let table = DeltaTable::new_with_state(this.store, this.snapshot);
+
             Ok((table, metrics))
         })
     }
@@ -688,8 +721,7 @@ mod tests {
     async fn get_data(table: DeltaTable) -> Vec<RecordBatch> {
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(table)).unwrap();
-        ctx
-            .sql("select * from test")
+        ctx.sql("select * from test")
             .await
             .unwrap()
             .collect()
