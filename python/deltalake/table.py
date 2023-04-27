@@ -314,9 +314,9 @@ given filters.
         return self._table.vacuum(dry_run, retention_hours, enforce_retention_duration)
 
     def optimize(
-            self,
-            partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
-            target_size: Optional[int] = None,
+        self,
+        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+        target_size: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.

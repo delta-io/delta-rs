@@ -24,4 +24,4 @@ def test_optimize_run_table(
     dt = DeltaTable(table_path)
     dt.optimize()
     last_action = dt.history(1)[0]
-    assert last_action['operation'] == 'OPTIMIZE'
+    assert last_action["operation"] == "OPTIMIZE"

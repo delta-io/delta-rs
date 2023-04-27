@@ -16,8 +16,8 @@ use deltalake::builder::DeltaTableBuilder;
 use deltalake::checkpoints::create_checkpoint;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
-use deltalake::operations::transaction::commit;
 use deltalake::operations::optimize::OptimizeBuilder;
+use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
 use deltalake::{
@@ -321,7 +321,7 @@ impl RawDeltaTable {
         &mut self,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
         target_size: Option<DeltaDataTypeLong>,
-    ) -> PyResult<String>{
+    ) -> PyResult<String> {
         let mut cmd = OptimizeBuilder::new(self._table.object_store(), self._table.state.clone());
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
