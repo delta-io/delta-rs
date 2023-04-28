@@ -421,7 +421,7 @@ impl TableProvider for DeltaTable {
                 .iter()
                 .filter(|f| !table_partition_cols.contains(f.name()))
                 .cloned()
-                .collect(),
+                .collect::<Vec<arrow::datatypes::FieldRef>>(),
         ));
 
         let parquet_scan = ParquetFormat::new()
@@ -561,7 +561,7 @@ fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
         //Unsupported types...
         ArrowDataType::Float16
         | ArrowDataType::Decimal256(_, _)
-        | ArrowDataType::Union(_, _, _)
+        | ArrowDataType::Union(_, _)
         | ArrowDataType::Dictionary(_, _)
         | ArrowDataType::LargeList(_)
         | ArrowDataType::Struct(_)

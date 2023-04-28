@@ -2,7 +2,9 @@ use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow::datatypes::{
+    DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+};
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
 use datafusion_common::config::ConfigOptions;
@@ -109,12 +111,15 @@ impl DeltaTableState {
                     .clone()
                     .into_iter()
                     .map(|field| {
+                        // field is an &Arc<Field>
+                        let owned_field: ArrowField = field.as_ref().clone();
                         file_schema
                             .field_with_name(field.name())
+                            // yielded with &Field
                             .cloned()
-                            .unwrap_or(field)
+                            .unwrap_or(owned_field)
                     })
-                    .collect(),
+                    .collect::<Vec<ArrowField>>(),
             ));
 
             Ok(table_schema)
