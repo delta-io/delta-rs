@@ -14,6 +14,7 @@ use pyo3::prelude::*;
 use pyo3::types::IntoPyDict;
 use pyo3::{PyRef, PyResult};
 use regex::Regex;
+use std::sync::Arc;
 use std::collections::HashMap;
 
 // PyO3 doesn't yet support converting classes with inheritance with Python
@@ -1031,17 +1032,17 @@ impl PySchema {
 
                 ArrowDataType::List(f) => {
                     let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
-                    field.with_data_type(ArrowDataType::LargeList(Box::from(sub_field)))
+                    field.with_data_type(ArrowDataType::LargeList(Arc::new(sub_field)))
                 }
 
                 ArrowDataType::FixedSizeList(f, size) => {
                     let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
-                    field.with_data_type(ArrowDataType::FixedSizeList(Box::from(sub_field), size))
+                    field.with_data_type(ArrowDataType::FixedSizeList(Arc::new(sub_field), size))
                 }
 
                 ArrowDataType::Map(f, sorted) => {
                     let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
-                    field.with_data_type(ArrowDataType::Map(Box::from(sub_field), sorted))
+                    field.with_data_type(ArrowDataType::Map(Arc::new(sub_field), sorted))
                 }
 
                 ArrowDataType::Struct(fields) => {
@@ -1070,7 +1071,7 @@ impl PySchema {
                         let dt: ArrowDataType = f.data_type().clone();
                         let f: ArrowField = f.clone();
 
-                        convert_to_large_type(f, dt)
+                        convert_to_large_type(f.clone(), dt)
                     })
                     .collect(),
             );
