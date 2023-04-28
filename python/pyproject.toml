@@ -32,6 +32,7 @@ devel = [
     "pytest-mock",
     "pytest-cov",
     "pytest-timeout",
+    "pytest-asyncio",
     "sphinx<=4.5",
     "sphinx-rtd-theme",
     "toml",

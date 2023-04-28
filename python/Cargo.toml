@@ -34,7 +34,11 @@ reqwest = { version = "*", features = ["native-tls-vendored"] }
 
 [dependencies.pyo3]
 version = "0.18"
-features = ["extension-module", "abi3", "abi3-py37"]
+features = ["extension-module", "abi3", "abi3-py37", "auto-initialize"]
+
+[dependencies.pyo3-asyncio]
+version = "0.18"
+features = ["tokio-runtime"]
 
 [dependencies.deltalake]
 path = "../rust"

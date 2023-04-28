@@ -1,13 +1,14 @@
 import pyarrow
 import pytest
 
-from deltalake import DeltaTable, Field
+from deltalake import DeltaTable, DeltaTableAsync, Field
 from deltalake.schema import ArrayType, MapType, PrimitiveType, Schema, StructType
 
 
-def test_table_schema():
+@pytest.mark.parametrize("table", [DeltaTable, DeltaTableAsync])
+def test_table_schema(table):
     table_path = "../rust/tests/data/simple_table"
-    dt = DeltaTable(table_path)
+    dt = table(table_path)
     schema = dt.schema()
     assert schema.json() == {
         "fields": [{"metadata": {}, "name": "id", "nullable": True, "type": "long"}],
@@ -27,9 +28,10 @@ def test_table_schema():
     )
 
 
-def test_table_schema_pyarrow_simple():
+@pytest.mark.parametrize("table", [DeltaTable, DeltaTableAsync])
+def test_table_schema_pyarrow_simple(table):
     table_path = "../rust/tests/data/simple_table"
-    dt = DeltaTable(table_path)
+    dt = table(table_path)
     schema = dt.schema().to_pyarrow()
     field = schema.field(0)
     assert len(schema.types) == 1
@@ -39,9 +41,10 @@ def test_table_schema_pyarrow_simple():
     assert field.metadata is None
 
 
-def test_table_schema_pyarrow_020():
+@pytest.mark.parametrize("table", [DeltaTable, DeltaTableAsync])
+def test_table_schema_pyarrow_020(table):
     table_path = "../rust/tests/data/delta-0.2.0"
-    dt = DeltaTable(table_path)
+    dt = table(table_path)
     schema = dt.schema().to_pyarrow()
     field = schema.field(0)
     assert len(schema.types) == 1
@@ -205,6 +208,6 @@ def test_delta_schema():
         Field("x", "integer", nullable=True),
         Field("y", ArrayType("string", contains_null=True), nullable=False),
     ]
-    schema_without_metadata = schema = Schema(fields)
+    schema_without_metadata = Schema(fields)
     pa_schema = schema_without_metadata.to_pyarrow()
     assert schema_without_metadata == Schema.from_pyarrow(pa_schema)
