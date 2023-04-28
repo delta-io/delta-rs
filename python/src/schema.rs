@@ -1,7 +1,8 @@
 extern crate pyo3;
 
 use deltalake::arrow::datatypes::{
-    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema,
+    DataType as ArrowDataType, Field as ArrowField, FieldRef as ArrowFieldRef,
+    Schema as ArrowSchema,
 };
 use deltalake::arrow::error::ArrowError;
 use deltalake::arrow::pyarrow::PyArrowType;
@@ -14,7 +15,6 @@ use pyo3::prelude::*;
 use pyo3::types::IntoPyDict;
 use pyo3::{PyRef, PyResult};
 use regex::Regex;
-use std::sync::Arc;
 use std::collections::HashMap;
 
 // PyO3 doesn't yet support converting classes with inheritance with Python
@@ -1024,25 +1024,31 @@ impl PySchema {
             .try_into()
             .map_err(|err: ArrowError| PyException::new_err(err.to_string()))?;
 
-        fn convert_to_large_type(field: ArrowField, dt: ArrowDataType) -> ArrowField {
+        fn convert_to_large_type(field: ArrowFieldRef, dt: ArrowDataType) -> ArrowFieldRef {
             match dt {
-                ArrowDataType::Utf8 => field.with_data_type(ArrowDataType::LargeUtf8),
+                ArrowDataType::Utf8 => field.with_data_type(ArrowDataType::LargeUtf8).into(),
 
-                ArrowDataType::Binary => field.with_data_type(ArrowDataType::LargeBinary),
+                ArrowDataType::Binary => field.with_data_type(ArrowDataType::LargeBinary).into(),
 
                 ArrowDataType::List(f) => {
-                    let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
-                    field.with_data_type(ArrowDataType::LargeList(Arc::new(sub_field)))
+                    let sub_field = convert_to_large_type(f.clone(), f.data_type().clone());
+                    field
+                        .with_data_type(ArrowDataType::LargeList(sub_field))
+                        .into()
                 }
 
                 ArrowDataType::FixedSizeList(f, size) => {
-                    let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
-                    field.with_data_type(ArrowDataType::FixedSizeList(Arc::new(sub_field), size))
+                    let sub_field = convert_to_large_type(f.clone(), f.data_type().clone());
+                    field
+                        .with_data_type(ArrowDataType::FixedSizeList(sub_field, size))
+                        .into()
                 }
 
                 ArrowDataType::Map(f, sorted) => {
-                    let sub_field = convert_to_large_type(*f.clone(), f.data_type().clone());
-                    field.with_data_type(ArrowDataType::Map(Arc::new(sub_field), sorted))
+                    let sub_field = convert_to_large_type(f.clone(), f.data_type().clone());
+                    field
+                        .with_data_type(ArrowDataType::Map(sub_field, sorted))
+                        .into()
                 }
 
                 ArrowDataType::Struct(fields) => {
@@ -1050,13 +1056,13 @@ impl PySchema {
                         .iter()
                         .map(|f| {
                             let dt: ArrowDataType = f.data_type().clone();
-                            let f: ArrowField = f.clone();
-
-                            convert_to_large_type(f, dt)
+                            convert_to_large_type(f.clone(), dt)
                         })
                         .collect();
 
-                    field.with_data_type(ArrowDataType::Struct(sub_fields))
+                    field
+                        .with_data_type(ArrowDataType::Struct(sub_fields))
+                        .into()
                 }
 
                 _ => field,
@@ -1069,11 +1075,9 @@ impl PySchema {
                     .iter()
                     .map(|f| {
                         let dt: ArrowDataType = f.data_type().clone();
-                        let f: ArrowField = f.clone();
-
                         convert_to_large_type(f.clone(), dt)
                     })
-                    .collect(),
+                    .collect::<Vec<ArrowFieldRef>>(),
             );
 
             Ok(PyArrowType(schema))
