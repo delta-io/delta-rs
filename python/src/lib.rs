@@ -321,18 +321,6 @@ impl RawDeltaTable {
             .collect())
     }
 
-    pub fn arrow_schema_json(&self) -> PyResult<String> {
-        let schema = self
-            ._table
-            .get_schema()
-            .map_err(PyDeltaTableError::from_raw)?;
-        serde_json::to_string(
-            &<ArrowSchema as TryFrom<&deltalake::Schema>>::try_from(schema)
-                .map_err(PyDeltaTableError::from_arrow)?,
-        )
-        .map_err(|_| PyDeltaTableError::new_err("Got invalid table schema"))
-    }
-
     pub fn update_incremental(&mut self) -> PyResult<()> {
         rt()?
             .block_on(self._table.update_incremental(None))
