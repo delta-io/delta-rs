@@ -41,15 +41,13 @@ jobs:
           node-version: "18"
       - run: npm install @commitlint/config-conventional
       - run: >
-          echo 'module.exports = {
-            // Workaround for https://github.com/dependabot/dependabot-core/issues/5923
-            "ignores": [(message) => /^Bumps \[.+]\(.+\) from .+ to .+\.$/m.test(message)]
-          }' > .commitlintrc.js
-      - run: npx commitlint --extends @commitlint/config-conventional --verbose <<< $COMMIT_MSG
+          npx commitlint \
+            --extends @commitlint/config-conventional \
+            --verbose <<< $COMMIT_MSG
         env:
           COMMIT_MSG: >
             ${{ github.event.pull_request.title }}
-
+            
             ${{ github.event.pull_request.body }}
       - if: failure()
         uses: actions/github-script@v6
@@ -57,8 +55,8 @@ jobs:
           script: |
             const message = `**ACTION NEEDED**
               
-              delta-rs follows the [Conventional Commits
-              specification](https://www.conventionalcommits.org/en/v1.0.0/) for
+              delta-rs follows the [Conventional Commits\
+              specification](https://www.conventionalcommits.org/en/v1.0.0/) for\
               release automation.
 
               The PR title and description are used as the merge commit message.\
