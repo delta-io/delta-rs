@@ -51,6 +51,9 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::RecordBatchStream;
 use datafusion::prelude::Expr;
 use datafusion_common::scalar::ScalarValue;
+use datafusion_common::tree_node::TreeNode;
+use datafusion_common::tree_node::TreeNodeVisitor;
+use datafusion_common::tree_node::VisitRecursion;
 use datafusion_common::DFSchema;
 use datafusion_expr::Volatility;
 use futures::future::BoxFuture;
@@ -239,172 +242,88 @@ async fn handle_stream(
 }
 
 struct ExprProperties {
+    partition_columns: Vec<String>,
+
     partition_only: bool,
+    volaility: Volatility,
+    maybe_error: Option<DeltaTableError>,
 }
 
 /// Ensure only expressions that make sense are accepted, check for
 /// non-deterministic functions, and determine if the expression only contains
 /// partition columns
-fn validate_expr(
-    expr: &Expr,
-    partition_columns: &Vec<String>,
-    properties: &mut ExprProperties,
-) -> DeltaResult<()> {
-    // TODO: We can likely relax the volatility to STABLE. Would require further
-    // research to confirm the same value is generated during the scan and
-    // rewrite phases.
-    match expr {
-        Expr::ScalarVariable(_, _) | Expr::Literal(_) => (),
-        Expr::Alias(expr, _) => validate_expr(expr, partition_columns, properties)?,
-        Expr::Column(c) => {
-            if !partition_columns.contains(&c.name) {
-                properties.partition_only = false;
-            }
-        }
-        Expr::BinaryExpr(bin) => {
-            validate_expr(&bin.left, partition_columns, properties)?;
-            validate_expr(&bin.right, partition_columns, properties)?;
-        }
-        Expr::Like(like) => {
-            validate_expr(&like.expr, partition_columns, properties)?;
-        }
-        Expr::ILike(like) => {
-            validate_expr(&like.expr, partition_columns, properties)?;
-        }
-        Expr::SimilarTo(like) => {
-            validate_expr(&like.expr, partition_columns, properties)?;
-        }
-        Expr::Not(expr)
-        | Expr::IsNotNull(expr)
-        | Expr::IsNull(expr)
-        | Expr::IsTrue(expr)
-        | Expr::IsFalse(expr)
-        | Expr::IsUnknown(expr)
-        | Expr::IsNotTrue(expr)
-        | Expr::IsNotFalse(expr)
-        | Expr::IsNotUnknown(expr)
-        | Expr::Negative(expr) => validate_expr(expr, partition_columns, properties)?,
-        Expr::GetIndexedField(index_field) => {
-            validate_expr(&index_field.expr, partition_columns, properties)?
-        }
-        Expr::Between(between) => {
-            validate_expr(&between.expr, partition_columns, properties)?;
-            validate_expr(&between.low, partition_columns, properties)?;
-            validate_expr(&between.high, partition_columns, properties)?;
-        }
-        Expr::Case(case) => {
-            if let Some(expr) = &case.expr {
-                validate_expr(expr, partition_columns, properties)?;
-            }
+impl TreeNodeVisitor for ExprProperties {
+    type N = Expr;
 
-            if let Some(expr) = &case.else_expr {
-                validate_expr(expr, partition_columns, properties)?;
-            }
+    fn pre_visit(&mut self, expr: &Self::N) -> datafusion_common::Result<VisitRecursion> {
+        // TODO: We can likely relax the volatility to STABLE. Would require further
+        // research to confirm the same value is generated during the scan and
+        // rewrite phases.
 
-            for (when, then) in &case.when_then_expr {
-                validate_expr(when, partition_columns, properties)?;
-                validate_expr(then, partition_columns, properties)?;
+        match expr {
+            Expr::Column(c) => {
+                if !self.partition_columns.contains(&c.name) {
+                    self.partition_only = false;
+                }
             }
-        }
-        Expr::Cast(cast) => validate_expr(&cast.expr, partition_columns, properties)?,
-        Expr::TryCast(try_cast) => validate_expr(&try_cast.expr, partition_columns, properties)?,
-        Expr::Sort(_) => {
-            return Err(DeltaTableError::Generic(
-                "Sort expression is not allowed Delete operation".to_string(),
-            ))
-        }
-        Expr::ScalarFunction { fun, args } => match fun.volatility() {
-            Volatility::Immutable => {
-                for e in args {
-                    validate_expr(e, partition_columns, properties)?;
+            Expr::ScalarVariable(_, _)
+            | Expr::Literal(_)
+            | Expr::Alias(_, _)
+            | Expr::BinaryExpr(_)
+            | Expr::Like(_)
+            | Expr::ILike(_)
+            | Expr::SimilarTo(_)
+            | Expr::Not(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
+            | Expr::Negative(_)
+            | Expr::InList { .. }
+            | Expr::GetIndexedField(_)
+            | Expr::Between(_)
+            | Expr::Case(_)
+            | Expr::Cast(_)
+            | Expr::TryCast(_) => (),
+            Expr::ScalarFunction { fun, .. } => {
+                self.volaility = self.volaility.max(fun.volatility());
+                if self.volaility > Volatility::Immutable {
+                    self.maybe_error = Some(DeltaTableError::Generic(format!(
+                        "Delete predicate contains nondeterministic function {}",
+                        fun
+                    )));
+                    return Ok(VisitRecursion::Stop);
+                }
+            }
+            Expr::ScalarUDF { fun, .. } => {
+                self.volaility = self.volaility.max(fun.signature.volatility);
+                if self.volaility > Volatility::Immutable {
+                    self.maybe_error = Some(DeltaTableError::Generic(format!(
+                        "Delete predicate contains nondeterministic function {}",
+                        fun.name
+                    )));
+                    return Ok(VisitRecursion::Stop);
                 }
             }
             _ => {
-                return Err(DeltaTableError::Generic(
-                    "Nondeterministic functions are not allowed in delete expression".to_string(),
-                ))
-            }
-        },
-        Expr::ScalarUDF { fun, args } => match fun.signature.volatility {
-            Volatility::Immutable => {
-                for e in args {
-                    validate_expr(e, partition_columns, properties)?;
-                }
-            }
-            _ => {
-                return Err(DeltaTableError::Generic(
-                    "Nondeterministic functions are not allowed in delete expression".to_string(),
-                ))
-            }
-        },
-        Expr::AggregateFunction(_) => {
-            return Err(DeltaTableError::Generic(
-                "Aggregate Function is not allowed in delete expression".to_string(),
-            ))
-        }
-        Expr::WindowFunction(_) => {
-            return Err(DeltaTableError::Generic(
-                "Window Function is not allowed in delete expression".to_string(),
-            ))
-        }
-        Expr::AggregateUDF { .. } => {
-            return Err(DeltaTableError::Generic(
-                "Aggregates UDF is not allowed in delete expression".to_string(),
-            ))
-        }
-        Expr::InList { expr, list, .. } => {
-            validate_expr(expr, partition_columns, properties)?;
-            for e in list {
-                validate_expr(e, partition_columns, properties)?;
+                self.maybe_error = Some(DeltaTableError::Generic(format!(
+                    "Delete predicate contains unsupported expression {}",
+                    expr
+                )));
+                return Ok(VisitRecursion::Stop);
             }
         }
-        Expr::Exists { .. } => {
-            return Err(DeltaTableError::Generic(
-                "Exists expression is not allowed in delete expression".to_string(),
-            ))
-        }
-        Expr::InSubquery { .. } => {
-            return Err(DeltaTableError::Generic(
-                "Subquery expression is not allowed in delete expression".to_string(),
-            ))
-        }
-        Expr::ScalarSubquery(_) => {
-            return Err(DeltaTableError::Generic(
-                "Subquery expression is not allowed in delete expression".to_string(),
-            ))
-        }
-        Expr::Wildcard => {
-            return Err(DeltaTableError::Generic(
-                "Wildcard expression is not allowed in delete expression".to_string(),
-            ))
-        }
-        Expr::QualifiedWildcard { .. } => {
-            return Err(DeltaTableError::Generic(
-                "Qualified Wildcard expression is not allowed in delete expression".to_string(),
-            ))
-        }
-        Expr::GroupingSet(_) => {
-            return Err(DeltaTableError::Generic(
-                "Group By expression is not allowed in delete expression".to_string(),
-            ))
-        }
-        Expr::Placeholder { .. } => {
-            return Err(DeltaTableError::Generic(
-                "Placeholder expression is not allowed in delete expression".to_string(),
-            ))
-        }
-        Expr::OuterReferenceColumn(_, _) => {
-            return Err(DeltaTableError::Generic(
-                "OuterReferenceColumn is not allowed in delete expression".to_string(),
-            ))
-        }
+
+        Ok(VisitRecursion::Continue)
     }
-
-    Ok(())
 }
 
 impl DeleteBuilder {
-    /// TODO
+    /// Create a new [`DeleteBuilder`]
     pub fn new(object_store: ObjectStoreRef, snapshot: DeltaTableState) -> Self {
         Self {
             predicate: None,
@@ -585,19 +504,23 @@ async fn execute(
 
     let (add_actions, to_delete) = match &predicate {
         Some(expr) => {
-            let mut expr_properties = ExprProperties {
-                partition_only: true,
-            };
-
             let current_metadata = snapshot
                 .current_metadata()
                 .ok_or(DeltaTableError::NoMetadata)?;
 
-            validate_expr(
-                expr,
-                &current_metadata.partition_columns,
-                &mut expr_properties,
-            )?;
+            let mut expr_properties = ExprProperties {
+                partition_only: true,
+                partition_columns: current_metadata.partition_columns.clone(),
+                volaility: Volatility::Immutable,
+                maybe_error: None,
+            };
+
+            TreeNode::visit(expr, &mut expr_properties)?;
+
+            if let Some(err) = expr_properties.maybe_error {
+                return Err(err);
+            }
+
             excute_non_empty_expr(
                 snapshot,
                 object_store.clone(),
@@ -928,7 +851,6 @@ mod tests {
     #[tokio::test]
     async fn test_failure_nondeterministic_query() {
         // Deletion requires a deterministic predicate
-        // Currently Datafusion does not provide an easy way to determine that. See arrow-datafusion/issues/3618
 
         let table = setup_table(None).await;
 
