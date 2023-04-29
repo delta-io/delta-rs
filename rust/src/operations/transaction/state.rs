@@ -43,8 +43,7 @@ impl DeltaTableState {
                     .map(|f| {
                         let field = ArrowField::try_from(f)?;
                         let corrected = match field.data_type() {
-                            // TODO Datafusion seems to currently not implement comparsion kernes for booleans in
-                            // dict arrays, so we have to omit converting that type for now.
+                            // Dictionary encoding columns bools is a waste of space
                             DataType::Boolean => field.data_type().clone(),
                             _ => wrap_partition_type_in_dict(field.data_type().clone()),
                         };
