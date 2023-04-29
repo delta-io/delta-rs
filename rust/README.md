@@ -41,15 +41,16 @@ cargo run --example read_delta_table
 
 ## Optional cargo package features
 
-- `s3` - enable the S3 storage backend to work with Delta Tables in AWS S3. Uses [rustls](https://github.com/ctz/rustls).
-- `s3-native-tls` - enable the S3 storage backend but rely on OpenSSL.
-- `glue` - enable the Glue data catalog to work with Delta Tables with AWS Glue.
 - `azure` - enable the Azure storage backend to work with Delta Tables in Azure Data Lake Storage Gen2 accounts.
-- `gcs` - enable the Google storage backend to work with Delta Tables in Google Cloud Storage.
 - `datafusion` - enable the `datafusion::datasource::TableProvider` trait implementation for Delta Tables, allowing them to be queried using [DataFusion](https://github.com/apache/arrow-datafusion).
 - `datafusion-ext` - DEPRECATED: alias for `datafusion` feature
-- `parquet2` - use parquet2 for checkpoint deserialization. Since `arrow` and `parquet` features are enabled by default for backwards compatibility, this feature needs to be used with `--no-default-features`.
+- `gcs` - enable the Google storage backend to work with Delta Tables in Google Cloud Storage.
+- `glue` - enable the Glue data catalog to work with Delta Tables with AWS Glue.
 - `hdfs` - enable the HDFS storage backend to work with Delta Tables in HDFS.
+- `json` - enable the JSON feature of the `parquet` crate for better JSON interoperability.
+- `parquet2` - use parquet2 for checkpoint deserialization. Since `arrow` and `parquet` features are enabled by default for backwards compatibility, this feature needs to be used with `--no-default-features`.
+- `s3` - enable the S3 storage backend to work with Delta Tables in AWS S3. Uses [rustls](https://github.com/ctz/rustls).
+- `s3-native-tls` - enable the S3 storage backend but rely on OpenSSL.
 
 ## Development
 
