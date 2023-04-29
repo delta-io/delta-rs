@@ -48,7 +48,6 @@ impl DeltaTableState {
                             DataType::Boolean => field.data_type().clone(),
                             _ => wrap_partition_type_in_dict(field.data_type().clone()),
                         };
-                        // let dict_type = wrap_partition_type_in_dict(field.data_type().clone());
                         Ok(field.with_data_type(corrected))
                     }),
             )
