@@ -473,7 +473,7 @@ pub mod hdfs_cli {
 
     pub fn create_dir(dir_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
         let path = hdfs_cli_path();
-        let mut child = Command::new(&path)
+        let mut child = Command::new(path)
             .args([
                 "dfs",
                 "-mkdir",
@@ -487,7 +487,7 @@ pub mod hdfs_cli {
 
     pub fn delete_dir(dir_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
         let path = hdfs_cli_path();
-        let mut child = Command::new(&path)
+        let mut child = Command::new(path)
             .args([
                 "dfs",
                 "-rm",
