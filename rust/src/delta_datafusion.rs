@@ -59,12 +59,8 @@ use url::Url;
 
 use crate::action::Add;
 use crate::builder::ensure_table_uri;
-<<<<<<< HEAD
-=======
-use crate::schema;
 use crate::storage::ObjectStoreRef;
 use crate::table_state::DeltaTableState;
->>>>>>> 56907ec (Rebase delete operation on main)
 use crate::{action, open_table, open_table_with_storage_options, SchemaDataType};
 use crate::{DeltaResult, Invariant};
 use crate::{DeltaTable, DeltaTableError};
@@ -383,8 +379,13 @@ pub(crate) async fn parquet_scan_from_actions(
             .iter()
             .filter(|f| !table_partition_cols.contains(f.name()))
             .cloned()
-            .collect(),
+            .collect::<Vec<arrow::datatypes::FieldRef>>(),
     ));
+
+    let table_partition_cols = table_partition_cols
+        .iter()
+        .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
+        .collect::<Result<Vec<_>, ArrowError>>()?;
 
     ParquetFormat::new()
         .create_physical_plan(
@@ -396,17 +397,7 @@ pub(crate) async fn parquet_scan_from_actions(
                 statistics: snapshot.datafusion_table_statistics(),
                 projection: projection.cloned(),
                 limit,
-                table_partition_cols: table_partition_cols
-                    .iter()
-                    .map(|c| {
-                        Ok((
-                            c.to_owned(),
-                            wrap_partition_type_in_dict(
-                                schema.field_with_name(c)?.data_type().clone(),
-                            ),
-                        ))
-                    })
-                    .collect::<Result<Vec<_>, ArrowError>>()?,
+                table_partition_cols,
                 output_ordering: None,
                 infinite_source: false,
             },
@@ -475,40 +466,6 @@ impl TableProvider for DeltaTable {
             self.get_state().files().to_owned()
         };
 
-<<<<<<< HEAD
-        let table_partition_cols = self.get_metadata()?.partition_columns.clone();
-        let file_schema = Arc::new(ArrowSchema::new(
-            schema
-                .fields()
-                .iter()
-                .filter(|f| !table_partition_cols.contains(f.name()))
-                .cloned()
-                .collect::<Vec<arrow::datatypes::FieldRef>>(),
-        ));
-
-        let table_partition_cols = table_partition_cols
-            .iter()
-            .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
-            .collect::<Result<Vec<_>, ArrowError>>()?;
-
-        let parquet_scan = ParquetFormat::new()
-            .create_physical_plan(
-                session,
-                FileScanConfig {
-                    object_store_url: self.storage.object_store_url(),
-                    file_schema,
-                    file_groups: file_groups.into_values().collect(),
-                    statistics: self.datafusion_table_statistics(),
-                    projection: projection.cloned(),
-                    limit,
-                    table_partition_cols,
-                    output_ordering: None,
-                    infinite_source: false,
-                },
-                filter_expr.as_ref(),
-            )
-            .await?;
-=======
         let parquet_scan = parquet_scan_from_actions(
             &self.state,
             self.object_store(),
@@ -520,7 +477,6 @@ impl TableProvider for DeltaTable {
             limit,
         )
         .await?;
->>>>>>> 56907ec (Rebase delete operation on main)
 
         Ok(Arc::new(DeltaScan {
             table_uri: ensure_table_uri(self.table_uri())?.as_str().into(),

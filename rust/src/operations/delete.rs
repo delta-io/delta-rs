@@ -419,7 +419,7 @@ async fn excute_non_empty_expr(
             .iter()
             .filter(|f| !table_partition_cols.contains(f.name()))
             .cloned()
-            .collect(),
+            .collect::<Vec<_>>(),
     ));
     let expr = logical_expr_to_physical_expr(expression, &schema);
 
@@ -708,6 +708,16 @@ fn new_array_builder(t: DataType, capacity: usize) -> DeltaResult<Box<dyn ArrayB
     })
 }
 
+fn get_inner_type(t: DataType) -> DeltaResult<DataType> {
+    match t {
+        DataType::Dictionary(_, value) => Ok(value.as_ref().to_owned()),
+        _ => Err(DeltaTableError::Generic(format!(
+            "Unable to create builder for arrow type {}",
+            t
+        ))),
+    }
+}
+
 // Create a record batch that contains the partition columns plus the path of the file
 fn create_partition_record_batch(
     snapshot: &DeltaTableState,
@@ -723,6 +733,7 @@ fn create_partition_record_batch(
             .unwrap()
             .data_type()
             .to_owned();
+        let t = get_inner_type(t)?;
         let builder = new_array_builder(t, cap)?;
         builders.push(builder);
     }
@@ -738,10 +749,14 @@ fn create_partition_record_batch(
                 .unwrap()
                 .data_type()
                 .to_owned();
+
+            // Partitions values are wrapped in a dictionary
+
             let value = match value {
                 Some(v) => v.to_owned(),
                 None => None,
             };
+            let t = get_inner_type(t)?;
             append_option_str(builder, value, t)?;
         }
         path_builder.append_value(action.path.clone());
@@ -756,11 +771,10 @@ fn create_partition_record_batch(
     let mut fields = Vec::new();
     for partition in partition_columns {
         let column = arrow_schema.field_with_name(partition).unwrap();
-        let field = Field::new(
-            partition,
-            column.data_type().to_owned(),
-            column.is_nullable(),
-        );
+
+        let t = column.data_type().to_owned();
+        let t = get_inner_type(t)?;
+        let field = Field::new(partition, t, column.is_nullable());
         fields.push(field);
     }
     fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
