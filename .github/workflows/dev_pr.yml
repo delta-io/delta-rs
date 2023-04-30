@@ -48,7 +48,8 @@ jobs:
         env:
           COMMIT_MSG: >
             ${{ github.event.pull_request.title }}
-            \n
+
+
             ${{ github.event.pull_request.body }}
       - if: failure()
         uses: actions/github-script@v6
