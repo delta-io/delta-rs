@@ -43,8 +43,14 @@ impl DeltaTableState {
                     .map(|f| {
                         let field = ArrowField::try_from(f)?;
                         let corrected = match field.data_type() {
-                            // Dictionary encoding columns bools is a waste of space
-                            DataType::Boolean => field.data_type().clone(),
+                            // Dictionary encoding for types around the size of dictionary values does not make much sense.
+                            DataType::Boolean
+                            | DataType::Int8
+                            | DataType::Int16
+                            | DataType::Int32
+                            | DataType::Utf8
+                            | DataType::UInt16
+                            | DataType::UInt32 => field.data_type().clone(),
                             _ => wrap_partition_type_in_dict(field.data_type().clone()),
                         };
                         Ok(field.with_data_type(corrected))
