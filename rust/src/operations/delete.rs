@@ -33,13 +33,30 @@ use crate::DeltaTable;
 use crate::DeltaTableError;
 
 use crate::action::{Action, Add, Remove};
+use arrow::array::ArrayBuilder;
+use arrow::array::ArrayRef;
+
+use arrow::array::BooleanBuilder;
+use arrow::array::Float32Builder;
+use arrow::array::Float64Builder;
+use arrow::array::Int16Builder;
+use arrow::array::Int32Builder;
+use arrow::array::Int64Builder;
+use arrow::array::Int8Builder;
 use arrow::array::StringArray;
+use arrow::array::StringBuilder;
+use arrow::array::UInt16Builder;
+use arrow::array::UInt32Builder;
+use arrow::array::UInt64Builder;
+use arrow::array::UInt8Builder;
 use arrow::datatypes::DataType;
+use arrow::datatypes::Field;
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
 use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::MemTable;
 use datafusion::execution::context::ExecutionProps;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_expr::create_physical_expr;
@@ -55,6 +72,7 @@ use datafusion_common::tree_node::TreeNode;
 use datafusion_common::tree_node::TreeNodeVisitor;
 use datafusion_common::tree_node::VisitRecursion;
 use datafusion_common::DFSchema;
+use datafusion_expr::col;
 use datafusion_expr::Volatility;
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
@@ -63,6 +81,7 @@ use serde_json::Map;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
@@ -246,7 +265,7 @@ struct ExprProperties {
 
     partition_only: bool,
     volaility: Volatility,
-    maybe_error: Option<DeltaTableError>,
+    result: DeltaResult<()>,
 }
 
 /// Ensure only expressions that make sense are accepted, check for
@@ -292,7 +311,7 @@ impl TreeNodeVisitor for ExprProperties {
             Expr::ScalarFunction { fun, .. } => {
                 self.volaility = self.volaility.max(fun.volatility());
                 if self.volaility > Volatility::Immutable {
-                    self.maybe_error = Some(DeltaTableError::Generic(format!(
+                    self.result = Err(DeltaTableError::Generic(format!(
                         "Delete predicate contains nondeterministic function {}",
                         fun
                     )));
@@ -302,7 +321,7 @@ impl TreeNodeVisitor for ExprProperties {
             Expr::ScalarUDF { fun, .. } => {
                 self.volaility = self.volaility.max(fun.signature.volatility);
                 if self.volaility > Volatility::Immutable {
-                    self.maybe_error = Some(DeltaTableError::Generic(format!(
+                    self.result = Err(DeltaTableError::Generic(format!(
                         "Delete predicate contains nondeterministic function {}",
                         fun.name
                     )));
@@ -310,7 +329,7 @@ impl TreeNodeVisitor for ExprProperties {
                 }
             }
             _ => {
-                self.maybe_error = Some(DeltaTableError::Generic(format!(
+                self.result = Err(DeltaTableError::Generic(format!(
                     "Delete predicate contains unsupported expression {}",
                     expr
                 )));
@@ -381,14 +400,13 @@ async fn excute_non_empty_expr(
     expression: &Expr,
     metrics: &mut DeleteMetrics,
     writer_properties: Option<WriterProperties>,
-    expr_properties: ExprProperties,
 ) -> DeltaResult<(Vec<Add>, Vec<Add>)> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
 
     let schema = snapshot.arrow_schema().unwrap();
+    let scan_start = Instant::now();
 
-    //TODO: Move this to a function.
     let table_partition_cols = snapshot
         .current_metadata()
         .ok_or(DeltaTableError::NoMetadata)
@@ -414,16 +432,6 @@ async fn excute_non_empty_expr(
         .filter_map(|(action, keep)| if keep { Some(action) } else { None })
         .collect();
 
-    // The expression only contains partition columns so the scan can be skipped.
-    // This assumes pruning works correctly for partitions
-    if expr_properties.partition_only {
-        return Ok((
-            Vec::new(),
-            files.into_iter().map(|x| x.to_owned()).collect(),
-        ));
-    }
-
-    let scan_start = Instant::now();
     // Create a new delta scan plan with only files that have a record
     let rewrite = find_files(
         snapshot,
@@ -497,8 +505,6 @@ async fn execute(
     writer_properties: Option<WriterProperties>,
     app_metadata: Option<Map<String, Value>>,
 ) -> DeltaResult<((Vec<Action>, DeltaDataTypeVersion), DeleteMetrics)> {
-    // TODO:
-    // Metrics for records written and deleted
     let mut metrics = DeleteMetrics::default();
     let exec_start = Instant::now();
 
@@ -512,25 +518,28 @@ async fn execute(
                 partition_only: true,
                 partition_columns: current_metadata.partition_columns.clone(),
                 volaility: Volatility::Immutable,
-                maybe_error: None,
+                result: Ok(()),
             };
 
             TreeNode::visit(expr, &mut expr_properties)?;
+            expr_properties.result?;
 
-            if let Some(err) = expr_properties.maybe_error {
-                return Err(err);
+            if expr_properties.partition_only {
+                let scan_start = Instant::now();
+                let remove = scan_memory_table(snapshot, expr).await?;
+                metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
+                (Vec::new(), remove)
+            } else {
+                excute_non_empty_expr(
+                    snapshot,
+                    object_store.clone(),
+                    &state,
+                    expr,
+                    &mut metrics,
+                    writer_properties,
+                )
+                .await?
             }
-
-            excute_non_empty_expr(
-                snapshot,
-                object_store.clone(),
-                &state,
-                expr,
-                &mut metrics,
-                writer_properties,
-                expr_properties,
-            )
-            .await?
         }
         None => (Vec::<Add>::new(), snapshot.files().to_owned()),
     };
@@ -577,6 +586,189 @@ async fn execute(
     }
 
     Ok(((actions, version), metrics))
+}
+
+async fn scan_memory_table(snapshot: &DeltaTableState, predicate: &Expr) -> DeltaResult<Vec<Add>> {
+    let actions = snapshot.files().to_owned();
+
+    let batch = create_partition_record_batch(snapshot, &actions)?;
+    let mem_table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+
+    let ctx = SessionContext::new();
+    let mut df = ctx.read_table(Arc::new(mem_table))?;
+    df = df
+        .filter(predicate.to_owned())?
+        .select(vec![col(PATH_COLUMN)])?;
+    let batches = df.collect().await?;
+
+    let mut map = HashMap::new();
+    for action in actions {
+        map.insert(action.path.clone(), action);
+    }
+    let mut files = Vec::new();
+
+    for batch in batches {
+        let array = batch
+            .column_by_name(PATH_COLUMN)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or(DeltaTableError::Generic(format!(
+                "Unable to downcast column {}",
+                PATH_COLUMN
+            )))?;
+        for path in array {
+            let path = path.ok_or(DeltaTableError::Generic(format!(
+                "{} cannot be null",
+                PATH_COLUMN
+            )))?;
+            let value = map.remove(path).unwrap();
+            files.push(value);
+        }
+    }
+
+    Ok(files)
+}
+
+macro_rules! append_builder {
+    ($builder:expr, $value:expr, $ARROW_BUILDER_TYPE:ident, $RUST_TYPE:ident) => {{
+        let array = $builder
+            .as_any_mut()
+            .downcast_mut::<$ARROW_BUILDER_TYPE>()
+            .unwrap();
+        let value = match $value {
+            Some(s) => {
+                Some(
+                    $RUST_TYPE::from_str(&s).map_err(|e| DeltaTableError::GenericError {
+                        source: Box::new(e),
+                    })?,
+                )
+            }
+            None => None,
+        };
+        array.append_option(value);
+    }};
+}
+
+fn append_option_str(
+    builder: &mut Box<dyn ArrayBuilder>,
+    value: Option<String>,
+    t: DataType,
+) -> DeltaResult<()> {
+    match t {
+        DataType::Boolean => append_builder!(builder, value, BooleanBuilder, bool),
+        DataType::Int8 => append_builder!(builder, value, Int8Builder, i8),
+        DataType::Int16 => append_builder!(builder, value, Int16Builder, i16),
+        DataType::Int32 => append_builder!(builder, value, Int32Builder, i32),
+        DataType::Int64 => append_builder!(builder, value, Int64Builder, i64),
+        DataType::UInt8 => append_builder!(builder, value, UInt8Builder, u8),
+        DataType::UInt16 => append_builder!(builder, value, UInt16Builder, u16),
+        DataType::UInt32 => append_builder!(builder, value, UInt32Builder, u32),
+        DataType::UInt64 => append_builder!(builder, value, UInt64Builder, u64),
+        DataType::Float32 => append_builder!(builder, value, Float32Builder, f32),
+        DataType::Float64 => append_builder!(builder, value, Float64Builder, f64),
+        DataType::Utf8 => {
+            let array = builder
+                .as_any_mut()
+                .downcast_mut::<StringBuilder>()
+                .unwrap();
+            array.append_option(value);
+        }
+        _ => {
+            return Err(DeltaTableError::Generic(format!(
+                "Unable to convert value to arrow type {}",
+                t
+            )))
+        }
+    }
+
+    Ok(())
+}
+
+fn new_array_builder(t: DataType, capacity: usize) -> DeltaResult<Box<dyn ArrayBuilder>> {
+    Ok(match t {
+        DataType::Boolean => Box::new(BooleanBuilder::with_capacity(capacity)),
+        DataType::Int8 => Box::new(Int8Builder::with_capacity(capacity)),
+        DataType::Int16 => Box::new(Int16Builder::with_capacity(capacity)),
+        DataType::Int32 => Box::new(Int32Builder::with_capacity(capacity)),
+        DataType::Int64 => Box::new(Int64Builder::with_capacity(capacity)),
+        DataType::UInt8 => Box::new(UInt8Builder::with_capacity(capacity)),
+        DataType::UInt16 => Box::new(UInt16Builder::with_capacity(capacity)),
+        DataType::UInt32 => Box::new(UInt32Builder::with_capacity(capacity)),
+        DataType::UInt64 => Box::new(UInt64Builder::with_capacity(capacity)),
+        DataType::Float32 => Box::new(Float32Builder::with_capacity(capacity)),
+        DataType::Float64 => Box::new(Float64Builder::with_capacity(capacity)),
+        DataType::Utf8 => Box::new(StringBuilder::with_capacity(capacity, 1024)),
+        _ => {
+            return Err(DeltaTableError::Generic(format!(
+                "Unable to create builder for arrow type {}",
+                t
+            )))
+        }
+    })
+}
+
+// Create a record batch that contains the partition columns plus the path of the file
+fn create_partition_record_batch(
+    snapshot: &DeltaTableState,
+    actions: &Vec<Add>,
+) -> DeltaResult<RecordBatch> {
+    let partition_columns = &snapshot.current_metadata().unwrap().partition_columns;
+    let arrow_schema = snapshot.arrow_schema().unwrap();
+    let cap = actions.len();
+    let mut builders: Vec<Box<dyn ArrayBuilder>> = Vec::new();
+    for partition in partition_columns {
+        let t = arrow_schema
+            .field_with_name(partition)
+            .unwrap()
+            .data_type()
+            .to_owned();
+        let builder = new_array_builder(t, cap)?;
+        builders.push(builder);
+    }
+    let mut path_builder = StringBuilder::with_capacity(cap, 1024);
+
+    for action in actions {
+        let partition_values = &action.partition_values;
+        for (i, column) in partition_columns.iter().enumerate() {
+            let value = partition_values.get(column);
+            let builder = builders.get_mut(i).unwrap();
+            let t = arrow_schema
+                .field_with_name(column)
+                .unwrap()
+                .data_type()
+                .to_owned();
+            let value = match value {
+                Some(v) => v.to_owned(),
+                None => None,
+            };
+            append_option_str(builder, value, t)?;
+        }
+        path_builder.append_value(action.path.clone());
+    }
+
+    let mut arrays: Vec<ArrayRef> = builders
+        .into_iter()
+        .map(|mut array| Arc::new(array.finish()) as ArrayRef)
+        .collect();
+    arrays.push(Arc::new(path_builder.finish()));
+
+    let mut fields = Vec::new();
+    for partition in partition_columns {
+        let column = arrow_schema.field_with_name(partition).unwrap();
+        let field = Field::new(
+            partition,
+            column.data_type().to_owned(),
+            column.is_nullable(),
+        );
+        fields.push(field);
+    }
+    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
+
+    Ok(RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(fields)),
+        arrays,
+    )?)
 }
 
 impl std::future::IntoFuture for DeleteBuilder {
@@ -769,6 +961,7 @@ mod tests {
 
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
+        assert!(metrics.scan_time_ms > 0);
         assert_eq!(metrics.num_deleted_rows, Some(1));
         assert_eq!(metrics.num_copied_rows, Some(3));
 
@@ -833,6 +1026,7 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 1);
         assert_eq!(metrics.num_deleted_rows, None);
         assert_eq!(metrics.num_copied_rows, None);
+        assert!(metrics.scan_time_ms > 0);
         assert_eq!(metrics.rewrite_time_ms, 0);
 
         let expected = vec![
