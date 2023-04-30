@@ -39,6 +39,8 @@ jobs:
       - uses: actions/setup-node@v3
         with:
           node-version: "18"
+      # Checkout to get the commitlint configuration.
+      - uses: actions/checkout@v3
       - run: npm install @commitlint/config-conventional
       - run: >
           npx commitlint \
