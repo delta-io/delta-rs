@@ -39,7 +39,7 @@ features = ["extension-module", "abi3", "abi3-py37"]
 [dependencies.deltalake]
 path = "../rust"
 version = "0"
-features = ["azure", "gcs", "python", "datafusion"]
+features = ["azure", "gcs", "python", "datafusion", "unity"]
 
 [features]
 default = ["rustls"]
