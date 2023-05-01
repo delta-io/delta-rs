@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 //! Utilities for writing unit tests
 use super::*;
 use crate::{

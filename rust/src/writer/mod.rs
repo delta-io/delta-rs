@@ -128,6 +128,7 @@ pub trait DeltaWriter<T> {
         table: &mut DeltaTable,
     ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
         let mut adds = self.flush().await?;
+        #[allow(deprecated)]
         let mut tx = table.create_transaction(None);
         tx.add_actions(adds.drain(..).map(Action::add).collect());
         let version = tx.commit(None, None).await?;
