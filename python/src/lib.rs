@@ -19,7 +19,9 @@ use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
-use deltalake::{DeltaDataTypeLong, DeltaDataTypeTimestamp, DeltaTableMetaData, Invariant, Schema};
+use deltalake::{
+    DeltaConfigKey, DeltaDataTypeLong, DeltaDataTypeTimestamp, DeltaOps, Invariant, Schema,
+};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::exceptions::PyValueError;
@@ -29,6 +31,8 @@ use pyo3::types::PyType;
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
+use std::future::IntoFuture;
+use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -740,33 +744,45 @@ fn write_new_deltalake(
     configuration: Option<HashMap<String, Option<String>>>,
     storage_options: Option<HashMap<String, String>>,
 ) -> PyResult<()> {
-    let mut table = DeltaTableBuilder::from_uri(table_uri)
+    let table = DeltaTableBuilder::from_uri(table_uri)
         .with_storage_options(storage_options.unwrap_or_default())
         .build()
         .map_err(PyDeltaTableError::from_raw)?;
 
-    let metadata = DeltaTableMetaData::new(
-        name,
-        description,
-        None, // Format
-        (&schema.0)
-            .try_into()
-            .map_err(PyDeltaTableError::from_arrow)?,
-        partition_by,
-        configuration.unwrap_or_default(),
-    );
+    let schema: Schema = (&schema.0)
+        .try_into()
+        .map_err(PyDeltaTableError::from_arrow)?;
 
-    let fut = table.create(
-        metadata,
-        action::Protocol {
-            min_reader_version: 1,
-            min_writer_version: 1, // TODO: Make sure we comply with protocol
-        },
-        None, // TODO
-        Some(add_actions.iter().map(|add| add.into()).collect()),
-    );
+    let configuration = configuration
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|(key, value)| {
+            if let Ok(key) = DeltaConfigKey::from_str(&key) {
+                Some((key, value))
+            } else {
+                None
+            }
+        })
+        .collect();
 
-    rt()?.block_on(fut).map_err(PyDeltaTableError::from_raw)?;
+    let mut builder = DeltaOps(table)
+        .create()
+        .with_columns(schema.get_fields().clone())
+        .with_partition_columns(partition_by)
+        .with_configuration(configuration)
+        .with_actions(add_actions.iter().map(|add| Action::add(add.into())));
+
+    if let Some(name) = &name {
+        builder = builder.with_table_name(name);
+    };
+
+    if let Some(description) = &description {
+        builder = builder.with_comment(description);
+    };
+
+    rt()?
+        .block_on(builder.into_future())
+        .map_err(PyDeltaTableError::from_raw)?;
 
     Ok(())
 }

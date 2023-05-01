@@ -1,3 +1,4 @@
+#![allow(deprecated)]
 use chrono::Utc;
 use deltalake::action::{Action, Add, Protocol, Remove};
 use deltalake::{

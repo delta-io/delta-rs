@@ -109,6 +109,7 @@ pub mod writer;
 pub use self::builder::*;
 pub use self::data_catalog::{get_data_catalog, DataCatalog, DataCatalogError};
 pub use self::delta::*;
+pub use self::delta_config::*;
 pub use self::partitions::*;
 pub use self::schema::*;
 pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
