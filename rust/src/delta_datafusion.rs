@@ -28,9 +28,7 @@ use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
-use arrow::datatypes::{
-    DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef, TimeUnit,
-};
+use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use async_trait::async_trait;
@@ -376,21 +374,6 @@ impl TableProvider for DeltaTable {
             .state
             .physical_arrow_schema(self.object_store())
             .await?;
-
-        let schema = Arc::new(ArrowSchema::new(
-            schema
-                .fields()
-                .iter()
-                .map(|field| match field.data_type() {
-                    ArrowDataType::Timestamp(TimeUnit::Microsecond, tz) => ArrowField::new(
-                        field.name().clone(),
-                        ArrowDataType::Timestamp(TimeUnit::Nanosecond, tz.clone()),
-                        field.is_nullable(),
-                    ),
-                    _ => field.clone(),
-                })
-                .collect(),
-        ));
 
         register_store(self, session.runtime_env().clone());
 
