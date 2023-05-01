@@ -136,7 +136,7 @@ pub(crate) fn configure_store(
     }
 }
 
-fn try_configure_local<P: AsRef<str>>(path: P) -> Result<Arc<DynObjectStore>, DeltaTableError> {
+fn try_configure_local<P: AsRef<str>>(path: P) -> DeltaResult<Arc<DynObjectStore>> {
     Ok(Arc::new(FileStorageBackend::try_new(path.as_ref())?))
 }
 
