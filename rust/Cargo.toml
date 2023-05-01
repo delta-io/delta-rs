@@ -30,7 +30,7 @@ num-traits = "0.2.15"
 object_store = "0.5.6"
 once_cell = "1.16.0"
 parking_lot = "0.12"
-parquet = { version = "37", features = [
+parquet = { version = "38", features = [
     "async",
     "object_store",
 ], optional = true }
