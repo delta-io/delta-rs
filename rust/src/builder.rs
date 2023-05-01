@@ -346,6 +346,14 @@ pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<Str
         .map_or_else(|| std::env::var(key).ok(), |v| Some(v.to_owned()))
 }
 
+lazy_static::lazy_static! {
+    static ref KNOWN_SCHEMES: Vec<&'static str> =
+        Vec::from([
+            "file", "memory", "az", "abfs", "abfss", "azure", "wasb", "adl", "s3", "s3a", "gs", "hdfs",
+            "https", "http",
+        ]);
+}
+
 /// Attempt to create a Url from given table location.
 ///
 /// The location could be:
@@ -364,15 +372,17 @@ pub(crate) fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
         LocalPath(PathBuf),
         Url(Url),
     }
-
     let uri_type: UriType = if let Ok(url) = Url::parse(table_uri) {
         if url.scheme() == "file" {
             UriType::LocalPath(url.to_file_path().map_err(|err| {
                 let msg = format!("Invalid table location: {}\nError: {:?}", table_uri, err);
                 DeltaTableError::InvalidTableLocation(msg)
             })?)
-        } else {
+        // NOTE this check is required to support absolute windows paths which may properly parse as url
+        } else if KNOWN_SCHEMES.contains(&url.scheme()) {
             UriType::Url(url)
+        } else {
+            UriType::LocalPath(PathBuf::from(table_uri))
         }
     } else {
         UriType::LocalPath(PathBuf::from(table_uri))
@@ -427,12 +437,22 @@ mod tests {
         assert!(uri.is_ok());
 
         // These cases should all roundtrip to themselves
-        let roundtrip_cases = &[
-            "s3://tests/data/delta-0.8.0",
-            "memory://",
-            "file:///",
-            "s3://bucket/my%20table", // Doesn't double-encode
-        ];
+        cfg_if::cfg_if! {
+            if #[cfg(windows)] {
+                let roundtrip_cases = &[
+                    "s3://tests/data/delta-0.8.0",
+                    "memory://",
+                    "s3://bucket/my%20table", // Doesn't double-encode
+                ];
+            } else {
+                let roundtrip_cases = &[
+                    "s3://tests/data/delta-0.8.0",
+                    "memory://",
+                    "file:///",
+                    "s3://bucket/my%20table", // Doesn't double-encode
+                ];
+            }
+        }
 
         for case in roundtrip_cases {
             let uri = ensure_table_uri(case).unwrap();
@@ -456,6 +476,20 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
+    fn test_windows_uri() {
+        let map_cases = &[
+            // extra slashes are removed
+            ("c:/", "file:///C:"),
+        ];
+
+        for (case, expected) in map_cases {
+            let uri = ensure_table_uri(case).unwrap();
+            assert_eq!(expected, &uri.as_str());
+        }
+    }
+
+    #[test]
     fn test_ensure_table_uri_path() {
         let tmp_dir = tempdir::TempDir::new("test").unwrap();
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
@@ -466,10 +500,9 @@ mod tests {
         ];
 
         for path in paths {
-            assert!(!path.exists());
-            let expected = Url::parse(&format!("file://{}", path.to_str().unwrap())).unwrap();
+            let expected = Url::from_directory_path(path).unwrap();
             let uri = ensure_table_uri(path.as_os_str().to_str().unwrap()).unwrap();
-            assert_eq!(expected, uri);
+            assert_eq!(expected.as_str().trim_end_matches('/'), uri.as_str());
             assert!(path.exists());
         }
 
@@ -491,8 +524,8 @@ mod tests {
         let tmp_dir = tempdir::TempDir::new("test").unwrap();
         let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
         let path = tmp_path.join("data/delta-0.8.0");
-        let expected = Url::parse(&format!("file://{}", path.to_str().unwrap())).unwrap();
+        let expected = Url::from_directory_path(path).unwrap();
         let url = ensure_table_uri(&expected).unwrap();
-        assert_eq!(expected, url);
+        assert_eq!(expected.as_str().trim_end_matches('/'), url.as_str());
     }
 }
