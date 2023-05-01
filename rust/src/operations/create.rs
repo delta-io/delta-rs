@@ -272,7 +272,7 @@ impl CreateBuilder {
         actions.extend(
             self.actions
                 .into_iter()
-                .filter(|a| matches!(a, Action::protocol(_))),
+                .filter(|a| !matches!(a, Action::protocol(_))),
         );
 
         Ok((table, actions, operation))
