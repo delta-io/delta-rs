@@ -1,5 +1,29 @@
 # Changelog
 
+## [rust-v0.10.0](https://github.com/delta-io/delta-rs/tree/rust-v0.10.0) (2023-05-02)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.8.0...rust-v0.9.0)
+
+**Implemented enhancements:**
+
+- Support Optimize on non-append-only tables [\#1125](https://github.com/delta-io/delta-rs/issues/1125)
+
+**Fixed bugs:**
+
+- DataFusion integration incorrectly handles partition columns defined "first" in schema [\#1168](https://github.com/delta-io/delta-rs/issues/1168)
+- Datafusion: SQL projection returns wrong column for partitioned data [\#1292](https://github.com/delta-io/delta-rs/issues/1292)
+- Unable to query partitioned tables [\#1291](https://github.com/delta-io/delta-rs/issues/1291)
+
+**Merged pull requests:**
+
+- chore: add deprecation notices for commit logic on `DeltaTable` [\#1323](https://github.com/delta-io/delta-rs/pull/1323) ([roeap](https://github.com/roeap))
+- fix: handle local paths on windows [\#1322](https://github.com/delta-io/delta-rs/pull/1322) ([roeap](https://github.com/roeap))
+- fix: scan partitioned tables with datafusion [\#1303](https://github.com/delta-io/delta-rs/pull/1303) ([roeap](https://github.com/roeap))
+- fix: allow special characters in storage prefix [\#1311](https://github.com/delta-io/delta-rs/pull/1311) ([wjones127](https://github.com/wjones127))
+- feat: upgrade to Arrow 37 and Datafusion 23 [\#1314](https://github.com/delta-io/delta-rs/pull/1314) ([rtyler](https://github.com/rtyler))
+- Hide the parquet/json feature behind our own JSON feature [\#1307](https://github.com/delta-io/delta-rs/pull/1307) ([rtyler](https://github.com/rtyler))
+- Enable the json feature for the parquet crate [\#1300](https://github.com/delta-io/delta-rs/pull/1300) ([rtyler](https://github.com/rtyler))
+
 ## [rust-v0.9.0](https://github.com/delta-io/delta-rs/tree/rust-v0.9.0) (2023-04-14)
 
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.8.0...rust-v0.9.0)
