@@ -2,7 +2,7 @@
 
 ## [rust-v0.10.0](https://github.com/delta-io/delta-rs/tree/rust-v0.10.0) (2023-05-02)
 
-[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.8.0...rust-v0.9.0)
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.9.0...rust-v0.10.0)
 
 **Implemented enhancements:**
 
