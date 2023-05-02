@@ -32,7 +32,7 @@ use url::{ParseError, Url};
 #[derive(Debug)]
 pub struct FileSystemCheckBuilder {
     /// A snapshot of the to-be-checked table's state
-    state: DeltaTableState,
+    snapshot: DeltaTableState,
     /// Delta object store for handling data files
     store: Arc<DeltaObjectStore>,
     /// Don't remove actions to the table log. Just determine which files can be removed
@@ -70,7 +70,7 @@ impl FileSystemCheckBuilder {
     /// Create a new [`FileSystemCheckBuilder`]
     pub fn new(store: Arc<DeltaObjectStore>, state: DeltaTableState) -> Self {
         FileSystemCheckBuilder {
-            state,
+            snapshot: state,
             store,
             dry_run: false,
         }
@@ -84,10 +84,10 @@ impl FileSystemCheckBuilder {
 
     async fn create_fsck_plan(&self) -> DeltaResult<FileSystemCheckPlan> {
         let mut files_relative: HashMap<&str, &Add> =
-            HashMap::with_capacity(self.state.files().len());
+            HashMap::with_capacity(self.snapshot.files().len());
         let store = self.store.clone();
 
-        for active in self.state.files() {
+        for active in self.snapshot.files() {
             if is_absolute_path(&active.path)? {
                 return Err(DeltaTableError::Generic(
                     "Filesystem check does not support absolute paths".to_string(),
@@ -174,7 +174,7 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
             let plan = this.create_fsck_plan().await?;
             if this.dry_run {
                 return Ok((
-                    DeltaTable::new_with_state(this.store, this.state),
+                    DeltaTable::new_with_state(this.store, this.snapshot),
                     FileSystemCheckMetrics {
                         files_removed: plan.files_to_remove.into_iter().map(|f| f.path).collect(),
                         dry_run: true,
@@ -182,8 +182,8 @@ impl std::future::IntoFuture for FileSystemCheckBuilder {
                 ));
             }
 
-            let metrics = plan.execute(&this.state).await?;
-            let mut table = DeltaTable::new_with_state(this.store, this.state);
+            let metrics = plan.execute(&this.snapshot).await?;
+            let mut table = DeltaTable::new_with_state(this.store, this.snapshot);
             table.update().await?;
             Ok((table, metrics))
         })
