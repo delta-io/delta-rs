@@ -147,3 +147,27 @@ async fn read_null_partitions_from_checkpoint() {
     let table = deltalake::open_table(&table.table_uri()).await.unwrap();
     assert_eq!(table.version(), 2);
 }
+
+#[cfg(feature = "datafusion")]
+#[tokio::test]
+async fn load_from_delta_8_0_table_with_special_partition() {
+    use datafusion::physical_plan::SendableRecordBatchStream;
+    use deltalake::{DeltaOps, DeltaTable};
+    use futures::{future, StreamExt};
+
+    let table = deltalake::open_table("./tests/data/delta-0.8.0-special-partition")
+        .await
+        .unwrap();
+
+    let (_, stream): (DeltaTable, SendableRecordBatchStream) = DeltaOps(table)
+        .load()
+        .with_columns(vec!["x", "y"])
+        .await
+        .unwrap();
+    stream
+        .for_each(|batch| {
+            assert!(batch.is_ok());
+            future::ready(())
+        })
+        .await;
+}

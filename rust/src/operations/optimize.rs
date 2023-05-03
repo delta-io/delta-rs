@@ -4,8 +4,9 @@
 //! file. Bin-packing reduces the number of API calls required for read
 //! operations.
 //!
-//! *WARNING:* Currently Optimize only supports append-only workflows. Use with
-//! other workflows may corrupt your table state.
+//! Optimize will fail if a concurrent write operation removes files from the
+//! table (such as in an overwrite). It will always succeed if concurrent writers
+//! are only appending.
 //!
 //! Optimize increments the table's version and creates remove actions for
 //! optimized files. Optimize does not delete files from storage. To delete

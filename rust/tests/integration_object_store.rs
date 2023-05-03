@@ -3,7 +3,7 @@
 use bytes::Bytes;
 use deltalake::storage::utils::flatten_list_stream;
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult};
-use deltalake::DeltaTableBuilder;
+use deltalake::{DeltaTableBuilder, ObjectStore};
 use object_store::{path::Path, DynObjectStore, Error as ObjectStoreError};
 use serial_test::serial;
 
@@ -22,6 +22,7 @@ async fn test_object_store_azure() -> TestResult {
     Ok(())
 }
 
+#[cfg(feature = "s3")]
 #[tokio::test]
 #[serial]
 async fn test_object_store_aws() -> TestResult {
@@ -413,5 +414,31 @@ async fn delete_fixtures(storage: &DynObjectStore) -> TestResult {
     for f in &paths {
         let _ = storage.delete(f).await?;
     }
+    Ok(())
+}
+
+#[tokio::test]
+#[serial]
+async fn test_object_store_prefixes_local() -> TestResult {
+    test_object_store_prefixes(StorageIntegration::Local).await?;
+    Ok(())
+}
+
+async fn test_object_store_prefixes(integration: StorageIntegration) -> TestResult {
+    let context = IntegrationContext::new(integration)?;
+    let prefixes = &["table path", "table path/hello%3F", "你好/😊"];
+    for prefix in prefixes {
+        let rooturi = format!("{}/{}", context.root_uri(), prefix);
+        let delta_store = DeltaTableBuilder::from_uri(&rooturi)
+            .with_allow_http(true)
+            .build_storage()?;
+
+        let contents = Bytes::from("cats");
+        let path = Path::from("test");
+        delta_store.put(&path, contents.clone()).await?;
+        let data = delta_store.get(&path).await?.bytes().await?;
+        assert_eq!(&data, &contents);
+    }
+
     Ok(())
 }

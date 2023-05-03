@@ -42,7 +42,7 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion::physical_plan::file_format::{wrap_partition_type_in_dict, FileScanConfig};
+use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::{
     ColumnStatistics, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
@@ -54,11 +54,10 @@ use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use object_store::{path::Path, ObjectMeta};
+use object_store::ObjectMeta;
 use url::Url;
 
 use crate::builder::ensure_table_uri;
-use crate::schema;
 use crate::{action, open_table, open_table_with_storage_options, SchemaDataType};
 use crate::{DeltaResult, Invariant};
 use crate::{DeltaTable, DeltaTableError};
@@ -349,10 +348,7 @@ impl TableProvider for DeltaTable {
     }
 
     fn schema(&self) -> Arc<ArrowSchema> {
-        Arc::new(
-            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(DeltaTable::schema(self).unwrap())
-                .unwrap(),
-        )
+        self.state.arrow_schema().unwrap()
     }
 
     fn table_type(&self) -> TableType {
@@ -421,8 +417,13 @@ impl TableProvider for DeltaTable {
                 .iter()
                 .filter(|f| !table_partition_cols.contains(f.name()))
                 .cloned()
-                .collect(),
+                .collect::<Vec<arrow::datatypes::FieldRef>>(),
         ));
+
+        let table_partition_cols = table_partition_cols
+            .iter()
+            .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
         let parquet_scan = ParquetFormat::new()
             .create_physical_plan(
@@ -434,17 +435,7 @@ impl TableProvider for DeltaTable {
                     statistics: self.datafusion_table_statistics(),
                     projection: projection.cloned(),
                     limit,
-                    table_partition_cols: table_partition_cols
-                        .iter()
-                        .map(|c| {
-                            Ok((
-                                c.to_owned(),
-                                wrap_partition_type_in_dict(
-                                    schema.field_with_name(c)?.data_type().clone(),
-                                ),
-                            ))
-                        })
-                        .collect::<Result<Vec<_>, ArrowError>>()?,
+                    table_partition_cols,
                     output_ordering: None,
                     infinite_source: false,
                 },
@@ -561,7 +552,7 @@ fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarValue> {
         //Unsupported types...
         ArrowDataType::Float16
         | ArrowDataType::Decimal256(_, _)
-        | ArrowDataType::Union(_, _, _)
+        | ArrowDataType::Union(_, _)
         | ArrowDataType::Dictionary(_, _)
         | ArrowDataType::LargeList(_)
         | ArrowDataType::Struct(_)
@@ -603,9 +594,8 @@ fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> P
     );
     PartitionedFile {
         object_meta: ObjectMeta {
-            location: Path::from(action.path.clone()),
             last_modified,
-            size: action.size as usize,
+            ..action.try_into().unwrap()
         },
         partition_values,
         range: None,
@@ -961,6 +951,7 @@ mod tests {
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
+    use object_store::path::Path;
     use serde_json::json;
     use std::ops::Deref;
 

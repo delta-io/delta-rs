@@ -1,10 +1,12 @@
-use std::convert::TryFrom;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
-use arrow::datatypes::{DataType, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow::datatypes::{
+    DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
+};
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
+use datafusion::physical_plan::file_format::wrap_partition_type_in_dict;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DFSchema, Result as DFResult, TableReference};
@@ -21,16 +23,37 @@ use crate::action::Add;
 use crate::delta_datafusion::{logical_expr_to_physical_expr, to_correct_scalar_value};
 use crate::table_state::DeltaTableState;
 use crate::DeltaResult;
-use crate::{schema, DeltaTableError};
+use crate::DeltaTableError;
 
 impl DeltaTableState {
     /// Get the table schema as an [`ArrowSchemaRef`]
     pub fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
-        Ok(Arc::new(
-            <ArrowSchema as TryFrom<&schema::Schema>>::try_from(
-                self.schema().ok_or(DeltaTableError::NoMetadata)?,
-            )?,
-        ))
+        let meta = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
+        let fields = meta
+            .schema
+            .get_fields()
+            .iter()
+            .filter(|f| !meta.partition_columns.contains(&f.get_name().to_string()))
+            .map(|f| f.try_into())
+            .chain(
+                meta.schema
+                    .get_fields()
+                    .iter()
+                    .filter(|f| meta.partition_columns.contains(&f.get_name().to_string()))
+                    .map(|f| {
+                        let field = ArrowField::try_from(f)?;
+                        let corrected = match field.data_type() {
+                            // Dictionary encoding boolean types does not yield benefits
+                            // https://github.com/apache/arrow-datafusion/pull/5545#issuecomment-1526917997
+                            DataType::Boolean => field.data_type().clone(),
+                            _ => wrap_partition_type_in_dict(field.data_type().clone()),
+                        };
+                        Ok(field.with_data_type(corrected))
+                    }),
+            )
+            .collect::<Result<Vec<ArrowField>, _>>()?;
+
+        Ok(Arc::new(ArrowSchema::new(fields)))
     }
 
     /// Iterate over all files in the log matching a predicate
@@ -86,7 +109,7 @@ impl DeltaTableState {
         Ok(sql_to_rel.sql_to_expr(sql, &df_schema, &mut Default::default())?)
     }
 
-    /// Get the pysical table schema.
+    /// Get the physical table schema.
     ///
     /// This will construct a schema derived from the parquet schema of the latest data file,
     /// and fields for partition columns from the schema defined in table meta data.
@@ -109,12 +132,15 @@ impl DeltaTableState {
                     .clone()
                     .into_iter()
                     .map(|field| {
+                        // field is an &Arc<Field>
+                        let owned_field: ArrowField = field.as_ref().clone();
                         file_schema
                             .field_with_name(field.name())
+                            // yielded with &Field
                             .cloned()
-                            .unwrap_or(field)
+                            .unwrap_or(owned_field)
                     })
-                    .collect(),
+                    .collect::<Vec<ArrowField>>(),
             ));
 
             Ok(table_schema)

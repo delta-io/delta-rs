@@ -6,18 +6,14 @@ use arrow::{
     datatypes::{DataType, Field},
     record_batch::RecordBatch,
 };
-use deltalake::action::{Action, Protocol, Remove};
-use deltalake::builder::DeltaTableBuilder;
+use deltalake::action::{Action, Remove};
 use deltalake::operations::optimize::{create_merge_plan, MetricDetails, Metrics};
 use deltalake::operations::DeltaOps;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
-use deltalake::{
-    DeltaTable, DeltaTableError, DeltaTableMetaData, PartitionFilter, Schema, SchemaDataType,
-    SchemaField,
-};
+use deltalake::{DeltaTable, DeltaTableError, PartitionFilter, SchemaDataType, SchemaField};
 use parquet::file::properties::WriterProperties;
 use rand::prelude::*;
-use serde_json::{json, Map, Value};
+use serde_json::json;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use std::{collections::HashMap, error::Error, sync::Arc};
@@ -29,7 +25,7 @@ struct Context {
 }
 
 async fn setup_test(partitioned: bool) -> Result<Context, Box<dyn Error>> {
-    let schema = Schema::new(vec![
+    let columns = vec![
         SchemaField::new(
             "x".to_owned(),
             SchemaDataType::primitive("integer".to_owned()),
@@ -48,45 +44,22 @@ async fn setup_test(partitioned: bool) -> Result<Context, Box<dyn Error>> {
             false,
             HashMap::new(),
         ),
-    ]);
+    ];
 
-    let p = if partitioned {
+    let partition_columns = if partitioned {
         vec!["date".to_owned()]
     } else {
         vec![]
     };
 
-    let table_meta = DeltaTableMetaData::new(
-        Some("opt_table".to_owned()),
-        Some("Table for optimize tests".to_owned()),
-        None,
-        schema.clone(),
-        p,
-        HashMap::new(),
-    );
-
     let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
-    let p = tmp_dir.path().to_str().to_owned().unwrap();
-    let mut dt = DeltaTableBuilder::from_uri(p).build()?;
-
-    let mut commit_info = Map::<String, Value>::new();
-
-    let protocol = Protocol {
-        min_reader_version: 1,
-        min_writer_version: 2,
-    };
-
-    commit_info.insert(
-        "operation".to_string(),
-        serde_json::Value::String("CREATE TABLE".to_string()),
-    );
-    dt.create(
-        table_meta.clone(),
-        protocol.clone(),
-        Some(commit_info),
-        None,
-    )
-    .await?;
+    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+    let dt = DeltaOps::try_from_uri(table_uri)
+        .await?
+        .create()
+        .with_columns(columns)
+        .with_partition_columns(partition_columns)
+        .await?;
 
     Ok(Context { tmp_dir, table: dt })
 }
@@ -314,6 +287,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         tags: Some(HashMap::new()),
     };
 
+    #[allow(deprecated)]
     let mut transaction = other_dt.create_transaction(None);
     transaction.add_action(Action::remove(remove));
     transaction.commit(None, None).await?;
