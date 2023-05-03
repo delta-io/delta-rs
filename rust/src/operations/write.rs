@@ -31,8 +31,9 @@ use crate::table_state::DeltaTableState;
 use crate::writer::record_batch::divide_by_partition_values;
 use crate::writer::utils::PartitionPath;
 
-use arrow::datatypes::{DataType, SchemaRef as ArrowSchemaRef};
-use arrow::record_batch::RecordBatch;
+use arrow_array::RecordBatch;
+use arrow_cast::{can_cast_types, cast};
+use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use futures::future::BoxFuture;
@@ -249,16 +250,13 @@ impl std::future::IntoFuture for WriteBuilder {
                         .snapshot
                         .physical_arrow_schema(this.store.clone())
                         .await
-                        .or_else(|_| this.snapshot.arrow_schema());
+                        .or_else(|_| this.snapshot.arrow_schema())
+                        .unwrap_or(schema.clone());
 
-                    // we cannot get a schema, if there is not data and or meta data in the table,
-                    // i.e. not initialized
-                    if let Ok(curr_schema) = table_schema {
-                        if !schema_eq(curr_schema, schema.clone()) {
-                            return Err(DeltaTableError::Generic(
-                                "Updating table schema not yet implemented".to_string(),
-                            ));
-                        }
+                    if !can_cast_batch(schema.as_ref(), table_schema.as_ref()) {
+                        return Err(DeltaTableError::Generic(
+                            "Updating table schema not yet implemented".to_string(),
+                        ));
                     };
 
                     let data = if !partition_columns.is_empty() {
@@ -269,8 +267,7 @@ impl std::future::IntoFuture for WriteBuilder {
                                 schema.clone(),
                                 partition_columns.clone(),
                                 &batch,
-                            )
-                            .unwrap();
+                            )?;
                             for part in divided {
                                 let key = PartitionPath::from_hashmap(
                                     &partition_columns,
@@ -326,13 +323,15 @@ impl std::future::IntoFuture for WriteBuilder {
                 );
                 let mut writer = DeltaWriter::new(this.store.clone(), config);
                 let checker_stream = checker.clone();
+                let schema = inner_plan.schema().clone();
                 let mut stream = inner_plan.execute(i, task_ctx)?;
                 let handle: tokio::task::JoinHandle<DeltaResult<Vec<Add>>> =
                     tokio::task::spawn(async move {
                         while let Some(maybe_batch) = stream.next().await {
                             let batch = maybe_batch?;
                             checker_stream.check_batch(&batch).await?;
-                            writer.write(&batch).await?;
+                            let arr = cast_record_batch(&batch, schema.clone())?;
+                            writer.write(&arr).await?;
                         }
                         writer.close().await
                     });
@@ -423,16 +422,36 @@ impl std::future::IntoFuture for WriteBuilder {
     }
 }
 
-fn schema_to_vec_name_type(schema: ArrowSchemaRef) -> Vec<(String, DataType)> {
-    schema
-        .fields()
-        .iter()
-        .map(|f| (f.name().to_owned(), f.data_type().clone()))
-        .collect::<Vec<_>>()
+fn can_cast_batch(from_schema: &ArrowSchema, to_schema: &ArrowSchema) -> bool {
+    if from_schema.fields.len() != to_schema.fields.len() {
+        return false;
+    }
+    from_schema.all_fields().iter().all(|f| {
+        if let Ok(target_field) = to_schema.field_with_name(f.name()) {
+            can_cast_types(f.data_type(), target_field.data_type())
+        } else {
+            false
+        }
+    })
 }
 
-fn schema_eq(l: ArrowSchemaRef, r: ArrowSchemaRef) -> bool {
-    schema_to_vec_name_type(l) == schema_to_vec_name_type(r)
+fn cast_record_batch(
+    batch: &RecordBatch,
+    target_schema: ArrowSchemaRef,
+) -> DeltaResult<RecordBatch> {
+    let columns = target_schema
+        .all_fields()
+        .iter()
+        .map(|f| {
+            let col = batch.column_by_name(f.name()).unwrap();
+            if !col.data_type().equals_datatype(f.data_type()) {
+                cast(col, f.data_type())
+            } else {
+                Ok(col.clone())
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()?;
+    Ok(RecordBatch::try_new(target_schema, columns)?)
 }
 
 #[cfg(test)]
