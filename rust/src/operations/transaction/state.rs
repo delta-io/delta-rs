@@ -109,7 +109,7 @@ impl DeltaTableState {
         Ok(sql_to_rel.sql_to_expr(sql, &df_schema, &mut Default::default())?)
     }
 
-    /// Get the pysical table schema.
+    /// Get the physical table schema.
     ///
     /// This will construct a schema derived from the parquet schema of the latest data file,
     /// and fields for partition columns from the schema defined in table meta data.

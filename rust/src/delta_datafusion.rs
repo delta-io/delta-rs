@@ -54,7 +54,7 @@ use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use object_store::{path::Path, ObjectMeta};
+use object_store::ObjectMeta;
 use url::Url;
 
 use crate::builder::ensure_table_uri;
@@ -594,9 +594,8 @@ fn partitioned_file_from_action(action: &action::Add, schema: &ArrowSchema) -> P
     );
     PartitionedFile {
         object_meta: ObjectMeta {
-            location: Path::from(action.path.clone()),
             last_modified,
-            size: action.size as usize,
+            ..action.try_into().unwrap()
         },
         partition_values,
         range: None,
@@ -952,6 +951,7 @@ mod tests {
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
+    use object_store::path::Path;
     use serde_json::json;
     use std::ops::Deref;
 
