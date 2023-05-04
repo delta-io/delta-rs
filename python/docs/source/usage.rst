@@ -145,7 +145,7 @@ The delta log maintains basic metadata about a table, including:
 * A unique ``id``
 * A ``name``, if provided
 * A ``description``, if provided
-* The list of ``partitionColumns``.
+* The list of ``partition_columns``.
 * The ``created_time`` of the table
 * A map of table ``configuration``. This includes fields such as ``delta.appendOnly``,
   which if ``true`` indicates the table is not meant to have data deleted from it.
