@@ -16,6 +16,7 @@ use deltalake::builder::DeltaTableBuilder;
 use deltalake::checkpoints::create_checkpoint;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
+use deltalake::operations::optimize::OptimizeBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
@@ -312,6 +313,28 @@ impl RawDeltaTable {
             .map_err(PyDeltaTableError::from_raw)?;
         self._table.state = table.state;
         Ok(metrics.files_deleted)
+    }
+
+    // Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
+    #[pyo3(signature = (partition_filters = None, target_size = None))]
+    pub fn optimize(
+        &mut self,
+        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+        target_size: Option<DeltaDataTypeLong>,
+    ) -> PyResult<String> {
+        let mut cmd = OptimizeBuilder::new(self._table.object_store(), self._table.state.clone());
+        if let Some(size) = target_size {
+            cmd = cmd.with_target_size(size);
+        }
+        let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
+            .map_err(PyDeltaTableError::from_raw)?;
+        cmd = cmd.with_filters(&converted_filters);
+
+        let (table, metrics) = rt()?
+            .block_on(async { cmd.await })
+            .map_err(PyDeltaTableError::from_raw)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
     }
 
     // Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.
