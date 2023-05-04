@@ -232,7 +232,7 @@ pub enum DeltaTableError {
     /// A Feature is missing to perform operation
     #[error("Delta-rs must be build with feature '{feature}' to support loading from: {url}.")]
     MissingFeature {
-        /// Name of the missiing feature
+        /// Name of the missing feature
         feature: &'static str,
         /// Storage location url
         url: String,
@@ -261,6 +261,14 @@ pub enum DeltaTableError {
         /// Source error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
+}
+
+impl From<object_store::path::Error> for DeltaTableError {
+    fn from(err: object_store::path::Error) -> Self {
+        Self::GenericError {
+            source: Box::new(err),
+        }
+    }
 }
 
 /// Delta table metadata
@@ -1104,6 +1112,10 @@ impl DeltaTable {
     }
 
     /// Vacuum the delta table. See [`VacuumBuilder`] for more information.
+    #[deprecated(
+        since = "0.10.0",
+        note = "use DelaOps from operations module to create a Vacuum operation."
+    )]
     pub async fn vacuum(
         &mut self,
         retention_hours: Option<u64>,
@@ -1125,6 +1137,11 @@ impl DeltaTable {
     /// Creates a new DeltaTransaction for the DeltaTable.
     /// The transaction holds a mutable reference to the DeltaTable, preventing other references
     /// until the transaction is dropped.
+    #[deprecated(
+        since = "0.10.0",
+        note = "use 'commit' function from operations module to commit to Delta table."
+    )]
+    #[allow(deprecated)]
     pub fn create_transaction(
         &mut self,
         options: Option<DeltaTransactionOptions>,
@@ -1137,6 +1154,11 @@ impl DeltaTable {
     /// This is low-level transaction API. If user does not want to maintain the commit loop then
     /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
     /// with retry logic.
+    #[deprecated(
+        since = "0.10.0",
+        note = "use 'commit' function from operations module to commite to Delta table."
+    )]
+    #[allow(deprecated)]
     pub async fn try_commit_transaction(
         &mut self,
         commit: &PreparedCommit,
@@ -1160,6 +1182,11 @@ impl DeltaTable {
     }
 
     /// Create a DeltaTable with version 0 given the provided MetaData, Protocol, and CommitInfo
+    #[deprecated(
+        since = "0.10.0",
+        note = "use DelaOps from operations module to create a Create operation."
+    )]
+    #[allow(deprecated)]
     pub async fn create(
         &mut self,
         metadata: DeltaTableMetaData,
@@ -1314,12 +1341,17 @@ impl Default for DeltaTransactionOptions {
 /// Please not that in case of non-retryable error the temporary commit file such as
 /// `_delta_log/_commit_<uuid>.json` will orphaned in storage.
 #[derive(Debug)]
+#[deprecated(
+    since = "0.10.0",
+    note = "use 'commit' function from operations module to commit to Delta table."
+)]
 pub struct DeltaTransaction<'a> {
     delta_table: &'a mut DeltaTable,
     actions: Vec<Action>,
     options: DeltaTransactionOptions,
 }
 
+#[allow(deprecated)]
 impl<'a> DeltaTransaction<'a> {
     /// Creates a new delta transaction.
     /// Holds a mutable reference to the delta table to prevent outside mutation while a transaction commit is in progress.
@@ -1369,7 +1401,6 @@ impl<'a> DeltaTransaction<'a> {
         // } else {
         //     IsolationLevel::Serializable
         // };
-
         let prepared_commit = self.prepare_commit(operation, app_metadata).await?;
 
         // try to commit in a loop in case other writers write the next version first
@@ -1422,6 +1453,7 @@ impl<'a> DeltaTransaction<'a> {
         Ok(PreparedCommit { uri: path })
     }
 
+    #[allow(deprecated)]
     async fn try_commit_loop(
         &mut self,
         commit: &PreparedCommit,
@@ -1465,6 +1497,10 @@ impl<'a> DeltaTransaction<'a> {
 /// Holds the uri to prepared commit temporary file created with `DeltaTransaction.prepare_commit`.
 /// Once created, the actual commit could be executed with `DeltaTransaction.try_commit`.
 #[derive(Debug)]
+#[deprecated(
+    since = "0.10.0",
+    note = "use 'commit' function from operations module to commit to Delta table."
+)]
 pub struct PreparedCommit {
     uri: Path,
 }
@@ -1616,6 +1652,7 @@ mod tests {
             serde_json::Value::String("test user".to_string()),
         );
         // Action
+        #[allow(deprecated)]
         dt.create(delta_md.clone(), protocol.clone(), Some(commit_info), None)
             .await
             .unwrap();

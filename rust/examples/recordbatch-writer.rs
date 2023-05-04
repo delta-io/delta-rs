@@ -8,7 +8,6 @@
  */
 
 use chrono::prelude::*;
-use deltalake::action::*;
 use deltalake::arrow::array::*;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
@@ -75,8 +74,8 @@ struct WeatherRecord {
 }
 
 impl WeatherRecord {
-    fn schema() -> Schema {
-        Schema::new(vec![
+    fn columns() -> Vec<SchemaField> {
+        vec![
             SchemaField::new(
                 "timestamp".to_string(),
                 SchemaDataType::primitive("timestamp".to_string()),
@@ -101,7 +100,7 @@ impl WeatherRecord {
                 true,
                 HashMap::new(),
             ),
-        ])
+        ]
     }
 }
 
@@ -189,27 +188,11 @@ fn convert_to_batch(table: &DeltaTable, records: &Vec<WeatherRecord>) -> RecordB
  * Table in an existing directory that doesn't currently contain a Delta table
  */
 async fn create_initialized_table(table_path: &Path) -> DeltaTable {
-    let mut table = DeltaTableBuilder::from_uri(table_path).build().unwrap();
-    let table_schema = WeatherRecord::schema();
-    let mut commit_info = serde_json::Map::<String, serde_json::Value>::new();
-    commit_info.insert(
-        "operation".to_string(),
-        serde_json::Value::String("CREATE TABLE".to_string()),
-    );
-    commit_info.insert(
-        "userName".to_string(),
-        serde_json::Value::String("test user".to_string()),
-    );
-
-    let protocol = Protocol {
-        min_reader_version: 1,
-        min_writer_version: 1,
-    };
-
-    let metadata = DeltaTableMetaData::new(None, None, None, table_schema, vec![], HashMap::new());
-
-    table
-        .create(metadata, protocol, Some(commit_info), None)
+    let table = DeltaOps::try_from_uri(table_path)
+        .await
+        .unwrap()
+        .create()
+        .with_columns(WeatherRecord::columns())
         .await
         .unwrap();
 

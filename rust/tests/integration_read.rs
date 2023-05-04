@@ -1,7 +1,7 @@
 #![cfg(feature = "integration_test")]
 
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
-use deltalake::DeltaTableBuilder;
+use deltalake::{DeltaTableBuilder, ObjectStore};
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use dynamodb_lock::dynamo_lock_options;
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
@@ -9,17 +9,34 @@ use maplit::hashmap;
 use object_store::path::Path;
 use serial_test::serial;
 
+static TEST_PREFIXES: &[&str] = &["my table", "你好/😊"];
+
+/// TEST_PREFIXES as they should appear in object stores.
+static TEST_PREFIXES_ENCODED: &[&str] = &["my%20table", "%E4%BD%A0%E5%A5%BD/%F0%9F%98%8A"];
+
 #[tokio::test]
 #[serial]
 async fn test_read_tables_local() -> TestResult {
-    Ok(read_tables(StorageIntegration::Local).await?)
+    read_tables(StorageIntegration::Local).await?;
+
+    for prefix in TEST_PREFIXES {
+        read_table_paths(StorageIntegration::Local, prefix, prefix).await?;
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "azure")]
 #[tokio::test]
 #[serial]
 async fn test_read_tables_azure() -> TestResult {
-    Ok(read_tables(StorageIntegration::Microsoft).await?)
+    read_tables(StorageIntegration::Microsoft).await?;
+
+    for (prefix, prefix_encoded) in TEST_PREFIXES.iter().zip(TEST_PREFIXES_ENCODED.iter()) {
+        read_table_paths(StorageIntegration::Microsoft, prefix, prefix_encoded).await?;
+    }
+
+    Ok(())
 }
 
 #[cfg(feature = "hdfs")]
@@ -33,17 +50,76 @@ async fn test_read_tables_hdfs() -> TestResult {
 #[tokio::test]
 #[serial]
 async fn test_read_tables_aws() -> TestResult {
-    Ok(read_tables(StorageIntegration::Amazon).await?)
+    read_tables(StorageIntegration::Amazon).await?;
+
+    for (prefix, prefix_encoded) in TEST_PREFIXES.iter().zip(TEST_PREFIXES_ENCODED.iter()) {
+        read_table_paths(StorageIntegration::Amazon, prefix, prefix_encoded).await?;
+    }
+
+    Ok(())
 }
 
 async fn read_tables(storage: StorageIntegration) -> TestResult {
     let context = IntegrationContext::new(storage)?;
     context.load_table(TestTables::Simple).await?;
     context.load_table(TestTables::Golden).await?;
+    context
+        .load_table(TestTables::Delta0_8_0SpecialPartitioned)
+        .await?;
 
     read_simple_table(&context).await?;
     read_simple_table_with_version(&context).await?;
     read_golden(&context).await?;
+
+    Ok(())
+}
+
+async fn read_table_paths(
+    storage: StorageIntegration,
+    table_root: &str,
+    upload_path: &str,
+) -> TestResult {
+    let context = IntegrationContext::new(storage)?;
+    context
+        .load_table_with_name(TestTables::Delta0_8_0SpecialPartitioned, upload_path)
+        .await?;
+
+    verify_store(&context, table_root).await?;
+
+    read_encoded_table(&context, table_root).await?;
+
+    Ok(())
+}
+
+async fn verify_store(integration: &IntegrationContext, root_path: &str) -> TestResult {
+    let table_uri = format!("{}/{}", integration.root_uri(), root_path);
+    let storage = DeltaTableBuilder::from_uri(table_uri.clone())
+        .with_allow_http(true)
+        .build_storage()?;
+
+    let files = storage.list_with_delimiter(None).await?;
+    assert_eq!(
+        vec![
+            Path::parse("_delta_log").unwrap(),
+            Path::parse("x=A%2FA").unwrap(),
+            Path::parse("x=B%20B").unwrap(),
+        ],
+        files.common_prefixes
+    );
+
+    Ok(())
+}
+
+async fn read_encoded_table(integration: &IntegrationContext, root_path: &str) -> TestResult {
+    let table_uri = format!("{}/{}", integration.root_uri(), root_path);
+
+    let table = DeltaTableBuilder::from_uri(table_uri)
+        .with_allow_http(true)
+        .load()
+        .await?;
+
+    assert_eq!(table.version(), 0);
+    assert_eq!(table.get_files().len(), 2);
 
     Ok(())
 }

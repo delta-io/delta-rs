@@ -1,4 +1,4 @@
-#[allow(dead_code)]
+#![allow(dead_code, deprecated)]
 mod fs_common;
 
 use deltalake::action::{Action, DeltaOperation, SaveMode};

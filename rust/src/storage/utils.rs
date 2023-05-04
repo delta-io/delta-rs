@@ -91,10 +91,37 @@ impl TryFrom<&Add> for ObjectMeta {
             Utc,
         );
         Ok(Self {
-            // TODO this won't work for absoute paths, since Paths are always relative to store.
-            location: Path::from(value.path.as_str()),
+            // TODO this won't work for absolute paths, since Paths are always relative to store.
+            location: Path::parse(value.path.as_str())?,
             last_modified,
             size: value.size as usize,
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_object_meta_from_add_action() {
+        let add = Add {
+            path: "x=A%252FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
+                .to_string(),
+            size: 123,
+            modification_time: 123456789,
+            ..Default::default()
+        };
+
+        let meta: ObjectMeta = (&add).try_into().unwrap();
+        assert_eq!(
+            meta.location,
+            Path::parse(
+                "x=A%252FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
+            )
+            .unwrap()
+        );
+        assert_eq!(meta.size, 123);
+        assert_eq!(meta.last_modified.timestamp_millis(), 123456789);
     }
 }
