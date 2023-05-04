@@ -2,9 +2,9 @@
 //!
 //! This module is gated behind the "unity" feature.
 use super::{DataCatalog, DataCatalogError};
-use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
-use reqwest_retry::{RetryTransientMiddleware, policies::ExponentialBackoff};
 use reqwest::header;
+use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
+use reqwest_retry::{policies::ExponentialBackoff, RetryTransientMiddleware};
 use serde::Deserialize;
 
 /// Databricks Unity Catalog - implementation of the `DataCatalog` trait
@@ -17,31 +17,32 @@ impl UnityCatalog {
     /// Creates a new UnityCatalog
     pub fn new() -> Result<Self, DataCatalogError> {
         let token_var = "DATABRICKS_ACCESS_TOKEN";
-        let access_token = std::env::var(token_var).map_err(|_|
-            DataCatalogError::MissingEnvVar { var_name: token_var.into() })?;
+        let access_token =
+            std::env::var(token_var).map_err(|_| DataCatalogError::MissingEnvVar {
+                var_name: token_var.into(),
+            })?;
 
-        let auth_header_val = header::HeaderValue::from_str(
-            &format!("Bearer {}", &access_token)
-        ).map_err(|_| DataCatalogError::InvalidAccessToken)?;
+        let auth_header_val = header::HeaderValue::from_str(&format!("Bearer {}", &access_token))
+            .map_err(|_| DataCatalogError::InvalidAccessToken)?;
 
-        let headers = header::HeaderMap::from_iter([
-            (header::AUTHORIZATION, auth_header_val),
-        ]);
+        let headers = header::HeaderMap::from_iter([(header::AUTHORIZATION, auth_header_val)]);
         let client = reqwest::Client::builder()
-            .default_headers(headers).build()?;
+            .default_headers(headers)
+            .build()?;
 
-        let retry_policy = ExponentialBackoff::builder()
-            .build_with_max_retries(10);
+        let retry_policy = ExponentialBackoff::builder().build_with_max_retries(10);
 
         let client_with_retry = ClientBuilder::new(client)
             .with(RetryTransientMiddleware::new_with_policy(retry_policy))
             .build();
 
         let workspace_var = "DATABRICKS_WORKSPACE_URL";
-        let workspace_url = std::env::var(workspace_var).map_err(|_|
-            DataCatalogError::MissingEnvVar { var_name: workspace_var.into() })?;
+        let workspace_url =
+            std::env::var(workspace_var).map_err(|_| DataCatalogError::MissingEnvVar {
+                var_name: workspace_var.into(),
+            })?;
 
-        Ok(Self{
+        Ok(Self {
             client_with_retry,
             workspace_url,
         })
@@ -73,7 +74,7 @@ pub enum GetTableError {
         error_code: String,
         /// Error description
         message: String,
-    }
+    },
 }
 
 impl From<reqwest_middleware::Error> for DataCatalogError {
@@ -97,23 +98,29 @@ impl DataCatalog for UnityCatalog {
         database_name: &str,
         table_name: &str,
     ) -> Result<String, DataCatalogError> {
-        let resp = self.client_with_retry.get(format!(
-            "{}/api/2.1/unity-catalog/tables/{}.{}.{}",
-            &self.workspace_url,
-            catalog_id.as_deref().unwrap_or("main"),
-            &database_name,
-            &table_name
-        )).send().await?;
+        let resp = self
+            .client_with_retry
+            .get(format!(
+                "{}/api/2.1/unity-catalog/tables/{}.{}.{}",
+                &self.workspace_url,
+                catalog_id.as_deref().unwrap_or("main"),
+                &database_name,
+                &table_name
+            ))
+            .send()
+            .await?;
 
         let parsed_resp: TableResponse = resp.json().await?;
         match parsed_resp {
-            TableResponse::Success { storage_location } =>
-                Ok(storage_location),
-            TableResponse::Error { error_code, message } =>
-                Err(GetTableError::InvalidTable {
-                    error_code,
-                    message
-                }.into()),
+            TableResponse::Success { storage_location } => Ok(storage_location),
+            TableResponse::Error {
+                error_code,
+                message,
+            } => Err(GetTableError::InvalidTable {
+                error_code,
+                message,
+            }
+            .into()),
         }
     }
 }
