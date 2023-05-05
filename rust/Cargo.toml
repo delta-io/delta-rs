@@ -135,7 +135,7 @@ s3 = [
     "object_store/aws",
     "object_store/aws_profile",
 ]
-unity = [
+unity-experimental = [
     "reqwest",
     "reqwest-middleware",
     "reqwest-retry",

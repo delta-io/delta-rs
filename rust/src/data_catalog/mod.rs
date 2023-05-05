@@ -5,7 +5,7 @@ use std::fmt::Debug;
 #[cfg(feature = "glue")]
 pub mod glue;
 
-#[cfg(feature = "unity")]
+#[cfg(feature = "unity-experimental")]
 pub mod unity;
 
 /// Error enum that represents a CatalogError.
@@ -47,7 +47,7 @@ pub enum DataCatalogError {
     },
 
     /// Error caused by missing environment variable for Unity Catalog.
-    #[cfg(feature = "unity")]
+    #[cfg(feature = "unity-experimental")]
     #[error("Missing Unity Catalog environment variable: {var_name}")]
     MissingEnvVar {
         /// Variable name
@@ -55,12 +55,12 @@ pub enum DataCatalogError {
     },
 
     /// Error caused by invalid access token value
-    #[cfg(feature = "unity")]
+    #[cfg(feature = "unity-experimental")]
     #[error("Invalid Databricks personal access token")]
     InvalidAccessToken,
 
     /// Databricks API client error
-    #[cfg(feature = "unity")]
+    #[cfg(feature = "unity-experimental")]
     #[error("API client error: {source}")]
     APIClientError {
         /// The underlying unity::GetTableError
@@ -99,7 +99,7 @@ pub fn get_data_catalog(data_catalog: &str) -> Result<Box<dyn DataCatalog>, Data
         "hdfs" => unimplemented!("HDFS Data Catalog is not implemented"),
         #[cfg(feature = "glue")]
         "glue" => Ok(Box::new(glue::GlueDataCatalog::new()?)),
-        #[cfg(feature = "unity")]
+        #[cfg(feature = "unity-experimental")]
         "unity" => Ok(Box::new(unity::UnityCatalog::new()?)),
         _ => Err(DataCatalogError::InvalidDataCatalog {
             data_catalog: data_catalog.to_string(),

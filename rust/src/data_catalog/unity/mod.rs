@@ -1,6 +1,6 @@
 //! Databricks Unity Catalog.
 //!
-//! This module is gated behind the "unity" feature.
+//! This module is gated behind the "unity-experimental" feature.
 use super::{DataCatalog, DataCatalogError};
 use reqwest::header;
 use reqwest_middleware::{ClientBuilder, ClientWithMiddleware};
