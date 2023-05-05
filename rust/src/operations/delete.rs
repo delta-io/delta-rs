@@ -444,7 +444,7 @@ async fn excute_non_empty_expr(
     .await?;
 
     // Apply the negation of the filter and rewrite files
-    let negated_expression = Box::new(Expr::IsFalse(Box::new(expression.clone())));
+    let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
     let physical_schema = file_schema.clone();
     let logical_schema: DFSchema = file_schema.as_ref().clone().try_into()?;
     let execution_props = ExecutionProps::new();
