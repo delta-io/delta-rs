@@ -74,6 +74,27 @@ For AWS Glue catalog, use AWS environment variables to authenticate.
 .. _`azure options`: https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants
 .. _`gcs options`: https://docs.rs/object_store/latest/object_store/gcp/enum.GoogleConfigKey.html#variants
 
+You could lazily load the table using the :meth:`DeltaTable.load` method.
+.. code-block:: python
+
+    >>> from deltalake import DeltaTable
+    >>> dt = DeltaTable("../rust/tests/data/delta-0.2.0", init=false)
+    >>> dt.load()
+
+Or in an asynchronous context, you could load the table using the :meth:`DeltaTable.load_async` method.
+.. code-block:: python
+
+    >>> import asyncio
+    >>> from deltalake import DeltaTable
+    >>> async def main():
+    ...    dt = DeltaTable("../rust/tests/data/simple_table", version=2)
+    ...    await dt.load_async()
+    ...    await dt.load_version_async(version=1)
+    ...
+    >>>
+    >>> asyncio.run(main())
+
+
 Custom Storage Backends
 ~~~~~~~~~~~~~~~~~~~~~~~
 

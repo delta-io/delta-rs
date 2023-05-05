@@ -4,13 +4,12 @@ import pathlib
 import pyarrow as pa
 import pytest
 
-from deltalake import DeltaTable, DeltaTableAsync, write_deltalake
+from deltalake import DeltaTable, write_deltalake
 
 
-@pytest.mark.parametrize("table", [DeltaTable, DeltaTableAsync])
-def test_vacuum_dry_run_simple_table(table):
+def test_vacuum_dry_run_simple_table():
     table_path = "../rust/tests/data/delta-0.2.0"
-    dt = table(table_path)
+    dt = DeltaTable(table_path)
     retention_periods = 169
     tombstones = dt.vacuum(retention_periods)
     tombstones.sort()
@@ -52,38 +51,6 @@ def test_vacuum_zero_duration(
     original_files = set(dt.files())
     write_deltalake(table_path, sample_data, mode="overwrite")
     dt.update_incremental()
-    new_files = set(dt.files())
-    assert new_files.isdisjoint(original_files)
-
-    tombstones = set(dt.vacuum(retention_hours=0, enforce_retention_duration=False))
-    assert tombstones == original_files
-
-    tombstones = set(
-        dt.vacuum(retention_hours=0, dry_run=False, enforce_retention_duration=False)
-    )
-    assert tombstones == original_files
-
-    parquet_files = {f for f in os.listdir(table_path) if f.endswith("parquet")}
-    assert parquet_files == new_files
-
-
-@pytest.mark.parametrize("use_relative", [True, False])
-@pytest.mark.asyncio
-async def test_vacuum_zero_duration_async(
-    tmp_path: pathlib.Path, sample_data: pa.Table, monkeypatch, use_relative: bool
-):
-    if use_relative:
-        monkeypatch.chdir(tmp_path)  # Make tmp_path the working directory
-        (tmp_path / "path/to/table").mkdir(parents=True)
-        table_path = "./path/to/table"
-    else:
-        table_path = str(tmp_path)
-
-    write_deltalake(table_path, sample_data, mode="overwrite")
-    dt = DeltaTableAsync(table_path)
-    original_files = set(dt.files())
-    write_deltalake(table_path, sample_data, mode="overwrite")
-    await dt.update_incremental()
     new_files = set(dt.files())
     assert new_files.isdisjoint(original_files)
 

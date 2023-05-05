@@ -3,7 +3,7 @@ import pyarrow.fs as pa_fs
 import pytest
 from numpy.random import standard_normal
 
-from deltalake import DeltaTable, DeltaTableAsync, write_deltalake
+from deltalake import DeltaTable, write_deltalake
 
 # NOTE: make sure to run these in release mode with
 # MATURIN_EXTRA_ARGS=--release make develop
@@ -21,11 +21,10 @@ def sample_table() -> pa.Table:
 
 
 @pytest.mark.benchmark(group="write")
-@pytest.mark.parametrize("table", [DeltaTable, DeltaTableAsync])
-def test_benchmark_write(benchmark, sample_table, tmp_path, table):
+def test_benchmark_write(benchmark, sample_table, tmp_path):
     benchmark(write_deltalake, str(tmp_path), sample_table, mode="overwrite")
 
-    dt = table(str(tmp_path))
+    dt = DeltaTable(str(tmp_path))
     assert dt.to_pyarrow_table().sort_by("i") == sample_table
 
 
@@ -43,20 +42,18 @@ def test_benchmark_write(benchmark, sample_table, tmp_path, table):
 
 
 @pytest.mark.benchmark(group="read")
-@pytest.mark.parametrize("table", [DeltaTable, DeltaTableAsync])
-def test_benchmark_read(benchmark, sample_table, tmp_path, table):
+def test_benchmark_read(benchmark, sample_table, tmp_path):
     write_deltalake(str(tmp_path), sample_table)
-    dt = table(str(tmp_path))
+    dt = DeltaTable(str(tmp_path))
 
     result = benchmark(dt.to_pyarrow_table)
     assert result.sort_by("i") == sample_table
 
 
 @pytest.mark.benchmark(group="read")
-@pytest.mark.parametrize("table", [DeltaTable, DeltaTableAsync])
-def test_benchmark_read_pyarrow(benchmark, sample_table, tmp_path, table):
+def test_benchmark_read_pyarrow(benchmark, sample_table, tmp_path):
     write_deltalake(str(tmp_path), sample_table)
-    dt = table(str(tmp_path))
+    dt = DeltaTable(str(tmp_path))
 
     fs = pa_fs.SubTreeFileSystem(str(tmp_path), pa_fs.LocalFileSystem())
     result = benchmark(dt.to_pyarrow_table, filesystem=fs)

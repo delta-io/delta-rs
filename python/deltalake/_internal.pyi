@@ -14,7 +14,6 @@ from deltalake.writer import AddAction
 __version__: str
 
 RawDeltaTable: Any
-RawDeltaTableAsync: Any
 rust_core_version: Callable[[], str]
 
 class PyDeltaTableError(BaseException): ...
