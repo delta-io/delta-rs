@@ -47,6 +47,21 @@ def test_read_simple_table_to_dict():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
 
 
+def test_read_simple_table_to_dict_without_init():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path, init=False)
+    dt.load()
+    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
+
+
+@pytest.mark.asyncio
+async def test_read_simple_table_to_dict_without_init_async():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path, init=False)
+    await dt.load_async()
+    assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
+
+
 def test_read_simple_table_by_version_to_dict():
     table_path = "../rust/tests/data/delta-0.2.0"
     dt = DeltaTable(table_path, version=2)

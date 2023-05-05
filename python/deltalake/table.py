@@ -119,8 +119,8 @@ class DeltaTable:
                               Some append-only applications might have no need of tracking any files. So, the
                               DeltaTable will be loaded with a significant memory reduction.
         :param init: If True, will load table based on other parameters.
-                     If False, will not load table immediately and an additional call to load() or load_async() is required after
-                     creating the instance.
+                     If False, will not load table immediately and an additional call to load() or load_async()
+                     is required after creating the instance.
         """
         self._storage_options = storage_options
         self._table = RawDeltaTable(
@@ -130,19 +130,22 @@ class DeltaTable:
             without_files=without_files,
             init=init,
         )
-        self._metadata = Metadata(self._table)
+        if init:
+            self._metadata = Metadata(self._table)
 
     def load(self) -> None:
         """
         Loads the DeltaTable from the last version.
         """
         self._table.load()
+        self._metadata = Metadata(self._table)
 
     async def load_async(self) -> None:
         """
         Asynchronously loads the DeltaTable from the last version.
         """
-        await self._table.load()
+        await self._table.load_async()
+        self._metadata = Metadata(self._table)
 
     @classmethod
     def from_data_catalog(
@@ -262,7 +265,7 @@ given filters.
 
     async def load_version_async(self, version: int) -> None:
         """
-        Asynchronously Load a DeltaTable asynchronously with a specified version.
+        Asynchronously Load a DeltaTable with a specified version.
 
         :param version: the identifier of the version of the DeltaTable to load
         """
@@ -364,6 +367,29 @@ given filters.
                 raise ValueError("The retention periods should be positive.")
 
         return self._table.vacuum(dry_run, retention_hours, enforce_retention_duration)
+
+    def optimize(
+        self,
+        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+        target_size: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Compacts small files to reduce the total number of files in the table.
+
+        This operation is idempotent; if run twice on the same table (assuming it has
+        not been updated) it will do nothing the second time.
+
+        If this operation happens concurrently with any operations other than append,
+        it will fail.
+
+        :param partition_filters: the partition filters that will be used for getting the matched files
+        :param target_size: desired file size after bin-packing files, in bytes. If not
+          provided, will attempt to read the table configuration value ``delta.targetFileSize``.
+          If that value isn't set, will use default value of 256MB.
+        :return: the metrics from optimize
+        """
+        metrics = self._table.optimize(partition_filters, target_size)
+        return json.loads(metrics)
 
     def pyarrow_schema(self) -> pyarrow.Schema:
         """

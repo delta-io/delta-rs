@@ -33,16 +33,14 @@ jobs:
         run: make check-rust
 
   test-minimal:
-    name: Python Build (Python 3.7 PyArrow 7.0.0)
+    name: Python Build (Python 3.8 PyArrow 7.0.0)
     runs-on: ubuntu-latest
-    # use the same environment we have for python release
-    container: quay.io/pypa/manylinux2014_x86_64:2022-09-24-4f086d0
     steps:
-      # actions/checkout@v3 is a node action, which runs on a fairly new
-      # version of node. however, manylinux environment's glibc is too old for
-      # that version of the node. so we will have to use v1 instead, which is a
-      # docker based action.
-      - uses: actions/checkout@v1
+      - uses: actions/checkout@v3
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
 
       - name: Install latest nightly
         uses: actions-rs/toolchain@v1
@@ -53,9 +51,10 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
 
-      - name: Enable manylinux Python targets
-        run: |
-          echo "/opt/python/cp37-cp37m/bin" >> $GITHUB_PATH
+      - name: Setup Python
+        uses: actions/setup-python@v2
+        with:
+          python-version: 3.8
 
       - name: Build and install deltalake
         run: |

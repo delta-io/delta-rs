@@ -161,10 +161,9 @@ impl RawDeltaTable {
 
     fn load(&self) -> PyResult<()> {
         let mut table = self._rt.block_on(self._table.lock());
-        Ok(self
-            ._rt
+        self._rt
             .block_on(table.load())
-            .map_err(PyDeltaTableError::from_raw)?)
+            .map_err(PyDeltaTableError::from_raw)
     }
 
     fn load_async<'a>(&self, py: Python<'a>) -> PyResult<&'a PyAny> {
