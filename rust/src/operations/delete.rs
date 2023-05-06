@@ -248,7 +248,6 @@ struct ExprProperties {
     partition_columns: Vec<String>,
 
     partition_only: bool,
-    volaility: Volatility,
     result: DeltaResult<()>,
 }
 
@@ -293,8 +292,8 @@ impl TreeNodeVisitor for ExprProperties {
             | Expr::Cast(_)
             | Expr::TryCast(_) => (),
             Expr::ScalarFunction { fun, .. } => {
-                self.volaility = self.volaility.max(fun.volatility());
-                if self.volaility > Volatility::Immutable {
+                let v = fun.volatility();
+                if v > Volatility::Immutable {
                     self.result = Err(DeltaTableError::Generic(format!(
                         "Delete predicate contains nondeterministic function {}",
                         fun
@@ -303,8 +302,8 @@ impl TreeNodeVisitor for ExprProperties {
                 }
             }
             Expr::ScalarUDF { fun, .. } => {
-                self.volaility = self.volaility.max(fun.signature.volatility);
-                if self.volaility > Volatility::Immutable {
+                let v = fun.signature.volatility;
+                if v > Volatility::Immutable {
                     self.result = Err(DeltaTableError::Generic(format!(
                         "Delete predicate contains nondeterministic function {}",
                         fun.name
@@ -428,6 +427,7 @@ async fn excute_non_empty_expr(
     .await?;
 
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis();
+    let write_start = Instant::now();
 
     let rewrite: Vec<Add> = rewrite.into_iter().map(|s| s.to_owned()).collect();
     let parquet_scan = parquet_scan_from_actions(
@@ -456,8 +456,6 @@ async fn excute_non_empty_expr(
     )?;
     let filter: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(predicate_expr, parquet_scan.clone())?);
-
-    let write_start = Instant::now();
 
     let add_actions = write_execution_plan(
         snapshot,
@@ -502,7 +500,6 @@ async fn execute(
             let mut expr_properties = ExprProperties {
                 partition_only: true,
                 partition_columns: current_metadata.partition_columns.clone(),
-                volaility: Volatility::Immutable,
                 result: Ok(()),
             };
 
