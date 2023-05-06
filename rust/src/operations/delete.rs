@@ -388,13 +388,12 @@ async fn excute_non_empty_expr(
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
 
-    let schema = snapshot.arrow_schema().unwrap();
+    let schema = snapshot.arrow_schema()?;
     let scan_start = Instant::now();
 
     let table_partition_cols = snapshot
         .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)
-        .unwrap()
+        .ok_or(DeltaTableError::NoMetadata)?
         .partition_columns
         .clone();
     let file_schema = Arc::new(ArrowSchema::new(
@@ -408,7 +407,7 @@ async fn excute_non_empty_expr(
     let expr = logical_expr_to_physical_expr(expression, &schema);
 
     let pruning_predicate = PruningPredicate::try_new(expr, schema.clone())?;
-    let files_to_prune = pruning_predicate.prune(snapshot).unwrap();
+    let files_to_prune = pruning_predicate.prune(snapshot)?;
     let files: Vec<&Add> = snapshot
         .files()
         .iter()
@@ -473,10 +472,12 @@ async fn excute_non_empty_expr(
     .await?;
     metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis();
 
-    let read_records = parquet_scan.metrics().unwrap().output_rows().unwrap();
-    let filter_records = filter.metrics().unwrap().output_rows().unwrap();
-    metrics.num_copied_rows = Some(filter_records);
-    metrics.num_deleted_rows = Some(read_records - filter_records);
+    let read_records = parquet_scan.metrics().and_then(|m| m.output_rows());
+    let filter_records = parquet_scan.metrics().and_then(|m| m.output_rows());
+    metrics.num_copied_rows = filter_records;
+    metrics.num_deleted_rows = read_records
+        .zip(filter_records)
+        .map(|(read, filter)| read - filter);
 
     Ok((add_actions, rewrite))
 }
@@ -584,7 +585,14 @@ async fn scan_memory_table(snapshot: &DeltaTableState, predicate: &Expr) -> Delt
 
     let schema = batch.schema();
 
-    arrays.push(batch.column_by_name("path").unwrap().to_owned());
+    arrays.push(
+        batch
+            .column_by_name("path")
+            .ok_or(DeltaTableError::Generic(
+                "Column with name `path` does not exist".to_owned(),
+            ))?
+            .to_owned(),
+    );
     fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
 
     for field in schema.fields() {
