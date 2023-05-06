@@ -27,6 +27,7 @@ datafusion-objectstore-hdfs = { version = "0.1.3", default-features = false, fea
 ], optional = true }
 errno = "0.3"
 futures = "0.3"
+hyper = { version = "0.14", optional = true }
 itertools = "0.10"
 lazy_static = "1"
 log = "0"
@@ -46,6 +47,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 thiserror = "1"
 tokio = { version = "1", features = ["macros", "rt", "parking_lot"] }
+tracing = { version = "0.1", optional = true }
+rand = "0.8"
 regex = "1"
 uuid = { version = "1", features = ["serde", "v4"] }
 url = "2.3"
@@ -60,9 +63,10 @@ rusoto_dynamodb = { version = "0.47", default-features = false, optional = true 
 rusoto_glue = { version = "0.47", default-features = false, optional = true }
 
 # Unity
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "json"], optional = true }
-reqwest-middleware = { version = "0.2.1", optional = true }
-reqwest-retry = { version = "0.2.2", optional = true }
+reqwest = { version = "0.11", default-features = false, features = [
+    "rustls-tls",
+    "json",
+], optional = true }
 
 # Datafusion
 datafusion = { version = "24", optional = true }
@@ -96,6 +100,7 @@ tempdir = "0"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 utime = "0.3"
+hyper = { version = "0.14", features = ["server"] }
 
 [build-dependencies]
 glibc_version = { path = "../glibc_version", version = "0.1" }
@@ -117,8 +122,8 @@ datafusion = [
 ]
 datafusion-ext = ["datafusion"]
 gcs = ["object_store/gcp"]
-glue = ["s3", "rusoto_glue/rustls"]
-glue-native-tls = ["s3-native-tls", "rusoto_glue"]
+glue = ["s3", "rusoto_glue/rustls", "tracing", "hyper"]
+glue-native-tls = ["s3-native-tls", "rusoto_glue", "tracing", "hyper"]
 hdfs = ["datafusion-objectstore-hdfs"]
 # used only for integration testing
 integration_test = ["fs_extra", "tempdir"]
@@ -142,11 +147,7 @@ s3 = [
     "object_store/aws",
     "object_store/aws_profile",
 ]
-unity-experimental = [
-    "reqwest",
-    "reqwest-middleware",
-    "reqwest-retry",
-]
+unity-experimental = ["reqwest", "tracing", "hyper"]
 
 [[bench]]
 name = "read_checkpoint"
