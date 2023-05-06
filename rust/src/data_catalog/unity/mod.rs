@@ -6,7 +6,9 @@ use std::str::FromStr;
 use reqwest::header::{HeaderValue, AUTHORIZATION};
 
 use self::credential::{ClientSecretOAuthProvider, CredentialProvider};
-use self::models::{GetSchemaResponse, GetTableResponse, ListSchemasResponse};
+use self::models::{
+    GetSchemaResponse, GetTableResponse, ListSchemasResponse, ListTableSummariesResponse,
+};
 use super::client::retry::RetryExt;
 use super::{client::retry::RetryConfig, CatalogResult, DataCatalog, DataCatalogError};
 
@@ -408,7 +410,7 @@ impl UnityCatalog {
         &self,
         catalog_name: impl AsRef<str>,
         schema_name_pattern: impl AsRef<str>,
-    ) -> CatalogResult<GetTableResponse> {
+    ) -> CatalogResult<ListTableSummariesResponse> {
         let token = self.get_credential().await?;
         // https://docs.databricks.com/api-explorer/workspace/tables/listsummaries
         let resp = self
