@@ -22,6 +22,8 @@ def test_optimize_run_table(
     write_deltalake(table_path, sample_data, mode="append")
 
     dt = DeltaTable(table_path)
+    old_version = dt.version()
     dt.optimize()
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
+    assert dt.version() == old_version + 1
