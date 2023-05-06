@@ -73,7 +73,7 @@ def write_deltalake(
     ],
     *,
     schema: Optional[pa.Schema] = None,
-    partition_by: Optional[List[str]] = None,
+    partition_by: Optional[Union[List[str], str]] = None,
     filesystem: Optional[pa_fs.FileSystem] = None,
     mode: Literal["error", "append", "overwrite", "ignore"] = "error",
     file_options: Optional[ds.ParquetFileWriteOptions] = None,
@@ -146,6 +146,10 @@ def write_deltalake(
 
     table, table_uri = try_get_table_and_table_uri(table_or_uri, storage_options)
 
+    # We need to write against the latest table version
+    if table:
+        table.update_incremental()
+
     if schema is None:
         if isinstance(data, RecordBatchReader):
             schema = data.schema
@@ -165,6 +169,9 @@ def write_deltalake(
             storage_options.update(storage_options or {})
 
         filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+
+    if isinstance(partition_by, str):
+        partition_by = [partition_by]
 
     if table:  # already exists
         if schema != table.schema().to_pyarrow() and not (
@@ -331,6 +338,7 @@ def write_deltalake(
             schema,
             partition_filters,
         )
+        table.update_incremental()
 
 
 def __enforce_append_only(
