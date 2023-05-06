@@ -137,6 +137,7 @@ impl AsRef<str> for UnityCatalogConfigKey {
 }
 
 /// Builder for crateing a UnityCatalogClient
+#[derive(Default)]
 pub struct UnityCatalogBuilder {
     /// Url of a Databricks workspace
     workspace_url: Option<String>,
@@ -155,19 +156,6 @@ pub struct UnityCatalogBuilder {
 
     /// Options for the underlying http client
     client_options: super::client::ClientOptions,
-}
-
-impl Default for UnityCatalogBuilder {
-    fn default() -> Self {
-        Self {
-            workspace_url: None,
-            client_options: Default::default(),
-            client_id: None,
-            client_secret: None,
-            tenant_id: None,
-            bearer_token: None,
-        }
-    }
 }
 
 impl UnityCatalogBuilder {
