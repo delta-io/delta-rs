@@ -471,7 +471,7 @@ async fn excute_non_empty_expr(
     metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis();
 
     let read_records = parquet_scan.metrics().and_then(|m| m.output_rows());
-    let filter_records = parquet_scan.metrics().and_then(|m| m.output_rows());
+    let filter_records = filter.metrics().and_then(|m| m.output_rows());
     metrics.num_copied_rows = filter_records;
     metrics.num_deleted_rows = read_records
         .zip(filter_records)
