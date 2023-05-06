@@ -118,8 +118,6 @@ def test_update_schema(existing_table: DeltaTable):
 
     write_deltalake(existing_table, new_data, mode="overwrite", overwrite_schema=True)
 
-    existing_table.update_incremental()
-
     read_data = existing_table.to_pyarrow_table()
     assert new_data == read_data
     assert existing_table.schema().to_pyarrow() == new_data.schema
@@ -174,7 +172,7 @@ def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
 def test_roundtrip_partitioned(
     tmp_path: pathlib.Path, sample_data: pa.Table, column: str
 ):
-    write_deltalake(tmp_path, sample_data, partition_by=[column])
+    write_deltalake(tmp_path, sample_data, partition_by=column)
 
     delta_table = DeltaTable(tmp_path)
     assert delta_table.schema().to_pyarrow() == sample_data.schema
@@ -259,14 +257,13 @@ def test_append_only_should_append_only_with_the_overwrite_mode(
             write_deltalake(data_store_type, sample_data, mode=mode)
 
     expected = pa.concat_tables([sample_data, sample_data])
-    table.update_incremental()
+
     assert table.to_pyarrow_table() == expected
     assert table.version() == 1
 
 
 def test_writer_with_table(existing_table: DeltaTable, sample_data: pa.Table):
     write_deltalake(existing_table, sample_data, mode="overwrite")
-    existing_table.update_incremental()
     assert existing_table.to_pyarrow_table() == sample_data
 
 
