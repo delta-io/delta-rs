@@ -41,7 +41,7 @@ pub enum ListSchemasResponse {
 #[serde(untagged)]
 pub enum GetSchemaResponse {
     /// Successful response
-    Success(Schema),
+    Success(Box<Schema>),
     /// Error response
     Error(ErrorResponse),
 }
