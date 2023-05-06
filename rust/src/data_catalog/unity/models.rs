@@ -46,6 +46,21 @@ pub enum GetSchemaResponse {
     Error(ErrorResponse),
 }
 
+/// List table summaries response
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum ListTableSummariesResponse {
+    /// Successful response
+    Success {
+        /// Basic table infos
+        tables: Vec<TableSummary>,
+        /// Continuation token
+        next_page_token: Option<String>,
+    },
+    /// Error response
+    Error(ErrorResponse),
+}
+
 /// A schema within a catalog
 #[derive(Deserialize)]
 pub struct Schema {
@@ -106,6 +121,27 @@ pub enum DataSourceFormat {
     Text,
     UnityCatalog,
     Deltasharing,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[allow(missing_docs)]
+/// Possible data source formats for unity tables
+pub enum TableType {
+    Managed,
+    External,
+    View,
+    MaterializedView,
+    StreamingTable,
+}
+
+///
+#[derive(Deserialize)]
+pub struct TableSummary {
+    /// The full name of the table.
+    pub full_name: String,
+    /// Type of table
+    pub table_type: TableType,
 }
 
 /// A table within a schema
