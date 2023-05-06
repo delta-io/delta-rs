@@ -125,8 +125,11 @@ impl CreateBuilder {
     }
 
     /// Specify columns to append to schema
-    pub fn with_columns(mut self, columns: impl IntoIterator<Item = SchemaField>) -> Self {
-        self.columns.extend(columns);
+    pub fn with_columns(
+        mut self,
+        columns: impl IntoIterator<Item = impl Into<SchemaField>>,
+    ) -> Self {
+        self.columns.extend(columns.into_iter().map(|c| c.into()));
         self
     }
 
@@ -269,7 +272,7 @@ impl CreateBuilder {
         actions.extend(
             self.actions
                 .into_iter()
-                .filter(|a| matches!(a, Action::protocol(_))),
+                .filter(|a| !matches!(a, Action::protocol(_))),
         );
 
         Ok((table, actions, operation))

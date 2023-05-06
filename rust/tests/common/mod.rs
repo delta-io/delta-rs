@@ -1,5 +1,4 @@
-#![allow(dead_code)]
-#![allow(unused_variables)]
+#![allow(dead_code, unused_variables, deprecated)]
 
 use bytes::Bytes;
 use deltalake::action::{self, Add, Remove};

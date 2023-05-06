@@ -145,7 +145,7 @@ The delta log maintains basic metadata about a table, including:
 * A unique ``id``
 * A ``name``, if provided
 * A ``description``, if provided
-* The list of ``partitionColumns``.
+* The list of ``partition_columns``.
 * The ``created_time`` of the table
 * A map of table ``configuration``. This includes fields such as ``delta.appendOnly``,
   which if ``true`` indicates the table is not meant to have data deleted from it.
@@ -399,7 +399,23 @@ only list the files to be deleted. Pass ``dry_run=False`` to actually delete fil
 Optimizing tables
 ~~~~~~~~~~~~~~~~~
 
-Optimizing tables is not currently supported.
+Optimizing a table will perform bin-packing on a Delta Table which merges small files
+into a large file. Bin-packing reduces the number of API calls required for read operations.
+Optimizing will increments the table's version and creates remove actions for optimized files.
+Optimize does not delete files from storage. To delete files that were removed, call :meth:`DeltaTable.vacuum`.
+
+Use :meth:`DeltaTable.optimize` to perform the optimize operation. Note that this method will fail if a
+concurrent writer performs an operation that removes any files (such as an overwrite).
+
+.. code-block:: python
+
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.optimize()
+    {'numFilesAdded': 1, 'numFilesRemoved': 5,
+     'filesAdded': {'min': 555, 'max': 555, 'avg': 555.0, 'totalFiles': 1, 'totalSize': 555},
+     'filesRemoved': {'min': 262, 'max': 429, 'avg': 362.2, 'totalFiles': 5, 'totalSize': 1811},
+     'partitionsOptimized': 1, 'numBatches': 1, 'totalConsideredFiles': 5,
+     'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
 
 Writing Delta Tables
 --------------------
