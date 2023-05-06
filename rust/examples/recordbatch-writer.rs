@@ -188,15 +188,15 @@ fn convert_to_batch(table: &DeltaTable, records: &Vec<WeatherRecord>) -> RecordB
  * Table in an existing directory that doesn't currently contain a Delta table
  */
 async fn create_initialized_table(table_path: &Path) -> DeltaTable {
-    let table = DeltaOps::try_from_uri(table_path)
+    
+
+    DeltaOps::try_from_uri(table_path)
         .await
         .unwrap()
         .create()
         .with_columns(WeatherRecord::columns())
         .await
-        .unwrap();
-
-    table
+        .unwrap()
 }
 
 #[cfg(test)]
