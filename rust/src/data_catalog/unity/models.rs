@@ -62,7 +62,7 @@ pub enum ListTableSummariesResponse {
 }
 
 /// A schema within a catalog
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 pub struct Schema {
     /// Username of schema creator.
     pub created_by: String,
@@ -112,6 +112,7 @@ pub struct Schema {
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
 pub enum DataSourceFormat {
+    Undefined,
     Delta,
     Csv,
     Json,
@@ -123,16 +124,29 @@ pub enum DataSourceFormat {
     Deltasharing,
 }
 
+impl Default for DataSourceFormat {
+    fn default() -> Self {
+        DataSourceFormat::Undefined
+    }
+}
+
 #[derive(Deserialize)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
 pub enum TableType {
+    Undefined,
     Managed,
     External,
     View,
     MaterializedView,
     StreamingTable,
+}
+
+impl Default for TableType {
+    fn default() -> Self {
+        TableType::Undefined
+    }
 }
 
 ///
@@ -145,7 +159,7 @@ pub struct TableSummary {
 }
 
 /// A table within a schema
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 pub struct Table {
     /// Username of table creator.
     pub created_by: String,
