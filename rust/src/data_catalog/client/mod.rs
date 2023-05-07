@@ -10,7 +10,6 @@ pub mod token;
 
 use reqwest::header::{HeaderMap, HeaderValue};
 use reqwest::{Client, ClientBuilder, Proxy};
-use std::collections::HashMap;
 use std::time::Duration;
 
 fn map_client_error(e: reqwest::Error) -> super::DataCatalogError {
@@ -26,8 +25,6 @@ static DEFAULT_USER_AGENT: &str = concat!(env!("CARGO_PKG_NAME"), "/", env!("CAR
 #[derive(Debug, Clone, Default)]
 pub struct ClientOptions {
     user_agent: Option<HeaderValue>,
-    content_type_map: HashMap<String, String>,
-    default_content_type: Option<String>,
     default_headers: Option<HeaderMap>,
     proxy_url: Option<String>,
     allow_http: bool,
@@ -54,22 +51,6 @@ impl ClientOptions {
     /// Default is based on the version of this crate
     pub fn with_user_agent(mut self, agent: HeaderValue) -> Self {
         self.user_agent = Some(agent);
-        self
-    }
-
-    /// Set the default CONTENT_TYPE for uploads
-    pub fn with_default_content_type(mut self, mime: impl Into<String>) -> Self {
-        self.default_content_type = Some(mime.into());
-        self
-    }
-
-    /// Set the CONTENT_TYPE for a given file extension
-    pub fn with_content_type_for_suffix(
-        mut self,
-        extension: impl Into<String>,
-        mime: impl Into<String>,
-    ) -> Self {
-        self.content_type_map.insert(extension.into(), mime.into());
         self
     }
 
