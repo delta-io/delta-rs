@@ -107,11 +107,12 @@ pub struct Schema {
     pub metastore_id: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
 pub enum DataSourceFormat {
+    #[default]
     Undefined,
     Delta,
     Csv,
@@ -124,29 +125,18 @@ pub enum DataSourceFormat {
     Deltasharing,
 }
 
-impl Default for DataSourceFormat {
-    fn default() -> Self {
-        DataSourceFormat::Undefined
-    }
-}
-
-#[derive(Deserialize)]
+#[derive(Deserialize, Default)]
 #[serde(rename_all = "SCREAMING_SNAKE_CASE")]
 #[allow(missing_docs)]
 /// Possible data source formats for unity tables
 pub enum TableType {
+    #[default]
     Undefined,
     Managed,
     External,
     View,
     MaterializedView,
     StreamingTable,
-}
-
-impl Default for TableType {
-    fn default() -> Self {
-        TableType::Undefined
-    }
 }
 
 ///
