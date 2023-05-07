@@ -11,6 +11,7 @@ use self::models::{
 };
 use super::client::retry::RetryExt;
 use super::{client::retry::RetryConfig, CatalogResult, DataCatalog, DataCatalogError};
+use crate::storage::str_is_truthy;
 
 pub mod credential;
 #[cfg(feature = "datafusion")]
@@ -48,6 +49,15 @@ enum UnityCatalogError {
     /// Unknown configuration key
     #[error("Failed to get a credential from UnityCatalog client configuration.")]
     MissingCredential,
+
+    #[error("Azure CLI error: {message}")]
+    AzureCli {
+        /// Error description
+        message: String,
+    },
+
+    #[error("Missing or corrupted federated token file for WorkloadIdentity.")]
+    FederatedTokenFile,
 }
 
 impl From<UnityCatalogError> for DataCatalogError {
@@ -99,13 +109,58 @@ pub enum UnityCatalogConfigKey {
     /// - `client_secret`
     ClientSecret,
 
-    /// Tenant id used in oauth flows
+    /// Authority (tenant) id used in oauth flows
     ///
     /// Supported keys:
     /// - `azure_tenant_id`
     /// - `unity_tenant_id`
     /// - `tenant_id`
-    TenantId,
+    AuthorityId,
+
+    /// Authority host used in oauth flows
+    ///
+    /// Supported keys:
+    /// - `azure_authority_host`
+    /// - `unity_authority_host`
+    /// - `authority_host`
+    AuthorityHost,
+
+    /// Endpoint to request a imds managed identity token
+    ///
+    /// Supported keys:
+    /// - `azure_msi_endpoint`
+    /// - `azure_identity_endpoint`
+    /// - `identity_endpoint`
+    /// - `msi_endpoint`
+    MsiEndpoint,
+
+    /// Object id for use with managed identity authentication
+    ///
+    /// Supported keys:
+    /// - `azure_object_id`
+    /// - `object_id`
+    ObjectId,
+
+    /// Msi resource id for use with managed identity authentication
+    ///
+    /// Supported keys:
+    /// - `azure_msi_resource_id`
+    /// - `msi_resource_id`
+    MsiResourceId,
+
+    /// File containing token for Azure AD workload identity federation
+    ///
+    /// Supported keys:
+    /// - `azure_federated_token_file`
+    /// - `federated_token_file`
+    FederatedTokenFile,
+
+    /// Use azure cli for acquiring access token
+    ///
+    /// Supported keys:
+    /// - `azure_use_azure_cli`
+    /// - `use_azure_cli`
+    UseAzureCli,
 }
 
 impl FromStr for UnityCatalogConfigKey {
@@ -113,11 +168,38 @@ impl FromStr for UnityCatalogConfigKey {
 
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s {
-            "workspace_url" | "unity_workspace_url" | "databricks_workspace_url" => {
-                Ok(UnityCatalogConfigKey::WorkspaceUrl)
-            }
             "access_token" | "unity_access_token" | "databricks_access_token" => {
                 Ok(UnityCatalogConfigKey::AccessToken)
+            }
+            "authority_host" | "unity_authority_host" | "databricks_authority_host" => {
+                Ok(UnityCatalogConfigKey::AuthorityHost)
+            }
+            "authority_id" | "unity_authority_id" | "databricks_authority_id" => {
+                Ok(UnityCatalogConfigKey::AuthorityId)
+            }
+            "client_id" | "unity_client_id" | "databricks_client_id" => {
+                Ok(UnityCatalogConfigKey::ClientId)
+            }
+            "client_secret" | "unity_client_secret" | "databricks_client_secret" => {
+                Ok(UnityCatalogConfigKey::ClientSecret)
+            }
+            "federated_token_file"
+            | "unity_federated_token_file"
+            | "databricks_federated_token_file" => Ok(UnityCatalogConfigKey::FederatedTokenFile),
+            "msi_endpoint" | "unity_msi_endpoint" | "databricks_msi_endpoint" => {
+                Ok(UnityCatalogConfigKey::MsiEndpoint)
+            }
+            "msi_resource_id" | "unity_msi_resource_id" | "databricks_msi_resource_id" => {
+                Ok(UnityCatalogConfigKey::MsiResourceId)
+            }
+            "object_id" | "unity_object_id" | "databricks_object_id" => {
+                Ok(UnityCatalogConfigKey::ObjectId)
+            }
+            "use_azure_cli" | "unity_use_azure_cli" | "databricks_use_azure_cli" => {
+                Ok(UnityCatalogConfigKey::UseAzureCli)
+            }
+            "workspace_url" | "unity_workspace_url" | "databricks_workspace_url" => {
+                Ok(UnityCatalogConfigKey::WorkspaceUrl)
             }
             _ => Err(UnityCatalogError::UnknownConfigKey(s.into()).into()),
         }
@@ -127,11 +209,17 @@ impl FromStr for UnityCatalogConfigKey {
 impl AsRef<str> for UnityCatalogConfigKey {
     fn as_ref(&self) -> &str {
         match self {
-            UnityCatalogConfigKey::WorkspaceUrl => "unity_workspace_url",
             UnityCatalogConfigKey::AccessToken => "unity_access_token",
-            UnityCatalogConfigKey::TenantId => "unity_tenant_id",
+            UnityCatalogConfigKey::AuthorityHost => "unity_authority_host",
+            UnityCatalogConfigKey::AuthorityId => "unity_authority_id",
             UnityCatalogConfigKey::ClientId => "unity_client_id",
             UnityCatalogConfigKey::ClientSecret => "unity_client_secret",
+            UnityCatalogConfigKey::FederatedTokenFile => "unity_federated_token_file",
+            UnityCatalogConfigKey::MsiEndpoint => "unity_msi_endpoint",
+            UnityCatalogConfigKey::MsiResourceId => "unity_msi_resource_id",
+            UnityCatalogConfigKey::ObjectId => "unity_object_id",
+            UnityCatalogConfigKey::UseAzureCli => "unity_use_azure_cli",
+            UnityCatalogConfigKey::WorkspaceUrl => "unity_workspace_url",
         }
     }
 }
@@ -152,7 +240,28 @@ pub struct UnityCatalogBuilder {
     client_secret: Option<String>,
 
     /// Tenant id
-    tenant_id: Option<String>,
+    authority_id: Option<String>,
+
+    /// Authority host
+    authority_host: Option<String>,
+
+    /// Msi endpoint for acquiring managed identity token
+    msi_endpoint: Option<String>,
+
+    /// Object id for use with managed identity authentication
+    object_id: Option<String>,
+
+    /// Msi resource id for use with managed identity authentication
+    msi_resource_id: Option<String>,
+
+    /// File containing token for Azure AD workload identity federation
+    federated_token_file: Option<String>,
+
+    /// When set to true, azure cli has to be used for acquiring access token
+    use_azure_cli: bool,
+
+    /// Retry config
+    retry_config: RetryConfig,
 
     /// Options for the underlying http client
     client_options: super::client::ClientOptions,
@@ -175,7 +284,15 @@ impl UnityCatalogBuilder {
             UnityCatalogConfigKey::AccessToken => self.bearer_token = Some(value.into()),
             UnityCatalogConfigKey::ClientId => self.client_id = Some(value.into()),
             UnityCatalogConfigKey::ClientSecret => self.client_secret = Some(value.into()),
-            UnityCatalogConfigKey::TenantId => self.tenant_id = Some(value.into()),
+            UnityCatalogConfigKey::AuthorityId => self.authority_id = Some(value.into()),
+            UnityCatalogConfigKey::AuthorityHost => self.authority_host = Some(value.into()),
+            UnityCatalogConfigKey::MsiEndpoint => self.msi_endpoint = Some(value.into()),
+            UnityCatalogConfigKey::ObjectId => self.object_id = Some(value.into()),
+            UnityCatalogConfigKey::MsiResourceId => self.msi_resource_id = Some(value.into()),
+            UnityCatalogConfigKey::FederatedTokenFile => {
+                self.federated_token_file = Some(value.into())
+            }
+            UnityCatalogConfigKey::UseAzureCli => self.use_azure_cli = str_is_truthy(&value.into()),
         };
         Ok(self)
     }
@@ -229,9 +346,9 @@ impl UnityCatalogBuilder {
         self
     }
 
-    /// Sets the tenant id for use in client secret or k8s federated credential flow
-    pub fn with_tenant_id(mut self, tenant_id: impl Into<String>) -> Self {
-        self.tenant_id = Some(tenant_id.into());
+    /// Sets the authority id for use service principal credential based authentication
+    pub fn with_authority_id(mut self, tenant_id: impl Into<String>) -> Self {
+        self.authority_id = Some(tenant_id.into());
         self
     }
 
@@ -252,8 +369,42 @@ impl UnityCatalogBuilder {
         self
     }
 
+    /// Sets the retry config, overriding any already set
+    pub fn with_retry_config(mut self, config: RetryConfig) -> Self {
+        self.retry_config = config;
+        self
+    }
+
+    fn get_credential_provider(&self) -> Option<CredentialProvider> {
+        if let Some(token) = self.bearer_token.as_ref() {
+            return Some(CredentialProvider::BearerToken(token.clone()));
+        }
+
+        if let (Some(client_id), Some(client_secret), Some(authority_id)) = (
+            self.client_id.as_ref(),
+            self.client_secret.as_ref(),
+            self.authority_id.as_ref(),
+        ) {
+            return Some(CredentialProvider::TokenCredential(
+                Default::default(),
+                Box::new(ClientSecretOAuthProvider::new(
+                    client_id,
+                    client_secret,
+                    authority_id,
+                    self.authority_host.as_ref(),
+                )),
+            ));
+        }
+
+        None
+    }
+
     /// Build an instance of [`UnityCatalog`]
     pub fn build(self) -> CatalogResult<UnityCatalog> {
+        let credential = self
+            .get_credential_provider()
+            .ok_or(UnityCatalogError::MissingCredential)?;
+
         let workspace_url = self
             .workspace_url
             .ok_or(UnityCatalogError::MissingConfiguration(
@@ -262,31 +413,13 @@ impl UnityCatalogBuilder {
             .trim_end_matches('/')
             .to_string();
 
-        let credential = if let Some(token) = self.bearer_token {
-            Ok(CredentialProvider::BearerToken(token))
-        } else if let (Some(client_id), Some(client_secret), Some(tenant_id)) =
-            (self.client_id, self.client_secret, self.tenant_id)
-        {
-            Ok(CredentialProvider::TokenCredential(
-                Default::default(),
-                Box::new(ClientSecretOAuthProvider::new(
-                    client_id,
-                    client_secret,
-                    tenant_id,
-                    None,
-                )),
-            ))
-        } else {
-            Err(UnityCatalogError::MissingCredential)
-        }?;
-
         let client = self.client_options.client()?;
 
         Ok(UnityCatalog {
             client,
             workspace_url,
             credential,
-            retry_config: Default::default(),
+            retry_config: self.retry_config,
         })
     }
 }
