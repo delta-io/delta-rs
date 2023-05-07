@@ -27,18 +27,14 @@
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-
-          
-          
-          <a href="index.html" class="icon icon-home">
-            delta-rs
+            <a href="index.html" class="icon icon-home"> delta-rs
           </a>
               <div class="version">
-                0.8.1
+                0.9.0
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
-    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
+    <input type="text" name="q" placeholder="Search docs" />
     <input type="hidden" name="check_keywords" value="yes" />
     <input type="hidden" name="area" value="default" />
   </form>
@@ -87,8 +83,8 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
-      <li class="breadcrumb-item active">Usage</li>
+      <li><a href="index.html" class="icon icon-home"></a> &raquo;</li>
+      <li>Usage</li>
       <li class="wy-breadcrumbs-aside">
               <a href="https://github.com/delta-io/delta-rs/blob/main/python/docs/source/usage.rst" class="fa fa-github"> Edit on GitHub</a>
       </li>
@@ -149,7 +145,7 @@ being used. We try to support many of the well-known formats to identify basic s
 </ul>
 </div></blockquote>
 <p>Alternatively, if you have a data catalog you can load it by reference to a
-database and table name. Currently only AWS Glue is supported.</p>
+database and table name. Currently supported are AWS Glue and Databricks Unity Catalog.</p>
 <p>For AWS Glue catalog, use AWS environment variables to authenticate.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 <span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DataCatalog</span>
@@ -161,14 +157,29 @@ database and table name. Currently only AWS Glue is supported.</p>
 <span class="go">{&#39;id&#39;: [5, 7, 9, 5, 6, 7, 8, 9]}</span>
 </pre></div>
 </div>
+<dl class="simple">
+<dt>For Databricks Unity Catalog authentication, use environment variables:</dt><dd><ul class="simple">
+<li><p>DATABRICKS_WORKSPACE_URL (e.g. <a class="reference external" href="https://adb-62800498333851.30.azuredatabricks.net">https://adb-62800498333851.30.azuredatabricks.net</a>)</p></li>
+<li><p>DATABRICKS_ACCESS_TOKEN</p></li>
+</ul>
+</dd>
+</dl>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DataCatalog</span><span class="p">,</span> <span class="n">DeltaTable</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">catalog_name</span> <span class="o">=</span> <span class="s1">&#39;main&#39;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">schema_name</span> <span class="o">=</span> <span class="s1">&#39;db_schema&#39;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">table_name</span> <span class="o">=</span> <span class="s1">&#39;db_table&#39;</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">data_catalog</span> <span class="o">=</span> <span class="n">DataCatalog</span><span class="o">.</span><span class="n">UNITY</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="o">.</span><span class="n">from_data_catalog</span><span class="p">(</span><span class="n">data_catalog</span><span class="o">=</span><span class="n">data_catalog</span><span class="p">,</span> <span class="n">data_catalog_id</span><span class="o">=</span><span class="n">catalog_name</span><span class="p">,</span> <span class="n">database_name</span><span class="o">=</span><span class="n">schema_name</span><span class="p">,</span> <span class="n">table_name</span><span class="o">=</span><span class="n">table_name</span><span class="p">)</span>
+</pre></div>
+</div>
 <section id="custom-storage-backends">
 <h3>Custom Storage Backends<a class="headerlink" href="#custom-storage-backends" title="Permalink to this headline"></a></h3>
 <p>While delta always needs its internal storage backend to work and be properly configured, in order to manage the delta log,
 it may sometime be advantageous - and is common practice in the arrow world - to customize the storage interface used for
 reading the bulk data.</p>
-<p><code class="docutils literal notranslate"><span class="pre">deltalake</span></code> will work with any storage compliant with <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v11.0.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.FileSystem</span></code></a>, however the root of the filesystem has
+<p><code class="docutils literal notranslate"><span class="pre">deltalake</span></code> will work with any storage compliant with <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v12.0.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.FileSystem</span></code></a>, however the root of the filesystem has
 to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into
-a <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.SubTreeFileSystem.html#pyarrow.fs.SubTreeFileSystem" title="(in Apache Arrow v11.0.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.SubTreeFileSystem</span></code></a>.</p>
+a <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.SubTreeFileSystem.html#pyarrow.fs.SubTreeFileSystem" title="(in Apache Arrow v12.0.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.SubTreeFileSystem</span></code></a>.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pyarrow.fs</span> <span class="k">as</span> <span class="nn">fs</span>
 <span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 
@@ -222,7 +233,7 @@ case an exception will be thrown. See <a class="reference internal" href="#vacuu
 <li><p>A unique <code class="docutils literal notranslate"><span class="pre">id</span></code></p></li>
 <li><p>A <code class="docutils literal notranslate"><span class="pre">name</span></code>, if provided</p></li>
 <li><p>A <code class="docutils literal notranslate"><span class="pre">description</span></code>, if provided</p></li>
-<li><p>The list of <code class="docutils literal notranslate"><span class="pre">partitionColumns</span></code>.</p></li>
+<li><p>The list of <code class="docutils literal notranslate"><span class="pre">partition_columns</span></code>.</p></li>
 <li><p>The <code class="docutils literal notranslate"><span class="pre">created_time</span></code> of the table</p></li>
 <li><p>A map of table <code class="docutils literal notranslate"><span class="pre">configuration</span></code>. This includes fields such as <code class="docutils literal notranslate"><span class="pre">delta.appendOnly</span></code>,
 which if <code class="docutils literal notranslate"><span class="pre">true</span></code> indicates the table is not meant to have data deleted from it.</p></li>
@@ -399,7 +410,7 @@ you can pass them to <code class="docutils literal notranslate"><span class="pre
 <span class="go">npartitions=6</span>
 <span class="go">               object  category[known]  category[known]  category[known]</span>
 <span class="go">                  ...              ...              ...              ...</span>
-<span class="gp">... </span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>
+<span class="go">...               ...              ...              ...              ...</span>
 <span class="go">                  ...              ...              ...              ...</span>
 <span class="go">                  ...              ...              ...              ...</span>
 <span class="go">Dask Name: read-parquet, 6 tasks</span>
@@ -440,7 +451,21 @@ only list the files to be deleted. Pass <code class="docutils literal notranslat
 </section>
 <section id="optimizing-tables">
 <h3>Optimizing tables<a class="headerlink" href="#optimizing-tables" title="Permalink to this headline"></a></h3>
-<p>Optimizing tables is not currently supported.</p>
+<p>Optimizing a table will perform bin-packing on a Delta Table which merges small files
+into a large file. Bin-packing reduces the number of API calls required for read operations.
+Optimizing will increments the table’s version and creates remove actions for optimized files.
+Optimize does not delete files from storage. To delete files that were removed, call <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.vacuum" title="deltalake.table.DeltaTable.vacuum"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.vacuum()</span></code></a>.</p>
+<p>Use <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.optimize" title="deltalake.table.DeltaTable.optimize"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.optimize()</span></code></a> to perform the optimize operation. Note that this method will fail if a
+concurrent writer performs an operation that removes any files (such as an overwrite).</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="p">()</span>
+<span class="go">{&#39;numFilesAdded&#39;: 1, &#39;numFilesRemoved&#39;: 5,</span>
+<span class="go"> &#39;filesAdded&#39;: {&#39;min&#39;: 555, &#39;max&#39;: 555, &#39;avg&#39;: 555.0, &#39;totalFiles&#39;: 1, &#39;totalSize&#39;: 555},</span>
+<span class="go"> &#39;filesRemoved&#39;: {&#39;min&#39;: 262, &#39;max&#39;: 429, &#39;avg&#39;: 362.2, &#39;totalFiles&#39;: 5, &#39;totalSize&#39;: 1811},</span>
+<span class="go"> &#39;partitionsOptimized&#39;: 1, &#39;numBatches&#39;: 1, &#39;totalConsideredFiles&#39;: 5,</span>
+<span class="go"> &#39;totalFilesSkipped&#39;: 0, &#39;preserveInsertionOrder&#39;: True}</span>
+</pre></div>
+</div>
 </section>
 </section>
 <section id="writing-delta-tables">
@@ -456,7 +481,7 @@ DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p><a class="reference internal" href="api_reference.html#deltalake.write_deltalake" title="deltalake.write_deltalake"><code class="xref py py-func docutils literal notranslate"><span class="pre">write_deltalake()</span></code></a> accepts a Pandas DataFrame, but will convert it to
-a Arrow table before writing. See caveats in <a class="reference external" href="https://arrow.apache.org/docs/python/pandas.html" title="(in Apache Arrow v11.0.0)"><span>Pandas Integration</span></a>.</p>
+a Arrow table before writing. See caveats in <a class="reference external" href="https://arrow.apache.org/docs/python/pandas.html" title="(in Apache Arrow v12.0.0)"><span>Pandas Integration</span></a>.</p>
 </div>
 <p>By default, writes create a new table and error if it already exists. This is
 controlled by the <code class="docutils literal notranslate"><span class="pre">mode</span></code> parameter, which mirrors the behavior of Spark’s
