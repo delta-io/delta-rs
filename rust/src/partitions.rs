@@ -189,8 +189,20 @@ pub struct DeltaTablePartition<'a> {
     pub value: &'a str,
 }
 
-/// Create a DeltaTable partition from a HivePartition string.
-/// A HivePartition string is represented by a "key=value" format.
+/**
+ * Create a DeltaTable partition from a HivePartition string.
+ *
+ * A HivePartition string is represented by a "key=value" format.
+ *
+ * ```rust
+ * use deltalake::DeltaTablePartition;
+ *
+ * let hive_part = "ds=2023-01-01";
+ * let partition = DeltaTablePartition::try_from(hive_part).unwrap();
+ * assert_eq!("ds", partition.key);
+ * assert_eq!("2023-01-01", partition.value);
+ * ```
+ */
 impl<'a> TryFrom<&'a str> for DeltaTablePartition<'a> {
     type Error = DeltaTableError;
 
@@ -211,7 +223,20 @@ impl<'a> TryFrom<&'a str> for DeltaTablePartition<'a> {
 }
 
 impl<'a> DeltaTablePartition<'a> {
-    /// Try to create a DeltaTable partition from a partition value kv pair.
+    /**
+     * Try to create a DeltaTable partition from a partition value kv pair.
+     *
+     * ```rust
+     * use deltalake::DeltaTablePartition;
+     *
+     * let value = (&"ds".to_string(), &Some("2023-01-01".to_string()));
+     * let null_default = "1979-01-01";
+     * let partition = DeltaTablePartition::from_partition_value(value, null_default);
+     *
+     * assert_eq!("ds", partition.key);
+     * assert_eq!("2023-01-01", partition.value);
+     * ```
+     */
     pub fn from_partition_value(
         partition_value: (&'a String, &'a Option<String>),
         default_for_null: &'a str,
@@ -222,5 +247,17 @@ impl<'a> DeltaTablePartition<'a> {
             None => default_for_null,
         };
         DeltaTablePartition { key: k, value: v }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn tryfrom_invalid() {
+        let buf = "this-is-not-a-partition";
+        let partition = DeltaTablePartition::try_from(buf);
+        assert!(partition.is_err());
     }
 }
