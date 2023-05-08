@@ -15,7 +15,7 @@ edition = "2021"
 [dependencies]
 arrow = { version = "37", optional = true }
 arrow-array = { version = "37", optional = true }
-arrow-cast = { version = "37", optional = true }
+arrow-cast = { version = "38", optional = true }
 arrow-schema = { version = "37", optional = true }
 async-trait = "0.1"
 bytes = "1"
