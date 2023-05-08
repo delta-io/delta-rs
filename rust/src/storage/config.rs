@@ -110,7 +110,9 @@ pub(crate) fn configure_store(
                 .ok_or_else(|| DeltaTableError::InvalidTableLocation(url.to_string()))?,
         ),
         "memory" => try_configure_memory(url),
-        "az" | "abfs" | "abfss" | "azure" | "wasb" | "adl" => try_configure_azure(url, options),
+        "az" | "abfs" | "abfss" | "azure" | "wasb" | "wasbs" | "adl" => {
+            try_configure_azure(url, options)
+        }
         "s3" | "s3a" => try_configure_s3(url, options),
         "gs" => try_configure_gcs(url, options),
         "hdfs" => try_configure_hdfs(url, options),
