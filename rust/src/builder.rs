@@ -349,8 +349,8 @@ pub(crate) fn str_option(map: &HashMap<String, String>, key: &str) -> Option<Str
 lazy_static::lazy_static! {
     static ref KNOWN_SCHEMES: Vec<&'static str> =
         Vec::from([
-            "file", "memory", "az", "abfs", "abfss", "azure", "wasb", "adl", "s3", "s3a", "gs", "hdfs",
-            "https", "http",
+            "file", "memory", "az", "abfs", "abfss", "azure", "wasb", "wasbs", "adl", "s3", "s3a",
+            "gs", "hdfs", "https", "http",
         ]);
 }
 
