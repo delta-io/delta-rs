@@ -389,6 +389,7 @@ given filters.
         :return: the metrics from optimize
         """
         metrics = self._table.optimize(partition_filters, target_size)
+        self.update_incremental()
         return json.loads(metrics)
 
     def pyarrow_schema(self) -> pyarrow.Schema:

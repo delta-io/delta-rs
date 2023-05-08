@@ -43,7 +43,7 @@ features = ["tokio-runtime"]
 [dependencies.deltalake]
 path = "../rust"
 version = "0"
-features = ["azure", "gcs", "python", "datafusion"]
+features = ["azure", "gcs", "python", "datafusion", "unity-experimental"]
 
 [features]
 default = ["rustls"]
