@@ -26,7 +26,7 @@ use crate::action::{Action, Add, DeltaOperation, Remove, SaveMode};
 use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::schema::Schema;
-use crate::storage::DeltaObjectStore;
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 use crate::table_state::DeltaTableState;
 use crate::writer::record_batch::divide_by_partition_values;
 use crate::writer::utils::PartitionPath;
@@ -38,6 +38,7 @@ use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use futures::future::BoxFuture;
 use futures::StreamExt;
+use parquet::file::properties::WriterProperties;
 
 #[derive(thiserror::Error, Debug)]
 enum WriteError {
@@ -205,6 +206,66 @@ impl WriteBuilder {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn write_execution_plan(
+    snapshot: &DeltaTableState,
+    state: SessionState,
+    plan: Arc<dyn ExecutionPlan>,
+    partition_columns: Vec<String>,
+    object_store: ObjectStoreRef,
+    target_file_size: Option<usize>,
+    write_batch_size: Option<usize>,
+    writer_properties: Option<WriterProperties>,
+) -> DeltaResult<Vec<Add>> {
+    let invariants = snapshot
+        .current_metadata()
+        .and_then(|meta| meta.schema.get_invariants().ok())
+        .unwrap_or_default();
+    let checker = DeltaDataChecker::new(invariants);
+
+    // Write data to disk
+    let mut tasks = vec![];
+    for i in 0..plan.output_partitioning().partition_count() {
+        let inner_plan = plan.clone();
+        let task_ctx = Arc::new(TaskContext::from(&state));
+        let config = WriterConfig::new(
+            inner_plan.schema(),
+            partition_columns.clone(),
+            writer_properties.clone(),
+            target_file_size,
+            write_batch_size,
+        );
+        let mut writer = DeltaWriter::new(object_store.clone(), config);
+        let checker_stream = checker.clone();
+        let schema = inner_plan.schema().clone();
+        let mut stream = inner_plan.execute(i, task_ctx)?;
+        let handle: tokio::task::JoinHandle<DeltaResult<Vec<Add>>> =
+            tokio::task::spawn(async move {
+                while let Some(maybe_batch) = stream.next().await {
+                    let batch = maybe_batch?;
+                    checker_stream.check_batch(&batch).await?;
+                    let arr = cast_record_batch(&batch, schema.clone())?;
+                    writer.write(&arr).await?;
+                }
+                writer.close().await
+            });
+
+        tasks.push(handle);
+    }
+
+    // Collect add actions to add to commit
+    Ok(futures::future::join_all(tasks)
+        .await
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|err| WriteError::WriteTask { source: err })?
+        .into_iter()
+        .collect::<Result<Vec<_>, _>>()?
+        .concat()
+        .into_iter()
+        .collect::<Vec<_>>())
+}
+
 impl std::future::IntoFuture for WriteBuilder {
     type Output = DeltaResult<DeltaTable>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
@@ -297,62 +358,26 @@ impl std::future::IntoFuture for WriteBuilder {
                 Err(WriteError::MissingData)
             }?;
 
-            let invariants = this
-                .snapshot
-                .current_metadata()
-                .and_then(|meta| meta.schema.get_invariants().ok())
-                .unwrap_or_default();
-            let checker = DeltaDataChecker::new(invariants);
-
-            // Write data to disk
-            let mut tasks = vec![];
-            for i in 0..plan.output_partitioning().partition_count() {
-                let inner_plan = plan.clone();
-                let task_ctx = Arc::from(if let Some(state) = this.state.clone() {
-                    TaskContext::from(&state)
-                } else {
+            let state = match this.state {
+                Some(state) => state,
+                None => {
                     let ctx = SessionContext::new();
-                    TaskContext::from(&ctx)
-                });
-                let config = WriterConfig::new(
-                    inner_plan.schema(),
-                    partition_columns.clone(),
-                    None,
-                    this.target_file_size,
-                    this.write_batch_size,
-                );
-                let mut writer = DeltaWriter::new(this.store.clone(), config);
-                let checker_stream = checker.clone();
-                let schema = inner_plan.schema().clone();
-                let mut stream = inner_plan.execute(i, task_ctx)?;
-                let handle: tokio::task::JoinHandle<DeltaResult<Vec<Add>>> =
-                    tokio::task::spawn(async move {
-                        while let Some(maybe_batch) = stream.next().await {
-                            let batch = maybe_batch?;
-                            checker_stream.check_batch(&batch).await?;
-                            let arr = cast_record_batch(&batch, schema.clone())?;
-                            writer.write(&arr).await?;
-                        }
-                        writer.close().await
-                    });
+                    ctx.state()
+                }
+            };
 
-                tasks.push(handle);
-            }
-
-            // Collect add actions to add to commit
-            let add_actions = futures::future::join_all(tasks)
-                .await
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()
-                .map_err(|err| WriteError::WriteTask { source: err })?
-                .into_iter()
-                .collect::<Result<Vec<_>, _>>()?
-                .concat()
-                .into_iter()
-                .map(Action::add)
-                .collect::<Vec<_>>();
-
-            actions.extend(add_actions);
+            let add_actions = write_execution_plan(
+                &this.snapshot,
+                state,
+                plan,
+                partition_columns.clone(),
+                this.store.clone(),
+                this.target_file_size,
+                this.write_batch_size,
+                None,
+            )
+            .await?;
+            actions.extend(add_actions.into_iter().map(Action::add));
 
             // Collect remove actions if we are overwriting the table
             if matches!(this.mode, SaveMode::Overwrite) {
