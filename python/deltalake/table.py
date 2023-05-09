@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, 
 import pyarrow
 import pyarrow.fs as pa_fs
 from pyarrow.dataset import FileSystemDataset, ParquetFileFormat, ParquetReadOptions
+from pyarrow.parquet.core import filters_to_expression
 
 if TYPE_CHECKING:
     import pandas
@@ -412,6 +413,9 @@ given filters.
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
+        filters: Optional[
+            Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]]
+        ] = None,
     ) -> pyarrow.Table:
         """
         Build a PyArrow Table using data from the DeltaTable.
@@ -419,17 +423,23 @@ given filters.
         :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
         :param columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
         :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
+        :param filters: A disjunctive normal form (DNF) for filter pushdown. The filters are expressed in a format that is compatible with `pyarrow.compute.Expression`
         :return: the PyArrow table
         """
+        if filters is not None:
+            filters = filters_to_expression(filters)
         return self.to_pyarrow_dataset(
             partitions=partitions, filesystem=filesystem
-        ).to_table(columns=columns)
+        ).to_table(columns=columns, filter=filters)
 
     def to_pandas(
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
+        filters: Optional[
+            Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]]
+        ] = None,
     ) -> "pandas.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
@@ -437,10 +447,14 @@ given filters.
         :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
         :param columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
         :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
+        :param filters: A disjunctive normal form (DNF) for filter pushdown. The filters are expressed in a format that is compatible with `pyarrow.compute.Expression`
         :return: a pandas dataframe
         """
         return self.to_pyarrow_table(
-            partitions=partitions, columns=columns, filesystem=filesystem
+            partitions=partitions,
+            columns=columns,
+            filesystem=filesystem,
+            filters=filters,
         ).to_pandas()
 
     def update_incremental(self) -> None:
