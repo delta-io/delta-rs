@@ -457,9 +457,9 @@ mod tests {
      */
     #[tokio::test]
     async fn test_divide_record_batch_with_map_single_partition() {
-        use crate::{action::Protocol, SchemaTypeStruct};
+        use crate::{DeltaOps, SchemaTypeStruct};
 
-        let mut table = crate::writer::test_utils::create_bare_table();
+        let table = crate::writer::test_utils::create_bare_table();
         let partition_cols = vec!["modified".to_string()];
         let delta_schema = r#"
         {"type" : "struct",
@@ -476,32 +476,10 @@ mod tests {
         let delta_schema: SchemaTypeStruct =
             serde_json::from_str(delta_schema).expect("Failed to parse schema");
 
-        let mut commit_info = serde_json::Map::<String, serde_json::Value>::new();
-        commit_info.insert(
-            "operation".to_string(),
-            serde_json::Value::String("CREATE TABLE".to_string()),
-        );
-        commit_info.insert(
-            "userName".to_string(),
-            serde_json::Value::String("test user".to_string()),
-        );
-
-        let protocol = Protocol {
-            min_reader_version: 1,
-            min_writer_version: 1,
-        };
-
-        let metadata = DeltaTableMetaData::new(
-            None,
-            None,
-            None,
-            delta_schema.clone(),
-            partition_cols.to_vec(),
-            HashMap::new(),
-        );
-
-        table
-            .create(metadata, protocol, Some(commit_info), None)
+        let table = DeltaOps(table)
+            .create()
+            .with_partition_columns(partition_cols.to_vec())
+            .with_columns(delta_schema.get_fields().clone())
             .await
             .unwrap();
 
