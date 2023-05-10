@@ -16,7 +16,7 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
     UInt64Type, UInt8Type,
 };
-use arrow::json::RawReaderBuilder;
+use arrow::json::ReaderBuilder;
 use arrow::record_batch::*;
 use object_store::path::Path;
 use parking_lot::RwLock;
@@ -125,7 +125,7 @@ pub fn record_batch_from_message(
     }
     // Reading the batch size of the message_buffer num rows to ensure this reads
     // a single RecordBatch out of the buffer
-    let mut decoder = RawReaderBuilder::new(arrow_schema)
+    let mut decoder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(message_buffer.len())
         .build_decoder()?;
 

@@ -417,7 +417,7 @@ mod tests {
         test_utils::{create_initialized_table, get_record_batch},
         utils::PartitionPath,
     };
-    use arrow::json::RawReaderBuilder;
+    use arrow::json::ReaderBuilder;
     use std::path::Path;
 
     #[tokio::test]
@@ -494,7 +494,7 @@ mod tests {
             <ArrowSchema as TryFrom<&Schema>>::try_from(&delta_schema).unwrap();
 
         // Using a batch size of two since the buf above only has two records
-        let mut decoder = RawReaderBuilder::new(Arc::new(schema))
+        let mut decoder = ReaderBuilder::new(Arc::new(schema))
             .with_batch_size(2)
             .build_decoder()
             .expect("Failed to build decoder");
