@@ -94,6 +94,18 @@ class ProtocolVersions(NamedTuple):
     min_writer_version: int
 
 
+FilterLiteralType = Tuple[str, str, Any]
+
+
+FilterConjunctionType = List[FilterLiteralType]
+
+
+FilterDNFType = List[FilterConjunctionType]
+
+
+FilterType = Union[FilterConjunctionType, FilterDNFType]
+
+
 def _check_contains_null(value: Any) -> bool:
     """
     Check if target contains nullish value.
@@ -112,9 +124,9 @@ def _check_contains_null(value: Any) -> bool:
 
 
 def _check_dnf(
-    dnf: List[List[Tuple[str, str, Any]]],
+    dnf: FilterDNFType,
     check_null_strings: bool = True,
-) -> List[List[Tuple[str, str, Any]]]:
+) -> FilterDNFType:
     """
     Check if DNF are well-formed.
     """
@@ -164,18 +176,16 @@ def _convert_single_predicate(column: str, op: str, value: Any) -> Expression:
         )
 
 
-def _filters_to_expression(
-    filters: Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]]
-) -> Expression:
+def _filters_to_expression(filters: FilterType) -> Expression:
     """
     Check if filters are well-formed and convert to an ``pyarrow.dataset.Expression``.
     """
     if isinstance(filters[0][0], str):
         # We have encountered the situation where we have one nesting level too few:
         #   We have [(,,), ..] instead of [[(,,), ..]]
-        dnf = cast(List[List[Tuple[str, str, Any]]], [filters])
+        dnf = cast(FilterDNFType, [filters])
     else:
-        dnf = cast(List[List[Tuple[str, str, Any]]], filters)
+        dnf = cast(FilterDNFType, filters)
     dnf = _check_dnf(dnf, check_null_strings=False)
     disjunction_members = []
     for conjunction in dnf:
@@ -521,9 +531,7 @@ given filters.
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
-        filters: Optional[
-            Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]]
-        ] = None,
+        filters: Optional[FilterType] = None,
     ) -> pyarrow.Table:
         """
         Build a PyArrow Table using data from the DeltaTable.
@@ -531,8 +539,7 @@ given filters.
         :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
         :param columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
         :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
-        :param filters: A disjunctive normal form (DNF) for filter pushdown. The filters are expressed in a format that is compatible with `pyarrow.compute.Expression`
-        :return: the PyArrow table
+        :param filters: A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass ``partitions``
         """
         if filters is not None:
             filters = _filters_to_expression(filters)
@@ -545,9 +552,7 @@ given filters.
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
         columns: Optional[List[str]] = None,
         filesystem: Optional[Union[str, pa_fs.FileSystem]] = None,
-        filters: Optional[
-            Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]]
-        ] = None,
+        filters: Optional[FilterType] = None,
     ) -> "pandas.DataFrame":
         """
         Build a pandas dataframe using data from the DeltaTable.
@@ -555,8 +560,7 @@ given filters.
         :param partitions: A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax
         :param columns: The columns to project. This can be a list of column names to include (order and duplicates will be preserved)
         :param filesystem: A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem
-        :param filters: A disjunctive normal form (DNF) for filter pushdown. The filters are expressed in a format that is compatible with `pyarrow.compute.Expression`
-        :return: a pandas dataframe
+        :param filters: A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass ``partitions``
         """
         return self.to_pyarrow_table(
             partitions=partitions,
