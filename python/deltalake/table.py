@@ -1,13 +1,29 @@
 import json
+import operator
 import warnings
 from dataclasses import dataclass
+from functools import reduce
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, List, NamedTuple, Optional, Tuple, Union
+from typing import (
+    TYPE_CHECKING,
+    Any,
+    Dict,
+    List,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+    cast,
+)
 
 import pyarrow
 import pyarrow.fs as pa_fs
-from pyarrow.dataset import FileSystemDataset, ParquetFileFormat, ParquetReadOptions
-from pyarrow.parquet.core import filters_to_expression
+from pyarrow.dataset import (
+    Expression,
+    FileSystemDataset,
+    ParquetFileFormat,
+    ParquetReadOptions,
+)
 
 if TYPE_CHECKING:
     import pandas
@@ -76,6 +92,98 @@ class Metadata:
 class ProtocolVersions(NamedTuple):
     min_reader_version: int
     min_writer_version: int
+
+
+def _check_contains_null(value: Any) -> bool:
+    """
+    Check if target contains nullish value.
+    """
+    if isinstance(value, bytes):
+        for byte in value:
+            if isinstance(byte, bytes):
+                compare_to = chr(0)
+            else:
+                compare_to = 0
+            if byte == compare_to:
+                return True
+    elif isinstance(value, str):
+        return "\x00" in value
+    return False
+
+
+def _check_dnf(
+    dnf: List[List[Tuple[str, str, Any]]],
+    check_null_strings: bool = True,
+) -> List[List[Tuple[str, str, Any]]]:
+    """
+    Check if DNF are well-formed.
+    """
+    if len(dnf) == 0 or any(len(c) == 0 for c in dnf):
+        raise ValueError("Malformed DNF")
+    if check_null_strings:
+        for conjunction in dnf:
+            for col, op, val in conjunction:
+                if (
+                    isinstance(val, list)
+                    and all(_check_contains_null(v) for v in val)
+                    or _check_contains_null(val)
+                ):
+                    raise NotImplementedError(
+                        "Null-terminated binary strings are not supported "
+                        "as filter values."
+                    )
+    return dnf
+
+
+def _convert_single_predicate(column: str, op: str, value: Any) -> Expression:
+    """
+    Convert given `tuple` to `pyarrow.dataset.Expression`.
+    """
+    import pyarrow.dataset as ds
+
+    field = ds.field(column)
+    if op == "=" or op == "==":
+        return field == value
+    elif op == "!=":
+        return field != value
+    elif op == "<":
+        return field < value
+    elif op == ">":
+        return field > value
+    elif op == "<=":
+        return field <= value
+    elif op == ">=":
+        return field >= value
+    elif op == "in":
+        return field.isin(value)
+    elif op == "not in":
+        return ~field.isin(value)
+    else:
+        raise ValueError(
+            f'"{(column, op, value)}" is not a valid operator in predicates.'
+        )
+
+
+def _filters_to_expression(
+    filters: Union[List[Tuple[str, str, Any]], List[List[Tuple[str, str, Any]]]]
+) -> Expression:
+    """
+    Check if filters are well-formed and convert to an ``pyarrow.dataset.Expression``.
+    """
+    if isinstance(filters[0][0], str):
+        # We have encountered the situation where we have one nesting level too few:
+        #   We have [(,,), ..] instead of [[(,,), ..]]
+        dnf = cast(List[List[Tuple[str, str, Any]]], [filters])
+    else:
+        dnf = cast(List[List[Tuple[str, str, Any]]], filters)
+    dnf = _check_dnf(dnf, check_null_strings=False)
+    disjunction_members = []
+    for conjunction in dnf:
+        conjunction_members = [
+            _convert_single_predicate(col, op, val) for col, op, val in conjunction
+        ]
+        disjunction_members.append(reduce(operator.and_, conjunction_members))
+    return reduce(operator.or_, disjunction_members)
 
 
 _DNF_filter_doc = """
@@ -427,7 +535,7 @@ given filters.
         :return: the PyArrow table
         """
         if filters is not None:
-            filters = filters_to_expression(filters)
+            filters = _filters_to_expression(filters)
         return self.to_pyarrow_dataset(
             partitions=partitions, filesystem=filesystem
         ).to_table(columns=columns, filter=filters)
