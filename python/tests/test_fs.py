@@ -254,3 +254,20 @@ def test_pickle_roundtrip(tmp_path):
 
     infos = store_pkl.get_file_info(["asd.pkl"])
     assert infos[0].size > 0
+
+
+@pytest.mark.hdfs
+@pytest.mark.integration
+@pytest.mark.timeout(timeout=30, method="thread")
+def test_read_hdfs(hdfs_url):
+    table_path = f"{hdfs_url}/deltars/simple"
+    handler = DeltaStorageHandler(table_path)
+    dt = DeltaTable(table_path)
+    files = dt.file_uris()
+    assert len(files) > 0
+    for file in files:
+        rel_path = file[len(table_path) :]
+        with handler.open_input_file(rel_path) as f_:
+            table = pq.read_table(f_)
+            assert isinstance(table, pa.Table)
+            assert table.shape > (0, 0)

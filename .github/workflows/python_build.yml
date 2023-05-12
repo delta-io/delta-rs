@@ -50,6 +50,11 @@ jobs:
           toolchain: stable
           override: true
           components: rustfmt, clippy
+      
+      - uses: actions/setup-java@v3
+        with:
+          distribution: 'zulu'
+          java-version: '17'
 
       - uses: Swatinem/rust-cache@v2
 
@@ -57,14 +62,16 @@ jobs:
         run: |
           echo "/opt/python/cp37-cp37m/bin" >> $GITHUB_PATH
 
+      # hdfs support requires clang 3.5+, which requires an scl package on this image
       - name: Build and install deltalake
         run: |
+          yum install -y llvm-toolset-7
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate
           make setup
           # Install minimum PyArrow version
-          pip install -e .[pandas,devel] pyarrow==7.0.0
+          scl enable llvm-toolset-7 'pip install -e .[pandas,devel] pyarrow==7.0.0'
 
       - name: Run tests
         run: |
@@ -88,6 +95,10 @@ jobs:
           override: true
           components: rustfmt, clippy
 
+      - uses: beyondstorage/setup-hdfs@master
+        with:
+          hdfs-version: '3.3.2'
+
       - uses: Swatinem/rust-cache@v2
 
       - uses: actions/setup-python@v3
@@ -110,7 +121,7 @@ jobs:
       - name: Run tests
         run: |
           source venv/bin/activate
-          python -m pytest -m '((s3 or azure) and integration) or not integration'
+          python -m pytest -m '((s3 or azure or hdfs) and integration) or not integration'
 
       - name: Test without pandas
         run: |
