@@ -307,9 +307,6 @@ pub async fn cleanup_expired_logs_for(
     }
 }
 
-// NOTE: Temporarily allowing these deprecated imports pending the completion of:
-// <https://github.com/apache/arrow-rs/pull/3979>
-#[allow(deprecated)]
 fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, CheckpointError> {
     let current_metadata = state
         .current_metadata()
