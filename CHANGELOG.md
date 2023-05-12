@@ -10,13 +10,14 @@
 
 **Merged pull requests:**
 
-- chore: add deprecation notices for commit logic on `DeltaTable` [\#1323](https://github.com/delta-io/delta-rs/pull/1323) ([roeap](https://github.com/roeap))
-- fix: handle local paths on windows [\#1322](https://github.com/delta-io/delta-rs/pull/1322) ([roeap](https://github.com/roeap))
-- fix: scan partitioned tables with datafusion [\#1303](https://github.com/delta-io/delta-rs/pull/1303) ([roeap](https://github.com/roeap))
-- fix: allow special characters in storage prefix [\#1311](https://github.com/delta-io/delta-rs/pull/1311) ([wjones127](https://github.com/wjones127))
-- feat: upgrade to Arrow 37 and Datafusion 23 [\#1314](https://github.com/delta-io/delta-rs/pull/1314) ([rtyler](https://github.com/rtyler))
-- Hide the parquet/json feature behind our own JSON feature [\#1307](https://github.com/delta-io/delta-rs/pull/1307) ([rtyler](https://github.com/rtyler))
-- Enable the json feature for the parquet crate [\#1300](https://github.com/delta-io/delta-rs/pull/1300) ([rtyler](https://github.com/rtyler))
+- chore: update Rust package version [\#1346](https://github.com/delta-io/delta-rs/pull/1346) ([rtyler](https://github.com/rtyler))
+- fix: replace deprecated arrow::json::reader::Decoder [\#1226](https://github.com/delta-io/delta-rs/pull/1226) ([rtyler](https://github.com/rtyler))
+- feat: delete operation [\#1176](https://github.com/delta-io/delta-rs/pull/1176) ([Blajda](https://github.com/Blajda))
+- feat: add `wasbs` to known schemes [\#1345](https://github.com/delta-io/delta-rs/pull/1345) ([iajoiner](https://github.com/iajoiner))
+- test: add some missing unit and doc tests for DeltaTablePartition [\#1341](https://github.com/delta-io/delta-rs/pull/1341) ([rtyler](https://github.com/rtyler))
+- feat: write command improvements [\#1267](https://github.com/delta-io/delta-rs/pull/1267) ([roeap](https://github.com/roeap))
+- feat: added support for Databricks Unity Catalog [\#1331](https://github.com/delta-io/delta-rs/pull/1331) ([nohajc](https://github.com/nohajc))
+- fix: double url encode of partition key [\#1324](https://github.com/delta-io/delta-rs/pull/1324) ([mrjoe7](https://github.com/mrjoe7))
 
 ## [rust-v0.10.0](https://github.com/delta-io/delta-rs/tree/rust-v0.10.0) (2023-05-02)
 
