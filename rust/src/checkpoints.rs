@@ -14,7 +14,6 @@ use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::io::Write;
 use std::iter::Iterator;
 use std::ops::Add;
 
@@ -393,23 +392,11 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
     let mut decoder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE)
         .build_decoder()?;
+    let jsons: Vec<serde_json::Value> = jsons.map(|r| r.unwrap()).collect();
+    decoder.serialize(&jsons)?;
 
-    let mut buf = vec![];
-    for res in jsons {
-        let json = res?;
-        buf.write_all(serde_json::to_string(&json)?.as_bytes())?;
-    }
-    let mut consumed = 0;
-
-    loop {
-        let read_bytes = decoder.decode(&buf)?;
-        consumed += read_bytes;
-        if let Some(batch) = decoder.flush()? {
-            writer.write(&batch)?;
-        }
-        if consumed == buf.len() {
-            break;
-        }
+    while let Some(batch) = decoder.flush()? {
+        writer.write(&batch)?;
     }
 
     let _ = writer.close()?;
