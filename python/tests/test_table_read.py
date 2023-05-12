@@ -476,6 +476,49 @@ def test_delta_table_with_filesystem():
     assert dt.to_pandas(filesystem=filesystem).equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 
+@pytest.mark.pandas
+def test_delta_table_with_filters():
+    table_path = "../rust/tests/data/COVID-19_NYT"
+    dt = DeltaTable(table_path)
+    dataset = dt.to_pyarrow_dataset()
+
+    filter_expr = ds.field("date") > "2021-02-20"
+    data = dataset.to_table(filter=filter_expr)
+    assert len(dt.to_pandas(filters=[("date", ">", "2021-02-20")])) == data.num_rows
+
+    filter_expr = (ds.field("date") > "2021-02-20") | (
+        ds.field("state").isin(["Alabama", "Wyoming"])
+    )
+    data = dataset.to_table(filter=filter_expr)
+    assert (
+        len(
+            dt.to_pandas(
+                filters=[
+                    [("date", ">", "2021-02-20")],
+                    [("state", "in", ["Alabama", "Wyoming"])],
+                ]
+            )
+        )
+        == data.num_rows
+    )
+
+    filter_expr = (ds.field("date") > "2021-02-20") & (
+        ds.field("state").isin(["Alabama", "Wyoming"])
+    )
+    data = dataset.to_table(filter=filter_expr)
+    assert (
+        len(
+            dt.to_pandas(
+                filters=[
+                    ("date", ">", "2021-02-20"),
+                    ("state", "in", ["Alabama", "Wyoming"]),
+                ]
+            )
+        )
+        == data.num_rows
+    )
+
+
 def test_writer_fails_on_protocol():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
