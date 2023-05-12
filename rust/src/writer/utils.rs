@@ -5,7 +5,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::writer::DeltaWriterError;
-use crate::{DeltaResult, DeltaTableError};
+use crate::DeltaResult;
 
 use arrow::array::{
     as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array, Array,
@@ -104,32 +104,13 @@ pub(crate) fn next_data_path(
     Ok(Path::from(format!("{partition_key}/{file_name}")))
 }
 
-// NOTE: Temporarily allowing these deprecated imports pending the completion of:
-// <https://github.com/apache/arrow-rs/pull/3979>
-#[allow(deprecated)]
 /// Convert a vector of json values to a RecordBatch
 pub fn record_batch_from_message(
     arrow_schema: Arc<ArrowSchema>,
-    message_buffer: &[Value],
+    json: &[Value],
 ) -> DeltaResult<RecordBatch> {
-    let mut buf = vec![];
-    for message in message_buffer {
-        buf.write_all(
-            serde_json::to_string(&message)
-                // Unsure why From<serde_json::Error> is not working for DeltaTableError
-                .map_err(|e| DeltaTableError::GenericError {
-                    source: Box::new(e),
-                })?
-                .as_bytes(),
-        )?;
-    }
-    // Reading the batch size of the message_buffer num rows to ensure this reads
-    // a single RecordBatch out of the buffer
-    let mut decoder = ReaderBuilder::new(arrow_schema)
-        .with_batch_size(message_buffer.len())
-        .build_decoder()?;
-
-    let _read_bytes = decoder.decode(&buf)?;
+    let mut decoder = ReaderBuilder::new(arrow_schema).build_decoder().unwrap();
+    decoder.serialize(json)?;
     decoder
         .flush()?
         .ok_or_else(|| DeltaWriterError::EmptyRecordBatch.into())
