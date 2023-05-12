@@ -1,0 +1,10 @@
+# Summary
+
+- [Index](./index.md)
+- [Installation](./installation.md)
+- [Usage](./usage/README.md)
+    - [Loading a Delta Table](./usage/loading-table.md)
+    - [Examining a Delta Table](./usage/examining-table.md)
+    - [Querying a Delta Table](./usage/querying-delta-tables.md)
+    - [Managing a Delta Table](./usage/managing-tables.md)
+    - [Writing Delta Tables](./usage/writing-delta-tables.md)

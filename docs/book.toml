@@ -1,0 +1,6 @@
+[book]
+authors = ["Delta Rust Team"]
+language = "en"
+multilingual = false
+src = "src"
+title = "Python deltalake book"
