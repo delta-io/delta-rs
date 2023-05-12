@@ -473,7 +473,7 @@ mod tests {
         let data = serde_json::json!(
             {
                 "id" : "A",
-                "value": "test",
+                "value": 42,
                 "modified": "2021-02-01"
             }
         );
