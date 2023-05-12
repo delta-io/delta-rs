@@ -1,4 +1,4 @@
-# MrPowers Book
+# Python deltalake book
 
 This book is built with [mdBook](https://github.com/rust-lang/mdBook).
 
@@ -8,9 +8,7 @@ This book is hosted here: https://mrpowers.github.io/
 
 Build the latest files with `mdbook build`.
 
-Manually copy these files into the [mrpowers.github.io](https://github.com/MrPowers/mrpowers.github.io) repository.
-
-Yea, I know, it's not a great deploy process :|
+TBD: Work out a production deploy process.
 
 ## Install
 
