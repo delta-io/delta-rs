@@ -65,12 +65,14 @@ pub enum ListTableSummariesResponse {
 #[derive(Deserialize, Default)]
 pub struct Schema {
     /// Username of schema creator.
+    #[serde(default)]
     pub created_by: String,
 
     /// Name of schema, relative to parent catalog.
     pub name: String,
 
     /// Username of user who last modified schema.
+    #[serde(default)]
     pub updated_by: String,
 
     /// Full name of schema, in form of catalog_name.schema_name.
@@ -83,24 +85,31 @@ pub struct Schema {
     pub catalog_name: String,
 
     /// Storage root URL for managed tables within schema.
+    #[serde(default)]
     pub storage_root: String,
 
     /// Storage location for managed tables within schema.
+    #[serde(default)]
     pub storage_location: String,
 
     /// A map of key-value properties attached to the securable.
+    #[serde(default)]
     pub properties: HashMap<String, String>,
 
     /// User-provided free-form text description.
+    #[serde(default)]
     pub comment: String,
 
     /// Time at which this schema was created, in epoch milliseconds.
+    #[serde(default)]
     pub created_at: i64,
 
     /// Username of current owner of schema.
+    #[serde(default)]
     pub owner: String,
 
     /// Time at which this schema was created, in epoch milliseconds.
+    #[serde(default)]
     pub updated_at: i64,
 
     /// Unique identifier of parent metastore.
@@ -152,15 +161,18 @@ pub struct TableSummary {
 #[derive(Deserialize, Default)]
 pub struct Table {
     /// Username of table creator.
+    #[serde(default)]
     pub created_by: String,
 
     /// Name of table, relative to parent schema.
     pub name: String,
 
     /// Username of user who last modified the table.
+    #[serde(default)]
     pub updated_by: String,
 
     /// List of schemes whose objects can be referenced without qualification.
+    #[serde(default)]
     pub sql_path: String,
 
     /// Data source format
