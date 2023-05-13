@@ -395,7 +395,13 @@ impl UnityCatalogBuilder {
                 )),
             ));
         }
-
++        if self.use_azure_cli {
++            return Some(CredentialProvider::TokenCredential(
++                Default::default(),
++                Box::new(AzureCliCredential::new()),
++            ));
++        }
++
         None
     }
 
