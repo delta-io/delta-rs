@@ -143,7 +143,7 @@ impl SchemaProvider for UnitySchemaProvider {
     async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
         let maybe_table = self
             .client
-            .get_table(Some(&self.catalog_name), &self.schema_name, name)
+            .get_table(&self.catalog_name, &self.schema_name, name)
             .await
             .ok()?;
 
