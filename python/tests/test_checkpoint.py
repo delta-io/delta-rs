@@ -12,8 +12,8 @@ def test_checkpoint(tmp_path: pathlib.Path, sample_data: pa.Table):
         tmp_table_path / "_delta_log" / "00000000000000000000.checkpoint.parquet"
     )
 
-    # TODO: Include decimal after fixing issue "Json error: Decimal128(5, 3) type is not supported"
-    sample_data = sample_data.drop(["decimal"])
+    # TODO: Include binary after fixing issue "Json error: binary type is not supported"
+    sample_data = sample_data.drop(["binary"])
     write_deltalake(str(tmp_table_path), sample_data)
 
     assert not checkpoint_path.exists()
