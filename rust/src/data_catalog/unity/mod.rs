@@ -5,7 +5,7 @@ use std::str::FromStr;
 
 use reqwest::header::{HeaderValue, AUTHORIZATION};
 
-use self::credential::{ClientSecretOAuthProvider, CredentialProvider};
+use self::credential::{AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider};
 use self::models::{
     GetSchemaResponse, GetTableResponse, ListSchemasResponse, ListTableSummariesResponse,
 };
@@ -395,13 +395,13 @@ impl UnityCatalogBuilder {
                 )),
             ));
         }
-+        if self.use_azure_cli {
-+            return Some(CredentialProvider::TokenCredential(
-+                Default::default(),
-+                Box::new(AzureCliCredential::new()),
-+            ));
-+        }
-+
+        if self.use_azure_cli {
+            return Some(CredentialProvider::TokenCredential(
+                Default::default(),
+                Box::new(AzureCliCredential::new()),
+            ));
+        }
+
         None
     }
 
@@ -563,7 +563,7 @@ impl UnityCatalog {
     /// # Parameters
     pub async fn get_table(
         &self,
-        catalog_id: Option<impl AsRef<str>>,
+        catalog_id: impl AsRef<str>,
         database_name: impl AsRef<str>,
         table_name: impl AsRef<str>,
     ) -> CatalogResult<GetTableResponse> {
@@ -574,9 +574,7 @@ impl UnityCatalog {
             .get(format!(
                 "{}/tables/{}.{}.{}",
                 self.catalog_url(),
-                catalog_id
-                    .map(|c| c.as_ref().to_string())
-                    .unwrap_or("main".into()),
+                catalog_id.as_ref(),
                 database_name.as_ref(),
                 table_name.as_ref()
             ))
@@ -598,7 +596,11 @@ impl DataCatalog for UnityCatalog {
         table_name: &str,
     ) -> Result<String, DataCatalogError> {
         match self
-            .get_table(catalog_id, database_name, table_name)
+            .get_table(
+                catalog_id.unwrap_or("main".into()),
+                database_name,
+                table_name,
+            )
             .await?
         {
             GetTableResponse::Success(table) => Ok(table.storage_location),
@@ -676,7 +678,7 @@ mod tests {
         });
 
         let get_table_response = client
-            .get_table(Some("catalog_name"), "schema_name", "table_name")
+            .get_table("catalog_name", "schema_name", "table_name")
             .await
             .unwrap();
         assert!(matches!(get_table_response, GetTableResponse::Success(_)));
