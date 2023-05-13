@@ -2,6 +2,8 @@ from typing import Any
 
 Dataset: Any
 dataset: Any
+Expression: Any
+field: Any
 partitioning: Any
 FileSystemDataset: Any
 ParquetFileFormat: Any

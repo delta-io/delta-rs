@@ -249,6 +249,7 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 }
 
 /// Helper container for partitioned record batches
+#[derive(Clone, Debug)]
 pub struct PartitionResult {
     /// values found in partition columns
     pub partition_values: HashMap<String, Option<String>>,
@@ -416,6 +417,7 @@ mod tests {
         test_utils::{create_initialized_table, get_record_batch},
         utils::PartitionPath,
     };
+    use arrow::json::ReaderBuilder;
     use std::path::Path;
 
     #[tokio::test]
@@ -445,6 +447,80 @@ mod tests {
             String::from("modified=2021-02-02"),
         ];
         validate_partition_map(partitions, &partition_cols, expected_keys)
+    }
+
+    /*
+     * This test is a little messy but demonstrates a bug when
+     * trying to write data to a Delta Table that has a map column and partition columns
+     *
+     * For readability the schema and data for the write are defined in JSON
+     */
+    #[tokio::test]
+    async fn test_divide_record_batch_with_map_single_partition() {
+        use crate::{DeltaOps, SchemaTypeStruct};
+
+        let table = crate::writer::test_utils::create_bare_table();
+        let partition_cols = vec!["modified".to_string()];
+        let delta_schema = r#"
+        {"type" : "struct",
+        "fields" : [
+            {"name" : "id", "type" : "string", "nullable" : false, "metadata" : {}},
+            {"name" : "value", "type" : "integer", "nullable" : false, "metadata" : {}},
+            {"name" : "modified", "type" : "string", "nullable" : false, "metadata" : {}},
+            {"name" : "metadata", "type" :
+                {"type" : "map", "keyType" : "string", "valueType" : "string", "valueContainsNull" : true},
+                "nullable" : false, "metadata" : {}}
+            ]
+        }"#;
+
+        let delta_schema: SchemaTypeStruct =
+            serde_json::from_str(delta_schema).expect("Failed to parse schema");
+
+        let table = DeltaOps(table)
+            .create()
+            .with_partition_columns(partition_cols.to_vec())
+            .with_columns(delta_schema.get_fields().clone())
+            .await
+            .unwrap();
+
+        let buf = r#"
+            {"id" : "0xdeadbeef", "value" : 42, "modified" : "2021-02-01",
+                "metadata" : {"some-key" : "some-value"}}
+            {"id" : "0xdeadcaf", "value" : 3, "modified" : "2021-02-02",
+                "metadata" : {"some-key" : "some-value"}}"#
+            .as_bytes();
+
+        let schema: ArrowSchema =
+            <ArrowSchema as TryFrom<&Schema>>::try_from(&delta_schema).unwrap();
+
+        // Using a batch size of two since the buf above only has two records
+        let mut decoder = ReaderBuilder::new(Arc::new(schema))
+            .with_batch_size(2)
+            .build_decoder()
+            .expect("Failed to build decoder");
+
+        decoder
+            .decode(buf)
+            .expect("Failed to deserialize the JSON in the buffer");
+        let batch = decoder.flush().expect("Failed to flush").unwrap();
+
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        let partitions = writer.divide_by_partition_values(&batch).unwrap();
+        println!("partitions: {:?}", partitions);
+
+        let expected_keys = vec![
+            String::from("modified=2021-02-01"),
+            String::from("modified=2021-02-02"),
+        ];
+
+        assert_eq!(partitions.len(), expected_keys.len());
+        for result in partitions {
+            let partition_key =
+                PartitionPath::from_hashmap(&partition_cols, &result.partition_values)
+                    .unwrap()
+                    .into();
+            assert!(expected_keys.contains(&partition_key));
+        }
     }
 
     #[tokio::test]

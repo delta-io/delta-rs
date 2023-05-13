@@ -1,5 +1,24 @@
 # Changelog
 
+## [rust-v0.11.0](https://github.com/delta-io/delta-rs/tree/rust-v0.11.0) (2023-05-12)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.10.0...rust-v0.11.0)
+
+**Implemented enhancements:**
+
+- Implement simple delete case [\#832](https://github.com/delta-io/delta-rs/issues/832)
+
+**Merged pull requests:**
+
+- chore: update Rust package version [\#1346](https://github.com/delta-io/delta-rs/pull/1346) ([rtyler](https://github.com/rtyler))
+- fix: replace deprecated arrow::json::reader::Decoder [\#1226](https://github.com/delta-io/delta-rs/pull/1226) ([rtyler](https://github.com/rtyler))
+- feat: delete operation [\#1176](https://github.com/delta-io/delta-rs/pull/1176) ([Blajda](https://github.com/Blajda))
+- feat: add `wasbs` to known schemes [\#1345](https://github.com/delta-io/delta-rs/pull/1345) ([iajoiner](https://github.com/iajoiner))
+- test: add some missing unit and doc tests for DeltaTablePartition [\#1341](https://github.com/delta-io/delta-rs/pull/1341) ([rtyler](https://github.com/rtyler))
+- feat: write command improvements [\#1267](https://github.com/delta-io/delta-rs/pull/1267) ([roeap](https://github.com/roeap))
+- feat: added support for Databricks Unity Catalog [\#1331](https://github.com/delta-io/delta-rs/pull/1331) ([nohajc](https://github.com/nohajc))
+- fix: double url encode of partition key [\#1324](https://github.com/delta-io/delta-rs/pull/1324) ([mrjoe7](https://github.com/mrjoe7))
+
 ## [rust-v0.10.0](https://github.com/delta-io/delta-rs/tree/rust-v0.10.0) (2023-05-02)
 
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.9.0...rust-v0.10.0)

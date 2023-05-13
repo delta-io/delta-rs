@@ -1,11 +1,8 @@
 //! Implementation for writing delta checkpoints.
 
 use arrow::datatypes::Schema as ArrowSchema;
-// NOTE: Temporarily allowing these deprecated imports pending the completion of:
-// <https://github.com/apache/arrow-rs/pull/3979>
 use arrow::error::ArrowError;
-#[allow(deprecated)]
-use arrow::json::reader::{Decoder, DecoderOptions};
+use arrow::json::ReaderBuilder;
 use chrono::{DateTime, Datelike, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -74,6 +71,13 @@ pub enum CheckpointError {
         /// The source serde_json::Error.
         #[from]
         source: serde_json::Error,
+    },
+    /// Passthrough error returned when doing std::io operations
+    #[error("std::io::Error: {source}")]
+    Io {
+        /// The source std::io::Error
+        #[from]
+        source: std::io::Error,
     },
 }
 
@@ -302,9 +306,6 @@ pub async fn cleanup_expired_logs_for(
     }
 }
 
-// NOTE: Temporarily allowing these deprecated imports pending the completion of:
-// <https://github.com/apache/arrow-rs/pull/3979>
-#[allow(deprecated)]
 fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, CheckpointError> {
     let current_metadata = state
         .current_metadata()
@@ -338,7 +339,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
     }
 
     // protocol
-    let mut jsons = std::iter::once(action::Action::protocol(action::Protocol {
+    let jsons = std::iter::once(action::Action::protocol(action::Protocol {
         min_reader_version: state.min_reader_version(),
         min_writer_version: state.min_writer_version(),
     }))
@@ -388,12 +389,16 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
     // Write the Checkpoint parquet file.
     let mut bytes = vec![];
     let mut writer = ArrowWriter::try_new(&mut bytes, arrow_schema.clone(), None)?;
+    let mut decoder = ReaderBuilder::new(arrow_schema)
+        .with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE)
+        .build_decoder()?;
+    let jsons: Vec<serde_json::Value> = jsons.map(|r| r.unwrap()).collect();
+    decoder.serialize(&jsons)?;
 
-    let options = DecoderOptions::new().with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE);
-    let decoder = Decoder::new(arrow_schema, options);
-    while let Some(batch) = decoder.next_batch(&mut jsons)? {
+    while let Some(batch) = decoder.flush()? {
         writer.write(&batch)?;
     }
+
     let _ = writer.close()?;
     debug!("Finished writing checkpoint parquet buffer.");
 
