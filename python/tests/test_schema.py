@@ -1,3 +1,5 @@
+import json
+
 import pyarrow
 import pytest
 
@@ -9,7 +11,7 @@ def test_table_schema():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
     schema = dt.schema()
-    assert schema.json() == {
+    assert json.loads(schema.to_json()) == {
         "fields": [{"metadata": {}, "name": "id", "nullable": True, "type": "long"}],
         "type": "struct",
     }
@@ -20,8 +22,8 @@ def test_table_schema():
     assert field.nullable is True
     assert field.metadata == {}
 
-    json = '{"type":"struct","fields":[{"name":"x","type":{"type":"array","elementType":"long","containsNull":true},"nullable":true,"metadata":{}}]}'
-    schema = Schema.from_json(json)
+    json_buf = '{"type":"struct","fields":[{"name":"x","type":{"type":"array","elementType":"long","containsNull":true},"nullable":true,"metadata":{}}]}'
+    schema = Schema.from_json(json_buf)
     assert schema.fields[0] == Field(
         "x", ArrayType(PrimitiveType("long"), True), True, {}
     )

@@ -5,7 +5,7 @@ use std::io::Write;
 use std::sync::Arc;
 
 use crate::writer::DeltaWriterError;
-use crate::DeltaTableError;
+use crate::DeltaResult;
 
 use arrow::array::{
     as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array, Array,
@@ -16,10 +16,7 @@ use arrow::datatypes::{
     TimestampMillisecondType, TimestampNanosecondType, TimestampSecondType, UInt16Type, UInt32Type,
     UInt64Type, UInt8Type,
 };
-// NOTE: Temporarily allowing these deprecated imports pending the completion of:
-// <https://github.com/apache/arrow-rs/pull/3979>
-#[allow(deprecated)]
-use arrow::json::reader::{Decoder, DecoderOptions};
+use arrow::json::ReaderBuilder;
 use arrow::record_batch::*;
 use object_store::path::Path;
 use parking_lot::RwLock;
@@ -107,19 +104,15 @@ pub(crate) fn next_data_path(
     Ok(Path::from(format!("{partition_key}/{file_name}")))
 }
 
-// NOTE: Temporarily allowing these deprecated imports pending the completion of:
-// <https://github.com/apache/arrow-rs/pull/3979>
-#[allow(deprecated)]
 /// Convert a vector of json values to a RecordBatch
 pub fn record_batch_from_message(
     arrow_schema: Arc<ArrowSchema>,
-    message_buffer: &[Value],
-) -> Result<RecordBatch, DeltaTableError> {
-    let mut value_iter = message_buffer.iter().map(|j| Ok(j.to_owned()));
-    let options = DecoderOptions::new().with_batch_size(message_buffer.len());
-    let decoder = Decoder::new(arrow_schema, options);
+    json: &[Value],
+) -> DeltaResult<RecordBatch> {
+    let mut decoder = ReaderBuilder::new(arrow_schema).build_decoder().unwrap();
+    decoder.serialize(json)?;
     decoder
-        .next_batch(&mut value_iter)?
+        .flush()?
         .ok_or_else(|| DeltaWriterError::EmptyRecordBatch.into())
 }
 
