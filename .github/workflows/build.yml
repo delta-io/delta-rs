@@ -56,6 +56,10 @@ jobs:
           - macos-11
           - windows-latest
     runs-on: ${{ matrix.os }}
+    env:
+      # Disable full debug symbol generation to speed up CI build and keep memory down
+      # "1" means line tables only, which is useful for panic tracebacks.
+      RUSTFLAGS: -C debuginfo=1
     steps:
       - uses: actions/checkout@v3
       - name: Install minimal stable with clippy and rustfmt
@@ -97,16 +101,16 @@ jobs:
           profile: default
           toolchain: stable
           override: true
-      
+
       - uses: actions/setup-java@v3
         with:
-          distribution: 'zulu'
-          java-version: '17'
-      
+          distribution: "zulu"
+          java-version: "17"
+
       - uses: beyondstorage/setup-hdfs@master
         with:
-          hdfs-version: '3.3.2'
-      
+          hdfs-version: "3.3.2"
+
       - name: Set Hadoop env
         run: |
           echo "CLASSPATH=$CLASSPATH:`hadoop classpath --glob`" >> $GITHUB_ENV
