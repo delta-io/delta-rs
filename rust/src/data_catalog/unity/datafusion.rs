@@ -21,6 +21,22 @@ pub struct UnityCatalogProvider {
 
     /// Parent catalog for schemas of interest.
     catalog_name: String,
+    // rt: Arc<Runtime>,
+}
+
+impl UnityCatalogProvider {
+    /// Create a new instance of [`UnityCatalogProvider`]
+    pub fn new(
+        // rt: Arc<Runtime>,
+        client: Arc<UnityCatalog>,
+        catalog_name: impl Into<String>,
+    ) -> Self {
+        Self {
+            // rt,
+            client,
+            catalog_name: catalog_name.into(),
+        }
+    }
 }
 
 impl CatalogProvider for UnityCatalogProvider {
@@ -29,12 +45,10 @@ impl CatalogProvider for UnityCatalogProvider {
     }
 
     fn schema_names(&self) -> Vec<String> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
+        let handle = tokio::runtime::Runtime::new().unwrap();
 
         let maybe_schemas =
-            rt.block_on(async move { self.client.list_schemas(&self.catalog_name).await });
+            handle.block_on(async move { self.client.list_schemas(&self.catalog_name).await });
 
         let schemas = if let Ok(response) = maybe_schemas {
             match response {
@@ -56,12 +70,13 @@ impl CatalogProvider for UnityCatalogProvider {
     }
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
+        // let rt = tokio::runtime::Builder::new_current_thread()
+        //     .build()
+        //     .unwrap();
+        let handle = tokio::runtime::Handle::try_current().unwrap();
 
         let maybe_schema =
-            rt.block_on(async move { self.client.get_schema(&self.catalog_name, name).await });
+            handle.block_on(async move { self.client.get_schema(&self.catalog_name, name).await });
 
         if let Ok(response) = maybe_schema {
             match response {
@@ -165,5 +180,56 @@ impl SchemaProvider for UnitySchemaProvider {
 
     fn table_exist(&self, _name: &str) -> bool {
         false
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use hyper::{Body, Response};
+    use reqwest::Method;
+
+    use super::*;
+    use crate::data_catalog::client::mock_server::MockServer;
+    use crate::data_catalog::client::ClientOptions;
+    use crate::data_catalog::unity::UnityCatalogBuilder;
+
+    const LIST_SCHEMAS_RESPONSE: &str = r#"
+    {
+        "schemas": [
+            {
+                "name": "test_tables",
+                "full_name": "delta_rs.test_tables",
+                "catalog_type": "catalog_type",
+                "catalog_name": "delta_rs",
+                "storage_root": "string",
+                "storage_location": "string",
+                "created_at": 0,
+                "owner": "owners",
+                "updated_at": 0,
+                "metastore_id": "store-id"
+            }
+        ]
+    }"#;
+
+    #[tokio::test(flavor = "multi_thread")]
+    async fn test_catalog_provider() {
+        let server = MockServer::new();
+        let options = ClientOptions::default().with_allow_http(true);
+        let client = UnityCatalogBuilder::new()
+            .with_workspace_url(server.url())
+            .with_bearer_token("bearer_token")
+            .with_client_options(options)
+            .build()
+            .unwrap();
+
+        server.push_fn(move |req| {
+            assert_eq!(req.uri().path(), "/api/2.1/unity-catalog/schemas");
+            assert_eq!(req.method(), &Method::GET);
+            Response::new(Body::from(LIST_SCHEMAS_RESPONSE))
+        });
+
+        let provider = UnityCatalogProvider::new(Arc::new(client), "delta_rs");
+        let schemas = provider.schema_names();
+        assert_eq!(schemas[0], "test_tables")
     }
 }
