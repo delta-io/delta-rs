@@ -4,38 +4,107 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use datafusion::catalog::catalog::CatalogProvider;
+use dashmap::DashMap;
+use datafusion::catalog::catalog::{CatalogList, CatalogProvider};
 use datafusion::catalog::schema::SchemaProvider;
 use datafusion::datasource::TableProvider;
 use tracing::error;
 
-use super::models::{GetSchemaResponse, GetTableResponse, ListTableSummariesResponse};
-use super::UnityCatalog;
+use super::models::{GetTableResponse, ListCatalogsResponse, ListTableSummariesResponse};
+use super::{CatalogResult, UnityCatalog};
 use crate::data_catalog::models::ListSchemasResponse;
 use crate::DeltaTableBuilder;
 
+/// In-memory list of catalogs populated by unity catalog
+pub struct UnityCatalogList {
+    /// Collection of catalogs containing schemas and ultimately TableProviders
+    pub catalogs: DashMap<String, Arc<dyn CatalogProvider>>,
+}
+
+impl UnityCatalogList {
+    /// Create a new instance of [`UnityCatalogList`]
+    pub async fn try_new(
+        client: Arc<UnityCatalog>,
+        storage_options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)> + Clone,
+    ) -> CatalogResult<Self> {
+        let catalogs = match client.list_catalogs().await? {
+            ListCatalogsResponse::Success { catalogs } => {
+                let mut providers = Vec::new();
+                for catalog in catalogs {
+                    let provider = UnityCatalogProvider::try_new(
+                        client.clone(),
+                        &catalog.name,
+                        storage_options.clone(),
+                    )
+                    .await?;
+                    providers.push((catalog.name, Arc::new(provider) as Arc<dyn CatalogProvider>));
+                }
+                providers
+            }
+            _ => vec![],
+        };
+        Ok(Self {
+            catalogs: catalogs.into_iter().collect(),
+        })
+    }
+}
+
+impl CatalogList for UnityCatalogList {
+    fn as_any(&self) -> &dyn Any {
+        self
+    }
+
+    fn catalog_names(&self) -> Vec<String> {
+        self.catalogs.iter().map(|c| c.key().clone()).collect()
+    }
+
+    fn register_catalog(
+        &self,
+        name: String,
+        catalog: Arc<dyn CatalogProvider>,
+    ) -> Option<Arc<dyn CatalogProvider>> {
+        self.catalogs.insert(name, catalog)
+    }
+
+    fn catalog(&self, name: &str) -> Option<Arc<dyn CatalogProvider>> {
+        self.catalogs.get(name).map(|c| c.value().clone())
+    }
+}
+
 /// A datafusion [`CatalogProvider`] backed by Databricks UnityCatalog
 pub struct UnityCatalogProvider {
-    /// UnityCatalog Api client
-    client: Arc<UnityCatalog>,
-
     /// Parent catalog for schemas of interest.
-    catalog_name: String,
-    // rt: Arc<Runtime>,
+    pub schemas: DashMap<String, Arc<dyn SchemaProvider>>,
 }
 
 impl UnityCatalogProvider {
     /// Create a new instance of [`UnityCatalogProvider`]
-    pub fn new(
-        // rt: Arc<Runtime>,
+    pub async fn try_new(
         client: Arc<UnityCatalog>,
         catalog_name: impl Into<String>,
-    ) -> Self {
-        Self {
-            // rt,
-            client,
-            catalog_name: catalog_name.into(),
-        }
+        storage_options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)> + Clone,
+    ) -> CatalogResult<Self> {
+        let catalog_name = catalog_name.into();
+        let schemas = match client.list_schemas(&catalog_name).await? {
+            ListSchemasResponse::Success { schemas } => {
+                let mut providers = Vec::new();
+                for schema in schemas {
+                    let provider = UnitySchemaProvider::try_new(
+                        client.clone(),
+                        &catalog_name,
+                        &schema.name,
+                        storage_options.clone(),
+                    )
+                    .await?;
+                    providers.push((schema.name, Arc::new(provider) as Arc<dyn SchemaProvider>));
+                }
+                providers
+            }
+            _ => vec![],
+        };
+        Ok(Self {
+            schemas: schemas.into_iter().collect(),
+        })
     }
 }
 
@@ -45,60 +114,11 @@ impl CatalogProvider for UnityCatalogProvider {
     }
 
     fn schema_names(&self) -> Vec<String> {
-        let handle = tokio::runtime::Runtime::new().unwrap();
-
-        let maybe_schemas =
-            handle.block_on(async move { self.client.list_schemas(&self.catalog_name).await });
-
-        let schemas = if let Ok(response) = maybe_schemas {
-            match response {
-                ListSchemasResponse::Success { schemas } => schemas,
-                ListSchemasResponse::Error(err) => {
-                    error!(
-                        "failed to fetch schemas from unity catalog: {}",
-                        err.message
-                    );
-                    Vec::new()
-                }
-            }
-        } else {
-            error!("failed to fetch schemas from unity catalog");
-            Vec::new()
-        };
-
-        schemas.into_iter().map(|s| s.name).collect()
+        self.schemas.iter().map(|c| c.key().clone()).collect()
     }
 
     fn schema(&self, name: &str) -> Option<Arc<dyn SchemaProvider>> {
-        // let rt = tokio::runtime::Builder::new_current_thread()
-        //     .build()
-        //     .unwrap();
-        let handle = tokio::runtime::Handle::try_current().unwrap();
-
-        let maybe_schema =
-            handle.block_on(async move { self.client.get_schema(&self.catalog_name, name).await });
-
-        if let Ok(response) = maybe_schema {
-            match response {
-                GetSchemaResponse::Success(schema) => Some(Arc::new(UnitySchemaProvider {
-                    client: self.client.clone(),
-                    catalog_name: self.catalog_name.clone(),
-                    schema_name: schema.name,
-                    // TODO pass down options
-                    storage_options: Default::default(),
-                })),
-                GetSchemaResponse::Error(err) => {
-                    error!(
-                        "failed to fetch schemas from unity catalog: {}",
-                        err.message
-                    );
-                    None
-                }
-            }
-        } else {
-            error!("failed to fetch schemas from unity catalog");
-            None
-        }
+        self.schemas.get(name).map(|c| c.value().clone())
     }
 }
 
@@ -107,13 +127,47 @@ pub struct UnitySchemaProvider {
     /// UnityCatalog Api client
     client: Arc<UnityCatalog>,
 
-    /// Parent catalog for schemas of interest.
     catalog_name: String,
 
-    /// Parent catalog for schemas of interest.
     schema_name: String,
 
+    /// Parent catalog for schemas of interest.
+    table_names: Vec<String>,
+
     storage_options: HashMap<String, String>,
+}
+
+impl UnitySchemaProvider {
+    /// Create a new instance of [`UnitySchemaProvider`]
+    pub async fn try_new(
+        client: Arc<UnityCatalog>,
+        catalog_name: impl Into<String>,
+        schema_name: impl Into<String>,
+        storage_options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
+    ) -> CatalogResult<Self> {
+        let catalog_name = catalog_name.into();
+        let schema_name = schema_name.into();
+        let table_names = match client
+            .list_table_summaries(&catalog_name, &schema_name)
+            .await?
+        {
+            ListTableSummariesResponse::Success { tables, .. } => tables
+                .into_iter()
+                .filter_map(|t| t.full_name.split('.').last().map(|n| n.into()))
+                .collect(),
+            ListTableSummariesResponse::Error(_) => vec![],
+        };
+        Ok(Self {
+            client,
+            table_names,
+            catalog_name,
+            schema_name,
+            storage_options: storage_options
+                .into_iter()
+                .map(|(key, value)| (key.into(), value.into()))
+                .collect(),
+        })
+    }
 }
 
 #[async_trait::async_trait]
@@ -123,36 +177,7 @@ impl SchemaProvider for UnitySchemaProvider {
     }
 
     fn table_names(&self) -> Vec<String> {
-        let rt = tokio::runtime::Builder::new_current_thread()
-            .build()
-            .unwrap();
-
-        let maybe_tables = rt.block_on(async move {
-            self.client
-                .list_table_summaries(&self.catalog_name, &self.schema_name)
-                .await
-        });
-
-        let tables = if let Ok(response) = maybe_tables {
-            match response {
-                ListTableSummariesResponse::Success { tables, .. } => tables,
-                ListTableSummariesResponse::Error(err) => {
-                    error!(
-                        "failed to fetch schemas from unity catalog: {}",
-                        err.message
-                    );
-                    Vec::new()
-                }
-            }
-        } else {
-            error!("failed to fetch schemas from unity catalog");
-            Vec::new()
-        };
-
-        tables
-            .into_iter()
-            .filter_map(|t| t.full_name.split('.').last().map(|n| n.to_string()))
-            .collect()
+        self.table_names.clone()
     }
 
     async fn table(&self, name: &str) -> Option<Arc<dyn TableProvider>> {
@@ -178,58 +203,7 @@ impl SchemaProvider for UnitySchemaProvider {
         }
     }
 
-    fn table_exist(&self, _name: &str) -> bool {
-        false
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use hyper::{Body, Response};
-    use reqwest::Method;
-
-    use super::*;
-    use crate::data_catalog::client::mock_server::MockServer;
-    use crate::data_catalog::client::ClientOptions;
-    use crate::data_catalog::unity::UnityCatalogBuilder;
-
-    const LIST_SCHEMAS_RESPONSE: &str = r#"
-    {
-        "schemas": [
-            {
-                "name": "test_tables",
-                "full_name": "delta_rs.test_tables",
-                "catalog_type": "catalog_type",
-                "catalog_name": "delta_rs",
-                "storage_root": "string",
-                "storage_location": "string",
-                "created_at": 0,
-                "owner": "owners",
-                "updated_at": 0,
-                "metastore_id": "store-id"
-            }
-        ]
-    }"#;
-
-    #[tokio::test(flavor = "multi_thread")]
-    async fn test_catalog_provider() {
-        let server = MockServer::new();
-        let options = ClientOptions::default().with_allow_http(true);
-        let client = UnityCatalogBuilder::new()
-            .with_workspace_url(server.url())
-            .with_bearer_token("bearer_token")
-            .with_client_options(options)
-            .build()
-            .unwrap();
-
-        server.push_fn(move |req| {
-            assert_eq!(req.uri().path(), "/api/2.1/unity-catalog/schemas");
-            assert_eq!(req.method(), &Method::GET);
-            Response::new(Body::from(LIST_SCHEMAS_RESPONSE))
-        });
-
-        let provider = UnityCatalogProvider::new(Arc::new(client), "delta_rs");
-        let schemas = provider.schema_names();
-        assert_eq!(schemas[0], "test_tables")
+    fn table_exist(&self, name: &str) -> bool {
+        self.table_names.contains(&String::from(name))
     }
 }

@@ -7,7 +7,8 @@ use reqwest::header::{HeaderValue, AUTHORIZATION};
 
 use self::credential::{AzureCliCredential, ClientSecretOAuthProvider, CredentialProvider};
 use self::models::{
-    GetSchemaResponse, GetTableResponse, ListSchemasResponse, ListTableSummariesResponse,
+    GetSchemaResponse, GetTableResponse, ListCatalogsResponse, ListSchemasResponse,
+    ListTableSummariesResponse,
 };
 use super::client::retry::RetryExt;
 use super::{client::retry::RetryConfig, CatalogResult, DataCatalog, DataCatalogError};
@@ -470,6 +471,22 @@ impl UnityCatalog {
 
     fn catalog_url(&self) -> String {
         format!("{}/api/2.1/unity-catalog", &self.workspace_url)
+    }
+
+    /// Gets an array of catalogs in the metastore. If the caller is the metastore admin,
+    /// all catalogs will be retrieved. Otherwise, only catalogs owned by the caller
+    /// (or for which the caller has the USE_CATALOG privilege) will be retrieved.
+    /// There is no guarantee of a specific ordering of the elements in the array.
+    pub async fn list_catalogs(&self) -> CatalogResult<ListCatalogsResponse> {
+        let token = self.get_credential().await?;
+        // https://docs.databricks.com/api-explorer/workspace/schemas/list
+        let resp = self
+            .client
+            .get(format!("{}/catalogs", self.catalog_url()))
+            .header(AUTHORIZATION, token)
+            .send_retry(&self.retry_config)
+            .await?;
+        Ok(resp.json().await?)
     }
 
     /// List all schemas for a catalog in the metastore.

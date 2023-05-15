@@ -13,12 +13,15 @@ pub struct ErrorResponse {
     pub message: String,
 }
 
-/// Get table response
+/// List catalogs response
 #[derive(Deserialize)]
 #[serde(untagged)]
-pub enum GetTableResponse {
+pub enum ListCatalogsResponse {
     /// Successful response
-    Success(Table),
+    Success {
+        /// The schemas within the parent catalog
+        catalogs: Vec<Catalog>,
+    },
     /// Error response
     Error(ErrorResponse),
 }
@@ -32,6 +35,16 @@ pub enum ListSchemasResponse {
         /// The schemas within the parent catalog
         schemas: Vec<Schema>,
     },
+    /// Error response
+    Error(ErrorResponse),
+}
+
+/// Get table response
+#[derive(Deserialize)]
+#[serde(untagged)]
+pub enum GetTableResponse {
+    /// Successful response
+    Success(Table),
     /// Error response
     Error(ErrorResponse),
 }
@@ -59,6 +72,89 @@ pub enum ListTableSummariesResponse {
     },
     /// Error response
     Error(ErrorResponse),
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[allow(missing_docs)]
+/// Whether the current securable is accessible from all workspaces or a specific set of workspaces.
+pub enum IsomationMode {
+    #[default]
+    Undefined,
+    Open,
+    Isolated,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(rename_all = "SCREAMING_SNAKE_CASE")]
+#[allow(missing_docs)]
+/// The type of the catalog.
+pub enum CatalogType {
+    #[default]
+    Undefined,
+    ManagedCatalog,
+    DeltasharingCatalog,
+    SystemCatalog,
+}
+
+/// A catalog within a metastore
+#[derive(Deserialize, Default)]
+pub struct Catalog {
+    /// Username of schema creator.
+    #[serde(default)]
+    pub created_by: String,
+
+    /// Name of schema, relative to parent catalog.
+    pub name: String,
+
+    /// Username of user who last modified schema.
+    #[serde(default)]
+    pub updated_by: String,
+
+    #[serde(default)]
+    /// Whether the current securable is accessible from all workspaces or a specific set of workspaces.
+    pub isolation_mode: IsomationMode,
+
+    #[serde(default)]
+    /// The type of the catalog.
+    pub catalog_type: CatalogType,
+
+    /// Storage root URL for managed tables within catalog.
+    pub storage_root: String,
+
+    /// The name of delta sharing provider.
+    ///
+    /// A Delta Sharing catalog is a catalog that is based on a Delta share on a remote sharing server.
+    pub provider_name: Option<String>,
+
+    /// Storage Location URL (full path) for managed tables within catalog.
+    pub storage_location: String,
+
+    /// A map of key-value properties attached to the securable.
+    #[serde(default)]
+    pub properties: HashMap<String, String>,
+
+    /// The name of the share under the share provider.
+    pub share_name: Option<String>,
+
+    /// User-provided free-form text description.
+    #[serde(default)]
+    pub comment: String,
+
+    /// Time at which this schema was created, in epoch milliseconds.
+    #[serde(default)]
+    pub created_at: i64,
+
+    /// Username of current owner of schema.
+    #[serde(default)]
+    pub owner: String,
+
+    /// Time at which this schema was created, in epoch milliseconds.
+    #[serde(default)]
+    pub updated_at: i64,
+
+    /// Unique identifier of parent metastore.
+    pub metastore_id: String,
 }
 
 /// A schema within a catalog

@@ -21,10 +21,7 @@ async-trait = "0.1"
 bytes = "1"
 chrono = { version = "0.4.22", default-features = false, features = ["clock"] }
 cfg-if = "1"
-datafusion-objectstore-hdfs = { version = "0.1.3", default-features = false, features = [
-    "hdfs3",
-    "try_spawn_blocking",
-], optional = true }
+dashmap = "5"
 errno = "0.3"
 futures = "0.3"
 hyper = { version = "0.14", optional = true }
@@ -52,6 +49,12 @@ rand = "0.8"
 regex = "1"
 uuid = { version = "1", features = ["serde", "v4"] }
 url = "2.3"
+
+# hdfs
+datafusion-objectstore-hdfs = { version = "0.1.3", default-features = false, features = [
+    "hdfs3",
+    "try_spawn_blocking",
+], optional = true }
 
 # S3 lock client
 rusoto_core = { version = "0.47", default-features = false, optional = true }
