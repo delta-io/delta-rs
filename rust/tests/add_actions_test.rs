@@ -204,10 +204,14 @@ async fn test_only_struct_stats() {
             "null_count.null",
             Arc::new(array::Int64Array::from(vec![1])),
         ),
+        ("min.null", Arc::new(array::NullArray::new(1))),
+        ("max.null", Arc::new(array::NullArray::new(1))),
         (
             "null_count.boolean",
             Arc::new(array::Int64Array::from(vec![0])),
         ),
+        ("min.boolean", Arc::new(array::NullArray::new(1))),
+        ("max.boolean", Arc::new(array::NullArray::new(1))),
         (
             "null_count.double",
             Arc::new(array::Int64Array::from(vec![0])),
@@ -256,6 +260,8 @@ async fn test_only_struct_stats() {
             "null_count.binary",
             Arc::new(array::Int64Array::from(vec![0])),
         ),
+        ("min.binary", Arc::new(array::NullArray::new(1))),
+        ("max.binary", Arc::new(array::NullArray::new(1))),
         (
             "null_count.date",
             Arc::new(array::Int64Array::from(vec![0])),
