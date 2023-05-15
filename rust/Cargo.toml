@@ -13,7 +13,7 @@ readme = "README.md"
 edition = "2021"
 
 [dependencies]
-arrow = { version = "38", optional = true }
+arrow = { version = "39", optional = true }
 arrow-array = { version = "38", optional = true }
 arrow-cast = { version = "38", optional = true }
 arrow-schema = { version = "38", optional = true }
