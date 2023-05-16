@@ -550,6 +550,11 @@ pub enum DeltaOperation {
         /// The condition the to be deleted data must match
         predicate: Option<String>,
     },
+    /// Update data matching predicate from delta table
+    Update {
+        /// The update predicate
+        predicate: Option<String>,
+    },
 
     /// Represents a Delta `StreamingUpdate` operation.
     #[serde(rename_all = "camelCase")]
@@ -588,6 +593,7 @@ impl DeltaOperation {
             DeltaOperation::Create { .. } => "CREATE TABLE",
             DeltaOperation::Write { .. } => "WRITE",
             DeltaOperation::Delete { .. } => "DELETE",
+            DeltaOperation::Update { .. } => "UPDATE",
             DeltaOperation::StreamingUpdate { .. } => "STREAMING UPDATE",
             DeltaOperation::Optimize { .. } => "OPTIMIZE",
             DeltaOperation::FileSystemCheck { .. } => "FSCK",
@@ -631,7 +637,8 @@ impl DeltaOperation {
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }
             | Self::Write { .. }
-            | Self::Delete { .. } => true,
+            | Self::Delete { .. }
+            | Self::Update { .. } => true,
         }
     }
 
@@ -651,6 +658,7 @@ impl DeltaOperation {
             // TODO add more operations
             Self::Write { predicate, .. } => predicate.clone(),
             Self::Delete { predicate, .. } => predicate.clone(),
+            Self::Update { predicate, .. } => predicate.clone(),
             _ => None,
         }
     }

@@ -103,7 +103,7 @@ pub struct DeleteMetrics {
 }
 
 /// Determine which files contain a record that statisfies the predicate
-async fn find_files<'a>(
+pub async fn find_files<'a>(
     snapshot: &DeltaTableState,
     store: ObjectStoreRef,
     schema: Arc<ArrowSchema>,
@@ -938,6 +938,64 @@ mod tests {
             "| 4     |",
             "+-------+",
         ];
+        let actual = get_data(table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+    #[tokio::test]
+    async fn test_delete_on_mixed_predicate() {
+        // Perform a delete where the predicate only contains partition columns
+
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(["modified"].to_vec())).await;
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from_slice([0, 20, 10, 100])),
+                Arc::new(arrow::array::StringArray::from_slice([
+                    "2021-02-02",
+                    "2021-02-03",
+                    "2021-02-02",
+                    "2021-02-03",
+                ])),
+            ],
+        )
+        .unwrap();
+
+        // write some data
+        let table = DeltaOps(table)
+            .write(vec![batch])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 2);
+
+        let (table, metrics) = DeltaOps(table)
+            .delete()
+            .with_predicate(col("modified").eq(lit("2021-02-03")).and(col("id").eq(lit(20))))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 2);
+        assert_eq!(table.get_file_uris().count(), 1);
+
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_deleted_rows, None);
+        assert_eq!(metrics.num_copied_rows, None);
+        assert!(metrics.scan_time_ms > 0);
+        assert_eq!(metrics.rewrite_time_ms, 0);
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 0     | 2021-02-02 |",
+            "| A  | 10    | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+
         let actual = get_data(table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
