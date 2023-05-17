@@ -260,6 +260,9 @@ fn primitive_parquet_field_to_json_value(field: &Field) -> Result<serde_json::Va
             )),
             _ => Err("Invalid type for min/max values."),
         },
+        Field::TimestampMicros(timestamp) => Ok(serde_json::Value::String(
+            convert_timestamp_micros_to_string(*timestamp)?,
+        )),
         Field::TimestampMillis(timestamp) => Ok(serde_json::Value::String(
             convert_timestamp_millis_to_string(*timestamp)?,
         )),
@@ -269,11 +272,25 @@ fn primitive_parquet_field_to_json_value(field: &Field) -> Result<serde_json::Va
 }
 
 fn convert_timestamp_millis_to_string(value: i64) -> Result<String, &'static str> {
+    let seconds = value / 1000;
+    let milliseconds = (value % 1000) as u32;
+
     let dt = Utc
-        .timestamp_opt(value / 1000, ((value % 1000) * 1000000) as u32)
+        .timestamp_opt(seconds, milliseconds * 1_000_000)
         .single()
         .ok_or("Value out of bounds")?;
     Ok(dt.to_rfc3339_opts(SecondsFormat::Millis, true))
+}
+
+fn convert_timestamp_micros_to_string(value: i64) -> Result<String, &'static str> {
+    let seconds = value / 1_000_000;
+    let microseconds = (value % 1_000_000) as u32;
+
+    let dt: chrono::DateTime<Utc> = Utc
+        .timestamp_opt(seconds, microseconds * 1_000)
+        .single()
+        .ok_or("Value out of bounds")?;
+    Ok(dt.to_rfc3339_opts(SecondsFormat::Micros, true))
 }
 
 fn convert_date_to_string(value: i32) -> Result<String, &'static str> {
@@ -617,5 +634,25 @@ mod tests {
 
         assert_eq!(add_action.partition_values.len(), 0);
         assert_eq!(add_action.stats, None);
+    }
+
+    #[test]
+    fn test_issue_1372_field_to_value_stat() {
+        let now = Utc::now();
+        let timestamp_milliseconds = Field::TimestampMillis(now.timestamp_millis());
+        let ts_millis = field_to_value_stat(&timestamp_milliseconds, "timestamp_millis");
+        assert!(ts_millis.is_some());
+        assert_eq!(
+            ColumnValueStat::Value(json!(now.to_rfc3339_opts(SecondsFormat::Millis, true))),
+            ts_millis.unwrap()
+        );
+
+        let timestamp_milliseconds = Field::TimestampMicros(now.timestamp_micros());
+        let ts_micros = field_to_value_stat(&timestamp_milliseconds, "timestamp_micros");
+        assert!(ts_micros.is_some());
+        assert_eq!(
+            ColumnValueStat::Value(json!(now.to_rfc3339_opts(SecondsFormat::Micros, true))),
+            ts_micros.unwrap()
+        );
     }
 }
