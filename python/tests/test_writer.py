@@ -142,7 +142,7 @@ def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
         sample_data,
         name="test_name",
         description="test_desc",
-        configuration={"delta.appendOnly": "false"},
+        configuration={"delta.appendOnly": "false", "foo": "bar"},
     )
 
     delta_table = DeltaTable(tmp_path)
@@ -151,7 +151,7 @@ def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
 
     assert metadata.name == "test_name"
     assert metadata.description == "test_desc"
-    assert metadata.configuration == {"delta.appendOnly": "false"}
+    assert metadata.configuration == {"delta.appendOnly": "false", "foo": "bar"}
 
 
 @pytest.mark.parametrize(
