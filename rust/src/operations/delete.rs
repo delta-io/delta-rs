@@ -149,7 +149,7 @@ async fn find_files<'a>(
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
     let predicate_expr = create_physical_expr(
-        expression,
+        &Expr::IsTrue(Box::new(expression.clone())),
         &input_dfschema,
         &input_schema,
         state.execution_props(),
