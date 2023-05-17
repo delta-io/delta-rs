@@ -50,12 +50,6 @@ jobs:
           toolchain: stable
           override: true
           components: rustfmt, clippy
-      
-      - uses: actions/setup-java@v3
-        with:
-          distribution: 'zulu'
-          java-version: '17'
-
       - uses: Swatinem/rust-cache@v2
 
       - name: Enable manylinux Python targets
@@ -65,13 +59,12 @@ jobs:
       # hdfs support requires clang 3.5+, which requires an scl package on this image
       - name: Build and install deltalake
         run: |
-          yum install -y llvm-toolset-7
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate
           make setup
           # Install minimum PyArrow version
-          scl enable llvm-toolset-7 'pip install -e .[pandas,devel] pyarrow==7.0.0'
+          pip install -e .[pandas,devel] pyarrow==7.0.0
 
       - name: Run tests
         run: |
@@ -113,7 +106,7 @@ jobs:
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate
-          make develop      
+          MATURIN_EXTRA_ARGS="--features hdfs" make develop      
               
       - name: Download Data Acceptance Tests (DAT) files
         run: make setup-dat

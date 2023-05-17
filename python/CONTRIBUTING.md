@@ -48,6 +48,9 @@ Unit test:
 make unit-test
 ```
 
+### Working with HDFS
+HDFS support is disabled by default for local development, due to the Java dependency to build. To enable HDFS support locally, set `MATURIN_EXTRA_ARGS="-F hdfs"` with the above commands.
+
 ## Release process
 
 1. Make a new PR to update the version in pyproject.toml.
