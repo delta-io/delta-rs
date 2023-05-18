@@ -1,5 +1,5 @@
 //! environment config
-use std::collections::HashMap;
+use std::collections::{hash_map::Entry, HashMap};
 use std::str::FromStr;
 
 use object_store::azure::AzureConfigKey;
@@ -113,9 +113,8 @@ impl ConfigHelper {
         for cred in &self.priority {
             if self.has_any_config(cred) && self.has_full_config_with_env(cred) {
                 for key in cred.keys() {
-                    if !self.config.contains_key(&key) {
-                        self.config
-                            .insert(key, self.env_config.get(&key).unwrap().to_owned());
+                    if let Entry::Vacant(e) = self.config.entry(key) {
+                        e.insert(self.env_config.get(&key).unwrap().to_owned());
                     }
                 }
                 return Ok(self.config);
