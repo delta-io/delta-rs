@@ -1,6 +1,7 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
 pub mod config;
+pub mod envconfig;
 pub mod file;
 pub mod utils;
 
