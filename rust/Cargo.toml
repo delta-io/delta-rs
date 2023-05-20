@@ -21,6 +21,7 @@ async-trait = "0.1"
 bytes = "1"
 chrono = { version = "0.4.22", default-features = false, features = ["clock"] }
 cfg-if = "1"
+dashmap = "5"
 datafusion-objectstore-hdfs = { version = "0.1.3", default-features = false, features = [
     "hdfs3",
     "try_spawn_blocking",
@@ -60,7 +61,10 @@ rusoto_dynamodb = { version = "0.47", default-features = false, optional = true 
 rusoto_glue = { version = "0.47", default-features = false, optional = true }
 
 # Unity
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "json"], optional = true }
+reqwest = { version = "0.11", default-features = false, features = [
+    "rustls-tls",
+    "json",
+], optional = true }
 reqwest-middleware = { version = "0.2.1", optional = true }
 reqwest-retry = { version = "0.2.2", optional = true }
 
@@ -142,11 +146,7 @@ s3 = [
     "object_store/aws",
     "object_store/aws_profile",
 ]
-unity-experimental = [
-    "reqwest",
-    "reqwest-middleware",
-    "reqwest-retry",
-]
+unity-experimental = ["reqwest", "reqwest-middleware", "reqwest-retry"]
 
 [[bench]]
 name = "read_checkpoint"
