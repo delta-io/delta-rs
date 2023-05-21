@@ -158,11 +158,11 @@ impl CreateBuilder {
     /// Set configuration on created table
     pub fn with_configuration(
         mut self,
-        configuration: HashMap<DeltaConfigKey, Option<impl Into<String>>>,
+        configuration: impl IntoIterator<Item = (impl Into<String>, Option<impl Into<String>>)>,
     ) -> Self {
         self.configuration = configuration
             .into_iter()
-            .map(|(k, v)| (k.as_ref().into(), v.map(|s| s.into())))
+            .map(|(k, v)| (k.into(), v.map(|s| s.into())))
             .collect();
         self
     }

@@ -20,9 +20,7 @@ use deltalake::operations::optimize::OptimizeBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
-use deltalake::{
-    DeltaConfigKey, DeltaDataTypeLong, DeltaDataTypeTimestamp, DeltaOps, Invariant, Schema,
-};
+use deltalake::{DeltaDataTypeLong, DeltaDataTypeTimestamp, DeltaOps, Invariant, Schema};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::exceptions::PyValueError;
@@ -33,7 +31,6 @@ use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::future::IntoFuture;
-use std::str::FromStr;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
@@ -778,23 +775,10 @@ fn write_new_deltalake(
         .try_into()
         .map_err(PyDeltaTableError::from_arrow)?;
 
-    let configuration = configuration
-        .unwrap_or_default()
-        .into_iter()
-        .filter_map(|(key, value)| {
-            if let Ok(key) = DeltaConfigKey::from_str(&key) {
-                Some((key, value))
-            } else {
-                None
-            }
-        })
-        .collect();
-
     let mut builder = DeltaOps(table)
         .create()
         .with_columns(schema.get_fields().clone())
         .with_partition_columns(partition_by)
-        .with_configuration(configuration)
         .with_actions(add_actions.iter().map(|add| Action::add(add.into())));
 
     if let Some(name) = &name {
@@ -803,6 +787,10 @@ fn write_new_deltalake(
 
     if let Some(description) = &description {
         builder = builder.with_comment(description);
+    };
+
+    if let Some(config) = configuration {
+        builder = builder.with_configuration(config);
     };
 
     rt()?
