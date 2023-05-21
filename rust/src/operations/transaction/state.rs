@@ -28,6 +28,10 @@ use crate::DeltaTableError;
 impl DeltaTableState {
     /// Get the table schema as an [`ArrowSchemaRef`]
     pub fn arrow_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        self._arrow_schema(true)
+    }
+
+    fn _arrow_schema(&self, wrap_partitions: bool) -> DeltaResult<ArrowSchemaRef> {
         let meta = self.current_metadata().ok_or(DeltaTableError::NoMetadata)?;
         let fields = meta
             .schema
@@ -42,11 +46,15 @@ impl DeltaTableState {
                     .filter(|f| meta.partition_columns.contains(&f.get_name().to_string()))
                     .map(|f| {
                         let field = ArrowField::try_from(f)?;
-                        let corrected = match field.data_type() {
-                            // Dictionary encoding boolean types does not yield benefits
-                            // https://github.com/apache/arrow-datafusion/pull/5545#issuecomment-1526917997
-                            DataType::Boolean => field.data_type().clone(),
-                            _ => wrap_partition_type_in_dict(field.data_type().clone()),
+                        let corrected = if wrap_partitions {
+                            match field.data_type() {
+                                // Dictionary encoding boolean types does not yield benefits
+                                // https://github.com/apache/arrow-datafusion/pull/5545#issuecomment-1526917997
+                                DataType::Boolean => field.data_type().clone(),
+                                _ => wrap_partition_type_in_dict(field.data_type().clone()),
+                            }
+                        } else {
+                            field.data_type().clone()
                         };
                         Ok(field.with_data_type(corrected))
                     }),
@@ -54,6 +62,10 @@ impl DeltaTableState {
             .collect::<Result<Vec<ArrowField>, _>>()?;
 
         Ok(Arc::new(ArrowSchema::new(fields)))
+    }
+
+    pub(crate) fn input_schema(&self) -> DeltaResult<ArrowSchemaRef> {
+        self._arrow_schema(false)
     }
 
     /// Iterate over all files in the log matching a predicate
