@@ -26,12 +26,10 @@ use crate::action::{self, Action, DeltaOperation};
 use crate::storage::ObjectStoreRef;
 use crate::table_state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
-use crate::writer::utils::PartitionPath;
 use crate::{DeltaResult, DeltaTable, DeltaTableError, ObjectMeta, PartitionFilter};
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use futures::future::BoxFuture;
-use futures::StreamExt;
-use log::debug;
+use futures::{StreamExt, TryStreamExt};
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
@@ -54,7 +52,7 @@ pub struct Metrics {
     pub files_removed: MetricDetails,
     /// Number of partitions that had at least one file optimized
     pub partitions_optimized: u64,
-    /// TODO: The number of batches written
+    /// The number of batches written
     pub num_batches: u64,
     /// How many files were considered during optimization. Not every file considered is optimized
     pub total_considered_files: usize,
@@ -79,6 +77,42 @@ pub struct MetricDetails {
     pub total_files: usize,
     /// Sum of file sizes of a operation
     pub total_size: i64,
+}
+
+impl MetricDetails {
+    /// Add a partial metric to the metrics
+    pub fn add(&mut self, partial: &MetricDetails) {
+        self.min = std::cmp::min(self.min, partial.min);
+        self.max = std::cmp::max(self.max, partial.max);
+        self.total_files += partial.total_files;
+        self.total_size += partial.total_size;
+        self.avg = self.total_size as f64 / self.total_files as f64;
+    }
+}
+
+/// Metrics for a single partition
+pub struct PartialMetrics {
+    /// Number of optimized files added
+    pub num_files_added: u64,
+    /// Number of unoptimized files removed
+    pub num_files_removed: u64,
+    /// Detailed metrics for the add operation
+    pub files_added: MetricDetails,
+    /// Detailed metrics for the remove operation
+    pub files_removed: MetricDetails,
+    /// The number of batches written
+    pub num_batches: u64,
+}
+
+impl Metrics {
+    /// Add a partial metric to the metrics
+    pub fn add(&mut self, partial: &PartialMetrics) {
+        self.num_files_added += partial.num_files_added;
+        self.num_files_removed += partial.num_files_removed;
+        self.files_added.add(&partial.files_added);
+        self.files_removed.add(&partial.files_removed);
+        self.num_batches += partial.num_batches;
+    }
 }
 
 impl Default for MetricDetails {
@@ -111,6 +145,10 @@ pub struct OptimizeBuilder<'a> {
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
     app_metadata: Option<HashMap<String, serde_json::Value>>,
+    /// Whether to preserve insertion order within files (default false)
+    preserve_insertion_order: bool,
+    /// Max number of concurrent tasks (defeault 10)
+    max_concurrent_tasks: usize,
 }
 
 impl<'a> OptimizeBuilder<'a> {
@@ -123,6 +161,8 @@ impl<'a> OptimizeBuilder<'a> {
             target_size: None,
             writer_properties: None,
             app_metadata: None,
+            preserve_insertion_order: false,
+            max_concurrent_tasks: 10,
         }
     }
 
@@ -152,6 +192,18 @@ impl<'a> OptimizeBuilder<'a> {
         self.app_metadata = Some(HashMap::from_iter(metadata));
         self
     }
+
+    /// Whether to preserve insertion order within files
+    pub fn with_preserve_insertion_order(mut self, preserve_insertion_order: bool) -> Self {
+        self.preserve_insertion_order = preserve_insertion_order;
+        self
+    }
+
+    /// Max number of concurrent tasks
+    pub fn with_max_concurrent_tasks(mut self, max_concurrent_tasks: usize) -> Self {
+        self.max_concurrent_tasks = max_concurrent_tasks;
+        self
+    }
 }
 
 impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
@@ -170,6 +222,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.filters,
                 this.target_size.to_owned(),
                 writer_properties,
+                this.max_concurrent_tasks,
             )?;
             let metrics = plan.execute(this.store.clone(), &this.snapshot).await?;
             let mut table = DeltaTable::new_with_state(this.store, this.snapshot);
@@ -190,41 +243,6 @@ impl From<OptimizeInput> for DeltaOperation {
             target_size: opt_input.target_size,
             predicate: None,
         }
-    }
-}
-
-/// A collection of bins for a particular partition
-#[derive(Debug)]
-struct MergeBin {
-    files: Vec<ObjectMeta>,
-    size_bytes: i64,
-}
-
-#[derive(Debug)]
-struct PartitionMergePlan {
-    partition_values: HashMap<String, Option<String>>,
-    bins: Vec<MergeBin>,
-}
-
-impl MergeBin {
-    pub fn new() -> Self {
-        MergeBin {
-            files: Vec::new(),
-            size_bytes: 0,
-        }
-    }
-
-    fn get_total_file_size(&self) -> i64 {
-        self.size_bytes
-    }
-
-    fn get_num_files(&self) -> usize {
-        self.files.len()
-    }
-
-    fn add(&mut self, meta: ObjectMeta) {
-        self.size_bytes += meta.size as i64;
-        self.files.push(meta);
     }
 }
 
@@ -251,7 +269,7 @@ fn create_remove(
 #[derive(Debug)]
 /// Encapsulates the operations required to optimize a Delta Table
 pub struct MergePlan {
-    operations: HashMap<PartitionPath, PartitionMergePlan>,
+    operations: HashMap<PartitionTuples, Vec<ObjectMeta>>,
     /// Metrics collected during operation
     metrics: Metrics,
     /// Parameters passed to optimize operation
@@ -264,99 +282,127 @@ pub struct MergePlan {
     writer_properties: WriterProperties,
     /// Version of the table at beginning of optimization. Used for conflict resolution.
     read_table_version: i64,
+    /// Whether to preserve insertion order within files
+    /// Max number of concurrent tasks
+    max_concurrent_tasks: usize,
 }
 
 impl MergePlan {
+    async fn rewrite_files(
+        &self,
+        partition: PartitionTuples,
+        files: Vec<ObjectMeta>,
+        object_store: ObjectStoreRef,
+    ) -> Result<(Vec<Action>, PartialMetrics), DeltaTableError> {
+        // First, initialize metrics
+        let partition_values = partition.to_hashmap();
+        let mut partial_actions = files
+            .iter()
+            .map(|file_meta| {
+                create_remove(
+                    file_meta.location.as_ref(),
+                    &partition_values,
+                    file_meta.size as i64,
+                )
+            })
+            .collect::<Result<Vec<_>, DeltaTableError>>()?;
+
+        let mut files_removed = MetricDetails::default();
+
+        for file in files.iter() {
+            files_removed.total_files += 1;
+            files_removed.total_size += file.size as i64;
+            files_removed.max = std::cmp::max(files_removed.max, file.size as i64);
+            files_removed.min = std::cmp::min(files_removed.min, file.size as i64);
+        }
+
+        let mut partial_metrics = PartialMetrics {
+            num_files_added: 0,
+            num_files_removed: files.len() as u64,
+            files_added: MetricDetails::default(),
+            files_removed,
+            num_batches: 0,
+        };
+
+        // Next, initialize the writer
+        let writer_config = PartitionWriterConfig::try_new(
+            self.file_schema.clone(),
+            partition_values.clone(),
+            self.partition_columns.clone(),
+            Some(self.writer_properties.clone()),
+            Some(self.input_parameters.target_size as usize),
+            None,
+        )?;
+        let mut writer = PartitionWriter::try_with_config(object_store.clone(), writer_config)?;
+
+        // Get data as a stream of batches
+        let mut batch_stream = futures::stream::iter(files)
+            .then(|file| async {
+                let file_reader = ParquetObjectReader::new(object_store.clone(), file);
+                ParquetRecordBatchStreamBuilder::new(file_reader)
+                    .await?
+                    .build()
+            })
+            .try_flatten()
+            .boxed();
+
+        while let Some(maybe_batch) = batch_stream.next().await {
+            let batch = maybe_batch?;
+            partial_metrics.num_batches += 1;
+            writer.write(&batch).await.map_err(DeltaTableError::from)?;
+        }
+
+        let add_actions = writer.close().await?.into_iter().map(|mut add| {
+            add.data_change = false;
+
+            let size = add.size;
+
+            partial_metrics.num_files_added += 1;
+            partial_metrics.files_added.total_files += 1;
+            partial_metrics.files_added.total_size += size;
+            partial_metrics.files_added.max = std::cmp::max(partial_metrics.files_added.max, size);
+            partial_metrics.files_added.min = std::cmp::min(partial_metrics.files_added.min, size);
+
+            Action::add(add)
+        });
+        partial_actions.extend(add_actions);
+
+        Ok((partial_actions, partial_metrics))
+    }
+
     /// Peform the operations outlined in the plan.
     pub async fn execute(
-        self,
+        mut self,
         object_store: ObjectStoreRef,
         snapshot: &DeltaTableState,
     ) -> Result<Metrics, DeltaTableError> {
         let mut actions = vec![];
-        let mut metrics = self.metrics;
 
-        // TODO since we are now async in read and write, should we parallelize this?
-        for (_partition_path, merge_partition) in self.operations.iter() {
-            let partition_values = &merge_partition.partition_values;
-            let bins = &merge_partition.bins;
-            debug!("{:?}", bins);
-            debug!("{:?}", _partition_path);
+        // Need to move metrics and operations out of self, so we can use self in the stream
+        let mut metrics = Metrics::default();
+        std::mem::swap(&mut self.metrics, &mut metrics);
 
-            for bin in bins {
-                let config = PartitionWriterConfig::try_new(
-                    self.file_schema.clone(),
-                    partition_values.clone(),
-                    self.partition_columns.clone(),
-                    Some(self.writer_properties.clone()),
-                    Some(self.input_parameters.target_size as usize),
-                    None,
-                )?;
-                let mut writer = PartitionWriter::try_with_config(object_store.clone(), config)?;
+        let mut operations = HashMap::new();
+        std::mem::swap(&mut self.operations, &mut operations);
+        // let operations = self.operations.take();
 
-                for file_meta in &bin.files {
-                    let file_reader =
-                        ParquetObjectReader::new(object_store.clone(), file_meta.clone());
-                    let mut batch_stream = ParquetRecordBatchStreamBuilder::new(file_reader)
-                        .await?
-                        .build()?;
+        futures::stream::iter(operations)
+            .map(|(partition, files)| self.rewrite_files(partition, files, object_store.clone()))
+            .buffer_unordered(self.max_concurrent_tasks)
+            .try_for_each(|(partial_actions, partial_metrics)| {
+                actions.extend(partial_actions);
+                metrics.add(&partial_metrics);
+                async { Ok(()) }
+            })
+            .await?;
 
-                    while let Some(batch) = batch_stream.next().await {
-                        let batch = batch?;
-                        writer.write(&batch).await?;
-                    }
-
-                    let size = file_meta.size as i64;
-                    actions.push(create_remove(
-                        file_meta.location.as_ref(),
-                        partition_values,
-                        size,
-                    )?);
-
-                    metrics.num_files_removed += 1;
-                    metrics.files_removed.total_files += 1;
-                    metrics.files_removed.total_size += file_meta.size as i64;
-                    metrics.files_removed.max = std::cmp::max(metrics.files_removed.max, size);
-                    metrics.files_removed.min = std::cmp::min(metrics.files_removed.min, size);
-                }
-
-                // Save the file to storage and create corresponding add and remove actions. Do not commit yet.
-                let add_actions = writer.close().await?;
-                if add_actions.len() != 1 {
-                    // Ensure we don't deviate from the merge plan which may result in idempotency being violated
-                    return Err(DeltaTableError::Generic(
-                        "Expected writer to return only one add action".to_owned(),
-                    ));
-                }
-                for mut add in add_actions {
-                    add.data_change = false;
-                    let size = add.size;
-
-                    metrics.num_files_added += 1;
-                    metrics.files_added.total_files += 1;
-                    metrics.files_added.total_size += size;
-                    metrics.files_added.max = std::cmp::max(metrics.files_added.max, size);
-                    metrics.files_added.min = std::cmp::min(metrics.files_added.min, size);
-                    actions.push(action::Action::add(add));
-                }
-            }
-            metrics.partitions_optimized += 1;
-        }
-
+        metrics.preserve_insertion_order = true;
         if metrics.num_files_added == 0 {
             metrics.files_added.min = 0;
-            metrics.files_added.avg = 0.0;
-
-            metrics.files_removed.min = 0;
-            metrics.files_removed.avg = 0.0;
-        } else {
-            metrics.files_added.avg =
-                (metrics.files_added.total_size as f64) / (metrics.files_added.total_files as f64);
-            metrics.files_removed.avg = (metrics.files_removed.total_size as f64)
-                / (metrics.files_removed.total_files as f64);
-            metrics.num_batches = 1;
         }
-        metrics.preserve_insertion_order = true;
+        if metrics.num_files_removed == 0 {
+            metrics.files_removed.min = 0;
+        }
 
         // TODO: Check for remove actions on optimized partitions. If a
         // optimized partition was updated then abort the commit. Requires (#593).
@@ -382,16 +428,38 @@ impl MergePlan {
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct PartitionTuples(Vec<(String, Option<String>)>);
+
+impl PartitionTuples {
+    fn from_hashmap(
+        partition_columns: &[String],
+        partition_values: &HashMap<String, Option<String>>,
+    ) -> Self {
+        let mut tuples = Vec::new();
+        for column in partition_columns {
+            let value = partition_values.get(column).cloned().flatten();
+            tuples.push((column.clone(), value));
+        }
+        Self(tuples)
+    }
+
+    fn to_hashmap(&self) -> HashMap<String, Option<String>> {
+        self.0.iter().cloned().collect()
+    }
+}
+
 /// Build a Plan on which files to merge together. See [OptimizeBuilder]
 pub fn create_merge_plan(
     snapshot: &DeltaTableState,
     filters: &[PartitionFilter<'_, &str>],
     target_size: Option<i64>,
     writer_properties: WriterProperties,
+    max_concurrent_tasks: usize,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
-    let mut candidates = HashMap::new();
-    let mut operations: HashMap<PartitionPath, PartitionMergePlan> = HashMap::new();
+
+    let mut operations: HashMap<PartitionTuples, Vec<ObjectMeta>> = HashMap::new();
     let mut metrics = Metrics::default();
     let partitions_keys = &snapshot
         .current_metadata()
@@ -400,59 +468,32 @@ pub fn create_merge_plan(
 
     //Place each add action into a bucket determined by the file's partition
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
-        let path = PartitionPath::from_hashmap(partitions_keys, &add.partition_values)?;
-        let v = candidates
-            .entry(path)
-            .or_insert_with(|| (add.partition_values.to_owned(), Vec::new()));
+        let part = PartitionTuples::from_hashmap(partitions_keys, &add.partition_values);
 
-        v.1.push(add);
+        metrics.total_considered_files += 1;
+
+        // Skip any files at or over the target size
+        if add.size >= target_size {
+            metrics.total_files_skipped += 1;
+            continue;
+        }
+
+        operations
+            .entry(part)
+            .or_insert_with(Vec::new)
+            .push(add.try_into()?);
     }
 
-    for mut candidate in candidates {
-        let mut bins: Vec<MergeBin> = Vec::new();
-        let partition_path = candidate.0;
-        let partition_values = &candidate.1 .0;
-        let files = &mut candidate.1 .1;
-        let mut curr_bin = MergeBin::new();
-
-        files.sort_by(|a, b| b.size.cmp(&a.size));
-        metrics.total_considered_files += files.len();
-
-        for file in files {
-            if file.size > target_size {
-                metrics.total_files_skipped += 1;
-                continue;
-            }
-
-            if file.size + curr_bin.get_total_file_size() < target_size {
-                curr_bin.add((*file).try_into()?);
-            } else {
-                if curr_bin.get_num_files() > 1 {
-                    bins.push(curr_bin);
-                } else {
-                    metrics.total_files_skipped += curr_bin.get_num_files();
-                }
-                curr_bin = MergeBin::new();
-                curr_bin.add((*file).try_into()?);
-            }
-        }
-
-        if curr_bin.get_num_files() > 1 {
-            bins.push(curr_bin);
-        } else {
-            metrics.total_files_skipped += curr_bin.get_num_files();
-        }
-
-        if !bins.is_empty() {
-            operations.insert(
-                partition_path.to_owned(),
-                PartitionMergePlan {
-                    bins,
-                    partition_values: partition_values.to_owned(),
-                },
-            );
+    // Prune any partitions that only have 1 file, since they can't be merged with anything.
+    for (_, files) in operations.iter_mut() {
+        if files.len() == 1 {
+            metrics.total_files_skipped += 1;
+            files.clear();
         }
     }
+    operations.retain(|_, files| !files.is_empty());
+
+    metrics.partitions_optimized = operations.len() as u64;
 
     let input_parameters = OptimizeInput { target_size };
     let file_schema = arrow_schema_without_partitions(
@@ -473,5 +514,6 @@ pub fn create_merge_plan(
         file_schema,
         partition_columns: partitions_keys.clone(),
         read_table_version: snapshot.version(),
+        max_concurrent_tasks,
     })
 }
