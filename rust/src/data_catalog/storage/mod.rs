@@ -31,7 +31,6 @@ const DELTA_LOG_FOLDER: &str = "_delta_log";
 /// s3://host.example.com:3000/data/tpch/customer/_delta_log/
 pub struct ListingSchemaProvider {
     authority: String,
-    path: object_store::path::Path,
     /// Underlying object store
     store: Arc<dyn ObjectStore>,
     /// A map of table names to a fully quilfied storage location
@@ -47,16 +46,12 @@ impl ListingSchemaProvider {
         storage_options: Option<HashMap<String, String>>,
     ) -> DeltaResult<Self> {
         let uri = ensure_table_uri(root_uri)?;
-        let mut authority = uri.clone();
-        authority.set_path("");
-        let authority = authority.to_string();
-        let path = object_store::path::Path::from(uri.path());
+        let authority = uri.to_string();
         let storage_options = storage_options.unwrap_or_default().into();
         // We already parsed the url, so unwrapping is safe.
         let store = configure_store(&url::Url::parse(&authority).unwrap(), &storage_options)?;
         Ok(Self {
             authority,
-            path,
             store,
             tables: DashMap::new(),
             storage_options,
@@ -65,22 +60,13 @@ impl ListingSchemaProvider {
 
     /// Reload table information from ObjectStore
     pub async fn refresh(&self) -> datafusion_common::Result<()> {
-        let entries: Vec<_> = self
-            .store
-            .list(Some(&self.path))
-            .await?
-            .try_collect()
-            .await?;
-        let base = Path::new(self.path.as_ref());
+        let entries: Vec<_> = self.store.list(None).await?.try_collect().await?;
         let mut tables = HashSet::new();
         for file in entries.iter() {
             let mut parent = Path::new(file.location.as_ref());
             while let Some(p) = parent.parent() {
                 if parent.ends_with(DELTA_LOG_FOLDER) {
                     tables.insert(p);
-                    break;
-                }
-                if p == base {
                     break;
                 }
                 parent = p;
