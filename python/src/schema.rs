@@ -110,7 +110,7 @@ fn python_type_to_schema(ob: PyObject, py: Python) -> PyResult<SchemaDataType> {
 ///  * "binary",
 ///  * "date",
 ///  * "timestamp",
-///  * "decimal(<scale>, <precision>)"
+///  * "decimal(<precision>, <scale>)"
 ///
 /// :param data_type: string representation of the data type
 #[pyclass(module = "deltalake.schema", text_signature = "(data_type)")]
