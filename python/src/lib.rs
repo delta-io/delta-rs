@@ -243,16 +243,18 @@ impl RawDeltaTable {
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced
     /// by the Delta table and are older than the retention threshold.
-    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true))]
+    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true, max_concurrent_requests = 10))]
     pub fn vacuum(
         &mut self,
         dry_run: bool,
         retention_hours: Option<u64>,
         enforce_retention_duration: bool,
+        max_concurrent_requests: usize,
     ) -> PyResult<Vec<String>> {
         let mut cmd = VacuumBuilder::new(self._table.object_store(), self._table.state.clone())
             .with_enforce_retention_duration(enforce_retention_duration)
-            .with_dry_run(dry_run);
+            .with_dry_run(dry_run)
+            .with_max_concurrent_requests(max_concurrent_requests);
         if let Some(retention_period) = retention_hours {
             cmd = cmd.with_retention_period(Duration::hours(retention_period as i64));
         }
@@ -263,14 +265,16 @@ impl RawDeltaTable {
         Ok(metrics.files_deleted)
     }
 
-    /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
-    #[pyo3(signature = (partition_filters = None, target_size = None))]
+    // Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
+    #[pyo3(signature = (partition_filters = None, target_size = None, max_concurrent_tasks = None))]
     pub fn optimize(
         &mut self,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
         target_size: Option<i64>,
+        max_concurrent_tasks: Option<usize>,
     ) -> PyResult<String> {
-        let mut cmd = OptimizeBuilder::new(self._table.object_store(), self._table.state.clone());
+        let mut cmd = OptimizeBuilder::new(self._table.object_store(), self._table.state.clone())
+            .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
         }

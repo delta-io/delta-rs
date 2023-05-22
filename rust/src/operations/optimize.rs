@@ -288,6 +288,10 @@ pub struct MergePlan {
 }
 
 impl MergePlan {
+    /// Rewrites files in a single partition.
+    ///
+    /// Returns a vector of add and remove actions, as well as the partial metrics
+    /// collected during the operation.
     async fn rewrite_files(
         &self,
         partition: PartitionTuples,
@@ -384,7 +388,6 @@ impl MergePlan {
 
         let mut operations = HashMap::new();
         std::mem::swap(&mut self.operations, &mut operations);
-        // let operations = self.operations.take();
 
         futures::stream::iter(operations)
             .map(|(partition, files)| self.rewrite_files(partition, files, object_store.clone()))
