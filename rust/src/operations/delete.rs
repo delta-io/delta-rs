@@ -51,12 +51,10 @@ use datafusion::physical_plan::ExecutionPlan;
 use datafusion::physical_plan::RecordBatchStream;
 use datafusion::prelude::Expr;
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::tree_node::TreeNode;
-use datafusion_common::tree_node::TreeNodeVisitor;
-use datafusion_common::tree_node::VisitRecursion;
+use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
 use datafusion_common::DFSchema;
-use datafusion_expr::col;
-use datafusion_expr::Volatility;
+use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
+use datafusion_expr::{col, Volatility};
 use futures::future::BoxFuture;
 use futures::stream::StreamExt;
 use parquet::file::properties::WriterProperties;
@@ -284,7 +282,7 @@ impl TreeNodeVisitor for ExprProperties {
             | Expr::Case(_)
             | Expr::Cast(_)
             | Expr::TryCast(_) => (),
-            Expr::ScalarFunction { fun, .. } => {
+            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
                 let v = fun.volatility();
                 if v > Volatility::Immutable {
                     self.result = Err(DeltaTableError::Generic(format!(
@@ -294,7 +292,7 @@ impl TreeNodeVisitor for ExprProperties {
                     return Ok(VisitRecursion::Stop);
                 }
             }
-            Expr::ScalarUDF { fun, .. } => {
+            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
                 let v = fun.signature.volatility;
                 if v > Volatility::Immutable {
                     self.result = Err(DeltaTableError::Generic(format!(
