@@ -27,7 +27,6 @@ use crate::operations::write::write_execution_plan;
 use crate::storage::DeltaObjectStore;
 use crate::storage::ObjectStoreRef;
 use crate::table_state::DeltaTableState;
-use crate::DeltaDataTypeVersion;
 use crate::DeltaTable;
 use crate::DeltaTableError;
 
@@ -485,7 +484,7 @@ async fn execute(
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     app_metadata: Option<Map<String, Value>>,
-) -> DeltaResult<((Vec<Action>, DeltaDataTypeVersion), DeleteMetrics)> {
+) -> DeltaResult<((Vec<Action>, i64), DeleteMetrics)> {
     let mut metrics = DeleteMetrics::default();
     let exec_start = Instant::now();
 

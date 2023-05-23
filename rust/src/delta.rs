@@ -40,14 +40,14 @@ pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
 pub struct CheckPoint {
     /// Delta table version
-    pub(crate) version: DeltaDataTypeVersion, // 20 digits decimals
-    size: DeltaDataTypeLong,
+    pub(crate) version: i64, // 20 digits decimals
+    size: i64,
     parts: Option<u32>, // 10 digits decimals
 }
 
 impl CheckPoint {
     /// Creates a new checkpoint from the given parameters.
-    pub fn new(version: DeltaDataTypeVersion, size: DeltaDataTypeLong, parts: Option<u32>) -> Self {
+    pub fn new(version: i64, size: i64, parts: Option<u32>) -> Self {
         Self {
             version,
             size,
@@ -123,7 +123,7 @@ pub enum DeltaTableError {
         /// invalid log entry content.
         line: String,
         /// corresponding table version for the log file.
-        version: DeltaDataTypeVersion,
+        version: i64,
     },
     /// Error returned when the log contains invalid stats JSON.
     #[error("Invalid JSON in file stats: {}", .json_err)]
@@ -141,7 +141,7 @@ pub enum DeltaTableError {
     },
     /// Error returned when the DeltaTable has an invalid version.
     #[error("Invalid table version: {0}")]
-    InvalidVersion(DeltaDataTypeVersion),
+    InvalidVersion(i64),
     /// Error returned when the DeltaTable has no data files.
     #[error("Corrupted table, cannot read data file {}: {}", .path, .source)]
     MissingDataFile {
@@ -225,10 +225,10 @@ pub enum DeltaTableError {
     },
     /// Error returned when transaction is failed to be committed because given version already exists.
     #[error("Delta transaction failed, version {0} already exists.")]
-    VersionAlreadyExists(DeltaDataTypeVersion),
+    VersionAlreadyExists(i64),
     /// Error returned when user attempts to commit actions that don't belong to the next version.
     #[error("Delta transaction failed, version {0} does not follow {1}")]
-    VersionMismatch(DeltaDataTypeVersion, DeltaDataTypeVersion),
+    VersionMismatch(i64, i64),
     /// A Feature is missing to perform operation
     #[error("Delta-rs must be build with feature '{feature}' to support loading from: {url}.")]
     MissingFeature {
@@ -287,7 +287,7 @@ pub struct DeltaTableMetaData {
     /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
-    pub created_time: Option<DeltaDataTypeTimestamp>,
+    pub created_time: Option<i64>,
     /// table properties
     pub configuration: HashMap<String, Option<String>>,
 }
@@ -458,7 +458,7 @@ impl From<ObjectStoreError> for LoadCheckpointError {
 #[derive(Debug)]
 pub enum PeekCommit {
     /// The next commit version and associated actions
-    New(DeltaDataTypeVersion, Vec<Action>),
+    New(i64, Vec<Action>),
     /// Provided DeltaVersion is up to date
     UpToDate,
 }
@@ -474,7 +474,7 @@ pub struct DeltaTable {
     /// file metadata for latest checkpoint
     last_check_point: Option<CheckPoint>,
     /// table versions associated with timestamps
-    version_timestamp: HashMap<DeltaDataTypeVersion, i64>,
+    version_timestamp: HashMap<i64, i64>,
 }
 
 impl Serialize for DeltaTable {
@@ -609,16 +609,14 @@ impl DeltaTable {
     }
 
     /// This method scans delta logs to find the earliest delta log version
-    async fn get_earliest_delta_log_version(
-        &self,
-    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
+    async fn get_earliest_delta_log_version(&self) -> Result<i64, DeltaTableError> {
         // TODO check if regex matches against path
         lazy_static! {
             static ref DELTA_LOG_REGEX: Regex =
                 Regex::new(r#"^_delta_log/(\d{20})\.(json|checkpoint)*$"#).unwrap();
         }
 
-        let mut current_delta_log_ver = DeltaDataTypeVersion::MAX;
+        let mut current_delta_log_ver = i64::MAX;
 
         // Get file objects from table.
         let mut stream = self.storage.list(Some(self.storage.log_path())).await?;
@@ -627,7 +625,7 @@ impl DeltaTable {
 
             if let Some(captures) = DELTA_LOG_REGEX.captures(obj_meta.location.as_ref()) {
                 let log_ver_str = captures.get(1).unwrap().as_str();
-                let log_ver: DeltaDataTypeVersion = log_ver_str.parse().unwrap();
+                let log_ver: i64 = log_ver_str.parse().unwrap();
                 if log_ver < current_delta_log_ver {
                     current_delta_log_ver = log_ver;
                 }
@@ -642,10 +640,7 @@ impl DeltaTable {
         match self.storage.get(&last_checkpoint_path).await {
             Ok(data) => Ok(serde_json::from_slice(&data.bytes().await?)?),
             Err(ObjectStoreError::NotFound { .. }) => {
-                match self
-                    .find_latest_check_point_for_version(DeltaDataTypeVersion::MAX)
-                    .await
-                {
+                match self.find_latest_check_point_for_version(i64::MAX).await {
                     Ok(Some(cp)) => Ok(cp),
                     _ => Err(LoadCheckpointError::NotFound),
                 }
@@ -656,7 +651,7 @@ impl DeltaTable {
 
     async fn find_latest_check_point_for_version(
         &self,
-        version: DeltaDataTypeVersion,
+        version: i64,
     ) -> Result<Option<CheckPoint>, DeltaTableError> {
         lazy_static! {
             static ref CHECKPOINT_REGEX: Regex =
@@ -681,7 +676,7 @@ impl DeltaTable {
             }?;
             if let Some(captures) = CHECKPOINT_REGEX.captures(obj_meta.location.as_ref()) {
                 let curr_ver_str = captures.get(1).unwrap().as_str();
-                let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
+                let curr_ver: i64 = curr_ver_str.parse().unwrap();
                 if curr_ver > version {
                     // skip checkpoints newer than max version
                     continue;
@@ -698,7 +693,7 @@ impl DeltaTable {
 
             if let Some(captures) = CHECKPOINT_PARTS_REGEX.captures(obj_meta.location.as_ref()) {
                 let curr_ver_str = captures.get(1).unwrap().as_str();
-                let curr_ver: DeltaDataTypeVersion = curr_ver_str.parse().unwrap();
+                let curr_ver: i64 = curr_ver_str.parse().unwrap();
                 if curr_ver > version {
                     // skip checkpoints newer than max version
                     continue;
@@ -726,7 +721,7 @@ impl DeltaTable {
         Ok(())
     }
 
-    async fn get_latest_version(&mut self) -> Result<DeltaDataTypeVersion, DeltaTableError> {
+    async fn get_latest_version(&mut self) -> Result<i64, DeltaTableError> {
         let mut version = match self.get_last_checkpoint().await {
             Ok(last_check_point) => last_check_point.version + 1,
             Err(LoadCheckpointError::NotFound) => {
@@ -772,7 +767,7 @@ impl DeltaTable {
     }
 
     /// Currently loaded version of the table
-    pub fn version(&self) -> DeltaDataTypeVersion {
+    pub fn version(&self) -> i64 {
         self.state.version()
     }
 
@@ -786,7 +781,7 @@ impl DeltaTable {
     /// Get the list of actions for the next commit
     pub async fn peek_next_commit(
         &self,
-        current_version: DeltaDataTypeVersion,
+        current_version: i64,
     ) -> Result<PeekCommit, DeltaTableError> {
         let next_version = current_version + 1;
         let commit_uri = commit_uri_from_version(next_version);
@@ -848,7 +843,7 @@ impl DeltaTable {
     /// It assumes that the table is already updated to the current version `self.version`.
     pub async fn update_incremental(
         &mut self,
-        max_version: Option<DeltaDataTypeVersion>,
+        max_version: Option<i64>,
     ) -> Result<(), DeltaTableError> {
         debug!(
             "incremental update with version({}) and max_version({max_version:?})",
@@ -879,10 +874,7 @@ impl DeltaTable {
     }
 
     /// Loads the DeltaTable state for the given version.
-    pub async fn load_version(
-        &mut self,
-        version: DeltaDataTypeVersion,
-    ) -> Result<(), DeltaTableError> {
+    pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
         // check if version is valid
         let commit_uri = commit_uri_from_version(version);
         match self.storage.head(&commit_uri).await {
@@ -916,7 +908,7 @@ impl DeltaTable {
 
     pub(crate) async fn get_version_timestamp(
         &mut self,
-        version: DeltaDataTypeVersion,
+        version: i64,
     ) -> Result<i64, DeltaTableError> {
         match self.version_timestamp.get(&version) {
             Some(ts) => Ok(*ts),
@@ -944,7 +936,7 @@ impl DeltaTable {
             None => self.get_earliest_delta_log_version().await?,
         };
         let mut commit_infos_list = vec![];
-        let mut earliest_commit: Option<DeltaDataTypeVersion> = None;
+        let mut earliest_commit: Option<i64> = None;
 
         loop {
             match DeltaTableState::from_commit(self, version).await {
@@ -1074,7 +1066,7 @@ impl DeltaTable {
     }
 
     /// Returns the current version of the DeltaTable based on the loaded metadata.
-    pub fn get_app_transaction_version(&self) -> &HashMap<String, DeltaDataTypeVersion> {
+    pub fn get_app_transaction_version(&self) -> &HashMap<String, i64> {
         self.state.app_transaction_version()
     }
 
@@ -1162,8 +1154,8 @@ impl DeltaTable {
     pub async fn try_commit_transaction(
         &mut self,
         commit: &PreparedCommit,
-        version: DeltaDataTypeVersion,
-    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
+        version: i64,
+    ) -> Result<i64, DeltaTableError> {
         // move temporary commit file to delta log directory
         // rely on storage to fail if the file already exists -
         self.storage
@@ -1382,7 +1374,7 @@ impl<'a> DeltaTransaction<'a> {
         &mut self,
         operation: Option<DeltaOperation>,
         app_metadata: Option<Map<String, Value>>,
-    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
+    ) -> Result<i64, DeltaTableError> {
         // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action),
         // but leaving it unused for now. `CommitInfo` is a fairly dynamic data structure so we should work
         // out the data structure approach separately.
@@ -1454,10 +1446,7 @@ impl<'a> DeltaTransaction<'a> {
     }
 
     #[allow(deprecated)]
-    async fn try_commit_loop(
-        &mut self,
-        commit: &PreparedCommit,
-    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
+    async fn try_commit_loop(&mut self, commit: &PreparedCommit) -> Result<i64, DeltaTableError> {
         let mut attempt_number: u32 = 0;
         loop {
             self.delta_table.update().await?;
@@ -1540,7 +1529,7 @@ pub async fn open_table_with_storage_options(
 /// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table_with_version(
     table_uri: impl AsRef<str>,
-    version: DeltaDataTypeVersion,
+    version: i64,
 ) -> Result<DeltaTable, DeltaTableError> {
     let table = DeltaTableBuilder::from_uri(table_uri)
         .with_version(version)

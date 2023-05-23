@@ -10,14 +10,6 @@ use crate::DeltaTableError;
 
 /// Type alias for a string expected to match a GUID/UUID format
 pub type Guid = String;
-/// Type alias for i64/Delta long
-pub type DeltaDataTypeLong = i64;
-/// Type alias representing the expected type (i64) of a Delta table version.
-pub type DeltaDataTypeVersion = DeltaDataTypeLong;
-/// Type alias representing the expected type (i64/ms since Unix epoch) of a Delta timestamp.
-pub type DeltaDataTypeTimestamp = DeltaDataTypeLong;
-/// Type alias for i32/Delta int
-pub type DeltaDataTypeInt = i32;
 
 static STRUCT_TAG: &str = "struct";
 static ARRAY_TAG: &str = "array";

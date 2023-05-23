@@ -2,7 +2,6 @@ use super::*;
 use crate::{
     action::{Add, ColumnValueStat, Stats},
     time_utils::timestamp_to_delta_stats_string,
-    DeltaDataTypeLong,
 };
 use arrow::{
     array::{
@@ -65,7 +64,7 @@ pub(crate) fn apply_null_counts(
 
                     match col_struct {
                         ColumnCountStat::Value(n) => {
-                            let null_count = column.null_count() as DeltaDataTypeLong;
+                            let null_count = column.null_count() as i64;
                             let n = null_count + *n;
                             null_counts.insert(key, ColumnCountStat::Value(n));
                         }
