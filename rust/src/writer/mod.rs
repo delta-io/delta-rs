@@ -2,7 +2,7 @@
 //! Abstractions and implementations for writing data to delta tables
 
 use crate::action::{Action, Add, ColumnCountStat};
-use crate::{DeltaDataTypeVersion, DeltaTable, DeltaTableError};
+use crate::{DeltaTable, DeltaTableError};
 
 use arrow::{datatypes::SchemaRef, datatypes::*, error::ArrowError};
 use async_trait::async_trait;
@@ -123,10 +123,7 @@ pub trait DeltaWriter<T> {
 
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// and commit the changes to the Delta log, creating a new table version.
-    async fn flush_and_commit(
-        &mut self,
-        table: &mut DeltaTable,
-    ) -> Result<DeltaDataTypeVersion, DeltaTableError> {
+    async fn flush_and_commit(&mut self, table: &mut DeltaTable) -> Result<i64, DeltaTableError> {
         let mut adds = self.flush().await?;
         #[allow(deprecated)]
         let mut tx = table.create_transaction(None);

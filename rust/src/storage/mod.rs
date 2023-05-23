@@ -5,7 +5,7 @@ pub mod file;
 pub mod utils;
 
 use self::config::StorageOptions;
-use crate::{DeltaDataTypeVersion, DeltaResult};
+use crate::DeltaResult;
 
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt};
@@ -38,7 +38,7 @@ lazy_static! {
 }
 
 /// Return the uri of commit version.
-pub(crate) fn commit_uri_from_version(version: DeltaDataTypeVersion) -> Path {
+pub(crate) fn commit_uri_from_version(version: i64) -> Path {
     let version = format!("{version:020}.json");
     DELTA_LOG_PATH.child(version.as_str())
 }

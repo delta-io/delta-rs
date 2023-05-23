@@ -8,7 +8,7 @@ use super::CommitInfo;
 use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
 use crate::delta_config::IsolationLevel;
 use crate::storage::commit_uri_from_version;
-use crate::{table_state::DeltaTableState, DeltaDataTypeVersion, DeltaResult, DeltaTableError};
+use crate::{table_state::DeltaTableState, DeltaResult, DeltaTableError};
 
 #[cfg(feature = "datafusion")]
 use super::state::AddContainer;
@@ -205,8 +205,8 @@ pub(crate) struct WinningCommitSummary {
 impl WinningCommitSummary {
     pub async fn try_new(
         object_store: &dyn ObjectStore,
-        read_version: DeltaDataTypeVersion,
-        winning_commit_version: DeltaDataTypeVersion,
+        read_version: i64,
+        winning_commit_version: i64,
     ) -> DeltaResult<Self> {
         // NOTE using asser, since a wrong version would right now mean a bug in our code.
         assert_eq!(winning_commit_version, read_version + 1);
