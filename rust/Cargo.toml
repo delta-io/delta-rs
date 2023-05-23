@@ -13,10 +13,10 @@ readme = "README.md"
 edition = "2021"
 
 [dependencies]
-arrow = { version = "38", optional = true }
-arrow-array = { version = "38", optional = true }
-arrow-cast = { version = "38", optional = true }
-arrow-schema = { version = "38", optional = true }
+arrow = { version = "39", optional = true }
+arrow-array = { version = "39", optional = true }
+arrow-cast = { version = "39", optional = true }
+arrow-schema = { version = "39", optional = true }
 async-trait = "0.1"
 bytes = "1"
 chrono = { version = "0.4.22", default-features = false, features = ["clock"] }
@@ -36,7 +36,7 @@ num-traits = "0.2.15"
 object_store = "0.5.6"
 once_cell = "1.16.0"
 parking_lot = "0.12"
-parquet = { version = "38", features = [
+parquet = { version = "39", features = [
     "async",
     "object_store",
 ], optional = true }
@@ -65,12 +65,12 @@ reqwest-middleware = { version = "0.2.1", optional = true }
 reqwest-retry = { version = "0.2.2", optional = true }
 
 # Datafusion
-datafusion = { version = "24", optional = true }
-datafusion-expr = { version = "24", optional = true }
-datafusion-common = { version = "24", optional = true }
-datafusion-proto = { version = "24", optional = true }
-datafusion-sql = { version = "24", optional = true }
-datafusion-physical-expr = { version = "24", optional = true }
+datafusion = { version = "25", optional = true }
+datafusion-expr = { version = "25", optional = true }
+datafusion-common = { version = "25", optional = true }
+datafusion-proto = { version = "25", optional = true }
+datafusion-sql = { version = "25", optional = true }
+datafusion-physical-expr = { version = "25", optional = true }
 
 sqlparser = { version = "0.33", optional = true }
 
@@ -142,11 +142,7 @@ s3 = [
     "object_store/aws",
     "object_store/aws_profile",
 ]
-unity-experimental = [
-    "reqwest",
-    "reqwest-middleware",
-    "reqwest-retry",
-]
+unity-experimental = ["reqwest", "reqwest-middleware", "reqwest-retry"]
 
 [[bench]]
 name = "read_checkpoint"
