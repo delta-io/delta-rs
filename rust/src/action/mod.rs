@@ -96,7 +96,7 @@ pub enum ColumnCountStat {
     /// Composite HashMap representation of statistics.
     Column(HashMap<String, ColumnCountStat>),
     /// Json representation of statistics.
-    Value(DeltaDataTypeLong),
+    Value(i64),
 }
 
 impl ColumnCountStat {
@@ -109,7 +109,7 @@ impl ColumnCountStat {
     }
 
     /// Returns the serde_json representation of the ColumnCountStat.
-    pub fn as_value(&self) -> Option<DeltaDataTypeLong> {
+    pub fn as_value(&self) -> Option<i64> {
         match self {
             ColumnCountStat::Value(v) => Some(*v),
             _ => None,
@@ -122,7 +122,7 @@ impl ColumnCountStat {
 #[serde(rename_all = "camelCase")]
 pub struct Stats {
     /// Number of records in the file associated with the log action.
-    pub num_records: DeltaDataTypeLong,
+    pub num_records: i64,
 
     // start of per column stats
     /// Contains a value smaller than all values present in the file for all columns.
@@ -137,7 +137,7 @@ pub struct Stats {
 #[derive(Debug, Default)]
 pub struct StatsParsed {
     /// Number of records in the file associated with the log action.
-    pub num_records: DeltaDataTypeLong,
+    pub num_records: i64,
 
     // start of per column stats
     /// Contains a value smaller than all values present in the file for all columns.
@@ -154,7 +154,7 @@ pub struct StatsParsed {
     /// Contains a value larger than all values present in the file for all columns.
     pub max_values: HashMap<String, String>,
     /// The number of null values for all columns.
-    pub null_count: HashMap<String, DeltaDataTypeLong>,
+    pub null_count: HashMap<String, i64>,
 }
 
 /// Delta AddCDCFile action that describes a parquet CDC data file.
@@ -165,7 +165,7 @@ pub struct AddCDCFile {
     /// absolute path to a CDC file
     pub path: String,
     /// The size of this file in bytes
-    pub size: DeltaDataTypeLong,
+    pub size: i64,
     /// A map from partition column to value for this file
     pub partition_values: HashMap<String, Option<String>>,
     /// Should always be set to false because they do not change the underlying data of the table
@@ -181,7 +181,7 @@ pub struct Add {
     /// A relative path, from the root of the table, to a file that should be added to the table
     pub path: String,
     /// The size of this file in bytes
-    pub size: DeltaDataTypeLong,
+    pub size: i64,
     /// A map from partition column to value for this file
     pub partition_values: HashMap<String, Option<String>>,
     /// Partition values stored in raw parquet struct format. In this struct, the column names
@@ -205,7 +205,7 @@ pub struct Add {
     #[serde(skip_serializing, skip_deserializing)]
     pub partition_values_parsed: Option<String>,
     /// The time this file was created, as milliseconds since the epoch
-    pub modification_time: DeltaDataTypeTimestamp,
+    pub modification_time: i64,
     /// When false the file must already be present in the table or the records in the added file
     /// must be contained in one or more remove actions in the same version
     ///
@@ -327,7 +327,7 @@ pub struct MetaData {
     /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
     /// The time when this metadata action is created, in milliseconds since the Unix epoch
-    pub created_time: Option<DeltaDataTypeTimestamp>,
+    pub created_time: Option<i64>,
     /// A map containing configuration options for the table
     pub configuration: HashMap<String, Option<String>>,
 }
@@ -367,7 +367,7 @@ pub struct Remove {
     /// The path of the file that is removed from the table.
     pub path: String,
     /// The timestamp when the remove was added to table state.
-    pub deletion_timestamp: Option<DeltaDataTypeTimestamp>,
+    pub deletion_timestamp: Option<i64>,
     /// Whether data is changed by the remove. A table optimize will report this as false for
     /// example, since it adds and removes files by combining many files into one.
     pub data_change: bool,
@@ -379,7 +379,7 @@ pub struct Remove {
     /// A map from partition column to value for this file.
     pub partition_values: Option<HashMap<String, Option<String>>>,
     /// Size of this file in bytes
-    pub size: Option<DeltaDataTypeLong>,
+    pub size: Option<i64>,
     /// Map containing metadata about this file
     pub tags: Option<HashMap<String, Option<String>>>,
 }
@@ -425,9 +425,9 @@ pub struct Txn {
     /// A unique identifier for the application performing the transaction.
     pub app_id: String,
     /// An application-specific numeric identifier for this transaction.
-    pub version: DeltaDataTypeVersion,
+    pub version: i64,
     /// The time when this transaction action was created in milliseconds since the Unix epoch.
-    pub last_updated: Option<DeltaDataTypeTimestamp>,
+    pub last_updated: Option<i64>,
 }
 
 /// Action used to increase the version of the Delta protocol required to read or write to the
@@ -437,10 +437,10 @@ pub struct Txn {
 pub struct Protocol {
     /// Minimum version of the Delta read protocol a client must implement to correctly read the
     /// table.
-    pub min_reader_version: DeltaDataTypeInt,
+    pub min_reader_version: i32,
     /// Minimum version of the Delta write protocol a client must implement to correctly read the
     /// table.
-    pub min_writer_version: DeltaDataTypeInt,
+    pub min_writer_version: i32,
 }
 
 /// The commitInfo is a fairly flexible action within the delta specification, where arbitrary data can be stored.
@@ -451,7 +451,7 @@ pub struct Protocol {
 pub struct CommitInfo {
     /// Timestamp in millis when the commit was created
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub timestamp: Option<DeltaDataTypeTimestamp>,
+    pub timestamp: Option<i64>,
     /// Id of the user invoking the commit
     #[serde(skip_serializing_if = "Option::is_none")]
     pub user_id: Option<String>,
@@ -569,7 +569,7 @@ pub enum DeltaOperation {
         /// The filter used to determine which partitions to filter
         predicate: Option<String>,
         /// Target optimize size
-        target_size: DeltaDataTypeLong,
+        target_size: i64,
     },
     #[serde(rename_all = "camelCase")]
     /// Represents a `FileSystemCheck` operation

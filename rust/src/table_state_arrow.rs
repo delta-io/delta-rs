@@ -4,7 +4,6 @@
 
 use crate::action::{ColumnCountStat, ColumnValueStat, Stats};
 use crate::table_state::DeltaTableState;
-use crate::DeltaDataTypeLong;
 use crate::DeltaTableError;
 use crate::SchemaDataType;
 use crate::SchemaTypeStruct;
@@ -335,7 +334,7 @@ impl DeltaTableState {
                             .as_ref()
                             .map(|stat| resolve_column_count_stat(&stat.null_count, &path))
                     })
-                    .collect::<Vec<Option<DeltaDataTypeLong>>>();
+                    .collect::<Vec<Option<i64>>>();
                 let null_count = Some(value_vec_to_array(null_count, |values| {
                     Ok(Arc::new(arrow::array::Int64Array::from(values)))
                 })?);
@@ -536,7 +535,7 @@ fn resolve_column_value_stat<'a>(
 fn resolve_column_count_stat(
     values: &HashMap<String, ColumnCountStat>,
     path: &[&str],
-) -> Option<DeltaDataTypeLong> {
+) -> Option<i64> {
     let mut current = values;
     let (&name, path) = path.split_last()?;
     for &segment in path {

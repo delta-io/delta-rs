@@ -27,10 +27,7 @@ use crate::storage::ObjectStoreRef;
 use crate::table_state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::writer::utils::PartitionPath;
-use crate::DeltaDataTypeVersion;
-use crate::{
-    DeltaDataTypeLong, DeltaResult, DeltaTable, DeltaTableError, ObjectMeta, PartitionFilter,
-};
+use crate::{DeltaResult, DeltaTable, DeltaTableError, ObjectMeta, PartitionFilter};
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use futures::future::BoxFuture;
 use futures::StreamExt;
@@ -73,21 +70,21 @@ pub struct Metrics {
 #[serde(rename_all = "camelCase")]
 pub struct MetricDetails {
     /// Minimum file size of a operation
-    pub min: DeltaDataTypeLong,
+    pub min: i64,
     /// Maximum file size of a operation
-    pub max: DeltaDataTypeLong,
+    pub max: i64,
     /// Average file size of a operation
     pub avg: f64,
     /// Number of files encountered during operation
     pub total_files: usize,
     /// Sum of file sizes of a operation
-    pub total_size: DeltaDataTypeLong,
+    pub total_size: i64,
 }
 
 impl Default for MetricDetails {
     fn default() -> Self {
         MetricDetails {
-            min: DeltaDataTypeLong::MAX,
+            min: i64::MAX,
             max: 0,
             avg: 0.0,
             total_files: 0,
@@ -136,7 +133,7 @@ impl<'a> OptimizeBuilder<'a> {
     }
 
     /// Set the target file size
-    pub fn with_target_size(mut self, target: DeltaDataTypeLong) -> Self {
+    pub fn with_target_size(mut self, target: i64) -> Self {
         self.target_size = Some(target);
         self
     }
@@ -184,7 +181,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
 
 #[derive(Debug)]
 struct OptimizeInput {
-    target_size: DeltaDataTypeLong,
+    target_size: i64,
 }
 
 impl From<OptimizeInput> for DeltaOperation {
@@ -200,7 +197,7 @@ impl From<OptimizeInput> for DeltaOperation {
 #[derive(Debug)]
 struct MergeBin {
     files: Vec<ObjectMeta>,
-    size_bytes: DeltaDataTypeLong,
+    size_bytes: i64,
 }
 
 #[derive(Debug)]
@@ -234,7 +231,7 @@ impl MergeBin {
 fn create_remove(
     path: &str,
     partitions: &HashMap<String, Option<String>>,
-    size: DeltaDataTypeLong,
+    size: i64,
 ) -> Result<Action, DeltaTableError> {
     // NOTE unwrap is safe since UNIX_EPOCH will always be earlier then now.
     let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
@@ -266,7 +263,7 @@ pub struct MergePlan {
     /// Properties passed to parquet writer
     writer_properties: WriterProperties,
     /// Version of the table at beginning of optimization. Used for conflict resolution.
-    read_table_version: DeltaDataTypeVersion,
+    read_table_version: i64,
 }
 
 impl MergePlan {
@@ -389,7 +386,7 @@ impl MergePlan {
 pub fn create_merge_plan(
     snapshot: &DeltaTableState,
     filters: &[PartitionFilter<'_, &str>],
-    target_size: Option<DeltaDataTypeLong>,
+    target_size: Option<i64>,
     writer_properties: WriterProperties,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
