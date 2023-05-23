@@ -6,10 +6,7 @@ use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::schema::SchemaDataType;
 use crate::storage::commit_uri_from_version;
 use crate::Schema;
-use crate::{
-    ApplyLogError, DeltaDataTypeLong, DeltaDataTypeVersion, DeltaTable, DeltaTableError,
-    DeltaTableMetaData,
-};
+use crate::{ApplyLogError, DeltaTable, DeltaTableError, DeltaTableMetaData};
 use chrono::Utc;
 use lazy_static::lazy_static;
 use object_store::{path::Path, ObjectStore};
@@ -27,7 +24,7 @@ use super::{CheckPoint, DeltaTableConfig};
 #[serde(rename_all = "camelCase")]
 pub struct DeltaTableState {
     // current table version represented by this table state
-    version: DeltaDataTypeVersion,
+    version: i64,
     // A remove action should remain in the state of the table as a tombstone until it has expired.
     // A tombstone expires when the creation timestamp of the delta file exceeds the expiration
     tombstones: HashSet<action::Remove>,
@@ -35,21 +32,21 @@ pub struct DeltaTableState {
     files: Vec<action::Add>,
     // Information added to individual commits
     commit_infos: Vec<action::CommitInfo>,
-    app_transaction_version: HashMap<String, DeltaDataTypeVersion>,
+    app_transaction_version: HashMap<String, i64>,
     min_reader_version: i32,
     min_writer_version: i32,
     // table metadata corresponding to current version
     current_metadata: Option<DeltaTableMetaData>,
     // retention period for tombstones in milli-seconds
-    tombstone_retention_millis: DeltaDataTypeLong,
+    tombstone_retention_millis: i64,
     // retention period for log entries in milli-seconds
-    log_retention_millis: DeltaDataTypeLong,
+    log_retention_millis: i64,
     enable_expired_log_cleanup: bool,
 }
 
 impl DeltaTableState {
     /// Create Table state with specified version
-    pub fn with_version(version: DeltaDataTypeVersion) -> Self {
+    pub fn with_version(version: i64) -> Self {
         Self {
             version,
             ..Self::default()
@@ -57,15 +54,12 @@ impl DeltaTableState {
     }
 
     /// Return table version
-    pub fn version(&self) -> DeltaDataTypeVersion {
+    pub fn version(&self) -> i64 {
         self.version
     }
 
     /// Construct a delta table state object from commit version.
-    pub async fn from_commit(
-        table: &DeltaTable,
-        version: DeltaDataTypeVersion,
-    ) -> Result<Self, ApplyLogError> {
+    pub async fn from_commit(table: &DeltaTable, version: i64) -> Result<Self, ApplyLogError> {
         let commit_uri = commit_uri_from_version(version);
         let commit_log_bytes = table.storage.get(&commit_uri).await?.bytes().await?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
@@ -84,10 +78,7 @@ impl DeltaTableState {
     }
 
     /// Construct a delta table state object from a list of actions
-    pub fn from_actions(
-        actions: Vec<Action>,
-        version: DeltaDataTypeVersion,
-    ) -> Result<Self, ApplyLogError> {
+    pub fn from_actions(actions: Vec<Action>, version: i64) -> Result<Self, ApplyLogError> {
         let mut new_state = DeltaTableState::with_version(version);
         for action in actions {
             new_state.process_action(action, true, true)?;
@@ -169,12 +160,12 @@ impl DeltaTableState {
     }
 
     /// Retention of tombstone in milliseconds.
-    pub fn tombstone_retention_millis(&self) -> DeltaDataTypeLong {
+    pub fn tombstone_retention_millis(&self) -> i64 {
         self.tombstone_retention_millis
     }
 
     /// Retention of logs in milliseconds.
-    pub fn log_retention_millis(&self) -> DeltaDataTypeLong {
+    pub fn log_retention_millis(&self) -> i64 {
         self.log_retention_millis
     }
 
@@ -211,7 +202,7 @@ impl DeltaTableState {
 
     /// HashMap containing the last txn version stored for every app id writing txn
     /// actions.
-    pub fn app_transaction_version(&self) -> &HashMap<String, DeltaDataTypeVersion> {
+    pub fn app_transaction_version(&self) -> &HashMap<String, i64> {
         &self.app_transaction_version
     }
 

@@ -115,7 +115,7 @@ pub async fn cleanup_metadata(table: &DeltaTable) -> Result<i32, DeltaTableError
 /// If it's empty then the table's `enableExpiredLogCleanup` is used.
 pub async fn create_checkpoint_from_table_uri_and_cleanup(
     table_uri: &str,
-    version: DeltaDataTypeVersion,
+    version: i64,
     cleanup: Option<bool>,
 ) -> Result<(), CheckpointError> {
     let table = open_table_with_version(table_uri, version).await?;
@@ -133,7 +133,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
 }
 
 async fn create_checkpoint_for(
-    version: DeltaDataTypeVersion,
+    version: i64,
     state: &DeltaTableState,
     storage: &DeltaObjectStore,
 ) -> Result<(), CheckpointError> {
@@ -164,10 +164,10 @@ async fn create_checkpoint_for(
     Ok(())
 }
 
-async fn flush_delete_files<T: Fn(&(DeltaDataTypeVersion, ObjectMeta)) -> bool>(
+async fn flush_delete_files<T: Fn(&(i64, ObjectMeta)) -> bool>(
     storage: &DeltaObjectStore,
-    maybe_delete_files: &mut Vec<(DeltaDataTypeVersion, ObjectMeta)>,
-    files_to_delete: &mut Vec<(DeltaDataTypeVersion, ObjectMeta)>,
+    maybe_delete_files: &mut Vec<(i64, ObjectMeta)>,
+    files_to_delete: &mut Vec<(i64, ObjectMeta)>,
     should_delete_file: T,
 ) -> Result<i32, DeltaTableError> {
     if !maybe_delete_files.is_empty() && should_delete_file(maybe_delete_files.last().unwrap()) {
@@ -199,7 +199,7 @@ async fn flush_delete_files<T: Fn(&(DeltaDataTypeVersion, ObjectMeta)) -> bool>(
 
 /// exposed only for integration testing - DO NOT USE otherwise
 pub async fn cleanup_expired_logs_for(
-    until_version: DeltaDataTypeVersion,
+    until_version: i64,
     storage: &DeltaObjectStore,
     log_retention_timestamp: i64,
 ) -> Result<i32, DeltaTableError> {
@@ -211,7 +211,7 @@ pub async fn cleanup_expired_logs_for(
     let mut deleted_log_num = 0;
 
     // Get file objects from table.
-    let mut candidates: Vec<(DeltaDataTypeVersion, ObjectMeta)> = Vec::new();
+    let mut candidates: Vec<(i64, ObjectMeta)> = Vec::new();
     let mut stream = storage.list(Some(storage.log_path())).await?;
     while let Some(obj_meta) = stream.next().await {
         let obj_meta = obj_meta?;
@@ -220,7 +220,7 @@ pub async fn cleanup_expired_logs_for(
 
         if let Some(captures) = DELTA_LOG_REGEX.captures(obj_meta.location.as_ref()) {
             let log_ver_str = captures.get(1).unwrap().as_str();
-            let log_ver: DeltaDataTypeVersion = log_ver_str.parse().unwrap();
+            let log_ver: i64 = log_ver_str.parse().unwrap();
             if log_ver < until_version && ts <= log_retention_timestamp {
                 candidates.push((log_ver, obj_meta));
             }
@@ -248,8 +248,8 @@ pub async fn cleanup_expired_logs_for(
         file.1.last_modified.timestamp() <= log_retention_timestamp && file.0 < until_version
     };
 
-    let mut maybe_delete_files: Vec<(DeltaDataTypeVersion, ObjectMeta)> = Vec::new();
-    let mut files_to_delete: Vec<(DeltaDataTypeVersion, ObjectMeta)> = Vec::new();
+    let mut maybe_delete_files: Vec<(i64, ObjectMeta)> = Vec::new();
+    let mut files_to_delete: Vec<(i64, ObjectMeta)> = Vec::new();
 
     // Init
     if !candidates.is_empty() {
@@ -258,7 +258,7 @@ pub async fn cleanup_expired_logs_for(
         maybe_delete_files.push(removed);
     }
 
-    let mut current_file: (DeltaDataTypeVersion, ObjectMeta);
+    let mut current_file: (i64, ObjectMeta);
     loop {
         if candidates.is_empty() {
             deleted_log_num += flush_delete_files(

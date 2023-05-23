@@ -19,9 +19,7 @@ mod string;
 mod validity;
 
 use crate::action::{Action, Add, CommitInfo, MetaData, Protocol, Remove, Txn};
-use crate::schema::{
-    DeltaDataTypeInt, DeltaDataTypeLong, DeltaDataTypeTimestamp, DeltaDataTypeVersion, Guid,
-};
+use crate::schema::Guid;
 use boolean::for_each_boolean_field_value;
 use map::for_each_map_field_value;
 use primitive::for_each_primitive_field_value;
@@ -253,7 +251,7 @@ fn deserialize_txn_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut Txn, v: DeltaDataTypeVersion| action.version = v,
+                |action: &mut Txn, v: i64| action.version = v,
             )?;
         }
         "appId" => {
@@ -271,7 +269,7 @@ fn deserialize_txn_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut Txn, v: DeltaDataTypeTimestamp| action.last_updated = Some(v),
+                |action: &mut Txn, v: i64| action.last_updated = Some(v),
             )?;
         }
         _ => {
@@ -309,7 +307,7 @@ fn deserialize_add_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut Add, v: DeltaDataTypeLong| action.size = v,
+                |action: &mut Add, v: i64| action.size = v,
             )?;
         }
         "partitionValues" => {
@@ -363,7 +361,7 @@ fn deserialize_add_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut Add, v: DeltaDataTypeTimestamp| action.modification_time = v,
+                |action: &mut Add, v: i64| action.modification_time = v,
             )?;
         }
         _ => {
@@ -398,9 +396,7 @@ fn deserialize_remove_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut Remove, v: DeltaDataTypeTimestamp| {
-                    action.deletion_timestamp = Some(v)
-                },
+                |action: &mut Remove, v: i64| action.deletion_timestamp = Some(v),
             )?;
         }
         "size" => {
@@ -409,7 +405,7 @@ fn deserialize_remove_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut Remove, v: DeltaDataTypeLong| action.size = Some(v),
+                |action: &mut Remove, v: i64| action.size = Some(v),
             )?;
         }
         // FIXME suport partitionValueParsed
@@ -556,7 +552,7 @@ fn deserialize_metadata_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut MetaData, v: DeltaDataTypeTimestamp| action.created_time = Some(v),
+                |action: &mut MetaData, v: i64| action.created_time = Some(v),
             )?;
         }
         "configuration" => {
@@ -595,7 +591,7 @@ fn deserialize_protocol_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut Protocol, v: DeltaDataTypeInt| action.min_reader_version = v,
+                |action: &mut Protocol, v: i32| action.min_reader_version = v,
             )?;
         }
         "minWriterVersion" => {
@@ -604,7 +600,7 @@ fn deserialize_protocol_column_page(
                 page,
                 dict,
                 descriptor,
-                |action: &mut Protocol, v: DeltaDataTypeInt| action.min_writer_version = v,
+                |action: &mut Protocol, v: i32| action.min_writer_version = v,
             )?;
         }
         _ => {
