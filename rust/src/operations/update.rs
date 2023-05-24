@@ -1,3 +1,23 @@
+//! Update records from a Delta Table for records statisfy a predicate
+//!
+//! When a predicate is not provided then all records are updated from the Delta
+//! Table. Otherwise a scan of the Delta table is performed to mark any files
+//! that contain records that satisfy the predicate. Once they are determined
+//! then column values are updated with new values provided by the user
+//!
+//!
+//! Predicates MUST be deterministic otherwise undefined behaviour may occur during the
+//! scanning and rewriting phase.
+//!
+//! # Example
+//! ```rust ignore
+//! let table = open_table("../path/to/table")?;
+//! let (table, metrics) = UpdateBuilder::new(table.object_store(), table.state)
+//!     .with_predicate(col("col1").eq(lit(1)))
+//!     .with_update("value", col("value") + lit(20))
+//!     .await?;
+//! ````
+
 use std::{
     collections::{HashMap, HashSet},
     sync::Arc,
@@ -23,11 +43,11 @@ use serde_json::{Map, Value};
 
 use crate::{
     action::{Action, Add, DeltaOperation, Remove},
-    delta_datafusion::{logical_expr_to_physical_expr, parquet_scan_from_actions, register_store},
+    delta_datafusion::{parquet_scan_from_actions, register_store},
     operations::delete::find_files,
     storage::{DeltaObjectStore, ObjectStoreRef},
     table_state::DeltaTableState,
-    DeltaDataTypeVersion, DeltaResult, DeltaTable, DeltaTableError,
+    DeltaResult, DeltaTable, DeltaTableError,
 };
 
 use super::{transaction::commit, write::write_execution_plan};
@@ -130,7 +150,7 @@ async fn execute(
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     app_metadata: Option<Map<String, Value>>,
-) -> DeltaResult<((Vec<Action>, DeltaDataTypeVersion), UpdateMetrics)> {
+) -> DeltaResult<((Vec<Action>, i64), UpdateMetrics)> {
     // Validate the predicate and update expressions
     //
     // If the predicate is not set then all files needs to be updated.
@@ -161,7 +181,15 @@ async fn execute(
                     .cloned()
                     .collect::<Vec<_>>(),
             ));
-            let expr = logical_expr_to_physical_expr(predicate, &schema);
+
+            let input_schema = snapshot.input_schema()?;
+            let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
+            let expr = create_physical_expr(
+                predicate,
+                &input_dfschema,
+                &input_schema,
+                state.execution_props(),
+            )?;
 
             let pruning_predicate = PruningPredicate::try_new(expr, schema.clone())?;
             let files_to_prune = pruning_predicate.prune(snapshot)?;
@@ -176,7 +204,7 @@ async fn execute(
             let rewrite = find_files(
                 snapshot,
                 object_store.clone(),
-                &schema,
+                schema.clone(),
                 file_schema.clone(),
                 files,
                 &state,
@@ -196,14 +224,6 @@ async fn execute(
         .ok_or(DeltaTableError::NoMetadata)?
         .partition_columns
         .clone();
-    let file_schema = Arc::new(ArrowSchema::new(
-        schema
-            .fields()
-            .iter()
-            .filter(|f| !table_partition_cols.contains(f.name()))
-            .cloned()
-            .collect::<Vec<_>>(),
-    ));
     let execution_props = ExecutionProps::new();
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
@@ -220,9 +240,9 @@ async fn execute(
     .await?;
 
     // Create a new projection
-    let physical_schema = file_schema.clone();
+    let input_schema = snapshot.input_schema()?;
     let mut fields = Vec::new();
-    for field in physical_schema.fields.iter() {
+    for field in input_schema.fields.iter() {
         fields.push(field.to_owned());
     }
     fields.push(Arc::new(Field::new(
@@ -231,8 +251,8 @@ async fn execute(
         true,
     )));
 
-    let physical_schema = Arc::new(ArrowSchema::new(fields));
-    let logical_schema: DFSchema = physical_schema.as_ref().clone().try_into()?;
+    let input_schema = Arc::new(ArrowSchema::new(fields));
+    let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     let scan_schema = parquet_scan.schema();
@@ -243,12 +263,8 @@ async fn execute(
         ));
     }
 
-    let predicate_expr = create_physical_expr(
-        &predicate,
-        &logical_schema,
-        &physical_schema,
-        &execution_props,
-    )?;
+    let predicate_expr =
+        create_physical_expr(&predicate, &input_dfschema, &input_schema, &execution_props)?;
     expressions.push((predicate_expr, "__delta_rs_update_predicate".to_string()));
 
     // Create the projection...
@@ -272,7 +288,7 @@ async fn execute(
             .when(lit(true), expr.to_owned())
             .otherwise(col(column.to_owned()))?;
         let predicate_expr =
-            create_physical_expr(&expr, &logical_schema, &physical_schema, &execution_props)?;
+            create_physical_expr(&expr, &input_dfschema, &input_schema, &execution_props)?;
         map.insert(column.name.clone(), expressions.len());
         let c = "__delta_rs_".to_string() + &column.name;
         expressions.push((predicate_expr, c.clone()));
@@ -290,7 +306,7 @@ async fn execute(
             match map.get(field.name()) {
                 Some(value) => {
                     expressions.push((
-                        Arc::new(expressions::Column::new(field.name(), value.clone())),
+                        Arc::new(expressions::Column::new(field.name(), *value)),
                         field.name().to_owned(),
                     ));
                 }
@@ -516,22 +532,6 @@ mod tests {
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
 
-
-        let ctx = SessionContext::new();
-        let t = Arc::new(table);
-        ctx.register_table("test", t).unwrap();
-        let r = ctx.sql("select * from test").await.unwrap()
-            .filter(col("modified").eq(lit("2021-02-03"))).unwrap();
-
-        r.show().await.unwrap();
-        ctx.sql("select * from test where modified = '2021-02-03'")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap();
-
-        /*
         let (table, metrics) = DeltaOps(table)
             .update()
             .with_predicate(col("modified").eq(lit("2021-02-03")))
@@ -558,7 +558,6 @@ mod tests {
         ];
         let actual = get_data(table).await;
         assert_batches_sorted_eq!(&expected, &actual);
-        */
     }
 
     #[tokio::test]
@@ -593,6 +592,7 @@ mod tests {
             .update()
             .with_predicate(col("modified").eq(lit("2021-02-03")))
             .with_update("modified", lit("2023-05-14"))
+            .with_update("id", lit("C"))
             .await
             .unwrap();
 
@@ -600,22 +600,22 @@ mod tests {
         assert_eq!(table.get_file_uris().count(), 2);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
-        //assert_eq!(metrics.num_updated_rows, 4);
+        //assert_eq!(metrics.num_updated_rows, 2);
         //assert_eq!(metrics.num_copied_rows, 0);
 
         let expected = vec![
             "+----+-------+------------+",
             "| id | value | modified   |",
             "+----+-------+------------+",
-            "| A  | 1     | 2023-05-14 |",
-            "| A  | 10    | 2023-05-14 |",
-            "| A  | 100   | 2023-05-14 |",
-            "| B  | 10    | 2023-05-14 |",
+            "| A  | 1     | 2021-02-02 |",
+            "| C  | 10    | 2023-05-14 |",
+            "| C  | 100   | 2023-05-14 |",
+            "| B  | 10    | 2021-02-02 |",
             "+----+-------+------------+",
         ];
+
         let actual = get_data(table).await;
         assert_batches_sorted_eq!(&expected, &actual);
-
     }
 
     #[tokio::test]
@@ -630,6 +630,14 @@ mod tests {
                 random() * lit(20.0),
                 arrow::datatypes::DataType::Int32,
             )))
+            .await;
+        assert!(res.is_err());
+
+        let table = setup_table(None).await;
+        let res = DeltaOps(table)
+            .update()
+            .with_predicate(col("value").eq(lit(10)))
+            .with_update("value", col("value") + lit(20))
             .await;
         assert!(res.is_err());
     }

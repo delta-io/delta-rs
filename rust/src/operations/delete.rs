@@ -974,7 +974,11 @@ mod tests {
 
         let (table, metrics) = DeltaOps(table)
             .delete()
-            .with_predicate(col("modified").eq(lit("2021-02-03")).and(col("id").eq(lit(20))))
+            .with_predicate(
+                col("modified")
+                    .eq(lit("2021-02-03"))
+                    .and(col("id").eq(lit(20))),
+            )
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
