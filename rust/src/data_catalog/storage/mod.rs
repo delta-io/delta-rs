@@ -10,7 +10,6 @@ use datafusion::catalog::schema::SchemaProvider;
 use datafusion::datasource::TableProvider;
 use datafusion_common::DataFusionError;
 use futures::TryStreamExt;
-use itertools::Itertools;
 use object_store::ObjectStore;
 
 use crate::storage::config::{configure_store, StorageOptions};
@@ -46,12 +45,11 @@ impl ListingSchemaProvider {
         storage_options: Option<HashMap<String, String>>,
     ) -> DeltaResult<Self> {
         let uri = ensure_table_uri(root_uri)?;
-        let authority = uri.to_string();
         let storage_options = storage_options.unwrap_or_default().into();
         // We already parsed the url, so unwrapping is safe.
-        let store = configure_store(&url::Url::parse(&authority).unwrap(), &storage_options)?;
+        let store = configure_store(&uri, &storage_options)?;
         Ok(Self {
-            authority,
+            authority: uri.to_string(),
             store,
             tables: DashMap::new(),
             storage_options,
@@ -73,26 +71,31 @@ impl ListingSchemaProvider {
             }
         }
         for table in tables.into_iter() {
-            let file_name = table
-                .file_name()
-                .ok_or_else(|| DataFusionError::Internal("Cannot parse file name!".to_string()))?
-                .to_str()
-                .ok_or_else(|| DataFusionError::Internal("Cannot parse file name!".to_string()))?
-                .replace(['-', '.'], "_")
-                .to_ascii_lowercase();
-            let table_name = file_name.split('.').collect_vec()[0];
+            let table_name = normalize_table_name(table)?;
             let table_path = table
                 .to_str()
                 .ok_or_else(|| DataFusionError::Internal("Cannot parse file name!".to_string()))?
                 .to_string();
-
-            if !self.table_exist(table_name) {
+            if !self.table_exist(&table_name) {
                 let table_url = format!("{}/{}", self.authority, table_path);
                 self.tables.insert(table_name.to_string(), table_url);
             }
         }
         Ok(())
     }
+}
+
+// noramalizes a path fragement to be a valida table name in datafusion
+// - removes some reserved characters (-, +, ., " ")
+// - lowecase ascii
+fn normalize_table_name(path: &Path) -> Result<String, DataFusionError> {
+    Ok(path
+        .file_name()
+        .ok_or_else(|| DataFusionError::Internal("Cannot parse file name!".to_string()))?
+        .to_str()
+        .ok_or_else(|| DataFusionError::Internal("Cannot parse file name!".to_string()))?
+        .replace(['-', '.', ' '], "_")
+        .to_ascii_lowercase())
 }
 
 #[async_trait]
@@ -143,6 +146,18 @@ mod tests {
     use datafusion::assert_batches_sorted_eq;
     use datafusion::catalog::catalog::{CatalogProvider, MemoryCatalogProvider};
     use datafusion::execution::context::SessionContext;
+
+    #[test]
+    fn test_normalize_table_name() {
+        let cases = vec![
+            (Path::new("Table Name"), "table_name"),
+            (Path::new("Table.Name"), "table_name"),
+            (Path::new("Table-Name"), "table_name"),
+        ];
+        for (raw, expected) in cases {
+            assert_eq!(normalize_table_name(raw).unwrap(), expected.to_string())
+        }
+    }
 
     #[tokio::test]
     async fn test_table_names() {
