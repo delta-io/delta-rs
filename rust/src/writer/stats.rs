@@ -1,29 +1,18 @@
 use super::*;
-use crate::{
-    action::{Add, ColumnValueStat, Stats},
-    time_utils::timestamp_to_delta_stats_string,
-};
-use arrow::{
-    array::{
-        as_boolean_array, as_primitive_array, as_struct_array, make_array, Array, ArrayData,
-        StructArray,
-    },
-    buffer::MutableBuffer,
-};
-use parquet::errors::ParquetError;
-use parquet::file::{metadata::RowGroupMetaData, statistics::Statistics};
+use crate::action::{Add, ColumnValueStat, Stats};
+use arrow::array::{as_struct_array, Array, StructArray};
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
-use serde_json::{Number, Value};
-use std::collections::HashMap;
+use parquet::{basic::LogicalType, errors::ParquetError};
+use parquet::{
+    file::{metadata::RowGroupMetaData, statistics::Statistics},
+    format::TimeUnit,
+};
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
+use std::{collections::HashMap, ops::AddAssign};
 
 pub type NullCounts = HashMap<String, ColumnCountStat>;
-pub type MinAndMaxValues = (
-    HashMap<String, ColumnValueStat>,
-    HashMap<String, ColumnValueStat>,
-);
 
 pub(crate) fn apply_null_counts(
     array: &StructArray,
@@ -77,21 +66,11 @@ pub(crate) fn apply_null_counts(
 
 pub(crate) fn create_add(
     partition_values: &HashMap<String, Option<String>>,
-    null_counts: NullCounts,
     path: String,
     size: i64,
     file_metadata: &FileMetaData,
 ) -> Result<Add, DeltaWriterError> {
-    let (min_values, max_values) =
-        min_max_values_from_file_metadata(partition_values, file_metadata)?;
-
-    let stats = Stats {
-        num_records: file_metadata.num_rows,
-        min_values,
-        max_values,
-        null_count: null_counts,
-    };
-
+    let stats = stats_from_file_metadata(partition_values, file_metadata)?;
     let stats_string = serde_json::to_string(&stats)?;
 
     // Determine the modification timestamp to include in the add action - milliseconds since epoch
@@ -112,15 +91,16 @@ pub(crate) fn create_add(
     })
 }
 
-fn min_max_values_from_file_metadata(
+fn stats_from_file_metadata(
     partition_values: &HashMap<String, Option<String>>,
     file_metadata: &FileMetaData,
-) -> Result<MinAndMaxValues, DeltaWriterError> {
+) -> Result<Stats, DeltaWriterError> {
     let type_ptr = parquet::schema::types::from_thrift(file_metadata.schema.as_slice());
     let schema_descriptor = type_ptr.map(|type_| Arc::new(SchemaDescriptor::new(type_)))?;
 
     let mut min_values: HashMap<String, ColumnValueStat> = HashMap::new();
     let mut max_values: HashMap<String, ColumnValueStat> = HashMap::new();
+    let mut null_count: HashMap<String, ColumnCountStat> = HashMap::new();
 
     let row_group_metadata: Result<Vec<RowGroupMetaData>, ParquetError> = file_metadata
         .row_groups
@@ -132,14 +112,6 @@ fn min_max_values_from_file_metadata(
     for i in 0..schema_descriptor.num_columns() {
         let column_descr = schema_descriptor.column(i);
 
-        // If max rep level is > 0, this is an array element or a struct element of an array or something downstream of an array.
-        // delta/databricks only computes null counts for arrays - not min max.
-        // null counts are tracked at the record batch level, so skip any column with max_rep_level
-        // > 0
-        if column_descr.max_rep_level() > 0 {
-            continue;
-        }
-
         let column_path = column_descr.path();
         let column_path_parts = column_path.parts();
 
@@ -148,44 +120,342 @@ fn min_max_values_from_file_metadata(
             continue;
         }
 
-        let statistics: Vec<&Statistics> = row_group_metadata
+        let maybe_stats: Option<AggregatedStats> = row_group_metadata
             .iter()
-            .filter_map(|g| g.column(i).statistics())
-            .collect();
+            .map(|g| {
+                g.column(i).statistics().and_then(|s| {
+                    AggregatedStats::try_from_stats(s, &column_descr.logical_type()).ok()
+                })
+            })
+            .reduce(|left, right| match (left, right) {
+                (Some(mut left), Some(right)) => {
+                    left += right;
+                    Some(left)
+                }
+                _ => None,
+            })
+            .flatten();
 
-        apply_min_max_for_column(
-            statistics.as_slice(),
-            column_descr.clone(),
-            column_path_parts,
-            &mut min_values,
-            &mut max_values,
-        )?;
+        if let Some(stats) = maybe_stats {
+            apply_min_max_for_column(
+                stats,
+                column_descr.clone(),
+                column_descr.path().parts(),
+                &mut min_values,
+                &mut max_values,
+                &mut null_count,
+            )?;
+        }
     }
 
-    Ok((min_values, max_values))
+    Ok(Stats {
+        min_values,
+        max_values,
+        num_records: file_metadata.num_rows,
+        null_count,
+    })
+}
+
+/// Logical scalars extracted from statistics. These are used to aggregate
+/// minimums and maximums. We can't use the physical scalars because they
+/// are not ordered correctly for some types. For example, decimals are stored
+/// as fixed length binary, and can't be sorted leixcographically.
+#[derive(Debug, Clone, PartialEq, PartialOrd)]
+enum StatsScalar {
+    Boolean(bool),
+    Int32(i32),
+    Int64(i64),
+    Float32(f32),
+    Float64(f64),
+    Date(chrono::NaiveDate),
+    Timestamp(chrono::NaiveDateTime),
+    // We are serializing to f64 later and the ordering should be the same
+    Decimal(f64),
+    String(String),
+    Bytes(Vec<u8>),
+}
+
+impl StatsScalar {
+    fn try_from_stats(
+        stats: &Statistics,
+        logical_type: &Option<LogicalType>,
+        use_min: bool,
+    ) -> Result<Self, DeltaWriterError> {
+        macro_rules! get_stat {
+            ($val: expr) => {
+                if use_min {
+                    *$val.min()
+                } else {
+                    *$val.max()
+                }
+            };
+        }
+
+        match (stats, logical_type) {
+            (Statistics::Boolean(v), _) => Ok(Self::Boolean(get_stat!(v))),
+            // Int32 can be date, decimal, or just int32
+            (Statistics::Int32(v), Some(LogicalType::Date)) => {
+                let date = chrono::NaiveDate::from_num_days_from_ce_opt(get_stat!(v)).ok_or(
+                    DeltaWriterError::StatsParsingFailed {
+                        debug_value: v.to_string(),
+                        logical_type: Some(LogicalType::Date),
+                    },
+                )?;
+                Ok(Self::Date(date))
+            }
+            (Statistics::Int32(v), Some(LogicalType::Decimal { scale, .. })) => {
+                let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
+                // Spark serializes these as numbers
+                Ok(Self::Decimal(val))
+            }
+            (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
+            // Int64 can be timestamp, decimal, or integer
+            (Statistics::Int64(v), Some(LogicalType::Timestamp { unit, .. })) => {
+                // For now, we assume timestamps are adjusted to UTC. Non-UTC timestamps
+                // are behind a feature gate in Delta:
+                // https://github.com/delta-io/delta/blob/master/PROTOCOL.md#timestamp-without-timezone-timestampntz
+                let v = get_stat!(v);
+                let timestamp = match unit {
+                    TimeUnit::MILLIS(_) => chrono::NaiveDateTime::from_timestamp_millis(v),
+                    TimeUnit::MICROS(_) => chrono::NaiveDateTime::from_timestamp_micros(v),
+                    TimeUnit::NANOS(_) => {
+                        let secs = v / 1_000_000_000;
+                        let nanosecs = (v % 1_000_000_000) as u32;
+                        chrono::NaiveDateTime::from_timestamp_opt(secs, nanosecs)
+                    }
+                };
+                let timestamp = timestamp.ok_or(DeltaWriterError::StatsParsingFailed {
+                    debug_value: v.to_string(),
+                    logical_type: logical_type.clone(),
+                })?;
+                Ok(Self::Timestamp(timestamp))
+            }
+            (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
+                let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
+                // Spark serializes these as numbers
+                Ok(Self::Decimal(val))
+            }
+            (Statistics::Int64(v), _) => Ok(Self::Int64(get_stat!(v))),
+            (Statistics::Float(v), _) => Ok(Self::Float32(get_stat!(v))),
+            (Statistics::Double(v), _) => Ok(Self::Float64(get_stat!(v))),
+            (Statistics::ByteArray(v), logical_type) => {
+                let bytes = if use_min {
+                    v.min_bytes()
+                } else {
+                    v.max_bytes()
+                };
+                match logical_type {
+                    None => Ok(Self::Bytes(bytes.to_vec())),
+                    Some(LogicalType::String) => {
+                        Ok(Self::String(String::from_utf8(bytes.to_vec()).map_err(
+                            |_| DeltaWriterError::StatsParsingFailed {
+                                debug_value: format!("{bytes:?}"),
+                                logical_type: Some(LogicalType::String),
+                            },
+                        )?))
+                    }
+                    _ => Err(DeltaWriterError::StatsParsingFailed {
+                        debug_value: format!("{bytes:?}"),
+                        logical_type: logical_type.clone(),
+                    }),
+                }
+            }
+            (Statistics::FixedLenByteArray(v), Some(LogicalType::Decimal { scale, precision })) => {
+                let val = if use_min {
+                    v.min_bytes()
+                } else {
+                    v.max_bytes()
+                };
+
+                let val = if val.len() <= 4 {
+                    let mut bytes = [0; 4];
+                    bytes[..val.len()].copy_from_slice(val);
+                    i32::from_be_bytes(bytes) as f64
+                } else if val.len() <= 8 {
+                    let mut bytes = [0; 8];
+                    bytes[..val.len()].copy_from_slice(val);
+                    i64::from_be_bytes(bytes) as f64
+                } else if val.len() <= 16 {
+                    let mut bytes = [0; 16];
+                    bytes[..val.len()].copy_from_slice(val);
+                    i128::from_be_bytes(bytes) as f64
+                } else {
+                    return Err(DeltaWriterError::StatsParsingFailed {
+                        debug_value: format!("{val:?}"),
+                        logical_type: Some(LogicalType::Decimal {
+                            scale: *scale,
+                            precision: *precision,
+                        }),
+                    });
+                };
+
+                let val = val / 10.0_f64.powi(*scale);
+                Ok(Self::Decimal(val))
+            }
+            (stats, _) => Err(DeltaWriterError::StatsParsingFailed {
+                debug_value: format!("{stats:?}"),
+                logical_type: logical_type.clone(),
+            }),
+        }
+    }
+}
+
+impl From<StatsScalar> for serde_json::Value {
+    fn from(scalar: StatsScalar) -> Self {
+        match scalar {
+            StatsScalar::Boolean(v) => serde_json::Value::Bool(v),
+            StatsScalar::Int32(v) => serde_json::Value::from(v),
+            StatsScalar::Int64(v) => serde_json::Value::from(v),
+            StatsScalar::Float32(v) => serde_json::Value::from(v),
+            StatsScalar::Float64(v) => serde_json::Value::from(v),
+            StatsScalar::Date(v) => serde_json::Value::from(v.format("%Y-%m-%d").to_string()),
+            StatsScalar::Timestamp(v) => {
+                serde_json::Value::from(v.format("%Y-%m-%dT%H:%M:%S%.fZ").to_string())
+            }
+            StatsScalar::Decimal(v) => serde_json::Value::from(v),
+            StatsScalar::String(v) => serde_json::Value::from(v),
+            StatsScalar::Bytes(v) => {
+                let escaped_bytes = v
+                    .into_iter()
+                    .map(std::ascii::escape_default)
+                    .flatten()
+                    .collect::<Vec<u8>>();
+                let escaped_string = String::from_utf8(escaped_bytes).unwrap();
+                serde_json::Value::from(escaped_string)
+            }
+        }
+    }
+}
+
+/// Aggregated stats
+struct AggregatedStats {
+    pub min: Option<StatsScalar>,
+    pub max: Option<StatsScalar>,
+    pub null_count: u64,
+}
+
+impl AggregatedStats {
+    fn try_from_stats(
+        stats: &Statistics,
+        logical_type: &Option<LogicalType>,
+    ) -> Result<Self, DeltaWriterError> {
+        let null_count = stats.null_count();
+        if stats.has_min_max_set() {
+            let min = StatsScalar::try_from_stats(stats, logical_type, true)?;
+            let max = StatsScalar::try_from_stats(stats, logical_type, false)?;
+            Ok(Self {
+                min: Some(min),
+                max: Some(max),
+                null_count,
+            })
+        } else {
+            Ok(Self {
+                min: None,
+                max: None,
+                null_count,
+            })
+        }
+    }
+}
+
+impl AddAssign for AggregatedStats {
+    fn add_assign(&mut self, rhs: Self) {
+        self.min = match (self.min.take(), rhs.min) {
+            (Some(lhs), Some(rhs)) => {
+                if lhs < rhs {
+                    Some(lhs)
+                } else {
+                    Some(rhs)
+                }
+            }
+            (lhs, rhs) => lhs.or(rhs),
+        };
+        self.max = match (self.min.take(), rhs.max) {
+            (Some(lhs), Some(rhs)) => {
+                if lhs > rhs {
+                    Some(lhs)
+                } else {
+                    Some(rhs)
+                }
+            }
+            (lhs, rhs) => lhs.or(rhs),
+        };
+
+        self.null_count += rhs.null_count;
+    }
+}
+
+/// For a list field, we don't want the inner field names. We need to chuck out
+/// the list and items fields from the path, but also need to handle the
+/// peculiar case where the user named the list field "list" or "item".
+///
+/// For example:
+///
+/// * ["some_nested_list", "list", "item", "list", "item"] -> "some_nested_list"
+/// * ["some_list", "list", "item"] -> "some_list"
+/// * ["list", "list", "item"] -> "list"
+/// * ["item", "list", "item"] -> "item"
+fn get_list_field_name(column_descr: &Arc<ColumnDescriptor>) -> Option<String> {
+    let max_rep_levels = column_descr.max_rep_level();
+    let column_path_parts = column_descr.path().parts();
+
+    // If there are more nested names, we can't handle them yet.
+    if column_path_parts.len() > (2 * max_rep_levels + 1) as usize {
+        return None;
+    }
+
+    let mut column_path_parts = column_path_parts.to_vec();
+    let mut items_seen = 0;
+    let mut lists_seen = 0;
+    while let Some(part) = column_path_parts.pop() {
+        match (part.as_str(), lists_seen, items_seen) {
+            ("list", seen, _) if seen == max_rep_levels => return Some("list".to_string()),
+            ("item", _, seen) if seen == max_rep_levels => return Some("item".to_string()),
+            ("list", _, _) => lists_seen += 1,
+            ("item", _, _) => items_seen += 1,
+            (other, _, _) => return Some(other.to_string()),
+        }
+    }
+    None
 }
 
 fn apply_min_max_for_column(
-    statistics: &[&Statistics],
+    statistics: AggregatedStats,
     column_descr: Arc<ColumnDescriptor>,
     column_path_parts: &[String],
     min_values: &mut HashMap<String, ColumnValueStat>,
     max_values: &mut HashMap<String, ColumnValueStat>,
+    null_counts: &mut HashMap<String, ColumnCountStat>,
 ) -> Result<(), DeltaWriterError> {
+    if column_descr.max_rep_level() > 0 {
+        let key = get_list_field_name(&column_descr);
+
+        if let Some(key) = key {
+            null_counts.insert(
+                key.to_string(),
+                ColumnCountStat::Value(statistics.null_count as i64),
+            );
+        }
+
+        return Ok(());
+    }
+
     match (column_path_parts.len(), column_path_parts.first()) {
         // Base case - we are at the leaf struct level in the path
         (1, _) => {
-            let (min, max) = min_and_max_from_parquet_statistics(statistics, column_descr.clone())?;
+            let key = column_descr.name().to_string();
 
-            if let Some(min) = min {
-                let min = ColumnValueStat::Value(min);
-                min_values.insert(column_descr.name().to_string(), min);
+            if let Some(min) = statistics.min {
+                let min = ColumnValueStat::Value(min.into());
+                min_values.insert(key.clone(), min);
             }
 
-            if let Some(max) = max {
-                let max = ColumnValueStat::Value(max);
-                max_values.insert(column_descr.name().to_string(), max);
+            if let Some(max) = statistics.max {
+                let max = ColumnValueStat::Value(max.into());
+                max_values.insert(key.clone(), max);
             }
+
+            null_counts.insert(key, ColumnCountStat::Value(statistics.null_count as i64));
 
             Ok(())
         }
@@ -197,9 +467,16 @@ fn apply_min_max_for_column(
             let child_max_values = max_values
                 .entry(key.to_owned())
                 .or_insert_with(|| ColumnValueStat::Column(HashMap::new()));
+            let child_null_counts = null_counts
+                .entry(key.to_owned())
+                .or_insert_with(|| ColumnCountStat::Column(HashMap::new()));
 
-            match (child_min_values, child_max_values) {
-                (ColumnValueStat::Column(mins), ColumnValueStat::Column(maxes)) => {
+            match (child_min_values, child_max_values, child_null_counts) {
+                (
+                    ColumnValueStat::Column(mins),
+                    ColumnValueStat::Column(maxes),
+                    ColumnCountStat::Column(null_counts),
+                ) => {
                     let remaining_parts: Vec<String> = column_path_parts
                         .iter()
                         .skip(1)
@@ -212,6 +489,7 @@ fn apply_min_max_for_column(
                         remaining_parts.as_slice(),
                         mins,
                         maxes,
+                        null_counts,
                     )?;
 
                     Ok(())
@@ -228,174 +506,6 @@ fn apply_min_max_for_column(
     }
 }
 
-#[inline]
-fn is_utf8(opt: Option<LogicalType>) -> bool {
-    matches!(opt.as_ref(), Some(LogicalType::String))
-}
-
-fn min_and_max_from_parquet_statistics(
-    statistics: &[&Statistics],
-    column_descr: Arc<ColumnDescriptor>,
-) -> Result<(Option<Value>, Option<Value>), DeltaWriterError> {
-    let stats_with_min_max: Vec<&Statistics> = statistics
-        .iter()
-        .filter(|s| s.has_min_max_set())
-        .copied()
-        .collect();
-
-    if stats_with_min_max.is_empty() {
-        return Ok((None, None));
-    }
-
-    let (data_size, data_type) = match stats_with_min_max.first() {
-        Some(Statistics::Boolean(_)) => (std::mem::size_of::<bool>(), DataType::Boolean),
-        Some(Statistics::Int32(_)) => (std::mem::size_of::<i32>(), DataType::Int32),
-        Some(Statistics::Int64(_)) => (std::mem::size_of::<i64>(), DataType::Int64),
-        Some(Statistics::Float(_)) => (std::mem::size_of::<f32>(), DataType::Float32),
-        Some(Statistics::Double(_)) => (std::mem::size_of::<f64>(), DataType::Float64),
-        Some(Statistics::ByteArray(_)) if is_utf8(column_descr.logical_type()) => {
-            (0, DataType::Utf8)
-        }
-        _ => {
-            // NOTE: Skips
-            // Statistics::Int96(_)
-            // Statistics::ByteArray(_)
-            // Statistics::FixedLenByteArray(_)
-
-            return Ok((None, None));
-        }
-    };
-
-    if data_type == DataType::Utf8 {
-        return Ok(min_max_strings_from_stats(&stats_with_min_max));
-    }
-
-    let arrow_buffer_capacity = stats_with_min_max.len() * data_size;
-
-    let min_array = arrow_array_from_bytes(
-        data_type.clone(),
-        arrow_buffer_capacity,
-        stats_with_min_max.iter().map(|s| s.min_bytes()).collect(),
-    )?;
-
-    let max_array = arrow_array_from_bytes(
-        data_type.clone(),
-        arrow_buffer_capacity,
-        stats_with_min_max.iter().map(|s| s.max_bytes()).collect(),
-    )?;
-
-    match data_type {
-        DataType::Boolean => {
-            let min = arrow::compute::min_boolean(as_boolean_array(&min_array));
-            let min = min.map(Value::Bool);
-
-            let max = arrow::compute::max_boolean(as_boolean_array(&max_array));
-            let max = max.map(Value::Bool);
-
-            Ok((min, max))
-        }
-        DataType::Int32 => {
-            let min_array = as_primitive_array::<arrow::datatypes::Int32Type>(&min_array);
-            let min = arrow::compute::min(min_array);
-            let min = min.map(|i| Value::Number(Number::from(i)));
-
-            let max_array = as_primitive_array::<arrow::datatypes::Int32Type>(&max_array);
-            let max = arrow::compute::max(max_array);
-            let max = max.map(|i| Value::Number(Number::from(i)));
-
-            Ok((min, max))
-        }
-        DataType::Int64 => {
-            let min_array = as_primitive_array::<arrow::datatypes::Int64Type>(&min_array);
-            let min = arrow::compute::min(min_array);
-            let max_array = as_primitive_array::<arrow::datatypes::Int64Type>(&max_array);
-            let max = arrow::compute::max(max_array);
-
-            match column_descr.logical_type().as_ref() {
-                Some(LogicalType::Timestamp { unit, .. }) => {
-                    let min = min
-                        .and_then(|n| timestamp_to_delta_stats_string(n, unit).map(Value::String));
-                    let max = max
-                        .and_then(|n| timestamp_to_delta_stats_string(n, unit).map(Value::String));
-
-                    Ok((min, max))
-                }
-                _ => {
-                    let min = min.map(|i| Value::Number(Number::from(i)));
-                    let max = max.map(|i| Value::Number(Number::from(i)));
-
-                    Ok((min, max))
-                }
-            }
-        }
-        DataType::Float32 => {
-            let min_array = as_primitive_array::<arrow::datatypes::Float32Type>(&min_array);
-            let min = arrow::compute::min(min_array);
-            let min = min.and_then(|f| Number::from_f64(f as f64).map(Value::Number));
-
-            let max_array = as_primitive_array::<arrow::datatypes::Float32Type>(&max_array);
-            let max = arrow::compute::max(max_array);
-            let max = max.and_then(|f| Number::from_f64(f as f64).map(Value::Number));
-
-            Ok((min, max))
-        }
-        DataType::Float64 => {
-            let min_array = as_primitive_array::<arrow::datatypes::Float64Type>(&min_array);
-            let min = arrow::compute::min(min_array);
-            let min = min.and_then(|f| Number::from_f64(f).map(Value::Number));
-
-            let max_array = as_primitive_array::<arrow::datatypes::Float64Type>(&max_array);
-            let max = arrow::compute::max(max_array);
-            let max = max.and_then(|f| Number::from_f64(f).map(Value::Number));
-
-            Ok((min, max))
-        }
-        _ => Ok((None, None)),
-    }
-}
-
-fn min_max_strings_from_stats(
-    stats_with_min_max: &[&Statistics],
-) -> (Option<Value>, Option<Value>) {
-    let min_string_candidates = stats_with_min_max
-        .iter()
-        .filter_map(|s| std::str::from_utf8(s.min_bytes()).ok());
-
-    let min_value = min_string_candidates
-        .min()
-        .map(|s| Value::String(s.to_string()));
-
-    let max_string_candidates = stats_with_min_max
-        .iter()
-        .filter_map(|s| std::str::from_utf8(s.max_bytes()).ok());
-
-    let max_value = max_string_candidates
-        .max()
-        .map(|s| Value::String(s.to_string()));
-
-    (min_value, max_value)
-}
-
-fn arrow_array_from_bytes(
-    data_type: DataType,
-    capacity: usize,
-    byte_arrays: Vec<&[u8]>,
-) -> Result<Arc<dyn Array>, DeltaWriterError> {
-    let mut buffer = MutableBuffer::new(capacity);
-
-    for arr in byte_arrays.iter() {
-        buffer.extend_from_slice(arr);
-    }
-
-    let builder = ArrayData::builder(data_type)
-        .len(byte_arrays.len())
-        .add_buffer(buffer.into());
-
-    let data = builder.build()?;
-
-    Ok(make_array(data))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -406,9 +516,138 @@ mod tests {
         DeltaTable, DeltaTableError,
     };
     use lazy_static::lazy_static;
+    use parquet::data_type::{ByteArray, FixedLenByteArray};
+    use parquet::file::statistics::ValueStatistics;
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::path::Path;
+
+    macro_rules! simple_parquet_stat {
+        ($variant:expr, $value:expr) => {
+            $variant(ValueStatistics::new(
+                Some($value),
+                Some($value),
+                None,
+                0,
+                false,
+            ))
+        };
+    }
+
+    #[test]
+    fn test_stats_scalar_serialization() {
+        let cases = &[
+            (
+                simple_parquet_stat!(Statistics::Boolean, true),
+                Some(LogicalType::Integer {
+                    bit_width: 1,
+                    is_signed: true,
+                }),
+                Value::Bool(true),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int32, 1),
+                Some(LogicalType::Integer {
+                    bit_width: 32,
+                    is_signed: true,
+                }),
+                Value::from(1),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int32, 1234),
+                Some(LogicalType::Decimal {
+                    scale: 3,
+                    precision: 4,
+                }),
+                Value::from(1.234),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int32, 1234),
+                Some(LogicalType::Decimal {
+                    scale: -1,
+                    precision: 4,
+                }),
+                Value::from(12340.0),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int32, 737821),
+                Some(LogicalType::Date),
+                Value::from("2021-01-31"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496789123456),
+                Some(LogicalType::Timestamp {
+                    is_adjusted_to_u_t_c: true,
+                    unit: parquet::format::TimeUnit::NANOS(parquet::format::NanoSeconds {}),
+                }),
+                Value::from("2022-01-01T12:34:56.789123456Z"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496789123),
+                Some(LogicalType::Timestamp {
+                    is_adjusted_to_u_t_c: true,
+                    unit: parquet::format::TimeUnit::MICROS(parquet::format::MicroSeconds {}),
+                }),
+                Value::from("2022-01-01T12:34:56.789123Z"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1641040496789),
+                Some(LogicalType::Timestamp {
+                    is_adjusted_to_u_t_c: true,
+                    unit: parquet::format::TimeUnit::MILLIS(parquet::format::MilliSeconds {}),
+                }),
+                Value::from("2022-01-01T12:34:56.789Z"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1234),
+                Some(LogicalType::Decimal {
+                    scale: 3,
+                    precision: 4,
+                }),
+                Value::from(1.234),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1234),
+                Some(LogicalType::Decimal {
+                    scale: -1,
+                    precision: 4,
+                }),
+                Value::from(12340.0),
+            ),
+            (
+                simple_parquet_stat!(Statistics::Int64, 1234),
+                None,
+                Value::from(1234),
+            ),
+            (
+                simple_parquet_stat!(Statistics::ByteArray, ByteArray::from(b"hello".to_vec())),
+                Some(LogicalType::String),
+                Value::from("hello"),
+            ),
+            (
+                simple_parquet_stat!(Statistics::ByteArray, ByteArray::from(b"\x00\\".to_vec())),
+                None,
+                Value::from("\\x00\\\\"),
+            ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(1243124142314423i128.to_be_bytes().to_vec())
+                ),
+                Some(LogicalType::Decimal {
+                    scale: 3,
+                    precision: 16,
+                }),
+                Value::from(1243124142314.423),
+            ),
+        ];
+
+        for (stats, logical_type, expected) in cases {
+            let scalar = StatsScalar::try_from_stats(stats, logical_type, true).unwrap();
+            let actual = serde_json::Value::from(scalar);
+            assert_eq!(&actual, expected);
+        }
+    }
 
     #[test]
     fn test_apply_null_counts() {
@@ -447,6 +686,8 @@ mod tests {
         let min_max_keys = vec!["meta", "some_int", "some_string", "some_bool"];
         let mut null_count_keys = vec!["some_list", "some_nested_list"];
         null_count_keys.extend_from_slice(min_max_keys.as_slice());
+
+        dbg!(&stats);
 
         assert_eq!(min_max_keys.len(), stats.min_values.len());
         assert_eq!(min_max_keys.len(), stats.max_values.len());
@@ -528,7 +769,7 @@ mod tests {
                 ("some_bool", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("some_string", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("some_list", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
-                ("some_nested_list", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
+                ("some_nested_list", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("date", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
                 _ => panic!("Key should not be present"),
             }

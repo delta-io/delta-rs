@@ -363,19 +363,15 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
         let writers = std::mem::take(&mut self.arrow_writers);
         let mut actions = Vec::new();
 
-        for (_, mut writer) in writers {
+        for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
             let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
             self.storage.put(&path, obj_bytes).await?;
 
-            // Replace self null_counts with an empty map. Use the other for stats.
-            let null_counts = std::mem::take(&mut writer.null_counts);
-
             actions.push(create_add(
                 &writer.partition_values,
-                null_counts,
                 path.to_string(),
                 file_size,
                 &metadata,

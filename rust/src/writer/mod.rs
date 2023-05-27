@@ -7,7 +7,7 @@ use crate::{DeltaTable, DeltaTableError};
 use arrow::{datatypes::SchemaRef, datatypes::*, error::ArrowError};
 use async_trait::async_trait;
 use object_store::Error as ObjectStoreError;
-use parquet::{basic::LogicalType, errors::ParquetError};
+use parquet::errors::ParquetError;
 use serde_json::Value;
 
 pub use json::JsonWriter;
@@ -55,9 +55,15 @@ pub(crate) enum DeltaWriterError {
     },
 
     /// Serialization of delta log statistics failed.
-    #[error("Serialization of delta log statistics failed: {source}")]
-    StatsSerializationFailed {
-        /// error raised during stats serialization.
+    #[error("Failed to write statistics value {debug_value} with logical type {logical_type:?}")]
+    StatsParsingFailed {
+        debug_value: String,
+        logical_type: Option<parquet::basic::LogicalType>,
+    },
+
+    /// JSON serialization failed
+    #[error("Failed to serialize data to JSON: {source}")]
+    JSONSerializationFailed {
         #[from]
         source: serde_json::Error,
     },
