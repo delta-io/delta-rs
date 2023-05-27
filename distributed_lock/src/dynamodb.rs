@@ -5,11 +5,11 @@ use std::collections::HashMap;
 use std::fmt::Debug;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
+use crate::{DistributedLockError, LockClient, LockItem};
 use maplit::hashmap;
 use rusoto_core::RusotoError;
 use rusoto_dynamodb::*;
 use uuid::Uuid;
-use crate::{DistributedLockError, LockClient, LockItem};
 
 /// DynamoDb option keys to use when creating DynamoDbOptions.
 /// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
@@ -408,7 +408,7 @@ impl DynamoDbLockClient {
                 vars::OWNER_NAME_VALUE.to_string() => attr(&lock.owner_name),
             }),
         )
-            .await
+        .await
     }
 
     /// Releases the given lock if the current user still has it, returning true if the lock was
@@ -647,4 +647,3 @@ impl<'a> AcquireLockState<'a> {
             .await
     }
 }
-

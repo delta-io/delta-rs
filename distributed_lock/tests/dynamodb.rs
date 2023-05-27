@@ -1,10 +1,10 @@
 #[cfg(test)]
 mod tests {
-    use std::time::Duration;
     use super::*;
+    use std::time::Duration;
 
-    use maplit::hashmap;
     use distributed_lock::dynamodb::{dynamo_lock_options, DynamoDbOptions};
+    use maplit::hashmap;
 
     #[test]
     fn lock_options_default_test() {

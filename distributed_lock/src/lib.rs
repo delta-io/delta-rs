@@ -2,8 +2,8 @@ pub mod dynamodb;
 
 use std::fmt::Debug;
 
-use thiserror::Error;
 use crate::dynamodb::DynamoError;
+use thiserror::Error;
 
 /// A lock that has been successfully acquired
 #[derive(Clone, Debug)]
@@ -73,5 +73,5 @@ pub enum DistributedLockError {
 
     /// DynamoDB specific errors
     #[error("Error returned by DynamoDB locking service: {0}")]
-    DynamoDB(#[from] DynamoError)
+    DynamoDB(#[from] DynamoError),
 }
