@@ -4,7 +4,6 @@
 
 use crate::action::{ColumnCountStat, ColumnValueStat, Stats};
 use crate::table_state::DeltaTableState;
-use crate::DeltaDataTypeLong;
 use crate::DeltaTableError;
 use crate::SchemaDataType;
 use crate::SchemaTypeStruct;
@@ -14,7 +13,7 @@ use arrow::array::{
 };
 use arrow::compute::cast;
 use arrow::compute::kernels::cast_utils::Parser;
-use arrow::datatypes::{DataType, Date32Type, Field, TimeUnit, TimestampMicrosecondType};
+use arrow::datatypes::{DataType, Date32Type, Field, Fields, TimeUnit, TimestampMicrosecondType};
 use itertools::Itertools;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -194,14 +193,17 @@ impl DeltaTableState {
             let fields = partition_column_types
                 .into_iter()
                 .zip(metadata.partition_columns.iter())
-                .map(|(datatype, name)| arrow::datatypes::Field::new(name, datatype, true));
-            let field_arrays = fields
-                .zip(partition_columns.into_iter())
+                .map(|(datatype, name)| arrow::datatypes::Field::new(name, datatype, true))
                 .collect::<Vec<_>>();
-            if field_arrays.is_empty() {
+
+            if fields.is_empty() {
                 vec![]
             } else {
-                let arr = Arc::new(arrow::array::StructArray::from(field_arrays));
+                let arr = Arc::new(arrow::array::StructArray::try_new(
+                    Fields::from(fields),
+                    partition_columns,
+                    None,
+                )?);
                 vec![(Cow::Borrowed("partition_values"), arr)]
             }
         };
@@ -260,16 +262,13 @@ impl DeltaTableState {
                     .map(|(key, array)| (format!("tags.{key}"), array)),
             )?)
         } else {
+            let (fields, arrays): (Vec<_>, Vec<_>) = arrays
+                .into_iter()
+                .map(|(key, array)| (Field::new(key, array.data_type().clone(), true), array))
+                .unzip();
             Ok(arrow::record_batch::RecordBatch::try_from_iter(vec![(
                 "tags",
-                Arc::new(StructArray::from(
-                    arrays
-                        .into_iter()
-                        .map(|(key, array)| {
-                            (Field::new(key, array.data_type().clone(), true), array)
-                        })
-                        .collect_vec(),
-                )) as ArrayRef,
+                Arc::new(StructArray::new(Fields::from(fields), arrays, None)) as ArrayRef,
             )])?)
         }
     }
@@ -335,7 +334,7 @@ impl DeltaTableState {
                             .as_ref()
                             .map(|stat| resolve_column_count_stat(&stat.null_count, &path))
                     })
-                    .collect::<Vec<Option<DeltaDataTypeLong>>>();
+                    .collect::<Vec<Option<i64>>>();
                 let null_count = Some(value_vec_to_array(null_count, |values| {
                     Ok(Arc::new(arrow::array::Int64Array::from(values)))
                 })?);
@@ -419,7 +418,7 @@ impl DeltaTableState {
             let combine_arrays = |sub_fields: &Vec<ColStats>,
                                   getter: for<'a> fn(&'a ColStats) -> &'a Option<ArrayRef>|
              -> Option<ArrayRef> {
-                let fields = sub_fields
+                let (fields, arrays): (Vec<_>, Vec<_>) = sub_fields
                     .iter()
                     .flat_map(|sub_field| {
                         if let Some(values) = getter(sub_field) {
@@ -436,11 +435,15 @@ impl DeltaTableState {
                             None
                         }
                     })
-                    .collect::<Vec<_>>();
+                    .unzip();
                 if fields.is_empty() {
                     None
                 } else {
-                    Some(Arc::new(StructArray::from(fields)))
+                    Some(Arc::new(StructArray::new(
+                        Fields::from(fields),
+                        arrays,
+                        None,
+                    )))
                 }
             };
 
@@ -532,7 +535,7 @@ fn resolve_column_value_stat<'a>(
 fn resolve_column_count_stat(
     values: &HashMap<String, ColumnCountStat>,
     path: &[&str],
-) -> Option<DeltaDataTypeLong> {
+) -> Option<i64> {
     let mut current = values;
     let (&name, path) = path.split_last()?;
     for &segment in path {

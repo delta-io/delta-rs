@@ -20,7 +20,7 @@ use deltalake::operations::optimize::OptimizeBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
-use deltalake::{DeltaDataTypeLong, DeltaDataTypeTimestamp, DeltaOps, Invariant, Schema};
+use deltalake::{DeltaOps, Invariant, Schema};
 use pyo3::create_exception;
 use pyo3::exceptions::PyException;
 use pyo3::exceptions::PyValueError;
@@ -107,7 +107,7 @@ struct RawDeltaTableMetaData {
     #[pyo3(get)]
     partition_columns: Vec<String>,
     #[pyo3(get)]
-    created_time: Option<deltalake::DeltaDataTypeTimestamp>,
+    created_time: Option<i64>,
     #[pyo3(get)]
     configuration: HashMap<String, Option<String>>,
 }
@@ -118,7 +118,7 @@ impl RawDeltaTable {
     #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false))]
     fn new(
         table_uri: &str,
-        version: Option<deltalake::DeltaDataTypeLong>,
+        version: Option<i64>,
         storage_options: Option<HashMap<String, String>>,
         without_files: bool,
     ) -> PyResult<Self> {
@@ -200,7 +200,7 @@ impl RawDeltaTable {
         ))
     }
 
-    pub fn load_version(&mut self, version: deltalake::DeltaDataTypeVersion) -> PyResult<()> {
+    pub fn load_version(&mut self, version: i64) -> PyResult<()> {
         rt()?
             .block_on(self._table.load_version(version))
             .map_err(PyDeltaTableError::from_raw)
@@ -319,7 +319,7 @@ impl RawDeltaTable {
     pub fn optimize(
         &mut self,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
-        target_size: Option<DeltaDataTypeLong>,
+        target_size: Option<i64>,
     ) -> PyResult<String> {
         let mut cmd = OptimizeBuilder::new(self._table.object_store(), self._table.state.clone());
         if let Some(size) = target_size {
@@ -719,7 +719,7 @@ fn save_mode_from_str(value: &str) -> PyResult<SaveMode> {
     }
 }
 
-fn current_timestamp() -> DeltaDataTypeTimestamp {
+fn current_timestamp() -> i64 {
     let start = SystemTime::now();
     let since_the_epoch = start
         .duration_since(UNIX_EPOCH)
@@ -730,9 +730,9 @@ fn current_timestamp() -> DeltaDataTypeTimestamp {
 #[derive(FromPyObject)]
 pub struct PyAddAction {
     path: String,
-    size: DeltaDataTypeLong,
+    size: i64,
     partition_values: HashMap<String, Option<String>>,
-    modification_time: DeltaDataTypeTimestamp,
+    modification_time: i64,
     data_change: bool,
     stats: Option<String>,
 }

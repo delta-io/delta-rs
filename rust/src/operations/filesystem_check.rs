@@ -15,7 +15,7 @@ use crate::action::{Action, Add, DeltaOperation, Remove};
 use crate::operations::transaction::commit;
 use crate::storage::DeltaObjectStore;
 use crate::table_state::DeltaTableState;
-use crate::{DeltaDataTypeLong, DeltaResult, DeltaTable, DeltaTableError};
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use futures::future::BoxFuture;
 use futures::StreamExt;
 pub use object_store::path::Path;
@@ -133,7 +133,7 @@ impl FileSystemCheckPlan {
 
         for file in self.files_to_remove {
             let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
-            let deletion_time = deletion_time.as_millis() as DeltaDataTypeLong;
+            let deletion_time = deletion_time.as_millis() as i64;
             removed_file_paths.push(file.path.clone());
             actions.push(Action::remove(Remove {
                 path: file.path,
