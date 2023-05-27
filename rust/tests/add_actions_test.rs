@@ -3,7 +3,7 @@
 use arrow::array::{self, ArrayRef, StructArray};
 use arrow::compute::kernels::cast_utils::Parser;
 use arrow::compute::sort_to_indices;
-use arrow::datatypes::{DataType, Date32Type, Field, TimestampMicrosecondType};
+use arrow::datatypes::{DataType, Date32Type, Field, Fields, TimestampMicrosecondType};
 use arrow::record_batch::RecordBatch;
 use std::sync::Arc;
 
@@ -54,10 +54,11 @@ async fn test_with_partitions() {
 
     expected_columns[4] = (
         "partition_values",
-        Arc::new(array::StructArray::from(vec![(
-            Field::new("k", DataType::Utf8, true),
-            Arc::new(array::StringArray::from(vec![Some("A"), None])) as ArrayRef,
-        )])),
+        Arc::new(array::StructArray::new(
+            Fields::from(vec![Field::new("k", DataType::Utf8, true)]),
+            vec![Arc::new(array::StringArray::from(vec![Some("A"), None])) as ArrayRef],
+            None,
+        )),
     );
     let expected = RecordBatch::try_from_iter(expected_columns).unwrap();
 

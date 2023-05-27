@@ -23,7 +23,7 @@
 
 use crate::storage::DeltaObjectStore;
 use crate::table_state::DeltaTableState;
-use crate::{DeltaDataTypeLong, DeltaResult, DeltaTable, DeltaTableError};
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
 use chrono::{Duration, Utc};
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
@@ -41,9 +41,9 @@ enum VacuumError {
     )]
     InvalidVacuumRetentionPeriod {
         /// User provided retention on vacuum call
-        provided: DeltaDataTypeLong,
+        provided: i64,
         /// Minimal retention configured in delta table config
-        min: DeltaDataTypeLong,
+        min: i64,
     },
 
     /// Error returned

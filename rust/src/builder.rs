@@ -5,7 +5,6 @@ use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::schema::DeltaDataTypeVersion;
 use crate::storage::config::StorageOptions;
 use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 
@@ -44,7 +43,7 @@ pub enum DeltaVersion {
     #[default]
     Newest,
     /// specify the version to load
-    Version(DeltaDataTypeVersion),
+    Version(i64),
     /// specify the timestamp in UTC
     Timestamp(DateTime<Utc>),
 }
@@ -148,7 +147,7 @@ impl DeltaTableBuilder {
     }
 
     /// Sets `version` to the builder
-    pub fn with_version(mut self, version: DeltaDataTypeVersion) -> Self {
+    pub fn with_version(mut self, version: i64) -> Self {
         self.options.version = DeltaVersion::Version(version);
         self
     }
