@@ -4,7 +4,7 @@
 use crate::action::{Action, Add, ColumnCountStat};
 use crate::{DeltaTable, DeltaTableError};
 
-use arrow::{datatypes::SchemaRef, datatypes::*, error::ArrowError};
+use arrow::{datatypes::SchemaRef, error::ArrowError};
 use async_trait::async_trait;
 use object_store::Error as ObjectStoreError;
 use parquet::errors::ParquetError;

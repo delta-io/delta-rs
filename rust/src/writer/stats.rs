@@ -1,6 +1,5 @@
 use super::*;
 use crate::action::{Add, ColumnValueStat, Stats};
-use arrow::array::{as_struct_array, Array, StructArray};
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{basic::LogicalType, errors::ParquetError};
@@ -11,58 +10,6 @@ use parquet::{
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
-
-pub type NullCounts = HashMap<String, ColumnCountStat>;
-
-pub(crate) fn apply_null_counts(
-    array: &StructArray,
-    null_counts: &mut HashMap<String, ColumnCountStat>,
-    _nest_level: i32,
-) {
-    let fields = match array.data_type() {
-        DataType::Struct(fields) => fields,
-        _ => unreachable!(),
-    };
-
-    array
-        .columns()
-        .iter()
-        .zip(fields)
-        .for_each(|(column, field)| {
-            let key = field.name().to_owned();
-
-            match column.data_type() {
-                // Recursive case
-                DataType::Struct(_) => {
-                    let col_struct = null_counts
-                        .entry(key)
-                        .or_insert_with(|| ColumnCountStat::Column(HashMap::new()));
-
-                    match col_struct {
-                        ColumnCountStat::Column(map) => {
-                            apply_null_counts(as_struct_array(column), map, _nest_level + 1);
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-                // Base case
-                _ => {
-                    let col_struct = null_counts
-                        .entry(key.clone())
-                        .or_insert_with(|| ColumnCountStat::Value(0));
-
-                    match col_struct {
-                        ColumnCountStat::Value(n) => {
-                            let null_count = column.null_count() as i64;
-                            let n = null_count + *n;
-                            null_counts.insert(key, ColumnCountStat::Value(n));
-                        }
-                        _ => unreachable!(),
-                    }
-                }
-            }
-        });
-}
 
 pub(crate) fn create_add(
     partition_values: &HashMap<String, Option<String>>,
@@ -317,8 +264,7 @@ impl From<StatsScalar> for serde_json::Value {
             StatsScalar::Bytes(v) => {
                 let escaped_bytes = v
                     .into_iter()
-                    .map(std::ascii::escape_default)
-                    .flatten()
+                    .flat_map(std::ascii::escape_default)
                     .collect::<Vec<u8>>();
                 let escaped_string = String::from_utf8(escaped_bytes).unwrap();
                 serde_json::Value::from(escaped_string)
@@ -431,10 +377,7 @@ fn apply_min_max_for_column(
         let key = get_list_field_name(&column_descr);
 
         if let Some(key) = key {
-            null_counts.insert(
-                key.to_string(),
-                ColumnCountStat::Value(statistics.null_count as i64),
-            );
+            null_counts.insert(key, ColumnCountStat::Value(statistics.null_count as i64));
         }
 
         return Ok(());
@@ -508,8 +451,8 @@ fn apply_min_max_for_column(
 
 #[cfg(test)]
 mod tests {
+    use super::utils::record_batch_from_message;
     use super::*;
-    use super::{test_utils::get_record_batch, utils::record_batch_from_message};
     use crate::{
         action::{ColumnCountStat, ColumnValueStat},
         builder::DeltaTableBuilder,
@@ -647,20 +590,6 @@ mod tests {
             let actual = serde_json::Value::from(scalar);
             assert_eq!(&actual, expected);
         }
-    }
-
-    #[test]
-    fn test_apply_null_counts() {
-        let record_batch = get_record_batch(None, true);
-        let mut ref_null_counts = HashMap::new();
-        ref_null_counts.insert("id".to_string(), ColumnCountStat::Value(3));
-        ref_null_counts.insert("value".to_string(), ColumnCountStat::Value(1));
-        ref_null_counts.insert("modified".to_string(), ColumnCountStat::Value(0));
-
-        let mut null_counts = HashMap::new();
-        apply_null_counts(&record_batch.into(), &mut null_counts, 0);
-
-        assert_eq!(null_counts, ref_null_counts)
     }
 
     #[tokio::test]
