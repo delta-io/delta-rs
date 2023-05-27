@@ -1,8 +1,8 @@
 [package]
-name = "dynamodb_lock"
+name = "distributed_lock"
 description = "Distributed lock backed by Dynamodb"
-version = "0.4.3"
-authors = ["Mykhailo Osypov <mykhailo.osypov@gmail.com>"]
+version = "0.4.4"
+authors = ["Mykhailo Osypov <mykhailo.osypov@gmail.com>", "John Darrington <john.darrington@inl.gov>"]
 edition = "2018"
 readme = "README.md"
 license = "Apache-2.0"
@@ -10,7 +10,7 @@ homepage = "https://github.com/delta-io/delta.rs"
 
 [dependencies]
 async-trait = "0.1"
-thiserror = "1"
+thiserror = "1.0.40"
 log = "0"
 uuid = { version = "1.2", features = ["serde", "v4"] }
 

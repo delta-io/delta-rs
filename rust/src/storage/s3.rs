@@ -3,7 +3,7 @@
 use super::utils::str_is_truthy;
 use crate::builder::{s3_storage_options, str_option};
 use bytes::Bytes;
-use dynamodb_lock::{DynamoError, LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};
+use distributed_lock::{LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS, DistributedLockError};
 use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{
@@ -50,9 +50,9 @@ enum S3LockError {
 
     /// Error interacting with dynamo lock client
     #[error("Dynamo Error: {} ({:?}).", source, source)]
-    Dynamo {
+    DistributedLock {
         /// raw error
-        source: DynamoError,
+        source: DistributedLockError,
     },
 
     /// Error raised when required lock data si missing
@@ -167,7 +167,7 @@ impl S3LockClient {
                     .lock_client
                     .update_data(&lock)
                     .await
-                    .map_err(|err| S3LockError::Dynamo { source: err })?;
+                    .map_err(|err| S3LockError::DistributedLock { source: err })?;
                 rename_result = s3.rename_no_replace(src, dst).await;
             }
 
@@ -177,7 +177,7 @@ impl S3LockClient {
             // to ensure that we no longer hold the lock
             rename_result?;
 
-            if !release_result.map_err(|err| S3LockError::Dynamo { source: err })? {
+            if !release_result.map_err(|err| S3LockError::DistributedLock { source: err })? {
                 return Err(S3LockError::ReleaseLock { item: lock }.into());
             }
 
@@ -198,7 +198,7 @@ impl S3LockClient {
                 .lock_client
                 .try_acquire_lock(data.as_str())
                 .await
-                .map_err(|err| S3LockError::Dynamo { source: err })?
+                .map_err(|err| S3LockError::DistributedLock { source: err })?
             {
                 Some(l) => {
                     lock = l;
@@ -523,9 +523,9 @@ fn try_create_lock_client(options: &S3StorageOptions) -> Result<Option<S3LockCli
                 ),
                 false => rusoto_dynamodb::DynamoDbClient::new(options.region.clone()),
             };
-            let lock_client = dynamodb_lock::DynamoDbLockClient::new(
+            let lock_client = distributed_lock::dynamodb::DynamoDbLockClient::new(
                 dynamodb_client,
-                dynamodb_lock::DynamoDbOptions::from_map(options.extra_opts.clone()),
+                distributed_lock::dynamodb::DynamoDbOptions::from_map(options.extra_opts.clone()),
             );
             Ok(Some(S3LockClient {
                 lock_client: Box::new(lock_client),

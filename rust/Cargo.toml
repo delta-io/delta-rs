@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.11.0"
+version = "0.11.1"
 rust-version = "1.64"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta.rs"
@@ -78,8 +78,8 @@ sqlparser = { version = "0.33", optional = true }
 fs_extra = { version = "1.2.0", optional = true }
 tempdir = { version = "0", optional = true }
 
-[dependencies.dynamodb_lock]
-path = "../dynamodb_lock"
+[dependencies.distributed_lock]
+path = "../distributed_lock"
 version = "0"
 default-features = false
 optional = true
@@ -129,7 +129,7 @@ s3-native-tls = [
     "rusoto_credential",
     "rusoto_sts/native-tls",
     "rusoto_dynamodb/native-tls",
-    "dynamodb_lock/native-tls",
+    "distributed_lock/native-tls",
     "object_store/aws",
     "object_store/aws_profile",
 ]
@@ -138,7 +138,7 @@ s3 = [
     "rusoto_credential",
     "rusoto_sts/rustls",
     "rusoto_dynamodb/rustls",
-    "dynamodb_lock/rustls",
+    "distributed_lock/rustls",
     "object_store/aws",
     "object_store/aws_profile",
 ]

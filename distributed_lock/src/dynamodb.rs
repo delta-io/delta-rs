@@ -9,52 +9,7 @@ use maplit::hashmap;
 use rusoto_core::RusotoError;
 use rusoto_dynamodb::*;
 use uuid::Uuid;
-
-/// A lock that has been successfully acquired
-#[derive(Clone, Debug)]
-pub struct LockItem {
-    /// The name of the owner that owns this lock.
-    pub owner_name: String,
-    /// Current version number of the lock in DynamoDB. This is what tells the lock client
-    /// when the lock is stale.
-    pub record_version_number: String,
-    /// The amount of time (in seconds) that the owner has this lock for.
-    /// If lease_duration is None then the lock is non-expirable.
-    pub lease_duration: Option<u64>,
-    /// Tells whether or not the lock was marked as released when loaded from DynamoDB.
-    pub is_released: bool,
-    /// Optional data associated with this lock.
-    pub data: Option<String>,
-    /// The last time this lock was updated or retrieved.
-    pub lookup_time: u128,
-    /// Tells whether this lock was acquired by expiring existing one.
-    pub acquired_expired_lock: bool,
-    /// If true then this lock could not be acquired.
-    pub is_non_acquirable: bool,
-}
-
-/// Abstraction over a distributive lock provider
-#[async_trait::async_trait]
-pub trait LockClient: Send + Sync + Debug {
-    /// Attempts to acquire lock. If successful, returns the lock.
-    /// Otherwise returns [`Option::None`] which is retryable action.
-    /// Visit implementation docs for more details.
-    async fn try_acquire_lock(&self, data: &str) -> Result<Option<LockItem>, DynamoError>;
-
-    /// Returns current lock from DynamoDB (if any).
-    async fn get_lock(&self) -> Result<Option<LockItem>, DynamoError>;
-
-    /// Update data in the upstream lock of the current user still has it.
-    /// The returned lock will have a new `rvn` so it'll increase the lease duration
-    /// as this method is usually called when the work with a lock is extended.
-    async fn update_data(&self, lock: &LockItem) -> Result<LockItem, DynamoError>;
-
-    /// Releases the given lock if the current user still has it, returning true if the lock was
-    /// successfully released, and false if someone else already stole the lock
-    async fn release_lock(&self, lock: &LockItem) -> Result<bool, DynamoError>;
-}
-
-pub const DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS: u32 = 10_000;
+use crate::{DistributedLockError, LockClient, LockItem};
 
 /// DynamoDb option keys to use when creating DynamoDbOptions.
 /// The same key should be used whether passing a key in the hashmap or setting it as an environment variable.
@@ -319,19 +274,19 @@ impl std::fmt::Debug for DynamoDbLockClient {
 
 #[async_trait::async_trait]
 impl LockClient for DynamoDbLockClient {
-    async fn try_acquire_lock(&self, data: &str) -> Result<Option<LockItem>, DynamoError> {
+    async fn try_acquire_lock(&self, data: &str) -> Result<Option<LockItem>, DistributedLockError> {
         Ok(self.try_acquire_lock(Some(data)).await?)
     }
 
-    async fn get_lock(&self) -> Result<Option<LockItem>, DynamoError> {
+    async fn get_lock(&self) -> Result<Option<LockItem>, DistributedLockError> {
         Ok(self.get_lock().await?)
     }
 
-    async fn update_data(&self, lock: &LockItem) -> Result<LockItem, DynamoError> {
+    async fn update_data(&self, lock: &LockItem) -> Result<LockItem, DistributedLockError> {
         Ok(self.update_data(lock).await?)
     }
 
-    async fn release_lock(&self, lock: &LockItem) -> Result<bool, DynamoError> {
+    async fn release_lock(&self, lock: &LockItem) -> Result<bool, DistributedLockError> {
         Ok(self.release_lock(lock).await?)
     }
 }
@@ -453,7 +408,7 @@ impl DynamoDbLockClient {
                 vars::OWNER_NAME_VALUE.to_string() => attr(&lock.owner_name),
             }),
         )
-        .await
+            .await
     }
 
     /// Releases the given lock if the current user still has it, returning true if the lock was
@@ -693,101 +648,3 @@ impl<'a> AcquireLockState<'a> {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    use maplit::hashmap;
-
-    #[test]
-    fn lock_options_default_test() {
-        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME, "some_table");
-        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME, "some_owner");
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE,
-            "some_pk",
-        );
-        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION, "40");
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_REFRESH_PERIOD_MILLIS,
-            "2000",
-        );
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS,
-            "3000",
-        );
-
-        let options = DynamoDbOptions::default();
-
-        assert_eq!(
-            DynamoDbOptions {
-                partition_key_value: "some_pk".to_string(),
-                table_name: "some_table".to_string(),
-                owner_name: "some_owner".to_string(),
-                lease_duration: 40,
-                refresh_period: Duration::from_millis(2000),
-                additional_time_to_wait_for_lock: Duration::from_millis(3000),
-            },
-            options
-        );
-    }
-
-    #[test]
-    fn lock_options_from_map_test() {
-        let options = DynamoDbOptions::from_map(hashmap! {
-            dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME.to_string() => "a_table".to_string(),
-            dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME.to_string() => "an_owner".to_string(),
-            dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE.to_string() => "a_pk".to_string(),
-            dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION.to_string() => "60".to_string(),
-            dynamo_lock_options::DYNAMO_LOCK_REFRESH_PERIOD_MILLIS.to_string() => "4000".to_string(),
-            dynamo_lock_options::DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS.to_string() => "5000".to_string(),
-        });
-
-        assert_eq!(
-            DynamoDbOptions {
-                partition_key_value: "a_pk".to_string(),
-                table_name: "a_table".to_string(),
-                owner_name: "an_owner".to_string(),
-                lease_duration: 60,
-                refresh_period: Duration::from_millis(4000),
-                additional_time_to_wait_for_lock: Duration::from_millis(5000),
-            },
-            options
-        );
-    }
-
-    #[test]
-    fn lock_options_mixed_test() {
-        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_TABLE_NAME, "some_table");
-        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_OWNER_NAME, "some_owner");
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE,
-            "some_pk",
-        );
-        std::env::set_var(dynamo_lock_options::DYNAMO_LOCK_LEASE_DURATION, "40");
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_REFRESH_PERIOD_MILLIS,
-            "2000",
-        );
-        std::env::set_var(
-            dynamo_lock_options::DYNAMO_LOCK_ADDITIONAL_TIME_TO_WAIT_MILLIS,
-            "3000",
-        );
-
-        let options = DynamoDbOptions::from_map(hashmap! {
-            dynamo_lock_options::DYNAMO_LOCK_PARTITION_KEY_VALUE.to_string() => "overridden_key".to_string()
-        });
-
-        assert_eq!(
-            DynamoDbOptions {
-                partition_key_value: "overridden_key".to_string(),
-                table_name: "some_table".to_string(),
-                owner_name: "some_owner".to_string(),
-                lease_duration: 40,
-                refresh_period: Duration::from_millis(2000),
-                additional_time_to_wait_for_lock: Duration::from_millis(3000),
-            },
-            options
-        );
-    }
-}
