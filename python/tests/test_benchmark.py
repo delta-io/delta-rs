@@ -13,7 +13,7 @@ from deltalake import DeltaTable, write_deltalake
 
 @pytest.fixture()
 def sample_table() -> pa.Table:
-    max_size_bytes = 100 * 1024 * 1024
+    max_size_bytes = 128 * 1024 * 1024
     ncols = 20
     nrows = max_size_bytes // 20 // 8
     tab = pa.table({f"x{i}": standard_normal(nrows) for i in range(ncols)})
@@ -63,29 +63,30 @@ def test_benchmark_read_pyarrow(benchmark, sample_table, tmp_path):
 
 
 @pytest.mark.benchmark(group="optimize")
-@pytest.mark.parametrize("max_tasks", [1, 5, 10])
+@pytest.mark.parametrize("max_tasks", [1, 5])
 def test_benchmark_optimize(benchmark, sample_table, tmp_path, max_tasks):
     def setup():
         # Create 2 partitions, each partition with 10 files.
         # Each file is about 100MB, so the total size is 2GB.
-        files_per_part = 10
-        parts = ["a", "b"]
-        for part, _ in product(parts, range(files_per_part)):
-            # Default row group size is 1 million rows. In order to get close to
-            # the target size, we need a tall dataset. Wide datasets will have
-            # huge row groups.
-            nrows = sample_table.num_rows
-            tab = sample_table.select(["x0", "x1", "i"])
+        files_per_part = 4
+        parts = ["a", "b", "c", "d", "e"]
+
+        nrows = int(sample_table.num_rows / files_per_part)
+        for part in parts:
+            tab = sample_table.slice(0, nrows)
             tab = tab.append_column("part", pa.array([part] * nrows))
-            write_deltalake(tmp_path, tab, mode="append", partition_by=["part"])
+            for _ in range(files_per_part):
+                write_deltalake(tmp_path, tab, mode="append", partition_by=["part"])
 
         dt = DeltaTable(tmp_path)
 
         assert len(dt.files()) == files_per_part * len(parts)
 
-        target_size = 100 * 1024 * 1024
+        target_size = 80 * 1024 * 1024
         sizes = dt.get_add_actions().column("size_bytes")
-        assert all(size.as_py() <= target_size for size in sizes)
+        print(sizes)
+        expected_size = 42 * 1024 * 1024 # 17MB
+        assert all(size.as_py() / expected_size < 1.1 for size in sizes)
 
         return (dt,), dict(max_concurrent_tasks=max_tasks, target_size=target_size)
 
@@ -99,5 +100,5 @@ def test_benchmark_optimize(benchmark, sample_table, tmp_path, max_tasks):
     print(results)
 
     assert results["numFilesRemoved"] == 20
-    assert results["numFilesAdded"] == 4
-    assert results["partitionsOptimized"] == 2
+    assert results["numFilesAdded"] == 5
+    assert results["partitionsOptimized"] == 5

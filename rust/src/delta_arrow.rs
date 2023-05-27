@@ -624,6 +624,45 @@ fn null_count_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
     }
 }
 
+/// Returns the estimated row size of the given schema in bytes.
+///
+/// This is exact for fixed width types, but a very rough estimate for variable
+/// width types.
+pub(crate) fn estimated_row_size(schema: &ArrowSchema, variable_width_guess: usize) -> usize {
+    let mut size: usize = 0;
+    for field in schema.fields() {
+        size += estimated_type_size(field.data_type(), variable_width_guess);
+    }
+    size
+}
+
+fn estimated_type_size(datatype: &ArrowDataType, variable_width_guess: usize) -> usize {
+    datatype.primitive_width().unwrap_or_else(|| {
+        match datatype {
+            ArrowDataType::List(_) => variable_width_guess,
+            ArrowDataType::LargeList(_) => variable_width_guess,
+            ArrowDataType::FixedSizeList(_, _) => variable_width_guess,
+            ArrowDataType::Struct(fields) => {
+                // Assume there are few runs, so each row is near zero incremental size
+                fields
+                    .iter()
+                    .map(|f| estimated_type_size(f.data_type(), variable_width_guess))
+                    .sum()
+            }
+            ArrowDataType::Map(_, _) => variable_width_guess,
+            ArrowDataType::Dictionary(index_type, _) => {
+                // Assume dictionary size is negligible
+                estimated_type_size(index_type.as_ref(), variable_width_guess)
+            }
+            ArrowDataType::RunEndEncoded(_, _) => {
+                // Assume there are few runs, so each row is near zero incremental size
+                0
+            }
+            _ => variable_width_guess,
+        }
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1011,5 +1050,34 @@ mod tests {
             true,
         ));
         let _converted: schema::SchemaField = field.as_ref().try_into().unwrap();
+    }
+
+    #[test]
+    fn test_estimated_row_size() {
+        let schema = ArrowSchema::new(vec![
+            ArrowField::new("a", ArrowDataType::Int32, true),
+            ArrowField::new(
+                "b",
+                ArrowDataType::Struct(
+                    vec![
+                        ArrowField::new("c", ArrowDataType::Utf8, true),
+                        ArrowField::new("d", ArrowDataType::Date32, true),
+                    ]
+                    .into(),
+                ),
+                true,
+            ),
+        ]);
+        let variable_width_guess = 8;
+        assert_eq!(
+            estimated_row_size(&schema, variable_width_guess),
+            4 + 4 + variable_width_guess
+        );
+
+        let variable_width_guess = 100;
+        assert_eq!(
+            estimated_row_size(&schema, variable_width_guess),
+            4 + 4 + variable_width_guess
+        );
     }
 }

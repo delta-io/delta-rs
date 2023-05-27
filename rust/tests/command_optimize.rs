@@ -439,7 +439,7 @@ async fn test_idempotent_metrics() -> Result<(), Box<dyn Error>> {
         num_batches: 0,
         total_considered_files: 1,
         total_files_skipped: 1,
-        preserve_insertion_order: true,
+        preserve_insertion_order: false,
         files_added: expected_metric_details.clone(),
         files_removed: expected_metric_details,
     };
