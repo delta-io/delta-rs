@@ -70,9 +70,9 @@ fn stats_from_file_metadata(
         let maybe_stats: Option<AggregatedStats> = row_group_metadata
             .iter()
             .map(|g| {
-                g.column(i).statistics().and_then(|s| {
-                    AggregatedStats::try_from_stats(s, &column_descr.logical_type()).ok()
-                })
+                g.column(i)
+                    .statistics()
+                    .map(|s| AggregatedStats::from((s, &column_descr.logical_type())))
             })
             .reduce(|left, right| match (left, right) {
                 (Some(mut left), Some(right)) => {
@@ -280,26 +280,24 @@ struct AggregatedStats {
     pub null_count: u64,
 }
 
-impl AggregatedStats {
-    fn try_from_stats(
-        stats: &Statistics,
-        logical_type: &Option<LogicalType>,
-    ) -> Result<Self, DeltaWriterError> {
+impl From<(&Statistics, &Option<LogicalType>)> for AggregatedStats {
+    fn from(value: (&Statistics, &Option<LogicalType>)) -> Self {
+        let (stats, logical_type) = value;
         let null_count = stats.null_count();
         if stats.has_min_max_set() {
-            let min = StatsScalar::try_from_stats(stats, logical_type, true)?;
-            let max = StatsScalar::try_from_stats(stats, logical_type, false)?;
-            Ok(Self {
-                min: Some(min),
-                max: Some(max),
+            let min = StatsScalar::try_from_stats(stats, logical_type, true).ok();
+            let max = StatsScalar::try_from_stats(stats, logical_type, false).ok();
+            Self {
+                min,
+                max,
                 null_count,
-            })
+            }
         } else {
-            Ok(Self {
+            Self {
                 min: None,
                 max: None,
                 null_count,
-            })
+            }
         }
     }
 }
@@ -373,6 +371,7 @@ fn apply_min_max_for_column(
     max_values: &mut HashMap<String, ColumnValueStat>,
     null_counts: &mut HashMap<String, ColumnCountStat>,
 ) -> Result<(), DeltaWriterError> {
+    // Special handling for list column
     if column_descr.max_rep_level() > 0 {
         let key = get_list_field_name(&column_descr);
 
