@@ -10,7 +10,6 @@
 
 use deltalake::checkpoints;
 use deltalake::checkpoints::CheckpointError;
-use deltalake::DeltaDataTypeVersion;
 use lambda_runtime::{service_fn, Error, LambdaEvent};
 use lazy_static::lazy_static;
 use log::*;
@@ -78,9 +77,7 @@ fn bucket_and_key_from_event(event: &Value) -> Result<(String, String), CheckPoi
     Ok((bucket, key))
 }
 
-fn table_path_and_version_from_key(
-    key: &str,
-) -> Result<(String, DeltaDataTypeVersion), CheckPointLambdaError> {
+fn table_path_and_version_from_key(key: &str) -> Result<(String, i64), CheckPointLambdaError> {
     lazy_static! {
         static ref JSON_LOG_ENTRY_REGEX: Regex =
             Regex::new(r#"(.*)/_delta_log/0*(\d+)\.json$"#).unwrap();
@@ -97,7 +94,7 @@ fn table_path_and_version_from_key(
                 .get(2)
                 .ok_or_else(|| CheckPointLambdaError::ObjectKeyParseFailed(key.to_string()))?
                 .as_str();
-            let version = version_str.parse::<DeltaDataTypeVersion>()?;
+            let version = version_str.parse::<i64>()?;
 
             Ok((table_path, version))
         }

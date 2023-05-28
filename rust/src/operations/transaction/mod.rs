@@ -8,7 +8,7 @@ use serde_json::{Map, Value};
 use crate::action::{Action, CommitInfo, DeltaOperation};
 use crate::storage::commit_uri_from_version;
 use crate::table_state::DeltaTableState;
-use crate::{crate_version, DeltaDataTypeVersion, DeltaResult, DeltaTableError};
+use crate::{crate_version, DeltaResult, DeltaTableError};
 
 mod conflict_checker;
 #[cfg(feature = "datafusion")]
@@ -25,7 +25,7 @@ const DELTA_LOG_FOLDER: &str = "_delta_log";
 pub enum TransactionError {
     /// Version already exists
     #[error("Tried committing existing table version: {0}")]
-    VersionAlreadyExists(DeltaDataTypeVersion),
+    VersionAlreadyExists(i64),
 
     /// Error returned when reading the delta log object failed.
     #[error("Error serializing commit log to json: {json_err}")]
@@ -134,8 +134,8 @@ pub(crate) async fn prepare_commit<'a>(
 async fn try_commit_transaction(
     storage: &dyn ObjectStore,
     tmp_commit: &Path,
-    version: DeltaDataTypeVersion,
-) -> Result<DeltaDataTypeVersion, TransactionError> {
+    version: i64,
+) -> Result<i64, TransactionError> {
     // move temporary commit file to delta log directory
     // rely on storage to fail if the file already exists -
     storage
@@ -160,7 +160,7 @@ pub async fn commit(
     operation: DeltaOperation,
     read_snapshot: &DeltaTableState,
     app_metadata: Option<Map<String, Value>>,
-) -> DeltaResult<DeltaDataTypeVersion> {
+) -> DeltaResult<i64> {
     let tmp_commit = prepare_commit(storage, &operation, actions, app_metadata).await?;
 
     let max_attempts = 5;
