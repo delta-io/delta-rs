@@ -615,8 +615,6 @@ mod tests {
         let mut null_count_keys = vec!["some_list", "some_nested_list"];
         null_count_keys.extend_from_slice(min_max_keys.as_slice());
 
-        dbg!(&stats);
-
         assert_eq!(min_max_keys.len(), stats.min_values.len());
         assert_eq!(min_max_keys.len(), stats.max_values.len());
         assert_eq!(null_count_keys.len(), stats.null_count.len());
