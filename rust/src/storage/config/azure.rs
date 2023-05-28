@@ -211,7 +211,7 @@ impl AzureConfigHelper {
         for key in self.env_config.keys() {
             if !omit_keys.contains(key) {
                 if let Entry::Vacant(e) = self.config.entry(*key) {
-                    e.insert(self.env_config.get(&key).unwrap().to_owned());
+                    e.insert(self.env_config.get(key).unwrap().to_owned());
                 }
             }
         }
