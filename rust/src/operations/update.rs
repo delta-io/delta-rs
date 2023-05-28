@@ -28,11 +28,10 @@ use arrow::datatypes::Schema as ArrowSchema;
 use arrow_schema::Field;
 use datafusion::{
     execution::context::SessionState,
-    physical_optimizer::pruning::PruningPredicate,
     physical_plan::{projection::ProjectionExec, ExecutionPlan},
     prelude::SessionContext,
 };
-use datafusion_common::{tree_node::TreeNode, Column, DFSchema, ScalarValue};
+use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::{case, col, lit, Expr};
 use datafusion_physical_expr::{create_physical_expr, expressions, PhysicalExpr};
 use futures::future::BoxFuture;
@@ -40,19 +39,14 @@ use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
 
 use crate::{
-    action::{Action, Add, DeltaOperation, Remove},
-    delta_datafusion::{parquet_scan_from_actions, register_store},
-    operations::delete::find_files,
+    action::{Action, DeltaOperation, Remove},
+    delta_datafusion::{find_files, parquet_scan_from_actions, register_store},
     storage::{DeltaObjectStore, ObjectStoreRef},
     table_state::DeltaTableState,
     DeltaResult, DeltaTable, DeltaTableError,
 };
 
-use super::{
-    delete::{scan_memory_table, ExprProperties},
-    transaction::commit,
-    write::write_execution_plan,
-};
+use super::{transaction::commit, write::write_execution_plan};
 
 /// Updates records in the Delta Table.
 /// See this module's documentaiton for more information
@@ -177,68 +171,16 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns.clone();
     let schema = snapshot.arrow_schema()?;
 
-    let files_to_rewrite = match &predicate {
-        Some(predicate) => {
-            let file_schema = Arc::new(ArrowSchema::new(
-                schema
-                    .fields()
-                    .iter()
-                    .filter(|f| !table_partition_cols.contains(f.name()))
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            ));
-
-            let input_schema = snapshot.input_schema()?;
-            let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
-            let expr = create_physical_expr(
-                predicate,
-                &input_dfschema,
-                &input_schema,
-                state.execution_props(),
-            )?;
-
-            // Validate the Predicate and determine if it only contains partition columns
-            let mut expr_properties = ExprProperties {
-                partition_only: true,
-                partition_columns: current_metadata.partition_columns.clone(),
-                result: Ok(()),
-            };
-
-            TreeNode::visit(predicate, &mut expr_properties)?;
-            expr_properties.result?;
-
-            let scan_start = Instant::now();
-            let candidates = if expr_properties.partition_only {
-                scan_memory_table(snapshot, predicate).await?
-            } else {
-                let pruning_predicate = PruningPredicate::try_new(expr, schema.clone())?;
-                let files_to_prune = pruning_predicate.prune(snapshot)?;
-                let files: Vec<&Add> = snapshot
-                    .files()
-                    .iter()
-                    .zip(files_to_prune.into_iter())
-                    .filter_map(|(action, keep)| if keep { Some(action) } else { None })
-                    .collect();
-
-                // Create a new delta scan plan with only files that have a record
-                let candidates = find_files(
-                    snapshot,
-                    object_store.clone(),
-                    schema.clone(),
-                    file_schema.clone(),
-                    files,
-                    &state,
-                    predicate,
-                )
-                .await?;
-                candidates.into_iter().map(|s| s.to_owned()).collect()
-            };
-            metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
-            candidates
-        }
-        None => snapshot.files().to_owned(),
-    };
-
+    let scan_start = Instant::now();
+    let candidates = find_files(
+        snapshot,
+        object_store.clone(),
+        schema.clone(),
+        &state,
+        predicate.clone(),
+    )
+    .await?;
+    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
     let execution_props = state.execution_props();
@@ -247,7 +189,7 @@ async fn execute(
     let parquet_scan = parquet_scan_from_actions(
         snapshot,
         object_store.clone(),
-        &files_to_rewrite,
+        &candidates.candidates,
         &schema,
         None,
         &state,
@@ -367,9 +309,9 @@ async fn execute(
     let mut actions: Vec<Action> = add_actions.into_iter().map(Action::add).collect();
 
     metrics.num_added_files = actions.len();
-    metrics.num_removed_files = files_to_rewrite.len();
+    metrics.num_removed_files = candidates.candidates.len();
 
-    for action in files_to_rewrite {
+    for action in candidates.candidates {
         actions.push(Action::remove(Remove {
             path: action.path,
             deletion_timestamp: Some(deletion_timestamp),
