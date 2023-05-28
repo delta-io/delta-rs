@@ -7,8 +7,22 @@ use object_store::Error;
 
 use crate::{DeltaResult, DeltaTableError};
 
+lazy_static::lazy_static! {
+    static ref CREDENTIAL_KEYS: Vec<AzureConfigKey> =
+    Vec::from_iter([
+        AzureConfigKey::ClientId,
+        AzureConfigKey::ClientSecret,
+        AzureConfigKey::FederatedTokenFile,
+        AzureConfigKey::SasKey,
+        AzureConfigKey::Token,
+        AzureConfigKey::MsiEndpoint,
+        AzureConfigKey::ObjectId,
+        AzureConfigKey::MsiResourceId,
+    ]);
+}
+
 /// Credential
-pub enum AzureCredential {
+enum AzureCredential {
     /// Using the account master key
     AccessKey,
     /// Using a static bearer token
@@ -57,7 +71,7 @@ impl AsRef<str> for AzureCredential {
 
 impl AzureCredential {
     /// Reys required for config
-    pub fn keys(&self) -> Vec<AzureConfigKey> {
+    fn keys(&self) -> Vec<AzureConfigKey> {
         match self {
             Self::AccessKey => Vec::from_iter([AzureConfigKey::AccessKey]),
             Self::BearerToken => Vec::from_iter([AzureConfigKey::Token]),
@@ -81,7 +95,7 @@ impl AzureCredential {
 ///
 /// Main concern is to pick the desired credential for connecting to starage backend
 /// based on a provided configuration and configuration set in the environment.
-pub struct AzureConfigHelper {
+pub(crate) struct AzureConfigHelper {
     config: HashMap<AzureConfigKey, String>,
     env_config: HashMap<AzureConfigKey, String>,
     priority: Vec<AzureCredential>,
@@ -120,17 +134,17 @@ impl AzureConfigHelper {
     }
 
     /// Check if all credential keys are contained in passed config
-    pub fn has_full_config(&self, cred: &AzureCredential) -> bool {
+    fn has_full_config(&self, cred: &AzureCredential) -> bool {
         cred.keys().iter().all(|key| self.config.contains_key(key))
     }
 
     /// Check if any credential keys are contained in passed config
-    pub fn has_any_config(&self, cred: &AzureCredential) -> bool {
+    fn has_any_config(&self, cred: &AzureCredential) -> bool {
         cred.keys().iter().any(|key| self.config.contains_key(key))
     }
 
     /// Check if all credential keys can be provided using the env
-    pub fn has_full_config_with_env(&self, cred: &AzureCredential) -> bool {
+    fn has_full_config_with_env(&self, cred: &AzureCredential) -> bool {
         cred.keys()
             .iter()
             .all(|key| self.config.contains_key(key) || self.env_config.contains_key(key))
@@ -138,37 +152,70 @@ impl AzureConfigHelper {
 
     /// Generate a cofiguration augmented with options from the environment
     pub fn build(mut self) -> DeltaResult<HashMap<AzureConfigKey, String>> {
+        let mut has_credential = false;
+
         if self.config.contains_key(&AzureConfigKey::UseAzureCli) {
-            return Ok(self.config);
+            has_credential = true;
         }
+
         // try using only passed config options
-        for cred in &self.priority {
-            if self.has_full_config(cred) {
-                return Ok(self.config);
+        if !has_credential {
+            for cred in &self.priority {
+                if self.has_full_config(cred) {
+                    has_credential = true;
+                    break;
+                }
             }
         }
+
         // try partially avaialbe credentials augmented by environment
-        for cred in &self.priority {
-            if self.has_any_config(cred) && self.has_full_config_with_env(cred) {
-                for key in cred.keys() {
-                    if let Entry::Vacant(e) = self.config.entry(key) {
-                        e.insert(self.env_config.get(&key).unwrap().to_owned());
+        if !has_credential {
+            for cred in &self.priority {
+                if self.has_any_config(cred) && self.has_full_config_with_env(cred) {
+                    for key in cred.keys() {
+                        if let Entry::Vacant(e) = self.config.entry(key) {
+                            e.insert(self.env_config.get(&key).unwrap().to_owned());
+                        }
                     }
+                    has_credential = true;
+                    break;
                 }
-                return Ok(self.config);
             }
         }
+
         // try getting credentials only from the environment
-        for cred in &self.priority {
-            if self.has_full_config_with_env(cred) {
-                for key in cred.keys() {
-                    if let Entry::Vacant(e) = self.config.entry(key) {
-                        e.insert(self.env_config.get(&key).unwrap().to_owned());
+        if !has_credential {
+            for cred in &self.priority {
+                if self.has_full_config_with_env(cred) {
+                    for key in cred.keys() {
+                        if let Entry::Vacant(e) = self.config.entry(key) {
+                            e.insert(self.env_config.get(&key).unwrap().to_owned());
+                        }
                     }
+                    has_credential = true;
+                    break;
                 }
-                return Ok(self.config);
             }
         }
+
+        let omit_keys = if has_credential {
+            CREDENTIAL_KEYS.clone()
+        } else {
+            Vec::new()
+        };
+
+        // add keys from the environment to the configuration.
+        // WE have to specifically configure omitting keys, since workload identity can
+        // work purely using defaults, but partial config may be present in the environment.
+        // Preference of conflicting configs (e.g. msi resource id vs. client id is handled in object store)
+        for key in self.env_config.keys() {
+            if !omit_keys.contains(key) {
+                if let Entry::Vacant(e) = self.config.entry(*key) {
+                    e.insert(self.env_config.get(&key).unwrap().to_owned());
+                }
+            }
+        }
+
         Ok(self.config)
     }
 }
