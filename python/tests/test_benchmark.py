@@ -1,4 +1,4 @@
-from itertools import product
+import os
 
 import pyarrow as pa
 import pyarrow.fs as pa_fs
@@ -65,40 +65,49 @@ def test_benchmark_read_pyarrow(benchmark, sample_table, tmp_path):
 @pytest.mark.benchmark(group="optimize")
 @pytest.mark.parametrize("max_tasks", [1, 5])
 def test_benchmark_optimize(benchmark, sample_table, tmp_path, max_tasks):
-    def setup():
-        # Create 2 partitions, each partition with 10 files.
-        # Each file is about 100MB, so the total size is 2GB.
-        files_per_part = 4
-        parts = ["a", "b", "c", "d", "e"]
+    # Create 2 partitions, each partition with 10 files.
+    # Each file is about 100MB, so the total size is 2GB.
+    files_per_part = 10
+    parts = ["a", "b", "c", "d", "e"]
 
-        nrows = int(sample_table.num_rows / files_per_part)
-        for part in parts:
-            tab = sample_table.slice(0, nrows)
-            tab = tab.append_column("part", pa.array([part] * nrows))
-            for _ in range(files_per_part):
-                write_deltalake(tmp_path, tab, mode="append", partition_by=["part"])
+    nrows = int(sample_table.num_rows / files_per_part)
+    for part in parts:
+        tab = sample_table.slice(0, nrows)
+        tab = tab.append_column("part", pa.array([part] * nrows))
+        for _ in range(files_per_part):
+            write_deltalake(tmp_path, tab, mode="append", partition_by=["part"])
 
         dt = DeltaTable(tmp_path)
+        dt = DeltaTable(tmp_path)
 
-        assert len(dt.files()) == files_per_part * len(parts)
+    dt = DeltaTable(tmp_path)
 
-        target_size = 80 * 1024 * 1024
-        sizes = dt.get_add_actions().column("size_bytes")
-        print(sizes)
-        expected_size = 42 * 1024 * 1024 # 17MB
-        assert all(size.as_py() / expected_size < 1.1 for size in sizes)
+    assert len(dt.files()) == files_per_part * len(parts)
+    initial_version = dt.version()
 
-        return (dt,), dict(max_concurrent_tasks=max_tasks, target_size=target_size)
+    def setup():
+        # Instead of recreating the table for each benchmark run, we just delete
+        # the optimize log file
+        optimize_version = initial_version + 1
+        try:
+            os.remove(
+                os.path.join(tmp_path, "_delta_log", f"{optimize_version:020}.json")
+            )
+        except FileNotFoundError:
+            pass
 
-    def func(dt, max_concurrent_tasks, target_size):
-        return dt.optimize(
-            max_concurrent_tasks=max_concurrent_tasks, target_size=target_size
-        )
+        # Reload the table after we have altered the log
+        dt = DeltaTable(tmp_path)
+        assert dt.version() == initial_version
+
+        return (dt,), dict(max_concurrent_tasks=max_tasks)
+
+    def func(dt, max_concurrent_tasks):
+        return dt.optimize(max_concurrent_tasks=max_concurrent_tasks)
 
     # We need to recreate the table for each benchmark run
-    results = benchmark.pedantic(func, setup=setup)
-    print(results)
+    results = benchmark.pedantic(func, setup=setup, rounds=5)
 
-    assert results["numFilesRemoved"] == 20
+    assert results["numFilesRemoved"] == 50
     assert results["numFilesAdded"] == 5
     assert results["partitionsOptimized"] == 5

@@ -30,6 +30,7 @@ use crate::{DeltaResult, DeltaTable, DeltaTableError, ObjectMeta, PartitionFilte
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
+use log::debug;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
@@ -298,6 +299,7 @@ impl MergePlan {
         files: Vec<ObjectMeta>,
         object_store: ObjectStoreRef,
     ) -> Result<(Vec<Action>, PartialMetrics), DeltaTableError> {
+        debug!("Rewriting files in partition: {:?}", partition);
         // First, initialize metrics
         let partition_values = partition.to_hashmap();
         let mut partial_actions = files
@@ -371,6 +373,8 @@ impl MergePlan {
         });
         partial_actions.extend(add_actions);
 
+        debug!("Finished rewriting files in partition: {:?}", partition);
+
         Ok((partial_actions, partial_metrics))
     }
 
@@ -393,6 +397,7 @@ impl MergePlan {
             .map(|(partition, files)| self.rewrite_files(partition, files, object_store.clone()))
             .buffer_unordered(self.max_concurrent_tasks)
             .try_for_each(|(partial_actions, partial_metrics)| {
+                debug!("Recording metrics for a completed partition");
                 actions.extend(partial_actions);
                 metrics.add(&partial_metrics);
                 async { Ok(()) }

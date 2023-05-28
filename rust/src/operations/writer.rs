@@ -3,7 +3,6 @@
 use std::collections::HashMap;
 
 use crate::action::Add;
-use crate::delta_arrow::estimated_row_size;
 use crate::storage::ObjectStoreRef;
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;
@@ -25,9 +24,6 @@ use parquet::file::properties::WriterProperties;
 // TODO databricks often suggests a file size of 100mb, should we set this default?
 const DEFAULT_TARGET_FILE_SIZE: usize = 104_857_600;
 const DEFAULT_WRITE_BATCH_SIZE: usize = 1024;
-/// The default size of a row group in bytes. This determines the resolution with
-/// which we can control the size of files written to disk. Though 
-const DEFAULT_ROW_GROUP_SIZE_BYTES: usize = 32 * 1024 * 1024; // 32 MB
 
 #[derive(thiserror::Error, Debug)]
 enum WriteError {
@@ -96,15 +92,8 @@ impl WriterConfig {
         write_batch_size: Option<usize>,
     ) -> Self {
         let writer_properties = writer_properties.unwrap_or_else(|| {
-            let row_size = estimated_row_size(&table_schema, 32);
-            let max_rows_per_group = if row_size != 0 {
-                DEFAULT_ROW_GROUP_SIZE_BYTES / row_size
-            } else {
-                1024 * 1024
-            };
             WriterProperties::builder()
                 .set_compression(Compression::SNAPPY)
-                .set_max_row_group_size(max_rows_per_group)
                 .build()
         });
         let target_file_size = target_file_size.unwrap_or(DEFAULT_TARGET_FILE_SIZE);
@@ -381,10 +370,6 @@ impl PartitionWriter {
             let length = usize::min(self.config.write_batch_size, max_offset - offset);
             self.write_batch(&batch.slice(offset, length))?;
             // flush currently buffered data to disk once we meet or exceed the target file size.
-            // self.buffer.len() is zero until we write a row group.
-            // TODO: Once https://github.com/apache/arrow-rs/pull/4280 is merged and
-            // released, switch to using `in_progress_size()`, which is more accurate.
-            // Once we do that, we can also bump up the row group size.
             if self.buffer.len() >= self.config.target_file_size {
                 log::debug!("Writing file with size {:?} to disk.", self.buffer.len());
                 self.flush_arrow_writer().await?;
