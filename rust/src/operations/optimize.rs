@@ -313,14 +313,15 @@ impl MergePlan {
             })
             .collect::<Result<Vec<_>, DeltaTableError>>()?;
 
-        let mut files_removed = MetricDetails::default();
-
-        for file in files.iter() {
-            files_removed.total_files += 1;
-            files_removed.total_size += file.size as i64;
-            files_removed.max = std::cmp::max(files_removed.max, file.size as i64);
-            files_removed.min = std::cmp::min(files_removed.min, file.size as i64);
-        }
+        let files_removed = files
+            .iter()
+            .fold(MetricDetails::default(), |mut curr, file| {
+                curr.total_files += 1;
+                curr.total_size += file.size as i64;
+                curr.max = std::cmp::max(files_removed.max, file.size as i64);
+                curr.min = std::cmp::min(files_removed.min, file.size as i64);
+                curr
+            });
 
         let mut partial_metrics = PartialMetrics {
             num_files_added: 0,
