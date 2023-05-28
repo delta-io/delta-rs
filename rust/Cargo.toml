@@ -63,17 +63,22 @@ rusoto_dynamodb = { version = "0.47", default-features = false, optional = true 
 rusoto_glue = { version = "0.47", default-features = false, optional = true }
 
 # Unity
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "json"], optional = true }
+reqwest = { version = "0.11", default-features = false, features = [
+    "rustls-tls",
+    "json",
+], optional = true }
 reqwest-middleware = { version = "0.2.1", optional = true }
 reqwest-retry = { version = "0.2.2", optional = true }
 
 # Datafusion
+dashmap = { version = "5", optional = true }
 datafusion = { version = "25", optional = true }
 datafusion-expr = { version = "25", optional = true }
 datafusion-common = { version = "25", optional = true }
 datafusion-proto = { version = "25", optional = true }
 datafusion-sql = { version = "25", optional = true }
 datafusion-physical-expr = { version = "25", optional = true }
+
 
 sqlparser = { version = "0.33", optional = true }
 
@@ -117,6 +122,7 @@ datafusion = [
     "sqlparser",
     "arrow",
     "parquet",
+    "dashmap",
 ]
 datafusion-ext = ["datafusion"]
 gcs = ["object_store/gcp"]
