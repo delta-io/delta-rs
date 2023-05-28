@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use crate::action::Add;
 use crate::storage::ObjectStoreRef;
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
-use crate::writer::stats::{apply_null_counts, create_add, NullCounts};
+use crate::writer::stats::create_add;
 use crate::writer::utils::{
     arrow_schema_without_partitions, record_batch_without_partitions, PartitionPath,
     ShareableBuffer,
@@ -16,7 +16,6 @@ use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use bytes::Bytes;
-use log::warn;
 use object_store::{path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
@@ -269,7 +268,6 @@ pub(crate) struct PartitionWriter {
     buffer: ShareableBuffer,
     arrow_writer: ArrowWriter<ShareableBuffer>,
     part_counter: usize,
-    null_counts: NullCounts,
     files_written: Vec<Add>,
 }
 
@@ -293,7 +291,6 @@ impl PartitionWriter {
             buffer,
             arrow_writer,
             part_counter: 0,
-            null_counts: NullCounts::new(),
             files_written: Vec::new(),
         })
     }
@@ -307,11 +304,8 @@ impl PartitionWriter {
         self.config.prefix.child(file_name)
     }
 
-    fn replace_arrow_buffer(
-        &mut self,
-        seed: impl AsRef<[u8]>,
-    ) -> DeltaResult<(ArrowWriter<ShareableBuffer>, ShareableBuffer)> {
-        let new_buffer = ShareableBuffer::from_bytes(seed.as_ref());
+    fn reset_writer(&mut self) -> DeltaResult<(ArrowWriter<ShareableBuffer>, ShareableBuffer)> {
+        let new_buffer = ShareableBuffer::default();
         let arrow_writer = ArrowWriter::try_new(
             new_buffer.clone(),
             self.config.file_schema.clone(),
@@ -324,40 +318,27 @@ impl PartitionWriter {
     }
 
     fn write_batch(&mut self, batch: &RecordBatch) -> DeltaResult<()> {
-        // copy current cursor bytes so we can recover from failures
-        // TODO is copying this something we should be doing?
-        let buffer_bytes = self.buffer.to_vec();
-        match self.arrow_writer.write(batch) {
-            Ok(_) => {
-                apply_null_counts(&batch.clone().into(), &mut self.null_counts, 0);
-                Ok(())
-            }
-            Err(err) => {
-                // if a write fails we need to reset the state of the PartitionWriter
-                warn!("error writing to arrow buffer, resetting writer state.");
-                self.replace_arrow_buffer(buffer_bytes)?;
-                Err(err.into())
-            }
-        }
+        Ok(self.arrow_writer.write(batch)?)
     }
 
     async fn flush_arrow_writer(&mut self) -> DeltaResult<()> {
         // replace counter / buffers and close the current writer
-        let (writer, buffer) = self.replace_arrow_buffer(vec![])?;
-        let null_counts = std::mem::take(&mut self.null_counts);
+        let (writer, buffer) = self.reset_writer()?;
         let metadata = writer.close()?;
+        let buffer = match buffer.into_inner() {
+            Some(buffer) => Bytes::from(buffer),
+            None => return Ok(()), // Nothing to write
+        };
 
         // collect metadata
         let path = self.next_data_path();
-        let obj_bytes = Bytes::from(buffer.to_vec());
-        let file_size = obj_bytes.len() as i64;
+        let file_size = buffer.len() as i64;
 
         // write file to object store
-        self.object_store.put(&path, obj_bytes).await?;
+        self.object_store.put(&path, buffer).await?;
         self.files_written.push(
             create_add(
                 &self.config.partition_values,
-                null_counts,
                 path.to_string(),
                 file_size,
                 &metadata,

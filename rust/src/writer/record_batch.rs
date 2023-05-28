@@ -26,30 +26,31 @@
 //!     }))
 //! }
 //! ```
+use std::{collections::HashMap, sync::Arc};
 
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::sync::Arc;
-
-use arrow_array::{ArrayRef, RecordBatch, UInt32Array};
-use arrow_ord::{partition::lexicographical_partition_ranges, sort::SortColumn};
+use super::{
+    stats::create_add,
+    utils::{
+        arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
+        stringified_partition_value, PartitionPath,
+    },
+    DeltaWriter, DeltaWriterError,
+};
+use crate::builder::DeltaTableBuilder;
+use crate::writer::utils::ShareableBuffer;
+use crate::DeltaTableError;
+use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
+use arrow::array::{Array, UInt32Array};
+use arrow::compute::{lexicographical_partition_ranges, take, SortColumn};
+use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow::error::ArrowError;
+use arrow::record_batch::RecordBatch;
+use arrow_array::ArrayRef;
 use arrow_row::{RowConverter, SortField};
-use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
-use arrow_select::take::take;
 use bytes::Bytes;
 use object_store::ObjectStore;
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
-
-use super::stats::{create_add, NullCounts};
-use super::utils::{
-    arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
-    stringified_partition_value, PartitionPath,
-};
-use super::{DeltaTableError, DeltaWriter, DeltaWriterError};
-use crate::builder::DeltaTableBuilder;
-use crate::writer::{stats::apply_null_counts, utils::ShareableBuffer};
-use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -225,19 +226,15 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         let writers = std::mem::take(&mut self.arrow_writers);
         let mut actions = Vec::new();
 
-        for (_, mut writer) in writers {
+        for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
             let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
             self.storage.put(&path, obj_bytes).await?;
 
-            // Replace self null_counts with an empty map. Use the other for stats.
-            let null_counts = std::mem::take(&mut writer.null_counts);
-
             actions.push(create_add(
                 &writer.partition_values,
-                null_counts,
                 path.to_string(),
                 file_size,
                 &metadata,
@@ -262,7 +259,6 @@ struct PartitionWriter {
     pub(super) buffer: ShareableBuffer,
     pub(super) arrow_writer: ArrowWriter<ShareableBuffer>,
     pub(super) partition_values: HashMap<String, Option<String>>,
-    pub(super) null_counts: NullCounts,
     pub(super) buffered_record_batch_count: usize,
 }
 
@@ -279,7 +275,6 @@ impl PartitionWriter {
             Some(writer_properties.clone()),
         )?;
 
-        let null_counts = NullCounts::new();
         let buffered_record_batch_count = 0;
 
         Ok(Self {
@@ -288,7 +283,6 @@ impl PartitionWriter {
             buffer,
             arrow_writer,
             partition_values,
-            null_counts,
             buffered_record_batch_count,
         })
     }
@@ -310,7 +304,6 @@ impl PartitionWriter {
         match self.arrow_writer.write(record_batch) {
             Ok(_) => {
                 self.buffered_record_batch_count += 1;
-                apply_null_counts(&record_batch.clone().into(), &mut self.null_counts, 0);
                 Ok(())
             }
             // If a write fails we need to reset the state of the PartitionWriter
