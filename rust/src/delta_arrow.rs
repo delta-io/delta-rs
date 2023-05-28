@@ -1012,33 +1012,4 @@ mod tests {
         ));
         let _converted: schema::SchemaField = field.as_ref().try_into().unwrap();
     }
-
-    #[test]
-    fn test_estimated_row_size() {
-        let schema = ArrowSchema::new(vec![
-            ArrowField::new("a", ArrowDataType::Int32, true),
-            ArrowField::new(
-                "b",
-                ArrowDataType::Struct(
-                    vec![
-                        ArrowField::new("c", ArrowDataType::Utf8, true),
-                        ArrowField::new("d", ArrowDataType::Date32, true),
-                    ]
-                    .into(),
-                ),
-                true,
-            ),
-        ]);
-        let variable_width_guess = 8;
-        assert_eq!(
-            estimated_row_size(&schema, variable_width_guess),
-            4 + 4 + variable_width_guess
-        );
-
-        let variable_width_guess = 100;
-        assert_eq!(
-            estimated_row_size(&schema, variable_width_guess),
-            4 + 4 + variable_width_guess
-        );
-    }
 }

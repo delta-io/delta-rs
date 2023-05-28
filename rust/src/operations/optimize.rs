@@ -318,8 +318,8 @@ impl MergePlan {
             .fold(MetricDetails::default(), |mut curr, file| {
                 curr.total_files += 1;
                 curr.total_size += file.size as i64;
-                curr.max = std::cmp::max(files_removed.max, file.size as i64);
-                curr.min = std::cmp::min(files_removed.min, file.size as i64);
+                curr.max = std::cmp::max(curr.max, file.size as i64);
+                curr.min = std::cmp::min(curr.min, file.size as i64);
                 curr
             });
 
