@@ -16,7 +16,10 @@ edition = "2021"
 arrow = { version = "39", optional = true }
 arrow-array = { version = "39", optional = true }
 arrow-cast = { version = "39", optional = true }
+arrow-ord = { version = "39", optional = true }
+arrow-row = { version = "39", optional = true }
 arrow-schema = { version = "39", optional = true }
+arrow-select = { version = "39", optional = true }
 async-trait = "0.1"
 bytes = "1"
 chrono = { version = "0.4.22", default-features = false, features = ["clock"] }
@@ -102,7 +105,7 @@ glibc_version = { path = "../glibc_version", version = "0.1" }
 
 [features]
 azure = ["object_store/azure"]
-arrow = ["dep:arrow", "arrow-array", "arrow-cast", "arrow-schema"]
+arrow = ["dep:arrow", "arrow-array", "arrow-cast", "arrow-ord", "arrow-row", "arrow-schema", "arrow-select"]
 default = ["arrow", "parquet"]
 datafusion = [
     "dep:datafusion",
