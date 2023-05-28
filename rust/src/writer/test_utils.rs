@@ -1,10 +1,10 @@
 #![allow(deprecated)]
 //! Utilities for writing unit tests
-use super::*;
 use crate::{
     action::Protocol, schema::Schema, DeltaTable, DeltaTableBuilder, DeltaTableMetaData,
     SchemaDataType, SchemaField,
 };
+use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{Int32Array, StringArray, UInt32Array},
