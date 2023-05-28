@@ -234,11 +234,11 @@ async fn handle_stream(
     Ok(None)
 }
 
-struct ExprProperties {
-    partition_columns: Vec<String>,
+pub(crate) struct ExprProperties {
+    pub partition_columns: Vec<String>,
 
-    partition_only: bool,
-    result: DeltaResult<()>,
+    pub partition_only: bool,
+    pub result: DeltaResult<()>,
 }
 
 /// Ensure only expressions that make sense are accepted, check for
@@ -568,7 +568,10 @@ async fn execute(
     Ok(((actions, version), metrics))
 }
 
-async fn scan_memory_table(snapshot: &DeltaTableState, predicate: &Expr) -> DeltaResult<Vec<Add>> {
+pub(crate) async fn scan_memory_table(
+    snapshot: &DeltaTableState,
+    predicate: &Expr,
+) -> DeltaResult<Vec<Add>> {
     let actions = snapshot.files().to_owned();
 
     let batch = snapshot.add_actions_table(true)?;

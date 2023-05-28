@@ -32,11 +32,9 @@ use datafusion::{
     physical_plan::{projection::ProjectionExec, ExecutionPlan},
     prelude::SessionContext,
 };
-use datafusion_common::{Column, DFSchema, ScalarValue};
+use datafusion_common::{tree_node::TreeNode, Column, DFSchema, ScalarValue};
 use datafusion_expr::{case, col, lit, Expr};
-use datafusion_physical_expr::{
-    create_physical_expr, execution_props::ExecutionProps, expressions, PhysicalExpr,
-};
+use datafusion_physical_expr::{create_physical_expr, expressions, PhysicalExpr};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
@@ -50,7 +48,11 @@ use crate::{
     DeltaResult, DeltaTable, DeltaTableError,
 };
 
-use super::{transaction::commit, write::write_execution_plan};
+use super::{
+    delete::{scan_memory_table, ExprProperties},
+    transaction::commit,
+    write::write_execution_plan,
+};
 
 /// Updates records in the Delta Table.
 /// See this module's documentaiton for more information
@@ -78,10 +80,10 @@ pub struct UpdateMetrics {
     pub num_added_files: usize,
     /// Number of files removed.
     pub num_removed_files: usize,
-    /// Number of rows updated.
-    pub num_updated_rows: usize,
-    /// Number of rows just copied over in the process of updating files.
-    pub num_copied_rows: usize,
+    // Number of rows updated.
+    // pub num_updated_rows: usize,
+    // Number of rows just copied over in the process of updating files.
+    // pub num_copied_rows: usize,
     /// Time taken to execute the entire operation.
     pub execution_time_ms: u128,
     /// Time taken to scan the files for matches.
@@ -165,14 +167,18 @@ async fn execute(
     let mut metrics = UpdateMetrics::default();
     let mut version = snapshot.version();
 
-    let rewrite = match &predicate {
+    if updates.is_empty() {
+        return Ok(((Vec::new(), version), metrics));
+    }
+
+    let current_metadata = snapshot
+        .current_metadata()
+        .ok_or(DeltaTableError::NoMetadata)?;
+    let table_partition_cols = current_metadata.partition_columns.clone();
+    let schema = snapshot.arrow_schema()?;
+
+    let files_to_rewrite = match &predicate {
         Some(predicate) => {
-            let schema = snapshot.arrow_schema()?;
-            let table_partition_cols = snapshot
-                .current_metadata()
-                .ok_or(DeltaTableError::NoMetadata)?
-                .partition_columns
-                .clone();
             let file_schema = Arc::new(ArrowSchema::new(
                 schema
                     .fields()
@@ -191,46 +197,57 @@ async fn execute(
                 state.execution_props(),
             )?;
 
-            let pruning_predicate = PruningPredicate::try_new(expr, schema.clone())?;
-            let files_to_prune = pruning_predicate.prune(snapshot)?;
-            let files: Vec<&Add> = snapshot
-                .files()
-                .iter()
-                .zip(files_to_prune.into_iter())
-                .filter_map(|(action, keep)| if keep { Some(action) } else { None })
-                .collect();
+            // Validate the Predicate and determine if it only contains partition columns
+            let mut expr_properties = ExprProperties {
+                partition_only: true,
+                partition_columns: current_metadata.partition_columns.clone(),
+                result: Ok(()),
+            };
 
-            // Create a new delta scan plan with only files that have a record
-            let rewrite = find_files(
-                snapshot,
-                object_store.clone(),
-                schema.clone(),
-                file_schema.clone(),
-                files,
-                &state,
-                predicate,
-            )
-            .await?;
-            rewrite.into_iter().map(|s| s.to_owned()).collect()
+            TreeNode::visit(predicate, &mut expr_properties)?;
+            expr_properties.result?;
+
+            let scan_start = Instant::now();
+            let candidates = if expr_properties.partition_only {
+                scan_memory_table(snapshot, predicate).await?
+            } else {
+                let pruning_predicate = PruningPredicate::try_new(expr, schema.clone())?;
+                let files_to_prune = pruning_predicate.prune(snapshot)?;
+                let files: Vec<&Add> = snapshot
+                    .files()
+                    .iter()
+                    .zip(files_to_prune.into_iter())
+                    .filter_map(|(action, keep)| if keep { Some(action) } else { None })
+                    .collect();
+
+                // Create a new delta scan plan with only files that have a record
+                let candidates = find_files(
+                    snapshot,
+                    object_store.clone(),
+                    schema.clone(),
+                    file_schema.clone(),
+                    files,
+                    &state,
+                    predicate,
+                )
+                .await?;
+                candidates.into_iter().map(|s| s.to_owned()).collect()
+            };
+            metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
+            candidates
         }
         None => snapshot.files().to_owned(),
     };
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
-    let schema = snapshot.arrow_schema()?;
-    let table_partition_cols = snapshot
-        .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)?
-        .partition_columns
-        .clone();
-    let execution_props = ExecutionProps::new();
+    let execution_props = state.execution_props();
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
     let parquet_scan = parquet_scan_from_actions(
         snapshot,
         object_store.clone(),
-        &rewrite,
+        &files_to_rewrite,
         &schema,
         None,
         &state,
@@ -239,7 +256,7 @@ async fn execute(
     )
     .await?;
 
-    // Create a new projection
+    // Create a projection for a new column with the predicate evaluated
     let input_schema = snapshot.input_schema()?;
     let mut fields = Vec::new();
     for field in input_schema.fields.iter() {
@@ -251,6 +268,7 @@ async fn execute(
         true,
     )));
 
+    // Recreate the schemas with the new column included
     let input_schema = Arc::new(ArrowSchema::new(fields));
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
 
@@ -264,10 +282,14 @@ async fn execute(
     }
 
     let predicate_expr =
-        create_physical_expr(&predicate, &input_dfschema, &input_schema, &execution_props)?;
+        create_physical_expr(&predicate, &input_dfschema, &input_schema, execution_props)?;
     expressions.push((predicate_expr, "__delta_rs_update_predicate".to_string()));
 
-    // Create the projection...
+    // Perform another projection but instead calculate updated values based on
+    // the predicate value.  If the predicate is true then evalute the user
+    // provided expression otherwise return the original column value
+    //
+    // For each update column a new column with a name of __delta_rs_ + `original name` is created
     let projection: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(expressions, parquet_scan)?);
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
@@ -279,6 +301,7 @@ async fn execute(
         ));
     }
 
+    // Maintain a map from the original column name to its temporary column index
     let mut map = HashMap::<String, usize>::new();
     let mut control_columns = HashSet::<String>::new();
     control_columns.insert("__delta_rs_update_predicate".to_owned());
@@ -288,19 +311,19 @@ async fn execute(
             .when(lit(true), expr.to_owned())
             .otherwise(col(column.to_owned()))?;
         let predicate_expr =
-            create_physical_expr(&expr, &input_dfschema, &input_schema, &execution_props)?;
+            create_physical_expr(&expr, &input_dfschema, &input_schema, execution_props)?;
         map.insert(column.name.clone(), expressions.len());
         let c = "__delta_rs_".to_string() + &column.name;
         expressions.push((predicate_expr, c.clone()));
         control_columns.insert(c);
     }
 
-    let projection: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(expressions, projection)?);
+    let projection_predicate: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(expressions, projection.clone())?);
 
-    // project again to remove __delta_rs columns and rename update columns to their original name
+    // Project again to remove __delta_rs columns and rename update columns to their original name
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let scan_schema = projection.schema();
+    let scan_schema = projection_predicate.schema();
     for (i, field) in scan_schema.fields().into_iter().enumerate() {
         if !control_columns.contains(field.name()) {
             match map.get(field.name()) {
@@ -320,8 +343,10 @@ async fn execute(
         }
     }
 
-    let projection: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(expressions, projection)?);
+    let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
+        expressions,
+        projection_predicate.clone(),
+    )?);
 
     let add_actions = write_execution_plan(
         snapshot,
@@ -342,9 +367,9 @@ async fn execute(
     let mut actions: Vec<Action> = add_actions.into_iter().map(Action::add).collect();
 
     metrics.num_added_files = actions.len();
-    metrics.num_removed_files = rewrite.len();
+    metrics.num_removed_files = files_to_rewrite.len();
 
-    for action in rewrite {
+    for action in files_to_rewrite {
         actions.push(Action::remove(Remove {
             path: action.path,
             deletion_timestamp: Some(deletion_timestamp),
@@ -630,13 +655,6 @@ mod tests {
                 random() * lit(20.0),
                 arrow::datatypes::DataType::Int32,
             )))
-            .await;
-        assert!(res.is_err());
-
-        let table = setup_table(None).await;
-        let res = DeltaOps(table)
-            .update()
-            .with_predicate(col("value").eq(lit(10)))
             .with_update("value", col("value") + lit(20))
             .await;
         assert!(res.is_err());
