@@ -5,39 +5,74 @@ use std::str::FromStr;
 use object_store::azure::AzureConfigKey;
 use object_store::Error;
 
-use crate::DeltaResult;
+use crate::{DeltaResult, DeltaTableError};
 
 /// Credential
 pub enum AzureCredential {
     /// Using the account master key
-    AcessKey,
+    AccessKey,
     /// Using a static bearer token
     BearerToken,
     /// Authorizing with secret
     ClientSecret,
-    /// Using workload identity
-    FederatedToken,
+    /// Using a shared access signature
+    ManagedIdentity,
     /// Using a shared access signature
     SasKey,
+    /// Using workload identity
+    WorkloadIdentity,
+}
+
+impl FromStr for AzureCredential {
+    type Err = DeltaTableError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "access_key" => Ok(AzureCredential::AccessKey),
+            "bearer_token" => Ok(AzureCredential::BearerToken),
+            "client_secret" => Ok(AzureCredential::ClientSecret),
+            "managed_identity" => Ok(AzureCredential::ManagedIdentity),
+            "workload_identity" => Ok(AzureCredential::WorkloadIdentity),
+            "sas_key" => Ok(AzureCredential::SasKey),
+            _ => Err(DeltaTableError::Generic(format!(
+                "Cannot parse AzureCredential variant from {}",
+                s
+            ))),
+        }
+    }
+}
+
+impl AsRef<str> for AzureCredential {
+    fn as_ref(&self) -> &str {
+        match self {
+            Self::AccessKey => "access_key",
+            Self::BearerToken => "bearer_token",
+            Self::ClientSecret => "client_secret",
+            Self::ManagedIdentity => "managed_identity",
+            Self::SasKey => "sas_key",
+            Self::WorkloadIdentity => "workload_identity",
+        }
+    }
 }
 
 impl AzureCredential {
     /// Reys required for config
     pub fn keys(&self) -> Vec<AzureConfigKey> {
         match self {
-            Self::AcessKey => Vec::from_iter([AzureConfigKey::AccessKey]),
+            Self::AccessKey => Vec::from_iter([AzureConfigKey::AccessKey]),
             Self::BearerToken => Vec::from_iter([AzureConfigKey::Token]),
             Self::ClientSecret => Vec::from_iter([
                 AzureConfigKey::ClientId,
                 AzureConfigKey::ClientSecret,
                 AzureConfigKey::AuthorityId,
             ]),
-            Self::FederatedToken => Vec::from_iter([
+            Self::WorkloadIdentity => Vec::from_iter([
                 AzureConfigKey::AuthorityId,
                 AzureConfigKey::ClientId,
                 AzureConfigKey::FederatedTokenFile,
             ]),
             Self::SasKey => Vec::from_iter([AzureConfigKey::SasKey]),
+            Self::ManagedIdentity => Vec::new(),
         }
     }
 }
@@ -46,13 +81,13 @@ impl AzureCredential {
 ///
 /// Main concern is to pick the desired credential for connecting to starage backend
 /// based on a provided configuration and configuration set in the environment.
-pub struct ConfigHelper {
+pub struct AzureConfigHelper {
     config: HashMap<AzureConfigKey, String>,
     env_config: HashMap<AzureConfigKey, String>,
     priority: Vec<AzureCredential>,
 }
 
-impl ConfigHelper {
+impl AzureConfigHelper {
     /// Create a new [`ConfigHelper`]
     pub fn try_new(
         config: impl IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>,
@@ -75,10 +110,11 @@ impl ConfigHelper {
                 .collect::<Result<_, Error>>()?,
             env_config,
             priority: Vec::from_iter([
+                AzureCredential::AccessKey,
                 AzureCredential::SasKey,
                 AzureCredential::BearerToken,
                 AzureCredential::ClientSecret,
-                AzureCredential::FederatedToken,
+                AzureCredential::WorkloadIdentity,
             ]),
         })
     }
@@ -105,11 +141,13 @@ impl ConfigHelper {
         if self.config.contains_key(&AzureConfigKey::UseAzureCli) {
             return Ok(self.config);
         }
+        // try using only passed config options
         for cred in &self.priority {
             if self.has_full_config(cred) {
                 return Ok(self.config);
             }
         }
+        // try partially avaialbe credentials augmented by environment
         for cred in &self.priority {
             if self.has_any_config(cred) && self.has_full_config_with_env(cred) {
                 for key in cred.keys() {
@@ -120,6 +158,17 @@ impl ConfigHelper {
                 return Ok(self.config);
             }
         }
-        todo!()
+        // try getting credentials only from the environment
+        for cred in &self.priority {
+            if self.has_full_config_with_env(cred) {
+                for key in cred.keys() {
+                    if let Entry::Vacant(e) = self.config.entry(key) {
+                        e.insert(self.env_config.get(&key).unwrap().to_owned());
+                    }
+                }
+                return Ok(self.config);
+            }
+        }
+        Ok(self.config)
     }
 }

@@ -172,8 +172,11 @@ impl DeltaTableBuilder {
     ///
     /// # Arguments
     ///
-    /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with "/" pointing at delta table root (i.e. where `_delta_log` is located).
+    /// * `storage` - A shared reference to an [`ObjectStore`] with "/" pointing at delta table root
+    ///   (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storagle location of `storage`.
+    ///
+    /// [`ObjectStore`]: object_store::ObjectStore
     pub fn with_storage_backend(mut self, storage: Arc<DynObjectStore>, location: Url) -> Self {
         self.options.storage_backend = Some((storage, location));
         self

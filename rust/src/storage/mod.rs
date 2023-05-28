@@ -1,12 +1,9 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
-pub mod config;
-pub mod envconfig;
-pub mod file;
-pub mod utils;
-
-use self::config::StorageOptions;
-use crate::DeltaResult;
+use std::collections::HashMap;
+use std::fmt;
+use std::ops::Range;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt};
@@ -14,18 +11,20 @@ use lazy_static::lazy_static;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashMap;
-use std::fmt;
-use std::ops::Range;
-use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use url::Url;
 
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-pub mod s3;
+use self::config::StorageOptions;
+use crate::DeltaResult;
 
 #[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
+
+pub mod config;
+pub mod file;
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+pub mod s3;
+pub mod utils;
 
 pub use object_store::path::{Path, DELIMITER};
 pub use object_store::{
@@ -49,12 +48,14 @@ pub type ObjectStoreRef = Arc<DeltaObjectStore>;
 
 /// Object Store implementation for DeltaTable.
 ///
-/// The [DeltaObjectStore] implements the [object_store::ObjectStore] trait to facilitate
+/// The [`DeltaObjectStore`] implements the [`ObjectStore`] trait to facilitate
 /// interoperability with the larger rust / arrow ecosystem. Specifically it can directly
 /// be registered as store within datafusion.
 ///
 /// The table root is treated as the root of the object store.
-/// All [Path] are reported relative to the table root.
+/// All [`Path`] are reported relative to the table root.
+///
+/// [ObjectStore]: object_store::ObjectStore
 #[derive(Debug, Clone)]
 pub struct DeltaObjectStore {
     storage: Arc<dyn ObjectStore>,
@@ -73,8 +74,11 @@ impl DeltaObjectStore {
     ///
     /// # Arguments
     ///
-    /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with "/" pointing at delta table root (i.e. where `_delta_log` is located).
+    /// * `storage` - A shared reference to an [`ObjectStore`] with "/" pointing at delta table root
+    ///    (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storage location of `storage`.
+    ///
+    /// [ObjectStore]: object_store::ObjectStore
     pub fn new(storage: Arc<DynObjectStore>, location: Url) -> Self {
         Self {
             storage,
@@ -88,7 +92,9 @@ impl DeltaObjectStore {
     /// # Arguments
     ///
     /// * `location` - A url pointing to the root of the delta table.
-    /// * `options` - Options passed to underlying builders. See [`with_storage_options`](crate::builder::DeltaTableBuilder::with_storage_options)
+    /// * `options` - Options passed to underlying builders. See [`with_storage_options`].
+    ///
+    /// [`with_storage_options`]: super::builder::DeltaTableBuilder::with_storage_options
     pub fn try_new(location: Url, options: impl Into<StorageOptions> + Clone) -> DeltaResult<Self> {
         let options = options.into();
         let storage = config::configure_store(&location, &options)?;

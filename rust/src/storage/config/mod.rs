@@ -1,18 +1,22 @@
 //! Configuration handling for defining Storage backends for DeltaTables.
-use super::file::FileStorageBackend;
-use super::utils::str_is_truthy;
-use crate::{DeltaResult, DeltaTableError};
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::prefix::PrefixStore;
 use object_store::{DynObjectStore, ObjectStore};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
 use url::Url;
+
+use super::file::FileStorageBackend;
+use super::utils::str_is_truthy;
+use crate::{DeltaResult, DeltaTableError};
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use super::s3::{S3StorageBackend, S3StorageOptions};
+#[cfg(feature = "azure")]
+use azure::AzureConfigHelper;
 #[cfg(feature = "hdfs")]
 use datafusion_objectstore_hdfs::object_store::hdfs::HadoopFileSystem;
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
@@ -28,6 +32,9 @@ use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
     feature = "azure"
 ))]
 use std::str::FromStr;
+
+#[cfg(feature = "azure")]
+mod azure;
 
 /// Options used for configuring backend storage
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -174,9 +181,10 @@ fn try_configure_azure(
     storage_url: &Url,
     options: &StorageOptions,
 ) -> DeltaResult<Arc<DynObjectStore>> {
-    let store = MicrosoftAzureBuilder::from_env()
+    let config = AzureConfigHelper::try_new(&options.as_azure_options())?.build()?;
+    let store = MicrosoftAzureBuilder::new()
         .with_url(storage_url.as_ref())
-        .try_with_options(&options.as_azure_options())?
+        .try_with_options(&config)?
         .with_allow_http(options.allow_http())
         .build()?;
     url_prefix_handler(store, storage_url)
