@@ -312,7 +312,7 @@ impl RawDeltaTable {
         Ok(metrics.files_deleted)
     }
 
-    // Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
+    /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
     #[pyo3(signature = (partition_filters = None, target_size = None))]
     pub fn optimize(
         &mut self,
@@ -334,7 +334,7 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
 
-    // Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.
+    /// Run the History command on the Delta Table: Returns provenance information, including the operation, user, and so on, for each write to a table.
     pub fn history(&mut self, limit: Option<usize>) -> PyResult<Vec<String>> {
         let history = rt()?
             .block_on(self._table.history(limit))
