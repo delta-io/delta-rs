@@ -1,8 +1,15 @@
 #![deny(warnings)]
 
+mod error;
 mod filesystem;
 mod schema;
 mod utils;
+
+use std::collections::{HashMap, HashSet};
+use std::convert::TryFrom;
+use std::future::IntoFuture;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
@@ -22,19 +29,11 @@ use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
 use deltalake::{DeltaOps, Invariant, Schema};
 use pyo3::create_exception;
-use pyo3::exceptions::PyException;
-use pyo3::exceptions::PyValueError;
+use pyo3::exceptions::{PyException, PyValueError};
 use pyo3::prelude::*;
-use pyo3::types::PyFrozenSet;
-use pyo3::types::PyType;
-use std::collections::HashMap;
-use std::collections::HashSet;
-use std::convert::TryFrom;
-use std::future::IntoFuture;
-use std::sync::Arc;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+use pyo3::types::{PyFrozenSet, PyType};
 
+use crate::error::PythonError;
 use crate::filesystem::FsConfig;
 use crate::schema::schema_to_pyobject;
 
@@ -135,9 +134,7 @@ impl RawDeltaTable {
             builder = builder.without_files()
         }
 
-        let table = rt()?
-            .block_on(builder.load())
-            .map_err(PyDeltaTableError::from_raw)?;
+        let table = rt()?.block_on(builder.load()).map_err(PythonError::from)?;
         Ok(RawDeltaTable {
             _table: table,
             _config: FsConfig {
@@ -177,10 +174,7 @@ impl RawDeltaTable {
     }
 
     pub fn metadata(&self) -> PyResult<RawDeltaTableMetaData> {
-        let metadata = self
-            ._table
-            .get_metadata()
-            .map_err(PyDeltaTableError::from_raw)?;
+        let metadata = self._table.get_metadata().map_err(PythonError::from)?;
         Ok(RawDeltaTableMetaData {
             id: metadata.id.clone(),
             name: metadata.name.clone(),
@@ -234,7 +228,7 @@ impl RawDeltaTable {
             Ok(filters) => Ok(self
                 ._table
                 .get_files_by_partitions(&filters)
-                .map_err(PyDeltaTableError::from_raw)?
+                .map_err(PythonError::from)?
                 .into_iter()
                 .map(|p| p.to_string())
                 .collect()),
@@ -247,12 +241,11 @@ impl RawDeltaTable {
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
     ) -> PyResult<Vec<String>> {
         if let Some(filters) = partition_filters {
-            let filters =
-                convert_partition_filters(filters).map_err(PyDeltaTableError::from_raw)?;
+            let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
             Ok(self
                 ._table
                 .get_files_by_partitions(&filters)
-                .map_err(PyDeltaTableError::from_raw)?
+                .map_err(PythonError::from)?
                 .into_iter()
                 .map(|p| p.to_string())
                 .collect())
@@ -270,12 +263,11 @@ impl RawDeltaTable {
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
     ) -> PyResult<Vec<String>> {
         if let Some(filters) = partition_filters {
-            let filters =
-                convert_partition_filters(filters).map_err(PyDeltaTableError::from_raw)?;
+            let filters = convert_partition_filters(filters).map_err(PythonError::from)?;
             Ok(self
                 ._table
                 .get_file_uris_by_partitions(&filters)
-                .map_err(PyDeltaTableError::from_raw)?)
+                .map_err(PythonError::from)?)
         } else {
             Ok(self._table.get_file_uris().collect())
         }
@@ -283,10 +275,7 @@ impl RawDeltaTable {
 
     #[getter]
     pub fn schema(&self, py: Python) -> PyResult<PyObject> {
-        let schema: &Schema = self
-            ._table
-            .get_schema()
-            .map_err(PyDeltaTableError::from_raw)?;
+        let schema: &Schema = self._table.get_schema().map_err(PythonError::from)?;
         schema_to_pyobject(schema, py)
     }
 
@@ -307,7 +296,7 @@ impl RawDeltaTable {
         }
         let (table, metrics) = rt()?
             .block_on(async { cmd.await })
-            .map_err(PyDeltaTableError::from_raw)?;
+            .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(metrics.files_deleted)
     }
@@ -324,12 +313,12 @@ impl RawDeltaTable {
             cmd = cmd.with_target_size(size);
         }
         let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
-            .map_err(PyDeltaTableError::from_raw)?;
+            .map_err(PythonError::from)?;
         cmd = cmd.with_filters(&converted_filters);
 
         let (table, metrics) = rt()?
             .block_on(async { cmd.await })
-            .map_err(PyDeltaTableError::from_raw)?;
+            .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
     }
@@ -338,7 +327,7 @@ impl RawDeltaTable {
     pub fn history(&mut self, limit: Option<usize>) -> PyResult<Vec<String>> {
         let history = rt()?
             .block_on(self._table.history(limit))
-            .map_err(PyDeltaTableError::from_raw)?;
+            .map_err(PythonError::from)?;
         Ok(history
             .iter()
             .map(|c| serde_json::to_string(c).unwrap())
@@ -374,7 +363,7 @@ impl RawDeltaTable {
                 None => true,
             })
             .map(|((path, partition_values), stats)| {
-                let stats = stats.map_err(PyDeltaTableError::from_raw)?;
+                let stats = stats.map_err(PythonError::from)?;
                 let expression = filestats_to_expression(py, &schema, partition_values, stats)?;
                 Ok((path, expression))
             })
@@ -397,7 +386,7 @@ impl RawDeltaTable {
         let partition_columns: HashSet<&str> = self
             ._table
             .get_metadata()
-            .map_err(PyDeltaTableError::from_raw)?
+            .map_err(PythonError::from)?
             .partition_columns
             .iter()
             .map(|col| col.as_str())
@@ -429,7 +418,7 @@ impl RawDeltaTable {
         }
 
         let converted_filters = convert_partition_filters(partitions_filters.unwrap_or_default())
-            .map_err(PyDeltaTableError::from_raw)?;
+            .map_err(PythonError::from)?;
 
         let partition_columns: Vec<&str> = partition_columns.into_iter().collect();
 
@@ -437,7 +426,7 @@ impl RawDeltaTable {
             ._table
             .get_state()
             .get_active_add_actions_by_partitions(&converted_filters)
-            .map_err(PyDeltaTableError::from_raw)?
+            .map_err(PythonError::from)?
             .map(|add| {
                 partition_columns
                     .iter()
@@ -466,10 +455,7 @@ impl RawDeltaTable {
             .try_into()
             .map_err(PyDeltaTableError::from_arrow)?;
 
-        let existing_schema = self
-            ._table
-            .get_schema()
-            .map_err(PyDeltaTableError::from_raw)?;
+        let existing_schema = self._table.get_schema().map_err(PythonError::from)?;
 
         let mut actions: Vec<action::Action> = add_actions
             .iter()
@@ -480,13 +466,13 @@ impl RawDeltaTable {
             SaveMode::Overwrite => {
                 let converted_filters =
                     convert_partition_filters(partitions_filters.unwrap_or_default())
-                        .map_err(PyDeltaTableError::from_raw)?;
+                        .map_err(PythonError::from)?;
 
                 let add_actions = self
                     ._table
                     .get_state()
                     .get_active_add_actions_by_partitions(&converted_filters)
-                    .map_err(PyDeltaTableError::from_raw)?;
+                    .map_err(PythonError::from)?;
 
                 for old_add in add_actions {
                     let remove_action = Action::remove(action::Remove {
@@ -506,7 +492,7 @@ impl RawDeltaTable {
                     let mut metadata = self
                         ._table
                         .get_metadata()
-                        .map_err(PyDeltaTableError::from_raw)?
+                        .map_err(PythonError::from)?
                         .clone();
                     metadata.schema = schema;
                     let metadata_action = action::MetaData::try_from(metadata)
@@ -537,7 +523,7 @@ impl RawDeltaTable {
                 self._table.get_state(),
                 None,
             ))
-            .map_err(PyDeltaTableError::from_raw)?;
+            .map_err(PythonError::from)?;
 
         Ok(())
     }
@@ -563,7 +549,7 @@ impl RawDeltaTable {
             self._table
                 .get_state()
                 .add_actions_table(flatten)
-                .map_err(PyDeltaTableError::from_raw)?,
+                .map_err(PythonError::from)?,
         ))
     }
 }
@@ -767,7 +753,7 @@ fn write_new_deltalake(
     let table = DeltaTableBuilder::from_uri(table_uri)
         .with_storage_options(storage_options.unwrap_or_default())
         .build()
-        .map_err(PyDeltaTableError::from_raw)?;
+        .map_err(PythonError::from)?;
 
     let schema: Schema = (&schema.0)
         .try_into()
@@ -793,7 +779,7 @@ fn write_new_deltalake(
 
     rt()?
         .block_on(builder.into_future())
-        .map_err(PyDeltaTableError::from_raw)?;
+        .map_err(PythonError::from)?;
 
     Ok(())
 }
@@ -822,18 +808,20 @@ impl PyDeltaDataChecker {
     }
 
     fn check_batch(&self, batch: PyArrowType<RecordBatch>) -> PyResult<()> {
-        self.rt.block_on(async {
-            self.inner
-                .check_batch(&batch.0)
-                .await
-                .map_err(PyDeltaTableError::from_raw)
-        })
+        Ok(self
+            .rt
+            .block_on(async { self.inner.check_batch(&batch.0).await })
+            .map_err(PythonError::from)?)
     }
 }
 
 #[pymodule]
 // module name need to match project name
 fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
+    use crate::error::{DeltaNotATableError, DeltaTableError};
+    m.add("DeltaTableError", py.get_type::<DeltaTableError>())?;
+    m.add("DeltaNotATableError", py.get_type::<DeltaNotATableError>())?;
+
     env_logger::Builder::from_env(env_logger::Env::default().default_filter_or("warn")).init();
     m.add("__version__", env!("CARGO_PKG_VERSION"))?;
     m.add_function(pyo3::wrap_pyfunction!(rust_core_version, m)?)?;

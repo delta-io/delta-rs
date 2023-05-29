@@ -266,3 +266,9 @@ class DeltaFileSystemHandler:
 class DeltaDataChecker:
     def __init__(self, invariants: List[Tuple[str, str]]) -> None: ...
     def check_batch(self, batch: pa.RecordBatch) -> None: ...
+
+class DeltaTableError(Exception):
+    pass
+
+class DeltaNotATableError(Exception):
+    pass
