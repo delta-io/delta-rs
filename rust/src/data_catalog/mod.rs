@@ -4,9 +4,13 @@ use std::fmt::Debug;
 
 #[cfg(feature = "glue")]
 pub mod glue;
-
+#[cfg(feature = "datafusion")]
+pub mod storage;
 #[cfg(feature = "unity-experimental")]
 pub mod unity;
+
+/// A result type for data catalog implementations
+pub type DataCatalogResult<T> = Result<T, DataCatalogError>;
 
 /// Error enum that represents a CatalogError.
 #[derive(thiserror::Error, Debug)]

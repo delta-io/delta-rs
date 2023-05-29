@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.11.0"
+version = "0.12.0"
 rust-version = "1.64"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta.rs"
@@ -63,11 +63,15 @@ rusoto_dynamodb = { version = "0.47", default-features = false, optional = true 
 rusoto_glue = { version = "0.47", default-features = false, optional = true }
 
 # Unity
-reqwest = { version = "0.11", default-features = false, features = ["rustls-tls", "json"], optional = true }
+reqwest = { version = "0.11", default-features = false, features = [
+    "rustls-tls",
+    "json",
+], optional = true }
 reqwest-middleware = { version = "0.2.1", optional = true }
 reqwest-retry = { version = "0.2.2", optional = true }
 
 # Datafusion
+dashmap = { version = "5", optional = true }
 datafusion = { version = "25", optional = true }
 datafusion-expr = { version = "25", optional = true }
 datafusion-common = { version = "25", optional = true }
@@ -75,17 +79,14 @@ datafusion-proto = { version = "25", optional = true }
 datafusion-sql = { version = "25", optional = true }
 datafusion-physical-expr = { version = "25", optional = true }
 
+
 sqlparser = { version = "0.33", optional = true }
 
 # NOTE dependencies only for integration tests
 fs_extra = { version = "1.2.0", optional = true }
 tempdir = { version = "0", optional = true }
 
-[dependencies.dynamodb_lock]
-path = "../dynamodb_lock"
-version = "0"
-default-features = false
-optional = true
+dynamodb_lock = { version = "0", default-features = false, optional = true }
 
 [dev-dependencies]
 anyhow = "1"
@@ -101,7 +102,7 @@ tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 utime = "0.3"
 
 [build-dependencies]
-glibc_version = { path = "../glibc_version", version = "0.1" }
+glibc_version = "0"
 
 [features]
 azure = ["object_store/azure"]
@@ -117,6 +118,7 @@ datafusion = [
     "sqlparser",
     "arrow",
     "parquet",
+    "dashmap",
 ]
 datafusion-ext = ["datafusion"]
 gcs = ["object_store/gcp"]
