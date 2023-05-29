@@ -16,7 +16,7 @@ edition = "2021"
 arrow = { version = "39", optional = true }
 arrow-array = { version = "39", optional = true }
 arrow-cast = { version = "39", optional = true }
-arrow-ord = { version = "39", optional = true }
+arrow-ord = { version = "40", optional = true }
 arrow-row = { version = "39", optional = true }
 arrow-schema = { version = "39", optional = true }
 arrow-select = { version = "39", optional = true }
