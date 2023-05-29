@@ -25,16 +25,26 @@ use std::{
 };
 
 use arrow::datatypes::Schema as ArrowSchema;
-use arrow_schema::Field;
+use arrow_array::RecordBatch;
+use arrow_schema::{Field, SchemaRef};
 use datafusion::{
     execution::context::SessionState,
-    physical_plan::{projection::ProjectionExec, ExecutionPlan},
+    physical_plan::{
+        metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
+        projection::ProjectionExec,
+        ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+    },
     prelude::SessionContext,
 };
+use datafusion_common::Result as DataFusionResult;
 use datafusion_common::{Column, DFSchema, ScalarValue};
-use datafusion_expr::{case, col, lit, Expr};
-use datafusion_physical_expr::{create_physical_expr, expressions, PhysicalExpr};
-use futures::future::BoxFuture;
+use datafusion_expr::{case, col, lit, when, Expr};
+use datafusion_physical_expr::{
+    create_physical_expr,
+    expressions::{self},
+    PhysicalExpr,
+};
+use futures::{future::BoxFuture, Stream, StreamExt};
 use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
 
@@ -74,10 +84,10 @@ pub struct UpdateMetrics {
     pub num_added_files: usize,
     /// Number of files removed.
     pub num_removed_files: usize,
-    // Number of rows updated.
-    // pub num_updated_rows: usize,
-    // Number of rows just copied over in the process of updating files.
-    // pub num_copied_rows: usize,
+    /// Number of rows updated.
+    pub num_updated_rows: usize,
+    /// Number of rows just copied over in the process of updating files.
+    pub num_copied_rows: usize,
     /// Time taken to execute the entire operation.
     pub execution_time_ms: u128,
     /// Time taken to scan the files for matches.
@@ -223,19 +233,32 @@ async fn execute(
         ));
     }
 
-    let predicate_expr =
-        create_physical_expr(&predicate, &input_dfschema, &input_schema, execution_props)?;
+    // Take advantage of how null counts are tracked in arrow arrays use the
+    // null count to track how many records do NOT statisfy the predicate.  The
+    // count is then exposed through the metrics through the `UpdateCountScan`
+    // execution plan
+    let predicate_null =
+        when(predicate.clone(), lit(true)).otherwise(lit(ScalarValue::Boolean(None)))?;
+    let predicate_expr = create_physical_expr(
+        &predicate_null,
+        &input_dfschema,
+        &input_schema,
+        execution_props,
+    )?;
     expressions.push((predicate_expr, "__delta_rs_update_predicate".to_string()));
+
+    let projection_predicate: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(expressions, parquet_scan)?);
+
+    let count_plan = Arc::new(UpdateCountScan::new(projection_predicate.clone()));
 
     // Perform another projection but instead calculate updated values based on
     // the predicate value.  If the predicate is true then evalute the user
     // provided expression otherwise return the original column value
     //
     // For each update column a new column with a name of __delta_rs_ + `original name` is created
-    let projection: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(expressions, parquet_scan)?);
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let scan_schema = projection.schema();
+    let scan_schema = count_plan.schema();
     for (i, field) in scan_schema.fields().into_iter().enumerate() {
         expressions.push((
             Arc::new(expressions::Column::new(field.name(), i)),
@@ -260,12 +283,12 @@ async fn execute(
         control_columns.insert(c);
     }
 
-    let projection_predicate: Arc<dyn ExecutionPlan> =
-        Arc::new(ProjectionExec::try_new(expressions, projection.clone())?);
+    let projection_update: Arc<dyn ExecutionPlan> =
+        Arc::new(ProjectionExec::try_new(expressions, count_plan.clone())?);
 
     // Project again to remove __delta_rs columns and rename update columns to their original name
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let scan_schema = projection_predicate.schema();
+    let scan_schema = projection_update.schema();
     for (i, field) in scan_schema.fields().into_iter().enumerate() {
         if !control_columns.contains(field.name()) {
             match map.get(field.name()) {
@@ -287,7 +310,7 @@ async fn execute(
 
     let projection: Arc<dyn ExecutionPlan> = Arc::new(ProjectionExec::try_new(
         expressions,
-        projection_predicate.clone(),
+        projection_update.clone(),
     )?);
 
     let add_actions = write_execution_plan(
@@ -301,6 +324,17 @@ async fn execute(
         writer_properties,
     )
     .await?;
+
+    let count_metrics = count_plan.metrics().unwrap();
+
+    metrics.num_updated_rows = count_metrics
+        .sum_by_name("num_updated_rows")
+        .unwrap()
+        .as_usize();
+    metrics.num_copied_rows = count_metrics
+        .sum_by_name("num_copied_rows")
+        .unwrap()
+        .as_usize();
 
     let deletion_timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -379,6 +413,112 @@ impl std::future::IntoFuture for UpdateBuilder {
         })
     }
 }
+
+#[derive(Debug)]
+struct UpdateCountScan {
+    parent: Arc<dyn ExecutionPlan>,
+    metrics: ExecutionPlanMetricsSet,
+}
+
+impl UpdateCountScan {
+    pub fn new(parent: Arc<dyn ExecutionPlan>) -> Self {
+        UpdateCountScan {
+            parent,
+            metrics: ExecutionPlanMetricsSet::new(),
+        }
+    }
+}
+
+impl ExecutionPlan for UpdateCountScan {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn schema(&self) -> arrow_schema::SchemaRef {
+        self.parent.schema()
+    }
+
+    fn output_partitioning(&self) -> datafusion::physical_plan::Partitioning {
+        self.parent.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
+        self.parent.output_ordering()
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        vec![self.parent.clone()]
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<datafusion::execution::context::TaskContext>,
+    ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
+        let res = self.parent.execute(partition, context)?;
+        Ok(Box::pin(UpdateCountStream {
+            schema: self.schema(),
+            input: res,
+            metrics: self.metrics.clone(),
+        }))
+    }
+
+    fn statistics(&self) -> datafusion_common::Statistics {
+        self.parent.statistics()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        ExecutionPlan::with_new_children(self.parent.clone(), children)
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+}
+
+struct UpdateCountStream {
+    schema: SchemaRef,
+    input: SendableRecordBatchStream,
+    metrics: ExecutionPlanMetricsSet,
+}
+
+impl Stream for UpdateCountStream {
+    type Item = DataFusionResult<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.input.poll_next_unpin(cx).map(|x| match x {
+            Some(Ok(batch)) => {
+                let array = batch.column_by_name("__delta_rs_update_predicate").unwrap();
+                let copied_rows = array.null_count();
+                let num_updated = array.len() - copied_rows;
+                let c1 = MetricBuilder::new(&self.metrics).global_counter("num_updated_rows");
+                c1.add(num_updated);
+
+                let c2 = MetricBuilder::new(&self.metrics).global_counter("num_copied_rows");
+                c2.add(copied_rows);
+                Some(Ok(batch))
+            }
+            other => other,
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.input.size_hint()
+    }
+}
+
+impl RecordBatchStream for UpdateCountStream {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
+    }
+}
+
 #[cfg(test)]
 mod tests {
 
@@ -454,8 +594,8 @@ mod tests {
         assert_eq!(table.get_file_uris().count(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
-        //assert_eq!(metrics.num_updated_rows, 4);
-        //assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(metrics.num_updated_rows, 4);
+        assert_eq!(metrics.num_copied_rows, 0);
 
         let expected = vec![
             "+----+-------+------------+",
@@ -510,8 +650,8 @@ mod tests {
         assert_eq!(table.get_file_uris().count(), 1);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
-        //assert_eq!(metrics.num_updated_rows, 4);
-        //assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(metrics.num_updated_rows, 2);
+        assert_eq!(metrics.num_copied_rows, 2);
 
         let expected = vec![
             "+----+-------+------------+",
@@ -567,8 +707,8 @@ mod tests {
         assert_eq!(table.get_file_uris().count(), 2);
         assert_eq!(metrics.num_added_files, 1);
         assert_eq!(metrics.num_removed_files, 1);
-        //assert_eq!(metrics.num_updated_rows, 2);
-        //assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(metrics.num_updated_rows, 2);
+        assert_eq!(metrics.num_copied_rows, 0);
 
         let expected = vec![
             "+----+-------+------------+",
