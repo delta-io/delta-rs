@@ -5,7 +5,6 @@ import pyarrow as pa
 import pytest
 
 from deltalake import write_deltalake
-from deltalake._internal import PyDeltaTableError
 from deltalake.exceptions import DeltaProtocolError
 
 from .utils import assert_spark_read_equal, get_spark
@@ -80,9 +79,9 @@ def test_write_invariant(tmp_path: pathlib.Path):
     # Cannot write invalid data to the table
     invalid_data = pa.table({"c1": pa.array([6, 2], type=pa.int32())})
     with pytest.raises(
-        PyDeltaTableError, match=r"Invariant \(c1 > 3\) violated by value .+2"
+        DeltaProtocolError, match=r"Invariant \(c1 > 3\) violated by value .+2"
     ):
-        # raise PyDeltaTableError("test")
+        # raise DeltaProtocolError("test")
         write_deltalake(str(tmp_path), invalid_data, mode="overwrite")
 
     # Can write valid data to the table
