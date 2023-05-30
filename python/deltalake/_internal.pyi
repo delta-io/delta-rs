@@ -16,8 +16,6 @@ __version__: str
 RawDeltaTable: Any
 rust_core_version: Callable[[], str]
 
-class PyDeltaTableError(BaseException): ...
-
 write_new_deltalake: Callable[
     [
         str,

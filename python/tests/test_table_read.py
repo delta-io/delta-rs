@@ -459,12 +459,6 @@ def test_writer_fails_on_protocol():
         dt.to_pandas()
 
 
-def test_import_delta_table_error():
-    from deltalake import PyDeltaTableError
-
-    PyDeltaTableError()
-
-
 class ExcPassThroughThread(Thread):
     """Wrapper around `threading.Thread` that propagates exceptions."""
 

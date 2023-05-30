@@ -28,8 +28,7 @@ use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
 use deltalake::{DeltaOps, Invariant, Schema};
-use pyo3::create_exception;
-use pyo3::exceptions::{PyException, PyRuntimeError, PyValueError};
+use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
 use pyo3::types::{PyFrozenSet, PyType};
 
@@ -37,18 +36,6 @@ use crate::error::DeltaProtocolError;
 use crate::error::PythonError;
 use crate::filesystem::FsConfig;
 use crate::schema::schema_to_pyobject;
-
-create_exception!(deltalake, PyDeltaTableError, PyException);
-
-impl PyDeltaTableError {
-    fn from_data_catalog(err: deltalake::DataCatalogError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(err.to_string())
-    }
-
-    fn from_checkpoint(err: deltalake::checkpoints::CheckpointError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(err.to_string())
-    }
-}
 
 #[inline]
 fn rt() -> PyResult<tokio::runtime::Runtime> {
@@ -125,15 +112,17 @@ impl RawDeltaTable {
         table_name: &str,
         data_catalog_id: Option<String>,
     ) -> PyResult<String> {
-        let data_catalog = deltalake::data_catalog::get_data_catalog(data_catalog)
-            .map_err(PyDeltaTableError::from_data_catalog)?;
+        let data_catalog =
+            deltalake::data_catalog::get_data_catalog(data_catalog).map_err(|_| {
+                PyValueError::new_err(format!("Catalog '{}' not available.", data_catalog))
+            })?;
         let table_uri = rt()?
             .block_on(data_catalog.get_table_storage_location(
                 data_catalog_id,
                 database_name,
                 table_name,
             ))
-            .map_err(PyDeltaTableError::from_data_catalog)?;
+            .map_err(|err| PyIOError::new_err(err.to_string()))?;
 
         Ok(table_uri)
     }
@@ -510,7 +499,7 @@ impl RawDeltaTable {
     pub fn create_checkpoint(&self) -> PyResult<()> {
         rt()?
             .block_on(create_checkpoint(&self._table))
-            .map_err(PyDeltaTableError::from_checkpoint)?;
+            .map_err(PythonError::from)?;
 
         Ok(())
     }
@@ -575,7 +564,7 @@ fn filestats_to_expression<'py>(
             schema
                 .field_with_name(column_name)
                 .map_err(|_| {
-                    PyDeltaTableError::new_err(format!("Column not found in schema: {column_name}"))
+                    PyValueError::new_err(format!("Column not found in schema: {column_name}"))
                 })?
                 .data_type()
                 .clone(),
@@ -801,7 +790,6 @@ fn _internal(py: Python, m: &PyModule) -> PyResult<()> {
     m.add_class::<RawDeltaTable>()?;
     m.add_class::<RawDeltaTableMetaData>()?;
     m.add_class::<PyDeltaDataChecker>()?;
-    m.add("PyDeltaTableError", py.get_type::<PyDeltaTableError>())?;
     // There are issues with submodules, so we will expose them flat for now
     // See also: https://github.com/PyO3/pyo3/issues/759
     m.add_class::<schema::PrimitiveType>()?;

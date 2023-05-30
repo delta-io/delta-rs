@@ -1,4 +1,5 @@
 use arrow_schema::ArrowError;
+use deltalake::checkpoints::CheckpointError;
 use deltalake::{DeltaTableError, ObjectStoreError};
 use pyo3::exceptions::{
     PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyValueError,
@@ -58,6 +59,19 @@ fn arrow_to_py(err: ArrowError) -> PyErr {
     }
 }
 
+fn checkpoint_to_py(err: CheckpointError) -> PyErr {
+    match err {
+        CheckpointError::Io { source } => PyIOError::new_err(source.to_string()),
+        CheckpointError::Arrow { source } => arrow_to_py(source),
+        CheckpointError::DeltaTable { source } => inner_to_py_err(source),
+        CheckpointError::ObjectStore { source } => object_store_to_py(source),
+        CheckpointError::MissingMetaData => DeltaProtocolError::new_err("Table metadata missing"),
+        CheckpointError::PartitionValueNotParseable(err) => PyValueError::new_err(err),
+        CheckpointError::JSONSerialization { source } => PyValueError::new_err(source.to_string()),
+        CheckpointError::Parquet { source } => PyIOError::new_err(source.to_string()),
+    }
+}
+
 #[derive(thiserror::Error, Debug)]
 pub enum PythonError {
     #[error("Error in delta table")]
@@ -66,6 +80,8 @@ pub enum PythonError {
     ObjectStore(#[from] ObjectStoreError),
     #[error("Error in arrow")]
     Arrow(#[from] ArrowError),
+    #[error("Error in checkpoint")]
+    Checkpoint(#[from] CheckpointError),
 }
 
 impl From<PythonError> for pyo3::PyErr {
@@ -74,6 +90,7 @@ impl From<PythonError> for pyo3::PyErr {
             PythonError::DeltaTable(err) => inner_to_py_err(err),
             PythonError::ObjectStore(err) => object_store_to_py(err),
             PythonError::Arrow(err) => arrow_to_py(err),
+            PythonError::Checkpoint(err) => checkpoint_to_py(err),
         }
     }
 }
