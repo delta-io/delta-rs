@@ -41,14 +41,6 @@ use crate::schema::schema_to_pyobject;
 create_exception!(deltalake, PyDeltaTableError, PyException);
 
 impl PyDeltaTableError {
-    fn from_arrow(err: arrow::error::ArrowError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(err.to_string())
-    }
-
-    fn from_datafusion(err: deltalake::datafusion::error::DataFusionError) -> pyo3::PyErr {
-        PyDeltaTableError::new_err(err.to_string())
-    }
-
     fn from_data_catalog(err: deltalake::DataCatalogError) -> pyo3::PyErr {
         PyDeltaTableError::new_err(err.to_string())
     }
@@ -432,9 +424,7 @@ impl RawDeltaTable {
         partitions_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
     ) -> PyResult<()> {
         let mode = save_mode_from_str(mode)?;
-        let schema: Schema = (&schema.0)
-            .try_into()
-            .map_err(PyDeltaTableError::from_arrow)?;
+        let schema: Schema = (&schema.0).try_into().map_err(PythonError::from)?;
 
         let existing_schema = self._table.get_schema().map_err(PythonError::from)?;
 
@@ -664,13 +654,13 @@ fn batch_distinct(batch: PyArrowType<RecordBatch>) -> PyResult<PyArrowType<Recor
     let ctx = SessionContext::new();
     let schema = batch.0.schema();
     ctx.register_batch("batch", batch.0)
-        .map_err(PyDeltaTableError::from_datafusion)?;
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
     let batches = rt()?
         .block_on(async { ctx.table("batch").await?.distinct()?.collect().await })
-        .map_err(PyDeltaTableError::from_datafusion)?;
+        .map_err(|err| PyRuntimeError::new_err(err.to_string()))?;
 
     Ok(PyArrowType(
-        concat_batches(&schema, &batches).map_err(PyDeltaTableError::from_arrow)?,
+        concat_batches(&schema, &batches).map_err(PythonError::from)?,
     ))
 }
 
@@ -736,9 +726,7 @@ fn write_new_deltalake(
         .build()
         .map_err(PythonError::from)?;
 
-    let schema: Schema = (&schema.0)
-        .try_into()
-        .map_err(PyDeltaTableError::from_arrow)?;
+    let schema: Schema = (&schema.0).try_into().map_err(PythonError::from)?;
 
     let mut builder = DeltaOps(table)
         .create()

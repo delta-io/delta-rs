@@ -1,5 +1,8 @@
+use arrow_schema::ArrowError;
 use deltalake::{DeltaTableError, ObjectStoreError};
-use pyo3::exceptions::{PyException, PyFileNotFoundError, PyIOError};
+use pyo3::exceptions::{
+    PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyValueError,
+};
 use pyo3::{create_exception, PyErr};
 
 create_exception!(_internal, DeltaError, PyException);
@@ -23,6 +26,8 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
         DeltaTableError::ObjectStore { source } => object_store_to_py(source),
         DeltaTableError::Io { source } => PyIOError::new_err(source.to_string()),
 
+        DeltaTableError::Arrow { source } => arrow_to_py(source),
+
         // catach all
         _ => DeltaError::new_err(err.to_string()),
     }
@@ -31,7 +36,23 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
 fn object_store_to_py(err: ObjectStoreError) -> PyErr {
     match err {
         ObjectStoreError::NotFound { .. } => PyFileNotFoundError::new_err(err.to_string()),
+        ObjectStoreError::Generic { source, .. }
+            if source.to_string().contains("AWS_S3_ALLOW_UNSAFE_RENAME") =>
+        {
+            DeltaProtocolError::new_err(source.to_string())
+        }
         _ => PyIOError::new_err(err.to_string()),
+    }
+}
+
+fn arrow_to_py(err: ArrowError) -> PyErr {
+    match err {
+        ArrowError::IoError(msg) => PyIOError::new_err(msg.to_string()),
+        ArrowError::InvalidArgumentError(_) | ArrowError::DivideByZero => {
+            PyValueError::new_err("value error")
+        }
+        ArrowError::NotYetImplemented(msg) => PyNotImplementedError::new_err(msg),
+        other => PyException::new_err(other.to_string()),
     }
 }
 
@@ -39,8 +60,10 @@ fn object_store_to_py(err: ObjectStoreError) -> PyErr {
 pub enum PythonError {
     #[error("Error in delta table")]
     DeltaTable(#[from] DeltaTableError),
-    #[error("Error in delta table")]
+    #[error("Error in object store")]
     ObjectStore(#[from] ObjectStoreError),
+    #[error("Error in arrow")]
+    Arrow(#[from] ArrowError),
 }
 
 impl From<PythonError> for pyo3::PyErr {
@@ -48,6 +71,7 @@ impl From<PythonError> for pyo3::PyErr {
         match value {
             PythonError::DeltaTable(err) => inner_to_py_err(err),
             PythonError::ObjectStore(err) => object_store_to_py(err),
+            PythonError::Arrow(err) => arrow_to_py(err),
         }
     }
 }
