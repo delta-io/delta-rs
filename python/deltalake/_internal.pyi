@@ -267,8 +267,22 @@ class DeltaDataChecker:
     def __init__(self, invariants: List[Tuple[str, str]]) -> None: ...
     def check_batch(self, batch: pa.RecordBatch) -> None: ...
 
-class DeltaTableError(Exception):
+class DeltaError(Exception):
+    """The base class for Delta-specific errors."""
+
     pass
 
-class DeltaNotATableError(Exception):
+class TableNotFoundError(DeltaError):
+    """Raised when a Delta table cannot be loaded from a location."""
+
+    pass
+
+class CommitFailedError(DeltaError):
+    """Raised when a commit to a Delta table fails."""
+
+    pass
+
+class DeltaProtocolError(DeltaError):
+    """Raised when a violation with the Delta protocol specs ocurred."""
+
     pass

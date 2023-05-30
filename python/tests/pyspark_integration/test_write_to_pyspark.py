@@ -6,7 +6,7 @@ import pytest
 
 from deltalake import write_deltalake
 from deltalake._internal import PyDeltaTableError
-from deltalake.writer import DeltaTableProtocolError
+from deltalake.exceptions import DeltaProtocolError
 
 from .utils import assert_spark_read_equal, get_spark
 
@@ -109,7 +109,7 @@ def test_checks_min_writer_version(tmp_path: pathlib.Path):
     spark.sql(f"ALTER TABLE delta.`{str(tmp_path)}` ADD CONSTRAINT x CHECK (c1 > 2)")
 
     with pytest.raises(
-        DeltaTableProtocolError, match="This table's min_writer_version is 3, but"
+        DeltaProtocolError, match="This table's min_writer_version is 3, but"
     ):
         valid_data = pa.table({"c1": pa.array([5, 6])})
         write_deltalake(str(tmp_path), valid_data, mode="append")

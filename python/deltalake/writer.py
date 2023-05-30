@@ -38,9 +38,10 @@ from pyarrow.lib import RecordBatchReader
 from deltalake.schema import delta_arrow_schema_from_pandas
 
 from ._internal import DeltaDataChecker as _DeltaDataChecker
-from ._internal import PyDeltaTableError, batch_distinct
+from ._internal import batch_distinct
 from ._internal import write_new_deltalake as _write_new_deltalake
-from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable, DeltaTableProtocolError
+from .exceptions import DeltaProtocolError, TableNotFoundError
+from .table import MAX_SUPPORTED_WRITER_VERSION, DeltaTable
 
 try:
     import pandas as pd  # noqa: F811
@@ -95,7 +96,7 @@ def write_deltalake(
 
     This function only supports writer protocol version 2 currently. When
     attempting to write to an existing table with a higher min_writer_version,
-    this function will throw DeltaTableProtocolError.
+    this function will throw DeltaProtocolError.
 
     Note that this function does NOT register this table in a data catalog.
 
@@ -195,7 +196,7 @@ def write_deltalake(
             partition_by = table.metadata().partition_columns
 
         if table.protocol().min_writer_version > MAX_SUPPORTED_WRITER_VERSION:
-            raise DeltaTableProtocolError(
+            raise DeltaProtocolError(
                 "This table's min_writer_version is "
                 f"{table.protocol().min_writer_version}, "
                 "but this method only supports version 2."
@@ -403,16 +404,18 @@ def try_get_deltatable(
 ) -> Optional[DeltaTable]:
     try:
         return DeltaTable(table_uri, storage_options=storage_options)
-    except PyDeltaTableError as err:
-        # TODO: There has got to be a better way...
-        if "Not a Delta table" in str(err):
-            return None
-        elif "cannot find" in str(err):
-            return None
-        elif "No such file or directory" in str(err):
-            return None
-        else:
-            raise
+    except TableNotFoundError:
+        return None
+    # except PyDeltaTableError as err:
+    #     # TODO: There has got to be a better way...
+    #     if "Not a Delta table" in str(err):
+    #         return None
+    #     elif "cannot find" in str(err):
+    #         return None
+    #     elif "No such file or directory" in str(err):
+    #         return None
+    #     else:
+    #         raise
 
 
 def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
