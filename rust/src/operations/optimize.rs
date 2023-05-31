@@ -23,6 +23,7 @@
 use super::transaction::commit;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::action::{self, Action, DeltaOperation};
+use crate::crate_version;
 use crate::storage::ObjectStoreRef;
 use crate::table_state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
@@ -32,6 +33,7 @@ use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
+use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
@@ -215,9 +217,12 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
         let this = self;
 
         Box::pin(async move {
-            let writer_properties = this
-                .writer_properties
-                .unwrap_or_else(|| WriterProperties::builder().build());
+            let writer_properties = this.writer_properties.unwrap_or_else(|| {
+                WriterProperties::builder()
+                    .set_compression(Compression::ZSTD(ZstdLevel::try_new(4).unwrap()))
+                    .set_created_by(format!("delta-rs version {}", crate_version()))
+                    .build()
+            });
             let plan = create_merge_plan(
                 &this.snapshot,
                 this.filters,
@@ -267,10 +272,44 @@ fn create_remove(
     }))
 }
 
+/// Layout for optimizing a plan
+///
+/// Within each partition, we identify a set of files that need to be merged
+/// together and/or sorted together.
+#[derive(Debug)]
+enum OptimizeOperations {
+    /// Plan to compact files into pre-determined bins
+    ///
+    /// Bins are determined by the bin-packing algorithm to reach an optimal size.
+    /// Files that are large enough already are skipped. Bins of size 1 are dropped.
+    Compact(HashMap<PartitionTuples, Vec<MergeBin>>),
+    /// Plan to Z-order files within a partition
+    ///
+    /// Bins are determined based on whether they overlap on the z-order columns.
+    /// If two files don't overlap, z-ordering them will make them less separated
+    /// rather than more. Therefore, we don't z-order files together if they
+    /// don't overlap. By z-ordering smaller sets of files, we reduce the
+    /// overhead involved with sorting.
+    #[allow(dead_code)]
+    ZOrder(HashMap<PartitionTuples, Vec<MergeBin>>),
+    /// Plan to sort files within a partition
+    ///
+    /// Bins are determined based on whether they overlap in sort ranges.
+    /// If two files don't overlap, they don't need to be sorted together.
+    #[allow(dead_code)]
+    Sort(HashMap<PartitionTuples, Vec<MergeBin>>),
+}
+
+impl Default for OptimizeOperations {
+    fn default() -> Self {
+        OptimizeOperations::Compact(HashMap::new())
+    }
+}
+
 #[derive(Debug)]
 /// Encapsulates the operations required to optimize a Delta Table
 pub struct MergePlan {
-    operations: HashMap<PartitionTuples, Vec<ObjectMeta>>,
+    operations: OptimizeOperations,
     /// Metrics collected during operation
     metrics: Metrics,
     /// Parameters passed to optimize operation
@@ -296,7 +335,7 @@ impl MergePlan {
     async fn rewrite_files(
         &self,
         partition: PartitionTuples,
-        files: Vec<ObjectMeta>,
+        files: MergeBin,
         object_store: ObjectStoreRef,
     ) -> Result<(Vec<Action>, PartialMetrics), DeltaTableError> {
         debug!("Rewriting files in partition: {:?}", partition);
@@ -388,22 +427,30 @@ impl MergePlan {
         let mut actions = vec![];
 
         // Need to move metrics and operations out of self, so we can use self in the stream
-        let mut metrics = Metrics::default();
-        std::mem::swap(&mut self.metrics, &mut metrics);
+        let mut metrics = std::mem::take(&mut self.metrics);
 
-        let mut operations = HashMap::new();
-        std::mem::swap(&mut self.operations, &mut operations);
+        let operations = std::mem::take(&mut self.operations);
 
-        futures::stream::iter(operations)
-            .map(|(partition, files)| self.rewrite_files(partition, files, object_store.clone()))
-            .buffer_unordered(self.max_concurrent_tasks)
-            .try_for_each(|(partial_actions, partial_metrics)| {
-                debug!("Recording metrics for a completed partition");
-                actions.extend(partial_actions);
-                metrics.add(&partial_metrics);
-                async { Ok(()) }
-            })
-            .await?;
+        match operations {
+            OptimizeOperations::Compact(bins) => {
+                futures::stream::iter(bins)
+                    .flat_map(|(partition, bins)| {
+                        futures::stream::iter(bins).map(move |bin| (partition.clone(), bin))
+                    })
+                    .map(|(partition, files)| {
+                        self.rewrite_files(partition, files, object_store.clone())
+                    })
+                    .buffer_unordered(self.max_concurrent_tasks)
+                    .try_for_each(|(partial_actions, partial_metrics)| {
+                        debug!("Recording metrics for a completed partition");
+                        actions.extend(partial_actions);
+                        metrics.add(&partial_metrics);
+                        async { Ok(()) }
+                    })
+                    .await?;
+            }
+            _ => unimplemented!("Z order and sort order"),
+        }
 
         metrics.preserve_insertion_order = true;
         if metrics.num_files_added == 0 {
@@ -468,41 +515,13 @@ pub fn create_merge_plan(
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
 
-    let mut operations: HashMap<PartitionTuples, Vec<ObjectMeta>> = HashMap::new();
-    let mut metrics = Metrics::default();
     let partitions_keys = &snapshot
         .current_metadata()
         .ok_or(DeltaTableError::NoMetadata)?
         .partition_columns;
 
-    //Place each add action into a bucket determined by the file's partition
-    for add in snapshot.get_active_add_actions_by_partitions(filters)? {
-        let part = PartitionTuples::from_hashmap(partitions_keys, &add.partition_values);
-
-        metrics.total_considered_files += 1;
-
-        // Skip any files at or over the target size
-        if add.size >= target_size {
-            metrics.total_files_skipped += 1;
-            continue;
-        }
-
-        operations
-            .entry(part)
-            .or_insert_with(Vec::new)
-            .push(add.try_into()?);
-    }
-
-    // Prune any partitions that only have 1 file, since they can't be merged with anything.
-    for (_, files) in operations.iter_mut() {
-        if files.len() == 1 {
-            metrics.total_files_skipped += 1;
-            files.clear();
-        }
-    }
-    operations.retain(|_, files| !files.is_empty());
-
-    metrics.partitions_optimized = operations.len() as u64;
+    let (operations, metrics) =
+        build_compaction_plan(snapshot, partitions_keys, filters, target_size)?;
 
     let input_parameters = OptimizeInput { target_size };
     let file_schema = arrow_schema_without_partitions(
@@ -525,4 +544,113 @@ pub fn create_merge_plan(
         read_table_version: snapshot.version(),
         max_concurrent_tasks,
     })
+}
+
+/// A collection of bins for a particular partition
+#[derive(Debug)]
+struct MergeBin {
+    files: Vec<ObjectMeta>,
+    size_bytes: i64,
+}
+
+impl MergeBin {
+    pub fn new() -> Self {
+        MergeBin {
+            files: Vec::new(),
+            size_bytes: 0,
+        }
+    }
+
+    fn total_file_size(&self) -> i64 {
+        self.size_bytes
+    }
+
+    fn len(&self) -> usize {
+        self.files.len()
+    }
+
+    fn add(&mut self, meta: ObjectMeta) {
+        self.size_bytes += meta.size as i64;
+        self.files.push(meta);
+    }
+}
+
+impl MergeBin {
+    fn iter(&self) -> impl Iterator<Item = &ObjectMeta> {
+        self.files.iter()
+    }
+}
+
+impl IntoIterator for MergeBin {
+    type Item = ObjectMeta;
+    type IntoIter = std::vec::IntoIter<Self::Item>;
+
+    fn into_iter(self) -> Self::IntoIter {
+        self.files.into_iter()
+    }
+}
+
+fn build_compaction_plan(
+    snapshot: &DeltaTableState,
+    partition_keys: &[String],
+    filters: &[PartitionFilter<'_, &str>],
+    target_size: i64,
+) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
+    let mut metrics = Metrics::default();
+
+    let mut partition_files: HashMap<PartitionTuples, Vec<ObjectMeta>> = HashMap::new();
+    for add in snapshot.get_active_add_actions_by_partitions(filters)? {
+        metrics.total_considered_files += 1;
+        let object_meta = ObjectMeta::try_from(add)?;
+        if (object_meta.size as i64) < target_size {
+            metrics.total_files_skipped += 1;
+            continue;
+        }
+
+        let part = PartitionTuples::from_hashmap(partition_keys, &add.partition_values);
+
+        partition_files
+            .entry(part)
+            .or_insert_with(Vec::new)
+            .push(object_meta);
+    }
+
+    for file in partition_files.values_mut() {
+        // Sort files by size: largest to smallest
+        file.sort_by(|a, b| b.size.cmp(&a.size));
+    }
+
+    let mut operations: HashMap<PartitionTuples, Vec<MergeBin>> = HashMap::new();
+    for (part, files) in partition_files {
+        let mut merge_bins = vec![MergeBin::new()];
+
+        'files: for file in files {
+            for bin in merge_bins.iter_mut() {
+                if bin.total_file_size() + file.size as i64 <= target_size {
+                    bin.add(file);
+                    // Move to next file
+                    continue 'files;
+                }
+            }
+            // Didn't find a bin to add to, so create a new one
+            let mut new_bin = MergeBin::new();
+            new_bin.add(file);
+            merge_bins.push(new_bin);
+        }
+
+        operations.insert(part, merge_bins);
+    }
+
+    // Prune merge bins with only 1 file, since they have no affect
+    for (_, bins) in operations.iter_mut() {
+        if bins.len() == 1 && bins[0].len() == 1 {
+            metrics.total_files_skipped += 1;
+            bins.clear();
+        }
+    }
+    operations.retain(|_, files| !files.is_empty());
+
+    metrics.partitions_optimized = operations.len() as u64;
+
+    Ok((OptimizeOperations::Compact(operations), metrics))
 }
