@@ -103,7 +103,7 @@ pub async fn cleanup_metadata(table: &DeltaTable) -> Result<i32, DeltaTableError
     let log_retention_timestamp =
         Utc::now().timestamp_millis() - table.get_state().log_retention_millis();
     cleanup_expired_logs_for(
-        table.version() + 1,
+        table.version(),
         table.storage.as_ref(),
         log_retention_timestamp,
     )
