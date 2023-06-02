@@ -406,16 +406,6 @@ def try_get_deltatable(
         return DeltaTable(table_uri, storage_options=storage_options)
     except TableNotFoundError:
         return None
-    # except PyDeltaTableError as err:
-    #     # TODO: There has got to be a better way...
-    #     if "Not a Delta table" in str(err):
-    #         return None
-    #     elif "cannot find" in str(err):
-    #         return None
-    #     elif "No such file or directory" in str(err):
-    #         return None
-    #     else:
-    #         raise
 
 
 def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:

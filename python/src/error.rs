@@ -23,7 +23,7 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
             DeltaProtocolError::new_err(format!("Inaviant violations: {:?}", violations))
         }
 
-        // commit erros
+        // commit errors
         DeltaTableError::Transaction { source } => CommitFailedError::new_err(source.to_string()),
 
         // python exceptions
@@ -32,7 +32,7 @@ fn inner_to_py_err(err: DeltaTableError) -> PyErr {
 
         DeltaTableError::Arrow { source } => arrow_to_py(source),
 
-        // catach all
+        // catch all
         _ => DeltaError::new_err(err.to_string()),
     }
 }
