@@ -79,13 +79,13 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 
 == Get Involved
 
-Join link:https://join.slack.com/t/delta-users/shared_invite/zt-1t1ahwrpx-hIEXnP20PCDzcBSf5V3heA[#delta-rs in the Delta Lake Slack workspace]
+Join link:https://go.delta.io/slack[#delta-rs in the Delta Lake Slack workspace]
 
 === Development Meeting
 
 We have a standing development sync meeting for those that are interested. The meeting is held every two weeks at **9am PST** on Tuesday mornings. The direct meeting URL is shared in the Slack channel above :point_up: before the meeting.
 
-These meetings are also link:https://www.youtube.com/channel/UCSKhDO79MNcX4pIIRFD0UVg[streamed live via YouTube] if you just want to listen in.
+These meetings are also link:https://go.delta.io/youtube[streamed live via YouTube] if you just want to listen in.
 
 === Development
 
