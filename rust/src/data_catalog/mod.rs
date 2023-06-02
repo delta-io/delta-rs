@@ -12,9 +12,6 @@ pub mod storage;
 #[cfg(feature = "unity-experimental")]
 pub mod unity;
 
-#[cfg(feature = "unity-experimental")]
-pub(crate) mod client;
-
 /// A result type for data catalog implementations
 pub type DataCatalogResult<T> = Result<T, DataCatalogError>;
 
