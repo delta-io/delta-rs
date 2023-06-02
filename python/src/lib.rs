@@ -257,7 +257,7 @@ impl RawDeltaTable {
             cmd = cmd.with_retention_period(Duration::hours(retention_period as i64));
         }
         let (table, metrics) = rt()?
-            .block_on(async { cmd.await })
+            .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(metrics.files_deleted)
@@ -279,7 +279,7 @@ impl RawDeltaTable {
         cmd = cmd.with_filters(&converted_filters);
 
         let (table, metrics) = rt()?
-            .block_on(async { cmd.await })
+            .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
