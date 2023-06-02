@@ -103,7 +103,7 @@ pub async fn cleanup_metadata(table: &DeltaTable) -> Result<i32, DeltaTableError
     let log_retention_timestamp =
         Utc::now().timestamp_millis() - table.get_state().log_retention_millis();
     cleanup_expired_logs_for(
-        table.version() + 1,
+        table.version(),
         table.storage.as_ref(),
         log_retention_timestamp,
     )
@@ -205,7 +205,7 @@ pub async fn cleanup_expired_logs_for(
 ) -> Result<i32, DeltaTableError> {
     lazy_static! {
         static ref DELTA_LOG_REGEX: Regex =
-            Regex::new(r#"_delta_log/(\d{20})\.(json|checkpoint)*$"#).unwrap();
+            Regex::new(r#"_delta_log/(\d{20})\.(json|checkpoint).*$"#).unwrap();
     }
 
     let mut deleted_log_num = 0;

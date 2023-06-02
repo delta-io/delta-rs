@@ -64,7 +64,7 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 
 | Checkpoint creation
 | :heavy_check_mark:
-|
+| :heavy_check_mark:
 
 | High-level file writer
 |
@@ -72,7 +72,7 @@ link:https://github.com/rajasekarv/vega[vega], etc. It also provides bindings to
 
 | Optimize
 | :heavy_check_mark: 
-| link:https://github.com/delta-io/delta-rs/issues/622[#622]
+| :heavy_check_mark:
 
 |===
 

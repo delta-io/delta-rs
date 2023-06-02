@@ -28,15 +28,11 @@ from pyarrow.dataset import (
 if TYPE_CHECKING:
     import pandas
 
-from ._internal import PyDeltaTableError, RawDeltaTable
+from ._internal import RawDeltaTable
 from .data_catalog import DataCatalog
+from .exceptions import DeltaProtocolError
 from .fs import DeltaStorageHandler
 from .schema import Schema
-
-
-class DeltaTableProtocolError(PyDeltaTableError):
-    pass
-
 
 MAX_SUPPORTED_READER_VERSION = 1
 MAX_SUPPORTED_WRITER_VERSION = 2
@@ -487,7 +483,7 @@ given filters.
         :return: the PyArrow dataset in PyArrow
         """
         if self.protocol().min_reader_version > MAX_SUPPORTED_READER_VERSION:
-            raise DeltaTableProtocolError(
+            raise DeltaProtocolError(
                 f"The table's minimum reader version is {self.protocol().min_reader_version}"
                 f"but deltalake only supports up to version {MAX_SUPPORTED_READER_VERSION}."
             )

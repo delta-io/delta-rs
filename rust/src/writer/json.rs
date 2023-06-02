@@ -3,7 +3,7 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use super::stats::{apply_null_counts, create_add, NullCounts};
+use super::stats::create_add;
 use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_from_message,
     record_batch_without_partitions, stringified_partition_value,
@@ -42,7 +42,6 @@ pub(crate) struct DataArrowWriter {
     buffer: ShareableBuffer,
     arrow_writer: ArrowWriter<ShareableBuffer>,
     partition_values: HashMap<String, Option<String>>,
-    null_counts: NullCounts,
     buffered_record_batch_count: usize,
 }
 
@@ -120,7 +119,6 @@ impl DataArrowWriter {
         match result {
             Ok(_) => {
                 self.buffered_record_batch_count += 1;
-                apply_null_counts(&record_batch.into(), &mut self.null_counts, 0);
                 Ok(())
             }
             // If a write fails we need to reset the state of the DeltaArrowWriter
@@ -152,7 +150,6 @@ impl DataArrowWriter {
         )?;
 
         let partition_values = HashMap::new();
-        let null_counts = NullCounts::new();
         let buffered_record_batch_count = 0;
 
         Ok(Self {
@@ -161,7 +158,6 @@ impl DataArrowWriter {
             buffer,
             arrow_writer,
             partition_values,
-            null_counts,
             buffered_record_batch_count,
         })
     }
@@ -363,19 +359,15 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
         let writers = std::mem::take(&mut self.arrow_writers);
         let mut actions = Vec::new();
 
-        for (_, mut writer) in writers {
+        for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
             let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
             self.storage.put(&path, obj_bytes).await?;
 
-            // Replace self null_counts with an empty map. Use the other for stats.
-            let null_counts = std::mem::take(&mut writer.null_counts);
-
             actions.push(create_add(
                 &writer.partition_values,
-                null_counts,
                 path.to_string(),
                 file_size,
                 &metadata,
