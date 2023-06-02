@@ -873,3 +873,40 @@ async fn test_issue_1291_datafusion_sql_partitioned_data() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_issue_1374() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table = deltalake::open_table("./tests/data/issue_1374")
+        .await
+        .unwrap();
+    ctx.register_table("t", Arc::new(table))?;
+
+    let batches = ctx
+        .sql(
+            r#"SELECT *
+        FROM t
+        WHERE timestamp BETWEEN '2023-05-24T00:00:00.000Z' AND '2023-05-25T00:00:00.000Z'
+        LIMIT 5
+        "#,
+        )
+        .await?
+        .collect()
+        .await?;
+
+    let expected = vec![
+        "+----------------------------+-------------+------------+",
+        "| timestamp                  | temperature | date       |",
+        "+----------------------------+-------------+------------+",
+        "| 2023-05-24T00:01:25.010301 | 8           | 2023-05-24 |",
+        "| 2023-05-24T00:01:25.013902 | 21          | 2023-05-24 |",
+        "| 2023-05-24T00:01:25.013972 | 58          | 2023-05-24 |",
+        "| 2023-05-24T00:01:25.014025 | 24          | 2023-05-24 |",
+        "| 2023-05-24T00:01:25.014072 | 90          | 2023-05-24 |",
+        "+----------------------------+-------------+------------+",
+    ];
+
+    assert_batches_sorted_eq!(&expected, &batches);
+
+    Ok(())
+}
