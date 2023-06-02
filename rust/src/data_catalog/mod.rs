@@ -7,14 +7,16 @@ pub use unity::*;
 
 #[cfg(feature = "glue")]
 pub mod glue;
+#[cfg(feature = "datafusion")]
+pub mod storage;
 #[cfg(feature = "unity-experimental")]
 pub mod unity;
 
 #[cfg(feature = "unity-experimental")]
 pub(crate) mod client;
 
-/// A convenience type for catalog results
-pub type CatalogResult<T> = Result<T, DataCatalogError>;
+/// A result type for data catalog implementations
+pub type DataCatalogResult<T> = Result<T, DataCatalogError>;
 
 /// Error enum that represents a CatalogError.
 #[derive(thiserror::Error, Debug)]

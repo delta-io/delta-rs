@@ -1,9 +1,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use crate::utils::{delete_dir, rt, walk_tree};
-use crate::PyDeltaTableError;
-
 use deltalake::storage::{DynObjectStore, ListResult, MultipartId, ObjectStoreError, Path};
 use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
@@ -12,6 +9,9 @@ use pyo3::types::{IntoPyDict, PyBytes};
 use serde::{Deserialize, Serialize};
 use tokio::io::{AsyncWrite, AsyncWriteExt};
 use tokio::runtime::Runtime;
+
+use crate::error::PythonError;
+use crate::utils::{delete_dir, rt, walk_tree};
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub(crate) struct FsConfig {
@@ -35,7 +35,7 @@ impl DeltaFileSystemHandler {
         let storage = DeltaTableBuilder::from_uri(table_uri)
             .with_storage_options(options.clone().unwrap_or_default())
             .build_storage()
-            .map_err(PyDeltaTableError::from_raw)?;
+            .map_err(PythonError::from)?;
         Ok(Self {
             inner: storage,
             rt: Arc::new(rt()?),
@@ -61,7 +61,7 @@ impl DeltaFileSystemHandler {
         let to_path = Path::from(dest);
         self.rt
             .block_on(self.inner.copy(&from_path, &to_path))
-            .map_err(PyDeltaTableError::from_object_store)?;
+            .map_err(PythonError::from)?;
         Ok(())
     }
 
@@ -74,7 +74,7 @@ impl DeltaFileSystemHandler {
         let path = Path::from(path);
         self.rt
             .block_on(delete_dir(self.inner.as_ref(), &path))
-            .map_err(PyDeltaTableError::from_object_store)?;
+            .map_err(PythonError::from)?;
         Ok(())
     }
 
@@ -82,7 +82,7 @@ impl DeltaFileSystemHandler {
         let path = Path::from(path);
         self.rt
             .block_on(self.inner.delete(&path))
-            .map_err(PyDeltaTableError::from_object_store)?;
+            .map_err(PythonError::from)?;
         Ok(())
     }
 
@@ -104,7 +104,7 @@ impl DeltaFileSystemHandler {
             let listed = self
                 .rt
                 .block_on(self.inner.list_with_delimiter(Some(&path)))
-                .map_err(PyDeltaTableError::from_object_store)?;
+                .map_err(PythonError::from)?;
 
             // TODO is there a better way to figure out if we are in a directory?
             if listed.objects.is_empty() && listed.common_prefixes.is_empty() {
@@ -129,7 +129,7 @@ impl DeltaFileSystemHandler {
                         )?);
                     }
                     Err(err) => {
-                        return Err(PyDeltaTableError::from_object_store(err));
+                        return Err(PythonError::from(err).into());
                     }
                 }
             } else {
@@ -177,7 +177,7 @@ impl DeltaFileSystemHandler {
             }
             Err(err) => Err(err),
         }
-        .map_err(PyDeltaTableError::from_object_store)?;
+        .map_err(PythonError::from)?;
 
         let mut infos = vec![];
         infos.extend(
@@ -220,7 +220,7 @@ impl DeltaFileSystemHandler {
         // TODO check the if not exists semantics
         self.rt
             .block_on(self.inner.rename(&from_path, &to_path))
-            .map_err(PyDeltaTableError::from_object_store)?;
+            .map_err(PythonError::from)?;
         Ok(())
     }
 
@@ -233,7 +233,7 @@ impl DeltaFileSystemHandler {
                 self.inner.clone(),
                 path,
             ))
-            .map_err(PyDeltaTableError::from_object_store)?;
+            .map_err(PythonError::from)?;
         Ok(file)
     }
 
@@ -251,7 +251,7 @@ impl DeltaFileSystemHandler {
                 self.inner.clone(),
                 path,
             ))
-            .map_err(PyDeltaTableError::from_object_store)?;
+            .map_err(PythonError::from)?;
         Ok(file)
     }
 
@@ -405,7 +405,7 @@ impl ObjectInputFile {
         let data = if nbytes > 0 {
             self.rt
                 .block_on(self.store.get_range(&self.path, range))
-                .map_err(PyDeltaTableError::from_object_store)?
+                .map_err(PythonError::from)?
         } else {
             "".into()
         };
@@ -484,8 +484,8 @@ impl ObjectOutputStream {
             Err(err) => {
                 self.rt
                     .block_on(self.store.abort_multipart(&self.path, &self.multipart_id))
-                    .map_err(PyDeltaTableError::from_object_store)?;
-                Err(PyDeltaTableError::from_io(err))
+                    .map_err(PythonError::from)?;
+                Err(PyIOError::new_err(err.to_string()))
             }
         }
     }
@@ -538,8 +538,8 @@ impl ObjectOutputStream {
             Err(err) => {
                 self.rt
                     .block_on(self.store.abort_multipart(&self.path, &self.multipart_id))
-                    .map_err(PyDeltaTableError::from_object_store)?;
-                Err(PyDeltaTableError::from_io(err))
+                    .map_err(PythonError::from)?;
+                Err(PyIOError::new_err(err.to_string()))
             }
         }
     }
@@ -550,8 +550,8 @@ impl ObjectOutputStream {
             Err(err) => {
                 self.rt
                     .block_on(self.store.abort_multipart(&self.path, &self.multipart_id))
-                    .map_err(PyDeltaTableError::from_object_store)?;
-                Err(PyDeltaTableError::from_io(err))
+                    .map_err(PythonError::from)?;
+                Err(PyIOError::new_err(err.to_string()))
             }
         }
     }

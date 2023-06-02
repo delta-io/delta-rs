@@ -236,6 +236,18 @@ impl ObjectStore for DeltaObjectStore {
         self.storage.list(prefix).await
     }
 
+    /// List all the objects with the given prefix and a location greater than `offset`
+    ///
+    /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
+    /// the number of network requests required
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
+        self.storage.list_with_offset(prefix, offset).await
+    }
+
     /// List objects with the given prefix and an implementation specific
     /// delimiter. Returns common prefixes (directories) in addition to object
     /// metadata.

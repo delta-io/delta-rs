@@ -6,8 +6,8 @@ from unittest.mock import Mock
 
 from packaging import version
 
+from deltalake.exceptions import DeltaProtocolError
 from deltalake.table import ProtocolVersions
-from deltalake.writer import DeltaTableProtocolError
 
 try:
     import pandas as pd
@@ -89,19 +89,19 @@ def test_load_with_datetime_bad_format():
         dt.load_with_datetime("2020-05-01T00:47:31")
     assert (
         str(exception.value)
-        == "Parse date and time string failed: premature end of input"
+        == "Failed to parse datetime string: premature end of input"
     )
     with pytest.raises(Exception) as exception:
         dt.load_with_datetime("2020-05-01 00:47:31")
     assert (
         str(exception.value)
-        == "Parse date and time string failed: input contains invalid characters"
+        == "Failed to parse datetime string: input contains invalid characters"
     )
     with pytest.raises(Exception) as exception:
         dt.load_with_datetime("2020-05-01T00:47:31+08")
     assert (
         str(exception.value)
-        == "Parse date and time string failed: premature end of input"
+        == "Failed to parse datetime string: premature end of input"
     )
 
 
@@ -451,18 +451,12 @@ def test_writer_fails_on_protocol():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
     dt.protocol = Mock(return_value=ProtocolVersions(2, 1))
-    with pytest.raises(DeltaTableProtocolError):
+    with pytest.raises(DeltaProtocolError):
         dt.to_pyarrow_dataset()
-    with pytest.raises(DeltaTableProtocolError):
+    with pytest.raises(DeltaProtocolError):
         dt.to_pyarrow_table()
-    with pytest.raises(DeltaTableProtocolError):
+    with pytest.raises(DeltaProtocolError):
         dt.to_pandas()
-
-
-def test_import_delta_table_error():
-    from deltalake import PyDeltaTableError
-
-    PyDeltaTableError()
 
 
 class ExcPassThroughThread(Thread):
