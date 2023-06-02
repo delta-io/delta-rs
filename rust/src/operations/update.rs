@@ -235,7 +235,7 @@ async fn execute(
 
     // Take advantage of how null counts are tracked in arrow arrays use the
     // null count to track how many records do NOT statisfy the predicate.  The
-    // count is then exposed through the metrics through the `UpdateCountScan`
+    // count is then exposed through the metrics through the `UpdateCountExec`
     // execution plan
     let predicate_null =
         when(predicate.clone(), lit(true)).otherwise(lit(ScalarValue::Boolean(None)))?;
@@ -250,7 +250,7 @@ async fn execute(
     let projection_predicate: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(expressions, parquet_scan)?);
 
-    let count_plan = Arc::new(UpdateCountScan::new(projection_predicate.clone()));
+    let count_plan = Arc::new(UpdateCountExec::new(projection_predicate.clone()));
 
     // Perform another projection but instead calculate updated values based on
     // the predicate value.  If the predicate is true then evalute the user
@@ -415,21 +415,21 @@ impl std::future::IntoFuture for UpdateBuilder {
 }
 
 #[derive(Debug)]
-struct UpdateCountScan {
+struct UpdateCountExec {
     parent: Arc<dyn ExecutionPlan>,
     metrics: ExecutionPlanMetricsSet,
 }
 
-impl UpdateCountScan {
+impl UpdateCountExec {
     pub fn new(parent: Arc<dyn ExecutionPlan>) -> Self {
-        UpdateCountScan {
+        UpdateCountExec {
             parent,
             metrics: ExecutionPlanMetricsSet::new(),
         }
     }
 }
 
-impl ExecutionPlan for UpdateCountScan {
+impl ExecutionPlan for UpdateCountExec {
     fn as_any(&self) -> &dyn std::any::Any {
         self
     }
@@ -522,11 +522,13 @@ impl RecordBatchStream for UpdateCountStream {
 #[cfg(test)]
 mod tests {
 
-    use crate::action::*;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::{get_arrow_schema, get_delta_schema};
     use crate::DeltaTable;
+    use crate::{action::*, DeltaResult};
+    use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
+    use arrow_array::Int32Array;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::from_slice::FromSlice;
     use datafusion::prelude::*;
@@ -545,7 +547,8 @@ mod tests {
         table
     }
 
-    async fn get_data(table: DeltaTable) -> Vec<RecordBatch> {
+    async fn get_data(table: &DeltaTable) -> Vec<RecordBatch> {
+        let table = DeltaTable::new_with_state(table.object_store(), table.state.clone());
         let ctx = SessionContext::new();
         ctx.register_table("test", Arc::new(table)).unwrap();
         ctx.sql("select * from test")
@@ -554,6 +557,35 @@ mod tests {
             .collect()
             .await
             .unwrap()
+    }
+
+    async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaResult<DeltaTable> {
+        DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+    }
+
+    async fn prepare_values_table() -> DeltaTable {
+        let schema = Arc::new(Schema::new(vec![Field::new(
+            "value",
+            arrow::datatypes::DataType::Int32,
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![
+                Some(0),
+                None,
+                Some(2),
+                None,
+                Some(4),
+            ]))],
+        )
+        .unwrap();
+
+        DeltaOps::new_in_memory().write(vec![batch]).await.unwrap()
     }
 
     #[tokio::test]
@@ -575,12 +607,8 @@ mod tests {
             ],
         )
         .unwrap();
-        // write some data
-        let table = DeltaOps(table)
-            .write(vec![batch.clone()])
-            .with_save_mode(SaveMode::Append)
-            .await
-            .unwrap();
+
+        let table = write_batch(table, batch).await.unwrap();
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
 
@@ -607,7 +635,7 @@ mod tests {
             "| B  | 10    | 2023-05-14 |",
             "+----+-------+------------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -630,12 +658,8 @@ mod tests {
             ],
         )
         .unwrap();
-        // write some data
-        let table = DeltaOps(table)
-            .write(vec![batch.clone()])
-            .with_save_mode(SaveMode::Append)
-            .await
-            .unwrap();
+
+        let table = write_batch(table, batch).await.unwrap();
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
 
@@ -663,7 +687,7 @@ mod tests {
             "| B  | 10    | 2021-02-02 |",
             "+----+-------+------------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -686,12 +710,8 @@ mod tests {
             ],
         )
         .unwrap();
-        // write some data
-        let table = DeltaOps(table)
-            .write(vec![batch.clone()])
-            .with_save_mode(SaveMode::Append)
-            .await
-            .unwrap();
+
+        let table = write_batch(table, batch).await.unwrap();
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 2);
 
@@ -721,12 +741,118 @@ mod tests {
             "+----+-------+------------+",
         ];
 
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]
-    async fn test_failure_invalid_expressions() {
+    async fn test_update_null() {
+        let table = prepare_values_table().await;
+        assert_eq!(table.version(), 0);
+        assert_eq!(table.get_file_uris().count(), 1);
+
+        let (table, metrics) = DeltaOps(table)
+            .update()
+            .with_update("value", col("value") + lit(1))
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(metrics.num_added_files, 1);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_updated_rows, 5);
+        assert_eq!(metrics.num_copied_rows, 0);
+
+        let expected = [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "|       |",
+            "|       |",
+            "| 1     |",
+            "| 3     |",
+            "| 5     |",
+            "+-------+",
+        ];
+
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        // Validate order operators do not include nulls
+        let table = prepare_values_table().await;
+        let (table, metrics) = DeltaOps(table)
+            .update()
+            .with_predicate(col("value").gt(lit(2)).or(col("value").lt(lit(2))))
+            .with_update("value", lit(10))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(metrics.num_added_files, 1);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_updated_rows, 2);
+        assert_eq!(metrics.num_copied_rows, 3);
+
+        let expected = [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "|       |",
+            "|       |",
+            "| 2     |",
+            "| 10    |",
+            "| 10    |",
+            "+-------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        let table = prepare_values_table().await;
+        let (table, metrics) = DeltaOps(table)
+            .update()
+            .with_predicate(col("value").is_null())
+            .with_update("value", lit("test"))
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 1);
+        assert_eq!(metrics.num_added_files, 1);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_updated_rows, 2);
+        assert_eq!(metrics.num_copied_rows, 3);
+
+        let expected = [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "| 10    |",
+            "| 10    |",
+            "| 0     |",
+            "| 2     |",
+            "| 4     |",
+            "+-------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_no_updates() {
+        let table = prepare_values_table().await;
+        let (table, metrics) = DeltaOps(table).update().await.unwrap();
+
+        assert_eq!(table.version(), 0);
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 0);
+        assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(metrics.num_removed_files, 0);
+        assert_eq!(metrics.scan_time_ms, 0);
+        assert_eq!(metrics.execution_time_ms, 0);
+    }
+
+    #[tokio::test]
+    async fn test_expected_failures() {
         // The predicate must be deterministic and expression must be valid
 
         let table = setup_table(None).await;
@@ -738,6 +864,15 @@ mod tests {
                 arrow::datatypes::DataType::Int32,
             )))
             .with_update("value", col("value") + lit(20))
+            .await;
+        assert!(res.is_err());
+
+        // Expression result types must match the table's schema
+        // I.E Schema evolution is not supported for now
+        let table = prepare_values_table().await;
+        let res = DeltaOps(table)
+            .update()
+            .with_update("value", lit("a string"))
             .await;
         assert!(res.is_err());
     }
