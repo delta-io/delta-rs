@@ -1,5 +1,4 @@
 rust:
-  - aws/**/*
   - delta-inspect/**/*
   - proofs/**/*
   - rust/**/*
@@ -19,9 +18,6 @@ documentation:
 
 storage/aws:
   - aws/**/*
-
-delta-checkpoint:
-  - aws/delta-checkpoint/**/*
 
 delta-inspect:
   - delta-inspect/**/*

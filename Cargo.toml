@@ -2,7 +2,6 @@
 members = [
     "rust",
     "python",
-    "aws/delta-checkpoint",
 ]
 exclude = ["proofs", "delta-inspect"]
 
