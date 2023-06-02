@@ -1,4 +1,3 @@
-from ._internal import PyDeltaTableError as PyDeltaTableError
 from ._internal import __version__ as __version__
 from ._internal import rust_core_version as rust_core_version
 from .data_catalog import DataCatalog as DataCatalog
