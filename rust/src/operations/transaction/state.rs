@@ -20,7 +20,9 @@ use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Tokenizer;
 
 use crate::action::Add;
-use crate::delta_datafusion::{logical_expr_to_physical_expr, to_correct_scalar_value};
+use crate::delta_datafusion::{
+    get_null_of_arrow_type, logical_expr_to_physical_expr, to_correct_scalar_value,
+};
 use crate::table_state::DeltaTableState;
 use crate::DeltaResult;
 use crate::DeltaTableError;
@@ -190,6 +192,8 @@ impl<'a> AddContainer<'a> {
             return None;
         }
 
+        let data_type = field.data_type();
+
         let values = self.inner.iter().map(|add| {
             if self.partition_columns.contains(&column.name) {
                 let value = add.partition_values.get(&column.name).unwrap();
@@ -197,7 +201,9 @@ impl<'a> AddContainer<'a> {
                     Some(v) => serde_json::Value::String(v.to_string()),
                     None => serde_json::Value::Null,
                 };
-                to_correct_scalar_value(&value, field.data_type()).unwrap_or(ScalarValue::Null)
+                to_correct_scalar_value(&value, data_type).unwrap_or(
+                    get_null_of_arrow_type(data_type).expect("Could not determine null type"),
+                )
             } else if let Ok(Some(statistics)) = add.get_stats() {
                 let values = if get_max {
                     statistics.max_values
@@ -207,10 +213,12 @@ impl<'a> AddContainer<'a> {
 
                 values
                     .get(&column.name)
-                    .and_then(|f| to_correct_scalar_value(f.as_value()?, field.data_type()))
-                    .unwrap_or(ScalarValue::Null)
+                    .and_then(|f| to_correct_scalar_value(f.as_value()?, data_type))
+                    .unwrap_or(
+                        get_null_of_arrow_type(data_type).expect("Could not determine null type"),
+                    )
             } else {
-                ScalarValue::Null
+                get_null_of_arrow_type(data_type).expect("Could not determine null type")
             }
         });
         ScalarValue::iter_to_array(values).ok()
