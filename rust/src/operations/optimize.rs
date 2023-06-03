@@ -32,6 +32,7 @@ use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use log::debug;
+use num_cpus;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
 use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
@@ -165,7 +166,7 @@ impl<'a> OptimizeBuilder<'a> {
             writer_properties: None,
             app_metadata: None,
             preserve_insertion_order: false,
-            max_concurrent_tasks: 10,
+            max_concurrent_tasks: num_cpus::get(),
         }
     }
 
@@ -238,7 +239,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct OptimizeInput {
     target_size: i64,
 }
@@ -312,6 +313,18 @@ pub struct MergePlan {
     operations: OptimizeOperations,
     /// Metrics collected during operation
     metrics: Metrics,
+    /// Parameters passed down to merge tasks
+    task_parameters: Arc<MergeTaskParameters>,
+    /// Version of the table at beginning of optimization. Used for conflict resolution.
+    read_table_version: i64,
+    /// Whether to preserve insertion order within files
+    /// Max number of concurrent tasks
+    max_concurrent_tasks: usize,
+}
+
+/// Parameters passed to individual merge tasks
+#[derive(Debug)]
+pub struct MergeTaskParameters {
     /// Parameters passed to optimize operation
     input_parameters: OptimizeInput,
     /// Schema of written files
@@ -320,11 +333,6 @@ pub struct MergePlan {
     partition_columns: Vec<String>,
     /// Properties passed to parquet writer
     writer_properties: WriterProperties,
-    /// Version of the table at beginning of optimization. Used for conflict resolution.
-    read_table_version: i64,
-    /// Whether to preserve insertion order within files
-    /// Max number of concurrent tasks
-    max_concurrent_tasks: usize,
 }
 
 impl MergePlan {
@@ -333,7 +341,7 @@ impl MergePlan {
     /// Returns a vector of add and remove actions, as well as the partial metrics
     /// collected during the operation.
     async fn rewrite_files(
-        &self,
+        task_parameters: Arc<MergeTaskParameters>,
         partition: PartitionTuples,
         files: MergeBin,
         object_store: ObjectStoreRef,
@@ -372,11 +380,11 @@ impl MergePlan {
 
         // Next, initialize the writer
         let writer_config = PartitionWriterConfig::try_new(
-            self.file_schema.clone(),
+            task_parameters.file_schema.clone(),
             partition_values.clone(),
-            self.partition_columns.clone(),
-            Some(self.writer_properties.clone()),
-            Some(self.input_parameters.target_size as usize),
+            task_parameters.partition_columns.clone(),
+            Some(task_parameters.writer_properties.clone()),
+            Some(task_parameters.input_parameters.target_size as usize),
             None,
         )?;
         let mut writer = PartitionWriter::try_with_config(object_store.clone(), writer_config)?;
@@ -437,8 +445,21 @@ impl MergePlan {
                     .flat_map(|(partition, bins)| {
                         futures::stream::iter(bins).map(move |bin| (partition.clone(), bin))
                     })
-                    .map(|(partition, files)| {
-                        self.rewrite_files(partition, files, object_store.clone())
+                    .map(|(partition, files)| async {
+                        let rewrite_result = tokio::task::spawn(Self::rewrite_files(
+                            self.task_parameters.clone(),
+                            partition,
+                            files,
+                            object_store.clone(),
+                        ))
+                        .await;
+                        match rewrite_result {
+                            Ok(Ok(data)) => Ok(data),
+                            Ok(Err(e)) => Err(e),
+                            Err(e) => Err(DeltaTableError::GenericError {
+                                source: Box::new(e),
+                            }),
+                        }
                     })
                     .buffer_unordered(self.max_concurrent_tasks)
                     .try_for_each(|(partial_actions, partial_metrics)| {
@@ -473,7 +494,7 @@ impl MergePlan {
             commit(
                 object_store.as_ref(),
                 &actions,
-                self.input_parameters.into(),
+                self.task_parameters.input_parameters.clone().into(),
                 snapshot,
                 Some(metadata),
             )
@@ -537,10 +558,12 @@ pub fn create_merge_plan(
     Ok(MergePlan {
         operations,
         metrics,
-        input_parameters,
-        writer_properties,
-        file_schema,
-        partition_columns: partitions_keys.clone(),
+        task_parameters: Arc::new(MergeTaskParameters {
+            input_parameters,
+            file_schema,
+            partition_columns: partitions_keys.clone(),
+            writer_properties,
+        }),
         read_table_version: snapshot.version(),
         max_concurrent_tasks,
     })
@@ -602,7 +625,7 @@ fn build_compaction_plan(
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(add)?;
-        if (object_meta.size as i64) < target_size {
+        if (object_meta.size as i64) > target_size {
             metrics.total_files_skipped += 1;
             continue;
         }
@@ -641,7 +664,8 @@ fn build_compaction_plan(
         operations.insert(part, merge_bins);
     }
 
-    // Prune merge bins with only 1 file, since they have no affect
+    // Prune merge bins with only 1 file, since they have no effect
+    // Also prune merge bins where compaction wouldnt provide any benefit
     for (_, bins) in operations.iter_mut() {
         if bins.len() == 1 && bins[0].len() == 1 {
             metrics.total_files_skipped += 1;

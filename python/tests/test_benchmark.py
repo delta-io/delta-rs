@@ -103,7 +103,9 @@ def test_benchmark_optimize(benchmark, sample_table, tmp_path, max_tasks):
         return (dt,), dict(max_concurrent_tasks=max_tasks)
 
     def func(dt, max_concurrent_tasks):
-        return dt.optimize(max_concurrent_tasks=max_concurrent_tasks)
+        return dt.optimize(
+            max_concurrent_tasks=max_concurrent_tasks, target_size=1024 * 1024 * 1024
+        )
 
     # We need to recreate the table for each benchmark run
     results = benchmark.pedantic(func, setup=setup, rounds=5)
