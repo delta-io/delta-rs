@@ -12,8 +12,9 @@ use datafusion_common::DataFusionError;
 use futures::TryStreamExt;
 use object_store::ObjectStore;
 
+use crate::errors::DeltaResult;
 use crate::storage::config::{configure_store, StorageOptions};
-use crate::{ensure_table_uri, open_table_with_storage_options, DeltaResult};
+use crate::{ensure_table_uri, open_table_with_storage_options};
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 

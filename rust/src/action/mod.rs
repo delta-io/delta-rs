@@ -2,14 +2,13 @@
 
 #![allow(non_camel_case_types)]
 
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod checkpoints;
+#[cfg(feature = "parquet2")]
+pub mod parquet2_read;
 #[cfg(feature = "parquet")]
 mod parquet_read;
 
-#[cfg(feature = "parquet2")]
-pub mod parquet2_read;
-
-use crate::delta_config::IsolationLevel;
-use crate::{schema::*, DeltaResult, DeltaTableError, DeltaTableMetaData};
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -17,18 +16,25 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
+use crate::delta_config::IsolationLevel;
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::{schema::*, DeltaTableMetaData};
+
 /// Error returned when an invalid Delta log action is encountered.
 #[derive(thiserror::Error, Debug)]
 pub enum ActionError {
     /// The action contains an invalid field.
     #[error("Invalid action field: {0}")]
     InvalidField(String),
+
     /// A parquet log checkpoint file contains an invalid action.
     #[error("Invalid action in parquet row: {0}")]
     InvalidRow(String),
+
     /// A generic action error. The wrapped error string describes the details.
     #[error("Generic action error: {0}")]
     Generic(String),
+
     #[cfg(feature = "parquet2")]
     #[error("Failed to parse parquet checkpoint: {}", .source)]
     /// Error returned when parsing checkpoint parquet using the parquet2 crate.
@@ -37,6 +43,7 @@ pub enum ActionError {
         #[from]
         source: parquet2_read::ParseError,
     },
+
     #[cfg(feature = "parquet")]
     #[error("Failed to parse parquet checkpoint: {}", .source)]
     /// Error returned when parsing checkpoint parquet using the parquet crate.
@@ -45,6 +52,7 @@ pub enum ActionError {
         #[from]
         source: parquet::errors::ParquetError,
     },
+
     /// Faild to serialize operation
     #[error("Failed to serialize operation: {source}")]
     SerializeOperation {

@@ -1,6 +1,6 @@
 use arrow_schema::ArrowError;
 use deltalake::checkpoints::CheckpointError;
-use deltalake::{DeltaTableError, ObjectStoreError};
+use deltalake::{errors::DeltaTableError, ObjectStoreError};
 use pyo3::exceptions::{
     PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyValueError,
 };

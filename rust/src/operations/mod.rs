@@ -11,7 +11,8 @@ use self::create::CreateBuilder;
 use self::filesystem_check::FileSystemCheckBuilder;
 use self::vacuum::VacuumBuilder;
 use crate::builder::DeltaTableBuilder;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::DeltaTable;
 
 pub mod create;
 pub mod filesystem_check;

@@ -19,18 +19,6 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::writer::{DeltaWriter, WriterConfig};
-use super::MAX_SUPPORTED_WRITER_VERSION;
-use super::{transaction::commit, CreateBuilder};
-use crate::action::{Action, Add, DeltaOperation, Remove, SaveMode};
-use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::delta_datafusion::DeltaDataChecker;
-use crate::schema::Schema;
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
-use crate::table_state::DeltaTableState;
-use crate::writer::record_batch::divide_by_partition_values;
-use crate::writer::utils::PartitionPath;
-
 use arrow_array::RecordBatch;
 use arrow_cast::{can_cast_types, cast};
 use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
@@ -39,6 +27,19 @@ use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
+
+use super::writer::{DeltaWriter, WriterConfig};
+use super::MAX_SUPPORTED_WRITER_VERSION;
+use super::{transaction::commit, CreateBuilder};
+use crate::action::{Action, Add, DeltaOperation, Remove, SaveMode};
+use crate::delta::DeltaTable;
+use crate::delta_datafusion::DeltaDataChecker;
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::schema::Schema;
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
+use crate::table_state::DeltaTableState;
+use crate::writer::record_batch::divide_by_partition_values;
+use crate::writer::utils::PartitionPath;
 
 #[derive(thiserror::Error, Debug)]
 enum WriteError {

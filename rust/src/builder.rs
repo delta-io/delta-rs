@@ -4,14 +4,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::storage::config::StorageOptions;
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
-
 use chrono::{DateTime, FixedOffset, Utc};
 use object_store::DynObjectStore;
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::delta::DeltaTable;
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::storage::config::StorageOptions;
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]

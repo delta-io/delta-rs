@@ -2,22 +2,25 @@
 //!
 //! See [crate::table_state::DeltaTableState].
 
-use crate::action::{ColumnCountStat, ColumnValueStat, Stats};
-use crate::table_state::DeltaTableState;
-use crate::DeltaTableError;
-use crate::SchemaDataType;
-use crate::SchemaTypeStruct;
-use arrow::array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float64Array, Int64Array, NullArray,
-    StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-};
-use arrow::compute::cast;
-use arrow::compute::kernels::cast_utils::Parser;
-use arrow::datatypes::{DataType, Date32Type, Field, Fields, TimeUnit, TimestampMicrosecondType};
-use itertools::Itertools;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+
+use arrow::compute::cast;
+use arrow::compute::kernels::cast_utils::Parser;
+use arrow_array::types::{Date32Type, TimestampMicrosecondType};
+use arrow_array::{
+    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float64Array, Int64Array, NullArray,
+    StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+};
+use arrow_schema::{DataType, Field, Fields, TimeUnit};
+use itertools::Itertools;
+
+use crate::action::{ColumnCountStat, ColumnValueStat, Stats};
+use crate::errors::DeltaTableError;
+use crate::table_state::DeltaTableState;
+use crate::SchemaDataType;
+use crate::SchemaTypeStruct;
 
 impl DeltaTableState {
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.

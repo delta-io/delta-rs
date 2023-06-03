@@ -17,15 +17,13 @@ use std::convert::TryFrom;
 use std::iter::Iterator;
 use std::ops::Add;
 
-use super::action;
-use super::delta_arrow::delta_log_schema_for_table;
-use super::open_table_with_version;
-use super::schema::*;
-use super::storage::DeltaObjectStore;
-use super::table_state::DeltaTableState;
-use super::time_utils;
-use super::DeltaTable;
-use super::{CheckPoint, DeltaTableError};
+use super::{Action, Add as AddAction, MetaData, Protocol, Txn};
+use crate::delta_arrow::delta_log_schema_for_table;
+use crate::errors::DeltaTableError;
+use crate::schema::*;
+use crate::storage::DeltaObjectStore;
+use crate::table_state::DeltaTableState;
+use crate::{open_table_with_version, time_utils, CheckPoint, DeltaTable};
 
 /// Error returned when there is an error during creating a checkpoint.
 #[derive(thiserror::Error, Debug)]
@@ -339,21 +337,21 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
     }
 
     // protocol
-    let jsons = std::iter::once(action::Action::protocol(action::Protocol {
+    let jsons = std::iter::once(Action::protocol(Protocol {
         min_reader_version: state.min_reader_version(),
         min_writer_version: state.min_writer_version(),
     }))
     // metaData
-    .chain(std::iter::once(action::Action::metaData(
-        action::MetaData::try_from(current_metadata.clone())?,
-    )))
+    .chain(std::iter::once(Action::metaData(MetaData::try_from(
+        current_metadata.clone(),
+    )?)))
     // txns
     .chain(
         state
             .app_transaction_version()
             .iter()
             .map(|(app_id, version)| {
-                action::Action::txn(action::Txn {
+                Action::txn(Txn {
                     app_id: app_id.clone(),
                     version: *version,
                     last_updated: None,
@@ -370,7 +368,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
             r.extended_file_metadata = Some(false);
         }
 
-        action::Action::remove(r)
+        Action::remove(r)
     }))
     .map(|a| serde_json::to_value(a).map_err(|err| ArrowError::JsonError(err.to_string())))
     // adds
@@ -406,11 +404,11 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
 }
 
 fn checkpoint_add_from_state(
-    add: &action::Add,
+    add: &AddAction,
     partition_col_data_types: &[(&str, &SchemaDataType)],
     stats_conversions: &[(SchemaPath, SchemaDataType)],
 ) -> Result<Value, ArrowError> {
-    let mut v = serde_json::to_value(action::Action::add(add.clone()))
+    let mut v = serde_json::to_value(Action::add(add.clone()))
         .map_err(|err| ArrowError::JsonError(err.to_string()))?;
 
     v["add"]["dataChange"] = Value::Bool(false);
