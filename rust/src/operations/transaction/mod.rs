@@ -6,9 +6,10 @@ use object_store::{Error as ObjectStoreError, ObjectStore};
 use serde_json::{Map, Value};
 
 use crate::action::{Action, CommitInfo, DeltaOperation};
+use crate::crate_version;
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::commit_uri_from_version;
 use crate::table_state::DeltaTableState;
-use crate::{crate_version, DeltaResult, DeltaTableError};
 
 mod conflict_checker;
 #[cfg(feature = "datafusion")]

@@ -37,7 +37,7 @@ fn get_table_batches() -> RecordBatch {
 }
 
 #[tokio::main(flavor = "current_thread")]
-async fn main() -> Result<(), deltalake::DeltaTableError> {
+async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
     // Create a delta operations client pointing at an un-initialized in-memory location.
     // In a production environment this would be created with "try_new" and point at
     // a real storage location.

@@ -1,14 +1,15 @@
 #![cfg(all(feature = "arrow", feature = "parquet"))]
 //! Abstractions and implementations for writing data to delta tables
 
-use crate::action::{Action, Add, ColumnCountStat};
-use crate::{DeltaTable, DeltaTableError};
-
 use arrow::{datatypes::SchemaRef, error::ArrowError};
 use async_trait::async_trait;
 use object_store::Error as ObjectStoreError;
 use parquet::errors::ParquetError;
 use serde_json::Value;
+
+use crate::action::{Action, Add, ColumnCountStat};
+use crate::errors::DeltaTableError;
+use crate::DeltaTable;
 
 pub use json::JsonWriter;
 pub use record_batch::RecordBatchWriter;

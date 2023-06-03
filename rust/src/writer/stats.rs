@@ -1,5 +1,7 @@
-use super::*;
-use crate::action::{Add, ColumnValueStat, Stats};
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+use std::{collections::HashMap, ops::AddAssign};
+
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{basic::LogicalType, errors::ParquetError};
@@ -7,9 +9,9 @@ use parquet::{
     file::{metadata::RowGroupMetaData, statistics::Statistics},
     format::TimeUnit,
 };
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
-use std::{collections::HashMap, ops::AddAssign};
+
+use super::*;
+use crate::action::{Add, ColumnValueStat, Stats};
 
 pub(crate) fn create_add(
     partition_values: &HashMap<String, Option<String>>,
@@ -455,7 +457,8 @@ mod tests {
     use crate::{
         action::{ColumnCountStat, ColumnValueStat},
         builder::DeltaTableBuilder,
-        DeltaTable, DeltaTableError,
+        errors::DeltaTableError,
+        DeltaTable,
     };
     use lazy_static::lazy_static;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
