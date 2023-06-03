@@ -5,6 +5,8 @@ use std::{collections::HashMap, fmt::Debug};
 #[cfg(feature = "unity-experimental")]
 pub use unity::*;
 
+#[cfg(feature = "unity-experimental")]
+pub mod client;
 #[cfg(feature = "glue")]
 pub mod glue;
 #[cfg(feature = "datafusion")]

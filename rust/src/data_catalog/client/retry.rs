@@ -61,6 +61,7 @@ impl From<RetryError> for std::io::Error {
     }
 }
 
+/// Error retrying http requests
 pub type Result<T, E = RetryError> = std::result::Result<T, E>;
 
 /// Contains the configuration for how to respond to server errors
@@ -102,6 +103,7 @@ impl Default for RetryConfig {
     }
 }
 
+/// Trait to rend requests with retry
 pub trait RetryExt {
     /// Dispatch a request with the given retry configuration
     ///

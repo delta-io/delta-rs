@@ -164,7 +164,7 @@ impl ClientOptions {
         self
     }
 
-    pub(crate) fn client(&self) -> super::CatalogResult<Client> {
+    pub(crate) fn client(&self) -> super::DataCatalogResult<Client> {
         let mut builder = ClientBuilder::new();
 
         match &self.user_agent {

@@ -11,7 +11,7 @@ use self::models::{
     ListTableSummariesResponse,
 };
 use super::client::retry::RetryExt;
-use super::{client::retry::RetryConfig, CatalogResult, DataCatalog, DataCatalogError};
+use super::{client::retry::RetryConfig, DataCatalog, DataCatalogError, DataCatalogResult};
 use crate::storage::str_is_truthy;
 
 pub mod credential;
@@ -279,7 +279,7 @@ impl UnityCatalogBuilder {
         mut self,
         key: impl AsRef<str>,
         value: impl Into<String>,
-    ) -> CatalogResult<Self> {
+    ) -> DataCatalogResult<Self> {
         match UnityCatalogConfigKey::from_str(key.as_ref())? {
             UnityCatalogConfigKey::WorkspaceUrl => self.workspace_url = Some(value.into()),
             UnityCatalogConfigKey::AccessToken => self.bearer_token = Some(value.into()),
@@ -302,7 +302,7 @@ impl UnityCatalogBuilder {
     pub fn try_with_options<I: IntoIterator<Item = (impl AsRef<str>, impl Into<String>)>>(
         mut self,
         options: I,
-    ) -> CatalogResult<Self> {
+    ) -> DataCatalogResult<Self> {
         for (key, value) in options {
             self = self.try_with_option(key, value)?;
         }
@@ -407,7 +407,7 @@ impl UnityCatalogBuilder {
     }
 
     /// Build an instance of [`UnityCatalog`]
-    pub fn build(self) -> CatalogResult<UnityCatalog> {
+    pub fn build(self) -> DataCatalogResult<UnityCatalog> {
         let credential = self
             .get_credential_provider()
             .ok_or(UnityCatalogError::MissingCredential)?;
@@ -440,7 +440,7 @@ pub struct UnityCatalog {
 }
 
 impl UnityCatalog {
-    async fn get_credential(&self) -> CatalogResult<HeaderValue> {
+    async fn get_credential(&self) -> DataCatalogResult<HeaderValue> {
         match &self.credential {
             CredentialProvider::BearerToken(token) => {
                 // we do the conversion to a HeaderValue here, since it is fallible
@@ -477,7 +477,7 @@ impl UnityCatalog {
     /// all catalogs will be retrieved. Otherwise, only catalogs owned by the caller
     /// (or for which the caller has the USE_CATALOG privilege) will be retrieved.
     /// There is no guarantee of a specific ordering of the elements in the array.
-    pub async fn list_catalogs(&self) -> CatalogResult<ListCatalogsResponse> {
+    pub async fn list_catalogs(&self) -> DataCatalogResult<ListCatalogsResponse> {
         let token = self.get_credential().await?;
         // https://docs.databricks.com/api-explorer/workspace/schemas/list
         let resp = self
@@ -501,7 +501,7 @@ impl UnityCatalog {
     pub async fn list_schemas(
         &self,
         catalog_name: impl AsRef<str>,
-    ) -> CatalogResult<ListSchemasResponse> {
+    ) -> DataCatalogResult<ListSchemasResponse> {
         let token = self.get_credential().await?;
         // https://docs.databricks.com/api-explorer/workspace/schemas/list
         let resp = self
@@ -522,7 +522,7 @@ impl UnityCatalog {
         &self,
         catalog_name: impl AsRef<str>,
         schema_name: impl AsRef<str>,
-    ) -> CatalogResult<GetSchemaResponse> {
+    ) -> DataCatalogResult<GetSchemaResponse> {
         let token = self.get_credential().await?;
         // https://docs.databricks.com/api-explorer/workspace/schemas/get
         let resp = self
@@ -554,7 +554,7 @@ impl UnityCatalog {
         &self,
         catalog_name: impl AsRef<str>,
         schema_name_pattern: impl AsRef<str>,
-    ) -> CatalogResult<ListTableSummariesResponse> {
+    ) -> DataCatalogResult<ListTableSummariesResponse> {
         let token = self.get_credential().await?;
         // https://docs.databricks.com/api-explorer/workspace/tables/listsummaries
         let resp = self
@@ -583,7 +583,7 @@ impl UnityCatalog {
         catalog_id: impl AsRef<str>,
         database_name: impl AsRef<str>,
         table_name: impl AsRef<str>,
-    ) -> CatalogResult<GetTableResponse> {
+    ) -> DataCatalogResult<GetTableResponse> {
         let token = self.get_credential().await?;
         // https://docs.databricks.com/api-explorer/workspace/tables/get
         let resp = self

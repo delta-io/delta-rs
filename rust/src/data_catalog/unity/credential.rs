@@ -10,7 +10,7 @@ use serde::Deserialize;
 use super::UnityCatalogError;
 use crate::data_catalog::client::retry::{RetryConfig, RetryExt};
 use crate::data_catalog::client::token::{TemporaryToken, TokenCache};
-use crate::data_catalog::CatalogResult;
+use crate::data_catalog::DataCatalogResult;
 
 // https://learn.microsoft.com/en-us/azure/databricks/dev-tools/api/latest/authentication
 
@@ -39,7 +39,7 @@ pub trait TokenCredential: std::fmt::Debug + Send + Sync + 'static {
         &self,
         client: &Client,
         retry: &RetryConfig,
-    ) -> CatalogResult<TemporaryToken<String>>;
+    ) -> DataCatalogResult<TemporaryToken<String>>;
 }
 
 /// Provides credentials for use when signing requests
@@ -97,7 +97,7 @@ impl TokenCredential for ClientSecretOAuthProvider {
         &self,
         client: &Client,
         retry: &RetryConfig,
-    ) -> CatalogResult<TemporaryToken<String>> {
+    ) -> DataCatalogResult<TemporaryToken<String>> {
         let response: TokenResponse = client
             .request(Method::POST, &self.token_url)
             .header(ACCEPT, HeaderValue::from_static(CONTENT_TYPE_JSON))
@@ -169,7 +169,7 @@ impl TokenCredential for AzureCliCredential {
         &self,
         _client: &Client,
         _retry: &RetryConfig,
-    ) -> CatalogResult<TemporaryToken<String>> {
+    ) -> DataCatalogResult<TemporaryToken<String>> {
         // on window az is a cmd and it should be called like this
         // see https://doc.rust-lang.org/nightly/std/process/struct.Command.html
         let program = if cfg!(target_os = "windows") {
@@ -283,7 +283,7 @@ impl TokenCredential for WorkloadIdentityOAuthProvider {
         &self,
         client: &Client,
         retry: &RetryConfig,
-    ) -> CatalogResult<TemporaryToken<String>> {
+    ) -> DataCatalogResult<TemporaryToken<String>> {
         let token_str = std::fs::read_to_string(&self.federated_token_file)
             .map_err(|_| UnityCatalogError::FederatedTokenFile)?;
 
@@ -372,7 +372,7 @@ impl TokenCredential for ImdsManagedIdentityOAuthProvider {
         &self,
         _client: &Client,
         retry: &RetryConfig,
-    ) -> CatalogResult<TemporaryToken<String>> {
+    ) -> DataCatalogResult<TemporaryToken<String>> {
         let resource_scope = format!("{}/.default", DATABRICKS_RESOURCE_SCOPE);
         let mut query_items = vec![
             ("api-version", MSI_API_VERSION),
