@@ -151,7 +151,7 @@ pub struct OptimizeBuilder<'a> {
     app_metadata: Option<HashMap<String, serde_json::Value>>,
     /// Whether to preserve insertion order within files (default false)
     preserve_insertion_order: bool,
-    /// Max number of concurrent tasks (defeault 10)
+    /// Max number of concurrent tasks (default is number of cpus)
     max_concurrent_tasks: usize,
 }
 
@@ -412,7 +412,7 @@ impl MergePlan {
         Ok((partial_actions, partial_metrics))
     }
 
-    /// Peform the operations outlined in the plan.
+    /// Perform the operations outlined in the plan.
     pub async fn execute(
         mut self,
         object_store: ObjectStoreRef,
@@ -650,7 +650,6 @@ fn build_compaction_plan(
     }
 
     // Prune merge bins with only 1 file, since they have no effect
-    // Also prune merge bins where compaction wouldnt provide any benefit
     for (_, bins) in operations.iter_mut() {
         if bins.len() == 1 && bins[0].len() == 1 {
             metrics.total_files_skipped += 1;

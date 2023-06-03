@@ -265,7 +265,7 @@ impl RawDeltaTable {
         Ok(metrics.files_deleted)
     }
 
-    // Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
+    /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
     #[pyo3(signature = (partition_filters = None, target_size = None, max_concurrent_tasks = None))]
     pub fn optimize(
         &mut self,

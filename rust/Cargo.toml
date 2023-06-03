@@ -29,7 +29,7 @@ datafusion-objectstore-hdfs = { version = "0.1.3", default-features = false, fea
     "try_spawn_blocking",
 ], optional = true }
 errno = "0.3"
-futures = "0.3.28"
+futures = "0.3"
 itertools = "0.10"
 lazy_static = "1"
 log = "0"
