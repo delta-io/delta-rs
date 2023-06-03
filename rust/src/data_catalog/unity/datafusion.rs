@@ -11,7 +11,7 @@ use datafusion::datasource::TableProvider;
 use tracing::error;
 
 use super::models::{GetTableResponse, ListCatalogsResponse, ListTableSummariesResponse};
-use super::{CatalogResult, UnityCatalog};
+use super::{DataCatalogResult, UnityCatalog};
 use crate::data_catalog::models::ListSchemasResponse;
 use crate::DeltaTableBuilder;
 
@@ -26,7 +26,7 @@ impl UnityCatalogList {
     pub async fn try_new(
         client: Arc<UnityCatalog>,
         storage_options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)> + Clone,
-    ) -> CatalogResult<Self> {
+    ) -> DataCatalogResult<Self> {
         let catalogs = match client.list_catalogs().await? {
             ListCatalogsResponse::Success { catalogs } => {
                 let mut providers = Vec::new();
@@ -83,7 +83,7 @@ impl UnityCatalogProvider {
         client: Arc<UnityCatalog>,
         catalog_name: impl Into<String>,
         storage_options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)> + Clone,
-    ) -> CatalogResult<Self> {
+    ) -> DataCatalogResult<Self> {
         let catalog_name = catalog_name.into();
         let schemas = match client.list_schemas(&catalog_name).await? {
             ListSchemasResponse::Success { schemas } => {
@@ -144,7 +144,7 @@ impl UnitySchemaProvider {
         catalog_name: impl Into<String>,
         schema_name: impl Into<String>,
         storage_options: impl IntoIterator<Item = (impl Into<String>, impl Into<String>)>,
-    ) -> CatalogResult<Self> {
+    ) -> DataCatalogResult<Self> {
         let catalog_name = catalog_name.into();
         let schema_name = schema_name.into();
         let table_names = match client

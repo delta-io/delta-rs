@@ -1,3 +1,4 @@
+//! Authorization credentials
 use std::future::Future;
 use std::time::Instant;
 
@@ -29,6 +30,7 @@ impl<T> Default for TokenCache<T> {
 }
 
 impl<T: Clone + Send> TokenCache<T> {
+    /// Get current token or update with a given closure
     pub async fn get_or_insert_with<F, Fut, E>(&self, f: F) -> Result<T, E>
     where
         F: FnOnce() -> Fut + Send,

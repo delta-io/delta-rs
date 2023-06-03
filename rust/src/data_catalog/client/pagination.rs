@@ -1,8 +1,9 @@
+//! Handle paginates results
 use std::future::Future;
 
 use futures::Stream;
 
-use crate::data_catalog::CatalogResult;
+use crate::data_catalog::DataCatalogResult;
 
 /// Takes a paginated operation `op` that when called with:
 ///
@@ -20,10 +21,10 @@ use crate::data_catalog::CatalogResult;
 /// finish, otherwise it will continue to call `op(state, token)` with the values returned by the
 /// previous call to `op`, until a continuation token of `None` is returned
 ///
-pub fn stream_paginated<F, Fut, S, T>(state: S, op: F) -> impl Stream<Item = CatalogResult<T>>
+pub fn stream_paginated<F, Fut, S, T>(state: S, op: F) -> impl Stream<Item = DataCatalogResult<T>>
 where
     F: Fn(S, Option<String>) -> Fut + Copy,
-    Fut: Future<Output = CatalogResult<(T, S, Option<String>)>>,
+    Fut: Future<Output = DataCatalogResult<(T, S, Option<String>)>>,
 {
     enum PaginationState<T> {
         Start(T),

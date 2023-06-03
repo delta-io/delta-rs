@@ -1,3 +1,4 @@
+//!  Exponential backoff with jitter
 use rand::prelude::*;
 use std::time::Duration;
 
