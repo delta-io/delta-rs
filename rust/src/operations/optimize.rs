@@ -35,6 +35,7 @@ use arrow_schema::ArrowError;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
+use itertools::Itertools;
 use log::debug;
 use num_cpus;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
@@ -794,6 +795,38 @@ fn build_zorder_plan(
     filters: &[PartitionFilter<'_, &str>],
     target_size: i64,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
+    if zorder_columns.is_empty() {
+        return Err(DeltaTableError::Generic(
+            "Z-order requires at least one column".to_string(),
+        ));
+    }
+    let zorder_partition_cols = zorder_columns
+        .iter()
+        .filter(|col| partition_keys.contains(col))
+        .collect_vec();
+    if !zorder_partition_cols.is_empty() {
+        return Err(DeltaTableError::Generic(format!(
+            "Z-order columns cannot be partition columns. Found: {zorder_partition_cols:?}"
+        )));
+    }
+    let field_names = snapshot
+        .current_metadata()
+        .unwrap()
+        .schema
+        .get_fields()
+        .iter()
+        .map(|field| field.get_name().to_string())
+        .collect_vec();
+    let unknown_columns = zorder_columns
+        .iter()
+        .filter(|col| !field_names.contains(col))
+        .collect_vec();
+    if !unknown_columns.is_empty() {
+        return Err(DeltaTableError::Generic(
+            format!("Z-order columns must be present in the table schema. Unknown columns: {unknown_columns:?}"),
+        ));
+    }
+
     // For now, just be naive and optimize all files in each selected partition.
     let mut metrics = Metrics::default();
 
@@ -915,12 +948,11 @@ pub(super) mod zorder {
     use arrow_row::{Row, RowConverter, SortField};
     use arrow_schema::ArrowError;
 
-    // Returns binary data
-    //
-    // Each value is 16 bytes * number of column. Each column is converted into
-    // it's row binary representation, and then the first 16 bytes are taken.
-    // These truncated values are interleaved in the array.
-    #[allow(dead_code)] // TODO: remove
+    /// Creates a new binary array containing the zorder keys for the given columns
+    ///
+    /// Each value is 16 bytes * number of columns. Each column is converted into
+    /// its row binary representation, and then the first 16 bytes are taken.
+    /// These truncated values are interleaved in the array values.
     pub fn zorder_key(columns: &[ArrayRef]) -> Result<ArrayRef, ArrowError> {
         if columns.is_empty() {
             return Err(ArrowError::InvalidArgumentError(
@@ -983,9 +1015,13 @@ pub(super) mod zorder {
             let row_offset = row_i * num_columns * 16;
             for bit_i in 0..128 {
                 let bit = row.get_bit(bit_i);
-                // How many bits to get to this bit's out position
+                // Position of bit within the value. We place a value every
+                // `num_columns` bits, offset by `col_pos` when interleaving.
+                // So if there are 3 columns, and we are the second column, then
+                // we place values at index: 1, 4, 7, 10, etc.
                 let bit_pos = (bit_i * num_columns) + col_pos;
                 let out_pos = (row_offset * 8) + bit_pos;
+                // Safety: we pre-sized the output vector in the outer function
                 if bit {
                     unsafe { set_bit_raw(out.as_mut_ptr(), out_pos) };
                 } else {
