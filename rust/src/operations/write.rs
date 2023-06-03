@@ -222,7 +222,8 @@ pub(crate) async fn write_execution_plan(
         .and_then(|meta| meta.schema.get_invariants().ok())
         .unwrap_or_default();
 
-    let schema = snapshot.arrow_schema().unwrap_or(plan.schema());
+    // Use input schema to prevent wrapping partitions columns into a dictionary.
+    let schema = snapshot.input_schema().unwrap_or(plan.schema());
 
     let checker = DeltaDataChecker::new(invariants);
 
@@ -233,7 +234,7 @@ pub(crate) async fn write_execution_plan(
         let inner_schema = schema.clone();
         let task_ctx = Arc::new(TaskContext::from(&state));
         let config = WriterConfig::new(
-            inner_plan.schema(),
+            inner_schema.clone(),
             partition_columns.clone(),
             writer_properties.clone(),
             target_file_size,
@@ -486,10 +487,12 @@ fn cast_record_batch(
 mod tests {
     use super::*;
     use crate::operations::DeltaOps;
+    use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::{get_delta_schema, get_record_batch};
     use arrow::datatypes::Field;
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow_array::{Int32Array, StringArray};
+    use datafusion::assert_batches_sorted_eq;
     use serde_json::json;
 
     #[tokio::test]
@@ -534,7 +537,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_write_different_types() {
-        // Ensure write fails when data of a different type from the table is provided.
+        // Ensure write data is casted when data of a different type from the table is provided.
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "value",
             arrow::datatypes::DataType::Int32,
@@ -558,13 +561,26 @@ mod tests {
             Arc::clone(&schema),
             vec![Arc::new(StringArray::from(vec![
                 Some("Test123".to_owned()),
+                Some("123".to_owned()),
                 None,
             ]))],
         )
         .unwrap();
 
-        let res = DeltaOps::from(table).write(vec![batch]).await;
-        assert!(res.is_err())
+        let table = DeltaOps::from(table).write(vec![batch]).await.unwrap();
+        let expected = [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "|       |",
+            "|       |",
+            "|       |",
+            "| 123   |",
+            "| 0     |",
+            "+-------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]

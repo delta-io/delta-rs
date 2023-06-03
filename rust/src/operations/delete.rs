@@ -681,6 +681,7 @@ mod tests {
 
     use crate::action::*;
     use crate::operations::DeltaOps;
+    use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::{get_arrow_schema, get_delta_schema};
     use crate::DeltaTable;
     use arrow::array::Int32Array;
@@ -702,17 +703,6 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         table
-    }
-
-    async fn get_data(table: DeltaTable) -> Vec<RecordBatch> {
-        let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(table)).unwrap();
-        ctx.sql("select * from test")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap()
     }
 
     #[tokio::test]
@@ -850,7 +840,7 @@ mod tests {
             "+----+-------+------------+",
         ];
 
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -898,7 +888,7 @@ mod tests {
             "| 2     |",
             "+-------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
 
         // Validate behaviour of less than
@@ -919,7 +909,7 @@ mod tests {
             "| 4     |",
             "+-------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
 
         // Validate behaviour of less plus not null
@@ -938,7 +928,7 @@ mod tests {
             "| 4     |",
             "+-------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -997,7 +987,7 @@ mod tests {
             "+----+-------+------------+",
         ];
 
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -1058,7 +1048,7 @@ mod tests {
             "| B  | 20    | 2021-02-03 |",
             "+----+-------+------------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
