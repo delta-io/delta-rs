@@ -284,21 +284,7 @@ enum OptimizeOperations {
     /// Bins are determined by the bin-packing algorithm to reach an optimal size.
     /// Files that are large enough already are skipped. Bins of size 1 are dropped.
     Compact(HashMap<PartitionTuples, Vec<MergeBin>>),
-    /// Plan to Z-order files within a partition
-    ///
-    /// Bins are determined based on whether they overlap on the z-order columns.
-    /// If two files don't overlap, z-ordering them will make them less separated
-    /// rather than more. Therefore, we don't z-order files together if they
-    /// don't overlap. By z-ordering smaller sets of files, we reduce the
-    /// overhead involved with sorting.
-    #[allow(dead_code)]
-    ZOrder(HashMap<PartitionTuples, Vec<MergeBin>>),
-    /// Plan to sort files within a partition
-    ///
-    /// Bins are determined based on whether they overlap in sort ranges.
-    /// If two files don't overlap, they don't need to be sorted together.
-    #[allow(dead_code)]
-    Sort(HashMap<PartitionTuples, Vec<MergeBin>>),
+    // TODO: ZOrder and Sort
 }
 
 impl Default for OptimizeOperations {
@@ -470,7 +456,6 @@ impl MergePlan {
                     })
                     .await?;
             }
-            _ => unimplemented!("Z order and sort order"),
         }
 
         metrics.preserve_insertion_order = true;
