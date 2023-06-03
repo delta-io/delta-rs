@@ -662,3 +662,187 @@ fn build_compaction_plan(
 
     Ok((OptimizeOperations::Compact(operations), metrics))
 }
+
+/// Z-order utilities
+pub(super) mod zorder {
+    use std::sync::Arc;
+
+    use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
+    use arrow_array::{Array, ArrayRef, BinaryArray};
+    use arrow_buffer::bit_util::{get_bit_raw, set_bit_raw, unset_bit_raw};
+    use arrow_row::{Row, RowConverter, SortField};
+    use arrow_schema::ArrowError;
+
+    // Returns binary data
+    //
+    // Each value is 16 bytes * number of column. Each column is converted into
+    // it's row binary representation, and then the first 16 bytes are taken.
+    // These truncated values are interleaved in the array.
+    #[allow(dead_code)] // TODO: remove
+    pub fn zorder_key(columns: &[ArrayRef]) -> Result<ArrayRef, ArrowError> {
+        if columns.is_empty() {
+            return Err(ArrowError::InvalidArgumentError(
+                "Cannot zorder empty columns".to_string(),
+            ));
+        }
+
+        // length is length of first array or 1 if all scalars
+        let out_length = columns[0].len();
+
+        if columns.iter().any(|col| col.len() != out_length) {
+            return Err(ArrowError::InvalidArgumentError(
+                "All columns must have the same length".to_string(),
+            ));
+        }
+
+        // We are taking 128 bits from each value. Shorter values will be padded.
+        let value_size: usize = columns.len() * 16;
+
+        // Initialize with zeros
+        let mut out: Vec<u8> = vec![0; out_length * value_size];
+
+        for (col_pos, col) in columns.iter().enumerate() {
+            set_bits_for_column(col.clone(), col_pos, columns.len(), &mut out)?;
+        }
+
+        let offsets = (0..=out_length)
+            .map(|i| (i * value_size) as i32)
+            .collect::<Vec<i32>>();
+
+        let out_arr = BinaryArray::new_unchecked(
+            OffsetBuffer::new(ScalarBuffer::from(offsets)),
+            Buffer::from_vec(out),
+            None,
+        );
+
+        Ok(Arc::new(out_arr))
+    }
+
+    /// Given an input array, will set the bits in the output array
+    ///
+    /// Arguments:
+    /// * `input` - The input array
+    /// * `col_pos` - The position of the column. Used to determine position
+    ///   when interleaving.
+    /// * `num_columns` - The number of columns in the input array. Used to
+    ///   determine offset when interleaving.
+    fn set_bits_for_column(
+        input: ArrayRef,
+        col_pos: usize,
+        num_columns: usize,
+        out: &mut Vec<u8>,
+    ) -> Result<(), ArrowError> {
+        // Convert array to rows
+        let mut converter = RowConverter::new(vec![SortField::new(input.data_type().clone())])?;
+        let rows = converter.convert_columns(&[input])?;
+
+        for (row_i, row) in rows.iter().enumerate() {
+            // How many bytes to get to this row's out position
+            let row_offset = row_i * num_columns * 16;
+            for bit_i in 0..128 {
+                let bit = row.get_bit(bit_i);
+                // How many bits to get to this bit's out position
+                let bit_pos = (bit_i * num_columns) + col_pos;
+                let out_pos = (row_offset * 8) + bit_pos;
+                if bit {
+                    unsafe { set_bit_raw(out.as_mut_ptr(), out_pos) };
+                } else {
+                    unsafe { unset_bit_raw(out.as_mut_ptr(), out_pos) };
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    trait RowBitUtil {
+        fn get_bit(&self, bit_i: usize) -> bool;
+    }
+
+    impl<'a> RowBitUtil for Row<'a> {
+        /// Get the bit at the given index, or just give false if the index is out of bounds
+        fn get_bit(&self, bit_i: usize) -> bool {
+            let byte_i = bit_i / 8;
+            let bytes = self.as_ref();
+            if byte_i >= bytes.len() {
+                return false;
+            }
+            // Safety: we just did a bounds check above
+            unsafe { get_bit_raw(bytes.as_ptr(), bit_i) }
+        }
+    }
+
+    #[cfg(test)]
+    mod test {
+        use arrow_array::{
+            cast::as_generic_binary_array, new_empty_array, StringArray, UInt8Array,
+        };
+        use arrow_schema::DataType;
+
+        use super::*;
+
+        #[test]
+        fn test_rejects_no_columns() {
+            let columns = vec![];
+            let result = zorder_key(&columns);
+            assert!(result.is_err());
+        }
+
+        #[test]
+        fn test_handles_no_rows() {
+            let columns: Vec<ArrayRef> = vec![
+                Arc::new(new_empty_array(&DataType::Int64)),
+                Arc::new(new_empty_array(&DataType::Utf8)),
+            ];
+            let result = zorder_key(columns.as_slice());
+            assert!(result.is_ok());
+            let result = result.unwrap();
+            assert_eq!(result.len(), 0);
+        }
+
+        #[test]
+        fn test_basics() {
+            let columns: Vec<ArrayRef> = vec![
+                // Small strings
+                Arc::new(StringArray::from(vec![Some("a"), Some("b"), None])),
+                // Strings of various sizes
+                Arc::new(StringArray::from(vec![
+                    "delta-rs: A native Rust library for Delta Lake, with bindings into Python",
+                    "cat",
+                    "",
+                ])),
+                Arc::new(UInt8Array::from(vec![Some(1), Some(4), None])),
+            ];
+            let result = zorder_key(columns.as_slice()).unwrap();
+            assert_eq!(result.len(), 3);
+            assert_eq!(result.data_type(), &DataType::Binary);
+            assert_eq!(result.null_count(), 0);
+
+            let data: &BinaryArray = as_generic_binary_array(result.as_ref());
+            dbg!(data);
+            assert_eq!(data.value_data().len(), 3 * 16 * 3);
+            assert!(data.iter().all(|x| x.unwrap().len() == 3 * 16));
+
+            // This value is mostly filled in since it has a large string
+            assert_eq!(
+                data.value(0),
+                [
+                    28, 0, 0, 133, 128, 13, 130, 0, 9, 128, 4, 9, 128, 32, 9, 2, 0, 9, 130, 4, 1,
+                    16, 32, 9, 18, 32, 9, 16, 36, 1, 0, 0, 1, 2, 0, 8, 0, 0, 1, 144, 4, 9, 2, 0, 9,
+                    128, 32, 9,
+                ]
+            );
+
+            // This value only has short strings, so it's largely zeros
+            assert_eq!(
+                data.value(1)[0..12],
+                [28u8, 0u8, 0u8, 26, 129, 13, 2, 0, 9, 128, 32, 9]
+            );
+            assert_eq!(data.value(1)[12..], [0; (3 * 16) - 12]);
+
+            // Last value is all nulls, so mostly zeros
+            assert_eq!(data.value(2)[0..1], [2u8]);
+            assert_eq!(data.value(2)[1..], [0; (3 * 16) - 1]);
+        }
+    }
+}
