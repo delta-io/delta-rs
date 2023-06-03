@@ -10,6 +10,7 @@
 use chrono::prelude::*;
 use deltalake::arrow::array::*;
 use deltalake::arrow::record_batch::RecordBatch;
+use deltalake::errors::DeltaTableError;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake::*;
 use log::*;

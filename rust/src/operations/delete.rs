@@ -17,18 +17,10 @@
 //!     .await?;
 //! ````
 
-use crate::action::DeltaOperation;
-use crate::delta::DeltaResult;
-use crate::delta_datafusion::parquet_scan_from_actions;
-use crate::delta_datafusion::partitioned_file_from_action;
-use crate::delta_datafusion::register_store;
-use crate::operations::transaction::commit;
-use crate::operations::write::write_execution_plan;
-use crate::storage::DeltaObjectStore;
-use crate::storage::ObjectStoreRef;
-use crate::table_state::DeltaTableState;
-use crate::DeltaTable;
-use crate::DeltaTableError;
+use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::action::{Action, Add, Remove};
 use arrow::array::StringArray;
@@ -59,10 +51,17 @@ use futures::stream::StreamExt;
 use parquet::file::properties::WriterProperties;
 use serde_json::Map;
 use serde_json::Value;
-use std::collections::HashMap;
-use std::pin::Pin;
-use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use crate::action::DeltaOperation;
+use crate::delta_datafusion::{
+    parquet_scan_from_actions, partitioned_file_from_action, register_store,
+};
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::operations::transaction::commit;
+use crate::operations::write::write_execution_plan;
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
+use crate::table_state::DeltaTableState;
+use crate::DeltaTable;
 
 const PATH_COLUMN: &str = "__delta_rs_path";
 

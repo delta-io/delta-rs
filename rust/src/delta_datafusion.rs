@@ -57,13 +57,12 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::ObjectMeta;
 use url::Url;
 
-use crate::action::Add;
+use crate::action::{self, Add};
 use crate::builder::ensure_table_uri;
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::ObjectStoreRef;
 use crate::table_state::DeltaTableState;
-use crate::{action, open_table, open_table_with_storage_options, SchemaDataType};
-use crate::{DeltaResult, Invariant};
-use crate::{DeltaTable, DeltaTableError};
+use crate::{open_table, open_table_with_storage_options, DeltaTable, Invariant, SchemaDataType};
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {

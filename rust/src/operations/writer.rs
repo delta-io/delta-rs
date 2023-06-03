@@ -2,16 +2,6 @@
 
 use std::collections::HashMap;
 
-use crate::action::Add;
-use crate::storage::ObjectStoreRef;
-use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
-use crate::writer::stats::create_add;
-use crate::writer::utils::{
-    arrow_schema_without_partitions, record_batch_without_partitions, PartitionPath,
-    ShareableBuffer,
-};
-use crate::{crate_version, DeltaResult, DeltaTableError};
-
 use arrow::datatypes::SchemaRef as ArrowSchemaRef;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
@@ -20,6 +10,17 @@ use object_store::{path::Path, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
+
+use crate::action::Add;
+use crate::crate_version;
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::storage::ObjectStoreRef;
+use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
+use crate::writer::stats::create_add;
+use crate::writer::utils::{
+    arrow_schema_without_partitions, record_batch_without_partitions, PartitionPath,
+    ShareableBuffer,
+};
 
 // TODO databricks often suggests a file size of 100mb, should we set this default?
 const DEFAULT_TARGET_FILE_SIZE: usize = 104_857_600;

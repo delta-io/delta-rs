@@ -1,15 +1,16 @@
 //! Utility functions for working across Delta tables
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::action::Add;
-use crate::builder::DeltaTableBuilder;
-use crate::{DeltaResult, DeltaTableError};
 use chrono::{DateTime, NaiveDateTime, Utc};
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectMeta, Result as ObjectStoreResult};
-use std::sync::Arc;
+
+use crate::action::Add;
+use crate::builder::DeltaTableBuilder;
+use crate::errors::{DeltaResult, DeltaTableError};
 
 /// Copies the contents from the `from` location into the `to` location
 pub async fn copy_table(
@@ -82,7 +83,7 @@ impl TryFrom<&Add> for ObjectMeta {
         let last_modified = DateTime::<Utc>::from_utc(
             NaiveDateTime::from_timestamp_millis(value.modification_time).ok_or(
                 DeltaTableError::InvalidAction {
-                    source: crate::action::ActionError::InvalidField(format!(
+                    source: crate::action::ProtocolError::InvalidField(format!(
                         "invalid modification_time: {:?}",
                         value.modification_time
                     )),

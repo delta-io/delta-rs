@@ -23,6 +23,7 @@ use deltalake::builder::DeltaTableBuilder;
 use deltalake::checkpoints::create_checkpoint;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
+use deltalake::errors::DeltaTableError;
 use deltalake::operations::optimize::OptimizeBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
@@ -174,7 +175,7 @@ impl RawDeltaTable {
         &self,
         partitions_filters: Vec<(&str, &str, PartitionFilterValue)>,
     ) -> PyResult<Vec<String>> {
-        let partition_filters: Result<Vec<PartitionFilter<&str>>, deltalake::DeltaTableError> =
+        let partition_filters: Result<Vec<PartitionFilter<&str>>, DeltaTableError> =
             partitions_filters
                 .into_iter()
                 .map(|filter| match filter {
@@ -520,7 +521,7 @@ impl RawDeltaTable {
 
 fn convert_partition_filters<'a>(
     partitions_filters: Vec<(&'a str, &'a str, PartitionFilterValue<'a>)>,
-) -> Result<Vec<PartitionFilter<&'a str>>, deltalake::DeltaTableError> {
+) -> Result<Vec<PartitionFilter<&'a str>>, DeltaTableError> {
     partitions_filters
         .into_iter()
         .map(|filter| match filter {

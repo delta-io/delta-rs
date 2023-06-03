@@ -3,7 +3,7 @@
 use std::convert::TryFrom;
 
 use super::schema::SchemaDataType;
-use crate::DeltaTableError;
+use crate::errors::DeltaTableError;
 use std::cmp::Ordering;
 use std::collections::HashMap;
 

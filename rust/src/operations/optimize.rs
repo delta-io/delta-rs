@@ -20,14 +20,10 @@
 //! let (table, metrics) = OptimizeBuilder::new(table.object_store(), table.state).await?;
 //! ````
 
-use super::transaction::commit;
-use super::writer::{PartitionWriter, PartitionWriterConfig};
-use crate::action::{self, Action, DeltaOperation};
-use crate::crate_version;
-use crate::storage::ObjectStoreRef;
-use crate::table_state::DeltaTableState;
-use crate::writer::utils::arrow_schema_without_partitions;
-use crate::{DeltaResult, DeltaTable, DeltaTableError, ObjectMeta, PartitionFilter};
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
@@ -38,9 +34,15 @@ use parquet::basic::{Compression, ZstdLevel};
 use parquet::file::properties::WriterProperties;
 use serde::{Deserialize, Serialize};
 use serde_json::Map;
-use std::collections::HashMap;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+
+use super::transaction::commit;
+use super::writer::{PartitionWriter, PartitionWriterConfig};
+use crate::action::{self, Action, DeltaOperation};
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::storage::ObjectStoreRef;
+use crate::table_state::DeltaTableState;
+use crate::writer::utils::arrow_schema_without_partitions;
+use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
 
 /// Metrics from Optimize
 #[derive(Default, Debug, PartialEq, Clone, Serialize, Deserialize)]
