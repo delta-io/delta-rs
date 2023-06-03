@@ -221,12 +221,19 @@ pub(crate) async fn write_execution_plan(
         .current_metadata()
         .and_then(|meta| meta.schema.get_invariants().ok())
         .unwrap_or_default();
+
+    println!("here");
+    //let schema = snapshot.arrow_schema()
+    //    .unwrap_or(plan.schema().clone());
+
     let checker = DeltaDataChecker::new(invariants);
 
     // Write data to disk
     let mut tasks = vec![];
     for i in 0..plan.output_partitioning().partition_count() {
         let inner_plan = plan.clone();
+        //let inner_schema = schema.clone();
+        let schema = inner_plan.schema().clone();
         let task_ctx = Arc::new(TaskContext::from(&state));
         let config = WriterConfig::new(
             inner_plan.schema(),
@@ -237,7 +244,6 @@ pub(crate) async fn write_execution_plan(
         );
         let mut writer = DeltaWriter::new(object_store.clone(), config);
         let checker_stream = checker.clone();
-        let schema = inner_plan.schema().clone();
         let mut stream = inner_plan.execute(i, task_ctx)?;
         let handle: tokio::task::JoinHandle<DeltaResult<Vec<Add>>> =
             tokio::task::spawn(async move {
@@ -484,6 +490,9 @@ mod tests {
     use super::*;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::{get_delta_schema, get_record_batch};
+    use arrow_array::{StringArray, Int32Array};
+    use arrow::datatypes::Field;
+    use arrow::datatypes::Schema as ArrowSchema;
     use serde_json::json;
 
     #[tokio::test]
@@ -524,6 +533,45 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 3);
         assert_eq!(table.get_file_uris().count(), 1)
+    }
+
+
+    #[tokio::test]
+    async fn test_write_different_types() {
+        // Ensure write fails when data of a different type from the table is provided.
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            arrow::datatypes::DataType::Int32,
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![
+                Some(0),
+                None,
+            ]))],
+        )
+        .unwrap();
+        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            arrow::datatypes::DataType::Utf8,
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec![
+                Some("Test123".to_owned()),
+                None,
+            ]))],
+        ).unwrap();
+
+        let res = DeltaOps::from(table).write(vec![batch]).await;
+        assert!(res.is_err())
+
     }
 
     #[tokio::test]
