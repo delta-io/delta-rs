@@ -151,7 +151,7 @@ mod simple_commit_fs {
         let result = table.try_commit_transaction(&commit, 1).await;
 
         match result {
-            Err(deltalake::DeltaTableError::VersionAlreadyExists(_)) => {
+            Err(DeltaTableError::VersionAlreadyExists(_)) => {
                 assert!(true, "Delta version already exists.");
             }
             _ => {

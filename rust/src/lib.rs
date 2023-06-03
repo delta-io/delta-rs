@@ -111,6 +111,7 @@ pub use self::delta::*;
 pub use self::delta_config::*;
 pub use self::partitions::*;
 pub use self::schema::*;
+pub use errors::*;
 pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
 pub use operations::DeltaOps;
 
