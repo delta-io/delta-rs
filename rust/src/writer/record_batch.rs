@@ -28,18 +28,6 @@
 //! ```
 use std::{collections::HashMap, sync::Arc};
 
-use super::{
-    stats::create_add,
-    utils::{
-        arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
-        stringified_partition_value, PartitionPath,
-    },
-    DeltaWriter, DeltaWriterError,
-};
-use crate::builder::DeltaTableBuilder;
-use crate::writer::utils::ShareableBuffer;
-use crate::DeltaTableError;
-use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
 use arrow::array::{Array, UInt32Array};
 use arrow::compute::{lexicographical_partition_ranges, take, SortColumn};
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
@@ -51,6 +39,16 @@ use bytes::Bytes;
 use object_store::ObjectStore;
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
+
+use super::stats::create_add;
+use super::utils::{
+    arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
+    stringified_partition_value, PartitionPath, ShareableBuffer,
+};
+use super::{DeltaWriter, DeltaWriterError};
+use crate::builder::DeltaTableBuilder;
+use crate::errors::DeltaTableError;
+use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {

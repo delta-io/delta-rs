@@ -4,7 +4,7 @@
 mod fs_common;
 
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
-use deltalake::{action, DeltaTableBuilder, DeltaTableError};
+use deltalake::{action, errors::DeltaTableError, DeltaTableBuilder};
 use serial_test::serial;
 use std::collections::HashMap;
 
@@ -151,7 +151,7 @@ mod simple_commit_fs {
         let result = table.try_commit_transaction(&commit, 1).await;
 
         match result {
-            Err(deltalake::DeltaTableError::VersionAlreadyExists(_)) => {
+            Err(DeltaTableError::VersionAlreadyExists(_)) => {
                 assert!(true, "Delta version already exists.");
             }
             _ => {

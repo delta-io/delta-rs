@@ -1,5 +1,9 @@
 #![cfg(all(feature = "arrow", feature = "parquet"))]
 
+use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
+use std::{collections::HashMap, error::Error, sync::Arc};
+
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::{
     array::{Int32Array, StringArray},
@@ -8,11 +12,12 @@ use arrow::{
 };
 use arrow_select::concat::concat_batches;
 use deltalake::action::{Action, Remove};
+use deltalake::errors::DeltaTableError;
 use deltalake::operations::optimize::{create_merge_plan, MetricDetails, Metrics, OptimizeType};
 use deltalake::operations::DeltaOps;
 use deltalake::storage::ObjectStoreRef;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
-use deltalake::{DeltaTable, DeltaTableError, PartitionFilter, Path, SchemaDataType, SchemaField};
+use deltalake::{DeltaTable, PartitionFilter, Path, SchemaDataType, SchemaField};
 use futures::TryStreamExt;
 use object_store::ObjectStore;
 use parquet::arrow::async_reader::ParquetObjectReader;
@@ -20,9 +25,6 @@ use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::file::properties::WriterProperties;
 use rand::prelude::*;
 use serde_json::json;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
-use std::{collections::HashMap, error::Error, sync::Arc};
 use tempdir::TempDir;
 
 struct Context {

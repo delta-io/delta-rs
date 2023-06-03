@@ -23,9 +23,8 @@ use crate::action::Add;
 use crate::delta_datafusion::{
     get_null_of_arrow_type, logical_expr_to_physical_expr, to_correct_scalar_value,
 };
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::table_state::DeltaTableState;
-use crate::DeltaResult;
-use crate::DeltaTableError;
 
 impl DeltaTableState {
     /// Get the table schema as an [`ArrowSchemaRef`]

@@ -5,7 +5,7 @@ use std::{collections::HashMap, str::FromStr};
 use lazy_static::lazy_static;
 use serde::{Deserialize, Serialize};
 
-use crate::DeltaTableError;
+use crate::errors::DeltaTableError;
 
 /// Typed property keys that can be defined on a delta table
 /// <https://docs.delta.io/latest/table-properties.html#delta-table-properties-reference>

@@ -6,7 +6,7 @@ use serde_json::Value;
 use std::borrow::Cow;
 use std::collections::HashMap;
 
-use crate::DeltaTableError;
+use crate::errors::DeltaTableError;
 
 /// Type alias for a string expected to match a GUID/UUID format
 pub type Guid = String;

@@ -21,16 +21,19 @@
 //! let (table, metrics) = VacuumBuilder::new(table.object_store(). table.state).await?;
 //! ````
 
-use crate::storage::DeltaObjectStore;
-use crate::table_state::DeltaTableState;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use std::collections::HashSet;
+use std::fmt::Debug;
+use std::sync::Arc;
+
 use chrono::{Duration, Utc};
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
 use object_store::{path::Path, ObjectStore};
-use std::collections::HashSet;
-use std::fmt::Debug;
-use std::sync::Arc;
+
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::storage::DeltaObjectStore;
+use crate::table_state::DeltaTableState;
+use crate::DeltaTable;
 
 /// Errors that can occur during vacuum
 #[derive(thiserror::Error, Debug)]

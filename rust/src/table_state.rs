@@ -1,20 +1,23 @@
 //! The module for delta table state.
 
-use crate::action::{self, Action, Add};
-use crate::delta_config::TableConfig;
-use crate::partitions::{DeltaTablePartition, PartitionFilter};
-use crate::schema::SchemaDataType;
-use crate::storage::commit_uri_from_version;
-use crate::Schema;
-use crate::{ApplyLogError, DeltaTable, DeltaTableError, DeltaTableMetaData};
-use chrono::Utc;
-use lazy_static::lazy_static;
-use object_store::{path::Path, ObjectStore};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, Cursor};
+
+use chrono::Utc;
+use lazy_static::lazy_static;
+use object_store::{path::Path, ObjectStore};
+use serde::{Deserialize, Serialize};
+
+use crate::action::{self, Action, Add};
+use crate::delta_config::TableConfig;
+use crate::errors::{ApplyLogError, DeltaTableError};
+use crate::partitions::{DeltaTablePartition, PartitionFilter};
+use crate::schema::SchemaDataType;
+use crate::storage::commit_uri_from_version;
+use crate::Schema;
+use crate::{DeltaTable, DeltaTableMetaData};
 
 #[cfg(any(feature = "parquet", feature = "parquet2"))]
 use super::{CheckPoint, DeltaTableConfig};
@@ -100,7 +103,7 @@ impl DeltaTableState {
             let preader = SerializedFileReader::new(data)?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
-                return Err(DeltaTableError::from(action::ActionError::Generic(
+                return Err(DeltaTableError::from(action::ProtocolError::Generic(
                     "Action record in checkpoint should be a struct".to_string(),
                 )));
             }
@@ -123,7 +126,7 @@ impl DeltaTableState {
 
             for row_group in metadata.row_groups {
                 for action in actions_from_row_group(row_group, &mut reader)
-                    .map_err(action::ActionError::from)?
+                    .map_err(action::ProtocolError::from)?
                 {
                     self.process_action(
                         action,
