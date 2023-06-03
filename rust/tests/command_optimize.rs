@@ -7,7 +7,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use deltalake::action::{Action, Remove};
-use deltalake::operations::optimize::{create_merge_plan, MetricDetails, Metrics};
+use deltalake::operations::optimize::{create_merge_plan, MetricDetails, Metrics, OptimizeType};
 use deltalake::operations::DeltaOps;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake::{DeltaTable, DeltaTableError, PartitionFilter, SchemaDataType, SchemaField};
@@ -263,6 +263,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     //create the merge plan, remove a file, and execute the plan.
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
+        OptimizeType::Compact,
         &dt.state,
         &filter,
         None,
@@ -325,6 +326,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     //create the merge plan, remove a file, and execute the plan.
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
+        OptimizeType::Compact,
         &dt.state,
         &filter,
         None,
