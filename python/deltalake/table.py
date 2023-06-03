@@ -413,6 +413,7 @@ given filters.
         retention_hours: Optional[int] = None,
         dry_run: bool = True,
         enforce_retention_duration: bool = True,
+        max_concurrent_requests: int = 10,
     ) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
@@ -420,18 +421,27 @@ given filters.
         :param retention_hours: the retention threshold in hours, if none then the value from `configuration.deletedFileRetentionDuration` is used or default of 1 week otherwise.
         :param dry_run: when activated, list only the files, delete otherwise
         :param enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `configuration.deletedFileRetentionDuration`.
+        :param max_concurrent_requests: the maximum number of concurrent requests to send to the backend.
+          Increasing this number may improve performance of vacuuming large tables, however it might also
+          increase the risk of hitting rate limits.
         :return: the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
         if retention_hours:
             if retention_hours < 0:
                 raise ValueError("The retention periods should be positive.")
 
-        return self._table.vacuum(dry_run, retention_hours, enforce_retention_duration)
+        return self._table.vacuum(
+            dry_run,
+            retention_hours,
+            enforce_retention_duration,
+            max_concurrent_requests,
+        )
 
     def optimize(
         self,
         partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
         target_size: Optional[int] = None,
+        max_concurrent_tasks: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -446,9 +456,14 @@ given filters.
         :param target_size: desired file size after bin-packing files, in bytes. If not
           provided, will attempt to read the table configuration value ``delta.targetFileSize``.
           If that value isn't set, will use default value of 256MB.
+        :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
+            file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
+            faster, but will also use more memory.
         :return: the metrics from optimize
         """
-        metrics = self._table.optimize(partition_filters, target_size)
+        metrics = self._table.optimize(
+            partition_filters, target_size, max_concurrent_tasks
+        )
         self.update_incremental()
         return json.loads(metrics)
 
