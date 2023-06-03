@@ -4,7 +4,7 @@
 mod fs_common;
 
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
-use deltalake::{action, DeltaTableBuilder, DeltaTableError};
+use deltalake::{action, errors::DeltaTableError, DeltaTableBuilder};
 use serial_test::serial;
 use std::collections::HashMap;
 
