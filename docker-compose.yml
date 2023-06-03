@@ -27,3 +27,17 @@ services:
     image: mcr.microsoft.com/azure-storage/azurite
     ports:
       - 10000:10000
+
+  hdfs:
+    image: apache/hadoop:3
+    ports:
+      - 9000:9000
+      - 9866:9866
+    volumes:
+      - ./dev/hdfs/core-site.xml:/opt/hadoop/etc/hadoop/core-site.xml
+      - ./dev/hdfs/hdfs-site.xml:/opt/hadoop/etc/hadoop/hdfs-site.xml
+      - ./dev/hdfs/start-hdfs.sh:/start-hdfs.sh
+    entrypoint: /start-hdfs.sh
+    # Only run on a profile so we can use the github action for HDFS support during CI
+    profiles:
+      - hdfs

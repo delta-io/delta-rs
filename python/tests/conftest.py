@@ -230,3 +230,47 @@ def existing_table(tmp_path: pathlib.Path, sample_data: pa.Table):
     path = str(tmp_path)
     write_deltalake(path, sample_data)
     return DeltaTable(path)
+
+
+@pytest.fixture()
+def hdfs_url(monkeypatch):
+    url = "hdfs://localhost:9000"
+
+    setup_commands = [
+        [
+            "hdfs",
+            "dfs",
+            "-mkdir",
+            f"{url}/deltars",
+        ],
+        [
+            "hdfs",
+            "dfs",
+            "-copyFromLocal",
+            "../rust/tests/data/simple_table",
+            f"{url}/deltars/simple",
+        ],
+    ]
+
+    try:
+        classpath = subprocess.run(["hadoop", "classpath"], capture_output=True).stdout
+        monkeypatch.setenv("CLASSPATH", classpath)
+        for args in setup_commands:
+            subprocess.run(args)
+    except OSError:
+        pytest.skip("hdfs cli not installed")
+
+    yield url
+
+    shutdown_commands = [
+        [
+            "hdfs",
+            "dfs",
+            "-rm",
+            "-r",
+            f"{url}/deltars",
+        ],
+    ]
+
+    for args in shutdown_commands:
+        subprocess.run(args)

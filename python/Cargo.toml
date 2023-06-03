@@ -45,5 +45,6 @@ features = ["azure", "gcs", "python", "datafusion", "unity-experimental"]
 
 [features]
 default = ["rustls"]
+hdfs = ["deltalake/hdfs"]
 native-tls = ["deltalake/s3-native-tls", "deltalake/glue-native-tls"]
 rustls = ["deltalake/s3", "deltalake/glue"]
