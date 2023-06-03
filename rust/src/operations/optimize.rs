@@ -35,7 +35,6 @@ use arrow_schema::ArrowError;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
 use futures::{Future, StreamExt, TryStreamExt};
-use itertools::Itertools;
 use log::debug;
 use num_cpus;
 use parquet::arrow::async_reader::{ParquetObjectReader, ParquetRecordBatchStreamBuilder};
@@ -477,43 +476,10 @@ impl MergePlan {
                 })
                 .collect::<Result<Vec<_>, ArrowError>>()?;
 
-        // merge the zorderkey column
-        let zorder_key = arrow_select::concat::concat(
-            zorder_keys
-                .iter()
-                .map(|array| array.as_ref())
-                .collect_vec()
-                .as_slice(),
-        )?;
-
-        // Sort the zorder key column to get indices
-        let indices = arrow::compute::lexsort_to_indices(
-            &[SortColumn {
-                values: zorder_key,
-                options: None,
-            }],
-            None,
-        )?;
-
-        // Take the resulting indices and map into nested indices
-        let nested_indices: Vec<(usize, usize)> = batches
-            .iter()
-            .enumerate()
-            .flat_map(|(batch_i, batch)| {
-                std::iter::zip(
-                    std::iter::repeat(batch_i).take(batch.num_rows()),
-                    0..batch.num_rows(),
-                )
-            })
-            .collect();
-        let mapped_indices: Vec<(usize, usize)> = indices
-            .iter()
-            .map(|i| nested_indices[i.unwrap() as usize])
-            .collect::<Vec<_>>();
+        let indices = util::sort_chunked_indices(zorder_keys)?;
 
         // Interleave the batches
-        let out_batches =
-            util::interleave_batches(batches, Arc::new(mapped_indices), false).await?;
+        let out_batches = util::interleave_batches(batches, Arc::new(indices), false).await?;
 
         Ok(futures::stream::once(futures::future::ready(out_batches))
             .map(Ok)
@@ -860,11 +826,48 @@ pub(super) mod util {
     use itertools::Itertools;
     use tokio::task::JoinError;
 
+    /// Sorts the indices of a "chunked" array
+    ///
+    /// The resulting indices is a pair. The first element is the index of the
+    /// chunk, while the second is the index within the chunk. This is meant
+    /// to be used in combination with [interleave_batches] or [interleave].
+    pub fn sort_chunked_indices(array: Vec<ArrayRef>) -> Result<Vec<(usize, usize)>, ArrowError> {
+        let single_array = arrow_select::concat::concat(
+            array
+                .iter()
+                .map(|arr| arr.as_ref())
+                .collect_vec()
+                .as_slice(),
+        )
+        .unwrap();
+        let indices = arrow::compute::lexsort_to_indices(
+            &[SortColumn {
+                values: single_array,
+                options: None,
+            }],
+            None,
+        )?;
+        let nested_indices: Vec<(usize, usize)> = array
+            .iter()
+            .enumerate()
+            .flat_map(|(chunk_i, array)| {
+                std::iter::zip(std::iter::repeat(chunk_i).take(array.len()), 0..array.len())
+            })
+            .collect();
+        Ok(indices
+            .iter()
+            .map(|i| nested_indices[i.unwrap() as usize])
+            .collect_vec())
+    }
+
+    /// Interleaves a vector of record batches based on a set of indices
     pub async fn interleave_batches(
         batches: Vec<RecordBatch>,
         indices: Arc<Vec<(usize, usize)>>,
         use_threads: bool,
     ) -> Result<RecordBatch, DeltaTableError> {
+        // It would be nice if upstream provided this. Though TBH they would
+        // probably prefer we just use DataFusion to sort.
         let columns: Vec<ArrayRef> = futures::stream::iter(0..batches[0].num_columns())
             .map(|col_i| {
                 let arrays: Vec<ArrayRef> = batches
