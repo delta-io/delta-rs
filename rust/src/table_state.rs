@@ -103,7 +103,7 @@ impl DeltaTableState {
             let preader = SerializedFileReader::new(data)?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
-                return Err(DeltaTableError::from(action::ActionError::Generic(
+                return Err(DeltaTableError::from(action::ProtocolError::Generic(
                     "Action record in checkpoint should be a struct".to_string(),
                 )));
             }
@@ -126,7 +126,7 @@ impl DeltaTableState {
 
             for row_group in metadata.row_groups {
                 for action in actions_from_row_group(row_group, &mut reader)
-                    .map_err(action::ActionError::from)?
+                    .map_err(action::ProtocolError::from)?
                 {
                     self.process_action(
                         action,

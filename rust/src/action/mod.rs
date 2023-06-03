@@ -9,6 +9,9 @@ pub mod parquet2_read;
 #[cfg(feature = "parquet")]
 mod parquet_read;
 
+#[cfg(all(feature = "arrow"))]
+use arrow_schema::ArrowError;
+use object_store::Error as ObjectStoreError;
 use percent_encoding::percent_decode;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -17,12 +20,16 @@ use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
 use crate::delta_config::IsolationLevel;
-use crate::errors::{DeltaResult, DeltaTableError};
+use crate::errors::DeltaResult;
 use crate::{schema::*, DeltaTableMetaData};
 
 /// Error returned when an invalid Delta log action is encountered.
+#[allow(missing_docs)]
 #[derive(thiserror::Error, Debug)]
-pub enum ActionError {
+pub enum ProtocolError {
+    #[error("Table state does not contain metadata")]
+    NoMetaData,
+
     /// The action contains an invalid field.
     #[error("Invalid action field: {0}")]
     InvalidField(String),
@@ -41,7 +48,7 @@ pub enum ActionError {
     ParquetParseError {
         /// Parquet error details returned when parsing the checkpoint parquet
         #[from]
-        source: parquet2_read::ParseError,
+        source: parquet2::error::Error,
     },
 
     #[cfg(feature = "parquet")]
@@ -60,13 +67,30 @@ pub enum ActionError {
         /// The source error
         source: serde_json::Error,
     },
+
+    /// Error returned when converting the schema to Arrow format failed.
+    #[cfg(all(feature = "arrow"))]
+    #[error("Failed to convert into Arrow schema: {}", .source)]
+    Arrow {
+        /// Arrow error details returned when converting the schema in Arrow format failed
+        #[from]
+        source: ArrowError,
+    },
+
+    /// Passthrough error returned when calling ObjectStore.
+    #[error("ObjectStoreError: {source}")]
+    ObjectStore {
+        /// The source ObjectStoreError.
+        #[from]
+        source: ObjectStoreError,
+    },
 }
 
-fn decode_path(raw_path: &str) -> Result<String, ActionError> {
+fn decode_path(raw_path: &str) -> Result<String, ProtocolError> {
     percent_decode(raw_path.as_bytes())
         .decode_utf8()
         .map(|c| c.to_string())
-        .map_err(|e| ActionError::InvalidField(format!("Decode path failed for action: {e}")))
+        .map_err(|e| ProtocolError::InvalidField(format!("Decode path failed for action: {e}")))
 }
 
 /// Struct used to represent minValues and maxValues in add action statistics.
@@ -250,7 +274,7 @@ impl Hash for Add {
 
 impl Add {
     /// Returns the Add action with path decoded.
-    pub fn path_decoded(self) -> Result<Self, ActionError> {
+    pub fn path_decoded(self) -> Result<Self, ProtocolError> {
         decode_path(&self.path).map(|path| Self { path, ..self })
     }
 
@@ -349,11 +373,11 @@ impl MetaData {
 }
 
 impl TryFrom<DeltaTableMetaData> for MetaData {
-    type Error = DeltaTableError;
+    type Error = ProtocolError;
 
     fn try_from(metadata: DeltaTableMetaData) -> Result<Self, Self::Error> {
         let schema_string = serde_json::to_string(&metadata.schema)
-            .map_err(|e| DeltaTableError::SerializeSchemaJson { json_err: e })?;
+            .map_err(|source| ProtocolError::SerializeOperation { source })?;
         Ok(Self {
             id: metadata.id,
             name: metadata.name,
@@ -420,7 +444,7 @@ impl PartialEq for Remove {
 
 impl Remove {
     /// Returns the Remove action with path decoded.
-    pub fn path_decoded(self) -> Result<Self, ActionError> {
+    pub fn path_decoded(self) -> Result<Self, ProtocolError> {
         decode_path(&self.path).map(|path| Self { path, ..self })
     }
 }
@@ -605,7 +629,7 @@ impl DeltaOperation {
     /// Parameters configured for operation.
     pub fn operation_parameters(&self) -> DeltaResult<HashMap<String, Value>> {
         if let Some(Some(Some(map))) = serde_json::to_value(self)
-            .map_err(|err| ActionError::SerializeOperation { source: err })?
+            .map_err(|err| ProtocolError::SerializeOperation { source: err })?
             .as_object()
             .map(|p| p.values().next().map(|q| q.as_object()))
         {
@@ -624,7 +648,7 @@ impl DeltaOperation {
                 })
                 .collect())
         } else {
-            Err(ActionError::Generic(
+            Err(ProtocolError::Generic(
                 "Operation parameters serialized into unexpected shape".into(),
             )
             .into())

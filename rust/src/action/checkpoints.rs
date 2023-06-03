@@ -7,7 +7,7 @@ use chrono::{DateTime, Datelike, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::*;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
+use object_store::{path::Path, ObjectMeta, ObjectStore};
 use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use regex::Regex;
@@ -17,31 +17,23 @@ use std::convert::TryFrom;
 use std::iter::Iterator;
 use std::ops::Add;
 
-use super::{Action, Add as AddAction, MetaData, Protocol, Txn};
+use super::{Action, Add as AddAction, MetaData, Protocol, ProtocolError, Txn};
 use crate::delta_arrow::delta_log_schema_for_table;
-use crate::errors::DeltaTableError;
 use crate::schema::*;
 use crate::storage::DeltaObjectStore;
 use crate::table_state::DeltaTableState;
 use crate::{open_table_with_version, time_utils, CheckPoint, DeltaTable};
 
+type SchemaPath = Vec<String>;
+
 /// Error returned when there is an error during creating a checkpoint.
 #[derive(thiserror::Error, Debug)]
-pub enum CheckpointError {
-    /// Error returned when the DeltaTableState does not contain a metadata action.
-    #[error("DeltaTableMetadata not present in DeltaTableState")]
-    MissingMetaData,
+enum CheckpointError {
     /// Error returned when a string formatted partition value cannot be parsed to its appropriate
     /// data type.
     #[error("Partition value {0} cannot be parsed from string.")]
     PartitionValueNotParseable(String),
-    /// Passthrough error returned when calling DeltaTable.
-    #[error("DeltaTableError: {source}")]
-    DeltaTable {
-        /// The source DeltaTableError.
-        #[from]
-        source: DeltaTableError,
-    },
+
     /// Error returned when the parquet writer fails while writing the checkpoint.
     #[error("Failed to write parquet: {}", .source)]
     Parquet {
@@ -49,6 +41,7 @@ pub enum CheckpointError {
         #[from]
         source: ParquetError,
     },
+
     /// Error returned when converting the schema to Arrow format failed.
     #[error("Failed to convert into Arrow schema: {}", .source)]
     Arrow {
@@ -56,48 +49,30 @@ pub enum CheckpointError {
         #[from]
         source: ArrowError,
     },
-    /// Passthrough error returned when calling ObjectStore.
-    #[error("ObjectStoreError: {source}")]
-    ObjectStore {
-        /// The source ObjectStoreError.
-        #[from]
-        source: ObjectStoreError,
-    },
-    /// Passthrough error returned by serde_json.
-    #[error("serde_json::Error: {source}")]
-    JSONSerialization {
-        /// The source serde_json::Error.
-        #[from]
-        source: serde_json::Error,
-    },
-    /// Passthrough error returned when doing std::io operations
-    #[error("std::io::Error: {source}")]
-    Io {
-        /// The source std::io::Error
-        #[from]
-        source: std::io::Error,
-    },
+}
+
+impl From<CheckpointError> for ProtocolError {
+    fn from(value: CheckpointError) -> Self {
+        match value {
+            CheckpointError::PartitionValueNotParseable(_) => Self::InvalidField(value.to_string()),
+            CheckpointError::Arrow { source } => Self::Arrow { source },
+            CheckpointError::Parquet { source } => Self::ParquetParseError { source },
+        }
+    }
 }
 
 /// The record batch size for checkpoint parquet file
 pub const CHECKPOINT_RECORD_BATCH_SIZE: usize = 5000;
 
-impl From<CheckpointError> for ArrowError {
-    fn from(error: CheckpointError) -> Self {
-        ArrowError::from_external_error(Box::new(error))
-    }
-}
-
 /// Creates checkpoint at current table version
-pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), CheckpointError> {
+pub async fn create_checkpoint(table: &DeltaTable) -> Result<(), ProtocolError> {
     create_checkpoint_for(table.version(), table.get_state(), table.storage.as_ref()).await?;
-
     Ok(())
 }
 
 /// Delete expires log files before given version from table. The table log retention is based on
 /// the `logRetentionDuration` property of the Delta Table, 30 days by default.
-pub async fn cleanup_metadata(table: &DeltaTable) -> Result<i32, DeltaTableError> {
+pub async fn cleanup_metadata(table: &DeltaTable) -> Result<i32, ProtocolError> {
     let log_retention_timestamp =
         Utc::now().timestamp_millis() - table.get_state().log_retention_millis();
     cleanup_expired_logs_for(
@@ -115,8 +90,10 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     table_uri: &str,
     version: i64,
     cleanup: Option<bool>,
-) -> Result<(), CheckpointError> {
-    let table = open_table_with_version(table_uri, version).await?;
+) -> Result<(), ProtocolError> {
+    let table = open_table_with_version(table_uri, version)
+        .await
+        .map_err(|err| ProtocolError::Generic(err.to_string()))?;
     create_checkpoint_for(version, table.get_state(), table.storage.as_ref()).await?;
 
     let enable_expired_log_cleanup =
@@ -134,7 +111,7 @@ async fn create_checkpoint_for(
     version: i64,
     state: &DeltaTableState,
     storage: &DeltaObjectStore,
-) -> Result<(), CheckpointError> {
+) -> Result<(), ProtocolError> {
     // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
     // an appropriate split point yet though so only writing a single part currently.
     // See https://github.com/delta-io/delta-rs/issues/288
@@ -167,7 +144,7 @@ async fn flush_delete_files<T: Fn(&(i64, ObjectMeta)) -> bool>(
     maybe_delete_files: &mut Vec<(i64, ObjectMeta)>,
     files_to_delete: &mut Vec<(i64, ObjectMeta)>,
     should_delete_file: T,
-) -> Result<i32, DeltaTableError> {
+) -> Result<i32, ProtocolError> {
     if !maybe_delete_files.is_empty() && should_delete_file(maybe_delete_files.last().unwrap()) {
         files_to_delete.append(maybe_delete_files);
     }
@@ -177,7 +154,7 @@ async fn flush_delete_files<T: Fn(&(i64, ObjectMeta)) -> bool>(
         .map(|file| async move {
             match storage.delete(&file.1.location).await {
                 Ok(_) => Ok(1),
-                Err(e) => Err(DeltaTableError::from(e)),
+                Err(e) => Err(ProtocolError::from(e)),
             }
         })
         .collect::<Vec<_>>();
@@ -200,7 +177,7 @@ pub async fn cleanup_expired_logs_for(
     until_version: i64,
     storage: &DeltaObjectStore,
     log_retention_timestamp: i64,
-) -> Result<i32, DeltaTableError> {
+) -> Result<i32, ProtocolError> {
     lazy_static! {
         static ref DELTA_LOG_REGEX: Regex =
             Regex::new(r#"_delta_log/(\d{20})\.(json|checkpoint).*$"#).unwrap();
@@ -304,10 +281,8 @@ pub async fn cleanup_expired_logs_for(
     }
 }
 
-fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, CheckpointError> {
-    let current_metadata = state
-        .current_metadata()
-        .ok_or(CheckpointError::MissingMetaData)?;
+fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, ProtocolError> {
+    let current_metadata = state.current_metadata().ok_or(ProtocolError::NoMetaData)?;
 
     let partition_col_data_types = current_metadata.get_partition_col_data_types();
 
@@ -370,7 +345,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
 
         Action::remove(r)
     }))
-    .map(|a| serde_json::to_value(a).map_err(|err| ArrowError::JsonError(err.to_string())))
+    .map(|a| serde_json::to_value(a).map_err(ProtocolError::from))
     // adds
     .chain(state.files().iter().map(|f| {
         checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
@@ -390,7 +365,7 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Che
     let mut decoder = ReaderBuilder::new(arrow_schema)
         .with_batch_size(CHECKPOINT_RECORD_BATCH_SIZE)
         .build_decoder()?;
-    let jsons: Vec<serde_json::Value> = jsons.map(|r| r.unwrap()).collect();
+    let jsons = jsons.collect::<Result<Vec<serde_json::Value>, _>>()?;
     decoder.serialize(&jsons)?;
 
     while let Some(batch) = decoder.flush()? {
@@ -407,7 +382,7 @@ fn checkpoint_add_from_state(
     add: &AddAction,
     partition_col_data_types: &[(&str, &SchemaDataType)],
     stats_conversions: &[(SchemaPath, SchemaDataType)],
-) -> Result<Value, ArrowError> {
+) -> Result<Value, ProtocolError> {
     let mut v = serde_json::to_value(Action::add(add.clone()))
         .map_err(|err| ArrowError::JsonError(err.to_string()))?;
 
@@ -455,7 +430,7 @@ fn checkpoint_add_from_state(
 fn typed_partition_value_from_string(
     string_value: &str,
     data_type: &SchemaDataType,
-) -> Result<Value, CheckpointError> {
+) -> Result<Value, ProtocolError> {
     match data_type {
         SchemaDataType::primitive(primitive_type) => match primitive_type.as_str() {
             "string" | "binary" => Ok(string_value.to_owned().into()),
@@ -502,7 +477,7 @@ fn typed_partition_value_from_string(
 fn typed_partition_value_from_option_string(
     string_value: &Option<String>,
     data_type: &SchemaDataType,
-) -> Result<Value, CheckpointError> {
+) -> Result<Value, ProtocolError> {
     match string_value {
         Some(s) => {
             if s.is_empty() {
@@ -514,8 +489,6 @@ fn typed_partition_value_from_option_string(
         None => Ok(Value::Null),
     }
 }
-
-type SchemaPath = Vec<String>;
 
 fn collect_stats_conversions(
     paths: &mut Vec<(SchemaPath, SchemaDataType)>,

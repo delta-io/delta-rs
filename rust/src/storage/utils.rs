@@ -83,7 +83,7 @@ impl TryFrom<&Add> for ObjectMeta {
         let last_modified = DateTime::<Utc>::from_utc(
             NaiveDateTime::from_timestamp_millis(value.modification_time).ok_or(
                 DeltaTableError::InvalidAction {
-                    source: crate::action::ActionError::InvalidField(format!(
+                    source: crate::action::ProtocolError::InvalidField(format!(
                         "invalid modification_time: {:?}",
                         value.modification_time
                     )),

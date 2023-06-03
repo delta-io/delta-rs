@@ -10,6 +10,14 @@ use parquet2::read::decompress;
 use parquet2::read::get_page_iterator;
 use parquet2::read::levels::get_bit_width;
 
+use super::ProtocolError;
+use crate::action::{Action, Add, CommitInfo, MetaData, Protocol, Remove, Txn};
+use crate::schema::Guid;
+use boolean::for_each_boolean_field_value;
+use map::for_each_map_field_value;
+use primitive::for_each_primitive_field_value;
+use string::{for_each_repeated_string_field_value, for_each_string_field_value};
+
 mod boolean;
 mod dictionary;
 mod map;
@@ -17,13 +25,6 @@ mod primitive;
 mod stats;
 mod string;
 mod validity;
-
-use crate::action::{Action, Add, CommitInfo, MetaData, Protocol, Remove, Txn};
-use crate::schema::Guid;
-use boolean::for_each_boolean_field_value;
-use map::for_each_map_field_value;
-use primitive::for_each_primitive_field_value;
-use string::{for_each_repeated_string_field_value, for_each_string_field_value};
 
 /// Parquet deserilization error
 #[derive(thiserror::Error, Debug)]
@@ -41,6 +42,16 @@ pub enum ParseError {
         #[from]
         source: parquet2::error::Error,
     },
+}
+
+impl From<ParseError> for ProtocolError {
+    fn from(value: ParseError) -> Self {
+        match value {
+            ParseError::Generic(msg) => Self::Generic(msg),
+            ParseError::InvalidAction(msg) => Self::InvalidRow(msg),
+            ParseError::Parquet { source } => Self::ParquetParseError { source },
+        }
+    }
 }
 
 #[derive(Default)]
@@ -642,7 +653,7 @@ const MAX_PARQUET_HEADER_SIZE: usize = usize::MAX;
 pub fn actions_from_row_group<R: std::io::Read + std::io::Seek>(
     row_group: parquet2::metadata::RowGroupMetaData,
     reader: &mut R,
-) -> Result<Vec<Action>, ParseError> {
+) -> Result<Vec<Action>, ProtocolError> {
     let row_count = row_group.num_rows();
     // TODO: reuse actions buffer
     let mut actions: Vec<Option<Action>> = vec![None; row_count as usize];
@@ -664,7 +675,8 @@ pub fn actions_from_row_group<R: std::io::Read + std::io::Seek>(
                 return Err(ParseError::InvalidAction(format!(
                     "unexpected action: {}",
                     &schema_path[0]
-                )));
+                ))
+                .into());
             }
         };
         let field = &schema_path[1..];

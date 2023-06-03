@@ -1,7 +1,7 @@
 //! Exceptions for the deltalake crate
 use object_store::Error as ObjectStoreError;
 
-use crate::action::ActionError;
+use crate::action::ProtocolError;
 use crate::delta_config::DeltaConfigError;
 use crate::operations::transaction::TransactionError;
 
@@ -111,7 +111,7 @@ pub enum DeltaTableError {
     InvalidAction {
         /// Action error details returned of the invalid action.
         #[from]
-        source: ActionError,
+        source: ProtocolError,
     },
 
     /// Error returned when attempting to write bad data to the table
@@ -242,6 +242,7 @@ pub enum ApplyLogError {
     /// Error returned when the end of transaction log is reached.
     #[error("End of transaction log")]
     EndOfLog,
+
     /// Error returned when the JSON of the log record is invalid.
     #[error("Invalid JSON found when applying log record")]
     InvalidJson {
@@ -249,12 +250,14 @@ pub enum ApplyLogError {
         #[from]
         source: serde_json::error::Error,
     },
+
     /// Error returned when the storage failed to read the log content.
     #[error("Failed to read log content")]
     Storage {
         /// Storage error details returned while reading the log content.
         source: ObjectStoreError,
     },
+
     /// Error returned when reading delta config failed.
     #[error("Failed to read delta config: {}", .source)]
     Config {
@@ -262,6 +265,7 @@ pub enum ApplyLogError {
         #[from]
         source: DeltaConfigError,
     },
+
     /// Error returned when a line from log record is invalid.
     #[error("Failed to read line from log record")]
     Io {
@@ -269,12 +273,13 @@ pub enum ApplyLogError {
         #[from]
         source: std::io::Error,
     },
+
     /// Error returned when the action record is invalid in log.
     #[error("Invalid action record found in log: {}", .source)]
     InvalidAction {
         /// Action error details returned of the invalid action.
         #[from]
-        source: ActionError,
+        source: ProtocolError,
     },
 }
 
