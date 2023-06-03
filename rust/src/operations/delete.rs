@@ -37,6 +37,7 @@ use arrow::datatypes::Field;
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
+use arrow_cast::CastOptions;
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
 use datafusion::datasource::listing::PartitionedFile;
 use datafusion::datasource::MemTable;
@@ -461,6 +462,7 @@ async fn excute_non_empty_expr(
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
+        &CastOptions { safe: false },
     )
     .await?;
     metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis();

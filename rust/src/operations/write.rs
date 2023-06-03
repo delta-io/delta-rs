@@ -32,7 +32,7 @@ use crate::writer::record_batch::divide_by_partition_values;
 use crate::writer::utils::PartitionPath;
 
 use arrow_array::RecordBatch;
-use arrow_cast::{can_cast_types, cast};
+use arrow_cast::{can_cast_types, cast_with_options, CastOptions};
 use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
@@ -96,6 +96,9 @@ pub struct WriteBuilder {
     write_batch_size: Option<usize>,
     /// RecordBatches to be written into the table
     batches: Option<Vec<RecordBatch>>,
+    /// CastOptions determines how data types that do not match the underlying table are handled
+    /// By default an error is returned
+    cast_options: CastOptions,
 }
 
 impl WriteBuilder {
@@ -112,6 +115,7 @@ impl WriteBuilder {
             target_file_size: None,
             write_batch_size: None,
             batches: None,
+            cast_options: CastOptions { safe: false },
         }
     }
 
@@ -167,6 +171,12 @@ impl WriteBuilder {
         self
     }
 
+    /// Specify the cast options to use when casting columns that do not match the table's schema.
+    pub fn with_cast_options(mut self, cast_options: CastOptions) -> Self {
+        self.cast_options = cast_options;
+        self
+    }
+
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
         match self.store.is_delta_table_location().await? {
             true => {
@@ -216,6 +226,7 @@ pub(crate) async fn write_execution_plan(
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
+    cast_options: &CastOptions,
 ) -> DeltaResult<Vec<Add>> {
     let invariants = snapshot
         .current_metadata()
@@ -233,6 +244,7 @@ pub(crate) async fn write_execution_plan(
         let inner_plan = plan.clone();
         let inner_schema = schema.clone();
         let task_ctx = Arc::new(TaskContext::from(&state));
+        let inner_cast = cast_options.clone();
         let config = WriterConfig::new(
             inner_schema.clone(),
             partition_columns.clone(),
@@ -248,7 +260,7 @@ pub(crate) async fn write_execution_plan(
                 while let Some(maybe_batch) = stream.next().await {
                     let batch = maybe_batch?;
                     checker_stream.check_batch(&batch).await?;
-                    let arr = cast_record_batch(&batch, inner_schema.clone())?;
+                    let arr = cast_record_batch(&batch, inner_schema.clone(), &inner_cast)?;
                     writer.write(&arr).await?;
                 }
                 writer.close().await
@@ -379,6 +391,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.target_file_size,
                 this.write_batch_size,
                 None,
+                &this.cast_options,
             )
             .await?;
             actions.extend(add_actions.into_iter().map(Action::add));
@@ -467,14 +480,17 @@ fn can_cast_batch(from_schema: &ArrowSchema, to_schema: &ArrowSchema) -> bool {
 fn cast_record_batch(
     batch: &RecordBatch,
     target_schema: ArrowSchemaRef,
+    cast_options: &CastOptions,
 ) -> DeltaResult<RecordBatch> {
+    //let cast_options = CastOptions { safe: false };
+
     let columns = target_schema
         .all_fields()
         .iter()
         .map(|f| {
             let col = batch.column_by_name(f.name()).unwrap();
             if !col.data_type().equals_datatype(f.data_type()) {
-                cast(col, f.data_type())
+                cast_with_options(col, f.data_type(), cast_options)
             } else {
                 Ok(col.clone())
             }
@@ -491,7 +507,8 @@ mod tests {
     use crate::writer::test_utils::{get_delta_schema, get_record_batch};
     use arrow::datatypes::Field;
     use arrow::datatypes::Schema as ArrowSchema;
-    use arrow_array::{Int32Array, StringArray};
+    use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
+    use arrow_schema::{DataType, TimeUnit};
     use datafusion::assert_batches_sorted_eq;
     use serde_json::json;
 
@@ -538,9 +555,11 @@ mod tests {
     #[tokio::test]
     async fn test_write_different_types() {
         // Ensure write data is casted when data of a different type from the table is provided.
+
+        // Validate String -> Int is err
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "value",
-            arrow::datatypes::DataType::Int32,
+            DataType::Int32,
             true,
         )]));
 
@@ -553,7 +572,7 @@ mod tests {
 
         let schema = Arc::new(ArrowSchema::new(vec![Field::new(
             "value",
-            arrow::datatypes::DataType::Utf8,
+            DataType::Utf8,
             true,
         )]));
 
@@ -567,7 +586,13 @@ mod tests {
         )
         .unwrap();
 
-        let table = DeltaOps::from(table).write(vec![batch]).await.unwrap();
+        // Test cast options
+        let table = DeltaOps::from(table)
+            .write(vec![batch.clone()])
+            .with_cast_options(CastOptions { safe: true })
+            .await
+            .unwrap();
+
         let expected = [
             "+-------+",
             "| value |",
@@ -580,6 +605,48 @@ mod tests {
             "+-------+",
         ];
         let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        let res = DeltaOps::from(table).write(vec![batch]).await;
+        assert!(res.is_err());
+
+        // Validate the datetime -> string behavior
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            arrow::datatypes::DataType::Utf8,
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec![Some(
+                "2023-06-03 15:35:00".to_owned(),
+            )]))],
+        )
+        .unwrap();
+        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(TimestampMicrosecondArray::from(vec![Some(10000)]))],
+        )
+        .unwrap();
+
+        let _res = DeltaOps::from(table).write(vec![batch]).await.unwrap();
+        let expected = [
+            "+-------------------------+",
+            "| value                   |",
+            "+-------------------------+",
+            "| 1970-01-01T00:00:00.010 |",
+            "| 2023-06-03 15:35:00     |",
+            "+-------------------------+",
+        ];
+        let actual = get_data(&_res).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
