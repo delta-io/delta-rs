@@ -168,6 +168,10 @@ pub fn get_delta_metadata(partition_cols: &[String]) -> DeltaTableMetaData {
     )
 }
 
+/*
+ * Create a bare table without any commits, this basically just creates a directory and then
+ * initializes a DeltaTable from it
+ */
 pub fn create_bare_table() -> DeltaTable {
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
@@ -176,10 +180,14 @@ pub fn create_bare_table() -> DeltaTable {
         .unwrap()
 }
 
-pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
+/*
+ * Create an initialized table with a schema
+ */
+pub async fn create_initialized_table_with(
+    schema: Schema,
+    partition_cols: &[String],
+) -> DeltaTable {
     let mut table = create_bare_table();
-    let table_schema = get_delta_schema();
-
     let mut commit_info = serde_json::Map::<String, serde_json::Value>::new();
     commit_info.insert(
         "operation".to_string(),
@@ -199,7 +207,7 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
         None,
         None,
         None,
-        table_schema,
+        schema,
         partition_cols.to_vec(),
         HashMap::new(),
     );
@@ -210,4 +218,12 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
         .unwrap();
 
     table
+}
+
+/*
+ * Create an initialize table in a temp directory with a test schema
+ */
+pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
+    let table_schema = get_delta_schema();
+    create_initialized_table_with(table_schema, partition_cols).await
 }

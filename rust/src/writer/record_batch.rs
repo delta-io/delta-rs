@@ -48,6 +48,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::ArrayRef;
 use arrow_row::{RowConverter, SortField};
 use bytes::Bytes;
+use log::*;
 use object_store::ObjectStore;
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
@@ -291,7 +292,15 @@ impl PartitionWriter {
     /// This method buffers the write stream internally so it can be invoked for many
     /// record batches and flushed after the appropriate number of bytes has been written.
     pub fn write(&mut self, record_batch: &RecordBatch) -> Result<(), DeltaWriterError> {
+        /*
+         * This schema check is redundant with one which ArrowWriter
+         * performs itself
+         */
         if record_batch.schema() != self.arrow_schema {
+            debug!("Attempting to write RecordBatch which does not match self.arrow_schema");
+            let new_batch = RecordBatch::try_new(self.arrow_schema.clone(), record_batch.columns().iter().map(|c| c.clone()).collect())?;
+
+            println!("record batch mismatch, new: {:?}", new_batch);
             return Err(DeltaWriterError::SchemaMismatch {
                 record_batch_schema: record_batch.schema(),
                 expected_schema: self.arrow_schema.clone(),
@@ -412,7 +421,7 @@ fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
 mod tests {
     use super::*;
     use crate::writer::{
-        test_utils::{create_initialized_table, get_record_batch},
+        test_utils::{create_initialized_table, create_initialized_table_with, get_record_batch},
         utils::PartitionPath,
     };
     use arrow::json::ReaderBuilder;
@@ -543,6 +552,49 @@ mod tests {
         let batch = get_record_batch(None, false);
         let partition_cols = vec![];
         let table = create_initialized_table(&partition_cols).await;
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        writer.write(batch).await.unwrap();
+        let adds = writer.flush().await.unwrap();
+        assert_eq!(adds.len(), 1);
+    }
+
+    /*
+     * This is a test case to address:
+     *  <https://github.com/delta-io/delta-rs/issues/1286>
+     */
+    #[tokio::test]
+    async fn test_write_batch_with_timestamps() {
+        use crate::{SchemaDataType, SchemaField};
+        use arrow::array::*;
+        use arrow::datatypes::{Field, TimeUnit, DataType as ArrowDataType};
+
+        let schema = Schema::new(vec![
+            SchemaField::new(
+                "id".to_string(),
+                SchemaDataType::primitive("string".to_string()),
+                true,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "timestamp".to_string(),
+                SchemaDataType::primitive("timestamp".to_string()),
+                true,
+                HashMap::new(),
+            ),
+        ]);
+
+        let batch_schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("id", ArrowDataType::Utf8, true),
+            Field::new("timestamp", ArrowDataType::Timestamp(TimeUnit::Nanosecond, None), true),
+        ]));
+
+        let table = create_initialized_table_with(schema, &vec![]).await;
+
+        let id_values = Arc::new(StringArray::from(vec![Some("Hi")]));
+        let timestamp_values = Arc::new(TimestampNanosecondArray::from(vec![1]));
+        let batch = RecordBatch::try_new(batch_schema, vec![id_values, timestamp_values])
+            .unwrap();
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         writer.write(batch).await.unwrap();
