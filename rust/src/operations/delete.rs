@@ -61,7 +61,7 @@ use crate::errors::{DeltaResult, DeltaTableError};
 use crate::operations::transaction::commit;
 use crate::operations::write::write_execution_plan;
 use crate::storage::{DeltaObjectStore, ObjectStoreRef};
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 const PATH_COLUMN: &str = "__delta_rs_path";

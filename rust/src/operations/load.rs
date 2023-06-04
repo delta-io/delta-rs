@@ -8,7 +8,7 @@ use futures::future::BoxFuture;
 
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::DeltaObjectStore;
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 #[derive(Debug, Clone)]

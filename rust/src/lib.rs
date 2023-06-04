@@ -83,20 +83,15 @@ compile_error!(
 );
 
 pub mod action;
-pub mod builder;
 pub mod data_catalog;
-pub mod delta;
 pub mod delta_config;
 pub mod errors;
 pub mod operations;
 pub mod partitions;
 pub mod schema;
 pub mod storage;
-pub mod table_state;
+pub mod table;
 pub mod time_utils;
-
-#[cfg(all(feature = "arrow"))]
-pub mod table_state_arrow;
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod delta_arrow;
@@ -105,12 +100,11 @@ pub mod delta_datafusion;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod writer;
 
-pub use self::builder::*;
 pub use self::data_catalog::{get_data_catalog, DataCatalog, DataCatalogError};
-pub use self::delta::*;
 pub use self::delta_config::*;
 pub use self::partitions::*;
 pub use self::schema::*;
+pub use self::table::*;
 pub use errors::*;
 pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
 pub use operations::DeltaOps;

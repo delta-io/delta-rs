@@ -28,7 +28,7 @@ use crate::action::{Action, Add, DeltaOperation, Remove};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::operations::transaction::commit;
 use crate::storage::DeltaObjectStore;
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 /// Audit the Delta Table's active files with the underlying file system.

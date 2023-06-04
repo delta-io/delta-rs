@@ -2,10 +2,10 @@
 
 use bytes::Bytes;
 use deltalake::action::{self, Add, DeltaOperation, Remove, SaveMode};
-use deltalake::builder::DeltaTableBuilder;
 use deltalake::operations::create::CreateBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::storage::DeltaObjectStore;
+use deltalake::DeltaTableBuilder;
 use deltalake::{DeltaTable, Schema};
 use object_store::{path::Path, ObjectStore};
 use std::any::Any;

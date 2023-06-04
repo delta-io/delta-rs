@@ -46,7 +46,7 @@ use super::writer::{PartitionWriter, PartitionWriterConfig};
 use crate::action::{self, Action, DeltaOperation};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::ObjectStoreRef;
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
 

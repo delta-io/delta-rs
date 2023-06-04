@@ -9,7 +9,7 @@ use object_store::DynObjectStore;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::delta::DeltaTable;
+use super::DeltaTable;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::config::StorageOptions;
 use crate::storage::{DeltaObjectStore, ObjectStoreRef};

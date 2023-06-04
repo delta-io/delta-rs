@@ -61,7 +61,7 @@ use crate::action::{self, Add};
 use crate::builder::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::ObjectStoreRef;
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options, DeltaTable, Invariant, SchemaDataType};
 
 impl From<DeltaTableError> for DataFusionError {

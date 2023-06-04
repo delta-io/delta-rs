@@ -19,16 +19,20 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
-use super::action::{self, find_latest_check_point_for_version, get_last_checkpoint, Action};
-use super::partitions::PartitionFilter;
-use super::schema::*;
-use super::table_state::DeltaTableState;
+use self::state::DeltaTableState;
+use crate::action::{self, find_latest_check_point_for_version, get_last_checkpoint, Action};
 use crate::action::{Add, ProtocolError, Stats};
 use crate::errors::DeltaTableError;
+use crate::partitions::PartitionFilter;
+use crate::schema::*;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
-// TODO re-exports only for transition
-pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
+pub(crate) mod builder;
+pub mod state;
+#[cfg(all(feature = "arrow"))]
+pub mod state_arrow;
+
+pub use builder::*;
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]

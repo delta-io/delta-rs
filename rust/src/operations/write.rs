@@ -32,14 +32,14 @@ use super::writer::{DeltaWriter, WriterConfig};
 use super::MAX_SUPPORTED_WRITER_VERSION;
 use super::{transaction::commit, CreateBuilder};
 use crate::action::{Action, Add, DeltaOperation, Remove, SaveMode};
-use crate::delta::DeltaTable;
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::schema::Schema;
 use crate::storage::{DeltaObjectStore, ObjectStoreRef};
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::writer::record_batch::divide_by_partition_values;
 use crate::writer::utils::PartitionPath;
+use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
 enum WriteError {

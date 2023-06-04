@@ -1,4 +1,3 @@
-#![allow(deprecated)]
 use chrono::Utc;
 use deltalake::action::{Action, Add, DeltaOperation, Remove, SaveMode};
 use deltalake::operations::create::CreateBuilder;

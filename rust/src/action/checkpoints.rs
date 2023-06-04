@@ -21,7 +21,7 @@ use super::{Action, Add as AddAction, MetaData, Protocol, ProtocolError, Txn};
 use crate::delta_arrow::delta_log_schema_for_table;
 use crate::schema::*;
 use crate::storage::DeltaObjectStore;
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::{open_table_with_version, time_utils, CheckPoint, DeltaTable};
 
 type SchemaPath = Vec<String>;

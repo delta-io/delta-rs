@@ -26,7 +26,7 @@ use std::hash::{Hash, Hasher};
 use crate::delta_config::IsolationLevel;
 use crate::errors::DeltaResult;
 use crate::storage::ObjectStoreRef;
-use crate::{delta::CheckPoint, schema::*, DeltaTableMetaData};
+use crate::{schema::*, table::CheckPoint, DeltaTableMetaData};
 
 /// Error returned when an invalid Delta log action is encountered.
 #[allow(missing_docs)]

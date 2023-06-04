@@ -9,7 +9,7 @@ use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
 use crate::delta_config::IsolationLevel;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::commit_uri_from_version;
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 
 #[cfg(feature = "datafusion")]
 use super::state::AddContainer;
