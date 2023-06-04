@@ -129,7 +129,8 @@ impl Worker {
         std::env::set_var("DYNAMO_LOCK_OWNER_NAME", &name);
         let table = DeltaTableBuilder::from_uri(path)
             .with_allow_http(true)
-            .build()
+            .load()
+            .await
             .unwrap();
         Self { table, name }
     }
