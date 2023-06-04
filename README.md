@@ -40,21 +40,32 @@
   </a>
 </p>
 
-This library provides low level access to Delta tables in Rust, which can be used standalone
-or for integrating on other frameworks like [datafusion][datafusion], [polars][polars], or [ballista][ballista].
-It also provider higher level APIs to perform more complex [operations](#supported-operations) that are
-used to interact with Delta tables. These operations are also exposed as python bindings.
+The delta-rs project aims to unlock the power of the Deltalake for as many users and projects as possible
+by providing native low level APIs aimed at developers and integrators, as well as a high level operations
+API that lets you query, inspect, and operate your Deltalake with ease.
+
+## Integrations
+
+- [polars](https://www.pola.rs/)
+- [datafusion][datafusion]
+- [ballista][ballista]
+- [DuckDB](https://duckdb.org/)
+- [Dask](https://github.com/dask-contrib/dask-deltatable)
+- [datahub](https://datahubproject.io/)
+- [Ray](https://github.com/delta-incubator/deltaray)
 
 ## Cloud Integrations
 
-| Storage         |  Rust   | Python  | Comment                             |
-| --------------- | :-----: | :-----: | ----------------------------------- |
-| Local           | ![done] | ![done] |                                     |
-| S3 - AWS        | ![done] | ![done] | requires lock for concurrent writes |
-| S3 - MinIO      | ![done] | ![done] | requires lock for concurrent writes |
-| S3 - R2         | ![done] | ![done] | requires lock for concurrent writes |
-| Azure Blob      | ![done] | ![done] |                                     |
-| Azure ADLS Gen2 | ![done] | ![done] |                                     |
+| Storage              |         Rust          |        Python         | Comment                             |
+| -------------------- | :-------------------: | :-------------------: | ----------------------------------- |
+| Local                |        ![done]        |        ![done]        |                                     |
+| S3 - AWS             |        ![done]        |        ![done]        | requires lock for concurrent writes |
+| S3 - MinIO           |        ![done]        |        ![done]        | requires lock for concurrent writes |
+| S3 - R2              |        ![done]        |        ![done]        | requires lock for concurrent writes |
+| Azure Blob           |        ![done]        |        ![done]        |                                     |
+| Azure ADLS Gen2      |        ![done]        |        ![done]        |                                     |
+| Micorosft OneLake    | [![open]][onelake-rs] | [![open]][onelake-rs] |                                     |
+| Google Cloud Storage |        ![done]        |        ![done]        |                                     |
 
 ## Supported Operations
 
@@ -70,7 +81,7 @@ used to interact with Delta tables. These operations are also exposed as python 
 | Merge                 | [![open]][merge-rs] | [![open]][merge-py] |                                       |
 | FS check              |       ![done]       |                     | Remove corrupted files from table     |
 
-## Protocol Support
+## Protocol Support Level
 
 | Writer Version | Requirement                                   |        Status        |
 | -------------- | --------------------------------------------- | :------------------: |
@@ -99,3 +110,4 @@ used to interact with Delta tables. These operations are also exposed as python 
 [merge-py]: https://github.com/delta-io/delta-rs/issues/1357
 [merge-rs]: https://github.com/delta-io/delta-rs/issues/850
 [writer-rs]: https://github.com/delta-io/delta-rs/issues/851
+[onelake-rs]: https://github.com/delta-io/delta-rs/issues/1418
