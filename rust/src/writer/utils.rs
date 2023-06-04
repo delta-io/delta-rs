@@ -78,24 +78,27 @@ impl Display for PartitionPath {
     }
 }
 
-// TODO: parquet files have a 5 digit zero-padded prefix and a "c\d{3}" suffix that
-// I have not been able to find documentation for yet.
+/// Generate the name of the file to be written
+/// prefix: The location of the file to be written
+/// part_count: Used the indicate that single logical partition was split into multiple physical files
+///     starts at 0. Is typically used when writer splits that data due to file size constraints
 pub(crate) fn next_data_path(
     prefix: &Path,
     part_count: usize,
     writer_id: &Uuid,
     writer_properties: &WriterProperties,
 ) -> Path {
+
     fn compression_to_str(compression: &Compression) -> &str {
         match compression {
             Compression::UNCOMPRESSED => "",
-            Compression::SNAPPY => "snappy",
-            Compression::GZIP(_) => "gz",
-            Compression::LZO => "lzo",
-            Compression::BROTLI(_) => "brotli",
-            Compression::LZ4 => "lz4",
-            Compression::ZSTD(_) => "zstd",
-            Compression::LZ4_RAW => "lz4_raw",
+            Compression::SNAPPY => ".snappy",
+            Compression::GZIP(_) => ".gz",
+            Compression::LZO => ".lzo",
+            Compression::BROTLI(_) => ".brotli",
+            Compression::LZ4 => ".lz4",
+            Compression::ZSTD(_) => ".zstd",
+            Compression::LZ4_RAW => ".lz4_raw",
         }
     }
 
@@ -107,18 +110,7 @@ pub(crate) fn next_data_path(
     let part = format!("{:0>5}", part_count);
 
     // TODO: what does c000 mean?
-    let mut file_name = format!("part-{}-{}-c000", part, writer_id);
-
-    match compression {
-        Compression::UNCOMPRESSED => {}
-        _ => {
-            file_name.push('.');
-            file_name.push_str(compression_to_str(&compression));
-        }
-    }
-
-    file_name.push_str(".parquet");
-
+    let file_name = format!("part-{}-{}-c000{}.parquet", part, writer_id, compression_to_str(&compression));
     prefix.child(file_name)
 }
 
