@@ -1,7 +1,8 @@
 #![allow(deprecated)]
 use chrono::Utc;
-use deltalake::action::{Action, Add, Remove};
+use deltalake::action::{Action, Add, DeltaOperation, Remove, SaveMode};
 use deltalake::operations::create::CreateBuilder;
+use deltalake::operations::transaction::commit;
 use deltalake::{DeltaTable, Schema, SchemaDataType, SchemaField};
 use serde_json::Value;
 use std::collections::HashMap;
@@ -89,7 +90,12 @@ pub fn add(offset_millis: i64) -> Add {
 }
 
 pub async fn commit_add(table: &mut DeltaTable, add: &Add) -> i64 {
-    commit_actions(table, vec![Action::add(add.clone())]).await
+    let operation = DeltaOperation::Write {
+        mode: SaveMode::Append,
+        partition_by: None,
+        predicate: None,
+    };
+    commit_actions(table, vec![Action::add(add.clone())], operation).await
 }
 
 pub async fn commit_removes(table: &mut DeltaTable, removes: Vec<&Remove>) -> i64 {
@@ -97,11 +103,24 @@ pub async fn commit_removes(table: &mut DeltaTable, removes: Vec<&Remove>) -> i6
         .iter()
         .map(|r| Action::remove((*r).clone()))
         .collect();
-    commit_actions(table, vec).await
+    let operation = DeltaOperation::Delete { predicate: None };
+    commit_actions(table, vec, operation).await
 }
 
-pub async fn commit_actions(table: &mut DeltaTable, actions: Vec<Action>) -> i64 {
-    let mut tx = table.create_transaction(None);
-    tx.add_actions(actions);
-    tx.commit(None, None).await.unwrap()
+pub async fn commit_actions(
+    table: &mut DeltaTable,
+    actions: Vec<Action>,
+    operation: DeltaOperation,
+) -> i64 {
+    let version = commit(
+        table.object_store().as_ref(),
+        &actions,
+        operation,
+        &table.state,
+        None,
+    )
+    .await
+    .unwrap();
+    table.update().await.unwrap();
+    version
 }

@@ -53,8 +53,8 @@ pub enum CommitConflictError {
     ///   you may need to upgrade your Delta Lake version.
     /// - When multiple writers are creating or replacing a table at the same time.
     /// - When multiple writers are writing to an empty path at the same time.
-    #[error("Protocol changed since last commit.")]
-    ProtocolChanged,
+    #[error("Protocol changed since last commit: {0}")]
+    ProtocolChanged(String),
 
     /// Error returned when the table requires an unsupported writer version
     #[error("Delta-rs does not support writer version {0}")]
@@ -392,10 +392,18 @@ impl<'a> ConflictChecker<'a> {
     /// to read and write against the protocol set by the committed transaction.
     fn check_protocol_compatibility(&self) -> Result<(), CommitConflictError> {
         for p in self.winning_commit_summary.protocol() {
-            if self.txn_info.read_snapshot.min_reader_version() < p.min_reader_version
-                || self.txn_info.read_snapshot.min_writer_version() < p.min_writer_version
-            {
-                return Err(CommitConflictError::ProtocolChanged);
+            let (win_read, curr_read) = (
+                p.min_reader_version,
+                self.txn_info.read_snapshot.min_reader_version(),
+            );
+            let (win_write, curr_write) = (
+                p.min_writer_version,
+                self.txn_info.read_snapshot.min_writer_version(),
+            );
+            if curr_read < win_read || win_write < curr_write {
+                return Err(CommitConflictError::ProtocolChanged(
+                    format!("reqired read/write {win_read}/{win_write}, current read/write {curr_read}/{curr_write}"),
+                ));
             };
         }
         if !self.winning_commit_summary.protocol().is_empty()
@@ -405,7 +413,9 @@ impl<'a> ConflictChecker<'a> {
                 .iter()
                 .any(|a| matches!(a, Action::protocol(_)))
         {
-            return Err(CommitConflictError::ProtocolChanged);
+            return Err(CommitConflictError::ProtocolChanged(
+                "protocol changed".into(),
+            ));
         };
         Ok(())
     }
@@ -818,7 +828,10 @@ mod tests {
             vec![tu::create_protocol_action(None, None)],
             false,
         );
-        assert!(matches!(result, Err(CommitConflictError::ProtocolChanged)));
+        assert!(matches!(
+            result,
+            Err(CommitConflictError::ProtocolChanged(_))
+        ));
 
         // taint whole table
         // `read_whole_table` should disallow any concurrent change, even if the change

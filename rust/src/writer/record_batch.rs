@@ -4,37 +4,13 @@
 //! Each Parquet file is buffered in-memory and only written once `flush()` is called on
 //! the writer. Once written, add actions are returned by the writer. It's the users responsibility
 //! to create the transaction using those actions.
-//!
-//! # Examples
-//!
-//! Write to an existing Delta Lake table:
-//! ```rust ignore
-//! let table = DeltaTable::try_from_uri("../path/to/table")
-//! let batch: RecordBatch = ...
-//! let mut writer = RecordBatchWriter::for_table(table, /*storage_options=*/ HashMap::new())
-//! writer.write(batch)?;
-//! let actions: Vec<action::Action> = writer.flush()?.iter()
-//!     .map(|add| Action::add(add.into()))
-//!     .collect();
-//! let mut transaction = table.create_transaction(Some(DeltaTransactionOptions::new(/*max_retry_attempts=*/3)));
-//! transaction.add_actions(actions);
-//! async {
-//!     transaction.commit(Some(DeltaOperation::Write {
-//!         SaveMode::Append,
-//!         partitionBy: Some(table.get_metadata().partition_columns),
-//!         predicate: None,
-//!     }))
-//! }
-//! ```
+
 use std::{collections::HashMap, sync::Arc};
 
-use arrow::array::{Array, UInt32Array};
 use arrow::compute::{lexicographical_partition_ranges, take, SortColumn};
-use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
-use arrow::error::ArrowError;
-use arrow::record_batch::RecordBatch;
-use arrow_array::ArrayRef;
+use arrow_array::{Array, ArrayRef, RecordBatch, UInt32Array};
 use arrow_row::{RowConverter, SortField};
+use arrow_schema::{ArrowError, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use bytes::Bytes;
 use object_store::ObjectStore;
 use parquet::{arrow::ArrowWriter, errors::ParquetError};

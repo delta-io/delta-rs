@@ -1,9 +1,10 @@
-#![allow(dead_code, unused_variables, deprecated)]
+#![allow(dead_code, unused_variables)]
 
 use bytes::Bytes;
-use deltalake::action::{self, Add, Remove};
+use deltalake::action::{self, Add, DeltaOperation, Remove, SaveMode};
 use deltalake::builder::DeltaTableBuilder;
 use deltalake::operations::create::CreateBuilder;
+use deltalake::operations::transaction::commit;
 use deltalake::storage::DeltaObjectStore;
 use deltalake::{DeltaTable, Schema};
 use object_store::{path::Path, ObjectStore};
@@ -137,9 +138,22 @@ pub async fn add_file(
             data_change: true,
             ..Default::default()
         };
-        let mut transaction = table.create_transaction(None);
-        transaction.add_action(action::Action::add(add));
-        transaction.commit(None, None).await.unwrap();
+        let operation = DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by: None,
+            predicate: None,
+        };
+        let actions = vec![action::Action::add(add)];
+        commit(
+            table.object_store().as_ref(),
+            &actions,
+            operation,
+            &table.state,
+            None,
+        )
+        .await
+        .unwrap();
+        table.update().await.unwrap();
     }
 }
 
@@ -161,7 +175,16 @@ pub async fn remove_file(
         data_change: true,
         ..Default::default()
     };
-    let mut transaction = table.create_transaction(None);
-    transaction.add_action(action::Action::remove(remove));
-    transaction.commit(None, None).await.unwrap();
+    let operation = DeltaOperation::Delete { predicate: None };
+    let actions = vec![action::Action::remove(remove)];
+    commit(
+        table.object_store().as_ref(),
+        &actions,
+        operation,
+        &table.state,
+        None,
+    )
+    .await
+    .unwrap();
+    table.update().await.unwrap();
 }

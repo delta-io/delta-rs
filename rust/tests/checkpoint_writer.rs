@@ -2,6 +2,7 @@
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 mod fs_common;
+use deltalake::action::DeltaOperation;
 
 // NOTE: The below is a useful external command for inspecting the written checkpoint schema visually:
 // parquet-tools inspect tests/data/checkpoints/_delta_log/00000000000000000005.checkpoint.parquet
@@ -360,8 +361,11 @@ mod checkpoints_with_tombstones {
             .map(Action::remove)
             .chain(std::iter::once(Action::add(add.clone())))
             .collect();
-
-        fs_common::commit_actions(table, actions).await;
+        let operation = DeltaOperation::Optimize {
+            predicate: None,
+            target_size: 1000000,
+        };
+        fs_common::commit_actions(table, actions, operation).await;
         (removes, add)
     }
 
