@@ -10,9 +10,11 @@ license = {file = "LICENSE.txt"}
 requires-python = ">=3.7"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3 :: Only"
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10"
 ]
 dependencies = [
     "pyarrow>=7",
