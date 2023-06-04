@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::debug;
@@ -31,7 +31,6 @@ use super::schema::*;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, ProtocolError, Stats};
 use crate::errors::DeltaTableError;
-use crate::operations::vacuum::VacuumBuilder;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
 // TODO re-exports only for transition
@@ -722,29 +721,6 @@ impl DeltaTable {
             .current_metadata()
             .ok_or(DeltaTableError::NoMetadata)?
             .get_configuration())
-    }
-
-    /// Vacuum the delta table. See [`VacuumBuilder`] for more information.
-    #[deprecated(
-        since = "0.10.0",
-        note = "use DelaOps from operations module to create a Vacuum operation."
-    )]
-    pub async fn vacuum(
-        &mut self,
-        retention_hours: Option<u64>,
-        dry_run: bool,
-        enforce_retention_duration: bool,
-    ) -> Result<Vec<String>, DeltaTableError> {
-        let mut plan = VacuumBuilder::new(self.object_store(), self.state.clone())
-            .with_dry_run(dry_run)
-            .with_enforce_retention_duration(enforce_retention_duration);
-        if let Some(hours) = retention_hours {
-            plan = plan.with_retention_period(Duration::hours(hours as i64));
-        }
-
-        let (table, metrics) = plan.await?;
-        self.state = table.state;
-        Ok(metrics.files_deleted)
     }
 
     /// Creates a new DeltaTransaction for the DeltaTable.
