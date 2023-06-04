@@ -1,9 +1,8 @@
 #![allow(deprecated)]
 use chrono::Utc;
-use deltalake::action::{Action, Add, Protocol, Remove};
-use deltalake::{
-    builder::DeltaTableBuilder, DeltaTable, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
-};
+use deltalake::action::{Action, Add, Remove};
+use deltalake::operations::create::CreateBuilder;
+use deltalake::{DeltaTable, Schema, SchemaDataType, SchemaField};
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
@@ -44,14 +43,16 @@ pub async fn create_test_table(
     partition_columns: Vec<&str>,
     config: HashMap<String, Option<String>>,
 ) -> DeltaTable {
-    let mut table = DeltaTableBuilder::from_uri(path).build().unwrap();
-    let partition_columns = partition_columns.iter().map(|s| s.to_string()).collect();
-    let md = DeltaTableMetaData::new(None, None, None, schema, partition_columns, config);
-    let protocol = Protocol {
-        min_reader_version: 1,
-        min_writer_version: 2,
-    };
-    table.create(md, protocol, None, None).await.unwrap();
+    let table = CreateBuilder::new()
+        .with_location(path)
+        .with_table_name("test-table")
+        .with_comment("A table for running tests")
+        .with_columns(schema.get_fields().clone())
+        .with_partition_columns(partition_columns)
+        .with_configuration(config)
+        .await
+        .unwrap();
+
     table
 }
 

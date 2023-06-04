@@ -1,18 +1,15 @@
-#![allow(deprecated)]
 //! Utilities for writing unit tests
-use crate::{
-    action::Protocol, schema::Schema, DeltaTable, DeltaTableBuilder, DeltaTableMetaData,
-    SchemaDataType, SchemaField,
-};
-use arrow::datatypes::{DataType, Field};
-use arrow::record_batch::RecordBatch;
-use arrow::{
-    array::{Int32Array, StringArray, UInt32Array},
-    compute::take,
-    datatypes::Schema as ArrowSchema,
-};
+
 use std::collections::HashMap;
 use std::sync::Arc;
+
+use arrow::compute::take;
+use arrow_array::{Int32Array, RecordBatch, StringArray, UInt32Array};
+use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+
+use crate::operations::create::CreateBuilder;
+use crate::schema::Schema;
+use crate::{DeltaTable, DeltaTableBuilder, DeltaTableMetaData, SchemaDataType, SchemaField};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
@@ -177,35 +174,16 @@ pub fn create_bare_table() -> DeltaTable {
 }
 
 pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
-    let mut table = create_bare_table();
     let table_schema = get_delta_schema();
+    let table_dir = tempfile::tempdir().unwrap();
+    let table_path = table_dir.path();
 
-    let mut commit_info = serde_json::Map::<String, serde_json::Value>::new();
-    commit_info.insert(
-        "operation".to_string(),
-        serde_json::Value::String("CREATE TABLE".to_string()),
-    );
-    commit_info.insert(
-        "userName".to_string(),
-        serde_json::Value::String("test user".to_string()),
-    );
-
-    let protocol = Protocol {
-        min_reader_version: 1,
-        min_writer_version: 1,
-    };
-
-    let metadata = DeltaTableMetaData::new(
-        None,
-        None,
-        None,
-        table_schema,
-        partition_cols.to_vec(),
-        HashMap::new(),
-    );
-
-    table
-        .create(metadata, protocol, Some(commit_info), None)
+    let table = CreateBuilder::new()
+        .with_location(table_path.to_str().unwrap())
+        .with_table_name("test-table")
+        .with_comment("A table for running tests")
+        .with_columns(table_schema.get_fields().clone())
+        .with_partition_columns(partition_cols)
         .await
         .unwrap();
 

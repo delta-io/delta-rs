@@ -3,10 +3,10 @@
 use bytes::Bytes;
 use deltalake::action::{self, Add, Remove};
 use deltalake::builder::DeltaTableBuilder;
+use deltalake::operations::create::CreateBuilder;
 use deltalake::storage::DeltaObjectStore;
-use deltalake::{DeltaTable, DeltaTableConfig, DeltaTableMetaData, Schema};
+use deltalake::{DeltaTable, Schema};
 use object_store::{path::Path, ObjectStore};
-use serde_json::{Map, Value};
 use std::any::Any;
 use std::collections::HashMap;
 use std::sync::Arc;
@@ -81,36 +81,15 @@ impl TestContext {
             .iter()
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
-        let table_meta = DeltaTableMetaData::new(
-            Some("delta-rs_test_table".to_owned()),
-            Some("Table created by delta-rs tests".to_owned()),
-            None,
-            schema.clone(),
-            p,
-            HashMap::new(),
-        );
-
         let backend = self.new_storage();
-        let mut dt = DeltaTable::new(backend, DeltaTableConfig::default());
-        let mut commit_info = Map::<String, Value>::new();
-
-        let protocol = action::Protocol {
-            min_reader_version: 1,
-            min_writer_version: 2,
-        };
-
-        commit_info.insert(
-            "operation".to_string(),
-            serde_json::Value::String("CREATE TABLE".to_string()),
-        );
-        dt.create(
-            table_meta.clone(),
-            protocol.clone(),
-            Some(commit_info),
-            None,
-        )
-        .await
-        .unwrap();
+        let dt = CreateBuilder::new()
+            .with_object_store(backend)
+            .with_table_name("delta-rs_test_table")
+            .with_comment("Table created by delta-rs tests")
+            .with_columns(schema.get_fields().clone())
+            .with_partition_columns(p)
+            .await
+            .unwrap();
 
         dt
     }

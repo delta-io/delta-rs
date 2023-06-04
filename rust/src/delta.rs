@@ -794,59 +794,6 @@ impl DeltaTable {
         Ok(version)
     }
 
-    /// Create a DeltaTable with version 0 given the provided MetaData, Protocol, and CommitInfo
-    #[deprecated(
-        since = "0.10.0",
-        note = "use DelaOps from operations module to create a Create operation."
-    )]
-    #[allow(deprecated)]
-    pub async fn create(
-        &mut self,
-        metadata: DeltaTableMetaData,
-        protocol: action::Protocol,
-        commit_info: Option<Map<String, Value>>,
-        add_actions: Option<Vec<action::Add>>,
-    ) -> Result<(), DeltaTableError> {
-        let meta = action::MetaData::try_from(metadata)?;
-
-        // delta-rs commit info will include the delta-rs version and timestamp as of now
-        let mut enriched_commit_info = commit_info.unwrap_or_default();
-        enriched_commit_info.insert(
-            "delta-rs".to_string(),
-            Value::String(crate_version().to_string()),
-        );
-        enriched_commit_info.insert(
-            "timestamp".to_string(),
-            Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
-        );
-
-        let mut actions = vec![
-            Action::commit_info(enriched_commit_info),
-            Action::protocol(protocol),
-            Action::metaData(meta),
-        ];
-        if let Some(add_actions) = add_actions {
-            for add_action in add_actions {
-                actions.push(Action::add(add_action));
-            }
-        };
-
-        let mut transaction = self.create_transaction(None);
-        transaction.add_actions(actions.clone());
-
-        let prepared_commit = transaction.prepare_commit(None, None).await?;
-        let committed_version = self.try_commit_transaction(&prepared_commit, 0).await?;
-
-        let new_state = DeltaTableState::from_commit(self, committed_version).await?;
-        self.state.merge(
-            new_state,
-            self.config.require_tombstones,
-            self.config.require_files,
-        );
-
-        Ok(())
-    }
-
     /// Time travel Delta table to the latest version that's created at or before provided
     /// `datetime` argument.
     ///
@@ -1181,16 +1128,16 @@ pub fn crate_version() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::Protocol;
+    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
     use crate::builder::DeltaTableBuilder;
+    use crate::operations::create::CreateBuilder;
     use pretty_assertions::assert_eq;
-    use std::io::{BufRead, BufReader};
-    use std::{collections::HashMap, fs::File, path::Path};
+    use std::collections::HashMap;
     use tempdir::TempDir;
 
     #[tokio::test]
     async fn table_round_trip() {
-        let (_, _, dt, tmp_dir) = create_test_table().await;
+        let (dt, tmp_dir) = create_test_table().await;
         let bytes = serde_json::to_vec(&dt).unwrap();
         let actual: DeltaTable = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(actual.version(), dt.version());
@@ -1213,107 +1160,32 @@ mod tests {
         }
     }
 
-    async fn create_test_table() -> (DeltaTableMetaData, Protocol, DeltaTable, TempDir) {
-        // Setup
-        let test_schema = Schema::new(vec![
-            SchemaField::new(
-                "Id".to_string(),
-                SchemaDataType::primitive("integer".to_string()),
-                true,
-                HashMap::new(),
-            ),
-            SchemaField::new(
-                "Name".to_string(),
-                SchemaDataType::primitive("string".to_string()),
-                true,
-                HashMap::new(),
-            ),
-        ]);
-
-        let delta_md = DeltaTableMetaData::new(
-            Some("Test Table Create".to_string()),
-            Some("This table is made to test the create function for a DeltaTable".to_string()),
-            None,
-            test_schema,
-            vec![],
-            HashMap::new(),
-        );
-
-        let protocol = action::Protocol {
-            min_reader_version: 1,
-            min_writer_version: 1,
-        };
-
+    async fn create_test_table() -> (DeltaTable, TempDir) {
         let tmp_dir = TempDir::new("create_table_test").unwrap();
         let table_dir = tmp_dir.path().join("test_create");
         std::fs::create_dir(&table_dir).unwrap();
 
-        let mut dt = DeltaTableBuilder::from_uri(table_dir.to_str().unwrap())
-            .build()
-            .unwrap();
-
-        let mut commit_info = Map::<String, Value>::new();
-        commit_info.insert(
-            "operation".to_string(),
-            serde_json::Value::String("CREATE TABLE".to_string()),
-        );
-        commit_info.insert(
-            "userName".to_string(),
-            serde_json::Value::String("test user".to_string()),
-        );
-        // Action
-        #[allow(deprecated)]
-        dt.create(delta_md.clone(), protocol.clone(), Some(commit_info), None)
+        let dt = CreateBuilder::new()
+            .with_location(table_dir.to_str().unwrap())
+            .with_table_name("Test Table Create")
+            .with_comment("This table is made to test the create function for a DeltaTable")
+            .with_columns(vec![
+                SchemaField::new(
+                    "Id".to_string(),
+                    SchemaDataType::primitive("integer".to_string()),
+                    true,
+                    HashMap::new(),
+                ),
+                SchemaField::new(
+                    "Name".to_string(),
+                    SchemaDataType::primitive("string".to_string()),
+                    true,
+                    HashMap::new(),
+                ),
+            ])
             .await
             .unwrap();
-        (delta_md, protocol, dt, tmp_dir)
-    }
 
-    #[tokio::test]
-    async fn test_create_delta_table() {
-        let (delta_md, protocol, dt, tmp_dir) = create_test_table().await;
-
-        // Validation
-        // assert DeltaTable version is now 0 and no data files have been added
-        assert_eq!(dt.version(), 0);
-        assert_eq!(dt.state.files().len(), 0);
-
-        // assert new _delta_log file created in tempDir
-        let table_uri = dt.table_uri();
-        let table_path = Path::new(&table_uri);
-        assert!(table_path.exists());
-
-        let delta_log = table_path.join("_delta_log");
-        assert!(delta_log.exists());
-
-        let version_file = delta_log.join("00000000000000000000.json");
-        assert!(version_file.exists());
-
-        // Checking the data written to delta table is the same when read back
-        let version_data = File::open(version_file).unwrap();
-        let lines = BufReader::new(version_data).lines();
-
-        for line in lines {
-            let action: Action = serde_json::from_str(line.unwrap().as_str()).unwrap();
-            match action {
-                Action::protocol(action) => {
-                    assert_eq!(action, protocol);
-                }
-                Action::metaData(action) => {
-                    assert_eq!(DeltaTableMetaData::try_from(action).unwrap(), delta_md);
-                }
-                Action::commitInfo(action) => {
-                    assert_eq!(action.operation, Some("CREATE TABLE".to_string()));
-                }
-                _ => (),
-            }
-        }
-
-        // assert DeltaTableState metadata matches fields in above DeltaTableMetaData
-        // assert metadata name
-        let current_metadata = dt.get_metadata().unwrap();
-        assert!(current_metadata.partition_columns.is_empty());
-        assert!(current_metadata.configuration.is_empty());
-        drop(tmp_dir);
+        (dt, tmp_dir)
     }
 }
