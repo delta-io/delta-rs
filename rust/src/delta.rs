@@ -30,7 +30,7 @@ use super::partitions::PartitionFilter;
 use super::schema::*;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, ProtocolError, Stats};
-use crate::errors::{ApplyLogError, DeltaTableError};
+use crate::errors::DeltaTableError;
 use crate::operations::vacuum::VacuumBuilder;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
@@ -148,7 +148,7 @@ impl fmt::Display for DeltaTableMetaData {
 }
 
 impl TryFrom<action::MetaData> for DeltaTableMetaData {
-    type Error = serde_json::error::Error;
+    type Error = ProtocolError;
 
     fn try_from(action_metadata: action::MetaData) -> Result<Self, Self::Error> {
         let schema = action_metadata.get_schema()?;
@@ -382,11 +382,7 @@ impl DeltaTable {
                         ObjectStoreError::NotFound { .. } => {
                             version -= 1;
                             if version < 0 {
-                                let err = format!(
-                                    "No snapshot or version 0 found, perhaps {} is an empty dir?",
-                                    self.table_uri()
-                                );
-                                return Err(DeltaTableError::NotATable(err));
+                                return Err(DeltaTableError::not_a_table(self.table_uri()));
                             }
                         }
                         _ => return Err(DeltaTableError::from(e)),
@@ -496,11 +492,7 @@ impl DeltaTable {
         }
 
         if self.version() == -1 {
-            let err = format!(
-                "No snapshot or version 0 found, perhaps {} is an empty dir?",
-                self.table_uri()
-            );
-            return Err(DeltaTableError::NotATable(err));
+            return Err(DeltaTableError::not_a_table(self.table_uri()));
         }
 
         Ok(())
@@ -579,7 +571,7 @@ impl DeltaTable {
                 }
                 Err(e) => {
                     match e {
-                        ApplyLogError::EndOfLog => {
+                        ProtocolError::EndOfLog => {
                             if earliest_commit.is_none() {
                                 earliest_commit =
                                     Some(self.get_earliest_delta_log_version().await?);
@@ -592,11 +584,7 @@ impl DeltaTable {
                             } else {
                                 version -= 1;
                                 if version == -1 {
-                                    let err = format!(
-                                        "No snapshot or version 0 found, perhaps {} is an empty dir?",
-                                        self.table_uri()
-                                    );
-                                    return Err(DeltaTableError::NotATable(err));
+                                    return Err(DeltaTableError::not_a_table(self.table_uri()));
                                 }
                             }
                         }

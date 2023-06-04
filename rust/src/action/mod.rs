@@ -38,6 +38,9 @@ pub enum ProtocolError {
     #[error("Checkpoint file not found")]
     CheckpointNotFound,
 
+    #[error("End of transaction log")]
+    EndOfLog,
+
     /// The action contains an invalid field.
     #[error("Invalid action field: {0}")]
     InvalidField(String),
@@ -86,6 +89,12 @@ pub enum ProtocolError {
         /// The source ObjectStoreError.
         #[from]
         source: ObjectStoreError,
+    },
+
+    #[error("Io: {source}")]
+    IO {
+        #[from]
+        source: std::io::Error,
     },
 }
 
