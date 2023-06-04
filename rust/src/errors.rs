@@ -9,22 +9,18 @@ use crate::operations::transaction::TransactionError;
 pub type DeltaResult<T> = Result<T, DeltaTableError>;
 
 /// Delta Table specific error
+#[allow(missing_docs)]
 #[derive(thiserror::Error, Debug)]
 pub enum DeltaTableError {
+    #[error("Delta protocol violation: {source}")]
+    Protocol { source: ProtocolError },
+
     /// Error returned when applying transaction log failed.
     #[error("Failed to apply transaction log: {}", .source)]
     ApplyLog {
         /// Apply error details returned when applying transaction log failed.
         #[from]
         source: ApplyLogError,
-    },
-
-    /// Error returned when loading checkpoint failed.
-    #[error("Failed to load checkpoint: {}", .source)]
-    LoadCheckpoint {
-        /// Load checkpoint error details returned when loading checkpoint failed.
-        #[from]
-        source: LoadCheckpointError,
     },
 
     /// Error returned when reading the delta log object failed.
@@ -104,14 +100,6 @@ pub enum DeltaTableError {
         /// Parse error details returned of the datetime string parse error.
         #[from]
         source: chrono::ParseError,
-    },
-
-    /// Error returned when the action record is invalid in log.
-    #[error("Invalid action record found in log: {}", .source)]
-    InvalidAction {
-        /// Action error details returned of the invalid action.
-        #[from]
-        source: ProtocolError,
     },
 
     /// Error returned when attempting to write bad data to the table
@@ -236,6 +224,18 @@ impl From<object_store::path::Error> for DeltaTableError {
     }
 }
 
+impl From<ProtocolError> for DeltaTableError {
+    fn from(value: ProtocolError) -> Self {
+        match value {
+            #[cfg(feature = "arrow")]
+            ProtocolError::Arrow { source } => DeltaTableError::Arrow { source },
+            ProtocolError::ObjectStore { source } => DeltaTableError::ObjectStore { source },
+            ProtocolError::ParquetParseError { source } => DeltaTableError::Parquet { source },
+            _ => DeltaTableError::Protocol { source: value },
+        }
+    }
+}
+
 /// Error related to Delta log application
 #[derive(thiserror::Error, Debug)]
 pub enum ApplyLogError {
@@ -288,36 +288,6 @@ impl From<ObjectStoreError> for ApplyLogError {
         match error {
             ObjectStoreError::NotFound { .. } => ApplyLogError::EndOfLog,
             _ => ApplyLogError::Storage { source: error },
-        }
-    }
-}
-
-/// Error related to checkpoint loading
-#[derive(thiserror::Error, Debug)]
-pub enum LoadCheckpointError {
-    /// Error returned when the JSON checkpoint is not found.
-    #[error("Checkpoint file not found")]
-    NotFound,
-    /// Error returned when the JSON checkpoint is invalid.
-    #[error("Invalid JSON in checkpoint: {source}")]
-    InvalidJson {
-        /// Error details returned while reading the JSON.
-        #[from]
-        source: serde_json::error::Error,
-    },
-    /// Error returned when it failed to read the checkpoint content.
-    #[error("Failed to read checkpoint content: {source}")]
-    Storage {
-        /// Storage error details returned while reading the checkpoint content.
-        source: ObjectStoreError,
-    },
-}
-
-impl From<ObjectStoreError> for LoadCheckpointError {
-    fn from(error: ObjectStoreError) -> Self {
-        match error {
-            ObjectStoreError::NotFound { .. } => LoadCheckpointError::NotFound,
-            _ => LoadCheckpointError::Storage { source: error },
         }
     }
 }

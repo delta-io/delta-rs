@@ -64,6 +64,7 @@ fn checkpoint_to_py(err: ProtocolError) -> PyErr {
         ProtocolError::Arrow { source } => arrow_to_py(source),
         ProtocolError::ObjectStore { source } => object_store_to_py(source),
         ProtocolError::NoMetaData => DeltaProtocolError::new_err("Table metadata missing"),
+        ProtocolError::CheckpointNotFound => DeltaProtocolError::new_err(err.to_string()),
         ProtocolError::InvalidField(err) => PyValueError::new_err(err),
         ProtocolError::InvalidRow(err) => PyValueError::new_err(err),
         ProtocolError::SerializeOperation { source } => PyValueError::new_err(source.to_string()),
