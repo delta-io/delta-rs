@@ -29,20 +29,29 @@
   <a href="https://pypi.python.org/pypi/deltalake">
     <img alt="Deltalake" src="https://img.shields.io/pypi/v/deltalake.svg?style=flat-square&color=F75101&logo=pypi" >
   </a>
-  <a target="_blank" href="https://pypistats.org/packages/deltalake" style="background:none">
-    <img alt="PyPI - Downloads" src="https://img.shields.io/pypi/dm/deltalake?style=flat-square&color=00ADD4" >
-  </a>
   <a href="https://pypi.python.org/pypi/deltalake">
-    <img alt="Deltalake" src="https://img.shields.io/pypi/pyversions/deltalake.svg?style=flat-square&color=F75101&logo=python">
+    <img alt="Deltalake" src="https://img.shields.io/pypi/pyversions/deltalake.svg?style=flat-square&color=00ADD4&logo=python">
   </a>
   <a target="_blank" href="https://go.delta.io/slack">
-    <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square&color=00ADD4">
+    <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square&color=F75101">
   </a>
 </p>
 
 The delta-rs project aims to unlock the power of the Deltalake for as many users and projects as possible
 by providing native low level APIs aimed at developers and integrators, as well as a high level operations
 API that lets you query, inspect, and operate your Deltalake with ease.
+
+| Source                | Downloads                         | Installation Command    | Docs            |
+| --------------------- | --------------------------------- | ----------------------- | --------------- |
+| **[PyPi][pypi]**      | [![Downloads][pypi-dl]][pypi]     | `pip install deltalake` | [Docs][py-docs] |
+| **[Crates.io][pypi]** | [![Downloads][crates-dl]][crates] | `cargo add deltalake`   | [Docs][rs-docs] |
+
+[pypi]: https://pypi.org/project/deltalake/
+[pypi-dl]: https://img.shields.io/pypi/dm/deltalake?style=flat-square&color=00ADD4
+[py-docs]: https://delta-io.github.io/delta-rs/python/
+[rs-docs]: https://docs.rs/deltalake/latest/deltalake/
+[crates]: https://crates.io/crates/deltalake
+[crates-dl]: https://img.shields.io/crates/d/deltalake?color=F75101
 
 ## Integrations
 
@@ -53,6 +62,7 @@ API that lets you query, inspect, and operate your Deltalake with ease.
 - [Dask](https://github.com/dask-contrib/dask-deltatable)
 - [datahub](https://datahubproject.io/)
 - [Ray](https://github.com/delta-incubator/deltaray)
+- [AWS SDK for Pandas](https://github.com/aws/aws-sdk-pandas)
 
 ## Cloud Integrations
 
