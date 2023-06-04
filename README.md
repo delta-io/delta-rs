@@ -18,25 +18,25 @@
   <br>
   <br>
   <a href="https://pypi.python.org/pypi/deltalake">
-    <img alt="Deltalake" src="https://img.shields.io/pypi/l/deltalake.svg?style=flat-square&color=00ADD4&labelColor=F75101&logo=apache&label=&logoColor=00ADD4">
+    <img alt="Deltalake" src="https://img.shields.io/pypi/l/deltalake.svg?style=flat-square&color=00ADD4&labelColor=F75101&logo=apache&label=">
   </a>
   <a target="_blank" href="https://github.com/delta-io/delta-rs" style="background:none">
-    <img src="https://img.shields.io/github/stars/delta-io/delta-rs?logo=github&color=00ADD4&labelColor=F75101&logoColor=00ADD4&label=&logoColor=00ADD4">
+    <img src="https://img.shields.io/github/stars/delta-io/delta-rs?logo=github&color=00ADD4&labelColor=F75101&label=">
   </a>
   <a href="https://crates.io/crates/deltalake">
-    <img alt="Crate" src="https://img.shields.io/crates/v/deltalake.svg?style=flat-square&color=00ADD4&labelColor=F75101&logo=rust&label=&logoColor=00ADD4" >
+    <img alt="Crate" src="https://img.shields.io/crates/v/deltalake.svg?style=flat-square&color=00ADD4&labelColor=F75101&logo=rust&label=" >
   </a>
   <a href="https://pypi.python.org/pypi/deltalake">
-    <img alt="Deltalake" src="https://img.shields.io/pypi/v/deltalake.svg?style=flat-square&color=00ADD4&labelColor=F75101&logo=python&label=&logoColor=00ADD4" >
+    <img alt="Deltalake" src="https://img.shields.io/pypi/v/deltalake.svg?style=flat-square&color=00ADD4&labelColor=F75101&logo=python&label=" >
   </a>
   <a target="_blank" href="https://pypistats.org/packages/deltalake" style="background:none">
-    <img alt="PyPI - Downloads" src="https://img.shields.io/pypi/dm/deltalake?style=flat-square&color=00ADD4&labelColor=F75101&logo=pypi&label=&logoColor=00ADD4" >
+    <img alt="PyPI - Downloads" src="https://img.shields.io/pypi/dm/deltalake?style=flat-square&color=00ADD4&labelColor=F75101&logo=pypi&label=" >
   </a>
   <a href="https://pypi.python.org/pypi/deltalake">
-    <img alt="Deltalake" src="https://img.shields.io/pypi/pyversions/deltalake.svg?style=flat-square&color=00ADD4&labelColor=F75101&logo=python&label=&logoColor=00ADD4">
+    <img alt="Deltalake" src="https://img.shields.io/pypi/pyversions/deltalake.svg?style=flat-square&color=00ADD4&labelColor=F75101&logo=python&label=">
   </a>
   <a target="_blank" href="https://go.delta.io/slack">
-    <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square&color=00ADD4&labelColor=F75101&label=&logoColor=00ADD4">
+    <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square&color=00ADD4&labelColor=F75101&label=">
   </a>
 </p>
 
