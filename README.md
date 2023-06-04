@@ -3,13 +3,12 @@
     <img src="https://github.com/delta-io/delta-rs/blob/main/logo.png?raw=true" alt="delta-rs logo" height="250">
   </a>
 </p>
-<h3 align="center">delta-rs</h3>
 <p align="center">
   A native Rust library for Delta Lake, with bindings into Python
   <br>
-  <a href="https://delta-io.github.io/delta-rs/python/">Python documentation</a>
+  <a href="https://delta-io.github.io/delta-rs/python/">Python docs</a>
   ·
-  <a href="https://docs.rs/deltalake/latest/deltalake/">Rust documentation</a>
+  <a href="https://docs.rs/deltalake/latest/deltalake/">Rust docs</a>
   ·
   <a href="https://github.com/delta-io/delta-rs/issues/new?template=bug_report.md">Report a bug</a>
   ·
@@ -18,26 +17,26 @@
   <a href="https://github.com/delta-io/delta-rs/issues/1128">Roadmap</a>
   <br>
   <br>
-  <a target="_blank" href="https://github.com/delta-io/delta-rs/actions" style="background:none">
-    <img alt="Build Status" src="https://github.com/delta-io/delta-rs/workflows/build/badge.svg?branch=main" >
+  <a href="https://pypi.python.org/pypi/deltalake">
+    <img alt="Deltalake" src="https://img.shields.io/pypi/l/deltalake.svg?style=flat-square&color=00ADD4&labelColor=F75101&logo=apache&label=&logoColor=00ADD4">
+  </a>
+  <a target="_blank" href="https://github.com/delta-io/delta-rs" style="background:none">
+    <img src="https://img.shields.io/github/stars/delta-io/delta-rs?logo=github&color=00ADD4&labelColor=F75101&logoColor=00ADD4&label=&logoColor=00ADD4">
   </a>
   <a href="https://crates.io/crates/deltalake">
-    <img alt="Crate" src="https://img.shields.io/crates/v/deltalake.svg?style=flat-square" >
+    <img alt="Crate" src="https://img.shields.io/crates/v/deltalake.svg?style=flat-square&color=00ADD4&labelColor=F75101&logo=rust&label=&logoColor=00ADD4" >
   </a>
   <a href="https://pypi.python.org/pypi/deltalake">
-    <img alt="Deltalake" src="https://img.shields.io/pypi/v/deltalake.svg?style=flat-square" >
+    <img alt="Deltalake" src="https://img.shields.io/pypi/v/deltalake.svg?style=flat-square&color=00ADD4&labelColor=F75101&logo=python&label=&logoColor=00ADD4" >
   </a>
-  <a href="https://pypi.org/project/deltalake">
-    <img alt="PyPI - Downloads" src="https://img.shields.io/pypi/dm/deltalake?style=flat-square" >
-  </a>
-  <a href="https://pypi.python.org/pypi/deltalake">
-    <img alt="Deltalake" src="https://img.shields.io/pypi/l/deltalake.svg?style=flat-square">
+  <a target="_blank" href="https://pypistats.org/packages/deltalake" style="background:none">
+    <img alt="PyPI - Downloads" src="https://img.shields.io/pypi/dm/deltalake?style=flat-square&color=00ADD4&labelColor=F75101&logo=pypi&label=&logoColor=00ADD4" >
   </a>
   <a href="https://pypi.python.org/pypi/deltalake">
-    <img alt="Deltalake" src="https://img.shields.io/pypi/pyversions/deltalake.svg">
+    <img alt="Deltalake" src="https://img.shields.io/pypi/pyversions/deltalake.svg?style=flat-square&color=00ADD4&labelColor=F75101&logo=python&label=&logoColor=00ADD4">
   </a>
   <a target="_blank" href="https://go.delta.io/slack">
-    <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square">
+    <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square&color=00ADD4&labelColor=F75101&label=&logoColor=00ADD4">
   </a>
 </p>
 
@@ -45,6 +44,17 @@ This library provides low level access to Delta tables in Rust, which can be use
 or for integrating on other frameworks like [datafusion][datafusion], [polars][polars], or [ballista][ballista].
 It also provider higher level APIs to perform more complex [operations](#supported-operations) that are
 used to interact with Delta tables. These operations are also exposed as python bindings.
+
+## Cloud Integrations
+
+| Storage         |  Rust   | Python  | Comment                             |
+| --------------- | :-----: | :-----: | ----------------------------------- |
+| Local           | ![done] | ![done] |                                     |
+| S3 - AWS        | ![done] | ![done] | requires lock for concurrent writes |
+| S3 - MinIO      | ![done] | ![done] | requires lock for concurrent writes |
+| S3 - R2         | ![done] | ![done] | requires lock for concurrent writes |
+| Azure Blob      | ![done] | ![done] |                                     |
+| Azure ADLS Gen2 | ![done] | ![done] |                                     |
 
 ## Supported Operations
 
@@ -56,8 +66,8 @@ used to interact with Delta tables. These operations are also exposed as python 
 | Delete - partitions   |                     |       ![done]       | Delete a table partition              |
 | Delete - predicates   |       ![done]       |                     | Delete data based on a predicate      |
 | Optimize - compaction |       ![done]       |       ![done]       | Harmonize the size of data file       |
-| Optimize - Z-order    |       ![done]       |                     | Place similar data into teh same file |
-| Merge                 | [![open]][merge-rs] | [![open]][merge-py] |
+| Optimize - Z-order    |       ![done]       |                     | Place similar data into the same file |
+| Merge                 | [![open]][merge-rs] | [![open]][merge-py] |                                       |
 | FS check              |       ![done]       |                     | Remove corrupted files from table     |
 
 ## Protocol Support
@@ -74,6 +84,11 @@ used to interact with Delta tables. These operations are also exposed as python 
 | Version 5      | Column Mapping                                |                      |
 | Version 6      | Identity Columns                              |                      |
 | Version 7      | Table Features                                |                      |
+
+| Reader Version | Requirement                         | Status |
+| -------------- | ----------------------------------- | ------ |
+| Version 2      | Collumn Mapping                     |        |
+| Version 3      | Table Features (requires reader V7) |        |
 
 [datafusion]: https://github.com/apache/arrow-datafusion
 [ballista]: https://github.com/apache/arrow-ballista
