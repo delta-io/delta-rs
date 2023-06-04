@@ -53,6 +53,46 @@ API that lets you query, inspect, and operate your Deltalake with ease.
 [crates]: https://crates.io/crates/deltalake
 [crates-dl]: https://img.shields.io/crates/d/deltalake?color=F75101
 
+## Table of contents
+
+- [Quick Start](#quick-start)
+- [Integartions](#integrations)
+- [Features](#features)
+
+## Quick Start
+
+```py3
+from deltalake import DeltaTable
+from deltalake.write import write_deltalake
+import pandas as pd
+
+# write some data into a delta table
+df = pd.DataFrame({"id": [1, 2], "value": ["foo", "boo"]})
+write_deltalake("./data/delta", df)
+
+# load data from delta table
+dt = DeltaTable("./data/delta")
+df2 = dt.to_pandas()
+
+assert df == df2
+```
+
+```rs
+use deltalake::{open_table, DeltaTableError};
+
+#[tokio::main]
+async fn main() -> Result<(), DeltaTableError> {
+    // open the table written in python
+    let table = open_table("./data/delta").await?;
+
+    // show all active files in the table
+    let files = table.get_files();
+    println!("{files}");
+
+    Ok(())
+}
+```
+
 ## Integrations
 
 - [polars](https://www.pola.rs/)
@@ -64,7 +104,9 @@ API that lets you query, inspect, and operate your Deltalake with ease.
 - [Ray](https://github.com/delta-incubator/deltaray)
 - [AWS SDK for Pandas](https://github.com/aws/aws-sdk-pandas)
 
-## Cloud Integrations
+## Features
+
+### Cloud Integrations
 
 | Storage              |         Rust          |        Python         | Comment                             |
 | -------------------- | :-------------------: | :-------------------: | ----------------------------------- |
@@ -77,7 +119,7 @@ API that lets you query, inspect, and operate your Deltalake with ease.
 | Micorosft OneLake    | [![open]][onelake-rs] | [![open]][onelake-rs] |                                     |
 | Google Cloud Storage |        ![done]        |        ![done]        |                                     |
 
-## Supported Operations
+### Supported Operations
 
 | Operation             |        Rust         |       Python        | Description                           |
 | --------------------- | :-----------------: | :-----------------: | ------------------------------------- |
@@ -91,7 +133,7 @@ API that lets you query, inspect, and operate your Deltalake with ease.
 | Merge                 | [![open]][merge-rs] | [![open]][merge-py] |                                       |
 | FS check              |       ![done]       |                     | Remove corrupted files from table     |
 
-## Protocol Support Level
+### Protocol Support Level
 
 | Writer Version | Requirement                                   |        Status        |
 | -------------- | --------------------------------------------- | :------------------: |
