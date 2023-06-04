@@ -25,8 +25,8 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_array::cast::as_generic_binary_array;
 use arrow_array::{ArrayRef, RecordBatch};
-use arrow_ord::sort::SortColumn;
 use arrow_schema::ArrowError;
 use futures::future::BoxFuture;
 use futures::stream::BoxStream;
@@ -350,24 +350,24 @@ pub struct MergeTaskParameters {
     writer_properties: WriterProperties,
 }
 
+/// A stream of record batches, with a ParquetError on failure.
+type ParquetReadStream = BoxStream<'static, Result<RecordBatch, ParquetError>>;
+
 impl MergePlan {
     /// Rewrites files in a single partition.
     ///
     /// Returns a vector of add and remove actions, as well as the partial metrics
     /// collected during the operation.
-    async fn rewrite_files(
+    async fn rewrite_files<F>(
         task_parameters: Arc<MergeTaskParameters>,
         partition: PartitionTuples,
         files: MergeBin,
         object_store: ObjectStoreRef,
-        read_stream: impl Future<
-                Output = Result<
-                    BoxStream<'static, Result<RecordBatch, ParquetError>>,
-                    DeltaTableError,
-                >,
-            > + Send
-            + 'static,
-    ) -> Result<(Vec<Action>, PartialMetrics), DeltaTableError> {
+        read_stream: F,
+    ) -> Result<(Vec<Action>, PartialMetrics), DeltaTableError>
+    where
+        F: Future<Output = Result<ParquetReadStream, DeltaTableError>> + Send + 'static,
+    {
         debug!("Rewriting files in partition: {:?}", partition);
         // First, initialize metrics
         let partition_values = partition.to_hashmap();
@@ -439,9 +439,11 @@ impl MergePlan {
         Ok((partial_actions, partial_metrics))
     }
 
-    /// Creates a stream of batches that are zordered
+    /// Creates a stream of batches that are Z-ordered.
     ///
-    /// Currently requires loading all the data into memory.
+    /// Currently requires loading all the data into memory. This is run for each
+    /// partition, so it is not a problem for tables where each partition is small.
+    /// But for large unpartitioned tables, this could be a problem.
     async fn read_zorder(
         columns: Arc<Vec<String>>,
         files: MergeBin,
@@ -479,7 +481,21 @@ impl MergePlan {
                 })
                 .collect::<Result<Vec<_>, ArrowError>>()?;
 
-        let indices = util::sort_chunked_indices(zorder_keys)?;
+        let mut indices = zorder_keys
+            .iter()
+            .enumerate()
+            .flat_map(|(batch_i, key)| {
+                let key = as_generic_binary_array::<i32>(key);
+                key.iter()
+                    .enumerate()
+                    .map(move |(row_i, key)| (key.unwrap(), batch_i, row_i))
+            })
+            .collect_vec();
+        indices.sort_by_key(|(key, _, _)| *key);
+        let indices = indices
+            .into_iter()
+            .map(|(_, batch_i, row_i)| (batch_i, row_i))
+            .collect_vec();
 
         // Interleave the batches
         let out_batches = util::interleave_batches(batches, Arc::new(indices), false).await?;
@@ -647,13 +663,9 @@ pub fn create_merge_plan(
         OptimizeType::Compact => {
             build_compaction_plan(snapshot, partitions_keys, filters, target_size)?
         }
-        OptimizeType::ZOrder(zorder_columns) => build_zorder_plan(
-            zorder_columns,
-            snapshot,
-            partitions_keys,
-            filters,
-            target_size,
-        )?,
+        OptimizeType::ZOrder(zorder_columns) => {
+            build_zorder_plan(zorder_columns, snapshot, partitions_keys, filters)?
+        }
     };
 
     let input_parameters = OptimizeInput { target_size };
@@ -795,7 +807,6 @@ fn build_zorder_plan(
     snapshot: &DeltaTableState,
     partition_keys: &[String],
     filters: &[PartitionFilter<'_, &str>],
-    target_size: i64,
 ) -> Result<(OptimizeOperations, Metrics), DeltaTableError> {
     if zorder_columns.is_empty() {
         return Err(DeltaTableError::Generic(
@@ -836,11 +847,6 @@ fn build_zorder_plan(
     for add in snapshot.get_active_add_actions_by_partitions(filters)? {
         metrics.total_considered_files += 1;
         let object_meta = ObjectMeta::try_from(add)?;
-        if (object_meta.size as i64) > target_size {
-            metrics.total_files_skipped += 1;
-            continue;
-        }
-
         let part = PartitionTuples::from_hashmap(partition_keys, &add.partition_values);
 
         partition_files
@@ -860,40 +866,6 @@ pub(super) mod util {
     use futures::Future;
     use itertools::Itertools;
     use tokio::task::JoinError;
-
-    /// Sorts the indices of a "chunked" array
-    ///
-    /// The resulting indices is a pair. The first element is the index of the
-    /// chunk, while the second is the index within the chunk. This is meant
-    /// to be used in combination with [interleave_batches] or [interleave].
-    pub fn sort_chunked_indices(array: Vec<ArrayRef>) -> Result<Vec<(usize, usize)>, ArrowError> {
-        let single_array = arrow_select::concat::concat(
-            array
-                .iter()
-                .map(|arr| arr.as_ref())
-                .collect_vec()
-                .as_slice(),
-        )
-        .unwrap();
-        let indices = arrow::compute::lexsort_to_indices(
-            &[SortColumn {
-                values: single_array,
-                options: None,
-            }],
-            None,
-        )?;
-        let nested_indices: Vec<(usize, usize)> = array
-            .iter()
-            .enumerate()
-            .flat_map(|(chunk_i, array)| {
-                std::iter::zip(std::iter::repeat(chunk_i).take(array.len()), 0..array.len())
-            })
-            .collect();
-        Ok(indices
-            .iter()
-            .map(|i| nested_indices[i.unwrap() as usize])
-            .collect_vec())
-    }
 
     /// Interleaves a vector of record batches based on a set of indices
     pub async fn interleave_batches(

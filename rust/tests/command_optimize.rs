@@ -686,6 +686,53 @@ async fn test_zorder_partitioned() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
+#[tokio::test]
+async fn test_zorder_respects_target_size() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(6_000_000), "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(9_000_000), "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(2_000_000), "2022-05-22")?,
+    )
+    .await?;
+
+    let optimize = DeltaOps(dt)
+        .optimize()
+        .with_writer_properties(
+            WriterProperties::builder()
+                .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+                // Easier to hit the target size with a smaller row group size
+                .set_max_row_group_size(64 * 1024)
+                .build(),
+        )
+        .with_type(OptimizeType::ZOrder(vec!["x".to_string(), "y".to_string()]))
+        .with_target_size(10_000_000);
+    let (_, metrics) = optimize.await?;
+
+    assert_eq!(metrics.num_files_added, 2);
+    assert_eq!(metrics.num_files_removed, 3);
+
+    // Allow going a little over the target size
+    assert!(metrics.files_added.max < 11_000_000);
+
+    Ok(())
+}
+
 async fn read_parquet_file(
     path: &Path,
     object_store: ObjectStoreRef,
