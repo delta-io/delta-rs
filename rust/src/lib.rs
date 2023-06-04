@@ -94,7 +94,7 @@ pub mod table;
 pub mod time_utils;
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]
-pub mod delta_arrow;
+pub mod arrow_convert;
 #[cfg(feature = "datafusion")]
 pub mod delta_datafusion;
 #[cfg(all(feature = "arrow", feature = "parquet"))]

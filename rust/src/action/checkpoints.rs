@@ -18,7 +18,7 @@ use std::iter::Iterator;
 use std::ops::Add;
 
 use super::{Action, Add as AddAction, MetaData, Protocol, ProtocolError, Txn};
-use crate::delta_arrow::delta_log_schema_for_table;
+use crate::arrow_convert::delta_log_schema_for_table;
 use crate::schema::*;
 use crate::storage::DeltaObjectStore;
 use crate::table::state::DeltaTableState;
