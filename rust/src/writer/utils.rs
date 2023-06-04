@@ -88,7 +88,6 @@ pub(crate) fn next_data_path(
     writer_id: &Uuid,
     writer_properties: &WriterProperties,
 ) -> Path {
-
     fn compression_to_str(compression: &Compression) -> &str {
         match compression {
             Compression::UNCOMPRESSED => "",
@@ -110,7 +109,12 @@ pub(crate) fn next_data_path(
     let part = format!("{:0>5}", part_count);
 
     // TODO: what does c000 mean?
-    let file_name = format!("part-{}-{}-c000{}.parquet", part, writer_id, compression_to_str(&compression));
+    let file_name = format!(
+        "part-{}-{}-c000{}.parquet",
+        part,
+        writer_id,
+        compression_to_str(&compression)
+    );
     prefix.child(file_name)
 }
 
