@@ -1,5 +1,3 @@
-#![deny(warnings)]
-
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 mod fs_common;
 use deltalake::action::DeltaOperation;
