@@ -35,7 +35,7 @@ num_cpus = "1"
 reqwest = { version = "*", features = ["native-tls-vendored"] }
 
 [dependencies.pyo3]
-version = "0.18"
+version = "0.19"
 features = ["extension-module", "abi3", "abi3-py37"]
 
 [dependencies.deltalake]
