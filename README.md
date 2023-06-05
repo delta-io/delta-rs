@@ -61,6 +61,9 @@ API that lets you query, inspect, and operate your Deltalake with ease.
 
 ## Quick Start
 
+The deltalake library aim to adopt familiar patterns from other libraries in data processing,
+so getting started should look famililiar.
+
 ```py3
 from deltalake import DeltaTable
 from deltalake.write import write_deltalake
@@ -76,6 +79,8 @@ df2 = dt.to_pandas()
 
 assert df == df2
 ```
+
+The same table written cal also be loaded using the core rust crate.
 
 ```rs
 use deltalake::{open_table, DeltaTableError};
