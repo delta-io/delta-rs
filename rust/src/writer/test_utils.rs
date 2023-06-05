@@ -178,16 +178,14 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
     let table_dir = tempfile::tempdir().unwrap();
     let table_path = table_dir.path();
 
-    let table = CreateBuilder::new()
+    CreateBuilder::new()
         .with_location(table_path.to_str().unwrap())
         .with_table_name("test-table")
         .with_comment("A table for running tests")
         .with_columns(table_schema.get_fields().clone())
         .with_partition_columns(partition_cols)
         .await
-        .unwrap();
-
-    table
+        .unwrap()
 }
 
 #[cfg(feature = "datafusion")]
