@@ -1,11 +1,9 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
-pub mod config;
-pub mod file;
-pub mod utils;
-
-use self::config::StorageOptions;
-use crate::DeltaResult;
+use std::collections::HashMap;
+use std::fmt;
+use std::ops::Range;
+use std::sync::Arc;
 
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt};
@@ -13,12 +11,15 @@ use lazy_static::lazy_static;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use std::collections::HashMap;
-use std::fmt;
-use std::ops::Range;
-use std::sync::Arc;
 use tokio::io::AsyncWrite;
 use url::Url;
+
+use self::config::StorageOptions;
+use crate::errors::DeltaResult;
+
+pub mod config;
+pub mod file;
+pub mod utils;
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 pub mod s3;
@@ -234,6 +235,18 @@ impl ObjectStore for DeltaObjectStore {
         prefix: Option<&Path>,
     ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
         self.storage.list(prefix).await
+    }
+
+    /// List all the objects with the given prefix and a location greater than `offset`
+    ///
+    /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
+    /// the number of network requests required
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
+        self.storage.list_with_offset(prefix, offset).await
     }
 
     /// List objects with the given prefix and an implementation specific

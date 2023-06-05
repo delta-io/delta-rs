@@ -80,17 +80,13 @@ select = [
     # isort
     "I"
 ]
-unfixable = ["F401"]
 ignore = ["E501"]
-
-[tool.ruff.per-file-ignores]
-"deltalake/__init__.py" = ["F401"]
 
 [tool.ruff.isort]
 known-first-party = ["deltalake"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=deltalake -v -m 'not integration'"
+addopts = "--cov=deltalake -v -m 'not integration and not benchmark'"
 testpaths = [
     "tests",
 ]

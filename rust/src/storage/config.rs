@@ -1,15 +1,17 @@
 //! Configuration handling for defining Storage backends for DeltaTables.
-use super::file::FileStorageBackend;
-use super::utils::str_is_truthy;
-use crate::{DeltaResult, DeltaTableError};
+use std::collections::HashMap;
+use std::sync::Arc;
+
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::prefix::PrefixStore;
 use object_store::{DynObjectStore, ObjectStore};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
-use std::sync::Arc;
 use url::Url;
+
+use super::file::FileStorageBackend;
+use super::utils::str_is_truthy;
+use crate::errors::{DeltaResult, DeltaTableError};
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use super::s3::{S3StorageBackend, S3StorageOptions};

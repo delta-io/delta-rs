@@ -1,5 +1,9 @@
-from ._internal import PyDeltaTableError, RawDeltaTable, __version__, rust_core_version
-from .data_catalog import DataCatalog
-from .schema import DataType, Field, Schema
-from .table import DeltaTable, Metadata
-from .writer import write_deltalake
+from ._internal import __version__ as __version__
+from ._internal import rust_core_version as rust_core_version
+from .data_catalog import DataCatalog as DataCatalog
+from .schema import DataType as DataType
+from .schema import Field as Field
+from .schema import Schema as Schema
+from .table import DeltaTable as DeltaTable
+from .table import Metadata as Metadata
+from .writer import write_deltalake as write_deltalake

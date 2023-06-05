@@ -26,31 +26,29 @@
 //!     }))
 //! }
 //! ```
-use super::{
-    stats::{create_add, NullCounts},
-    utils::{
-        arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
-        stringified_partition_value, PartitionPath,
-    },
-    DeltaWriter, DeltaWriterError,
-};
-use crate::builder::DeltaTableBuilder;
-use crate::writer::stats::apply_null_counts;
-use crate::writer::utils::ShareableBuffer;
-use crate::DeltaTableError;
-use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
+use std::{collections::HashMap, sync::Arc};
+
 use arrow::array::{Array, UInt32Array};
-use arrow::compute::{lexicographical_partition_ranges, lexsort_to_indices, take, SortColumn};
+use arrow::compute::{lexicographical_partition_ranges, take, SortColumn};
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
+use arrow_array::ArrayRef;
+use arrow_row::{RowConverter, SortField};
 use bytes::Bytes;
 use object_store::ObjectStore;
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::sync::Arc;
+
+use super::stats::create_add;
+use super::utils::{
+    arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
+    stringified_partition_value, PartitionPath, ShareableBuffer,
+};
+use super::{DeltaWriter, DeltaWriterError};
+use crate::builder::DeltaTableBuilder;
+use crate::errors::DeltaTableError;
+use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -226,19 +224,15 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
         let writers = std::mem::take(&mut self.arrow_writers);
         let mut actions = Vec::new();
 
-        for (_, mut writer) in writers {
+        for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
             let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
             self.storage.put(&path, obj_bytes).await?;
 
-            // Replace self null_counts with an empty map. Use the other for stats.
-            let null_counts = std::mem::take(&mut writer.null_counts);
-
             actions.push(create_add(
                 &writer.partition_values,
-                null_counts,
                 path.to_string(),
                 file_size,
                 &metadata,
@@ -263,7 +257,6 @@ struct PartitionWriter {
     pub(super) buffer: ShareableBuffer,
     pub(super) arrow_writer: ArrowWriter<ShareableBuffer>,
     pub(super) partition_values: HashMap<String, Option<String>>,
-    pub(super) null_counts: NullCounts,
     pub(super) buffered_record_batch_count: usize,
 }
 
@@ -280,7 +273,6 @@ impl PartitionWriter {
             Some(writer_properties.clone()),
         )?;
 
-        let null_counts = NullCounts::new();
         let buffered_record_batch_count = 0;
 
         Ok(Self {
@@ -289,7 +281,6 @@ impl PartitionWriter {
             buffer,
             arrow_writer,
             partition_values,
-            null_counts,
             buffered_record_batch_count,
         })
     }
@@ -311,7 +302,6 @@ impl PartitionWriter {
         match self.arrow_writer.write(record_batch) {
             Ok(_) => {
                 self.buffered_record_batch_count += 1;
-                apply_null_counts(&record_batch.clone().into(), &mut self.null_counts, 0);
                 Ok(())
             }
             // If a write fails we need to reset the state of the PartitionWriter
@@ -354,24 +344,18 @@ pub(crate) fn divide_by_partition_values(
 
     let schema = values.schema();
 
-    // collect all columns in order relevant for partitioning
-    let sort_columns = partition_columns
-        .clone()
-        .into_iter()
-        .map(|col| {
-            Ok(SortColumn {
-                values: values.column(schema.index_of(&col)?).clone(),
-                options: None,
-            })
-        })
+    let projection = partition_columns
+        .iter()
+        .map(|n| Ok(schema.index_of(n)?))
         .collect::<Result<Vec<_>, DeltaWriterError>>()?;
+    let sort_columns = values.project(&projection)?;
 
-    let indices = lexsort_to_indices(sort_columns.as_slice(), None)?;
-    let sorted_partition_columns = sort_columns
+    let indices = lexsort_to_indices(sort_columns.columns());
+    let sorted_partition_columns = partition_columns
         .iter()
         .map(|c| {
             Ok(SortColumn {
-                values: take(c.values.as_ref(), &indices, None)?,
+                values: take(values.column(schema.index_of(c)?), &indices, None)?,
                 options: None,
             })
         })
@@ -408,6 +392,18 @@ pub(crate) fn divide_by_partition_values(
     }
 
     Ok(partitions)
+}
+
+fn lexsort_to_indices(arrays: &[ArrayRef]) -> UInt32Array {
+    let fields = arrays
+        .iter()
+        .map(|a| SortField::new(a.data_type().clone()))
+        .collect();
+    let mut converter = RowConverter::new(fields).unwrap();
+    let rows = converter.convert_columns(arrays).unwrap();
+    let mut sort: Vec<_> = rows.iter().enumerate().collect();
+    sort.sort_unstable_by(|(_, a), (_, b)| a.cmp(b));
+    UInt32Array::from_iter_values(sort.iter().map(|(i, _)| *i as u32))
 }
 
 #[cfg(test)]
@@ -506,7 +502,6 @@ mod tests {
 
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
-        println!("partitions: {:?}", partitions);
 
         let expected_keys = vec![
             String::from("modified=2021-02-01"),

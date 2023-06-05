@@ -4,9 +4,6 @@ use std::fmt::Display;
 use std::io::Write;
 use std::sync::Arc;
 
-use crate::writer::DeltaWriterError;
-use crate::DeltaResult;
-
 use arrow::array::{
     as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array, Array,
 };
@@ -22,6 +19,9 @@ use object_store::path::Path;
 use parking_lot::RwLock;
 use serde_json::Value;
 use uuid::Uuid;
+
+use crate::errors::DeltaResult;
+use crate::writer::DeltaWriterError;
 
 const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 const PARTITION_DATE_FORMAT: &str = "%Y-%m-%d";

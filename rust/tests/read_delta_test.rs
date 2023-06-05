@@ -563,7 +563,7 @@ async fn read_empty_folder() {
 
     assert!(matches!(
         result.unwrap_err(),
-        deltalake::DeltaTableError::NotATable(_),
+        deltalake::errors::DeltaTableError::NotATable(_),
     ));
 
     let dir = std::env::temp_dir();
@@ -575,7 +575,7 @@ async fn read_empty_folder() {
 
     assert!(matches!(
         result.unwrap_err(),
-        deltalake::DeltaTableError::NotATable(_),
+        deltalake::errors::DeltaTableError::NotATable(_),
     ));
 }
 

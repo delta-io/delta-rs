@@ -1,8 +1,5 @@
 rust:
-  - aws/**/*
   - delta-inspect/**/*
-  - dynamodb_lock/**/*
-  - glibc_version/**/*
   - proofs/**/*
   - rust/**/*
 
@@ -22,20 +19,11 @@ documentation:
 storage/aws:
   - aws/**/*
 
-delta-checkpoint:
-  - aws/delta-checkpoint/**/*
-  
 delta-inspect:
   - delta-inspect/**/*
 
 binding/rust:
   - rust/**/*
-
-dynamodb_lock:
-  - dynamodb_lock/**/*
-
-glibc_version:
-  - glibc_version/**/*
 
 proofs:
   - proofs/**/*

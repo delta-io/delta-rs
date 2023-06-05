@@ -1,8 +1,7 @@
-extern crate deltalake;
-
-use deltalake::schema::SchemaDataType;
 use std::collections::HashMap;
 use std::convert::TryFrom;
+
+use deltalake::schema::SchemaDataType;
 
 #[allow(dead_code)]
 mod fs_common;
@@ -22,7 +21,7 @@ fn test_create_delta_table_partition() {
     let _wrong_path = "year=2021/month=";
     assert!(matches!(
         deltalake::DeltaTablePartition::try_from(_wrong_path).unwrap_err(),
-        deltalake::DeltaTableError::PartitionError {
+        deltalake::errors::DeltaTableError::PartitionError {
             partition: _wrong_path
         },
     ))

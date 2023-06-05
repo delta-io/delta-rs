@@ -17,21 +17,23 @@
 //!     .await?;
 //! ````
 
-use crate::action::DeltaOperation;
-use crate::delta::DeltaResult;
-use crate::delta_datafusion::find_files;
-use crate::delta_datafusion::parquet_scan_from_actions;
-use crate::delta_datafusion::register_store;
-use crate::operations::transaction::commit;
-use crate::operations::write::write_execution_plan;
-use crate::storage::DeltaObjectStore;
-use crate::storage::ObjectStoreRef;
-use crate::table_state::DeltaTableState;
-use crate::DeltaTable;
-use crate::DeltaTableError;
+use std::collections::HashMap;
+use std::pin::Pin;
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::action::{Action, Add, Remove};
-use datafusion::execution::context::{SessionContext, SessionState};
+use arrow::array::StringArray;
+use arrow::datatypes::DataType;
+use arrow::datatypes::Field;
+use arrow::datatypes::Schema as ArrowSchema;
+use arrow::error::ArrowError;
+use arrow::record_batch::RecordBatch;
+use arrow_cast::CastOptions;
+use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
+use datafusion::datasource::listing::PartitionedFile;
+use datafusion::datasource::MemTable;
+use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::ExecutionPlan;
@@ -42,8 +44,17 @@ use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde_json::Map;
 use serde_json::Value;
-use std::sync::Arc;
-use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
+use crate::action::DeltaOperation;
+use crate::delta_datafusion::{
+    parquet_scan_from_actions, partitioned_file_from_action, register_store,
+};
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::operations::transaction::commit;
+use crate::operations::write::write_execution_plan;
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
+use crate::table_state::DeltaTableState;
+use crate::DeltaTable;
 
 /// Delete Records from the Delta Table.
 /// See this module's documentaiton for more information
@@ -188,6 +199,7 @@ async fn excute_non_empty_expr(
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
+        &CastOptions { safe: false },
     )
     .await?;
 
@@ -328,6 +340,7 @@ mod tests {
 
     use crate::action::*;
     use crate::operations::DeltaOps;
+    use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::{get_arrow_schema, get_delta_schema};
     use crate::DeltaTable;
     use arrow::array::Int32Array;
@@ -349,17 +362,6 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         table
-    }
-
-    async fn get_data(table: DeltaTable) -> Vec<RecordBatch> {
-        let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(table)).unwrap();
-        ctx.sql("select * from test")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap()
     }
 
     #[tokio::test]
@@ -497,7 +499,7 @@ mod tests {
             "+----+-------+------------+",
         ];
 
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -545,7 +547,7 @@ mod tests {
             "| 2     |",
             "+-------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
 
         // Validate behaviour of less than
@@ -566,7 +568,7 @@ mod tests {
             "| 4     |",
             "+-------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
 
         // Validate behaviour of less plus not null
@@ -585,7 +587,7 @@ mod tests {
             "| 4     |",
             "+-------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -644,7 +646,7 @@ mod tests {
             "+----+-------+------------+",
         ];
 
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -705,7 +707,7 @@ mod tests {
             "| B  | 20    | 2021-02-03 |",
             "+----+-------+------------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 

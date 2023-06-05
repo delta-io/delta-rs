@@ -1,19 +1,21 @@
 //! Command for creating a new delta table
 // https://github.com/delta-io/delta/blob/master/core/src/main/scala/org/apache/spark/sql/delta/commands/CreateDeltaTableCommand.scala
+
+use std::collections::HashMap;
+use std::sync::Arc;
+
+use futures::future::BoxFuture;
+use serde_json::{Map, Value};
+
 use super::transaction::commit;
 use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
 use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
 use crate::builder::ensure_table_uri;
 use crate::delta_config::DeltaConfigKey;
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
 use crate::storage::DeltaObjectStore;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::{DeltaTableBuilder, DeltaTableMetaData};
-
-use futures::future::BoxFuture;
-use serde_json::{Map, Value};
-use std::collections::HashMap;
-use std::sync::Arc;
+use crate::{DeltaTable, DeltaTableBuilder, DeltaTableMetaData};
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {

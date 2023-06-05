@@ -1,10 +1,10 @@
 #![allow(deprecated)]
 //! Utilities for writing unit tests
-use super::*;
 use crate::{
     action::Protocol, schema::Schema, DeltaTable, DeltaTableBuilder, DeltaTableMetaData,
     SchemaDataType, SchemaField,
 };
+use arrow::datatypes::{DataType, Field};
 use arrow::record_batch::RecordBatch;
 use arrow::{
     array::{Int32Array, StringArray, UInt32Array},
@@ -210,4 +210,24 @@ pub async fn create_initialized_table(partition_cols: &[String]) -> DeltaTable {
         .unwrap();
 
     table
+}
+
+#[cfg(feature = "datafusion")]
+pub mod datafusion {
+    use crate::DeltaTable;
+    use arrow_array::RecordBatch;
+    use datafusion::prelude::SessionContext;
+    use std::sync::Arc;
+
+    pub async fn get_data(table: &DeltaTable) -> Vec<RecordBatch> {
+        let table = DeltaTable::new_with_state(table.object_store(), table.state.clone());
+        let ctx = SessionContext::new();
+        ctx.register_table("test", Arc::new(table)).unwrap();
+        ctx.sql("select * from test")
+            .await
+            .unwrap()
+            .collect()
+            .await
+            .unwrap()
+    }
 }
