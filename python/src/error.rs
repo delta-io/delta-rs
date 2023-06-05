@@ -63,7 +63,7 @@ fn checkpoint_to_py(err: ProtocolError) -> PyErr {
     match err {
         ProtocolError::Arrow { source } => arrow_to_py(source),
         ProtocolError::ObjectStore { source } => object_store_to_py(source),
-        ProtocolError::EndOfLog => DeltaProtocolError::new_err("Enf of log"),
+        ProtocolError::EndOfLog => DeltaProtocolError::new_err("End of log"),
         ProtocolError::NoMetaData => DeltaProtocolError::new_err("Table metadata missing"),
         ProtocolError::CheckpointNotFound => DeltaProtocolError::new_err(err.to_string()),
         ProtocolError::InvalidField(err) => PyValueError::new_err(err),
