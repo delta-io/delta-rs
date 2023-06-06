@@ -441,9 +441,6 @@ given filters.
     @property
     def optimize(
         self,
-        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
-        target_size: Optional[int] = None,
-        max_concurrent_tasks: Optional[int] = None,
     ) -> "TableOptimizer":
         return TableOptimizer(self)
 
@@ -686,6 +683,16 @@ class TableOptimizer:
         Reorders the data using a Z-order curve to improve data skipping.
 
         This also performs compaction, so the same parameters as compact() apply.
+
+        :param columns: the columns to use for Z-ordering. There must be at least one column.
+        :param partition_filters: the partition filters that will be used for getting the matched files
+        :param target_size: desired file size after bin-packing files, in bytes. If not
+          provided, will attempt to read the table configuration value ``delta.targetFileSize``.
+          If that value isn't set, will use default value of 256MB.
+        :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
+            file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
+            faster, but will also use more memory.
+        :return: the metrics from optimize
         """
         metrics = self.table._table.z_order_optimize(
             list(columns), partition_filters, target_size, max_concurrent_tasks
