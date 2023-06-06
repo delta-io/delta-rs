@@ -635,7 +635,7 @@ class TableOptimizer:
         """
 
         warnings.warn(
-            "Call to deprecated method files_by_partitions. Please use file_uris instead.",
+            "Call to deprecated method DeltaTable.optimize. Use DeltaTable.optimize.compact() instead.",
             category=DeprecationWarning,
             stacklevel=2,
         )
