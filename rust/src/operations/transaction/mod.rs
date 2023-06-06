@@ -165,7 +165,7 @@ pub async fn commit(
     let tmp_commit = prepare_commit(storage, &operation, actions, app_metadata).await?;
 
     // TODO make max attempts configurable
-    let max_attempts = 10;
+    let max_attempts = 25;
     let mut attempt_number = 1;
 
     while attempt_number <= max_attempts {
