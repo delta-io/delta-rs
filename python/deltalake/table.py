@@ -8,6 +8,7 @@ from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
+    Iterable,
     List,
     NamedTuple,
     Optional,
@@ -437,35 +438,14 @@ given filters.
             max_concurrent_requests,
         )
 
+    @property
     def optimize(
         self,
         partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """
-        Compacts small files to reduce the total number of files in the table.
-
-        This operation is idempotent; if run twice on the same table (assuming it has
-        not been updated) it will do nothing the second time.
-
-        If this operation happens concurrently with any operations other than append,
-        it will fail.
-
-        :param partition_filters: the partition filters that will be used for getting the matched files
-        :param target_size: desired file size after bin-packing files, in bytes. If not
-          provided, will attempt to read the table configuration value ``delta.targetFileSize``.
-          If that value isn't set, will use default value of 256MB.
-        :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
-            file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
-            faster, but will also use more memory.
-        :return: the metrics from optimize
-        """
-        metrics = self._table.optimize(
-            partition_filters, target_size, max_concurrent_tasks
-        )
-        self.update_incremental()
-        return json.loads(metrics)
+    ) -> "TableOptimizer":
+        return TableOptimizer(self)
 
     def pyarrow_schema(self) -> pyarrow.Schema:
         """
@@ -638,3 +618,77 @@ given filters.
         2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            1            1             0      4      4
         """
         return self._table.get_add_actions(flatten)
+
+
+class TableOptimizer:
+    """API for various table optimization commands."""
+
+    def __init__(self, table: DeltaTable):
+        self.table = table
+
+    def __call__(
+        self,
+        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+        target_size: Optional[int] = None,
+        max_concurrent_tasks: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        .. deprecated:: 0.10.0
+            Use :meth:`compact` instead, which has the same signature.
+        """
+
+        warnings.warn(
+            "Call to deprecated method files_by_partitions. Please use file_uris instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+
+        return self.compact(partition_filters, target_size, max_concurrent_tasks)
+
+    def compact(
+        self,
+        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+        target_size: Optional[int] = None,
+        max_concurrent_tasks: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Compacts small files to reduce the total number of files in the table.
+
+        This operation is idempotent; if run twice on the same table (assuming it has
+        not been updated) it will do nothing the second time.
+
+        If this operation happens concurrently with any operations other than append,
+        it will fail.
+
+        :param partition_filters: the partition filters that will be used for getting the matched files
+        :param target_size: desired file size after bin-packing files, in bytes. If not
+          provided, will attempt to read the table configuration value ``delta.targetFileSize``.
+          If that value isn't set, will use default value of 256MB.
+        :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
+            file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
+            faster, but will also use more memory.
+        :return: the metrics from optimize
+        """
+        metrics = self.table._table.compact_optimize(
+            partition_filters, target_size, max_concurrent_tasks
+        )
+        self.table.update_incremental()
+        return json.loads(metrics)
+
+    def z_order(
+        self,
+        columns: Iterable[str],
+        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+        target_size: Optional[int] = None,
+        max_concurrent_tasks: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Reorders the data using a Z-order curve to improve data skipping.
+
+        This also performs compaction, so the same parameters as compact() apply.
+        """
+        metrics = self.table._table.z_order_optimize(
+            list(columns), partition_filters, target_size, max_concurrent_tasks
+        )
+        self.table.update_incremental()
+        return json.loads(metrics)
