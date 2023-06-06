@@ -28,6 +28,7 @@ use crate::schema::*;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
 pub(crate) mod builder;
+pub mod config;
 pub mod state;
 #[cfg(all(feature = "arrow"))]
 pub mod state_arrow;

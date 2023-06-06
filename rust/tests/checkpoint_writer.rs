@@ -90,7 +90,7 @@ mod delete_expired_delta_log_in_checkpoint {
 
     use ::object_store::path::Path as ObjectStorePath;
     use chrono::Utc;
-    use deltalake::delta_config::DeltaConfigKey;
+    use deltalake::config::DeltaConfigKey;
     use deltalake::*;
     use maplit::hashmap;
 
@@ -212,7 +212,7 @@ mod checkpoints_with_tombstones {
     use ::object_store::path::Path as ObjectStorePath;
     use chrono::Utc;
     use deltalake::action::*;
-    use deltalake::delta_config::DeltaConfigKey;
+    use deltalake::config::DeltaConfigKey;
     use deltalake::*;
     use maplit::hashmap;
     use parquet::file::reader::{FileReader, SerializedFileReader};

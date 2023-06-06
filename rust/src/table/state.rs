@@ -10,8 +10,8 @@ use lazy_static::lazy_static;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use serde::{Deserialize, Serialize};
 
+use super::config::TableConfig;
 use crate::action::{self, Action, Add, ProtocolError};
-use crate::delta_config::TableConfig;
 use crate::errors::DeltaTableError;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::schema::SchemaDataType;

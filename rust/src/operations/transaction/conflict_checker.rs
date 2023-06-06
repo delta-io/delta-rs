@@ -6,7 +6,7 @@ use object_store::ObjectStore;
 
 use super::CommitInfo;
 use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
-use crate::delta_config::IsolationLevel;
+use crate::config::IsolationLevel;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::commit_uri_from_version;
 use crate::table::state::DeltaTableState;

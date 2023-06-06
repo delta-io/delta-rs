@@ -23,7 +23,7 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-use crate::delta_config::IsolationLevel;
+use crate::config::IsolationLevel;
 use crate::errors::DeltaResult;
 use crate::storage::ObjectStoreRef;
 use crate::{schema::*, table::CheckPoint, DeltaTableMetaData};

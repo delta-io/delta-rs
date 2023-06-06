@@ -11,7 +11,7 @@ use super::transaction::commit;
 use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
 use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
 use crate::builder::ensure_table_uri;
-use crate::delta_config::DeltaConfigKey;
+use crate::config::DeltaConfigKey;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
 use crate::storage::DeltaObjectStore;
@@ -322,7 +322,7 @@ impl std::future::IntoFuture for CreateBuilder {
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
     use super::*;
-    use crate::delta_config::DeltaConfigKey;
+    use crate::config::DeltaConfigKey;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::get_delta_schema;
     use tempdir::TempDir;
