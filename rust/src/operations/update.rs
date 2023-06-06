@@ -80,7 +80,7 @@ impl From<&str> for Expression {
 }
 
 /// Updates records in the Delta Table.
-/// See this module's documentaiton for more information
+/// See this module's documentation for more information
 pub struct UpdateBuilder {
     /// Which records to update
     predicate: Option<Expression>,
