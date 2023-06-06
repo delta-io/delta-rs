@@ -17,13 +17,13 @@ use std::convert::TryFrom;
 use std::iter::Iterator;
 use std::ops::Add;
 
-use super::{Action, Add as AddAction, MetaData, Protocol, ProtocolError, Txn};
+use super::{time_utils, Action, Add as AddAction, MetaData, Protocol, ProtocolError, Txn};
 use crate::arrow_convert::delta_log_schema_for_table;
 use crate::schema::*;
 use crate::storage::DeltaObjectStore;
 use crate::table::state::DeltaTableState;
 use crate::table::CheckPoint;
-use crate::{open_table_with_version, time_utils, DeltaTable};
+use crate::{open_table_with_version, DeltaTable};
 
 type SchemaPath = Vec<String>;
 

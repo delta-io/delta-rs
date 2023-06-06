@@ -89,7 +89,6 @@ pub mod operations;
 pub mod schema;
 pub mod storage;
 pub mod table;
-pub mod time_utils;
 
 #[cfg(feature = "datafusion")]
 pub mod delta_datafusion;

@@ -8,6 +8,7 @@ pub mod checkpoints;
 pub mod parquet2_read;
 #[cfg(feature = "parquet")]
 mod parquet_read;
+mod time_utils;
 
 #[cfg(all(feature = "arrow"))]
 use arrow_schema::ArrowError;
