@@ -90,14 +90,16 @@ pub(crate) fn next_data_path(
 ) -> Path {
     fn compression_to_str(compression: &Compression) -> &str {
         match compression {
+            // This is to match HADOOP's convention
+            // https://github.com/apache/parquet-mr/blob/c4977579ab3b149ea045a177b039f055b5408e8f/parquet-common/src/main/java/org/apache/parquet/hadoop/metadata/CompressionCodecName.java#L27-L34
             Compression::UNCOMPRESSED => "",
             Compression::SNAPPY => ".snappy",
             Compression::GZIP(_) => ".gz",
             Compression::LZO => ".lzo",
-            Compression::BROTLI(_) => ".brotli",
+            Compression::BROTLI(_) => ".br",
             Compression::LZ4 => ".lz4",
             Compression::ZSTD(_) => ".zstd",
-            Compression::LZ4_RAW => ".lz4_raw",
+            Compression::LZ4_RAW => ".lz4raw",
         }
     }
 
