@@ -371,7 +371,6 @@ mod tests {
         let uuid = Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708208").unwrap();
 
         // Validated against Spark
-
         let props = WriterProperties::builder()
             .set_compression(Compression::UNCOMPRESSED)
             .build();
@@ -413,13 +412,12 @@ mod tests {
             "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.zstd.parquet"
         );
 
-        // Unable to validate against spark
         let props = WriterProperties::builder()
             .set_compression(Compression::LZ4_RAW)
             .build();
         assert_eq!(
             next_data_path(&prefix, 1, &uuid, &props).as_ref(),
-            "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.lz4_raw.parquet"
+            "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.lz4raw.parquet"
         );
 
         let props = WriterProperties::builder()
@@ -427,7 +425,7 @@ mod tests {
             .build();
         assert_eq!(
             next_data_path(&prefix, 1, &uuid, &props).as_ref(),
-            "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.brotli.parquet"
+            "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.br.parquet"
         );
     }
 }
