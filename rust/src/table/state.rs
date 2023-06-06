@@ -16,8 +16,9 @@ use crate::errors::DeltaTableError;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::schema::SchemaDataType;
 use crate::storage::commit_uri_from_version;
+use crate::table::DeltaTableMetaData;
+use crate::DeltaTable;
 use crate::Schema;
-use crate::{DeltaTable, DeltaTableMetaData};
 
 #[cfg(any(feature = "parquet", feature = "parquet2"))]
 use super::{CheckPoint, DeltaTableConfig};

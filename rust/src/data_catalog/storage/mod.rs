@@ -13,8 +13,9 @@ use futures::TryStreamExt;
 use object_store::ObjectStore;
 
 use crate::errors::DeltaResult;
+use crate::open_table_with_storage_options;
 use crate::storage::config::{configure_store, StorageOptions};
-use crate::{ensure_table_uri, open_table_with_storage_options};
+use crate::table::builder::ensure_table_uri;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 

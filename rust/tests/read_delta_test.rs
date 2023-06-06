@@ -1,6 +1,6 @@
 use chrono::Utc;
+use deltalake::table::PeekCommit;
 use deltalake::DeltaTableBuilder;
-use deltalake::PeekCommit;
 use object_store::path::Path;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;

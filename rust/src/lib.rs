@@ -96,12 +96,17 @@ pub mod delta_datafusion;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod writer;
 
-pub use self::config::*;
+use std::collections::HashMap;
+
 pub use self::data_catalog::{get_data_catalog, DataCatalog, DataCatalogError};
+pub use self::errors::*;
 pub use self::schema::partitions::*;
 pub use self::schema::*;
-pub use self::table::*;
-pub use errors::*;
+pub use self::table::builder::{
+    DeltaTableBuilder, DeltaTableConfig, DeltaTableLoadOptions, DeltaVersion,
+};
+pub use self::table::config::DeltaConfigKey;
+pub use self::table::DeltaTable;
 pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
 pub use operations::DeltaOps;
 
@@ -121,3 +126,55 @@ pub use parquet2;
 // TODO can / should we move this into the test crate?
 #[cfg(feature = "integration_test")]
 pub mod test_utils;
+
+/// Creates and loads a DeltaTable from the given path with current metadata.
+/// Infers the storage backend to use from the scheme in the given table path.
+pub async fn open_table(table_uri: impl AsRef<str>) -> Result<DeltaTable, DeltaTableError> {
+    let table = DeltaTableBuilder::from_uri(table_uri).load().await?;
+    Ok(table)
+}
+
+/// Same as `open_table`, but also accepts storage options to aid in building the table for a deduced
+/// `StorageService`.
+pub async fn open_table_with_storage_options(
+    table_uri: impl AsRef<str>,
+    storage_options: HashMap<String, String>,
+) -> Result<DeltaTable, DeltaTableError> {
+    let table = DeltaTableBuilder::from_uri(table_uri)
+        .with_storage_options(storage_options)
+        .load()
+        .await?;
+    Ok(table)
+}
+
+/// Creates a DeltaTable from the given path and loads it with the metadata from the given version.
+/// Infers the storage backend to use from the scheme in the given table path.
+pub async fn open_table_with_version(
+    table_uri: impl AsRef<str>,
+    version: i64,
+) -> Result<DeltaTable, DeltaTableError> {
+    let table = DeltaTableBuilder::from_uri(table_uri)
+        .with_version(version)
+        .load()
+        .await?;
+    Ok(table)
+}
+
+/// Creates a DeltaTable from the given path.
+/// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
+/// Infers the storage backend to use from the scheme in the given table path.
+pub async fn open_table_with_ds(
+    table_uri: impl AsRef<str>,
+    ds: impl AsRef<str>,
+) -> Result<DeltaTable, DeltaTableError> {
+    let table = DeltaTableBuilder::from_uri(table_uri)
+        .with_datestring(ds)?
+        .load()
+        .await?;
+    Ok(table)
+}
+
+/// Returns rust crate version, can be use used in language bindings to expose Rust core version
+pub fn crate_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}

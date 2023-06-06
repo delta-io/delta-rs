@@ -10,8 +10,8 @@
 use self::create::CreateBuilder;
 use self::filesystem_check::FileSystemCheckBuilder;
 use self::vacuum::VacuumBuilder;
-use crate::builder::DeltaTableBuilder;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 
 pub mod create;

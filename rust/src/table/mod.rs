@@ -19,6 +19,7 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
+use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
 use crate::action::{self, find_latest_check_point_for_version, get_last_checkpoint, Action};
 use crate::action::{Add, ProtocolError, Stats};
@@ -32,8 +33,6 @@ pub mod config;
 pub mod state;
 #[cfg(all(feature = "arrow"))]
 pub mod state_arrow;
-
-pub use builder::*;
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
@@ -791,64 +790,12 @@ impl std::fmt::Debug for DeltaTable {
     }
 }
 
-/// Creates and loads a DeltaTable from the given path with current metadata.
-/// Infers the storage backend to use from the scheme in the given table path.
-pub async fn open_table(table_uri: impl AsRef<str>) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri).load().await?;
-    Ok(table)
-}
-
-/// Same as `open_table`, but also accepts storage options to aid in building the table for a deduced
-/// `StorageService`.
-pub async fn open_table_with_storage_options(
-    table_uri: impl AsRef<str>,
-    storage_options: HashMap<String, String>,
-) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)
-        .with_storage_options(storage_options)
-        .load()
-        .await?;
-    Ok(table)
-}
-
-/// Creates a DeltaTable from the given path and loads it with the metadata from the given version.
-/// Infers the storage backend to use from the scheme in the given table path.
-pub async fn open_table_with_version(
-    table_uri: impl AsRef<str>,
-    version: i64,
-) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)
-        .with_version(version)
-        .load()
-        .await?;
-    Ok(table)
-}
-
-/// Creates a DeltaTable from the given path.
-/// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
-/// Infers the storage backend to use from the scheme in the given table path.
-pub async fn open_table_with_ds(
-    table_uri: impl AsRef<str>,
-    ds: impl AsRef<str>,
-) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)
-        .with_datestring(ds)?
-        .load()
-        .await?;
-    Ok(table)
-}
-
-/// Returns rust crate version, can be use used in language bindings to expose Rust core version
-pub fn crate_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-    use crate::builder::DeltaTableBuilder;
     use crate::operations::create::CreateBuilder;
+    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+    use crate::table::builder::DeltaTableBuilder;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use tempdir::TempDir;

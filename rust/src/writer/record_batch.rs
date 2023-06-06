@@ -22,9 +22,10 @@ use super::utils::{
     stringified_partition_value, PartitionPath, ShareableBuffer,
 };
 use super::{DeltaWriter, DeltaWriterError};
-use crate::builder::DeltaTableBuilder;
 use crate::errors::DeltaTableError;
-use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
+use crate::table::builder::DeltaTableBuilder;
+use crate::table::DeltaTableMetaData;
+use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, Schema};
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {

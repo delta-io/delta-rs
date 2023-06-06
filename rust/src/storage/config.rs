@@ -260,7 +260,7 @@ fn url_prefix_handler<T: ObjectStore>(
 
 #[cfg(test)]
 mod test {
-    use crate::ensure_table_uri;
+    use crate::table::builder::ensure_table_uri;
 
     use super::*;
 

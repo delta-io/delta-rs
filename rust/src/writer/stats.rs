@@ -456,8 +456,8 @@ mod tests {
     use super::*;
     use crate::{
         action::{ColumnCountStat, ColumnValueStat},
-        builder::DeltaTableBuilder,
         errors::DeltaTableError,
+        table::builder::DeltaTableBuilder,
         DeltaTable,
     };
     use lazy_static::lazy_static;

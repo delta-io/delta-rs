@@ -23,10 +23,11 @@ use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 
-use crate::config::IsolationLevel;
 use crate::errors::DeltaResult;
 use crate::storage::ObjectStoreRef;
-use crate::{schema::*, table::CheckPoint, DeltaTableMetaData};
+use crate::table::config::IsolationLevel;
+use crate::table::DeltaTableMetaData;
+use crate::{schema::*, table::CheckPoint};
 
 /// Error returned when an invalid Delta log action is encountered.
 #[allow(missing_docs)]

@@ -20,9 +20,10 @@ use super::utils::{
     record_batch_without_partitions, stringified_partition_value,
 };
 use super::{DeltaWriter, DeltaWriterError};
-use crate::builder::DeltaTableBuilder;
 use crate::errors::DeltaTableError;
-use crate::{action::Add, DeltaTable, DeltaTableMetaData, Schema};
+use crate::table::builder::DeltaTableBuilder;
+use crate::table::DeltaTableMetaData;
+use crate::{action::Add, DeltaTable, Schema};
 use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
 
 type BadValue = (Value, ParquetError);

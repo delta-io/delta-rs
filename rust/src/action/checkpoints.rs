@@ -22,7 +22,8 @@ use crate::arrow_convert::delta_log_schema_for_table;
 use crate::schema::*;
 use crate::storage::DeltaObjectStore;
 use crate::table::state::DeltaTableState;
-use crate::{open_table_with_version, time_utils, CheckPoint, DeltaTable};
+use crate::table::CheckPoint;
+use crate::{open_table_with_version, time_utils, DeltaTable};
 
 type SchemaPath = Vec<String>;
 

@@ -9,8 +9,8 @@ use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectMeta, Result as ObjectStoreResult};
 
 use crate::action::Add;
-use crate::builder::DeltaTableBuilder;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::table::builder::DeltaTableBuilder;
 
 /// Copies the contents from the `from` location into the `to` location
 pub async fn copy_table(

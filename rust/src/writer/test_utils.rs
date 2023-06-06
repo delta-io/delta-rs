@@ -9,7 +9,8 @@ use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 
 use crate::operations::create::CreateBuilder;
 use crate::schema::Schema;
-use crate::{DeltaTable, DeltaTableBuilder, DeltaTableMetaData, SchemaDataType, SchemaField};
+use crate::table::DeltaTableMetaData;
+use crate::{DeltaTable, DeltaTableBuilder, SchemaDataType, SchemaField};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 

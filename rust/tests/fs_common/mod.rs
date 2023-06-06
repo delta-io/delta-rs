@@ -43,7 +43,7 @@ pub async fn create_test_table(
     partition_columns: Vec<&str>,
     config: HashMap<String, Option<String>>,
 ) -> DeltaTable {
-    let table = CreateBuilder::new()
+    CreateBuilder::new()
         .with_location(path)
         .with_table_name("test-table")
         .with_comment("A table for running tests")
@@ -51,9 +51,7 @@ pub async fn create_test_table(
         .with_partition_columns(partition_columns)
         .with_configuration(config)
         .await
-        .unwrap();
-
-    table
+        .unwrap()
 }
 
 pub async fn create_table(

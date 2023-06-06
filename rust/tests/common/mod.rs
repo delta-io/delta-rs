@@ -83,16 +83,14 @@ impl TestContext {
             .map(|s| s.to_string())
             .collect::<Vec<String>>();
         let backend = self.new_storage();
-        let dt = CreateBuilder::new()
+        CreateBuilder::new()
             .with_object_store(backend)
             .with_table_name("delta-rs_test_table")
             .with_comment("Table created by delta-rs tests")
             .with_columns(schema.get_fields().clone())
             .with_partition_columns(p)
             .await
-            .unwrap();
-
-        dt
+            .unwrap()
     }
 }
 
