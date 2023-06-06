@@ -1,8 +1,8 @@
 #![cfg(feature = "integration_test")]
 
-use deltalake::action::{Action, Add, DeltaOperation, SaveMode};
 use deltalake::operations::transaction::commit;
 use deltalake::operations::DeltaOps;
+use deltalake::protocol::{Action, Add, DeltaOperation, SaveMode};
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
 use deltalake::{DeltaTable, DeltaTableBuilder, Schema, SchemaDataType, SchemaField};
 use std::collections::HashMap;

@@ -6,7 +6,7 @@ use num_traits::cast::ToPrimitive;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use serde_json::json;
 
-use crate::action::{
+use crate::protocol::{
     Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, MetaData, Protocol, ProtocolError,
     Remove, Stats, Txn,
 };

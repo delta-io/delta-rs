@@ -1,6 +1,6 @@
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 mod fs_common;
-use deltalake::action::DeltaOperation;
+use deltalake::protocol::DeltaOperation;
 
 // NOTE: The below is a useful external command for inspecting the written checkpoint schema visually:
 // parquet-tools inspect tests/data/checkpoints/_delta_log/00000000000000000005.checkpoint.parquet
@@ -211,7 +211,7 @@ mod checkpoints_with_tombstones {
     use super::*;
     use ::object_store::path::Path as ObjectStorePath;
     use chrono::Utc;
-    use deltalake::action::*;
+    use deltalake::protocol::*;
     use deltalake::table::config::DeltaConfigKey;
     use deltalake::*;
     use maplit::hashmap;

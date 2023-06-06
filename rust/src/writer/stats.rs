@@ -11,7 +11,7 @@ use parquet::{
 };
 
 use super::*;
-use crate::action::{Add, ColumnValueStat, Stats};
+use crate::protocol::{Add, ColumnValueStat, Stats};
 
 pub(crate) fn create_add(
     partition_values: &HashMap<String, Option<String>>,
@@ -455,8 +455,8 @@ mod tests {
     use super::utils::record_batch_from_message;
     use super::*;
     use crate::{
-        action::{ColumnCountStat, ColumnValueStat},
         errors::DeltaTableError,
+        protocol::{ColumnCountStat, ColumnValueStat},
         table::builder::DeltaTableBuilder,
         DeltaTable,
     };

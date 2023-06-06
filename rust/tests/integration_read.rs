@@ -152,7 +152,7 @@ async fn read_simple_table(integration: &IntegrationContext) -> TestResult {
     );
     let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 31);
-    assert!(tombstones.contains(&deltalake::action::Remove {
+    assert!(tombstones.contains(&deltalake::protocol::Remove {
         path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
         deletion_timestamp: Some(1587968596250),
         data_change: true,
@@ -188,7 +188,7 @@ async fn read_simple_table_with_version(integration: &IntegrationContext) -> Tes
     );
     let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 29);
-    assert!(tombstones.contains(&deltalake::action::Remove {
+    assert!(tombstones.contains(&deltalake::protocol::Remove {
         path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
         deletion_timestamp: Some(1587968596250),
         data_change: true,
@@ -251,7 +251,7 @@ mod gcs {
         );
         let tombstones = table.get_state().all_tombstones();
         assert_eq!(tombstones.len(), 31);
-        assert!(tombstones.contains(&deltalake::action::Remove {
+        assert!(tombstones.contains(&deltalake::protocol::Remove {
             path: "part-00006-63ce9deb-bc0f-482d-b9a1-7e717b67f294-c000.snappy.parquet".to_string(),
             deletion_timestamp: Some(1587968596250),
             data_change: true,

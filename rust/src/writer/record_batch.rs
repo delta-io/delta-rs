@@ -25,7 +25,7 @@ use super::{DeltaWriter, DeltaWriterError};
 use crate::errors::DeltaTableError;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::DeltaTableMetaData;
-use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, Schema};
+use crate::{protocol::Add, storage::DeltaObjectStore, DeltaTable, Schema};
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {

@@ -17,8 +17,8 @@ use arrow_schema::{DataType, Field, Fields, TimeUnit};
 use itertools::Itertools;
 
 use super::state::DeltaTableState;
-use crate::action::{ColumnCountStat, ColumnValueStat, Stats};
 use crate::errors::DeltaTableError;
+use crate::protocol::{ColumnCountStat, ColumnValueStat, Stats};
 use crate::SchemaDataType;
 use crate::SchemaTypeStruct;
 

@@ -82,10 +82,10 @@ compile_error!(
     "Features s3 and s3-native-tls are mutually exclusive and cannot be enabled together"
 );
 
-pub mod action;
 pub mod data_catalog;
 pub mod errors;
 pub mod operations;
+pub mod protocol;
 pub mod schema;
 pub mod storage;
 pub mod table;
@@ -110,8 +110,6 @@ pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, Object
 pub use operations::DeltaOps;
 
 // convenience exports for consumers to avoid aligning crate versions
-#[cfg(all(feature = "arrow", feature = "parquet"))]
-pub use action::checkpoints;
 #[cfg(feature = "arrow")]
 pub use arrow;
 #[cfg(feature = "datafusion")]
@@ -120,6 +118,8 @@ pub use datafusion;
 pub use parquet;
 #[cfg(feature = "parquet2")]
 pub use parquet2;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub use protocol::checkpoints;
 
 // needed only for integration tests
 // TODO can / should we move this into the test crate?

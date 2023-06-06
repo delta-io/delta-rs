@@ -25,9 +25,9 @@ use datafusion_proto::bytes::{
 };
 use url::Url;
 
-use deltalake::action::SaveMode;
 use deltalake::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
 use deltalake::operations::create::CreateBuilder;
+use deltalake::protocol::SaveMode;
 use deltalake::storage::DeltaObjectStore;
 use deltalake::{
     operations::{write::WriteBuilder, DeltaOps},

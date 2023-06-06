@@ -101,7 +101,7 @@ fn test_match_filters() {
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 #[tokio::test]
 async fn read_null_partitions_from_checkpoint() {
-    use deltalake::action::Add;
+    use deltalake::protocol::Add;
     use maplit::hashmap;
     use serde_json::json;
 

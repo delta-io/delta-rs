@@ -11,9 +11,9 @@ use parquet::arrow::ArrowWriter;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 
-use crate::action::Add;
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::Add;
 use crate::storage::ObjectStoreRef;
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;

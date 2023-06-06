@@ -9,8 +9,8 @@ use serde_json::{Map, Value};
 
 use super::transaction::commit;
 use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
-use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
 use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
 use crate::storage::DeltaObjectStore;
 use crate::table::builder::ensure_table_uri;

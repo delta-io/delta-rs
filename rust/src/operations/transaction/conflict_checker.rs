@@ -5,8 +5,8 @@ use std::io::{BufRead, BufReader, Cursor};
 use object_store::ObjectStore;
 
 use super::CommitInfo;
-use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::{Action, Add, DeltaOperation, MetaData, Protocol, Remove};
 use crate::storage::commit_uri_from_version;
 use crate::table::config::IsolationLevel;
 use crate::table::state::DeltaTableState;
@@ -641,7 +641,7 @@ mod tests {
     use super::super::test_utils as tu;
     use super::super::test_utils::init_table_actions;
     use super::*;
-    use crate::action::Action;
+    use crate::protocol::Action;
     #[cfg(feature = "datafusion")]
     use datafusion_expr::{col, lit};
     use serde_json::json;

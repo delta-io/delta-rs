@@ -26,7 +26,7 @@ async fn read_delta_2_0_table_without_version() {
     );
     let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 4);
-    assert!(tombstones.contains(&deltalake::action::Remove {
+    assert!(tombstones.contains(&deltalake::protocol::Remove {
         path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
         deletion_timestamp: Some(1564524298213),
         data_change: false,
@@ -192,7 +192,7 @@ async fn read_delta_8_0_table_without_version() {
     );
     let tombstones = table.get_state().all_tombstones();
     assert_eq!(tombstones.len(), 1);
-    assert!(tombstones.contains(&deltalake::action::Remove {
+    assert!(tombstones.contains(&deltalake::protocol::Remove {
         path: "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet".to_string(),
         deletion_timestamp: Some(1615043776198),
         data_change: true,
@@ -416,7 +416,7 @@ async fn read_delta_1_2_1_struct_stats_table() {
     fn get_stats_for_file(
         table: &deltalake::DeltaTable,
         file_name: &str,
-    ) -> deltalake::action::Stats {
+    ) -> deltalake::protocol::Stats {
         table
             .get_file_uris()
             .zip(table.get_stats())
@@ -450,7 +450,7 @@ async fn test_action_reconciliation() {
     assert_eq!(table.get_files(), vec![Path::from(a.path.clone())]);
 
     // Remove added file.
-    let r = deltalake::action::Remove {
+    let r = deltalake::protocol::Remove {
         path: a.path.clone(),
         deletion_timestamp: Some(Utc::now().timestamp_millis()),
         data_change: false,

@@ -8,8 +8,8 @@ use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectMeta, Result as ObjectStoreResult};
 
-use crate::action::Add;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::Add;
 use crate::table::builder::DeltaTableBuilder;
 
 /// Copies the contents from the `from` location into the `to` location
@@ -82,7 +82,7 @@ impl TryFrom<&Add> for ObjectMeta {
     fn try_from(value: &Add) -> DeltaResult<Self> {
         let last_modified = DateTime::<Utc>::from_utc(
             NaiveDateTime::from_timestamp_millis(value.modification_time).ok_or(
-                DeltaTableError::from(crate::action::ProtocolError::InvalidField(format!(
+                DeltaTableError::from(crate::protocol::ProtocolError::InvalidField(format!(
                     "invalid modification_time: {:?}",
                     value.modification_time
                 ))),

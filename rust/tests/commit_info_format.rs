@@ -1,8 +1,8 @@
 #![allow(dead_code)]
 mod fs_common;
 
-use deltalake::action::{Action, DeltaOperation, SaveMode};
 use deltalake::operations::transaction::commit;
+use deltalake::protocol::{Action, DeltaOperation, SaveMode};
 use serde_json::json;
 use std::error::Error;
 use tempdir::TempDir;

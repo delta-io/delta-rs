@@ -23,7 +23,7 @@ use super::{DeltaWriter, DeltaWriterError};
 use crate::errors::DeltaTableError;
 use crate::table::builder::DeltaTableBuilder;
 use crate::table::DeltaTableMetaData;
-use crate::{action::Add, DeltaTable, Schema};
+use crate::{protocol::Add, DeltaTable, Schema};
 use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
 
 type BadValue = (Value, ParquetError);

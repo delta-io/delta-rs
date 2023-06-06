@@ -13,9 +13,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
-use deltalake::action::{
-    self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
-};
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
@@ -27,6 +24,9 @@ use deltalake::operations::optimize::OptimizeBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
+use deltalake::protocol::{
+    self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
+};
 use deltalake::DeltaTableBuilder;
 use deltalake::{DeltaOps, Invariant, Schema};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
@@ -422,7 +422,7 @@ impl RawDeltaTable {
 
         let existing_schema = self._table.get_schema().map_err(PythonError::from)?;
 
-        let mut actions: Vec<action::Action> = add_actions
+        let mut actions: Vec<protocol::Action> = add_actions
             .iter()
             .map(|add| Action::add(add.into()))
             .collect();
@@ -440,7 +440,7 @@ impl RawDeltaTable {
                     .map_err(PythonError::from)?;
 
                 for old_add in add_actions {
-                    let remove_action = Action::remove(action::Remove {
+                    let remove_action = Action::remove(protocol::Remove {
                         path: old_add.path.clone(),
                         deletion_timestamp: Some(current_timestamp()),
                         data_change: true,
@@ -460,7 +460,7 @@ impl RawDeltaTable {
                         .map_err(PythonError::from)?
                         .clone();
                     metadata.schema = schema;
-                    let metadata_action = action::MetaData::try_from(metadata)
+                    let metadata_action = protocol::MetaData::try_from(metadata)
                         .map_err(|_| PyValueError::new_err("Failed to reparse metadata"))?;
                     actions.push(Action::metaData(metadata_action));
                 }
@@ -686,9 +686,9 @@ pub struct PyAddAction {
     stats: Option<String>,
 }
 
-impl From<&PyAddAction> for action::Add {
+impl From<&PyAddAction> for protocol::Add {
     fn from(action: &PyAddAction) -> Self {
-        action::Add {
+        protocol::Add {
             path: action.path.clone(),
             size: action.size,
             partition_values: action.partition_values.clone(),

@@ -19,11 +19,11 @@ use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Tokenizer;
 
-use crate::action::Add;
 use crate::delta_datafusion::{
     get_null_of_arrow_type, logical_expr_to_physical_expr, to_correct_scalar_value,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::Add;
 use crate::table::state::DeltaTableState;
 
 impl DeltaTableState {

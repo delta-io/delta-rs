@@ -21,10 +21,10 @@ use uuid::Uuid;
 
 use self::builder::DeltaTableConfig;
 use self::state::DeltaTableState;
-use crate::action::{self, find_latest_check_point_for_version, get_last_checkpoint, Action};
-use crate::action::{Add, ProtocolError, Stats};
 use crate::errors::DeltaTableError;
 use crate::partitions::PartitionFilter;
+use crate::protocol::{self, find_latest_check_point_for_version, get_last_checkpoint, Action};
+use crate::protocol::{Add, ProtocolError, Stats};
 use crate::schema::*;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
@@ -72,7 +72,7 @@ pub struct DeltaTableMetaData {
     /// User-provided description for this table
     pub description: Option<String>,
     /// Specification of the encoding for the files stored in the table
-    pub format: action::Format,
+    pub format: protocol::Format,
     /// Schema of the table
     pub schema: Schema,
     /// An array containing the names of columns by which the data should be partitioned
@@ -88,7 +88,7 @@ impl DeltaTableMetaData {
     pub fn new(
         name: Option<String>,
         description: Option<String>,
-        format: Option<action::Format>,
+        format: Option<protocol::Format>,
         schema: Schema,
         partition_columns: Vec<String>,
         configuration: HashMap<String, Option<String>>,
@@ -144,10 +144,10 @@ impl fmt::Display for DeltaTableMetaData {
     }
 }
 
-impl TryFrom<action::MetaData> for DeltaTableMetaData {
+impl TryFrom<protocol::MetaData> for DeltaTableMetaData {
     type Error = ProtocolError;
 
-    fn try_from(action_metadata: action::MetaData) -> Result<Self, Self::Error> {
+    fn try_from(action_metadata: protocol::MetaData) -> Result<Self, Self::Error> {
         let schema = action_metadata.get_schema()?;
         Ok(Self {
             id: action_metadata.id,
@@ -552,7 +552,7 @@ impl DeltaTable {
     pub async fn history(
         &mut self,
         limit: Option<usize>,
-    ) -> Result<Vec<action::CommitInfo>, DeltaTableError> {
+    ) -> Result<Vec<protocol::CommitInfo>, DeltaTableError> {
         let mut version = match limit {
             Some(l) => max(self.version() - l as i64 + 1, 0),
             None => self.get_earliest_delta_log_version().await?,
@@ -679,7 +679,7 @@ impl DeltaTable {
     }
 
     /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
-    pub fn get_tombstones(&self) -> impl Iterator<Item = &action::Remove> {
+    pub fn get_tombstones(&self) -> impl Iterator<Item = &protocol::Remove> {
         self.state.unexpired_tombstones()
     }
 
