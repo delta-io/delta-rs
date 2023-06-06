@@ -1,6 +1,6 @@
 //! Methods to get Delta Table state in Arrow structures
 //!
-//! See [crate::table_state::DeltaTableState].
+//! See [crate::table::DeltaTableState].
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
