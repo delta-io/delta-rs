@@ -4,7 +4,7 @@ use parquet2::page::DataPage;
 
 use super::validity::ValidityRowIndexIter;
 use super::{split_page, ActionVariant, ParseError};
-use crate::action::Action;
+use crate::protocol::Action;
 
 /// Parquet dictionary primitive value reader
 pub struct SomeBooleanValueIter<'a> {

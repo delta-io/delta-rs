@@ -11,7 +11,7 @@ use parquet2::read::get_page_iterator;
 use parquet2::read::levels::get_bit_width;
 
 use super::ProtocolError;
-use crate::action::{Action, Add, CommitInfo, MetaData, Protocol, Remove, Txn};
+use crate::protocol::{Action, Add, CommitInfo, MetaData, Protocol, Remove, Txn};
 use crate::schema::Guid;
 use boolean::for_each_boolean_field_value;
 use map::for_each_map_field_value;
@@ -751,7 +751,7 @@ mod tests {
                     assert_eq!(meta_data.description, None);
                     assert_eq!(
                         meta_data.format,
-                        crate::action::Format::new("parquet".to_string(), None),
+                        crate::protocol::Format::new("parquet".to_string(), None),
                     );
                     assert_eq!(meta_data.schema_string, "{\"type\":\"struct\",\"fields\":[{\"name\":\"value\",\"type\":\"integer\",\"nullable\":true,\"metadata\":{}}]}");
                     assert_eq!(meta_data.partition_columns.len(), 0);
@@ -826,7 +826,7 @@ mod tests {
                     assert_eq!(meta_data.description, None);
                     assert_eq!(
                         meta_data.format,
-                        crate::action::Format::new("parquet".to_string(), None),
+                        crate::protocol::Format::new("parquet".to_string(), None),
                     );
                     assert_eq!(
                         meta_data.schema_string,

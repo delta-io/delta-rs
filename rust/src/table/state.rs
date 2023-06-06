@@ -134,7 +134,7 @@ impl DeltaTableState {
                     .map_err(protocol::ProtocolError::from)?
                 {
                     self.process_action(
-                        protocol,
+                        action,
                         table_config.require_tombstones,
                         table_config.require_files,
                     )?;
