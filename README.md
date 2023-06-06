@@ -80,7 +80,7 @@ df2 = dt.to_pandas()
 assert df == df2
 ```
 
-The same table written cal also be loaded using the core rust crate.
+The same table written can also be loaded using the core Rust crate:
 
 ```rs
 use deltalake::{open_table, DeltaTableError};
