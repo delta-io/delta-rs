@@ -852,7 +852,7 @@ mod tests {
         let (table, metrics) = DeltaOps(table)
             .update()
             .with_predicate(col("value").is_null())
-            .with_update("value", lit("test"))
+            .with_update("value", lit(10))
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
