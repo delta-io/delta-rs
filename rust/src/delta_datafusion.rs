@@ -1088,7 +1088,7 @@ pub(crate) struct FindFiles {
     pub partition_scan: bool,
 }
 
-async fn handle_stream(
+async fn get_filename_if_nonempty(
     mut stream: Pin<Box<dyn RecordBatchStream + Send>>,
 ) -> Result<Option<String>, DeltaTableError> {
     if let Some(maybe_batch) = stream.next().await {
