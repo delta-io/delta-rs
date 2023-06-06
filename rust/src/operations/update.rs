@@ -62,9 +62,9 @@ use super::{transaction::commit, write::write_execution_plan};
 /// Used to represent user input of either a Datafusion expression or string expression
 pub enum Expression {
     /// Datafusion Expression
-    E(Expr),
+    DataFusion(Expr),
     /// String Expression
-    S(String),
+    String(String),
 }
 
 impl From<Expr> for Expression {
