@@ -37,9 +37,9 @@
   </a>
 </p>
 
-The delta-rs project aims to unlock the power of the Deltalake for as many users and projects as possible
+The Delta Lake project aims to unlock the power of the Deltalake for as many users and projects as possible
 by providing native low level APIs aimed at developers and integrators, as well as a high level operations
-API that lets you query, inspect, and operate your Deltalake with ease.
+API that lets you query, inspect, and operate your Delta Lake with ease.
 
 | Source                | Downloads                         | Installation Command    | Docs            |
 | --------------------- | --------------------------------- | ----------------------- | --------------- |
@@ -56,12 +56,13 @@ API that lets you query, inspect, and operate your Deltalake with ease.
 ## Table of contents
 
 - [Quick Start](#quick-start)
+- [Get Involved](#get-involved)
 - [Integartions](#integrations)
 - [Features](#features)
 
 ## Quick Start
 
-The deltalake library aim to adopt familiar patterns from other libraries in data processing,
+The `deltalake` library aim to adopt familiar patterns from other libraries in data processing,
 so getting started should look famililiar.
 
 ```py3
@@ -98,14 +99,23 @@ async fn main() -> Result<(), DeltaTableError> {
 }
 ```
 
+## Get Involved
+
+We encourage you to reach out, and are [commited](https://github.com/delta-io/delta-rs/blob/main/CODE_OF_CONDUCT.md)
+to provide a welcoming community.
+
+- [Join us in our slack worksapce](https://go.delta.io/slack)
+- [Report an issue](https://github.com/delta-io/delta-rs/issues/new?template=bug_report.md)
+- Looking to contribute? See our [good first issues](https://github.com/delta-io/delta-rs/contribute).
+
 ## Integrations
 
-- [polars](https://www.pola.rs/)
-- [datafusion][datafusion]
 - [ballista][ballista]
+- [datafusion][datafusion]
 - [DuckDB](https://duckdb.org/)
 - [Dask](https://github.com/dask-contrib/dask-deltatable)
 - [datahub](https://datahubproject.io/)
+- [polars](https://www.pola.rs/)
 - [Ray](https://github.com/delta-incubator/deltaray)
 - [AWS SDK for Pandas](https://github.com/aws/aws-sdk-pandas)
 
