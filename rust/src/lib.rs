@@ -87,14 +87,11 @@ pub mod data_catalog;
 pub mod delta_config;
 pub mod errors;
 pub mod operations;
-pub mod partitions;
 pub mod schema;
 pub mod storage;
 pub mod table;
 pub mod time_utils;
 
-#[cfg(all(feature = "arrow", feature = "parquet"))]
-pub mod arrow_convert;
 #[cfg(feature = "datafusion")]
 pub mod delta_datafusion;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
@@ -102,7 +99,7 @@ pub mod writer;
 
 pub use self::data_catalog::{get_data_catalog, DataCatalog, DataCatalogError};
 pub use self::delta_config::*;
-pub use self::partitions::*;
+pub use self::schema::partitions::*;
 pub use self::schema::*;
 pub use self::table::*;
 pub use errors::*;
