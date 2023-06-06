@@ -149,7 +149,7 @@ impl CreateBuilder {
     ///
     /// Options may be passed in the HashMap or set as environment variables.
     ///
-    /// [crate::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
+    /// [crate::table::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
     /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
     ///
     /// If an object store is also passed using `with_object_store()` these options will be ignored.
