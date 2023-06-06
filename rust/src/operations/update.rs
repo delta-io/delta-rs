@@ -26,6 +26,7 @@ use std::{
 
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow_array::RecordBatch;
+use arrow_cast::CastOptions;
 use arrow_schema::{Field, SchemaRef};
 use datafusion::{
     execution::context::SessionState,
@@ -58,13 +59,33 @@ use crate::{
 
 use super::{transaction::commit, write::write_execution_plan};
 
+/// Used to represent user input of either a Datafusion expression or string expression
+pub enum Expression {
+    /// Datafusion Expression
+    E(Expr),
+    /// String Expression
+    S(String),
+}
+
+impl From<Expr> for Expression {
+    fn from(val: Expr) -> Self {
+        Expression::E(val)
+    }
+}
+
+impl From<&str> for Expression {
+    fn from(val: &str) -> Self {
+        Expression::S(val.to_string())
+    }
+}
+
 /// Updates records in the Delta Table.
 /// See this module's documentaiton for more information
 pub struct UpdateBuilder {
     /// Which records to update
-    predicate: Option<Expr>,
+    predicate: Option<Expression>,
     /// How to update columns in a record that match the predicate
-    updates: HashMap<Column, Expr>,
+    updates: HashMap<Column, Expression>,
     /// A snapshot of the table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
@@ -75,6 +96,9 @@ pub struct UpdateBuilder {
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
     app_metadata: Option<Map<String, serde_json::Value>>,
+    /// CastOptions determines how data types that do not match the underlying table are handled
+    /// By default an error is returned
+    cast_options: CastOptions,
 }
 
 #[derive(Default)]
@@ -105,24 +129,23 @@ impl UpdateBuilder {
             state: None,
             writer_properties: None,
             app_metadata: None,
+            cast_options: CastOptions { safe: false },
         }
     }
 
     /// Which records to update
-    pub fn with_predicate(mut self, predicate: Expr) -> Self {
-        self.predicate = Some(predicate);
-        self
-    }
-
-    /// Overwrite update expressions with the supplied map
-    pub fn with_updates(mut self, updates: HashMap<Column, Expr>) -> Self {
-        self.updates = updates;
+    pub fn with_predicate<E: Into<Expression>>(mut self, predicate: E) -> Self {
+        self.predicate = Some(predicate.into());
         self
     }
 
     /// Perform an additonal update expression during the operaton
-    pub fn with_update<S: Into<Column>>(mut self, column: S, expression: Expr) -> Self {
-        self.updates.insert(column.into(), expression);
+    pub fn with_update<S: Into<Column>, E: Into<Expression>>(
+        mut self,
+        column: S,
+        expression: E,
+    ) -> Self {
+        self.updates.insert(column.into(), expression.into());
         self
     }
 
@@ -146,16 +169,24 @@ impl UpdateBuilder {
         self.writer_properties = Some(writer_properties);
         self
     }
+
+    /// Specify the cast options to use when casting columns that do not match the table's schema.
+    pub fn with_cast_options(mut self, cast_options: CastOptions) -> Self {
+        self.cast_options = cast_options;
+        self
+    }
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute(
-    predicate: Option<Expr>,
-    updates: &HashMap<Column, Expr>,
+    predicate: Option<Expression>,
+    updates: HashMap<Column, Expression>,
     object_store: ObjectStoreRef,
     snapshot: &DeltaTableState,
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     app_metadata: Option<Map<String, Value>>,
+    cast_options: CastOptions,
 ) -> DeltaResult<((Vec<Action>, i64), UpdateMetrics)> {
     // Validate the predicate and update expressions
     //
@@ -174,6 +205,24 @@ async fn execute(
     if updates.is_empty() {
         return Ok(((Vec::new(), version), metrics));
     }
+
+    let predicate = match predicate {
+        Some(predicate) => match predicate {
+            Expression::E(expr) => Some(expr),
+            Expression::S(s) => Some(snapshot.parse_predicate_expression(s)?),
+        },
+        None => None,
+    };
+
+    let mut _updates = HashMap::new();
+    for (key, expr) in updates {
+        let expr = match expr {
+            Expression::E(e) => e,
+            Expression::S(s) => snapshot.parse_predicate_expression(s)?,
+        };
+        _updates.insert(key, expr);
+    }
+    let updates = _updates;
 
     let current_metadata = snapshot
         .current_metadata()
@@ -322,6 +371,7 @@ async fn execute(
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
+        &cast_options,
     )
     .await?;
 
@@ -396,12 +446,13 @@ impl std::future::IntoFuture for UpdateBuilder {
 
             let ((actions, version), metrics) = execute(
                 this.predicate,
-                &this.updates,
+                this.updates,
                 this.object_store.clone(),
                 &this.snapshot,
                 state,
                 this.writer_properties,
                 this.app_metadata,
+                this.cast_options,
             )
             .await?;
 
@@ -523,6 +574,7 @@ impl RecordBatchStream for UpdateCountStream {
 mod tests {
 
     use crate::operations::DeltaOps;
+    use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::{get_arrow_schema, get_delta_schema};
     use crate::DeltaTable;
     use crate::{action::*, DeltaResult};
@@ -545,18 +597,6 @@ mod tests {
             .unwrap();
         assert_eq!(table.version(), 0);
         table
-    }
-
-    async fn get_data(table: &DeltaTable) -> Vec<RecordBatch> {
-        let table = DeltaTable::new_with_state(table.object_store(), table.state.clone());
-        let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(table)).unwrap();
-        ctx.sql("select * from test")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap()
     }
 
     async fn write_batch(table: DeltaTable, batch: RecordBatch) -> DeltaResult<DeltaTable> {
@@ -838,6 +878,9 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_str_expressions() {}
+
+    #[tokio::test]
     async fn test_no_updates() {
         let table = prepare_values_table().await;
         let (table, metrics) = DeltaOps(table).update().await.unwrap();
@@ -868,7 +911,6 @@ mod tests {
         assert!(res.is_err());
 
         // Expression result types must match the table's schema
-        // I.E Schema evolution is not supported for now
         let table = prepare_values_table().await;
         let res = DeltaOps(table)
             .update()

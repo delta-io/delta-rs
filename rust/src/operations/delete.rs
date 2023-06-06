@@ -17,23 +17,12 @@
 //!     .await?;
 //! ````
 
-use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::action::{Action, Add, Remove};
-use arrow::array::StringArray;
-use arrow::datatypes::DataType;
-use arrow::datatypes::Field;
-use arrow::datatypes::Schema as ArrowSchema;
-use arrow::error::ArrowError;
-use arrow::record_batch::RecordBatch;
 use arrow_cast::CastOptions;
-use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::MemTable;
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
+use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::ExecutionPlan;
@@ -46,9 +35,7 @@ use serde_json::Map;
 use serde_json::Value;
 
 use crate::action::DeltaOperation;
-use crate::delta_datafusion::{
-    parquet_scan_from_actions, partitioned_file_from_action, register_store,
-};
+use crate::delta_datafusion::{find_files, parquet_scan_from_actions, register_store};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::operations::transaction::commit;
 use crate::operations::write::write_execution_plan;
