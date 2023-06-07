@@ -104,7 +104,7 @@ async fn main() -> Result<(), DeltaTableError> {
 We encourage you to reach out, and are [commited](https://github.com/delta-io/delta-rs/blob/main/CODE_OF_CONDUCT.md)
 to provide a welcoming community.
 
-- [Join us in our slack worksapce](https://go.delta.io/slack)
+- [Join us in our Slack workspace](https://go.delta.io/slack)
 - [Report an issue](https://github.com/delta-io/delta-rs/issues/new?template=bug_report.md)
 - Looking to contribute? See our [good first issues](https://github.com/delta-io/delta-rs/contribute).
 
