@@ -7,12 +7,12 @@ use std::io::{BufRead, BufReader, Cursor};
 
 use chrono::Utc;
 use lazy_static::lazy_static;
-use object_store::{path::Path, ObjectStore};
+use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use serde::{Deserialize, Serialize};
 
-use crate::action::{self, Action, Add};
+use crate::action::{self, Action, Add, ProtocolError};
 use crate::delta_config::TableConfig;
-use crate::errors::{ApplyLogError, DeltaTableError};
+use crate::errors::DeltaTableError;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::schema::SchemaDataType;
 use crate::storage::commit_uri_from_version;
@@ -62,9 +62,13 @@ impl DeltaTableState {
     }
 
     /// Construct a delta table state object from commit version.
-    pub async fn from_commit(table: &DeltaTable, version: i64) -> Result<Self, ApplyLogError> {
+    pub async fn from_commit(table: &DeltaTable, version: i64) -> Result<Self, ProtocolError> {
         let commit_uri = commit_uri_from_version(version);
-        let commit_log_bytes = table.storage.get(&commit_uri).await?.bytes().await?;
+        let commit_log_bytes = match table.storage.get(&commit_uri).await {
+            Ok(get) => Ok(get.bytes().await?),
+            Err(ObjectStoreError::NotFound { .. }) => Err(ProtocolError::EndOfLog),
+            Err(source) => Err(ProtocolError::ObjectStore { source }),
+        }?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
         let mut new_state = DeltaTableState::with_version(version);
@@ -81,7 +85,7 @@ impl DeltaTableState {
     }
 
     /// Construct a delta table state object from a list of actions
-    pub fn from_actions(actions: Vec<Action>, version: i64) -> Result<Self, ApplyLogError> {
+    pub fn from_actions(actions: Vec<Action>, version: i64) -> Result<Self, ProtocolError> {
         let mut new_state = DeltaTableState::with_version(version);
         for action in actions {
             new_state.process_action(action, true, true)?;
@@ -312,7 +316,7 @@ impl DeltaTableState {
         action: action::Action,
         require_tombstones: bool,
         require_files: bool,
-    ) -> Result<(), ApplyLogError> {
+    ) -> Result<(), ProtocolError> {
         match action {
             // TODO: optionally load CDC into TableState
             action::Action::cdc(_v) => {}
@@ -332,8 +336,7 @@ impl DeltaTableState {
                 self.min_writer_version = v.min_writer_version;
             }
             action::Action::metaData(v) => {
-                let md = DeltaTableMetaData::try_from(v)
-                    .map_err(|e| ApplyLogError::InvalidJson { source: e })?;
+                let md = DeltaTableMetaData::try_from(v)?;
                 let table_config = TableConfig(&md.configuration);
                 self.tombstone_retention_millis =
                     table_config.deleted_file_retention_duration().as_millis() as i64;

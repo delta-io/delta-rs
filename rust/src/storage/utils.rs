@@ -82,12 +82,10 @@ impl TryFrom<&Add> for ObjectMeta {
     fn try_from(value: &Add) -> DeltaResult<Self> {
         let last_modified = DateTime::<Utc>::from_utc(
             NaiveDateTime::from_timestamp_millis(value.modification_time).ok_or(
-                DeltaTableError::InvalidAction {
-                    source: crate::action::ProtocolError::InvalidField(format!(
-                        "invalid modification_time: {:?}",
-                        value.modification_time
-                    )),
-                },
+                DeltaTableError::from(crate::action::ProtocolError::InvalidField(format!(
+                    "invalid modification_time: {:?}",
+                    value.modification_time
+                ))),
             )?,
             Utc,
         );
