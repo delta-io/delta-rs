@@ -625,7 +625,7 @@ class TableOptimizer:
 
     def __call__(
         self,
-        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+        partition_filters: Optional[FilterType] = None,
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
     ) -> Dict[str, Any]:
@@ -644,7 +644,7 @@ class TableOptimizer:
 
     def compact(
         self,
-        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+        partition_filters: Optional[FilterType] = None,
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
     ) -> Dict[str, Any]:
@@ -675,7 +675,7 @@ class TableOptimizer:
     def z_order(
         self,
         columns: Iterable[str],
-        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+        partition_filters: Optional[FilterType] = None,
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
     ) -> Dict[str, Any]:
