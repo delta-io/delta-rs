@@ -24,7 +24,7 @@ use deltalake::checkpoints::create_checkpoint;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
-use deltalake::operations::optimize::OptimizeBuilder;
+use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
@@ -268,7 +268,7 @@ impl RawDeltaTable {
 
     /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
     #[pyo3(signature = (partition_filters = None, target_size = None, max_concurrent_tasks = None))]
-    pub fn optimize(
+    pub fn compact_optimize(
         &mut self,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
         target_size: Option<i64>,
@@ -276,6 +276,32 @@ impl RawDeltaTable {
     ) -> PyResult<String> {
         let mut cmd = OptimizeBuilder::new(self._table.object_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
+        if let Some(size) = target_size {
+            cmd = cmd.with_target_size(size);
+        }
+        let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
+            .map_err(PythonError::from)?;
+        cmd = cmd.with_filters(&converted_filters);
+
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    /// Run z-order variation of optimize
+    #[pyo3(signature = (z_order_columns, partition_filters = None, target_size = None, max_concurrent_tasks = None))]
+    pub fn z_order_optimize(
+        &mut self,
+        z_order_columns: Vec<String>,
+        partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
+        target_size: Option<i64>,
+        max_concurrent_tasks: Option<usize>,
+    ) -> PyResult<String> {
+        let mut cmd = OptimizeBuilder::new(self._table.object_store(), self._table.state.clone())
+            .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
+            .with_type(OptimizeType::ZOrder(z_order_columns));
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
         }
