@@ -813,7 +813,7 @@ async fn test_datafusion_scan_timestamps() -> Result<()> {
 #[tokio::test]
 async fn test_issue_1292_datafusion_sql_projection() -> Result<()> {
     let ctx = SessionContext::new();
-    let table = deltalake::open_table("./tests/data/http_requests")
+    let table = deltalake::open_table("./tests/data/issue_1292")
         .await
         .unwrap();
     ctx.register_table("http_requests", Arc::new(table))?;
@@ -844,7 +844,7 @@ async fn test_issue_1292_datafusion_sql_projection() -> Result<()> {
 #[tokio::test]
 async fn test_issue_1291_datafusion_sql_partitioned_data() -> Result<()> {
     let ctx = SessionContext::new();
-    let table = deltalake::open_table("./tests/data/http_requests")
+    let table = deltalake::open_table("./tests/data/issue_1291")
         .await
         .unwrap();
     ctx.register_table("http_requests", Arc::new(table))?;
