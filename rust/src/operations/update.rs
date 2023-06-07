@@ -214,15 +214,16 @@ async fn execute(
         None => None,
     };
 
-    let mut _updates = HashMap::new();
-    for (key, expr) in updates {
-        let expr = match expr {
-            Expression::DataFusion(e) => e,
-            Expression::String(s) => snapshot.parse_predicate_expression(s)?,
-        };
-        _updates.insert(key, expr);
-    }
-    let updates = _updates;
+    let updates = updates
+        .into_iter()
+        .map(|(key, expr)| {
+            let expr = match expr {
+                Expression::DataFusion(e) => e,
+                Expression::String(s) => snapshot.parse_predicate_expression(s)?,
+            };
+            Ok((key, expr))
+        })
+        .collect::<Result<HashMap<_, _>>, _>()?;
 
     let current_metadata = snapshot
         .current_metadata()
