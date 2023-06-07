@@ -3,27 +3,28 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
+use super::stats::create_add;
+use super::utils::{
+    arrow_schema_without_partitions, next_data_path, record_batch_from_message,
+    record_batch_without_partitions, stringified_partition_value, PartitionPath,
+};
+use super::{DeltaWriter, DeltaWriterError};
+use crate::builder::DeltaTableBuilder;
+use crate::{action::Add, DeltaTable, DeltaTableError, DeltaTableMetaData, Schema};
+use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
+
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::*;
 use bytes::Bytes;
 use log::{info, warn};
+use object_store::path::Path;
 use object_store::ObjectStore;
 use parquet::{
     arrow::ArrowWriter, basic::Compression, errors::ParquetError,
     file::properties::WriterProperties,
 };
 use serde_json::Value;
-
-use super::stats::create_add;
-use super::utils::{
-    arrow_schema_without_partitions, next_data_path, record_batch_from_message,
-    record_batch_without_partitions, stringified_partition_value,
-};
-use super::{DeltaWriter, DeltaWriterError};
-use crate::builder::DeltaTableBuilder;
-use crate::errors::DeltaTableError;
-use crate::{action::Add, DeltaTable, DeltaTableMetaData, Schema};
-use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
+use uuid::Uuid;
 
 type BadValue = (Value, ParquetError);
 
@@ -362,7 +363,12 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
-            let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
+            let prefix =
+                PartitionPath::from_hashmap(&self.partition_columns, &writer.partition_values)?;
+            let prefix = Path::parse(prefix)?;
+            let uuid = Uuid::new_v4();
+
+            let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
             self.storage.put(&path, obj_bytes).await?;
