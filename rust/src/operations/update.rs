@@ -69,13 +69,13 @@ pub enum Expression {
 
 impl From<Expr> for Expression {
     fn from(val: Expr) -> Self {
-        Expression::E(val)
+        Expression::DataFusion(val)
     }
 }
 
 impl From<&str> for Expression {
     fn from(val: &str) -> Self {
-        Expression::S(val.to_string())
+        Expression::String(val.to_string())
     }
 }
 
@@ -208,8 +208,8 @@ async fn execute(
 
     let predicate = match predicate {
         Some(predicate) => match predicate {
-            Expression::E(expr) => Some(expr),
-            Expression::S(s) => Some(snapshot.parse_predicate_expression(s)?),
+            Expression::DataFusion(expr) => Some(expr),
+            Expression::String(s) => Some(snapshot.parse_predicate_expression(s)?),
         },
         None => None,
     };
@@ -217,8 +217,8 @@ async fn execute(
     let mut _updates = HashMap::new();
     for (key, expr) in updates {
         let expr = match expr {
-            Expression::E(e) => e,
-            Expression::S(s) => snapshot.parse_predicate_expression(s)?,
+            Expression::DataFusion(e) => e,
+            Expression::String(s) => snapshot.parse_predicate_expression(s)?,
         };
         _updates.insert(key, expr);
     }
@@ -240,6 +240,11 @@ async fn execute(
     )
     .await?;
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
+
+    if candidates.candidates.is_empty() {
+        return Ok(((Vec::new(), version), metrics));
+    }
+
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
     let execution_props = state.execution_props();
@@ -379,12 +384,13 @@ async fn execute(
 
     metrics.num_updated_rows = count_metrics
         .sum_by_name("num_updated_rows")
-        .unwrap()
-        .as_usize();
+        .map(|m| m.as_usize())
+        .unwrap_or(0);
+
     metrics.num_copied_rows = count_metrics
         .sum_by_name("num_copied_rows")
-        .unwrap()
-        .as_usize();
+        .map(|m| m.as_usize())
+        .unwrap_or(0);
 
     let deletion_timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -409,20 +415,17 @@ async fn execute(
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_micros();
 
-    // Do not make a commit when there are zero updates to the state
-    if !actions.is_empty() {
-        let operation = DeltaOperation::Update {
-            predicate: Some(predicate.canonical_name()),
-        };
-        version = commit(
-            object_store.as_ref(),
-            &actions,
-            operation,
-            snapshot,
-            app_metadata,
-        )
-        .await?;
-    }
+    let operation = DeltaOperation::Update {
+        predicate: Some(predicate.canonical_name()),
+    };
+    version = commit(
+        object_store.as_ref(),
+        &actions,
+        operation,
+        snapshot,
+        app_metadata,
+    )
+    .await?;
 
     Ok(((actions, version), metrics))
 }
@@ -851,8 +854,8 @@ mod tests {
         let table = prepare_values_table().await;
         let (table, metrics) = DeltaOps(table)
             .update()
-            .with_predicate(col("value").is_null())
-            .with_update("value", lit(10))
+            .with_predicate("value is null")
+            .with_update("value", "10")
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
@@ -878,10 +881,8 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_str_expressions() {}
-
-    #[tokio::test]
     async fn test_no_updates() {
+        // No Update operations are provided
         let table = prepare_values_table().await;
         let (table, metrics) = DeltaOps(table).update().await.unwrap();
 
@@ -892,6 +893,20 @@ mod tests {
         assert_eq!(metrics.num_removed_files, 0);
         assert_eq!(metrics.scan_time_ms, 0);
         assert_eq!(metrics.execution_time_ms, 0);
+
+        // The predicate does not match any records
+        let (table, metrics) = DeltaOps(table)
+            .update()
+            .with_predicate(col("value").eq(lit(3)))
+            .with_update("value", lit(10))
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 0);
+        assert_eq!(metrics.num_added_files, 0);
+        assert_eq!(metrics.num_removed_files, 0);
+        assert_eq!(metrics.num_copied_rows, 0);
+        assert_eq!(metrics.num_removed_files, 0);
     }
 
     #[tokio::test]

@@ -24,7 +24,6 @@ use std::any::Any;
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt::Debug;
-use std::pin::Pin;
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
@@ -50,8 +49,7 @@ use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::{
-    ColumnStatistics, ExecutionPlan, Partitioning, RecordBatchStream, SendableRecordBatchStream,
-    Statistics,
+    ColumnStatistics, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
@@ -65,7 +63,6 @@ use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
-use futures::StreamExt;
 use object_store::ObjectMeta;
 use url::Url;
 
@@ -1088,40 +1085,6 @@ pub(crate) struct FindFiles {
     pub partition_scan: bool,
 }
 
-async fn get_filename_if_nonempty(
-    mut stream: Pin<Box<dyn RecordBatchStream + Send>>,
-) -> Result<Option<String>, DeltaTableError> {
-    if let Some(maybe_batch) = stream.next().await {
-        let batch: RecordBatch = maybe_batch?;
-        if batch.num_rows() > 1 {
-            return Err(DeltaTableError::Generic(
-                "Find files returned multiple records for batch".to_owned(),
-            ));
-        }
-        let array = batch
-            .column_by_name(PATH_COLUMN)
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or(DeltaTableError::Generic(format!(
-                "Unable to downcast column {}",
-                PATH_COLUMN
-            )))?;
-
-        let path = array
-            .into_iter()
-            .next()
-            .unwrap()
-            .ok_or(DeltaTableError::Generic(format!(
-                "{} cannot be null",
-                PATH_COLUMN
-            )))?;
-        return Ok(Some(path.to_string()));
-    }
-
-    Ok(None)
-}
-
 /// Determine which files contain a record that statisfies the predicate
 pub(crate) async fn find_files_scan<'a>(
     snapshot: &DeltaTableState,
@@ -1195,24 +1158,39 @@ pub(crate) async fn find_files_scan<'a>(
     let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(filter, 1));
 
     let task_ctx = Arc::new(TaskContext::from(state));
-    let partitions = limit.output_partitioning().partition_count();
-    let mut tasks = Vec::with_capacity(partitions);
+    let path_batches = datafusion::physical_plan::collect(limit, task_ctx).await?;
 
-    for i in 0..partitions {
-        let stream = limit.execute(i, task_ctx.clone())?;
-        tasks.push(handle_stream(stream));
-    }
+    for batch in path_batches {
+        if batch.num_rows() > 1 {
+            return Err(DeltaTableError::Generic(
+                "Find files returned multiple records for batch".to_owned(),
+            ));
+        }
+        let array = batch
+            .column_by_name(PATH_COLUMN)
+            .unwrap()
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or(DeltaTableError::Generic(format!(
+                "Unable to downcast column {}",
+                PATH_COLUMN
+            )))?;
 
-    for res in futures::future::join_all(tasks).await.into_iter() {
-        let path = res?;
-        if let Some(path) = path {
-            match candidate_map.remove(&path) {
-                Some(action) => files.push(action),
-                None => {
-                    return Err(DeltaTableError::Generic(
-                        "Unable to map __delta_rs_path to action.".to_owned(),
-                    ))
-                }
+        let path = array
+            .into_iter()
+            .next()
+            .unwrap()
+            .ok_or(DeltaTableError::Generic(format!(
+                "{} cannot be null",
+                PATH_COLUMN
+            )))?;
+
+        match candidate_map.remove(path) {
+            Some(action) => files.push(action),
+            None => {
+                return Err(DeltaTableError::Generic(
+                    "Unable to map __delta_rs_path to action.".to_owned(),
+                ))
             }
         }
     }
@@ -1341,7 +1319,7 @@ pub(crate) async fn find_files<'a>(
                 let candidates = scan_memory_table(snapshot, predicate).await?;
                 Ok(FindFiles {
                     candidates,
-                    parition_scan: true,
+                    partition_scan: true,
                 })
             } else {
                 let pruning_predicate = PruningPredicate::try_new(expr, schema.clone())?;
@@ -1367,13 +1345,13 @@ pub(crate) async fn find_files<'a>(
 
                 Ok(FindFiles {
                     candidates: candidates.into_iter().map(|s| s.to_owned()).collect(),
-                    parition_scan: false,
+                    partition_scan: false,
                 })
             }
         }
         None => Ok(FindFiles {
             candidates: snapshot.files().to_owned(),
-            parition_scan: true,
+            partition_scan: true,
         }),
     }
 }

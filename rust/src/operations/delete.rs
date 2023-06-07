@@ -225,7 +225,7 @@ async fn execute(
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
 
-    let add = if candidates.parition_scan {
+    let add = if candidates.partition_scan {
         Vec::new()
     } else {
         let write_start = Instant::now();
