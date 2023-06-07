@@ -188,15 +188,15 @@ async fn execute(
     app_metadata: Option<Map<String, Value>>,
     cast_options: CastOptions,
 ) -> DeltaResult<((Vec<Action>, i64), UpdateMetrics)> {
-    // Validate the predicate and update expressions
+    // Validate the predicate and update expressions.
     //
-    // If the predicate is not set then all files needs to be updated.
-    // else if only contains partitions columns then perform in memory-scan
-    // otherwise scan files for records that statisfy the predicate
+    // If the predicate is not set, then all files need to be updated.
+    // If it only contains partition columns then perform in memory-scan.
+    // Otherwise, scan files for records that satisfy the predicate.
     //
-    // For files that were identified, scan for record that match the predicate
-    // and perform update operations, and then commit add and remove actions to
-    // the log
+    // For files that were identified, scan for records that match the predicate,
+    // perform update operations, and then commit add and remove actions to
+    // the log.
 
     let exec_start = Instant::now();
     let mut metrics = UpdateMetrics::default();
