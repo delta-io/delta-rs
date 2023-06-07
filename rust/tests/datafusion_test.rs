@@ -910,3 +910,35 @@ async fn test_issue_1374() -> Result<()> {
 
     Ok(())
 }
+
+#[tokio::test]
+async fn test_issue_1445_date_partition() -> Result<()> {
+    let ctx = SessionContext::new();
+    let table = deltalake::open_table("./tests/data/issue_1445")
+        .await
+        .unwrap();
+    ctx.register_table("t", Arc::new(table))?;
+
+    let batches = ctx
+        .sql(
+            r#"SELECT *
+        FROM t
+        WHERE date > '2023-06-07'
+        "#,
+        )
+        .await?
+        .collect()
+        .await?;
+
+    let expected = vec![
+        "+----+------------+",
+        "| id | date       |",
+        "+----+------------+",
+        "| 2  | 2023-06-08 |",
+        "+----+------------+",
+    ];
+
+    assert_batches_sorted_eq!(&expected, &batches);
+
+    Ok(())
+}

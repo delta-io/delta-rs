@@ -1,0 +1,3 @@
+{"add":{"path":"date=2023-06-07/part-00000-94397190-941b-4859-ad95-4f40dae21a9b-c000.snappy.parquet","size":484,"partitionValues":{"date":"2023-06-07"},"modificationTime":1686160061092,"dataChange":true,"stats":"{\"numRecords\":1,\"minValues\":{\"id\":1},\"maxValues\":{\"id\":1},\"nullCount\":{\"id\":0}}","tags":null}}
+{"add":{"path":"date=2023-06-08/part-00000-938c1d51-6fe7-4b01-84da-ee1aa265befd-c000.snappy.parquet","size":484,"partitionValues":{"date":"2023-06-08"},"modificationTime":1686160061095,"dataChange":true,"stats":"{\"numRecords\":1,\"minValues\":{\"id\":2},\"maxValues\":{\"id\":2},\"nullCount\":{\"id\":0}}","tags":null}}
+{"commitInfo":{"timestamp":1686160061095,"clientVersion":"delta-rs.0.13.0"}}
