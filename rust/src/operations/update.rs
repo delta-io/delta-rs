@@ -78,6 +78,11 @@ impl From<&str> for Expression {
         Expression::String(val.to_string())
     }
 }
+impl From<String> for Expression {
+    fn from(val: String) -> Self {
+        Expression::String(val)
+    }
+}
 
 /// Updates records in the Delta Table.
 /// See this module's documentation for more information
@@ -188,15 +193,15 @@ async fn execute(
     app_metadata: Option<Map<String, Value>>,
     cast_options: CastOptions,
 ) -> DeltaResult<((Vec<Action>, i64), UpdateMetrics)> {
-    // Validate the predicate and update expressions.
+    // Validate the predicate and update expressions
     //
-    // If the predicate is not set, then all files need to be updated.
-    // If it only contains partition columns then perform in memory-scan.
-    // Otherwise, scan files for records that satisfy the predicate.
+    // If the predicate is not set then all files needs to be updated.
+    // else if only contains partitions columns then perform in memory-scan
+    // otherwise scan files for records that statisfy the predicate
     //
-    // For files that were identified, scan for records that match the predicate,
-    // perform update operations, and then commit add and remove actions to
-    // the log.
+    // For files that were identified, scan for record that match the predicate
+    // and perform update operations, and then commit add and remove actions to
+    // the log
 
     let exec_start = Instant::now();
     let mut metrics = UpdateMetrics::default();
@@ -214,16 +219,15 @@ async fn execute(
         None => None,
     };
 
-    let updates = updates
-        .into_iter()
-        .map(|(key, expr)| {
-            let expr = match expr {
-                Expression::DataFusion(e) => e,
-                Expression::String(s) => snapshot.parse_predicate_expression(s)?,
-            };
-            Ok((key, expr))
-        })
-        .collect::<Result<HashMap<_, _>>, _>()?;
+    let mut _updates = HashMap::new();
+    for (key, expr) in updates {
+        let expr = match expr {
+            Expression::DataFusion(e) => e,
+            Expression::String(s) => snapshot.parse_predicate_expression(s)?,
+        };
+        _updates.insert(key, expr);
+    }
+    let updates = _updates;
 
     let current_metadata = snapshot
         .current_metadata()

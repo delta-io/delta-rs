@@ -1168,22 +1168,20 @@ pub(crate) async fn find_files_scan<'a>(
         }
         let array = batch
             .column_by_name(PATH_COLUMN)
+            .ok_or_else(|| {
+                DeltaTableError::Generic(format!("Unable to find column {}", PATH_COLUMN))
+            })
             .unwrap()
             .as_any()
             .downcast_ref::<StringArray>()
-            .ok_or(DeltaTableError::Generic(format!(
-                "Unable to downcast column {}",
-                PATH_COLUMN
-            )))?;
+            .ok_or_else(|| {
+                DeltaTableError::Generic(format!("Unable to downcast column {}", PATH_COLUMN))
+            })?;
 
-        let path = array
-            .into_iter()
-            .next()
-            .unwrap()
-            .ok_or(DeltaTableError::Generic(format!(
-                "{} cannot be null",
-                PATH_COLUMN
-            )))?;
+        let path =
+            array.into_iter().next().flatten().ok_or_else(|| {
+                DeltaTableError::Generic(format!("{} cannot be null", PATH_COLUMN))
+            })?;
 
         match candidate_map.remove(path) {
             Some(action) => files.push(action),
