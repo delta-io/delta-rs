@@ -175,7 +175,15 @@ impl UpdateBuilder {
         self
     }
 
-    /// Specify the cast options to use when casting columns that do not match the table's schema.
+    /// Specify the cast options to use when casting columns that do not match
+    /// the table's schema.  When `cast_options.safe` is set to safe then any
+    /// failures to cast a datatype will use null instead of returning an error
+    /// to the user.
+    ///
+    /// Example (column's type is int):
+    /// Input               Output
+    /// 123         ->      123
+    /// Test123     ->      null
     pub fn with_cast_options(mut self, cast_options: CastOptions) -> Self {
         self.cast_options = cast_options;
         self
