@@ -26,14 +26,18 @@
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-            <a href="index.html" class="icon icon-home"> delta-rs
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            delta-rs
           </a>
               <div class="version">
-                0.9.0
+                0.10.0
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
-    <input type="text" name="q" placeholder="Search docs" />
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
     <input type="hidden" name="check_keywords" value="yes" />
     <input type="hidden" name="area" value="default" />
   </form>
@@ -65,8 +69,8 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="index.html" class="icon icon-home"></a> &raquo;</li>
-      <li>API Reference</li>
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">API Reference</li>
       <li class="wy-breadcrumbs-aside">
               <a href="https://github.com/delta-io/delta-rs/blob/main/python/docs/source/api_reference.rst" class="fa fa-github"> Edit on GitHub</a>
       </li>
@@ -322,32 +326,6 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 </dd></dl>
 
 <dl class="py method">
-<dt class="sig sig-object py" id="deltalake.table.DeltaTable.optimize">
-<span class="sig-name descname"><span class="pre">optimize</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.optimize" title="Permalink to this definition"></a></dt>
-<dd><p>Compacts small files to reduce the total number of files in the table.</p>
-<p>This operation is idempotent; if run twice on the same table (assuming it has
-not been updated) it will do nothing the second time.</p>
-<p>If this operation happens concurrently with any operations other than append,
-it will fail.</p>
-<dl class="field-list simple">
-<dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><ul class="simple">
-<li><p><strong>partition_filters</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – the partition filters that will be used for getting the matched files</p></li>
-<li><p><strong>target_size</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – desired file size after bin-packing files, in bytes. If not
-provided, will attempt to read the table configuration value <code class="docutils literal notranslate"><span class="pre">delta.targetFileSize</span></code>.
-If that value isn’t set, will use default value of 256MB.</p></li>
-</ul>
-</dd>
-<dt class="field-even">Returns</dt>
-<dd class="field-even"><p>the metrics from optimize</p>
-</dd>
-<dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><em>Dict</em>[str, <em>Any</em>]</p>
-</dd>
-</dl>
-</dd></dl>
-
-<dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.pyarrow_schema">
 <span class="sig-name descname"><span class="pre">pyarrow_schema</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.pyarrow_schema" title="Permalink to this definition"></a></dt>
 <dd><p>Get the current schema of the DeltaTable with the Parquet PyArrow format.</p>
@@ -378,7 +356,7 @@ If that value isn’t set, will use default value of 256MB.</p></li>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.to_pandas">
-<span class="sig-name descname"><span class="pre">to_pandas</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partitions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">columns</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filesystem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.to_pandas" title="Permalink to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">to_pandas</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partitions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">columns</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filesystem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.to_pandas" title="Permalink to this definition"></a></dt>
 <dd><p>Build a pandas dataframe using data from the DeltaTable.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -386,13 +364,11 @@ If that value isn’t set, will use default value of 256MB.</p></li>
 <li><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p></li>
 <li><p><strong>columns</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>]</em>) – The columns to project. This can be a list of column names to include (order and duplicates will be preserved)</p></li>
 <li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v12.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
+<li><p><strong>filters</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>, </em><em>List</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em><em>]</em><em>]</em>) – A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass <code class="docutils literal notranslate"><span class="pre">partitions</span></code></p></li>
 </ul>
 </dd>
-<dt class="field-even">Returns</dt>
-<dd class="field-even"><p>a pandas dataframe</p>
-</dd>
-<dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.0.1)">pandas.DataFrame</a></p>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.0.2)">pandas.DataFrame</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -421,7 +397,7 @@ More info: <a class="reference external" href="https://arrow.apache.org/docs/pyt
 
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.to_pyarrow_table">
-<span class="sig-name descname"><span class="pre">to_pyarrow_table</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partitions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">columns</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filesystem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.to_pyarrow_table" title="Permalink to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">to_pyarrow_table</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partitions</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">columns</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filesystem</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.to_pyarrow_table" title="Permalink to this definition"></a></dt>
 <dd><p>Build a PyArrow Table using data from the DeltaTable.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -429,13 +405,11 @@ More info: <a class="reference external" href="https://arrow.apache.org/docs/pyt
 <li><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p></li>
 <li><p><strong>columns</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>]</em>) – The columns to project. This can be a list of column names to include (order and duplicates will be preserved)</p></li>
 <li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v12.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
+<li><p><strong>filters</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>, </em><em>List</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em><em>]</em><em>]</em>) – A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass <code class="docutils literal notranslate"><span class="pre">partitions</span></code></p></li>
 </ul>
 </dd>
-<dt class="field-even">Returns</dt>
-<dd class="field-even"><p>the PyArrow table</p>
-</dd>
-<dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v12.0.0)">pyarrow.lib.Table</a></p>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v12.0.0)">pyarrow.lib.Table</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -454,7 +428,7 @@ newer versions.</p>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.vacuum">
-<span class="sig-name descname"><span class="pre">vacuum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">retention_hours</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dry_run</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">enforce_retention_duration</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.vacuum" title="Permalink to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">vacuum</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">retention_hours</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">dry_run</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">enforce_retention_duration</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_concurrent_requests</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">10</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.vacuum" title="Permalink to this definition"></a></dt>
 <dd><p>Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -462,6 +436,9 @@ newer versions.</p>
 <li><p><strong>retention_hours</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – the retention threshold in hours, if none then the value from <cite>configuration.deletedFileRetentionDuration</cite> is used or default of 1 week otherwise.</p></li>
 <li><p><strong>dry_run</strong> (<em>bool</em>) – when activated, list only the files, delete otherwise</p></li>
 <li><p><strong>enforce_retention_duration</strong> (<em>bool</em>) – when disabled, accepts retention hours smaller than the value from <cite>configuration.deletedFileRetentionDuration</cite>.</p></li>
+<li><p><strong>max_concurrent_requests</strong> (<em>int</em>) – the maximum number of concurrent requests to send to the backend.
+Increasing this number may improve performance of vacuuming large tables, however it might also
+increase the risk of hitting rate limits.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
@@ -488,11 +465,6 @@ newer versions.</p>
 </dd></dl>
 
 </dd></dl>
-
-<dl class="py exception">
-<dt class="sig sig-object py" id="deltalake.table.DeltaTableProtocolError">
-<em class="property"><span class="pre">exception</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.table.</span></span><span class="sig-name descname"><span class="pre">DeltaTableProtocolError</span></span><a class="headerlink" href="#deltalake.table.DeltaTableProtocolError" title="Permalink to this definition"></a></dt>
-<dd></dd></dl>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.table.Metadata">
@@ -566,6 +538,73 @@ newer versions.</p>
 
 </dd></dl>
 
+<dl class="py class">
+<dt class="sig sig-object py" id="deltalake.table.TableOptimizer">
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.table.</span></span><span class="sig-name descname"><span class="pre">TableOptimizer</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableOptimizer" title="Permalink to this definition"></a></dt>
+<dd><p>API for various table optimization commands.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><p><strong>table</strong> (<a class="reference internal" href="#deltalake.table.DeltaTable" title="deltalake.table.DeltaTable"><em>deltalake.table.DeltaTable</em></a>) – </p>
+</dd>
+</dl>
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.TableOptimizer.compact">
+<span class="sig-name descname"><span class="pre">compact</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_concurrent_tasks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableOptimizer.compact" title="Permalink to this definition"></a></dt>
+<dd><p>Compacts small files to reduce the total number of files in the table.</p>
+<p>This operation is idempotent; if run twice on the same table (assuming it has
+not been updated) it will do nothing the second time.</p>
+<p>If this operation happens concurrently with any operations other than append,
+it will fail.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>partition_filters</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>, </em><em>List</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em><em>]</em><em>]</em>) – the partition filters that will be used for getting the matched files</p></li>
+<li><p><strong>target_size</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – desired file size after bin-packing files, in bytes. If not
+provided, will attempt to read the table configuration value <code class="docutils literal notranslate"><span class="pre">delta.targetFileSize</span></code>.
+If that value isn’t set, will use default value of 256MB.</p></li>
+<li><p><strong>max_concurrent_tasks</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – the maximum number of concurrent tasks to use for
+file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
+faster, but will also use more memory.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>the metrics from optimize</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><em>Dict</em>[str, <em>Any</em>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.TableOptimizer.z_order">
+<span class="sig-name descname"><span class="pre">z_order</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">columns</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_concurrent_tasks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableOptimizer.z_order" title="Permalink to this definition"></a></dt>
+<dd><p>Reorders the data using a Z-order curve to improve data skipping.</p>
+<p>This also performs compaction, so the same parameters as compact() apply.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>columns</strong> (<em>Iterable</em><em>[</em><em>str</em><em>]</em>) – the columns to use for Z-ordering. There must be at least one column.</p></li>
+<li><p><strong>partition_filters</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>, </em><em>List</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em><em>]</em><em>]</em>) – the partition filters that will be used for getting the matched files</p></li>
+<li><p><strong>target_size</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – desired file size after bin-packing files, in bytes. If not
+provided, will attempt to read the table configuration value <code class="docutils literal notranslate"><span class="pre">delta.targetFileSize</span></code>.
+If that value isn’t set, will use default value of 256MB.</p></li>
+<li><p><strong>max_concurrent_tasks</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – the maximum number of concurrent tasks to use for
+file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
+faster, but will also use more memory.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>the metrics from optimize</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><em>Dict</em>[str, <em>Any</em>]</p>
+</dd>
+</dl>
+</dd></dl>
+
+</dd></dl>
+
 </section>
 <section id="writing-deltatables">
 <h2>Writing DeltaTables<a class="headerlink" href="#writing-deltatables" title="Permalink to this headline"></a></h2>
@@ -576,13 +615,13 @@ newer versions.</p>
 <p>If the table does not already exist, it will be created.</p>
 <p>This function only supports writer protocol version 2 currently. When
 attempting to write to an existing table with a higher min_writer_version,
-this function will throw DeltaTableProtocolError.</p>
+this function will throw DeltaProtocolError.</p>
 <p>Note that this function does NOT register this table in a data catalog.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>table_or_uri</strong> (<em>Union</em><em>[</em><em>str</em><em>, </em><em>pathlib.Path</em><em>, </em><a class="reference internal" href="#deltalake.table.DeltaTable" title="deltalake.table.DeltaTable"><em>deltalake.table.DeltaTable</em></a><em>]</em>) – URI of a table or a DeltaTable object.</p></li>
-<li><p><strong>data</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.0.1)"><em>pandas.core.frame.DataFrame</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v12.0.0)"><em>pyarrow.lib.Table</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v12.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>, </em><em>Iterable</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v12.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>]</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader" title="(in Apache Arrow v12.0.0)"><em>pyarrow.lib.RecordBatchReader</em></a><em>]</em>) – Data to write. If passing iterable, the schema must also be given.</p></li>
+<li><p><strong>data</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.0.2)"><em>pandas.core.frame.DataFrame</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v12.0.0)"><em>pyarrow.lib.Table</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v12.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>, </em><em>Iterable</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v12.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>]</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader" title="(in Apache Arrow v12.0.0)"><em>pyarrow.lib.RecordBatchReader</em></a><em>]</em>) – Data to write. If passing iterable, the schema must also be given.</p></li>
 <li><p><strong>schema</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v12.0.0)"><em>pyarrow.lib.Schema</em></a><em>]</em>) – Optional schema to write.</p></li>
 <li><p><strong>partition_by</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>, </em><em>str</em><em>]</em><em>]</em>) – List of columns to partition the table by. Only required
 when creating a new table.</p></li>
@@ -633,7 +672,7 @@ If this value is set, then min_rows_per_group should also be set.</p></li>
 <p>Schemas, fields, and data types are provided in the <code class="docutils literal notranslate"><span class="pre">deltalake.schema</span></code> submodule.</p>
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.Schema">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">Schema</span></span><a class="headerlink" href="#deltalake.schema.Schema" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">Schema</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fields</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.Schema" title="Permalink to this definition"></a></dt>
 <dd><p>A Delta Lake schema</p>
 <p>Create using a list of <a class="reference internal" href="#deltalake.schema.Field" title="deltalake.schema.Field"><code class="xref py py-class docutils literal notranslate"><span class="pre">Field</span></code></a>:</p>
 <div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">Schema</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">),</span> <span class="n">Field</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="s2">&quot;string&quot;</span><span class="p">)])</span>
@@ -740,7 +779,7 @@ versions of Arrow types.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.PrimitiveType">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">PrimitiveType</span></span><a class="headerlink" href="#deltalake.schema.PrimitiveType" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">PrimitiveType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_type</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.PrimitiveType" title="Permalink to this definition"></a></dt>
 <dd><p>A primitive datatype, such as a string or number.</p>
 <p>Can be initialized with a string value:</p>
 <div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">PrimitiveType</span><span class="p">(</span><span class="s2">&quot;integer&quot;</span><span class="p">)</span>
@@ -761,7 +800,7 @@ versions of Arrow types.</p>
 <li><p>“binary”,</p></li>
 <li><p>“date”,</p></li>
 <li><p>“timestamp”,</p></li>
-<li><p>“decimal(&lt;scale&gt;, &lt;precision&gt;)”</p></li>
+<li><p>“decimal(&lt;precision&gt;, &lt;scale&gt;)”</p></li>
 </ul>
 </div></blockquote>
 <dl class="field-list simple">
@@ -840,7 +879,7 @@ versions of Arrow types.</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.ArrayType">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">ArrayType</span></span><a class="headerlink" href="#deltalake.schema.ArrayType" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">ArrayType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">element_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">contains_null</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.ArrayType" title="Permalink to this definition"></a></dt>
 <dd><p>An Array (List) DataType</p>
 <p>Can either pass the element type explicitly or can pass a string
 if it is a primitive type:</p>
@@ -948,7 +987,7 @@ if it is a primitive type:</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.MapType">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">MapType</span></span><a class="headerlink" href="#deltalake.schema.MapType" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">MapType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">key_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value_type</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">value_contains_null</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.MapType" title="Permalink to this definition"></a></dt>
 <dd><p>A map data type</p>
 <p><code class="docutils literal notranslate"><span class="pre">key_type</span></code> and <code class="docutils literal notranslate"><span class="pre">value_type</span></code> should be :class PrimitiveType:, :class ArrayType:,
 :class ListType:, or :class StructType:. A string can also be passed, which will be
@@ -1069,7 +1108,7 @@ parsed as a primitive type:</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.Field">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">Field</span></span><a class="headerlink" href="#deltalake.schema.Field" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">Field</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ty</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">nullable</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">True</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">metadata</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.Field" title="Permalink to this definition"></a></dt>
 <dd><p>A field in a Delta StructType or Schema</p>
 <p>Can create with just a name and a type:</p>
 <div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;my_int_col&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">)</span>
@@ -1090,7 +1129,7 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 <span class="gp">... </span><span class="s2"> &quot;name&quot;: &quot;col&quot;,</span>
 <span class="gp">... </span><span class="s2"> &quot;type&quot;: &quot;integer&quot;,</span>
 <span class="gp">... </span><span class="s2"> &quot;nullable&quot;: true,</span>
-<span class="gp">... </span><span class="s2"> &quot;metadata&quot;: </span><span class="si">{}</span>
+<span class="gp">... </span><span class="s2"> &quot;metadata&quot;: </span><span class="si">{}</span><span class="s2"></span>
 <span class="gp">... </span><span class="s2">}&quot;&quot;&quot;</span><span class="p">)</span>
 <span class="go">Field(col, PrimitiveType(&quot;integer&quot;), nullable=True)</span>
 </pre></div>
@@ -1198,7 +1237,7 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.schema.StructType">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">StructType</span></span><a class="headerlink" href="#deltalake.schema.StructType" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.schema.</span></span><span class="sig-name descname"><span class="pre">StructType</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">fields</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.schema.StructType" title="Permalink to this definition"></a></dt>
 <dd><p>A struct datatype, containing one or more subfields</p>
 <p>Create with a list of <a class="reference internal" href="#deltalake.schema.Field" title="deltalake.schema.Field"><code class="xref py py-class docutils literal notranslate"><span class="pre">Field</span></code></a>:</p>
 <div class="doctest highlight-default notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">StructType</span><span class="p">([</span><span class="n">Field</span><span class="p">(</span><span class="s2">&quot;x&quot;</span><span class="p">,</span> <span class="s2">&quot;integer&quot;</span><span class="p">),</span> <span class="n">Field</span><span class="p">(</span><span class="s2">&quot;y&quot;</span><span class="p">,</span> <span class="s2">&quot;string&quot;</span><span class="p">)])</span>

@@ -27,14 +27,18 @@
     <nav data-toggle="wy-nav-shift" class="wy-nav-side">
       <div class="wy-side-scroll">
         <div class="wy-side-nav-search" >
-            <a href="index.html" class="icon icon-home"> delta-rs
+
+          
+          
+          <a href="index.html" class="icon icon-home">
+            delta-rs
           </a>
               <div class="version">
-                0.9.0
+                0.10.0
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
-    <input type="text" name="q" placeholder="Search docs" />
+    <input type="text" name="q" placeholder="Search docs" aria-label="Search docs" />
     <input type="hidden" name="check_keywords" value="yes" />
     <input type="hidden" name="area" value="default" />
   </form>
@@ -83,8 +87,8 @@
         <div class="rst-content">
           <div role="navigation" aria-label="Page navigation">
   <ul class="wy-breadcrumbs">
-      <li><a href="index.html" class="icon icon-home"></a> &raquo;</li>
-      <li>Usage</li>
+      <li><a href="index.html" class="icon icon-home" aria-label="Home"></a></li>
+      <li class="breadcrumb-item active">Usage</li>
       <li class="wy-breadcrumbs-aside">
               <a href="https://github.com/delta-io/delta-rs/blob/main/python/docs/source/usage.rst" class="fa fa-github"> Edit on GitHub</a>
       </li>
@@ -410,7 +414,7 @@ you can pass them to <code class="docutils literal notranslate"><span class="pre
 <span class="go">npartitions=6</span>
 <span class="go">               object  category[known]  category[known]  category[known]</span>
 <span class="go">                  ...              ...              ...              ...</span>
-<span class="go">...               ...              ...              ...              ...</span>
+<span class="gp">... </span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>              <span class="o">...</span>
 <span class="go">                  ...              ...              ...              ...</span>
 <span class="go">                  ...              ...              ...              ...</span>
 <span class="go">Dask Name: read-parquet, 6 tasks</span>
@@ -455,14 +459,28 @@ only list the files to be deleted. Pass <code class="docutils literal notranslat
 into a large file. Bin-packing reduces the number of API calls required for read operations.
 Optimizing will increments the table’s version and creates remove actions for optimized files.
 Optimize does not delete files from storage. To delete files that were removed, call <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.vacuum" title="deltalake.table.DeltaTable.vacuum"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.vacuum()</span></code></a>.</p>
-<p>Use <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.optimize" title="deltalake.table.DeltaTable.optimize"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.optimize()</span></code></a> to perform the optimize operation. Note that this method will fail if a
-concurrent writer performs an operation that removes any files (such as an overwrite).</p>
+<p><code class="docutils literal notranslate"><span class="pre">DeltaTable.optimize</span></code> returns a <a class="reference internal" href="api_reference.html#deltalake.table.TableOptimizer" title="deltalake.table.TableOptimizer"><code class="xref py py-class docutils literal notranslate"><span class="pre">TableOptimizer</span></code></a> object which provides
+methods for optimizing the table. Note that these method will fail if a concurrent
+writer performs an operation that removes any files (such as an overwrite).</p>
+<p>For just file compaction, use the <a class="reference internal" href="api_reference.html#deltalake.table.TableOptimizer.compact" title="deltalake.table.TableOptimizer.compact"><code class="xref py py-meth docutils literal notranslate"><span class="pre">TableOptimizer.compact()</span></code></a> method:</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
-<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="p">()</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="o">.</span><span class="n">compact</span><span class="p">()</span>
 <span class="go">{&#39;numFilesAdded&#39;: 1, &#39;numFilesRemoved&#39;: 5,</span>
 <span class="go"> &#39;filesAdded&#39;: {&#39;min&#39;: 555, &#39;max&#39;: 555, &#39;avg&#39;: 555.0, &#39;totalFiles&#39;: 1, &#39;totalSize&#39;: 555},</span>
 <span class="go"> &#39;filesRemoved&#39;: {&#39;min&#39;: 262, &#39;max&#39;: 429, &#39;avg&#39;: 362.2, &#39;totalFiles&#39;: 5, &#39;totalSize&#39;: 1811},</span>
 <span class="go"> &#39;partitionsOptimized&#39;: 1, &#39;numBatches&#39;: 1, &#39;totalConsideredFiles&#39;: 5,</span>
+<span class="go"> &#39;totalFilesSkipped&#39;: 0, &#39;preserveInsertionOrder&#39;: True}</span>
+</pre></div>
+</div>
+<p>For improved data skipping, use the <a class="reference internal" href="api_reference.html#deltalake.table.TableOptimizer.z_order" title="deltalake.table.TableOptimizer.z_order"><code class="xref py py-meth docutils literal notranslate"><span class="pre">TableOptimizer.z_order()</span></code></a> method. This
+is slower than just file compaction, but can improve performance for queries that
+filter on multiple columns at once.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/COVID-19_NYT&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">optimize</span><span class="o">.</span><span class="n">z_order</span><span class="p">([</span><span class="s2">&quot;date&quot;</span><span class="p">,</span> <span class="s2">&quot;county&quot;</span><span class="p">])</span>
+<span class="go">{&#39;numFilesAdded&#39;: 1, &#39;numFilesRemoved&#39;: 8,</span>
+<span class="go"> &#39;filesAdded&#39;: {&#39;min&#39;: 2473439, &#39;max&#39;: 2473439, &#39;avg&#39;: 2473439.0, &#39;totalFiles&#39;: 1, &#39;totalSize&#39;: 2473439},</span>
+<span class="go"> &#39;filesRemoved&#39;: {&#39;min&#39;: 325440, &#39;max&#39;: 895702, &#39;avg&#39;: 773810.625, &#39;totalFiles&#39;: 8, &#39;totalSize&#39;: 6190485},</span>
+<span class="go"> &#39;partitionsOptimized&#39;: 0, &#39;numBatches&#39;: 1, &#39;totalConsideredFiles&#39;: 8,</span>
 <span class="go"> &#39;totalFilesSkipped&#39;: 0, &#39;preserveInsertionOrder&#39;: True}</span>
 </pre></div>
 </div>
