@@ -52,6 +52,7 @@ impl DeltaTableState {
                                 // Dictionary encoding boolean types does not yield benefits
                                 // https://github.com/apache/arrow-datafusion/pull/5545#issuecomment-1526917997
                                 DataType::Boolean => field.data_type().clone(),
+                                DataType::Date32 => field.data_type().clone(),
                                 _ => wrap_partition_type_in_dict(field.data_type().clone()),
                             }
                         } else {
