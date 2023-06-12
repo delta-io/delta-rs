@@ -201,6 +201,7 @@ async fn execute(
     app_metadata: Option<Map<String, Value>>,
     cast_options: CastOptions,
 ) -> DeltaResult<((Vec<Action>, i64), UpdateMetrics)> {
+    println!("here 200");
     // Validate the predicate and update expressions.
     //
     // If the predicate is not set, then all files need to be updated.
@@ -241,6 +242,7 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns.clone();
     let schema = snapshot.arrow_schema()?;
 
+    println!("here 201");
     let scan_start = Instant::now();
     let candidates = find_files(
         snapshot,
@@ -250,7 +252,8 @@ async fn execute(
         predicate.clone(),
     )
     .await?;
-    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
+    println!("here 202");
+    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis();
 
     if candidates.candidates.is_empty() {
         return Ok(((Vec::new(), version), metrics));
@@ -261,6 +264,7 @@ async fn execute(
     let execution_props = state.execution_props();
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
+    println!("here100");
     let parquet_scan = parquet_scan_from_actions(
         snapshot,
         object_store.clone(),
@@ -274,7 +278,9 @@ async fn execute(
     .await?;
 
     // Create a projection for a new column with the predicate evaluated
+    //let df_schema = snapshot.input_schema()?;
     let input_schema = snapshot.input_schema()?;
+
     let mut fields = Vec::new();
     for field in input_schema.fields.iter() {
         fields.push(field.to_owned());
@@ -284,10 +290,21 @@ async fn execute(
         arrow_schema::DataType::Boolean,
         true,
     )));
-
     // Recreate the schemas with the new column included
     let input_schema = Arc::new(ArrowSchema::new(fields));
-    let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
+    let input_dfschema: DFSchema = input_schema.as_ref().clone().try_into()?;
+
+    /*
+    let mut fields = Vec::new();
+    for field in df_schema.fields.iter() {
+        fields.push(field.to_owned());
+    }
+    fields.push(Arc::new(Field::new(
+        "__delta_rs_update_predicate",
+        arrow_schema::DataType::Boolean,
+        true,
+    )));
+    */
 
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     let scan_schema = parquet_scan.schema();
@@ -302,6 +319,10 @@ async fn execute(
     // null count to track how many records do NOT statisfy the predicate.  The
     // count is then exposed through the metrics through the `UpdateCountExec`
     // execution plan
+    println!("{:?}", &input_dfschema);
+    println!("{:?}", &input_schema);
+    println!("here1");
+
     let predicate_null =
         when(predicate.clone(), lit(true)).otherwise(lit(ScalarValue::Boolean(None)))?;
     let predicate_expr = create_physical_expr(
@@ -311,9 +332,11 @@ async fn execute(
         execution_props,
     )?;
     expressions.push((predicate_expr, "__delta_rs_update_predicate".to_string()));
+    println!("here2");
 
     let projection_predicate: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(expressions, parquet_scan)?);
+    println!("here3");
 
     let count_plan = Arc::new(UpdateCountExec::new(projection_predicate.clone()));
 
@@ -335,6 +358,7 @@ async fn execute(
     let mut map = HashMap::<String, usize>::new();
     let mut control_columns = HashSet::<String>::new();
     control_columns.insert("__delta_rs_update_predicate".to_owned());
+    println!("here4");
 
     for (column, expr) in updates {
         let expr = case(col("__delta_rs_update_predicate"))
@@ -350,6 +374,7 @@ async fn execute(
 
     let projection_update: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(expressions, count_plan.clone())?);
+    println!("here5");
 
     // Project again to remove __delta_rs columns and rename update columns to their original name
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
@@ -377,6 +402,7 @@ async fn execute(
         expressions,
         projection_update.clone(),
     )?);
+    println!("here6");
 
     let add_actions = write_execution_plan(
         snapshot,
@@ -390,6 +416,7 @@ async fn execute(
         &cast_options,
     )
     .await?;
+    println!("here7");
 
     let count_metrics = count_plan.metrics().unwrap();
 
@@ -423,8 +450,9 @@ async fn execute(
             tags: None,
         }))
     }
+    println!("here9");
 
-    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_micros();
+    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis();
 
     let operation = DeltaOperation::Update {
         predicate: Some(predicate.canonical_name()),
@@ -713,6 +741,9 @@ mod tests {
         )
         .unwrap();
 
+        // Update a partitioned table where the predicate contains only partition column
+        // The expectation is that a physical scan of data is not required
+
         let table = write_batch(table, batch).await.unwrap();
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
@@ -765,7 +796,7 @@ mod tests {
         )
         .unwrap();
 
-        let table = write_batch(table, batch).await.unwrap();
+        let table = write_batch(table, batch.clone()).await.unwrap();
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 2);
 
@@ -792,6 +823,45 @@ mod tests {
             "| C  | 10    | 2023-05-14 |",
             "| C  | 100   | 2023-05-14 |",
             "| B  | 10    | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        // Update a partitioned table where the predicate contains a partition column and non-partition column
+        let table = setup_table(Some(vec!["modified"])).await;
+        let table = write_batch(table, batch).await.unwrap();
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 2);
+
+        let (table, metrics) = DeltaOps(table)
+            .update()
+            .with_predicate(
+                col("modified")
+                    .eq(lit("2021-02-03"))
+                    .and(col("value").eq(lit(100))),
+            )
+            .with_update("modified", lit("2023-05-14"))
+            .with_update("id", lit("C"))
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 2);
+        assert_eq!(table.get_file_uris().count(), 3);
+        assert_eq!(metrics.num_added_files, 2);
+        assert_eq!(metrics.num_removed_files, 1);
+        assert_eq!(metrics.num_updated_rows, 1);
+        assert_eq!(metrics.num_copied_rows, 1);
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-02 |",
+            "| A  | 10    | 2021-02-03 |",
+            "| B  | 10    | 2021-02-02 |",
+            "| C  | 100   | 2023-05-14 |",
             "+----+-------+------------+",
         ];
 

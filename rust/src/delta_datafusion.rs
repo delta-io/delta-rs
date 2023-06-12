@@ -1164,16 +1164,29 @@ pub(crate) async fn find_files_scan<'a>(
     table_partition_cols.push((PATH_COLUMN.to_owned(), DataType::Utf8));
 
     let input_schema = snapshot.input_schema()?;
+
+    let mut fields = Vec::new();
+    for field in input_schema.fields.iter() {
+        fields.push(field.to_owned());
+    }
+    fields.push(Arc::new(Field::new(
+        PATH_COLUMN,
+        arrow_schema::DataType::Boolean,
+        true,
+    )));
+    let input_schema = Arc::new(ArrowSchema::new(fields));
+
     // Identify which columns we need to project
+    /*
     let mut used_columns = expression
-        .to_columns()
-        ?
+        .to_columns()?
         .into_iter()
         .map(|column| input_schema.index_of(&column.name))
         .collect::<Result<Vec<usize>, ArrowError>>()
         .unwrap();
     // Add path column
     used_columns.push(input_schema.fields().len());
+    */
 
     let parquet_scan = ParquetFormat::new()
         .create_physical_plan(
@@ -1183,7 +1196,7 @@ pub(crate) async fn find_files_scan<'a>(
                 file_schema,
                 file_groups: file_groups.into_values().collect(),
                 statistics: snapshot.datafusion_table_statistics(),
-                projection: Some(used_columns),
+                projection: None,
                 limit: None,
                 table_partition_cols,
                 infinite_source: false,
@@ -1193,14 +1206,20 @@ pub(crate) async fn find_files_scan<'a>(
         )
         .await?;
 
-    let input_schema = parquet_scan.schema();
+    // Issue here...
     let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
+    println!("scan 001");
+    println!("{:?}", &expression);
+    println!("{:?}", &input_schema);
+    println!("{:?}", &input_dfschema);
+
     let predicate_expr = create_physical_expr(
         &Expr::IsTrue(Box::new(expression.clone())),
         &input_dfschema,
         &input_schema,
         state.execution_props(),
     )?;
+    println!("scan 002");
 
     let filter: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(predicate_expr, parquet_scan.clone())?);
