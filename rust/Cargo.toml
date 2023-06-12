@@ -18,7 +18,7 @@ arrow-array = { version = "39", optional = true }
 arrow-buffer = { version = "39", optional = true }
 arrow-cast = { version = "39", optional = true }
 arrow-ord = { version = "39", optional = true }
-arrow-row = { version = "39", optional = true }
+arrow-row = { version = "41", optional = true }
 arrow-schema = { version = "39", optional = true }
 arrow-select = { version = "39", optional = true }
 async-trait = "0.1"
