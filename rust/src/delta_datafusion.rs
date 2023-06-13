@@ -1098,7 +1098,7 @@ fn join_batches_with_add_actions(
     // Given RecordBatches that contains `__delta_rs_path` perform a hash join
     // with actions to obtain original add actions
 
-    let mut files = Vec::new();
+    let mut files = Vec::with_capacity(batches.iter().map(|batch| batch.num_rows()).sum());
     for batch in batches {
         let array = batch
             .column_by_name(PATH_COLUMN)
@@ -1212,7 +1212,7 @@ pub(crate) async fn find_files_scan<'a>(
                 limit: None,
                 table_partition_cols,
                 infinite_source: false,
-                output_ordering: None,
+                output_ordering: vec![],
             },
             None,
         )
