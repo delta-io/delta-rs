@@ -21,7 +21,6 @@ use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
 use crate::action::{Action, Add, Remove};
-use arrow_cast::CastOptions;
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::filter::FilterExec;
@@ -186,7 +185,7 @@ async fn excute_non_empty_expr(
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
-        &CastOptions { safe: false },
+        false,
     )
     .await?;
 

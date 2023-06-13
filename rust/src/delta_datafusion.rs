@@ -414,7 +414,7 @@ pub(crate) async fn parquet_scan_from_actions(
                 projection: projection.cloned(),
                 limit,
                 table_partition_cols,
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             filters.as_ref(),
@@ -697,7 +697,10 @@ pub(crate) fn to_correct_scalar_value(
                 let cast_arr = cast_with_options(
                     &time_nanos.to_array(),
                     field_dt,
-                    &CastOptions { safe: false },
+                    &CastOptions {
+                        safe: false,
+                        ..Default::default()
+                    },
                 )
                 .ok()?;
                 Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)
@@ -714,7 +717,10 @@ pub(crate) fn to_correct_scalar_value(
                 let cast_arr = cast_with_options(
                     &time_nanos.to_array(),
                     field_dt,
-                    &CastOptions { safe: false },
+                    &CastOptions {
+                        safe: false,
+                        ..Default::default()
+                    },
                 )
                 .ok()?;
                 Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)

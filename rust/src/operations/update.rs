@@ -26,7 +26,6 @@ use std::{
 
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow_array::RecordBatch;
-use arrow_cast::CastOptions;
 use arrow_schema::{Field, SchemaRef};
 use datafusion::{
     execution::context::SessionState,
@@ -101,9 +100,9 @@ pub struct UpdateBuilder {
     writer_properties: Option<WriterProperties>,
     /// Additional metadata to be added to commit
     app_metadata: Option<Map<String, serde_json::Value>>,
-    /// CastOptions determines how data types that do not match the underlying table are handled
+    /// safe_cast determines how data types that do not match the underlying table are handled
     /// By default an error is returned
-    cast_options: CastOptions,
+    safe_cast: bool,
 }
 
 #[derive(Default)]
@@ -134,7 +133,7 @@ impl UpdateBuilder {
             state: None,
             writer_properties: None,
             app_metadata: None,
-            cast_options: CastOptions { safe: false },
+            safe_cast: false,
         }
     }
 
@@ -176,7 +175,7 @@ impl UpdateBuilder {
     }
 
     /// Specify the cast options to use when casting columns that do not match
-    /// the table's schema.  When `cast_options.safe` is set to safe then any
+    /// the table's schema.  When `cast_options.safe` is set true then any
     /// failures to cast a datatype will use null instead of returning an error
     /// to the user.
     ///
@@ -184,8 +183,8 @@ impl UpdateBuilder {
     /// Input               Output
     /// 123         ->      123
     /// Test123     ->      null
-    pub fn with_cast_options(mut self, cast_options: CastOptions) -> Self {
-        self.cast_options = cast_options;
+    pub fn with_safe_cast(mut self, safe_cast: bool) -> Self {
+        self.safe_cast = safe_cast;
         self
     }
 }
@@ -199,7 +198,7 @@ async fn execute(
     state: SessionState,
     writer_properties: Option<WriterProperties>,
     app_metadata: Option<Map<String, Value>>,
-    cast_options: CastOptions,
+    safe_cast: bool,
 ) -> DeltaResult<((Vec<Action>, i64), UpdateMetrics)> {
     // Validate the predicate and update expressions.
     //
@@ -401,7 +400,7 @@ async fn execute(
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
-        &cast_options,
+        safe_cast,
     )
     .await?;
 
@@ -480,7 +479,7 @@ impl std::future::IntoFuture for UpdateBuilder {
                 state,
                 this.writer_properties,
                 this.app_metadata,
-                this.cast_options,
+                this.safe_cast,
             )
             .await?;
 

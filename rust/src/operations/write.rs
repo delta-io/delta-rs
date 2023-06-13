@@ -97,9 +97,8 @@ pub struct WriteBuilder {
     write_batch_size: Option<usize>,
     /// RecordBatches to be written into the table
     batches: Option<Vec<RecordBatch>>,
-    /// CastOptions determines how data types that do not match the underlying table are handled
-    /// By default an error is returned
-    cast_options: CastOptions,
+    /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
+    safe_cast: bool,
 }
 
 impl WriteBuilder {
@@ -116,7 +115,7 @@ impl WriteBuilder {
             target_file_size: None,
             write_batch_size: None,
             batches: None,
-            cast_options: CastOptions { safe: false },
+            safe_cast: false,
         }
     }
 
@@ -172,9 +171,10 @@ impl WriteBuilder {
         self
     }
 
-    /// Specify the cast options to use when casting columns that do not match the table's schema.
-    pub fn with_cast_options(mut self, cast_options: CastOptions) -> Self {
-        self.cast_options = cast_options;
+    /// Specify the safety of the casting operation
+    /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
+    pub fn with_cast_safety(mut self, safe: bool) -> Self {
+        self.safe_cast = safe;
         self
     }
 
@@ -227,7 +227,7 @@ pub(crate) async fn write_execution_plan(
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
-    cast_options: &CastOptions,
+    safe_cast: bool,
 ) -> DeltaResult<Vec<Add>> {
     let invariants = snapshot
         .current_metadata()
@@ -245,7 +245,6 @@ pub(crate) async fn write_execution_plan(
         let inner_plan = plan.clone();
         let inner_schema = schema.clone();
         let task_ctx = Arc::new(TaskContext::from(&state));
-        let inner_cast = cast_options.clone();
         let config = WriterConfig::new(
             inner_schema.clone(),
             partition_columns.clone(),
@@ -261,7 +260,7 @@ pub(crate) async fn write_execution_plan(
                 while let Some(maybe_batch) = stream.next().await {
                     let batch = maybe_batch?;
                     checker_stream.check_batch(&batch).await?;
-                    let arr = cast_record_batch(&batch, inner_schema.clone(), &inner_cast)?;
+                    let arr = cast_record_batch(&batch, inner_schema.clone(), safe_cast)?;
                     writer.write(&arr).await?;
                 }
                 writer.close().await
@@ -392,7 +391,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.target_file_size,
                 this.write_batch_size,
                 None,
-                &this.cast_options,
+                this.safe_cast,
             )
             .await?;
             actions.extend(add_actions.into_iter().map(Action::add));
@@ -481,9 +480,12 @@ fn can_cast_batch(from_schema: &ArrowSchema, to_schema: &ArrowSchema) -> bool {
 fn cast_record_batch(
     batch: &RecordBatch,
     target_schema: ArrowSchemaRef,
-    cast_options: &CastOptions,
+    safe: bool,
 ) -> DeltaResult<RecordBatch> {
-    //let cast_options = CastOptions { safe: false };
+    let cast_options = CastOptions {
+        safe,
+        ..Default::default()
+    };
 
     let columns = target_schema
         .all_fields()
@@ -491,7 +493,7 @@ fn cast_record_batch(
         .map(|f| {
             let col = batch.column_by_name(f.name()).unwrap();
             if !col.data_type().equals_datatype(f.data_type()) {
-                cast_with_options(col, f.data_type(), cast_options)
+                cast_with_options(col, f.data_type(), &cast_options)
             } else {
                 Ok(col.clone())
             }
@@ -590,7 +592,7 @@ mod tests {
         // Test cast options
         let table = DeltaOps::from(table)
             .write(vec![batch.clone()])
-            .with_cast_options(CastOptions { safe: true })
+            .with_cast_safety(true)
             .await
             .unwrap();
 
