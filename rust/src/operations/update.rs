@@ -201,7 +201,6 @@ async fn execute(
     app_metadata: Option<Map<String, Value>>,
     cast_options: CastOptions,
 ) -> DeltaResult<((Vec<Action>, i64), UpdateMetrics)> {
-    println!("here 200");
     // Validate the predicate and update expressions.
     //
     // If the predicate is not set, then all files need to be updated.
@@ -242,7 +241,6 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns.clone();
     let schema = snapshot.arrow_schema()?;
 
-    println!("here 201");
     let scan_start = Instant::now();
     let candidates = find_files(
         snapshot,
@@ -252,7 +250,6 @@ async fn execute(
         predicate.clone(),
     )
     .await?;
-    println!("here 202");
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis();
 
     if candidates.candidates.is_empty() {
@@ -264,7 +261,6 @@ async fn execute(
     let execution_props = state.execution_props();
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
-    println!("here100");
     let parquet_scan = parquet_scan_from_actions(
         snapshot,
         object_store.clone(),
@@ -319,9 +315,6 @@ async fn execute(
     // null count to track how many records do NOT statisfy the predicate.  The
     // count is then exposed through the metrics through the `UpdateCountExec`
     // execution plan
-    println!("{:?}", &input_dfschema);
-    println!("{:?}", &input_schema);
-    println!("here1");
 
     let predicate_null =
         when(predicate.clone(), lit(true)).otherwise(lit(ScalarValue::Boolean(None)))?;
@@ -332,11 +325,9 @@ async fn execute(
         execution_props,
     )?;
     expressions.push((predicate_expr, "__delta_rs_update_predicate".to_string()));
-    println!("here2");
 
     let projection_predicate: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(expressions, parquet_scan)?);
-    println!("here3");
 
     let count_plan = Arc::new(UpdateCountExec::new(projection_predicate.clone()));
 
@@ -358,7 +349,6 @@ async fn execute(
     let mut map = HashMap::<String, usize>::new();
     let mut control_columns = HashSet::<String>::new();
     control_columns.insert("__delta_rs_update_predicate".to_owned());
-    println!("here4");
 
     for (column, expr) in updates {
         let expr = case(col("__delta_rs_update_predicate"))
@@ -374,7 +364,6 @@ async fn execute(
 
     let projection_update: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(expressions, count_plan.clone())?);
-    println!("here5");
 
     // Project again to remove __delta_rs columns and rename update columns to their original name
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
@@ -402,7 +391,6 @@ async fn execute(
         expressions,
         projection_update.clone(),
     )?);
-    println!("here6");
 
     let add_actions = write_execution_plan(
         snapshot,
@@ -416,7 +404,6 @@ async fn execute(
         &cast_options,
     )
     .await?;
-    println!("here7");
 
     let count_metrics = count_plan.metrics().unwrap();
 
@@ -450,7 +437,6 @@ async fn execute(
             tags: None,
         }))
     }
-    println!("here9");
 
     metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis();
 

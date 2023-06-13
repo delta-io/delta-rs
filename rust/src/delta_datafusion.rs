@@ -1177,7 +1177,6 @@ pub(crate) async fn find_files_scan<'a>(
     let input_schema = Arc::new(ArrowSchema::new(fields));
 
     // Identify which columns we need to project
-    /*
     let mut used_columns = expression
         .to_columns()?
         .into_iter()
@@ -1185,8 +1184,15 @@ pub(crate) async fn find_files_scan<'a>(
         .collect::<Result<Vec<usize>, ArrowError>>()
         .unwrap();
     // Add path column
-    used_columns.push(input_schema.fields().len());
-    */
+    used_columns.push(input_schema.index_of(PATH_COLUMN)?);
+
+    // Project the logical schema so column indicies align between the parquet scan and the expression
+    let mut fields = vec![];
+    for idx in &used_columns {
+        fields.push(input_schema.field(*idx).to_owned());
+    }
+    let input_schema = Arc::new(ArrowSchema::new(fields));
+    let input_dfschema = input_schema.as_ref().clone().try_into()?;
 
     let parquet_scan = ParquetFormat::new()
         .create_physical_plan(
@@ -1196,7 +1202,7 @@ pub(crate) async fn find_files_scan<'a>(
                 file_schema,
                 file_groups: file_groups.into_values().collect(),
                 statistics: snapshot.datafusion_table_statistics(),
-                projection: None,
+                projection: Some(used_columns),
                 limit: None,
                 table_partition_cols,
                 infinite_source: false,
@@ -1206,20 +1212,12 @@ pub(crate) async fn find_files_scan<'a>(
         )
         .await?;
 
-    // Issue here...
-    let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
-    println!("scan 001");
-    println!("{:?}", &expression);
-    println!("{:?}", &input_schema);
-    println!("{:?}", &input_dfschema);
-
     let predicate_expr = create_physical_expr(
         &Expr::IsTrue(Box::new(expression.clone())),
         &input_dfschema,
         &input_schema,
         state.execution_props(),
     )?;
-    println!("scan 002");
 
     let filter: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(predicate_expr, parquet_scan.clone())?);
