@@ -22,7 +22,7 @@ pub mod transaction;
 pub mod vacuum;
 
 #[cfg(feature = "datafusion")]
-use self::{delete::DeleteBuilder, load::LoadBuilder, write::WriteBuilder};
+use self::{delete::DeleteBuilder, load::LoadBuilder, update::UpdateBuilder, write::WriteBuilder};
 #[cfg(feature = "datafusion")]
 use arrow::record_batch::RecordBatch;
 #[cfg(feature = "datafusion")]
@@ -34,6 +34,8 @@ use optimize::OptimizeBuilder;
 pub mod delete;
 #[cfg(feature = "datafusion")]
 mod load;
+#[cfg(feature = "datafusion")]
+pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
@@ -139,6 +141,13 @@ impl DeltaOps {
     #[must_use]
     pub fn delete(self) -> DeleteBuilder {
         DeleteBuilder::new(self.0.object_store(), self.0.state)
+    }
+
+    /// Update data from Delta table
+    #[cfg(feature = "datafusion")]
+    #[must_use]
+    pub fn update(self) -> UpdateBuilder {
+        UpdateBuilder::new(self.0.object_store(), self.0.state)
     }
 }
 
