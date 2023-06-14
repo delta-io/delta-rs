@@ -599,7 +599,7 @@ impl MapType {
 /// Field("my_col", PrimitiveType("integer"), nullable=True, metadata={"custom_metadata": {"test": 2}})
 #[pyclass(
     module = "deltalake.schema",
-    text_signature = "(name, ty, nullable=True, metadata=None)"
+    text_signature = "(name, type, nullable=True, metadata=None)"
 )]
 #[derive(Clone)]
 pub struct Field {
@@ -609,15 +609,15 @@ pub struct Field {
 #[pymethods]
 impl Field {
     #[new]
-    #[pyo3(signature = (name, ty, nullable = true, metadata = None))]
+    #[pyo3(signature = (name, r#type, nullable = true, metadata = None))]
     fn new(
         name: String,
-        ty: PyObject,
+        r#type: PyObject,
         nullable: bool,
         metadata: Option<PyObject>,
         py: Python,
     ) -> PyResult<Self> {
-        let ty = python_type_to_schema(ty, py)?;
+        let ty = python_type_to_schema(r#type, py)?;
 
         // Serialize and de-serialize JSON (it needs to be valid JSON anyways)
         let metadata: HashMap<String, serde_json::Value> = if let Some(ref json) = metadata {
