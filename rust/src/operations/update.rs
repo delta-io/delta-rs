@@ -117,9 +117,9 @@ pub struct UpdateMetrics {
     /// Number of rows just copied over in the process of updating files.
     pub num_copied_rows: usize,
     /// Time taken to execute the entire operation.
-    pub execution_time_ms: u128,
+    pub execution_time_ms: u64,
     /// Time taken to scan the files for matches.
-    pub scan_time_ms: u128,
+    pub scan_time_ms: u64,
 }
 
 impl UpdateBuilder {
@@ -249,7 +249,7 @@ async fn execute(
         predicate.clone(),
     )
     .await?;
-    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis();
+    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
         return Ok(((Vec::new(), version), metrics));
@@ -273,7 +273,6 @@ async fn execute(
     .await?;
 
     // Create a projection for a new column with the predicate evaluated
-    //let df_schema = snapshot.input_schema()?;
     let input_schema = snapshot.input_schema()?;
 
     let mut fields = Vec::new();
@@ -288,18 +287,6 @@ async fn execute(
     // Recreate the schemas with the new column included
     let input_schema = Arc::new(ArrowSchema::new(fields));
     let input_dfschema: DFSchema = input_schema.as_ref().clone().try_into()?;
-
-    /*
-    let mut fields = Vec::new();
-    for field in df_schema.fields.iter() {
-        fields.push(field.to_owned());
-    }
-    fields.push(Arc::new(Field::new(
-        "__delta_rs_update_predicate",
-        arrow_schema::DataType::Boolean,
-        true,
-    )));
-    */
 
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     let scan_schema = parquet_scan.schema();
@@ -437,7 +424,7 @@ async fn execute(
         }))
     }
 
-    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis();
+    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
 
     let operation = DeltaOperation::Update {
         predicate: Some(predicate.canonical_name()),
