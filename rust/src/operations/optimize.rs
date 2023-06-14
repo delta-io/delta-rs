@@ -498,10 +498,8 @@ impl MergePlan {
             .collect_vec();
 
         // Interleave the batches
-        let out_batches = util::interleave_batches(batches, Arc::new(indices), false).await?;
-
-        Ok(futures::stream::once(futures::future::ready(out_batches))
-            .map(Ok)
+        Ok(util::interleave_batches(batches, indices, 10_000)
+            .map_err(|err| ParquetError::General(format!("Failed to reorder data: {:?}", err)))
             .boxed())
     }
 
@@ -861,39 +859,44 @@ fn build_zorder_plan(
 
 pub(super) mod util {
     use super::*;
-    use arrow_array::ArrayRef;
     use arrow_select::interleave::interleave;
     use futures::Future;
     use itertools::Itertools;
     use tokio::task::JoinError;
 
     /// Interleaves a vector of record batches based on a set of indices
-    pub async fn interleave_batches(
+    pub fn interleave_batches(
         batches: Vec<RecordBatch>,
-        indices: Arc<Vec<(usize, usize)>>,
-        use_threads: bool,
-    ) -> Result<RecordBatch, DeltaTableError> {
-        // It would be nice if upstream provided this. Though TBH they would
-        // probably prefer we just use DataFusion to sort.
-        let columns: Vec<ArrayRef> = futures::stream::iter(0..batches[0].num_columns())
-            .map(|col_i| {
-                let arrays: Vec<ArrayRef> = batches
+        indices: Vec<(usize, usize)>,
+        batch_size: usize,
+    ) -> BoxStream<'static, Result<RecordBatch, DeltaTableError>> {
+        if batches.is_empty() {
+            return futures::stream::empty().boxed();
+        }
+        let num_columns = batches[0].num_columns();
+        let schema = batches[0].schema();
+        let arrays = (0..num_columns)
+            .map(move |col_i| {
+                batches
                     .iter()
                     .map(|batch| batch.column(col_i).clone())
-                    .collect_vec();
-                let indices = indices.clone();
-                let task = tokio::task::spawn_blocking(move || {
-                    let arrays = arrays.iter().map(|arr| arr.as_ref()).collect_vec();
-                    interleave(&arrays, &indices)
-                });
-
-                flatten_join_error(task)
+                    .collect_vec()
             })
-            .buffered(if use_threads { num_cpus::get() } else { 1 })
-            .try_collect::<Vec<_>>()
-            .await?;
+            .collect_vec();
 
-        Ok(RecordBatch::try_new(batches[0].schema(), columns)?)
+        futures::stream::iter(indices)
+            .chunks(batch_size)
+            .map(move |chunk| {
+                let columns = arrays
+                    .iter()
+                    .map(|array_chunks| {
+                        let array_refs = array_chunks.iter().map(|arr| arr.as_ref()).collect_vec();
+                        interleave(&array_refs, &chunk)
+                    })
+                    .collect::<Result<Vec<_>, ArrowError>>()?;
+                Ok(RecordBatch::try_new(schema.clone(), columns)?)
+            })
+            .boxed()
     }
 
     pub async fn flatten_join_error<T, E>(
