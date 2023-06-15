@@ -110,16 +110,22 @@ to provide a welcoming community.
 
 ## Integrations
 
+Libraries and framewors that interoperate with delta-rs - in alphabetical order.
+
+- [AWS SDK for Pandas](https://github.com/aws/aws-sdk-pandas)
 - [ballista][ballista]
 - [datafusion][datafusion]
-- [DuckDB](https://duckdb.org/)
 - [Dask](https://github.com/dask-contrib/dask-deltatable)
 - [datahub](https://datahubproject.io/)
+- [DuckDB](https://duckdb.org/)
 - [polars](https://www.pola.rs/)
 - [Ray](https://github.com/delta-incubator/deltaray)
-- [AWS SDK for Pandas](https://github.com/aws/aws-sdk-pandas)
 
 ## Features
+
+The following section outline some core features like supported [storage backends](#cloud-integrations)
+and [operations](#supported-operations) that can be performed against tables. The state of implementation
+of features outlined in the Delta [protocol][protocol] is also [tracked](#protocol-support-level).
 
 ### Cloud Integrations
 
@@ -144,7 +150,7 @@ to provide a welcoming community.
 | Delete - partitions   |                     |       ![done]       | Delete a table partition              |
 | Delete - predicates   |       ![done]       |                     | Delete data based on a predicate      |
 | Optimize - compaction |       ![done]       |       ![done]       | Harmonize the size of data file       |
-| Optimize - Z-order    |       ![done]       |                     | Place similar data into the same file |
+| Optimize - Z-order    |       ![done]       |       ![done]       | Place similar data into the same file |
 | Merge                 | [![open]][merge-rs] | [![open]][merge-py] |                                       |
 | FS check              |       ![done]       |                     | Remove corrupted files from table     |
 
@@ -178,3 +184,4 @@ to provide a welcoming community.
 [merge-rs]: https://github.com/delta-io/delta-rs/issues/850
 [writer-rs]: https://github.com/delta-io/delta-rs/issues/851
 [onelake-rs]: https://github.com/delta-io/delta-rs/issues/1418
+[protocol]: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
