@@ -447,7 +447,7 @@ impl MergePlan {
         columns: Arc<Vec<String>>,
         files: MergeBin,
         object_store: ObjectStoreRef,
-        _use_threads: bool,
+        use_threads: bool,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
         use arrow_array::cast::as_generic_binary_array;
         use arrow_array::ArrayRef;
@@ -502,9 +502,12 @@ impl MergePlan {
             .collect_vec();
 
         // Interleave the batches
-        Ok(util::interleave_batches(batches, indices, 10_000)
-            .map_err(|err| ParquetError::General(format!("Failed to reorder data: {:?}", err)))
-            .boxed())
+        Ok(
+            util::interleave_batches(batches, indices, 10_000, use_threads)
+                .await
+                .map_err(|err| ParquetError::General(format!("Failed to reorder data: {:?}", err)))
+                .boxed(),
+        )
     }
 
     /// Datafusion-based z-order read.
@@ -939,13 +942,15 @@ pub(super) mod util {
 
     /// Interleaves a vector of record batches based on a set of indices
     #[cfg(not(feature = "datafusion"))]
-    pub fn interleave_batches(
+    pub async fn interleave_batches(
         batches: Vec<RecordBatch>,
         indices: Vec<(usize, usize)>,
         batch_size: usize,
+        use_threads: bool,
     ) -> BoxStream<'static, Result<RecordBatch, DeltaTableError>> {
-        use arrow_schema::ArrowError;
+        use arrow_array::ArrayRef;
         use arrow_select::interleave::interleave;
+        use futures::TryFutureExt;
 
         if batches.is_empty() {
             return futures::stream::empty().boxed();
@@ -954,25 +959,52 @@ pub(super) mod util {
         let schema = batches[0].schema();
         let arrays = (0..num_columns)
             .map(move |col_i| {
-                batches
-                    .iter()
-                    .map(|batch| batch.column(col_i).clone())
-                    .collect_vec()
+                Arc::new(
+                    batches
+                        .iter()
+                        .map(|batch| batch.column(col_i).clone())
+                        .collect_vec(),
+                )
             })
             .collect_vec();
+        let arrays = Arc::new(arrays);
+
+        fn interleave_task(
+            array_chunks: Arc<Vec<ArrayRef>>,
+            indices: Arc<Vec<(usize, usize)>>,
+        ) -> impl Future<Output = Result<ArrayRef, DeltaTableError>> + Send + 'static {
+            let fut = tokio::task::spawn_blocking(move || {
+                let array_refs = array_chunks.iter().map(|arr| arr.as_ref()).collect_vec();
+                interleave(&array_refs, &indices)
+            });
+            flatten_join_error(fut)
+        }
+
+        fn interleave_batch(
+            arrays: Arc<Vec<Arc<Vec<ArrayRef>>>>,
+            chunk: Vec<(usize, usize)>,
+            schema: ArrowSchemaRef,
+            use_threads: bool,
+        ) -> impl Future<Output = Result<RecordBatch, DeltaTableError>> + Send + 'static {
+            let num_threads = if use_threads { num_cpus::get() } else { 1 };
+            let chunk = Arc::new(chunk);
+            futures::stream::iter(0..arrays.len())
+                .map(move |i| arrays[i].clone())
+                .map(move |array_chunks| interleave_task(array_chunks.clone(), chunk.clone()))
+                .buffered(num_threads)
+                .try_collect::<Vec<_>>()
+                .and_then(move |columns| {
+                    futures::future::ready(
+                        RecordBatch::try_new(schema.clone(), columns)
+                            .map_err(|err| DeltaTableError::from(err)),
+                    )
+                })
+        }
 
         futures::stream::iter(indices)
             .chunks(batch_size)
-            .map(move |chunk| {
-                let columns = arrays
-                    .iter()
-                    .map(|array_chunks| {
-                        let array_refs = array_chunks.iter().map(|arr| arr.as_ref()).collect_vec();
-                        interleave(&array_refs, &chunk)
-                    })
-                    .collect::<Result<Vec<_>, ArrowError>>()?;
-                Ok(RecordBatch::try_new(schema.clone(), columns)?)
-            })
+            .map(move |chunk| interleave_batch(arrays.clone(), chunk, schema.clone(), use_threads))
+            .buffered(2)
             .boxed()
     }
 
