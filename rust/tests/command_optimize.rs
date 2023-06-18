@@ -277,6 +277,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         None,
         WriterProperties::builder().build(),
         1,
+        20,
     )?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
@@ -340,6 +341,7 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
         None,
         WriterProperties::builder().build(),
         1,
+        20,
     )?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();

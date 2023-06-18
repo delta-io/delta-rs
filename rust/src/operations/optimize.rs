@@ -168,6 +168,8 @@ pub struct OptimizeBuilder<'a> {
     preserve_insertion_order: bool,
     /// Max number of concurrent tasks (default is number of cpus)
     max_concurrent_tasks: usize,
+    /// Maximum number of bytes that are allowed to spill to disk
+    max_spill_size: usize,
     /// Optimize type
     optimize_type: OptimizeType,
 }
@@ -184,6 +186,7 @@ impl<'a> OptimizeBuilder<'a> {
             app_metadata: None,
             preserve_insertion_order: false,
             max_concurrent_tasks: num_cpus::get(),
+            max_spill_size: 20 * 1024 * 1024 * 2014, // 20 GB.
             optimize_type: OptimizeType::Compact,
         }
     }
@@ -232,6 +235,12 @@ impl<'a> OptimizeBuilder<'a> {
         self.max_concurrent_tasks = max_concurrent_tasks;
         self
     }
+
+    /// Max spill size
+    pub fn with_max_spill_size(mut self, max_spill_size: usize) -> Self {
+        self.max_spill_size = max_spill_size;
+        self
+    }
 }
 
 impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
@@ -255,6 +264,7 @@ impl<'a> std::future::IntoFuture for OptimizeBuilder<'a> {
                 this.target_size.to_owned(),
                 writer_properties,
                 this.max_concurrent_tasks,
+                this.max_spill_size,
             )?;
             let metrics = plan.execute(this.store.clone(), &this.snapshot).await?;
             let mut table = DeltaTable::new_with_state(this.store, this.snapshot);
@@ -333,6 +343,9 @@ pub struct MergePlan {
     /// Whether to preserve insertion order within files
     /// Max number of concurrent tasks
     max_concurrent_tasks: usize,
+    #[allow(dead_code)]
+    /// Maximum number of bytes that are allowed to spill to disk
+    max_spill_size: usize,
 }
 
 /// Parameters passed to individual merge tasks
@@ -444,16 +457,14 @@ impl MergePlan {
     /// But for large unpartitioned tables, this could be a problem.
     #[cfg(not(feature = "datafusion"))]
     async fn read_zorder(
-        columns: Arc<Vec<String>>,
         files: MergeBin,
-        object_store: ObjectStoreRef,
-        use_threads: bool,
+        context: Arc<zorder::ZOrderExecContext>,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
         use arrow_array::cast::as_generic_binary_array;
         use arrow_array::ArrayRef;
         use arrow_schema::ArrowError;
 
-        let object_store_ref = object_store.clone();
+        let object_store_ref = context.object_store.clone();
         // Read all batches into a vec
         let batches: Vec<RecordBatch> = futures::stream::iter(files.clone())
             .then(|file| {
@@ -475,7 +486,7 @@ impl MergePlan {
                 .iter()
                 .map(|batch| {
                     let mut zorder_columns = Vec::new();
-                    for column in columns.iter() {
+                    for column in context.columns.iter() {
                         let array = batch.column_by_name(column).ok_or(ArrowError::SchemaError(
                             format!("Column not found in data file: {column}"),
                         ))?;
@@ -503,7 +514,7 @@ impl MergePlan {
 
         // Interleave the batches
         Ok(
-            util::interleave_batches(batches, indices, 10_000, use_threads)
+            util::interleave_batches(batches, indices, 10_000, context.use_inner_threads)
                 .await
                 .map_err(|err| ParquetError::General(format!("Failed to reorder data: {:?}", err)))
                 .boxed(),
@@ -513,35 +524,19 @@ impl MergePlan {
     /// Datafusion-based z-order read.
     #[cfg(feature = "datafusion")]
     async fn read_zorder(
-        columns: Arc<Vec<String>>,
         files: MergeBin,
-        object_store: ObjectStoreRef,
-        _use_threads: bool,
+        context: Arc<zorder::ZOrderExecContext>,
     ) -> Result<BoxStream<'static, Result<RecordBatch, ParquetError>>, DeltaTableError> {
-        use datafusion::execution::memory_pool::FairSpillPool;
-        use datafusion::execution::runtime_env::{RuntimeConfig, RuntimeEnv};
-        // TODO: usethreads
-        use datafusion::prelude::{col, ParquetReadOptions, SessionConfig};
-
-        // TODO: make this configurable.
-        // TODO: push this up and share between bins or maybe an overall runtime.
-        let memory_pool = FairSpillPool::new(8 * 1024 * 1024 * 1024);
-        let config = RuntimeConfig::new().with_memory_pool(Arc::new(memory_pool));
-        let runtime = Arc::new(RuntimeEnv::new(config)?);
-        runtime.register_object_store(&Url::parse("delta-rs://").unwrap(), object_store);
-
-        use datafusion::prelude::SessionContext;
+        use datafusion::prelude::{col, ParquetReadOptions};
         use datafusion_expr::expr::ScalarUDF;
         use datafusion_expr::Expr;
-        use url::Url;
-        let ctx = SessionContext::with_config_rt(SessionConfig::default(), runtime);
-        ctx.register_udf(zorder::datafusion::zorder_key_udf());
 
         let locations = files
             .iter()
             .map(|file| format!("delta-rs:///{}", file.location))
             .collect_vec();
-        let df = ctx
+        let df = context
+            .ctx
             .read_parquet(locations, ParquetReadOptions::default())
             .await?;
 
@@ -554,7 +549,7 @@ impl MergePlan {
 
         // Add a temporary z-order column we will sort by, and then drop.
         const ZORDER_KEY_COLUMN: &str = "__zorder_key";
-        let cols = columns.iter().map(col).collect_vec();
+        let cols = context.columns.iter().map(col).collect_vec();
         let expr = Expr::ScalarUDF(ScalarUDF::new(
             Arc::new(zorder::datafusion::zorder_key_udf()),
             cols,
@@ -629,20 +624,25 @@ impl MergePlan {
                     .await?;
             }
             OptimizeOperations::ZOrder(zorder_columns, bins) => {
-                let zorder_columns = Arc::new(zorder_columns);
-                // If there aren't enough bins to use all threads, then instead
-                // use threads within the bins. This is important for the case where
-                // the table is un-partitioned, in which case the entire table is just
-                // one big bin.
-                let use_threads_within_bin = bins.len() <= num_cpus::get();
+                #[cfg(not(feature = "datafusion"))]
+                let exec_context = Arc::new(zorder::ZOrderExecContext::new(
+                    zorder_columns,
+                    object_store.clone(),
+                    // If there aren't enough bins to use all threads, then instead
+                    // use threads within the bins. This is important for the case where
+                    // the table is un-partitioned, in which case the entire table is just
+                    // one big bin.
+                    bins.len() <= num_cpus::get(),
+                ));
+                #[cfg(feature = "datafusion")]
+                let exec_context = Arc::new(zorder::ZOrderExecContext::new(
+                    zorder_columns,
+                    object_store.clone(),
+                    self.max_spill_size,
+                )?);
                 futures::stream::iter(bins)
                     .map(|(partition, files)| {
-                        let batch_stream = Self::read_zorder(
-                            zorder_columns.clone(),
-                            files.clone(),
-                            object_store.clone(),
-                            use_threads_within_bin,
-                        );
+                        let batch_stream = Self::read_zorder(files.clone(), exec_context.clone());
 
                         let object_store = object_store.clone();
 
@@ -727,6 +727,7 @@ pub fn create_merge_plan(
     target_size: Option<i64>,
     writer_properties: WriterProperties,
     max_concurrent_tasks: usize,
+    max_spill_size: usize,
 ) -> Result<MergePlan, DeltaTableError> {
     let target_size = target_size.unwrap_or_else(|| snapshot.table_config().target_file_size());
 
@@ -766,6 +767,7 @@ pub fn create_merge_plan(
         }),
         read_table_version: snapshot.version(),
         max_concurrent_tasks,
+        max_spill_size,
     })
 }
 
@@ -995,8 +997,7 @@ pub(super) mod util {
                 .try_collect::<Vec<_>>()
                 .and_then(move |columns| {
                     futures::future::ready(
-                        RecordBatch::try_new(schema.clone(), columns)
-                            .map_err(|err| DeltaTableError::from(err)),
+                        RecordBatch::try_new(schema, columns).map_err(DeltaTableError::from),
                     )
                 })
         }
@@ -1026,23 +1027,85 @@ pub(super) mod util {
 
 /// Z-order utilities
 pub(super) mod zorder {
-    use std::sync::Arc;
+    use super::*;
 
     use arrow::buffer::{Buffer, OffsetBuffer, ScalarBuffer};
     use arrow_array::{Array, ArrayRef, BinaryArray};
     use arrow_buffer::bit_util::{get_bit_raw, set_bit_raw, unset_bit_raw};
     use arrow_row::{Row, RowConverter, SortField};
     use arrow_schema::ArrowError;
+
+    /// Execution context for Z-order scan
+    #[cfg(not(feature = "datafusion"))]
+    pub struct ZOrderExecContext {
+        /// Columns to z-order by
+        pub columns: Arc<[String]>,
+        /// Object store to use for reading files
+        pub object_store: ObjectStoreRef,
+        /// Whether to use threads when interleaving batches
+        pub use_inner_threads: bool,
+    }
+
+    #[cfg(not(feature = "datafusion"))]
+    impl ZOrderExecContext {
+        pub fn new(
+            columns: Vec<String>,
+            object_store: ObjectStoreRef,
+            use_inner_threads: bool,
+        ) -> Self {
+            let columns = columns.into();
+            Self {
+                columns,
+                object_store,
+                use_inner_threads,
+            }
+        }
+    }
+
+    #[cfg(feature = "datafusion")]
+    pub use self::datafusion::ZOrderExecContext;
+
     #[cfg(feature = "datafusion")]
     pub(super) mod datafusion {
+        use super::*;
+        use ::datafusion::{
+            execution::{
+                memory_pool::FairSpillPool,
+                runtime_env::{RuntimeConfig, RuntimeEnv},
+            },
+            prelude::{SessionConfig, SessionContext},
+        };
         use arrow_schema::DataType;
         use datafusion_common::DataFusionError;
         use datafusion_expr::{ColumnarValue, ScalarUDF, Signature, TypeSignature, Volatility};
         use itertools::Itertools;
 
-        use super::*;
-
         pub const ZORDER_UDF_NAME: &str = "zorder_key";
+
+        pub struct ZOrderExecContext {
+            pub columns: Arc<[String]>,
+            pub ctx: SessionContext,
+        }
+
+        impl ZOrderExecContext {
+            pub fn new(
+                columns: Vec<String>,
+                object_store: ObjectStoreRef,
+                max_spill_size: usize,
+            ) -> Result<Self, DataFusionError> {
+                let columns = columns.into();
+
+                let memory_pool = FairSpillPool::new(max_spill_size);
+                let config = RuntimeConfig::new().with_memory_pool(Arc::new(memory_pool));
+                let runtime = Arc::new(RuntimeEnv::new(config)?);
+                runtime.register_object_store(&Url::parse("delta-rs://").unwrap(), object_store);
+
+                use url::Url;
+                let ctx = SessionContext::with_config_rt(SessionConfig::default(), runtime);
+                ctx.register_udf(datafusion::zorder_key_udf());
+                Ok(Self { columns, ctx })
+            }
+        }
 
         /// Get the DataFusion UDF struct for zorder_key
         pub fn zorder_key_udf() -> ScalarUDF {
@@ -1059,7 +1122,7 @@ pub(super) mod zorder {
         }
 
         /// Datafusion zorder UDF body
-        pub fn zorder_key_datafusion(
+        fn zorder_key_datafusion(
             columns: &[ColumnarValue],
         ) -> Result<ColumnarValue, DataFusionError> {
             let length = columns
