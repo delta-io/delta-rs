@@ -1,8 +1,14 @@
 //! Implementation for writing delta checkpoints.
 
+use std::collections::HashMap;
+use std::convert::TryFrom;
+use std::iter::Iterator;
+use std::ops::Add;
+
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow::error::ArrowError;
 use arrow::json::ReaderBuilder;
+
 use chrono::{DateTime, Datelike, Duration, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -12,17 +18,13 @@ use parquet::arrow::ArrowWriter;
 use parquet::errors::ParquetError;
 use regex::Regex;
 use serde_json::Value;
-use std::collections::HashMap;
-use std::convert::TryFrom;
-use std::iter::Iterator;
-use std::ops::Add;
 
 use super::{Action, Add as AddAction, MetaData, Protocol, ProtocolError, Txn};
 use crate::delta_arrow::delta_log_schema_for_table;
-use crate::schema::*;
 use crate::storage::DeltaObjectStore;
 use crate::table_state::DeltaTableState;
 use crate::{open_table_with_version, time_utils, CheckPoint, DeltaTable};
+use crate::{schema::*, CheckPointBuilder};
 
 type SchemaPath = Vec<String>;
 
@@ -118,9 +120,7 @@ async fn create_checkpoint_for(
     let last_checkpoint_path = storage.log_path().child("_last_checkpoint");
 
     debug!("Writing parquet bytes to checkpoint buffer.");
-    let parquet_bytes = parquet_bytes_from_state(state)?;
-    let size = parquet_bytes.len() as i64;
-    let checkpoint = CheckPoint::new(version, size, None);
+    let (checkpoint, parquet_bytes) = parquet_bytes_from_state(state)?;
 
     let file_name = format!("{version:020}.checkpoint.parquet");
     let checkpoint_path = storage.log_path().child(file_name);
@@ -281,7 +281,9 @@ pub async fn cleanup_expired_logs_for(
     }
 }
 
-fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, ProtocolError> {
+fn parquet_bytes_from_state(
+    state: &DeltaTableState,
+) -> Result<(CheckPoint, bytes::Bytes), ProtocolError> {
     let current_metadata = state.current_metadata().ok_or(ProtocolError::NoMetaData)?;
 
     let partition_col_data_types = current_metadata.get_partition_col_data_types();
@@ -375,7 +377,10 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Pro
     let _ = writer.close()?;
     debug!("Finished writing checkpoint parquet buffer.");
 
-    Ok(bytes::Bytes::from(bytes))
+    let checkpoint = CheckPointBuilder::new(state.version(), jsons.len() as i64)
+        .with_size_in_bytes(bytes.len() as i64)
+        .build();
+    Ok((checkpoint, bytes::Bytes::from(bytes)))
 }
 
 fn checkpoint_add_from_state(
