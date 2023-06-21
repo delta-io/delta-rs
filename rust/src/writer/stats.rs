@@ -1,3 +1,4 @@
+//! Statistics for Delta Table columns.
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
@@ -13,6 +14,7 @@ use parquet::{
 use super::*;
 use crate::action::{Add, ColumnValueStat, Stats};
 
+/// Creates an [`Add`] log action struct.
 pub(crate) fn create_add(
     partition_values: &HashMap<String, Option<String>>,
     path: String,
