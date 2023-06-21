@@ -24,7 +24,7 @@ pub mod test_utils;
 
 /// Enum representing an error when calling [`DeltaWriter`].
 #[derive(thiserror::Error, Debug)]
-pub enum DeltaWriterError {
+pub(crate) enum DeltaWriterError {
     /// Partition column is missing in a record written to delta.
     #[error("Missing partition column: {0}")]
     MissingPartitionColumn(String),
@@ -58,16 +58,13 @@ pub enum DeltaWriterError {
     /// Serialization of delta log statistics failed.
     #[error("Failed to write statistics value {debug_value} with logical type {logical_type:?}")]
     StatsParsingFailed {
-        /// The debug value for this statistics value.
         debug_value: String,
-        /// The logical type of this statistics value.
         logical_type: Option<parquet::basic::LogicalType>,
     },
 
     /// JSON serialization failed
     #[error("Failed to serialize data to JSON: {source}")]
     JSONSerializationFailed {
-        /// The wrapped [`serde_json::Error`]
         #[from]
         source: serde_json::Error,
     },
