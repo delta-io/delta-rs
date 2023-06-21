@@ -15,7 +15,7 @@ use super::*;
 use crate::action::{Add, ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.
-pub(crate) fn create_add(
+pub fn create_add(
     partition_values: &HashMap<String, Option<String>>,
     path: String,
     size: i64,
