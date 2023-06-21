@@ -20,7 +20,7 @@ pub fn create_add(
     path: String,
     size: i64,
     file_metadata: &FileMetaData,
-) -> Result<Add, DeltaWriterError> {
+) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(partition_values, file_metadata)?;
     let stats_string = serde_json::to_string(&stats)?;
 

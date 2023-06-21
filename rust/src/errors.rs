@@ -228,6 +228,12 @@ impl From<ProtocolError> for DeltaTableError {
     }
 }
 
+impl From<serde_json::Error> for DeltaTableError {
+    fn from(value: serde_json::Error) -> Self {
+        DeltaTableError::InvalidStatsJson { json_err: value } 
+    }
+}
+
 impl DeltaTableError {
     /// Crate a NotATable Error with message for given path.
     pub fn not_a_table(path: impl AsRef<str>) -> Self {
