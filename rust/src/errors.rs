@@ -230,7 +230,7 @@ impl From<ProtocolError> for DeltaTableError {
 
 impl From<serde_json::Error> for DeltaTableError {
     fn from(value: serde_json::Error) -> Self {
-        DeltaTableError::InvalidStatsJson { json_err: value } 
+        DeltaTableError::InvalidStatsJson { json_err: value }
     }
 }
 
