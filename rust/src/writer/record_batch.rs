@@ -73,16 +73,20 @@ impl RecordBatchWriter {
         schema: ArrowSchemaRef,
         partition_columns: Option<Vec<String>>,
         storage_options: Option<HashMap<String, String>>,
+        writer_properties: Option<WriterProperties>,
     ) -> Result<Self, DeltaTableError> {
         let storage = DeltaTableBuilder::from_uri(table_uri)
             .with_storage_options(storage_options.unwrap_or_default())
             .build_storage()?;
 
         // Initialize writer properties for the underlying arrow writer
-        let writer_properties = WriterProperties::builder()
-            // NOTE: Consider extracting config for writer properties and setting more than just compression
-            .set_compression(Compression::SNAPPY)
-            .build();
+        let writer_properties = match writer_properties {
+            Some(properties) => properties,
+            None => WriterProperties::builder()
+                // NOTE: Consider extracting config for writer properties and setting more than just compression
+                .set_compression(Compression::SNAPPY)
+                .build(),
+        };
 
         Ok(Self {
             storage,
@@ -205,6 +209,15 @@ impl RecordBatchWriter {
             self.partition_columns.clone(),
             values,
         )
+    }
+
+    /// Sets the writer properties for the underlying arrow writer.
+    pub fn with_writer_properties(
+        &mut self,
+        writer_properties: WriterProperties,
+    ) -> Result<(), DeltaTableError> {
+        self.writer_properties = writer_properties;
+        Ok(())
     }
 }
 

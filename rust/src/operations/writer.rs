@@ -134,6 +134,12 @@ impl DeltaWriter {
         }
     }
 
+    /// Apply custom writer_properties to the underlying parquet writer
+    pub fn with_writer_properties(&mut self, writer_properties: WriterProperties) -> &mut Self {
+        self.config.writer_properties = writer_properties;
+        self
+    }
+
     fn divide_by_partition_values(
         &mut self,
         values: &RecordBatch,
