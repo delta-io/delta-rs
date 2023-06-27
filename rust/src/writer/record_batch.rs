@@ -200,6 +200,12 @@ impl RecordBatchWriter {
         Ok(())
     }
 
+    /// Sets the writer properties for the underlying arrow writer.
+    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
+        self.writer_properties = writer_properties;
+        self
+    }
+
     fn divide_by_partition_values(
         &mut self,
         values: &RecordBatch,
@@ -209,15 +215,6 @@ impl RecordBatchWriter {
             self.partition_columns.clone(),
             values,
         )
-    }
-
-    /// Sets the writer properties for the underlying arrow writer.
-    pub fn with_writer_properties(
-        &mut self,
-        writer_properties: WriterProperties,
-    ) -> Result<(), DeltaTableError> {
-        self.writer_properties = writer_properties;
-        Ok(())
     }
 }
 

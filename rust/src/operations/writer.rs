@@ -135,7 +135,7 @@ impl DeltaWriter {
     }
 
     /// Apply custom writer_properties to the underlying parquet writer
-    pub fn with_writer_properties(&mut self, writer_properties: WriterProperties) -> &mut Self {
+    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.config.writer_properties = writer_properties;
         self
     }
