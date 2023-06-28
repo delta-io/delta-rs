@@ -51,8 +51,13 @@ impl DeltaTableState {
                             match field.data_type() {
                                 // Only dictionary-encode types that may be large
                                 // // https://github.com/apache/arrow-datafusion/pull/5545
-                                DataType::Utf8 | DataType::LargeUtf8 | DataType::Binary | DataType::LargeBinary => wrap_partition_type_in_dict(field.data_type().clone()),
-                                _ => field.data_type().clone()
+                                DataType::Utf8
+                                | DataType::LargeUtf8
+                                | DataType::Binary
+                                | DataType::LargeBinary => {
+                                    wrap_partition_type_in_dict(field.data_type().clone())
+                                }
+                                _ => field.data_type().clone(),
                             }
                         } else {
                             field.data_type().clone()
