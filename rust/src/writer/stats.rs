@@ -2,6 +2,7 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
 
+use num_bigint::BigInt;
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{basic::LogicalType, errors::ParquetError};
@@ -120,7 +121,7 @@ enum StatsScalar {
     Date(chrono::NaiveDate),
     Timestamp(chrono::NaiveDateTime),
     // We are serializing to f64 later and the ordering should be the same
-    Decimal(f64),
+    Decimal(String),
     String(String),
     Bytes(Vec<u8>),
 }
@@ -156,7 +157,7 @@ impl StatsScalar {
             (Statistics::Int32(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
                 // Spark serializes these as numbers
-                Ok(Self::Decimal(val))
+                Ok(Self::Decimal(val.to_string()))
             }
             (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
             // Int64 can be timestamp, decimal, or integer
@@ -183,7 +184,7 @@ impl StatsScalar {
             (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
                 // Spark serializes these as numbers
-                Ok(Self::Decimal(val))
+                Ok(Self::Decimal(val.to_string()))
             }
             (Statistics::Int64(v), _) => Ok(Self::Int64(get_stat!(v))),
             (Statistics::Float(v), _) => Ok(Self::Float32(get_stat!(v))),
@@ -220,15 +221,15 @@ impl StatsScalar {
                 let val = if val.len() <= 4 {
                     let mut bytes = [0; 4];
                     bytes[..val.len()].copy_from_slice(val);
-                    i32::from_be_bytes(bytes) as f64
+                    BigInt::from(i32::from_be_bytes(bytes))
                 } else if val.len() <= 8 {
                     let mut bytes = [0; 8];
                     bytes[..val.len()].copy_from_slice(val);
-                    i64::from_be_bytes(bytes) as f64
+                    BigInt::from(i64::from_be_bytes(bytes))
                 } else if val.len() <= 16 {
                     let mut bytes = [0; 16];
                     bytes[..val.len()].copy_from_slice(val);
-                    i128::from_be_bytes(bytes) as f64
+                    BigInt::from(i128::from_be_bytes(bytes))
                 } else {
                     return Err(DeltaWriterError::StatsParsingFailed {
                         debug_value: format!("{val:?}"),
@@ -239,8 +240,16 @@ impl StatsScalar {
                     });
                 };
 
-                let val = val / 10.0_f64.powi(*scale);
-                Ok(Self::Decimal(val))
+
+                let str_val = val.to_string();
+                let decimal_string = if str_val.len() > *scale as usize {
+                    let (integer_part, fractional_part) =
+                        str_val.split_at(str_val.len() - *scale as usize);
+                    format!("{}.{}", integer_part, fractional_part)
+                } else {
+                    format!("0.{}", str_val)
+                };
+                Ok(Self::Decimal(decimal_string))
             }
             (stats, _) => Err(DeltaWriterError::StatsParsingFailed {
                 debug_value: format!("{stats:?}"),

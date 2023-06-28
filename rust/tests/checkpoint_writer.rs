@@ -9,7 +9,7 @@ mod fs_common;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 mod simple_checkpoint {
     use arrow::datatypes::Schema as ArrowSchema;
-    use arrow_array::{BinaryArray, RecordBatch};
+    use arrow_array::{BinaryArray, RecordBatch, Decimal128Array};
     use arrow_schema::{DataType, Field};
     use deltalake::writer::{DeltaWriter, RecordBatchWriter};
     use deltalake::*;
@@ -25,12 +25,20 @@ mod simple_checkpoint {
     }
 
     async fn setup_test() -> Result<Context, Box<dyn Error>> {
-        let columns = vec![SchemaField::new(
-            "x".to_owned(),
-            SchemaDataType::primitive("binary".to_owned()),
-            false,
-            HashMap::new(),
-        )];
+        let columns = vec![
+            SchemaField::new(
+                "bin".to_owned(),
+                SchemaDataType::primitive("binary".to_owned()),
+                false,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "dec".to_owned(),
+                SchemaDataType::primitive("decimal(38,10)".to_owned()),
+                false,
+                HashMap::new(),
+            ),
+        ];
 
         let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
         let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
@@ -43,16 +51,16 @@ mod simple_checkpoint {
         Ok(Context { table: dt })
     }
 
-    fn get_batch(items: Vec<&[u8]>) -> Result<RecordBatch, Box<dyn Error>> {
+    fn get_batch(items: Vec<&[u8]>, decimals: Vec<i128>) -> Result<RecordBatch, Box<dyn Error>> {
         let x_array = BinaryArray::from(items);
+        let dec_array = Decimal128Array::from(decimals);
 
         Ok(RecordBatch::try_new(
-            Arc::new(ArrowSchema::new(vec![Field::new(
-                "x",
-                DataType::Binary,
-                false,
-            )])),
-            vec![Arc::new(x_array)],
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("bin", DataType::Binary, false),
+                Field::new("dec", DataType::Decimal128(38, 10), false),
+            ])),
+            vec![Arc::new(x_array), Arc::new(dec_array)],
         )?)
     }
 
@@ -72,7 +80,7 @@ mod simple_checkpoint {
         let mut dt = context.table;
         let mut writer = RecordBatchWriter::for_table(&dt)?;
 
-        write(&mut writer, &mut dt, get_batch(vec![&[1, 2]])?).await?;
+        write(&mut writer, &mut dt, get_batch(vec![&[1, 2]], vec![12390211983908098091820909809])?).await?;
 
         // Just checking that this doesn't fail. https://github.com/delta-io/delta-rs/issues/1493
         checkpoints::create_checkpoint(&dt).await?;

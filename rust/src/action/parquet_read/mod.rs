@@ -2,7 +2,6 @@ use std::collections::HashMap;
 
 use chrono::{SecondsFormat, TimeZone, Utc};
 use num_bigint::BigInt;
-use num_traits::cast::ToPrimitive;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use serde_json::json;
 
@@ -255,12 +254,7 @@ fn primitive_parquet_field_to_json_value(field: &Field) -> Result<serde_json::Va
         Field::Float(value) => Ok(json!(value)),
         Field::Double(value) => Ok(json!(value)),
         Field::Str(value) => Ok(json!(value)),
-        Field::Decimal(decimal) => match BigInt::from_signed_bytes_be(decimal.data()).to_f64() {
-            Some(int) => Ok(json!(
-                int / (10_i64.pow((decimal.scale()).try_into().unwrap()) as f64)
-            )),
-            _ => Err("Invalid type for min/max values."),
-        },
+        Field::Decimal(decimal) => Ok(serde_json::Value::String(BigInt::from_signed_bytes_be(decimal.data()).to_string())),
         Field::TimestampMicros(timestamp) => Ok(serde_json::Value::String(
             convert_timestamp_micros_to_string(*timestamp)?,
         )),

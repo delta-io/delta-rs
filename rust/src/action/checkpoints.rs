@@ -283,7 +283,6 @@ pub async fn cleanup_expired_logs_for(
 
 // Filter binary from the schema so that it isn't serialized into JSON,
 // as arrow currently does not support this.
-// https://github.com/delta-io/delta-rs/issues/1493
 fn filter_binary(schema: &Schema) -> Schema {
     Schema::new(
         schema
@@ -309,7 +308,9 @@ fn filter_binary(schema: &Schema) -> Schema {
     )
 }
 
-fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, ProtocolError> {
+fn parquet_bytes_from_state(
+    state: &DeltaTableState,
+) -> Result<(CheckPoint, bytes::Bytes), ProtocolError> {
     let current_metadata = state.current_metadata().ok_or(ProtocolError::NoMetaData)?;
 
     let partition_col_data_types = current_metadata.get_partition_col_data_types();
@@ -379,11 +380,9 @@ fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, Pro
         checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
     }));
 
-    let filterd_schema = filter_binary(&current_metadata.schema);
-
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
-        <ArrowSchema as TryFrom<&Schema>>::try_from(&filterd_schema)?,
+        <ArrowSchema as TryFrom<&Schema>>::try_from(&filter_binary(&current_metadata.schema))?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
     );
