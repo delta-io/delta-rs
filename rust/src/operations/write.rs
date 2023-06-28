@@ -99,6 +99,8 @@ pub struct WriteBuilder {
     batches: Option<Vec<RecordBatch>>,
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     safe_cast: bool,
+    /// Parquet writer properties
+    writer_properties: Option<WriterProperties>,
 }
 
 impl WriteBuilder {
@@ -116,6 +118,7 @@ impl WriteBuilder {
             write_batch_size: None,
             batches: None,
             safe_cast: false,
+            writer_properties: None,
         }
     }
 
@@ -175,6 +178,12 @@ impl WriteBuilder {
     /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
     pub fn with_cast_safety(mut self, safe: bool) -> Self {
         self.safe_cast = safe;
+        self
+    }
+
+    /// Specify the writer properties to use when writing a parquet file
+    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
+        self.writer_properties = Some(writer_properties);
         self
     }
 
@@ -390,7 +399,7 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.store.clone(),
                 this.target_file_size,
                 this.write_batch_size,
-                None,
+                this.writer_properties,
                 this.safe_cast,
             )
             .await?;
