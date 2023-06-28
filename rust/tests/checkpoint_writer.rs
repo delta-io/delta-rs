@@ -34,7 +34,7 @@ mod simple_checkpoint {
             ),
             SchemaField::new(
                 "dec".to_owned(),
-                SchemaDataType::primitive("decimal(38,10)".to_owned()),
+                SchemaDataType::primitive("decimal(23,0)".to_owned()),
                 false,
                 HashMap::new(),
             ),
@@ -53,12 +53,12 @@ mod simple_checkpoint {
 
     fn get_batch(items: Vec<&[u8]>, decimals: Vec<i128>) -> Result<RecordBatch, Box<dyn Error>> {
         let x_array = BinaryArray::from(items);
-        let dec_array = Decimal128Array::from(decimals);
+        let dec_array = Decimal128Array::from(decimals).with_precision_and_scale(23, 0)?;
 
         Ok(RecordBatch::try_new(
             Arc::new(ArrowSchema::new(vec![
                 Field::new("bin", DataType::Binary, false),
-                Field::new("dec", DataType::Decimal128(38, 10), false),
+                Field::new("dec", DataType::Decimal128(23, 0), false),
             ])),
             vec![Arc::new(x_array), Arc::new(dec_array)],
         )?)
@@ -80,7 +80,7 @@ mod simple_checkpoint {
         let mut dt = context.table;
         let mut writer = RecordBatchWriter::for_table(&dt)?;
 
-        write(&mut writer, &mut dt, get_batch(vec![&[1, 2]], vec![12390211983908098091820909809])?).await?;
+        write(&mut writer, &mut dt, get_batch(vec![&[1, 2]], vec![18446744073709551614])?).await?;
 
         // Just checking that this doesn't fail. https://github.com/delta-io/delta-rs/issues/1493
         checkpoints::create_checkpoint(&dt).await?;

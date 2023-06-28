@@ -2,7 +2,6 @@ use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 use std::{collections::HashMap, ops::AddAssign};
 
-use num_bigint::BigInt;
 use parquet::format::FileMetaData;
 use parquet::schema::types::{ColumnDescriptor, SchemaDescriptor};
 use parquet::{basic::LogicalType, errors::ParquetError};
@@ -220,16 +219,17 @@ impl StatsScalar {
 
                 let val = if val.len() <= 4 {
                     let mut bytes = [0; 4];
-                    bytes[..val.len()].copy_from_slice(val);
-                    BigInt::from(i32::from_be_bytes(bytes))
+                    bytes[(4 - val.len())..4].copy_from_slice(val);
+                    i32::from_be_bytes(bytes).to_string()
                 } else if val.len() <= 8 {
                     let mut bytes = [0; 8];
-                    bytes[..val.len()].copy_from_slice(val);
-                    BigInt::from(i64::from_be_bytes(bytes))
+                    bytes[(8 - val.len())..8].copy_from_slice(val);
+                    i64::from_be_bytes(bytes).to_string()
                 } else if val.len() <= 16 {
                     let mut bytes = [0; 16];
-                    bytes[..val.len()].copy_from_slice(val);
-                    BigInt::from(i128::from_be_bytes(bytes))
+                    bytes[(16 - val.len())..16].copy_from_slice(val);
+                    let thing = i128::from_be_bytes(bytes);
+                    thing.to_string()
                 } else {
                     return Err(DeltaWriterError::StatsParsingFailed {
                         debug_value: format!("{val:?}"),
@@ -240,14 +240,16 @@ impl StatsScalar {
                     });
                 };
 
-
-                let str_val = val.to_string();
-                let decimal_string = if str_val.len() > *scale as usize {
+                let decimal_string = if val.len() > *scale as usize {
                     let (integer_part, fractional_part) =
-                        str_val.split_at(str_val.len() - *scale as usize);
-                    format!("{}.{}", integer_part, fractional_part)
+                        val.split_at(val.len() - *scale as usize);
+                    if fractional_part.len() == 0 {
+                      integer_part.to_string()
+                    } else {
+                      format!("{}.{}", integer_part, fractional_part)
+                    }
                 } else {
-                    format!("0.{}", str_val)
+                    format!("0.{}", val)
                 };
                 Ok(Self::Decimal(decimal_string))
             }
