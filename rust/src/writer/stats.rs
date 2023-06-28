@@ -242,13 +242,13 @@ impl StatsScalar {
 
                 let decimal_string = if val.len() > *scale as usize {
                     let (integer_part, fractional_part) = val.split_at(val.len() - *scale as usize);
-                    if fractional_part.len() == 0 {
+                    if fractional_part.is_empty() {
                         integer_part.to_string()
                     } else {
                         format!("{}.{}", integer_part, fractional_part)
                     }
                 } else if *scale < 0 {
-                    let abs_scale = scale.abs() as usize;
+                    let abs_scale = scale.unsigned_abs() as usize;
                     let decimal_zeros = "0".repeat(abs_scale);
                     format!("{}{}", val, decimal_zeros)
                 } else {
@@ -519,7 +519,7 @@ mod tests {
                     scale: 3,
                     precision: 4,
                 }),
-                Value::from(1.234),
+                Value::from("1.234"),
             ),
             (
                 simple_parquet_stat!(Statistics::Int32, 1234),
@@ -527,7 +527,7 @@ mod tests {
                     scale: -1,
                     precision: 4,
                 }),
-                Value::from(12340.0),
+                Value::from("12340"),
             ),
             (
                 simple_parquet_stat!(Statistics::Int32, 737821),
@@ -564,7 +564,7 @@ mod tests {
                     scale: 3,
                     precision: 4,
                 }),
-                Value::from(1.234),
+                Value::from("1.234"),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1234),
@@ -572,7 +572,7 @@ mod tests {
                     scale: -1,
                     precision: 4,
                 }),
-                Value::from(12340.0),
+                Value::from("12340"),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1234),
@@ -598,7 +598,7 @@ mod tests {
                     scale: 3,
                     precision: 16,
                 }),
-                Value::from(1243124142314.423),
+                Value::from("1243124142314.423"),
             ),
         ];
 

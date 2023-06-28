@@ -9,7 +9,7 @@ mod fs_common;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 mod simple_checkpoint {
     use arrow::datatypes::Schema as ArrowSchema;
-    use arrow_array::{BinaryArray, RecordBatch, Decimal128Array};
+    use arrow_array::{BinaryArray, Decimal128Array, RecordBatch};
     use arrow_schema::{DataType, Field};
     use deltalake::writer::{DeltaWriter, RecordBatchWriter};
     use deltalake::*;
@@ -80,7 +80,12 @@ mod simple_checkpoint {
         let mut dt = context.table;
         let mut writer = RecordBatchWriter::for_table(&dt)?;
 
-        write(&mut writer, &mut dt, get_batch(vec![&[1, 2]], vec![18446744073709551614])?).await?;
+        write(
+            &mut writer,
+            &mut dt,
+            get_batch(vec![&[1, 2]], vec![18446744073709551614])?,
+        )
+        .await?;
 
         // Just checking that this doesn't fail. https://github.com/delta-io/delta-rs/issues/1493
         checkpoints::create_checkpoint(&dt).await?;

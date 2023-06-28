@@ -287,7 +287,7 @@ fn filter_binary(schema: &Schema) -> Schema {
     Schema::new(
         schema
             .get_fields()
-            .into_iter()
+            .iter()
             .flat_map(|f| match f.get_type() {
                 SchemaDataType::primitive(p) => {
                     if p != "binary" {

@@ -254,7 +254,9 @@ fn primitive_parquet_field_to_json_value(field: &Field) -> Result<serde_json::Va
         Field::Float(value) => Ok(json!(value)),
         Field::Double(value) => Ok(json!(value)),
         Field::Str(value) => Ok(json!(value)),
-        Field::Decimal(decimal) => Ok(serde_json::Value::String(BigInt::from_signed_bytes_be(decimal.data()).to_string())),
+        Field::Decimal(decimal) => Ok(serde_json::Value::String(
+            BigInt::from_signed_bytes_be(decimal.data()).to_string(),
+        )),
         Field::TimestampMicros(timestamp) => Ok(serde_json::Value::String(
             convert_timestamp_micros_to_string(*timestamp)?,
         )),
