@@ -1,14 +1,11 @@
 #![cfg(feature = "datafusion")]
 
-use std::collections::{HashMap, HashSet};
-use std::path::PathBuf;
-use std::sync::Arc;
-
 use arrow::array::*;
 use arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
 use arrow::record_batch::RecordBatch;
+use arrow_schema::{DataType, Field};
 use common::datafusion::context_with_delta_table_factory;
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::TableProvider;
@@ -23,6 +20,12 @@ use datafusion_expr::Expr;
 use datafusion_proto::bytes::{
     physical_plan_from_bytes_with_extension_codec, physical_plan_to_bytes_with_extension_codec,
 };
+use deltalake::writer::{DeltaWriter, RecordBatchWriter};
+use deltalake::{DeltaTableError, SchemaDataType, SchemaField};
+use std::collections::{HashMap, HashSet};
+use std::error::Error;
+use std::path::PathBuf;
+use std::sync::Arc;
 use url::Url;
 
 use deltalake::action::SaveMode;
@@ -911,13 +914,69 @@ async fn test_issue_1374() -> Result<()> {
     Ok(())
 }
 
+async fn setup_test() -> Result<DeltaTable, Box<dyn Error>> {
+    let columns = vec![
+        SchemaField::new(
+            "id".to_owned(),
+            SchemaDataType::primitive("integer".to_owned()),
+            false,
+            HashMap::new(),
+        ),
+        SchemaField::new(
+            "date".to_owned(),
+            SchemaDataType::primitive("date".to_owned()),
+            false,
+            HashMap::new(),
+        ),
+    ];
+
+    let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
+    let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+    let dt = DeltaOps::try_from_uri(table_uri)
+        .await?
+        .create()
+        .with_columns(columns)
+        .with_partition_columns(["date"])
+        .await?;
+
+    Ok(dt)
+}
+
+fn get_batch(ids: Vec<i32>, dates: Vec<i32>) -> Result<RecordBatch, Box<dyn Error>> {
+    let ids_array: PrimitiveArray<arrow_array::types::Int32Type> = Int32Array::from(ids);
+    let date_array = Date32Array::from(dates);
+
+    Ok(RecordBatch::try_new(
+        Arc::new(ArrowSchema::new(vec![
+            Field::new("id", DataType::Int32, false),
+            Field::new("date", DataType::Date32, false),
+        ])),
+        vec![Arc::new(ids_array), Arc::new(date_array)],
+    )?)
+}
+
+async fn write(
+    writer: &mut RecordBatchWriter,
+    table: &mut DeltaTable,
+    batch: RecordBatch,
+) -> Result<(), DeltaTableError> {
+    writer.write(batch).await?;
+    writer.flush_and_commit(table).await?;
+    Ok(())
+}
+
 #[tokio::test]
 async fn test_issue_1445_date_partition() -> Result<()> {
     let ctx = SessionContext::new();
-    let table = deltalake::open_table("./tests/data/issue_1445")
-        .await
-        .unwrap();
-    ctx.register_table("t", Arc::new(table))?;
+    let mut dt = setup_test().await.unwrap();
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+    write(
+        &mut writer,
+        &mut dt,
+        get_batch(vec![2], vec![19517]).unwrap(),
+    )
+    .await?;
+    ctx.register_table("t", Arc::new(dt))?;
 
     let batches = ctx
         .sql(
@@ -934,7 +993,7 @@ async fn test_issue_1445_date_partition() -> Result<()> {
         "+----+------------+",
         "| id | date       |",
         "+----+------------+",
-        "| 2  | 2023-06-08 |",
+        "| 2  | 2023-06-09 |",
         "+----+------------+",
     ];
 
