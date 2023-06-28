@@ -241,13 +241,16 @@ impl StatsScalar {
                 };
 
                 let decimal_string = if val.len() > *scale as usize {
-                    let (integer_part, fractional_part) =
-                        val.split_at(val.len() - *scale as usize);
+                    let (integer_part, fractional_part) = val.split_at(val.len() - *scale as usize);
                     if fractional_part.len() == 0 {
-                      integer_part.to_string()
+                        integer_part.to_string()
                     } else {
-                      format!("{}.{}", integer_part, fractional_part)
+                        format!("{}.{}", integer_part, fractional_part)
                     }
+                } else if *scale < 0 {
+                    let abs_scale = scale.abs() as usize;
+                    let decimal_zeros = "0".repeat(abs_scale);
+                    format!("{}{}", val, decimal_zeros)
                 } else {
                     format!("0.{}", val)
                 };
