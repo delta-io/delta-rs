@@ -281,9 +281,35 @@ pub async fn cleanup_expired_logs_for(
     }
 }
 
-fn parquet_bytes_from_state(
-    state: &DeltaTableState,
-) -> Result<(CheckPoint, bytes::Bytes), ProtocolError> {
+// Filter binary from the schema so that it isn't serialized into JSON,
+// as arrow currently does not support this.
+// https://github.com/delta-io/delta-rs/issues/1493
+fn filter_binary(schema: &Schema) -> Schema {
+    Schema::new(
+        schema
+            .get_fields()
+            .into_iter()
+            .flat_map(|f| match f.get_type() {
+                SchemaDataType::primitive(p) => {
+                    if p != "binary" {
+                        Some(f.clone())
+                    } else {
+                        None
+                    }
+                }
+                SchemaDataType::r#struct(s) => Some(SchemaField::new(
+                    f.get_name().to_string(),
+                    SchemaDataType::r#struct(filter_binary(&Schema::new(s.get_fields().clone()))),
+                    f.is_nullable(),
+                    f.get_metadata().clone(),
+                )),
+                _ => Some(f.clone()),
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn parquet_bytes_from_state(state: &DeltaTableState) -> Result<bytes::Bytes, ProtocolError> {
     let current_metadata = state.current_metadata().ok_or(ProtocolError::NoMetaData)?;
 
     let partition_col_data_types = current_metadata.get_partition_col_data_types();
@@ -353,9 +379,11 @@ fn parquet_bytes_from_state(
         checkpoint_add_from_state(f, partition_col_data_types.as_slice(), &stats_conversions)
     }));
 
+    let filterd_schema = filter_binary(&current_metadata.schema);
+
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
-        <ArrowSchema as TryFrom<&Schema>>::try_from(&current_metadata.schema)?,
+        <ArrowSchema as TryFrom<&Schema>>::try_from(&filterd_schema)?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
     );

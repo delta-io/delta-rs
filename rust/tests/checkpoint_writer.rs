@@ -8,10 +8,77 @@ mod fs_common;
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 mod simple_checkpoint {
+    use arrow::datatypes::Schema as ArrowSchema;
+    use arrow_array::{BinaryArray, RecordBatch};
+    use arrow_schema::{DataType, Field};
+    use deltalake::writer::{DeltaWriter, RecordBatchWriter};
     use deltalake::*;
     use pretty_assertions::assert_eq;
+    use std::collections::HashMap;
+    use std::error::Error;
     use std::fs;
     use std::path::{Path, PathBuf};
+    use std::sync::Arc;
+
+    struct Context {
+        pub table: DeltaTable,
+    }
+
+    async fn setup_test() -> Result<Context, Box<dyn Error>> {
+        let columns = vec![SchemaField::new(
+            "x".to_owned(),
+            SchemaDataType::primitive("binary".to_owned()),
+            false,
+            HashMap::new(),
+        )];
+
+        let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
+        let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+        let dt = DeltaOps::try_from_uri(table_uri)
+            .await?
+            .create()
+            .with_columns(columns)
+            .await?;
+
+        Ok(Context { table: dt })
+    }
+
+    fn get_batch(items: Vec<&[u8]>) -> Result<RecordBatch, Box<dyn Error>> {
+        let x_array = BinaryArray::from(items);
+
+        Ok(RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![Field::new(
+                "x",
+                DataType::Binary,
+                false,
+            )])),
+            vec![Arc::new(x_array)],
+        )?)
+    }
+
+    async fn write(
+        writer: &mut RecordBatchWriter,
+        table: &mut DeltaTable,
+        batch: RecordBatch,
+    ) -> Result<(), DeltaTableError> {
+        writer.write(batch).await?;
+        writer.flush_and_commit(table).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_checkpoint_write_binary_stats() -> Result<(), Box<dyn Error>> {
+        let context = setup_test().await?;
+        let mut dt = context.table;
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+        write(&mut writer, &mut dt, get_batch(vec![&[1, 2]])?).await?;
+
+        // Just checking that this doesn't fail. https://github.com/delta-io/delta-rs/issues/1493
+        checkpoints::create_checkpoint(&dt).await?;
+
+        Ok(())
+    }
 
     #[tokio::test]
     async fn simple_checkpoint_test() {
