@@ -30,7 +30,7 @@ use object_store::path::Path;
 use object_store::ObjectStore;
 
 use crate::action::{Action, Add, DeltaOperation, Remove};
-use crate::operations::transaction::{prepare_commit, try_commit_transaction};
+use crate::operations::transaction::{prepare_commit, TransactionError, try_commit_transaction};
 use crate::storage::ObjectStoreRef;
 use crate::table_state::DeltaTableState;
 use crate::{action, DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
@@ -231,7 +231,10 @@ async fn execute(
     .await?;
     let commit_version = snapshot.version() + 1;
     match try_commit_transaction(object_store.as_ref(), &commit, commit_version).await {
-        Ok(_) => {}
+        Ok(_) => {},
+        Err(err @ TransactionError::VersionAlreadyExists(_)) => {
+            return Err(err.into());
+        },
         Err(err) => {
             object_store.delete(&commit).await?;
             return Err(err.into());
