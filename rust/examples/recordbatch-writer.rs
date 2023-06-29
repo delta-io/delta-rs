@@ -14,8 +14,12 @@ use deltalake::errors::DeltaTableError;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake::*;
 use log::*;
-
 use object_store::path::Path;
+use parquet::{
+    basic::{Compression, ZstdLevel},
+    file::properties::WriterProperties,
+};
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -42,8 +46,13 @@ async fn main() -> Result<(), anyhow::Error> {
         Err(err) => Err(err).unwrap(),
     };
 
-    let mut writer =
-        RecordBatchWriter::for_table(&table).expect("Failed to make RecordBatchWriter");
+    let writer_properties = WriterProperties::builder()
+        .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap()))
+        .build();
+
+    let mut writer = RecordBatchWriter::for_table(&table)
+        .expect("Failed to make RecordBatchWriter")
+        .with_writer_properties(writer_properties);
 
     let records = fetch_readings();
     let batch = convert_to_batch(&table, &records);
