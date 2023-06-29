@@ -18,6 +18,7 @@ pub mod create;
 pub mod filesystem_check;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod optimize;
+pub mod restore;
 pub mod transaction;
 pub mod vacuum;
 
@@ -29,6 +30,7 @@ use arrow::record_batch::RecordBatch;
 pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 use optimize::OptimizeBuilder;
+use restore::RestoreBuilder;
 
 #[cfg(feature = "datafusion")]
 pub mod delete;
@@ -148,6 +150,12 @@ impl DeltaOps {
     #[must_use]
     pub fn update(self) -> UpdateBuilder {
         UpdateBuilder::new(self.0.object_store(), self.0.state)
+    }
+
+    /// Restore delta table to a specified version or datetime
+    #[must_use]
+    pub fn restore(self) -> RestoreBuilder {
+        RestoreBuilder::new(self.0.object_store(), self.0.state)
     }
 }
 
