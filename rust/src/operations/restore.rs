@@ -16,7 +16,7 @@
 //! # Example
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;
-//! let (table, metrics) = RestoreBuilder::new(table.object_store(), table.state).restore_to_version(1).await?;
+//! let (table, metrics) = RestoreBuilder::new(table.object_store(), table.state).with_version_to_restore(1).await?;
 //! ````
 
 use std::cmp::max;
@@ -96,13 +96,13 @@ impl RestoreBuilder {
     }
 
     /// Set the version to restore
-    pub fn restore_to_version(mut self, version: i64) -> Self {
+    pub fn with_version_to_restore(mut self, version: i64) -> Self {
         self.version_to_restore = Some(version);
         self
     }
 
     /// Set the datetime to restore
-    pub fn restore_to_datetime(mut self, datetime: DateTime<Utc>) -> Self {
+    pub fn with_datetime_to_restore(mut self, datetime: DateTime<Utc>) -> Self {
         self.datetime_to_restore = Some(datetime);
         self
     }

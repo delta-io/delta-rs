@@ -95,7 +95,7 @@ fn get_record_batch() -> RecordBatch {
 async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
     let context = setup_test().await?;
     let table = context.table;
-    let result = DeltaOps(table).restore().restore_to_version(1).await?;
+    let result = DeltaOps(table).restore().with_version_to_restore(1).await?;
     assert_eq!(result.1.num_restored_file, 1);
     assert_eq!(result.1.num_removed_file, 2);
     assert_eq!(result.0.state.version(), 4);
@@ -104,7 +104,10 @@ async fn test_restore_by_version() -> Result<(), Box<dyn Error>> {
     table.0.load_version(1).await?;
     assert_eq!(table.0.state.files(), result.0.state.files());
 
-    let result = DeltaOps(result.0).restore().restore_to_version(0).await?;
+    let result = DeltaOps(result.0)
+        .restore()
+        .with_version_to_restore(0)
+        .await?;
     assert_eq!(result.0.state.files().len(), 0);
     Ok(())
 }
@@ -120,7 +123,7 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
 
     let result = DeltaOps(table)
         .restore()
-        .restore_to_datetime(datetime)
+        .with_datetime_to_restore(datetime)
         .await?;
     assert_eq!(result.1.num_restored_file, 1);
     assert_eq!(result.1.num_removed_file, 2);
@@ -140,15 +143,15 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     // datetime and version both set
     let result = DeltaOps(table)
         .restore()
-        .restore_to_version(1)
-        .restore_to_datetime(datetime)
+        .with_version_to_restore(1)
+        .with_datetime_to_restore(datetime)
         .await;
     assert!(result.is_err());
 
     // version too large
     let table_uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let ops = DeltaOps::try_from_uri(table_uri).await?;
-    let result = ops.restore().restore_to_version(5).await;
+    let result = ops.restore().with_version_to_restore(5).await;
     assert!(result.is_err());
     Ok(())
 }
@@ -169,7 +172,7 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
 
     let result = DeltaOps(context.table)
         .restore()
-        .restore_to_version(1)
+        .with_version_to_restore(1)
         .await;
     assert!(result.is_err());
     Ok(())
@@ -192,7 +195,7 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
     let result = DeltaOps(context.table)
         .restore()
         .ignore_missing_files(true)
-        .restore_to_version(1)
+        .with_version_to_restore(1)
         .await;
     assert!(result.is_ok());
     Ok(())
@@ -204,7 +207,7 @@ async fn test_restore_transaction_conflict() -> Result<(), Box<dyn Error>> {
     let mut table = context.table;
     table.load_version(2).await?;
 
-    let result = DeltaOps(table).restore().restore_to_version(1).await;
+    let result = DeltaOps(table).restore().with_version_to_restore(1).await;
     assert!(result.is_err());
     Ok(())
 }
