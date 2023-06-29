@@ -228,8 +228,7 @@ impl StatsScalar {
                 } else if val.len() <= 16 {
                     let mut bytes = [0; 16];
                     bytes[(16 - val.len())..16].copy_from_slice(val);
-                    let thing = i128::from_be_bytes(bytes);
-                    thing.to_string()
+                    i128::from_be_bytes(bytes).to_string()
                 } else {
                     return Err(DeltaWriterError::StatsParsingFailed {
                         debug_value: format!("{val:?}"),
