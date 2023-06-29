@@ -183,7 +183,7 @@ async fn execute(
                 extended_file_metadata: Some(false),
                 partition_values: Some(a.partition_values.clone()),
                 size: Some(a.size),
-                tags: a.tags.clone(),
+                tags: a.tags,
             }
         })
         .collect();

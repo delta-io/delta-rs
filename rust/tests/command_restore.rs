@@ -143,13 +143,13 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
         .restore_to_version(1)
         .restore_to_datetime(datetime)
         .await;
-    assert_eq!(result.is_err(), true);
+    assert!(result.is_err());
 
     // version too large
     let table_uri = context.tmp_dir.path().to_str().to_owned().unwrap();
     let ops = DeltaOps::try_from_uri(table_uri).await?;
     let result = ops.restore().restore_to_version(5).await;
-    assert_eq!(result.is_err(), true);
+    assert!(result.is_err());
     Ok(())
 }
 
@@ -171,7 +171,7 @@ async fn test_restore_file_missing() -> Result<(), Box<dyn Error>> {
         .restore()
         .restore_to_version(1)
         .await;
-    assert_eq!(result.is_err(), true);
+    assert!(result.is_err());
     Ok(())
 }
 
@@ -194,7 +194,7 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
         .ignore_missing_files(true)
         .restore_to_version(1)
         .await;
-    assert_eq!(result.is_err(), false);
+    assert!(result.is_ok());
     Ok(())
 }
 
@@ -205,6 +205,6 @@ async fn test_restore_transaction_conflict() -> Result<(), Box<dyn Error>> {
     table.load_version(2).await?;
 
     let result = DeltaOps(table).restore().restore_to_version(1).await;
-    assert_eq!(result.is_err(), true);
+    assert!(result.is_err());
     Ok(())
 }
