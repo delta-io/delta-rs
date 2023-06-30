@@ -13,6 +13,7 @@ use crate::DeltaTable;
 
 pub use json::JsonWriter;
 pub use record_batch::RecordBatchWriter;
+pub use stats::create_add;
 
 pub mod json;
 pub mod record_batch;
