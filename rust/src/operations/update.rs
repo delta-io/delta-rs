@@ -596,7 +596,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow_array::Int32Array;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::from_slice::FromSlice;
     use datafusion::prelude::*;
     use std::sync::Arc;
 
@@ -650,9 +649,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-02",
@@ -701,9 +700,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-03",
@@ -756,9 +755,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-03",

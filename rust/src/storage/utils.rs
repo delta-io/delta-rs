@@ -94,6 +94,7 @@ impl TryFrom<&Add> for ObjectMeta {
             location: Path::parse(value.path.as_str())?,
             last_modified,
             size: value.size as usize,
+            e_tag: None,
         })
     }
 }

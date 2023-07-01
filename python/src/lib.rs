@@ -773,7 +773,7 @@ fn write_new_deltalake(
     Ok(())
 }
 
-#[pyclass(name = "DeltaDataChecker", text_signature = "(invariants)")]
+#[pyclass(name = "DeltaDataChecker")]
 struct PyDeltaDataChecker {
     inner: DeltaDataChecker,
     rt: tokio::runtime::Runtime,
@@ -782,6 +782,7 @@ struct PyDeltaDataChecker {
 #[pymethods]
 impl PyDeltaDataChecker {
     #[new]
+    #[pyo3(signature = (invariants))]
     fn new(invariants: Vec<(String, String)>) -> Self {
         let invariants: Vec<Invariant> = invariants
             .into_iter()
