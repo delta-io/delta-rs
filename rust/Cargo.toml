@@ -74,7 +74,7 @@ reqwest-retry = { version = "0.2.2", optional = true }
 
 # Datafusion
 dashmap = { version = "5", optional = true }
-datafusion = { version = "26", optional = true }
+datafusion = { version = "27", optional = true }
 datafusion-expr = { version = "26", optional = true }
 datafusion-common = { version = "26", optional = true }
 datafusion-proto = { version = "26", optional = true }
