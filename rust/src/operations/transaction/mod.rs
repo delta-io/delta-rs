@@ -164,7 +164,7 @@ pub async fn commit(
 ) -> DeltaResult<i64> {
     let tmp_commit = prepare_commit(storage, &operation, actions, app_metadata).await?;
 
-    let max_attempts = 5;
+    let max_attempts = 15;
     let mut attempt_number = 1;
 
     while attempt_number <= max_attempts {
