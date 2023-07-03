@@ -678,6 +678,7 @@ class TableOptimizer:
         partition_filters: Optional[FilterType] = None,
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
+        max_spill_size: int = 20 * 1024 * 1024 * 1024,
     ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
@@ -692,10 +693,15 @@ class TableOptimizer:
         :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
             file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
             faster, but will also use more memory.
+        :param max_spill_size: the maximum number of bytes to spill to disk. Defaults to 20GB.
         :return: the metrics from optimize
         """
         metrics = self.table._table.z_order_optimize(
-            list(columns), partition_filters, target_size, max_concurrent_tasks
+            list(columns),
+            partition_filters,
+            target_size,
+            max_concurrent_tasks,
+            max_spill_size,
         )
         self.table.update_incremental()
         return json.loads(metrics)
