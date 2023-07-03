@@ -79,7 +79,7 @@ datafusion-expr = { version = "26", optional = true }
 datafusion-common = { version = "26", optional = true }
 datafusion-proto = { version = "26", optional = true }
 datafusion-sql = { version = "26", optional = true }
-datafusion-physical-expr = { version = "26", optional = true }
+datafusion-physical-expr = { version = "27", optional = true }
 
 
 sqlparser = { version = "0.34", optional = true }
