@@ -4,16 +4,13 @@ use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
 use std::{collections::HashMap, error::Error, sync::Arc};
 
-use arrow::datatypes::Schema as ArrowSchema;
-use arrow::{
-    array::{Int32Array, StringArray},
-    datatypes::{DataType, Field},
-    record_batch::RecordBatch,
-};
+use arrow_array::{Int32Array, RecordBatch, StringArray};
+use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 use arrow_select::concat::concat_batches;
-use deltalake::action::{Action, Remove};
+use deltalake::action::{Action, DeltaOperation, Remove};
 use deltalake::errors::DeltaTableError;
 use deltalake::operations::optimize::{create_merge_plan, MetricDetails, Metrics, OptimizeType};
+use deltalake::operations::transaction::commit;
 use deltalake::operations::DeltaOps;
 use deltalake::storage::ObjectStoreRef;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
@@ -196,6 +193,7 @@ async fn write(
 ) -> Result<(), DeltaTableError> {
     writer.write(batch).await?;
     writer.flush_and_commit(table).await?;
+    table.update().await?;
     Ok(())
 }
 
@@ -281,7 +279,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     )?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
-    let mut other_dt = deltalake::open_table(uri).await?;
+    let other_dt = deltalake::open_table(uri).await?;
     let add = &other_dt.get_state().files()[0];
     let remove = Remove {
         path: add.path.clone(),
@@ -298,10 +296,15 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         tags: Some(HashMap::new()),
     };
 
-    #[allow(deprecated)]
-    let mut transaction = other_dt.create_transaction(None);
-    transaction.add_action(Action::remove(remove));
-    transaction.commit(None, None).await?;
+    let operation = DeltaOperation::Delete { predicate: None };
+    commit(
+        other_dt.object_store().as_ref(),
+        &vec![Action::remove(remove)],
+        operation,
+        &other_dt.state,
+        None,
+    )
+    .await?;
 
     let maybe_metrics = plan.execute(dt.object_store(), &dt.state).await;
     assert!(maybe_metrics.is_err());
