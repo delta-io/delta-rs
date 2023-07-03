@@ -7,8 +7,9 @@ use object_store::Error as ObjectStoreError;
 use parquet::errors::ParquetError;
 use serde_json::Value;
 
-use crate::action::{Action, Add, ColumnCountStat};
+use crate::action::{Action, Add, ColumnCountStat, DeltaOperation, SaveMode};
 use crate::errors::DeltaTableError;
+use crate::operations::transaction::commit;
 use crate::DeltaTable;
 
 pub use json::JsonWriter;
@@ -132,11 +133,20 @@ pub trait DeltaWriter<T> {
     /// Flush the internal write buffers to files in the delta table folder structure.
     /// and commit the changes to the Delta log, creating a new table version.
     async fn flush_and_commit(&mut self, table: &mut DeltaTable) -> Result<i64, DeltaTableError> {
-        let mut adds = self.flush().await?;
-        #[allow(deprecated)]
-        let mut tx = table.create_transaction(None);
-        tx.add_actions(adds.drain(..).map(Action::add).collect());
-        let version = tx.commit(None, None).await?;
+        let adds: Vec<_> = self.flush().await?.drain(..).map(Action::add).collect();
+        let partition_cols = table.get_metadata()?.partition_columns.clone();
+        let partition_by = if !partition_cols.is_empty() {
+            Some(partition_cols)
+        } else {
+            None
+        };
+        let operation = DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by,
+            predicate: None,
+        };
+        let version = commit(table.storage.as_ref(), &adds, operation, &table.state, None).await?;
+        table.update().await?;
         Ok(version)
     }
 }

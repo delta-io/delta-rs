@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 
-use chrono::{DateTime, Duration, Utc};
+use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::debug;
@@ -19,19 +19,15 @@ use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
-use serde_json::{Map, Value};
 use uuid::Uuid;
 
 use super::action;
-use super::action::{
-    find_latest_check_point_for_version, get_last_checkpoint, Action, DeltaOperation,
-};
+use super::action::{find_latest_check_point_for_version, get_last_checkpoint, Action};
 use super::partitions::PartitionFilter;
 use super::schema::*;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, ProtocolError, Stats};
 use crate::errors::DeltaTableError;
-use crate::operations::vacuum::VacuumBuilder;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
 // TODO re-exports only for transition
@@ -789,129 +785,6 @@ impl DeltaTable {
             .get_configuration())
     }
 
-    /// Vacuum the delta table. See [`VacuumBuilder`] for more information.
-    #[deprecated(
-        since = "0.10.0",
-        note = "use DelaOps from operations module to create a Vacuum operation."
-    )]
-    pub async fn vacuum(
-        &mut self,
-        retention_hours: Option<u64>,
-        dry_run: bool,
-        enforce_retention_duration: bool,
-    ) -> Result<Vec<String>, DeltaTableError> {
-        let mut plan = VacuumBuilder::new(self.object_store(), self.state.clone())
-            .with_dry_run(dry_run)
-            .with_enforce_retention_duration(enforce_retention_duration);
-        if let Some(hours) = retention_hours {
-            plan = plan.with_retention_period(Duration::hours(hours as i64));
-        }
-
-        let (table, metrics) = plan.await?;
-        self.state = table.state;
-        Ok(metrics.files_deleted)
-    }
-
-    /// Creates a new DeltaTransaction for the DeltaTable.
-    /// The transaction holds a mutable reference to the DeltaTable, preventing other references
-    /// until the transaction is dropped.
-    #[deprecated(
-        since = "0.10.0",
-        note = "use 'commit' function from operations module to commit to Delta table."
-    )]
-    #[allow(deprecated)]
-    pub fn create_transaction(
-        &mut self,
-        options: Option<DeltaTransactionOptions>,
-    ) -> DeltaTransaction {
-        DeltaTransaction::new(self, options)
-    }
-
-    /// Tries to commit a prepared commit file. Returns `DeltaTableError::VersionAlreadyExists`
-    /// if the given `version` already exists. The caller should handle the retry logic itself.
-    /// This is low-level transaction API. If user does not want to maintain the commit loop then
-    /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
-    /// with retry logic.
-    #[deprecated(
-        since = "0.10.0",
-        note = "use 'commit' function from operations module to commite to Delta table."
-    )]
-    #[allow(deprecated)]
-    pub async fn try_commit_transaction(
-        &mut self,
-        commit: &PreparedCommit,
-        version: i64,
-    ) -> Result<i64, DeltaTableError> {
-        // move temporary commit file to delta log directory
-        // rely on storage to fail if the file already exists -
-        self.storage
-            .rename_if_not_exists(&commit.uri, &commit_uri_from_version(version))
-            .await
-            .map_err(|e| match e {
-                ObjectStoreError::AlreadyExists { .. } => {
-                    DeltaTableError::VersionAlreadyExists(version)
-                }
-                _ => DeltaTableError::from(e),
-            })?;
-
-        self.update().await?;
-
-        Ok(version)
-    }
-
-    /// Create a DeltaTable with version 0 given the provided MetaData, Protocol, and CommitInfo
-    #[deprecated(
-        since = "0.10.0",
-        note = "use DelaOps from operations module to create a Create operation."
-    )]
-    #[allow(deprecated)]
-    pub async fn create(
-        &mut self,
-        metadata: DeltaTableMetaData,
-        protocol: action::Protocol,
-        commit_info: Option<Map<String, Value>>,
-        add_actions: Option<Vec<action::Add>>,
-    ) -> Result<(), DeltaTableError> {
-        let meta = action::MetaData::try_from(metadata)?;
-
-        // delta-rs commit info will include the delta-rs version and timestamp as of now
-        let mut enriched_commit_info = commit_info.unwrap_or_default();
-        enriched_commit_info.insert(
-            "delta-rs".to_string(),
-            Value::String(crate_version().to_string()),
-        );
-        enriched_commit_info.insert(
-            "timestamp".to_string(),
-            Value::Number(serde_json::Number::from(Utc::now().timestamp_millis())),
-        );
-
-        let mut actions = vec![
-            Action::commit_info(enriched_commit_info),
-            Action::protocol(protocol),
-            Action::metaData(meta),
-        ];
-        if let Some(add_actions) = add_actions {
-            for add_action in add_actions {
-                actions.push(Action::add(add_action));
-            }
-        };
-
-        let mut transaction = self.create_transaction(None);
-        transaction.add_actions(actions.clone());
-
-        let prepared_commit = transaction.prepare_commit(None, None).await?;
-        let committed_version = self.try_commit_transaction(&prepared_commit, 0).await?;
-
-        let new_state = DeltaTableState::from_commit(self, committed_version).await?;
-        self.state.merge(
-            new_state,
-            self.config.require_tombstones,
-            self.config.require_files,
-        );
-
-        Ok(())
-    }
-
     /// Time travel Delta table to the latest version that's created at or before provided
     /// `datetime` argument.
     ///
@@ -981,216 +854,6 @@ impl std::fmt::Debug for DeltaTable {
     }
 }
 
-const DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS: u32 = 10_000_000;
-
-/// Options for customizing behavior of a `DeltaTransaction`
-#[derive(Debug)]
-pub struct DeltaTransactionOptions {
-    /// number of retry attempts allowed when committing a transaction
-    max_retry_commit_attempts: u32,
-}
-
-impl DeltaTransactionOptions {
-    /// Creates a new `DeltaTransactionOptions`
-    pub fn new(max_retry_commit_attempts: u32) -> Self {
-        Self {
-            max_retry_commit_attempts,
-        }
-    }
-}
-
-impl Default for DeltaTransactionOptions {
-    fn default() -> Self {
-        Self {
-            max_retry_commit_attempts: DEFAULT_DELTA_MAX_RETRY_COMMIT_ATTEMPTS,
-        }
-    }
-}
-
-/// Object representing a delta transaction.
-/// Clients that do not need to mutate action content in case a transaction conflict is encountered
-/// may use the `commit` method and rely on optimistic concurrency to determine the
-/// appropriate Delta version number for a commit. A good example of this type of client is an
-/// append only client that does not need to maintain transaction state with external systems.
-/// Clients that may need to do conflict resolution if the Delta version changes should use
-/// the `prepare_commit` and `try_commit_transaction` methods and manage the Delta version
-/// themselves so that they can resolve data conflicts that may occur between Delta versions.
-///
-/// Please not that in case of non-retryable error the temporary commit file such as
-/// `_delta_log/_commit_<uuid>.json` will orphaned in storage.
-#[derive(Debug)]
-#[deprecated(
-    since = "0.10.0",
-    note = "use 'commit' function from operations module to commit to Delta table."
-)]
-pub struct DeltaTransaction<'a> {
-    delta_table: &'a mut DeltaTable,
-    actions: Vec<Action>,
-    options: DeltaTransactionOptions,
-}
-
-#[allow(deprecated)]
-impl<'a> DeltaTransaction<'a> {
-    /// Creates a new delta transaction.
-    /// Holds a mutable reference to the delta table to prevent outside mutation while a transaction commit is in progress.
-    /// Transaction behavior may be customized by passing an instance of `DeltaTransactionOptions`.
-    pub fn new(delta_table: &'a mut DeltaTable, options: Option<DeltaTransactionOptions>) -> Self {
-        DeltaTransaction {
-            delta_table,
-            actions: vec![],
-            options: options.unwrap_or_default(),
-        }
-    }
-
-    /// Add an arbitrary "action" to the actions associated with this transaction
-    pub fn add_action(&mut self, action: action::Action) {
-        self.actions.push(action);
-    }
-
-    /// Add an arbitrary number of actions to the actions associated with this transaction
-    pub fn add_actions(&mut self, actions: Vec<action::Action>) {
-        for action in actions.into_iter() {
-            self.actions.push(action);
-        }
-    }
-
-    /// Commits the given actions to the delta log.
-    /// This method will retry the transaction commit based on the value of `max_retry_commit_attempts` set in `DeltaTransactionOptions`.
-    pub async fn commit(
-        &mut self,
-        operation: Option<DeltaOperation>,
-        app_metadata: Option<Map<String, Value>>,
-    ) -> Result<i64, DeltaTableError> {
-        // TODO: stubbing `operation` parameter (which will be necessary for writing the CommitInfo action),
-        // but leaving it unused for now. `CommitInfo` is a fairly dynamic data structure so we should work
-        // out the data structure approach separately.
-
-        // TODO: calculate isolation level to use when checking for conflicts.
-        // Leaving conflict checking unimplemented for now to get the "single writer" implementation off the ground.
-        // Leaving some commented code in place as a guidepost for the future.
-
-        // let no_data_changed = actions.iter().all(|a| match a {
-        //     Action::add(x) => !x.dataChange,
-        //     Action::remove(x) => !x.dataChange,
-        //     _ => false,
-        // });
-        // let isolation_level = if no_data_changed {
-        //     IsolationLevel::SnapshotIsolation
-        // } else {
-        //     IsolationLevel::Serializable
-        // };
-        let prepared_commit = self.prepare_commit(operation, app_metadata).await?;
-
-        // try to commit in a loop in case other writers write the next version first
-        let version = self.try_commit_loop(&prepared_commit).await?;
-
-        Ok(version)
-    }
-
-    /// Low-level transaction API. Creates a temporary commit file. Once created,
-    /// the transaction object could be dropped and the actual commit could be executed
-    /// with `DeltaTable.try_commit_transaction`.
-    pub async fn prepare_commit(
-        &mut self,
-        operation: Option<DeltaOperation>,
-        app_metadata: Option<Map<String, Value>>,
-    ) -> Result<PreparedCommit, DeltaTableError> {
-        if !self
-            .actions
-            .iter()
-            .any(|a| matches!(a, action::Action::commitInfo(..)))
-        {
-            let mut extra_info = Map::<String, Value>::new();
-            let mut commit_info = operation.map(|op| op.get_commit_info()).unwrap_or_default();
-            commit_info.timestamp = Some(Utc::now().timestamp_millis());
-            extra_info.insert(
-                "clientVersion".to_string(),
-                Value::String(format!("delta-rs.{}", crate_version())),
-            );
-            if let Some(mut meta) = app_metadata {
-                extra_info.append(&mut meta)
-            }
-            commit_info.info = extra_info;
-            self.add_action(action::Action::commitInfo(commit_info));
-        }
-
-        // Serialize all actions that are part of this log entry.
-        let log_entry = bytes::Bytes::from(
-            log_entry_from_actions(&self.actions)
-                .map_err(|e| DeltaTableError::SerializeLogJson { json_err: e })?,
-        );
-
-        // Write delta log entry as temporary file to storage. For the actual commit,
-        // the temporary file is moved (atomic rename) to the delta log folder within `commit` function.
-        let token = Uuid::new_v4().to_string();
-        let file_name = format!("_commit_{token}.json.tmp");
-        let path = Path::from_iter(["_delta_log", &file_name]);
-
-        self.delta_table.storage.put(&path, log_entry).await?;
-
-        Ok(PreparedCommit { uri: path })
-    }
-
-    #[allow(deprecated)]
-    async fn try_commit_loop(&mut self, commit: &PreparedCommit) -> Result<i64, DeltaTableError> {
-        let mut attempt_number: u32 = 0;
-        loop {
-            self.delta_table.update().await?;
-
-            let version = self.delta_table.version() + 1;
-
-            match self
-                .delta_table
-                .try_commit_transaction(commit, version)
-                .await
-            {
-                Ok(v) => {
-                    return Ok(v);
-                }
-                Err(e) => {
-                    match e {
-                        DeltaTableError::VersionAlreadyExists(_) => {
-                            if attempt_number > self.options.max_retry_commit_attempts + 1 {
-                                debug!("Transaction attempt failed. Attempts exhausted beyond max_retry_commit_attempts of {} so failing.", self.options.max_retry_commit_attempts);
-                                return Err(e);
-                            } else {
-                                attempt_number += 1;
-                                debug!("Transaction attempt failed. Incrementing attempt number to {} and retrying.", attempt_number);
-                            }
-                        }
-                        // NOTE: Add other retryable errors as needed here
-                        _ => {
-                            return Err(e);
-                        }
-                    }
-                }
-            }
-        }
-    }
-}
-
-/// Holds the uri to prepared commit temporary file created with `DeltaTransaction.prepare_commit`.
-/// Once created, the actual commit could be executed with `DeltaTransaction.try_commit`.
-#[derive(Debug)]
-#[deprecated(
-    since = "0.10.0",
-    note = "use 'commit' function from operations module to commit to Delta table."
-)]
-pub struct PreparedCommit {
-    uri: Path,
-}
-
-fn log_entry_from_actions(actions: &[Action]) -> Result<String, serde_json::Error> {
-    let mut jsons = Vec::<String>::new();
-
-    for action in actions {
-        let json = serde_json::to_string(action)?;
-        jsons.push(json);
-    }
-
-    Ok(jsons.join("\n"))
-}
-
 /// Creates and loads a DeltaTable from the given path with current metadata.
 /// Infers the storage backend to use from the scheme in the given table path.
 pub async fn open_table(table_uri: impl AsRef<str>) -> Result<DeltaTable, DeltaTableError> {
@@ -1246,16 +909,16 @@ pub fn crate_version() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::Protocol;
+    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
     use crate::builder::DeltaTableBuilder;
+    use crate::operations::create::CreateBuilder;
     use pretty_assertions::assert_eq;
-    use std::io::{BufRead, BufReader};
-    use std::{collections::HashMap, fs::File, path::Path};
+    use std::collections::HashMap;
     use tempdir::TempDir;
 
     #[tokio::test]
     async fn table_round_trip() {
-        let (_, _, dt, tmp_dir) = create_test_table().await;
+        let (dt, tmp_dir) = create_test_table().await;
         let bytes = serde_json::to_vec(&dt).unwrap();
         let actual: DeltaTable = serde_json::from_slice(&bytes).unwrap();
         assert_eq!(actual.version(), dt.version());
@@ -1278,107 +941,31 @@ mod tests {
         }
     }
 
-    async fn create_test_table() -> (DeltaTableMetaData, Protocol, DeltaTable, TempDir) {
-        // Setup
-        let test_schema = Schema::new(vec![
-            SchemaField::new(
-                "Id".to_string(),
-                SchemaDataType::primitive("integer".to_string()),
-                true,
-                HashMap::new(),
-            ),
-            SchemaField::new(
-                "Name".to_string(),
-                SchemaDataType::primitive("string".to_string()),
-                true,
-                HashMap::new(),
-            ),
-        ]);
-
-        let delta_md = DeltaTableMetaData::new(
-            Some("Test Table Create".to_string()),
-            Some("This table is made to test the create function for a DeltaTable".to_string()),
-            None,
-            test_schema,
-            vec![],
-            HashMap::new(),
-        );
-
-        let protocol = action::Protocol {
-            min_reader_version: 1,
-            min_writer_version: 1,
-        };
-
+    async fn create_test_table() -> (DeltaTable, TempDir) {
         let tmp_dir = TempDir::new("create_table_test").unwrap();
         let table_dir = tmp_dir.path().join("test_create");
         std::fs::create_dir(&table_dir).unwrap();
 
-        let mut dt = DeltaTableBuilder::from_uri(table_dir.to_str().unwrap())
-            .build()
-            .unwrap();
-
-        let mut commit_info = Map::<String, Value>::new();
-        commit_info.insert(
-            "operation".to_string(),
-            serde_json::Value::String("CREATE TABLE".to_string()),
-        );
-        commit_info.insert(
-            "userName".to_string(),
-            serde_json::Value::String("test user".to_string()),
-        );
-        // Action
-        #[allow(deprecated)]
-        dt.create(delta_md.clone(), protocol.clone(), Some(commit_info), None)
+        let dt = CreateBuilder::new()
+            .with_location(table_dir.to_str().unwrap())
+            .with_table_name("Test Table Create")
+            .with_comment("This table is made to test the create function for a DeltaTable")
+            .with_columns(vec![
+                SchemaField::new(
+                    "Id".to_string(),
+                    SchemaDataType::primitive("integer".to_string()),
+                    true,
+                    HashMap::new(),
+                ),
+                SchemaField::new(
+                    "Name".to_string(),
+                    SchemaDataType::primitive("string".to_string()),
+                    true,
+                    HashMap::new(),
+                ),
+            ])
             .await
             .unwrap();
-        (delta_md, protocol, dt, tmp_dir)
-    }
-
-    #[tokio::test]
-    async fn test_create_delta_table() {
-        let (delta_md, protocol, dt, tmp_dir) = create_test_table().await;
-
-        // Validation
-        // assert DeltaTable version is now 0 and no data files have been added
-        assert_eq!(dt.version(), 0);
-        assert_eq!(dt.state.files().len(), 0);
-
-        // assert new _delta_log file created in tempDir
-        let table_uri = dt.table_uri();
-        let table_path = Path::new(&table_uri);
-        assert!(table_path.exists());
-
-        let delta_log = table_path.join("_delta_log");
-        assert!(delta_log.exists());
-
-        let version_file = delta_log.join("00000000000000000000.json");
-        assert!(version_file.exists());
-
-        // Checking the data written to delta table is the same when read back
-        let version_data = File::open(version_file).unwrap();
-        let lines = BufReader::new(version_data).lines();
-
-        for line in lines {
-            let action: Action = serde_json::from_str(line.unwrap().as_str()).unwrap();
-            match action {
-                Action::protocol(action) => {
-                    assert_eq!(action, protocol);
-                }
-                Action::metaData(action) => {
-                    assert_eq!(DeltaTableMetaData::try_from(action).unwrap(), delta_md);
-                }
-                Action::commitInfo(action) => {
-                    assert_eq!(action.operation, Some("CREATE TABLE".to_string()));
-                }
-                _ => (),
-            }
-        }
-
-        // assert DeltaTableState metadata matches fields in above DeltaTableMetaData
-        // assert metadata name
-        let current_metadata = dt.get_metadata().unwrap();
-        assert!(current_metadata.partition_columns.is_empty());
-        assert!(current_metadata.configuration.is_empty());
-        drop(tmp_dir);
+        (dt, tmp_dir)
     }
 }
