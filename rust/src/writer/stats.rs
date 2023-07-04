@@ -339,7 +339,7 @@ impl AddAssign for AggregatedStats {
             }
             (lhs, rhs) => lhs.or(rhs),
         };
-        self.max = match (self.min.take(), rhs.max) {
+        self.max = match (self.max.take(), rhs.max) {
             (Some(lhs), Some(rhs)) => {
                 if lhs > rhs {
                     Some(lhs)
