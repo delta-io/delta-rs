@@ -37,6 +37,8 @@ mod load;
 #[cfg(feature = "datafusion")]
 pub mod update;
 #[cfg(feature = "datafusion")]
+pub mod merge;
+#[cfg(feature = "datafusion")]
 pub mod write;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod writer;
