@@ -170,7 +170,7 @@ impl AsRef<DeltaTable> for DeltaOps {
 }
 
 #[cfg(feature = "datafusion")]
-mod datafusion {
+mod datafusion_utils {
     use datafusion_expr::Expr;
 
     /// Used to represent user input of either a Datafusion expression or string expression

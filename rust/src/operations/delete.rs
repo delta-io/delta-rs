@@ -42,7 +42,7 @@ use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 use crate::table_state::DeltaTableState;
 use crate::DeltaTable;
 
-use super::datafusion::Expression;
+use super::datafusion_utils::Expression;
 
 /// Delete Records from the Delta Table.
 /// See this module's documentaiton for more information

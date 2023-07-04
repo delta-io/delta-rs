@@ -56,7 +56,7 @@ use crate::{
     DeltaResult, DeltaTable, DeltaTableError,
 };
 
-use super::{datafusion::Expression, transaction::commit, write::write_execution_plan};
+use super::{datafusion_utils::Expression, transaction::commit, write::write_execution_plan};
 
 /// Updates records in the Delta Table.
 /// See this module's documentation for more information
