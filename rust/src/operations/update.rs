@@ -56,32 +56,7 @@ use crate::{
     DeltaResult, DeltaTable, DeltaTableError,
 };
 
-use super::{transaction::commit, write::write_execution_plan};
-
-/// Used to represent user input of either a Datafusion expression or string expression
-pub enum Expression {
-    /// Datafusion Expression
-    DataFusion(Expr),
-    /// String Expression
-    String(String),
-}
-
-impl From<Expr> for Expression {
-    fn from(val: Expr) -> Self {
-        Expression::DataFusion(val)
-    }
-}
-
-impl From<&str> for Expression {
-    fn from(val: &str) -> Self {
-        Expression::String(val.to_string())
-    }
-}
-impl From<String> for Expression {
-    fn from(val: String) -> Self {
-        Expression::String(val)
-    }
-}
+use super::{datafusion::Expression, transaction::commit, write::write_execution_plan};
 
 /// Updates records in the Delta Table.
 /// See this module's documentation for more information

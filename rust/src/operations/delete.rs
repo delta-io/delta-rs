@@ -42,11 +42,13 @@ use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 use crate::table_state::DeltaTableState;
 use crate::DeltaTable;
 
+use super::datafusion::Expression;
+
 /// Delete Records from the Delta Table.
 /// See this module's documentaiton for more information
 pub struct DeleteBuilder {
     /// Which records to delete
-    predicate: Option<Expr>,
+    predicate: Option<Expression>,
     /// A snapshot of the table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
@@ -92,20 +94,9 @@ impl DeleteBuilder {
     }
 
     /// A predicate that determines if a record is deleted
-    pub fn with_predicate(mut self, predicate: Expr) -> Self {
-        self.predicate = Some(predicate);
+    pub fn with_predicate<E: Into<Expression>>(mut self, predicate: E) -> Self {
+        self.predicate = Some(predicate.into());
         self
-    }
-
-    /// Parse the provided query into a Datafusion expression
-    pub fn with_str_predicate(
-        mut self,
-        predicate: impl AsRef<str>,
-    ) -> Result<Self, DeltaTableError> {
-        let expr = self.snapshot.parse_predicate_expression(predicate)?;
-        self.predicate = Some(expr);
-
-        Ok(self)
     }
 
     /// The Datafusion session state to use
@@ -302,8 +293,16 @@ impl std::future::IntoFuture for DeleteBuilder {
                 session.state()
             });
 
+            let predicate = match this.predicate {
+                Some(predicate) => match predicate {
+                    Expression::DataFusion(expr) => Some(expr),
+                    Expression::String(s) => Some(this.snapshot.parse_predicate_expression(s)?),
+                },
+                None => None,
+            };
+
             let ((actions, version), metrics) = execute(
-                this.predicate,
+                predicate,
                 this.store.clone(),
                 &this.snapshot,
                 state,
