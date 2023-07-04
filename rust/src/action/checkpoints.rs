@@ -109,7 +109,7 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     Ok(())
 }
 
-async fn create_checkpoint_for(
+pub async fn create_checkpoint_for(
     version: i64,
     state: &DeltaTableState,
     storage: &DeltaObjectStore,
