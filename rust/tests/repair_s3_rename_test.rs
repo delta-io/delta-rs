@@ -9,8 +9,8 @@ use deltalake::{storage::s3::S3StorageBackend, DeltaTableBuilder, ObjectStore};
 use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{
-    DynObjectStore, Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta,
-    Result as ObjectStoreResult,
+    DynObjectStore, Error as ObjectStoreError, GetOptions, GetResult, ListResult, MultipartId,
+    ObjectMeta, Result as ObjectStoreResult,
 };
 use serial_test::serial;
 use std::ops::Range;
@@ -175,6 +175,10 @@ impl ObjectStore for DelayedObjectStore {
 
     async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
         self.inner.get(location).await
+    }
+
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
+        self.inner.get_opts(location, options).await
     }
 
     async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
