@@ -545,7 +545,10 @@ mod tests {
     use super::*;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
-    use crate::writer::test_utils::{get_delta_schema, get_record_batch};
+    use crate::writer::test_utils::{
+        get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
+        get_record_batch_with_nested_struct,
+    };
     use arrow::datatypes::Field;
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
@@ -771,5 +774,36 @@ mod tests {
 
         let table = DeltaOps(table).write(vec![batch.clone()]).await;
         assert!(table.is_err())
+    }
+
+    #[tokio::test]
+    async fn test_nested_struct() {
+        let table_schema = get_delta_schema_with_nested_struct();
+        let batch = get_record_batch_with_nested_struct();
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(table_schema.get_fields().clone())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let table = DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+
+        let actual = get_data(&table).await;
+        let expected = DataType::Struct(Fields::from(vec![Field::new(
+            "count",
+            DataType::Int32,
+            true,
+        )]));
+        assert_eq!(
+            actual[0].column_by_name("nested").unwrap().data_type(),
+            &expected
+        );
     }
 }
