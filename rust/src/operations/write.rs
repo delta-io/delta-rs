@@ -474,6 +474,10 @@ impl std::future::IntoFuture for WriteBuilder {
 }
 
 fn can_cast_batch_fields(from_fields: &Fields, to_fields: &Fields) -> bool {
+    if from_fields.len() != to_fields.len() {
+        return false;
+    }
+
     from_fields.iter().all(|f| {
         if let Some((_, target_field)) = to_fields.find(f.name()) {
             if let (DataType::Struct(fields0), DataType::Struct(fields1)) =
@@ -490,10 +494,6 @@ fn can_cast_batch_fields(from_fields: &Fields, to_fields: &Fields) -> bool {
 }
 
 fn can_cast_batch(from_schema: &ArrowSchema, to_schema: &ArrowSchema) -> bool {
-    if from_schema.fields.len() != to_schema.fields.len() {
-        return false;
-    }
-
     can_cast_batch_fields(from_schema.fields(), to_schema.fields())
 }
 
