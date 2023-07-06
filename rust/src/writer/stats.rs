@@ -339,7 +339,7 @@ impl AddAssign for AggregatedStats {
             }
             (lhs, rhs) => lhs.or(rhs),
         };
-        self.max = match (self.min.take(), rhs.max) {
+        self.max = match (self.max.take(), rhs.max) {
             (Some(lhs), Some(rhs)) => {
                 if lhs > rhs {
                     Some(lhs)
@@ -486,6 +486,7 @@ mod tests {
     use lazy_static::lazy_static;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::statistics::ValueStatistics;
+    use parquet::{basic::Compression, file::properties::WriterProperties};
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::path::Path;
@@ -642,6 +643,12 @@ mod tests {
             .unwrap();
 
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        writer = writer.with_writer_properties(
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .set_max_row_group_size(128)
+                .build(),
+        );
 
         let arrow_schema = writer.arrow_schema();
         let batch = record_batch_from_message(arrow_schema, JSON_ROWS.clone().as_ref()).unwrap();
