@@ -594,9 +594,16 @@ pub enum DeltaOperation {
         /// The condition the to be deleted data must match
         predicate: Option<String>,
     },
+
     /// Update data matching predicate from delta table
     Update {
         /// The update predicate
+        predicate: Option<String>,
+    },
+
+    /// Merge data with a source data with the following predicate
+    Merge {
+        /// The merge predicate
         predicate: Option<String>,
     },
 
@@ -638,6 +645,7 @@ impl DeltaOperation {
             DeltaOperation::Write { .. } => "WRITE",
             DeltaOperation::Delete { .. } => "DELETE",
             DeltaOperation::Update { .. } => "UPDATE",
+            DeltaOperation::Merge { .. } => "MERGE",
             DeltaOperation::StreamingUpdate { .. } => "STREAMING UPDATE",
             DeltaOperation::Optimize { .. } => "OPTIMIZE",
             DeltaOperation::FileSystemCheck { .. } => "FSCK",
@@ -682,6 +690,7 @@ impl DeltaOperation {
             | Self::StreamingUpdate { .. }
             | Self::Write { .. }
             | Self::Delete { .. }
+            | Self::Merge { .. }
             | Self::Update { .. } => true,
         }
     }

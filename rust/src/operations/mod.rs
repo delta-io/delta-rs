@@ -22,7 +22,10 @@ pub mod transaction;
 pub mod vacuum;
 
 #[cfg(feature = "datafusion")]
-use self::{delete::DeleteBuilder, load::LoadBuilder, update::UpdateBuilder, write::WriteBuilder};
+use self::{
+    delete::DeleteBuilder, load::LoadBuilder, merge::MergeBuilder, update::UpdateBuilder,
+    write::WriteBuilder,
+};
 #[cfg(feature = "datafusion")]
 use arrow::record_batch::RecordBatch;
 #[cfg(feature = "datafusion")]
@@ -35,9 +38,9 @@ pub mod delete;
 #[cfg(feature = "datafusion")]
 mod load;
 #[cfg(feature = "datafusion")]
-pub mod update;
-#[cfg(feature = "datafusion")]
 pub mod merge;
+#[cfg(feature = "datafusion")]
+pub mod update;
 #[cfg(feature = "datafusion")]
 pub mod write;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
@@ -150,6 +153,22 @@ impl DeltaOps {
     #[must_use]
     pub fn update(self) -> UpdateBuilder {
         UpdateBuilder::new(self.0.object_store(), self.0.state)
+    }
+
+    /// Update data from Delta table
+    #[cfg(feature = "datafusion")]
+    #[must_use]
+    pub fn merge<E: Into<update::Expression>>(
+        self,
+        source: datafusion::prelude::DataFrame,
+        predicate: E,
+    ) -> MergeBuilder {
+        MergeBuilder::new(
+            self.0.object_store(),
+            self.0.state,
+            predicate.into(),
+            source,
+        )
     }
 }
 
