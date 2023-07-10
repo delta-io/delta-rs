@@ -284,6 +284,20 @@ impl Hash for Add {
     }
 }
 
+impl PartialEq for Add {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.size == other.size
+            && self.partition_values == other.partition_values
+            && self.modification_time == other.modification_time
+            && self.data_change == other.data_change
+            && self.stats == other.stats
+            && self.tags == other.tags
+    }
+}
+
+impl Eq for Add {}
+
 impl Add {
     /// Returns the Add action with path decoded.
     pub fn path_decoded(self) -> Result<Self, ProtocolError> {
@@ -630,7 +644,14 @@ pub enum DeltaOperation {
     #[serde(rename_all = "camelCase")]
     /// Represents a `FileSystemCheck` operation
     FileSystemCheck {},
-    // TODO: Add more operations
+
+    /// Represents a `Restore` operation
+    Restore {
+        /// Version to restore
+        version: Option<i64>,
+        ///Datetime to restore
+        datetime: Option<i64>,
+    }, // TODO: Add more operations
 }
 
 impl DeltaOperation {
@@ -649,6 +670,7 @@ impl DeltaOperation {
             DeltaOperation::StreamingUpdate { .. } => "STREAMING UPDATE",
             DeltaOperation::Optimize { .. } => "OPTIMIZE",
             DeltaOperation::FileSystemCheck { .. } => "FSCK",
+            DeltaOperation::Restore { .. } => "RESTORE",
         }
     }
 
@@ -691,7 +713,8 @@ impl DeltaOperation {
             | Self::Write { .. }
             | Self::Delete { .. }
             | Self::Merge { .. }
-            | Self::Update { .. } => true,
+            | Self::Update { .. }
+            | Self::Restore { .. } => true,
         }
     }
 

@@ -57,7 +57,7 @@ use crate::{
     DeltaResult, DeltaTable, DeltaTableError,
 };
 
-use super::{transaction::commit, update::Expression};
+use super::{transaction::commit, datafusion_utils::Expression};
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
@@ -1020,7 +1020,6 @@ mod tests {
     use crate::DeltaTable;
     use arrow::record_batch::RecordBatch;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::from_slice::FromSlice;
     use datafusion::prelude::SessionContext;
     use datafusion_expr::col;
     use std::sync::Arc;
@@ -1046,9 +1045,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "C", "D"])),
-                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-02",

@@ -581,6 +581,14 @@ fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
 ///
 /// PyArrow uses this expression to determine which Dataset fragments may be
 /// skipped during a scan.
+///
+/// Partition values are translated to equality expressions (if they are valid)
+/// or is_null expression otherwise. For example, if the partition is
+/// {"date": "2021-01-01", "x": null}, then the expression is:
+/// field(date) = "2021-01-01" AND x IS NULL
+///
+/// Statistics are translated into inequalities. If there are null values, then
+/// they must be OR'd with is_null.
 fn filestats_to_expression<'py>(
     py: Python<'py>,
     schema: &PyArrowType<ArrowSchema>,
@@ -616,10 +624,27 @@ fn filestats_to_expression<'py>(
                     .call1((column,))?
                     .call_method1("__eq__", (converted_value,)),
             );
+        } else {
+            expressions.push(field.call1((column,))?.call_method0("is_null"));
         }
     }
 
     if let Some(stats) = stats {
+        let mut has_nulls_set: HashSet<String> = HashSet::new();
+
+        for (col_name, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
+            ColumnCountStat::Value(val) => Some((k, val)),
+            _ => None,
+        }) {
+            if *null_count == 0 {
+                expressions.push(field.call1((col_name,))?.call_method0("is_valid"));
+            } else if *null_count == stats.num_records {
+                expressions.push(field.call1((col_name,))?.call_method0("is_null"));
+            } else {
+                has_nulls_set.insert(col_name.clone());
+            }
+        }
+
         for (col_name, minimum) in stats.min_values.iter().filter_map(|(k, v)| match v {
             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
             // TODO(wjones127): Handle nested field statistics.
@@ -628,7 +653,17 @@ fn filestats_to_expression<'py>(
         }) {
             let maybe_minimum = cast_to_type(&col_name, minimum, &schema.0);
             if let Ok(minimum) = maybe_minimum {
-                expressions.push(field.call1((col_name,))?.call_method1("__ge__", (minimum,)));
+                let field_expr = field.call1((&col_name,))?;
+                let expr = field_expr.call_method1("__ge__", (minimum,));
+                let expr = if has_nulls_set.contains(&col_name) {
+                    // col >= min_value OR col is null
+                    let is_null_expr = field_expr.call_method0("is_null");
+                    expr?.call_method1("__or__", (is_null_expr?,))
+                } else {
+                    // col >= min_value
+                    expr
+                };
+                expressions.push(expr);
             }
         }
 
@@ -638,20 +673,17 @@ fn filestats_to_expression<'py>(
         }) {
             let maybe_maximum = cast_to_type(&col_name, maximum, &schema.0);
             if let Ok(maximum) = maybe_maximum {
-                expressions.push(field.call1((col_name,))?.call_method1("__le__", (maximum,)));
-            }
-        }
-
-        for (col_name, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
-            ColumnCountStat::Value(val) => Some((k, val)),
-            _ => None,
-        }) {
-            if *null_count == stats.num_records {
-                expressions.push(field.call1((col_name.clone(),))?.call_method0("is_null"));
-            }
-
-            if *null_count == 0 {
-                expressions.push(field.call1((col_name.clone(),))?.call_method0("is_valid"));
+                let field_expr = field.call1((&col_name,))?;
+                let expr = field_expr.call_method1("__le__", (maximum,));
+                let expr = if has_nulls_set.contains(&col_name) {
+                    // col <= max_value OR col is null
+                    let is_null_expr = field_expr.call_method0("is_null");
+                    expr?.call_method1("__or__", (is_null_expr?,))
+                } else {
+                    // col <= max_value
+                    expr
+                };
+                expressions.push(expr);
             }
         }
     }
@@ -661,7 +693,7 @@ fn filestats_to_expression<'py>(
     } else {
         expressions
             .into_iter()
-            .reduce(|accum, item| accum?.getattr("__and__")?.call1((item?,)))
+            .reduce(|accum, item| accum?.call_method1("__and__", (item?,)))
             .transpose()
     }
 }
@@ -775,7 +807,7 @@ fn write_new_deltalake(
     Ok(())
 }
 
-#[pyclass(name = "DeltaDataChecker", text_signature = "(invariants)")]
+#[pyclass(name = "DeltaDataChecker")]
 struct PyDeltaDataChecker {
     inner: DeltaDataChecker,
     rt: tokio::runtime::Runtime,
@@ -784,6 +816,7 @@ struct PyDeltaDataChecker {
 #[pymethods]
 impl PyDeltaDataChecker {
     #[new]
+    #[pyo3(signature = (invariants))]
     fn new(invariants: Vec<(String, String)>) -> Self {
         let invariants: Vec<Invariant> = invariants
             .into_iter()

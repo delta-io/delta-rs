@@ -18,6 +18,7 @@ pub mod create;
 pub mod filesystem_check;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod optimize;
+pub mod restore;
 pub mod transaction;
 pub mod vacuum;
 
@@ -27,11 +28,12 @@ use self::{
     write::WriteBuilder,
 };
 #[cfg(feature = "datafusion")]
-use arrow::record_batch::RecordBatch;
+pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
 #[cfg(feature = "datafusion")]
-pub use datafusion::physical_plan::common::collect as collect_sendable_stream;
+use arrow::record_batch::RecordBatch;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 use optimize::OptimizeBuilder;
+use restore::RestoreBuilder;
 
 #[cfg(feature = "datafusion")]
 pub mod delete;
@@ -155,6 +157,12 @@ impl DeltaOps {
         UpdateBuilder::new(self.0.object_store(), self.0.state)
     }
 
+    /// Restore delta table to a specified version or datetime
+    #[must_use]
+    pub fn restore(self) -> RestoreBuilder {
+        RestoreBuilder::new(self.0.object_store(), self.0.state)
+    }
+
     /// Update data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
@@ -187,5 +195,35 @@ impl From<DeltaOps> for DeltaTable {
 impl AsRef<DeltaTable> for DeltaOps {
     fn as_ref(&self) -> &DeltaTable {
         &self.0
+    }
+}
+
+#[cfg(feature = "datafusion")]
+mod datafusion_utils {
+    use datafusion_expr::Expr;
+
+    /// Used to represent user input of either a Datafusion expression or string expression
+    pub enum Expression {
+        /// Datafusion Expression
+        DataFusion(Expr),
+        /// String Expression
+        String(String),
+    }
+
+    impl From<Expr> for Expression {
+        fn from(val: Expr) -> Self {
+            Expression::DataFusion(val)
+        }
+    }
+
+    impl From<&str> for Expression {
+        fn from(val: &str) -> Self {
+            Expression::String(val.to_string())
+        }
+    }
+    impl From<String> for Expression {
+        fn from(val: String) -> Self {
+            Expression::String(val)
+        }
     }
 }
