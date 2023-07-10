@@ -18,13 +18,6 @@
 //!     .await?;
 //! ````
 
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
-
-use arrow_array::RecordBatch;
 use arrow_schema::SchemaRef;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::{
@@ -35,19 +28,25 @@ use datafusion::{
             utils::{build_join_schema, JoinFilter},
             NestedLoopJoinExec,
         },
-        metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
+        metrics::{MetricBuilder, MetricsSet},
         projection::ProjectionExec,
-        ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+        ExecutionPlan,
     },
     prelude::{DataFrame, SessionContext},
 };
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_physical_expr::{create_physical_expr, expressions, PhysicalExpr};
-use futures::{future::BoxFuture, Stream, StreamExt};
+use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
+use std::{
+    collections::HashMap,
+    sync::Arc,
+    time::{Instant, SystemTime, UNIX_EPOCH},
+};
 
+use crate::operations::datafusion_utils::MetricObserverExec;
 use crate::{
     action::{Action, DeltaOperation, Remove},
     delta_datafusion::{parquet_scan_from_actions, register_store},
@@ -57,7 +56,10 @@ use crate::{
     DeltaResult, DeltaTable, DeltaTableError,
 };
 
-use super::{transaction::commit, datafusion_utils::Expression};
+use super::{
+    datafusion_utils::{into_expr, maybe_into_expr, Expression},
+    transaction::commit,
+};
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
@@ -66,6 +68,7 @@ const TARGET_UPDATE_COLUMN: &str = "__delta_rs_target_update";
 const TARGET_DELETE_COLUMN: &str = "__delta_rs_target_delete";
 const TARGET_COPY_COLUMN: &str = "__delta_rs_target_copy";
 
+const SOURCE_COUNT_METRIC: &str = "num_source_rows";
 const TARGET_COPY_METRIC: &str = "num_copied_rows";
 const TARGET_INSERTED_METRIC: &str = "num_target_inserted_rows";
 const TARGET_UPDATED_METRIC: &str = "num_target_updated_rows";
@@ -82,13 +85,8 @@ pub struct MergeBuilder {
     not_match_operations: Vec<MergeOperation>,
     /// TODO
     not_match_source_operations: Vec<MergeOperation>,
-    //last_match_update: bool,
-    //last_match_delete: bool,
-    //last_not_matched_insert: bool,
-    //last_not_match_source_update: bool,
-    //last_not_match_source_delete: bool,
-    /// Prefix the source columns with a user provided prefix
-    //source_alias: Option<String>,
+    ///Prefix the source columns with a user provided prefix
+    source_alias: Option<String>,
     /// A snapshot of the table's state. AKA the target table in the operation
     snapshot: DeltaTableState,
     /// The source data
@@ -119,7 +117,7 @@ impl MergeBuilder {
             source,
             snapshot,
             object_store,
-            //source_alias: None,
+            source_alias: None,
             state: None,
             app_metadata: None,
             writer_properties: None,
@@ -127,11 +125,6 @@ impl MergeBuilder {
             not_match_operations: Vec::new(),
             not_match_source_operations: Vec::new(),
             safe_cast: false,
-            //last_match_update: false,
-            //last_match_delete: false,
-            //last_not_matched_insert: false,
-            //last_not_match_source_update: false,
-            //last_not_match_source_delete: false,
         }
     }
 
@@ -141,35 +134,28 @@ impl MergeBuilder {
         F: FnOnce(UpdateBuilder) -> UpdateBuilder,
     {
         let builder = builder(UpdateBuilder::default());
+        let op = MergeOperation::try_new(
+            &self.snapshot,
+            builder.predicate,
+            builder.updates,
+            OperationType::Update,
+        )?;
+        self.match_operations.push(op);
+        Ok(self)
+    }
 
-        let predicate = match builder.predicate {
-            Some(predicate) => {
-                match predicate {
-                    Expression::DataFusion(expr) => Some(expr),
-                    //TODO: Have this return a result...
-                    Expression::String(s) => Some(self.snapshot.parse_predicate_expression(s)?),
-                }
-            }
-            None => None,
-        };
-
-        let mut operations = HashMap::new();
-
-        for (column, expr) in builder.updates {
-            let expr = match expr {
-                Expression::DataFusion(expr) => expr,
-                //TODO: Have this return a result...
-                Expression::String(s) => self.snapshot.parse_predicate_expression(s)?,
-            };
-            operations.insert(column, expr);
-        }
-
-        let op = MergeOperation {
-            predicate,
-            operations,
-            r#type: OperationType::Update,
-        };
-
+    /// Perform an additonal update expression during the operaton
+    pub fn when_matched_delete<F>(mut self, builder: F) -> DeltaResult<MergeBuilder>
+    where
+        F: FnOnce(DeleteBuilder) -> DeleteBuilder,
+    {
+        let builder = builder(DeleteBuilder::default());
+        let op = MergeOperation::try_new(
+            &self.snapshot,
+            builder.predicate,
+            HashMap::default(),
+            OperationType::Delete,
+        )?;
         self.match_operations.push(op);
         Ok(self)
     }
@@ -180,50 +166,53 @@ impl MergeBuilder {
         F: FnOnce(InsertBuilder) -> InsertBuilder,
     {
         let builder = builder(InsertBuilder::default());
-
-        let predicate = match builder.predicate {
-            Some(predicate) => {
-                match predicate {
-                    Expression::DataFusion(expr) => Some(expr),
-                    //TODO: Have this return a result...
-                    Expression::String(s) => Some(self.snapshot.parse_predicate_expression(s)?),
-                }
-            }
-            None => None,
-        };
-
-        let mut operations = HashMap::new();
-
-        for (column, expr) in builder.set {
-            let expr = match expr {
-                Expression::DataFusion(expr) => expr,
-                //TODO: Have this return a result...
-                Expression::String(s) => self.snapshot.parse_predicate_expression(s)?,
-            };
-            operations.insert(column, expr);
-        }
-
-        let op = MergeOperation {
-            predicate,
-            operations,
-            r#type: OperationType::Insert,
-        };
-
+        let op = MergeOperation::try_new(
+            &self.snapshot,
+            builder.predicate,
+            builder.set,
+            OperationType::Insert,
+        )?;
         self.not_match_operations.push(op);
         Ok(self)
     }
 
-    /*
     /// Perform an additonal update expression during the operaton
-    pub fn when_not_matched_by_source_update(self) -> MergeOperationBuilder {
-        MergeOperationBuilder::new(self, OperationClass::SourceNotMatch, OperationType::Update)
+    pub fn when_not_matched_by_source_update<F>(mut self, builder: F) -> DeltaResult<MergeBuilder>
+    where
+        F: FnOnce(UpdateBuilder) -> UpdateBuilder,
+    {
+        let builder = builder(UpdateBuilder::default());
+        let op = MergeOperation::try_new(
+            &self.snapshot,
+            builder.predicate,
+            builder.updates,
+            OperationType::Update,
+        )?;
+        self.not_match_source_operations.push(op);
+        Ok(self)
     }
 
     /// Perform an additonal update expression during the operaton
-    pub fn when_not_matched_by_source_delete(self) -> MergeOperationBuilder {
-        MergeOperationBuilder::new(self, OperationClass::SourceNotMatch, OperationType::Delete)
+    pub fn when_not_matched_by_source_delete<F>(mut self, builder: F) -> DeltaResult<MergeBuilder>
+    where
+        F: FnOnce(DeleteBuilder) -> DeleteBuilder,
+    {
+        let builder = builder(DeleteBuilder::default());
+        let op = MergeOperation::try_new(
+            &self.snapshot,
+            builder.predicate,
+            HashMap::default(),
+            OperationType::Delete,
+        )?;
+        self.not_match_source_operations.push(op);
+        Ok(self)
     }
-    */
+
+    /// Rename columns in the source dataset to have a prefix of `alias`.`original column name`
+    pub fn with_source_alias<S: ToString>(mut self, alias: S) -> Self {
+        self.source_alias = Some(alias.to_string());
+        self
+    }
 
     /// The Datafusion session state to use
     pub fn with_session_state(mut self, state: SessionState) -> Self {
@@ -311,18 +300,16 @@ pub struct InsertBuilder {
     set: HashMap<Column, Expression>,
 }
 
-/*
+/// TODO
 #[derive(Default)]
 pub struct DeleteBuilder {
     /// Only delete records that match the predicate
     predicate: Option<Expression>,
 }
-*/
 
 #[derive(Debug)]
 enum OperationType {
     Update,
-    #[allow(dead_code)]
     Delete,
     SourceDelete,
     Insert,
@@ -330,13 +317,35 @@ enum OperationType {
 }
 
 /// TODO
-pub struct MergeOperation {
+struct MergeOperation {
     /// Which records to update
     predicate: Option<Expr>,
     /// How to update columns in a record that match the predicate
     operations: HashMap<Column, Expr>,
     /// type
     r#type: OperationType,
+}
+
+impl MergeOperation {
+    pub fn try_new(
+        snapshot: &DeltaTableState,
+        predicate: Option<Expression>,
+        operations: HashMap<Column, Expression>,
+        r#type: OperationType,
+    ) -> DeltaResult<Self> {
+        let predicate = maybe_into_expr(predicate, snapshot)?;
+        let mut _operations = HashMap::new();
+
+        for (column, expr) in operations {
+            _operations.insert(column, into_expr(expr, snapshot)?);
+        }
+
+        Ok(MergeOperation {
+            predicate,
+            operations: _operations,
+            r#type,
+        })
+    }
 }
 
 #[derive(Default)]
@@ -376,6 +385,7 @@ async fn execute(
     writer_properties: Option<WriterProperties>,
     app_metadata: Option<Map<String, Value>>,
     safe_cast: bool,
+    source_alias: Option<String>,
     match_operations: Vec<MergeOperation>,
     not_match_target_operations: Vec<MergeOperation>,
     not_match_source_operations: Vec<MergeOperation>,
@@ -409,19 +419,32 @@ async fn execute(
 
     let source = source.create_physical_plan().await?;
 
+    let source_count = Arc::new(MetricObserverExec::new(source, |batch, metrics| {
+        MetricBuilder::new(metrics)
+            .global_counter(SOURCE_COUNT_METRIC)
+            .add(batch.num_rows());
+    }));
+
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
-    let source_schema = source.schema();
+    let source_schema = source_count.schema();
+
+    let source_prefix = source_alias
+        .map(|mut s| {
+            s.push('.');
+            s
+        })
+        .unwrap_or_default();
     for (i, field) in source_schema.fields().into_iter().enumerate() {
         expressions.push((
             Arc::new(expressions::Column::new(field.name(), i)),
-            field.name().to_owned(),
+            source_prefix.clone() + field.name(),
         ));
     }
     expressions.push((
         Arc::new(expressions::Literal::new(true.into())),
         "__delta_rs_source".to_owned(),
     ));
-    let source = Arc::new(ProjectionExec::try_new(expressions, source.clone())?);
+    let source = Arc::new(ProjectionExec::try_new(expressions, source_count.clone())?);
 
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     let target_schema = target.schema();
@@ -437,6 +460,9 @@ async fn execute(
     ));
     let target = Arc::new(ProjectionExec::try_new(expressions, target.clone())?);
 
+    // TODO: Currently a NestedLoopJoin is used but we should target to support SortMergeJoin
+    // This would require rewriting the join predicate to only contain equality between left and right columns and pushing some filters down
+    // Ideally it would be nice if the optimizer / planner can pick the best join so maybe explore rewriting the entire operation using logical plans.
     let join_schema = build_join_schema(&source.schema(), &target.schema(), &JoinType::Full);
     let predicate_expr = create_physical_expr(
         &predicate,
@@ -444,10 +470,8 @@ async fn execute(
         &join_schema.0,
         state.execution_props(),
     )?;
-    let join_filter = JoinFilter::new(predicate_expr, join_schema.1, join_schema.0);
-    // How to determine if a record is a left, full, or right join?
 
-    // The left side is coalesced into a single partition
+    let join_filter = JoinFilter::new(predicate_expr, join_schema.1, join_schema.0);
     let join: Arc<dyn ExecutionPlan> = Arc::new(NestedLoopJoinExec::try_new(
         source.clone(),
         target.clone(),
@@ -728,28 +752,51 @@ async fn execute(
     ));
 
     let projection = Arc::new(ProjectionExec::try_new(expressions, projection.clone())?);
-
-    let count_plan = Arc::new(MergeStatsExec::new(projection));
-
-    /*/
-    let mut batches = Vec::new();
-    let mut b = count_plan.execute(0, state.task_ctx())?;
-
-    while let Some(r) = b.next().await {
-        let b = r?;
-        batches.push(b);
-    }
-    println!("{}", pretty_format_batches(&batches)?);
-    */
+    let target_count_plan = Arc::new(MetricObserverExec::new(projection, |batch, metrics| {
+        MetricBuilder::new(metrics)
+            .global_counter(TARGET_INSERTED_METRIC)
+            .add(
+                batch
+                    .column_by_name(TARGET_INSERT_COLUMN)
+                    .unwrap()
+                    .null_count(),
+            );
+        MetricBuilder::new(metrics)
+            .global_counter(TARGET_UPDATED_METRIC)
+            .add(
+                batch
+                    .column_by_name(TARGET_UPDATE_COLUMN)
+                    .unwrap()
+                    .null_count(),
+            );
+        MetricBuilder::new(metrics)
+            .global_counter(TARGET_DELETED_METRIC)
+            .add(
+                batch
+                    .column_by_name(TARGET_DELETE_COLUMN)
+                    .unwrap()
+                    .null_count(),
+            );
+        MetricBuilder::new(metrics)
+            .global_counter(TARGET_COPY_METRIC)
+            .add(
+                batch
+                    .column_by_name(TARGET_COPY_COLUMN)
+                    .unwrap()
+                    .null_count(),
+            );
+    }));
 
     let write_predicate = create_physical_expr(
         &(col(DELETE_COLUMN).is_false()),
-        &count_plan.schema().as_ref().to_owned().try_into()?,
-        &count_plan.schema(),
+        &target_count_plan.schema().as_ref().to_owned().try_into()?,
+        &target_count_plan.schema(),
         state.execution_props(),
     )?;
-    let filter: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(write_predicate, count_plan.clone())?);
+    let filter: Arc<dyn ExecutionPlan> = Arc::new(FilterExec::try_new(
+        write_predicate,
+        target_count_plan.clone(),
+    )?);
 
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     for (key, value) in projection_map {
@@ -806,15 +853,17 @@ async fn execute(
 
     let mut version = snapshot.version();
 
-    let count_metrics = count_plan.metrics().unwrap();
+    let source_count_metrics = source_count.metrics().unwrap();
+    let target_count_metrics = target_count_plan.metrics().unwrap();
     fn get_metric(metrics: &MetricsSet, name: &str) -> usize {
         metrics.sum_by_name(name).map(|m| m.as_usize()).unwrap_or(0)
     }
 
-    metrics.num_target_rows_inserted = get_metric(&count_metrics, TARGET_INSERTED_METRIC);
-    metrics.num_target_rows_updated = get_metric(&count_metrics, TARGET_UPDATED_METRIC);
-    metrics.num_target_rows_deleted = get_metric(&count_metrics, TARGET_DELETED_METRIC);
-    metrics.num_target_rows_copied = get_metric(&count_metrics, TARGET_COPY_METRIC);
+    metrics.num_source_rows = get_metric(&source_count_metrics, SOURCE_COUNT_METRIC);
+    metrics.num_target_rows_inserted = get_metric(&target_count_metrics, TARGET_INSERTED_METRIC);
+    metrics.num_target_rows_updated = get_metric(&target_count_metrics, TARGET_UPDATED_METRIC);
+    metrics.num_target_rows_deleted = get_metric(&target_count_metrics, TARGET_DELETED_METRIC);
+    metrics.num_target_rows_copied = get_metric(&target_count_metrics, TARGET_COPY_METRIC);
     metrics.num_output_rows = metrics.num_target_rows_inserted
         + metrics.num_target_rows_updated
         + metrics.num_target_rows_copied;
@@ -865,6 +914,7 @@ impl std::future::IntoFuture for MergeBuilder {
                 this.writer_properties,
                 this.app_metadata,
                 this.safe_cast,
+                this.source_alias,
                 this.match_operations,
                 this.not_match_operations,
                 this.not_match_source_operations,
@@ -877,135 +927,6 @@ impl std::future::IntoFuture for MergeBuilder {
 
             Ok((table, metrics))
         })
-    }
-}
-
-#[derive(Debug)]
-struct MergeStatsExec {
-    parent: Arc<dyn ExecutionPlan>,
-    metrics: ExecutionPlanMetricsSet,
-}
-
-impl MergeStatsExec {
-    pub fn new(parent: Arc<dyn ExecutionPlan>) -> Self {
-        MergeStatsExec {
-            parent,
-            metrics: ExecutionPlanMetricsSet::new(),
-        }
-    }
-}
-
-impl ExecutionPlan for MergeStatsExec {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn schema(&self) -> arrow_schema::SchemaRef {
-        self.parent.schema()
-    }
-
-    fn output_partitioning(&self) -> datafusion::physical_plan::Partitioning {
-        self.parent.output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
-        self.parent.output_ordering()
-    }
-
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.parent.clone()]
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<datafusion::execution::context::TaskContext>,
-    ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
-        let res = self.parent.execute(partition, context)?;
-        Ok(Box::pin(UpdateCountStream {
-            schema: self.schema(),
-            input: res,
-            metrics: self.metrics.clone(),
-        }))
-    }
-
-    fn statistics(&self) -> datafusion_common::Statistics {
-        self.parent.statistics()
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        ExecutionPlan::with_new_children(self.parent.clone(), children)
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
-    }
-}
-
-struct UpdateCountStream {
-    schema: SchemaRef,
-    input: SendableRecordBatchStream,
-    metrics: ExecutionPlanMetricsSet,
-}
-
-impl Stream for UpdateCountStream {
-    type Item = DataFusionResult<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.input.poll_next_unpin(cx).map(|x| match x {
-            Some(Ok(batch)) => {
-                MetricBuilder::new(&self.metrics)
-                    .global_counter(TARGET_INSERTED_METRIC)
-                    .add(
-                        batch
-                            .column_by_name(TARGET_INSERT_COLUMN)
-                            .unwrap()
-                            .null_count(),
-                    );
-                MetricBuilder::new(&self.metrics)
-                    .global_counter(TARGET_UPDATED_METRIC)
-                    .add(
-                        batch
-                            .column_by_name(TARGET_UPDATE_COLUMN)
-                            .unwrap()
-                            .null_count(),
-                    );
-                MetricBuilder::new(&self.metrics)
-                    .global_counter(TARGET_DELETED_METRIC)
-                    .add(
-                        batch
-                            .column_by_name(TARGET_DELETE_COLUMN)
-                            .unwrap()
-                            .null_count(),
-                    );
-                MetricBuilder::new(&self.metrics)
-                    .global_counter(TARGET_COPY_METRIC)
-                    .add(
-                        batch
-                            .column_by_name(TARGET_COPY_COLUMN)
-                            .unwrap()
-                            .null_count(),
-                    );
-                Some(Ok(batch))
-            }
-            other => other,
-        })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.input.size_hint()
-    }
-}
-
-impl RecordBatchStream for UpdateCountStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
     }
 }
 
@@ -1022,6 +943,7 @@ mod tests {
     use datafusion::assert_batches_sorted_eq;
     use datafusion::prelude::SessionContext;
     use datafusion_expr::col;
+    use datafusion_expr::lit;
     use std::sync::Arc;
 
     async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
@@ -1079,29 +1001,28 @@ mod tests {
             ],
         )
         .unwrap();
-        let source = ctx
-            .read_batch(batch)
-            .unwrap()
-            .with_column_renamed("id", "id_src")
-            .unwrap()
-            .with_column_renamed("value", "value_src")
-            .unwrap()
-            .with_column_renamed("modified", "modified_src")
-            .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
 
         let (table, metrics) = DeltaOps(table)
-            .merge(source, col("id").eq(col("id_src")))
+            .merge(source, col("id").eq(col("source.id")))
+            .with_source_alias("source")
             .when_matched_update(|update| {
                 update
-                    .update("value", col("value_src"))
-                    .update("modified", col("modified_src"))
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate(col("value").eq(lit(1)))
+                    .update("value", col("value") + lit(1))
             })
             .unwrap()
             .when_not_matched_insert(|insert| {
                 insert
-                    .set("id", col("id_src"))
-                    .set("value", col("value_src"))
-                    .set("modified", col("modified_src"))
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
             })
             .unwrap()
             .await
@@ -1111,17 +1032,18 @@ mod tests {
         assert_eq!(table.get_file_uris().count(), 1);
         assert_eq!(metrics.num_target_files_added, 1);
         assert_eq!(metrics.num_target_files_removed, 1);
-        assert_eq!(metrics.num_target_rows_copied, 2);
-        assert_eq!(metrics.num_target_rows_updated, 2);
+        assert_eq!(metrics.num_target_rows_copied, 1);
+        assert_eq!(metrics.num_target_rows_updated, 3);
         assert_eq!(metrics.num_target_rows_inserted, 1);
         assert_eq!(metrics.num_target_rows_deleted, 0);
         assert_eq!(metrics.num_output_rows, 5);
+        assert_eq!(metrics.num_source_rows, 3);
 
         let expected = vec![
             "+----+-------+------------+",
             "| id | value | modified   |",
             "+----+-------+------------+",
-            "| A  | 1     | 2021-02-02 |",
+            "| A  | 2     | 2021-02-02 |",
             "| B  | 10    | 2021-02-02 |",
             "| C  | 20    | 2023-07-04 |",
             "| D  | 100   | 2021-02-02 |",
