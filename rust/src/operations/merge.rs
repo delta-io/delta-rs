@@ -1069,9 +1069,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["B", "C", "X"])),
-                Arc::new(arrow::array::Int32Array::from_slice([10, 20, 30])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2023-07-04",
                     "2023-07-04",

@@ -26,6 +26,7 @@ pub mod vacuum;
 use self::{
     delete::DeleteBuilder, load::LoadBuilder, merge::MergeBuilder, update::UpdateBuilder,
     write::WriteBuilder,
+    datafusion_utils::Expression
 };
 #[cfg(feature = "datafusion")]
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
@@ -166,11 +167,12 @@ impl DeltaOps {
     /// Update data from Delta table
     #[cfg(feature = "datafusion")]
     #[must_use]
-    pub fn merge<E: Into<update::Expression>>(
+    pub fn merge<E: Into<Expression>>(
         self,
         source: datafusion::prelude::DataFrame,
         predicate: E,
     ) -> MergeBuilder {
+
         MergeBuilder::new(
             self.0.object_store(),
             self.0.state,
