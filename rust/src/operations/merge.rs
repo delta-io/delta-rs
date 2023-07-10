@@ -24,7 +24,9 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use arrow_cast::pretty::pretty_format_batches;
+use arrow_array::RecordBatch;
+use arrow_schema::SchemaRef;
+use datafusion::error::Result as DataFusionResult;
 use datafusion::{
     execution::context::SessionState,
     physical_plan::{
@@ -33,15 +35,16 @@ use datafusion::{
             utils::{build_join_schema, JoinFilter},
             NestedLoopJoinExec,
         },
+        metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         projection::ProjectionExec,
-        ExecutionPlan,
+        ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
     },
     prelude::{DataFrame, SessionContext},
 };
-use datafusion_common::Column;
-use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, Expr, JoinType};
+use datafusion_common::{Column, DFSchema, ScalarValue};
+use datafusion_expr::{col, conditional_expressions::CaseBuilder, lit, when, Expr, JoinType};
 use datafusion_physical_expr::{create_physical_expr, expressions, PhysicalExpr};
-use futures::{future::BoxFuture, StreamExt};
+use futures::{future::BoxFuture, Stream, StreamExt};
 use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
 
@@ -55,6 +58,18 @@ use crate::{
 };
 
 use super::{transaction::commit, update::Expression};
+
+const OPERATION_COLUMN: &str = "__delta_rs_operation";
+const DELETE_COLUMN: &str = "__delta_rs_delete";
+const TARGET_INSERT_COLUMN: &str = "__delta_rs_target_insert";
+const TARGET_UPDATE_COLUMN: &str = "__delta_rs_target_update";
+const TARGET_DELETE_COLUMN: &str = "__delta_rs_target_delete";
+const TARGET_COPY_COLUMN: &str = "__delta_rs_target_copy";
+
+const TARGET_COPY_METRIC: &str = "num_copied_rows";
+const TARGET_INSERTED_METRIC: &str = "num_target_inserted_rows";
+const TARGET_UPDATED_METRIC: &str = "num_target_updated_rows";
+const TARGET_DELETED_METRIC: &str = "num_target_deleted_rows";
 
 /// Merge records into a Delta Table.
 /// See this module's documentation for more information
@@ -187,7 +202,9 @@ enum OperationClass {
 enum OperationType {
     Update,
     Delete,
+    SourceDelete,
     Insert,
+    Copy,
 }
 
 /// TODO!
@@ -246,7 +263,7 @@ impl MergeOperationBuilder {
         };
 
         let update = MergeOperation {
-            predicate: predicate,
+            predicate,
             updates: self.updates,
             r#type: self.r#type,
         };
@@ -310,13 +327,14 @@ pub struct MergeMetrics {
     /// Number of files removed from the sink(target)
     pub num_target_files_removed: usize,
     /// Time taken to execute the entire operation
-    pub execution_time_ms: u128,
+    pub execution_time_ms: u64,
     /// Time taken to scan the files for matches
-    pub scan_time_ms: u128,
+    pub scan_time_ms: u64,
     /// Time taken to rewrite the matched files
-    pub rewrite_time_ms: u128,
+    pub rewrite_time_ms: u64,
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute(
     predicate: Expression,
     source: DataFrame,
@@ -348,7 +366,7 @@ async fn execute(
     let target = parquet_scan_from_actions(
         snapshot,
         object_store.clone(),
-        &snapshot.files(),
+        snapshot.files(),
         &schema,
         None,
         &state,
@@ -432,7 +450,7 @@ async fn execute(
 
     fn update_case(
         operations: Vec<MergeOperation>,
-        ops: &mut Vec<(HashMap<Column, Expression>, bool)>,
+        ops: &mut Vec<(HashMap<Column, Expression>, OperationType)>,
         when_expr: &mut Vec<Expr>,
         then_expr: &mut Vec<Expr>,
         base_expr: &Expr,
@@ -443,15 +461,10 @@ async fn execute(
                 None => base_expr.clone(),
             };
 
-            let delete = match action.r#type {
-                OperationType::Delete => true,
-                _ => false,
-            };
-
             when_expr.push(predicate);
             then_expr.push(lit(ops.len() as i32));
 
-            ops.push((action.updates, delete));
+            ops.push((action.updates, action.r#type));
         }
     }
 
@@ -481,15 +494,15 @@ async fn execute(
 
     when_expr.push(matched);
     then_expr.push(lit(ops.len() as i32));
-    ops.push((HashMap::new(), false));
+    ops.push((HashMap::new(), OperationType::Copy));
 
     when_expr.push(not_matched_target);
     then_expr.push(lit(ops.len() as i32));
-    ops.push((HashMap::new(), true));
+    ops.push((HashMap::new(), OperationType::SourceDelete));
 
     when_expr.push(not_matched_source);
     then_expr.push(lit(ops.len() as i32));
-    ops.push((HashMap::new(), false));
+    ops.push((HashMap::new(), OperationType::Copy));
 
     let case = CaseBuilder::new(None, when_expr, then_expr, None).end()?;
 
@@ -499,7 +512,7 @@ async fn execute(
         &join.schema(),
         state.execution_props(),
     )?;
-    expressions.push((case, "__delta_rs_operation".to_owned()));
+    expressions.push((case, OPERATION_COLUMN.to_owned()));
     let projection = Arc::new(ProjectionExec::try_new(expressions, join.clone())?);
 
     // Project again and include the original table schema plus a column to mark if row needs to be filtered before write
@@ -525,9 +538,7 @@ async fn execute(
                     match expr {
                         Expression::DataFusion(expr) => expr.to_owned(),
                         //TODO: Have this return a result...
-                        Expression::String(s) => {
-                            snapshot.parse_predicate_expression(s).unwrap().to_owned()
-                        }
+                        Expression::String(s) => snapshot.parse_predicate_expression(s).unwrap(),
                     }
                 })
                 .unwrap_or(col(field.get_name()));
@@ -537,7 +548,7 @@ async fn execute(
         }
 
         let case = CaseBuilder::new(
-            Some(Box::new(col("__delta_rs_operation"))),
+            Some(Box::new(col(OPERATION_COLUMN))),
             when_expr,
             then_expr,
             None,
@@ -555,48 +566,164 @@ async fn execute(
         expressions.push((case, "__delta_rs_c_".to_owned() + field.get_name()));
     }
 
-    let mut when_expr = Vec::new();
-    let mut then_expr = Vec::new();
-    for (idx, (_operations, delete)) in ops.iter().enumerate() {
-        when_expr.push(lit(idx as i32));
-        then_expr.push(lit(delete.to_owned()));
+    let mut insert_when = Vec::with_capacity(ops.len());
+    let mut insert_then = Vec::with_capacity(ops.len());
+
+    let mut update_when = Vec::with_capacity(ops.len());
+    let mut update_then = Vec::with_capacity(ops.len());
+
+    let mut target_delete_when = Vec::with_capacity(ops.len());
+    let mut target_delete_then = Vec::with_capacity(ops.len());
+
+    let mut delete_when = Vec::with_capacity(ops.len());
+    let mut delete_then = Vec::with_capacity(ops.len());
+
+    let mut copy_when = Vec::with_capacity(ops.len());
+    let mut copy_then = Vec::with_capacity(ops.len());
+
+    for (idx, (_operations, r#type)) in ops.iter().enumerate() {
+        let op = idx as i32;
+
+        // Used to indicate the record should be dropped prior to write
+        delete_when.push(lit(op));
+        delete_then.push(lit(matches!(
+            r#type,
+            OperationType::Delete | OperationType::SourceDelete
+        )));
+
+        // Use the null count on these arrays to determine how many records satisfy the predicate
+        insert_when.push(lit(op));
+        insert_then.push(
+            when(
+                lit(matches!(r#type, OperationType::Insert)),
+                lit(ScalarValue::Boolean(None)),
+            )
+            .otherwise(lit(false))?,
+        );
+
+        update_when.push(lit(op));
+        update_then.push(
+            when(
+                lit(matches!(r#type, OperationType::Update)),
+                lit(ScalarValue::Boolean(None)),
+            )
+            .otherwise(lit(false))?,
+        );
+
+        target_delete_when.push(lit(op));
+        target_delete_then.push(
+            when(
+                lit(matches!(r#type, OperationType::Delete)),
+                lit(ScalarValue::Boolean(None)),
+            )
+            .otherwise(lit(false))?,
+        );
+
+        copy_when.push(lit(op));
+        copy_then.push(
+            when(
+                lit(matches!(r#type, OperationType::Copy)),
+                lit(ScalarValue::Boolean(None)),
+            )
+            .otherwise(lit(false))?,
+        );
     }
-    let case = CaseBuilder::new(
-        Some(Box::new(col("__delta_rs_operation"))),
-        when_expr,
-        then_expr,
-        None,
-    )
-    .end()?;
 
-    let case = create_physical_expr(
-        &case,
-        &projection.schema().as_ref().to_owned().try_into()?,
-        &projection.schema(),
-        state.execution_props(),
-    )?;
+    fn build_case(
+        when: Vec<Expr>,
+        then: Vec<Expr>,
+        schema: SchemaRef,
+        input_dfschema: &DFSchema,
+        state: &SessionState,
+    ) -> DataFusionResult<Arc<dyn PhysicalExpr>> {
+        let case = CaseBuilder::new(
+            Some(Box::new(col(OPERATION_COLUMN))),
+            when,
+            then,
+            Some(Box::new(lit(false))),
+        )
+        .end()?;
 
-    expressions.push((case, "__delta_rs_delete".to_owned()));
+        create_physical_expr(&case, input_dfschema, &schema, state.execution_props())
+    }
+
+    let schema = projection.schema();
+    let input_dfschema = schema.as_ref().to_owned().try_into()?;
+    expressions.push((
+        build_case(
+            delete_when,
+            delete_then,
+            schema.clone(),
+            &input_dfschema,
+            &state,
+        )?,
+        DELETE_COLUMN.to_owned(),
+    ));
+
+    expressions.push((
+        build_case(
+            insert_when,
+            insert_then,
+            schema.clone(),
+            &input_dfschema,
+            &state,
+        )?,
+        TARGET_INSERT_COLUMN.to_owned(),
+    ));
+    expressions.push((
+        build_case(
+            update_when,
+            update_then,
+            schema.clone(),
+            &input_dfschema,
+            &state,
+        )?,
+        TARGET_UPDATE_COLUMN.to_owned(),
+    ));
+    expressions.push((
+        build_case(
+            target_delete_when,
+            target_delete_then,
+            schema.clone(),
+            &input_dfschema,
+            &state,
+        )?,
+        TARGET_DELETE_COLUMN.to_owned(),
+    ));
+    expressions.push((
+        build_case(
+            copy_when,
+            copy_then,
+            schema.clone(),
+            &input_dfschema,
+            &state,
+        )?,
+        TARGET_COPY_COLUMN.to_owned(),
+    ));
+
     let projection = Arc::new(ProjectionExec::try_new(expressions, projection.clone())?);
 
+    let count_plan = Arc::new(MergeStatsExec::new(projection));
+
+    /*/
     let mut batches = Vec::new();
-    let mut b = projection.execute(0, state.task_ctx())?;
+    let mut b = count_plan.execute(0, state.task_ctx())?;
 
     while let Some(r) = b.next().await {
         let b = r?;
         batches.push(b);
     }
     println!("{}", pretty_format_batches(&batches)?);
+    */
 
-    // TODO: Filter records after applying updates and deletions. Column used to determine this will change
     let write_predicate = create_physical_expr(
-        &(col("__delta_rs_delete").is_false()),
-        &projection.schema().as_ref().to_owned().try_into()?,
-        &projection.schema(),
+        &(col(DELETE_COLUMN).is_false()),
+        &count_plan.schema().as_ref().to_owned().try_into()?,
+        &count_plan.schema(),
         state.execution_props(),
     )?;
     let filter: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(write_predicate, projection.clone())?);
+        Arc::new(FilterExec::try_new(write_predicate, count_plan.clone())?);
 
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     for (key, value) in projection_map {
@@ -613,6 +740,8 @@ async fn execute(
 
     // write projected records
     let table_partition_cols = current_metadata.partition_columns.clone();
+
+    let rewrite_start = Instant::now();
     let add_actions = write_execution_plan(
         snapshot,
         state.clone(),
@@ -626,13 +755,18 @@ async fn execute(
     )
     .await?;
 
+    metrics.rewrite_time_ms = Instant::now().duration_since(rewrite_start).as_millis() as u64;
+
     let deletion_timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64;
 
     let mut actions: Vec<Action> = add_actions.into_iter().map(Action::add).collect();
+    metrics.num_target_files_added = actions.len();
+
     for action in snapshot.files() {
+        metrics.num_target_files_removed += 1;
         actions.push(Action::remove(Remove {
             path: action.path.clone(),
             deletion_timestamp: Some(deletion_timestamp),
@@ -646,7 +780,21 @@ async fn execute(
 
     let mut version = snapshot.version();
 
-    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis();
+    let count_metrics = count_plan.metrics().unwrap();
+    fn get_metric(metrics: &MetricsSet, name: &str) -> usize {
+        metrics.sum_by_name(name).map(|m| m.as_usize()).unwrap_or(0)
+    }
+
+    metrics.num_target_rows_inserted = get_metric(&count_metrics, TARGET_INSERTED_METRIC);
+    metrics.num_target_rows_updated = get_metric(&count_metrics, TARGET_UPDATED_METRIC);
+    metrics.num_target_rows_deleted = get_metric(&count_metrics, TARGET_DELETED_METRIC);
+    metrics.num_target_rows_copied = get_metric(&count_metrics, TARGET_COPY_METRIC);
+    metrics.num_output_rows = metrics.num_target_rows_inserted
+        + metrics.num_target_rows_updated
+        + metrics.num_target_rows_copied;
+
+    metrics.execution_time_ms = Instant::now().duration_since(exec_start).as_millis() as u64;
+
     // Do not make a commit when there are zero updates to the state
     if !actions.is_empty() {
         let operation = DeltaOperation::Merge {
@@ -703,6 +851,135 @@ impl std::future::IntoFuture for MergeBuilder {
 
             Ok((table, metrics))
         })
+    }
+}
+
+#[derive(Debug)]
+struct MergeStatsExec {
+    parent: Arc<dyn ExecutionPlan>,
+    metrics: ExecutionPlanMetricsSet,
+}
+
+impl MergeStatsExec {
+    pub fn new(parent: Arc<dyn ExecutionPlan>) -> Self {
+        MergeStatsExec {
+            parent,
+            metrics: ExecutionPlanMetricsSet::new(),
+        }
+    }
+}
+
+impl ExecutionPlan for MergeStatsExec {
+    fn as_any(&self) -> &dyn std::any::Any {
+        self
+    }
+
+    fn schema(&self) -> arrow_schema::SchemaRef {
+        self.parent.schema()
+    }
+
+    fn output_partitioning(&self) -> datafusion::physical_plan::Partitioning {
+        self.parent.output_partitioning()
+    }
+
+    fn output_ordering(&self) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
+        self.parent.output_ordering()
+    }
+
+    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+        vec![self.parent.clone()]
+    }
+
+    fn execute(
+        &self,
+        partition: usize,
+        context: Arc<datafusion::execution::context::TaskContext>,
+    ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
+        let res = self.parent.execute(partition, context)?;
+        Ok(Box::pin(UpdateCountStream {
+            schema: self.schema(),
+            input: res,
+            metrics: self.metrics.clone(),
+        }))
+    }
+
+    fn statistics(&self) -> datafusion_common::Statistics {
+        self.parent.statistics()
+    }
+
+    fn with_new_children(
+        self: Arc<Self>,
+        children: Vec<Arc<dyn ExecutionPlan>>,
+    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+        ExecutionPlan::with_new_children(self.parent.clone(), children)
+    }
+
+    fn metrics(&self) -> Option<MetricsSet> {
+        Some(self.metrics.clone_inner())
+    }
+}
+
+struct UpdateCountStream {
+    schema: SchemaRef,
+    input: SendableRecordBatchStream,
+    metrics: ExecutionPlanMetricsSet,
+}
+
+impl Stream for UpdateCountStream {
+    type Item = DataFusionResult<RecordBatch>;
+
+    fn poll_next(
+        mut self: std::pin::Pin<&mut Self>,
+        cx: &mut std::task::Context<'_>,
+    ) -> std::task::Poll<Option<Self::Item>> {
+        self.input.poll_next_unpin(cx).map(|x| match x {
+            Some(Ok(batch)) => {
+                MetricBuilder::new(&self.metrics)
+                    .global_counter(TARGET_INSERTED_METRIC)
+                    .add(
+                        batch
+                            .column_by_name(TARGET_INSERT_COLUMN)
+                            .unwrap()
+                            .null_count(),
+                    );
+                MetricBuilder::new(&self.metrics)
+                    .global_counter(TARGET_UPDATED_METRIC)
+                    .add(
+                        batch
+                            .column_by_name(TARGET_UPDATE_COLUMN)
+                            .unwrap()
+                            .null_count(),
+                    );
+                MetricBuilder::new(&self.metrics)
+                    .global_counter(TARGET_DELETED_METRIC)
+                    .add(
+                        batch
+                            .column_by_name(TARGET_DELETE_COLUMN)
+                            .unwrap()
+                            .null_count(),
+                    );
+                MetricBuilder::new(&self.metrics)
+                    .global_counter(TARGET_COPY_METRIC)
+                    .add(
+                        batch
+                            .column_by_name(TARGET_COPY_COLUMN)
+                            .unwrap()
+                            .null_count(),
+                    );
+                Some(Ok(batch))
+            }
+            other => other,
+        })
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        self.input.size_hint()
+    }
+}
+
+impl RecordBatchStream for UpdateCountStream {
+    fn schema(&self) -> SchemaRef {
+        self.schema.clone()
     }
 }
 
@@ -787,7 +1064,7 @@ mod tests {
             .with_column_renamed("modified", "modified_src")
             .unwrap();
 
-        let (table, _metrics) = DeltaOps(table)
+        let (table, metrics) = DeltaOps(table)
             .merge(source, col("id").eq(col("id_src")))
             .when_matched_update()
             .with_update("value", col("value_src"))
@@ -803,12 +1080,13 @@ mod tests {
 
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_file_uris().count(), 1);
-        /*
         assert_eq!(metrics.num_target_files_added, 1);
         assert_eq!(metrics.num_target_files_removed, 1);
         assert_eq!(metrics.num_target_rows_copied, 2);
         assert_eq!(metrics.num_target_rows_updated, 2);
-        */
+        assert_eq!(metrics.num_target_rows_inserted, 1);
+        assert_eq!(metrics.num_target_rows_deleted, 0);
+        assert_eq!(metrics.num_output_rows, 5);
 
         let expected = vec![
             "+----+-------+------------+",
