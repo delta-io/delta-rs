@@ -87,6 +87,8 @@ pub struct MergeBuilder {
     //last_not_matched_insert: bool,
     //last_not_match_source_update: bool,
     //last_not_match_source_delete: bool,
+    /// Prefix the source columns with a user provided prefix
+    //source_alias: Option<String>,
     /// A snapshot of the table's state. AKA the target table in the operation
     snapshot: DeltaTableState,
     /// The source data
@@ -117,6 +119,7 @@ impl MergeBuilder {
             source,
             snapshot,
             object_store,
+            //source_alias: None,
             state: None,
             app_metadata: None,
             writer_properties: None,
@@ -133,19 +136,84 @@ impl MergeBuilder {
     }
 
     /// Perform an additonal update expression during the operaton
-    pub fn when_matched_update(self) -> MergeOperationBuilder {
-        MergeOperationBuilder::new(self, OperationClass::Match, OperationType::Update)
-    }
-    /// Perform an additonal update expression during the operaton
-    pub fn when_matched_delete(self) -> MergeOperationBuilder {
-        MergeOperationBuilder::new(self, OperationClass::Match, OperationType::Delete)
+    pub fn when_matched_update<F>(mut self, builder: F) -> DeltaResult<MergeBuilder>
+    where
+        F: FnOnce(UpdateBuilder) -> UpdateBuilder,
+    {
+        let builder = builder(UpdateBuilder::default());
+
+        let predicate = match builder.predicate {
+            Some(predicate) => {
+                match predicate {
+                    Expression::DataFusion(expr) => Some(expr),
+                    //TODO: Have this return a result...
+                    Expression::String(s) => Some(self.snapshot.parse_predicate_expression(s)?),
+                }
+            }
+            None => None,
+        };
+
+        let mut operations = HashMap::new();
+
+        for (column, expr) in builder.updates {
+            let expr = match expr {
+                Expression::DataFusion(expr) => expr,
+                //TODO: Have this return a result...
+                Expression::String(s) => self.snapshot.parse_predicate_expression(s)?,
+            };
+            operations.insert(column, expr);
+        }
+
+        let op = MergeOperation {
+            predicate,
+            operations,
+            r#type: OperationType::Update,
+        };
+
+        self.match_operations.push(op);
+        Ok(self)
     }
 
     /// Perform an additonal update expression during the operaton
-    pub fn when_not_matched_insert(self) -> MergeOperationBuilder {
-        MergeOperationBuilder::new(self, OperationClass::TargetNotMatch, OperationType::Insert)
+    pub fn when_not_matched_insert<F>(mut self, builder: F) -> DeltaResult<MergeBuilder>
+    where
+        F: FnOnce(InsertBuilder) -> InsertBuilder,
+    {
+        let builder = builder(InsertBuilder::default());
+
+        let predicate = match builder.predicate {
+            Some(predicate) => {
+                match predicate {
+                    Expression::DataFusion(expr) => Some(expr),
+                    //TODO: Have this return a result...
+                    Expression::String(s) => Some(self.snapshot.parse_predicate_expression(s)?),
+                }
+            }
+            None => None,
+        };
+
+        let mut operations = HashMap::new();
+
+        for (column, expr) in builder.set {
+            let expr = match expr {
+                Expression::DataFusion(expr) => expr,
+                //TODO: Have this return a result...
+                Expression::String(s) => self.snapshot.parse_predicate_expression(s)?,
+            };
+            operations.insert(column, expr);
+        }
+
+        let op = MergeOperation {
+            predicate,
+            operations,
+            r#type: OperationType::Insert,
+        };
+
+        self.not_match_operations.push(op);
+        Ok(self)
     }
 
+    /*
     /// Perform an additonal update expression during the operaton
     pub fn when_not_matched_by_source_update(self) -> MergeOperationBuilder {
         MergeOperationBuilder::new(self, OperationClass::SourceNotMatch, OperationType::Update)
@@ -155,6 +223,7 @@ impl MergeBuilder {
     pub fn when_not_matched_by_source_delete(self) -> MergeOperationBuilder {
         MergeOperationBuilder::new(self, OperationClass::SourceNotMatch, OperationType::Delete)
     }
+    */
 
     /// The Datafusion session state to use
     pub fn with_session_state(mut self, state: SessionState) -> Self {
@@ -192,109 +261,72 @@ impl MergeBuilder {
     }
 }
 
-enum OperationClass {
-    Match,
-    TargetNotMatch,
-    SourceNotMatch,
-}
-
-#[derive(Debug)]
-enum OperationType {
-    Update,
-    Delete,
-    SourceDelete,
-    Insert,
-    Copy,
-}
-
-/// TODO!
-pub struct MergeOperationBuilder {
-    /// Which records to update
+#[derive(Default)]
+/// TODO
+pub struct UpdateBuilder {
+    /// Only update records that match the predicate
     predicate: Option<Expression>,
-    /// How to update columns in a record that match the predicate
+    /// How to update columns in the target table
     updates: HashMap<Column, Expression>,
-    merge_builder: MergeBuilder,
-    class: OperationClass,
-    r#type: OperationType,
 }
 
-impl MergeOperationBuilder {
-    fn new(merge_builder: MergeBuilder, class: OperationClass, r#type: OperationType) -> Self {
-        MergeOperationBuilder {
-            class,
-            r#type,
-            predicate: None,
-            updates: HashMap::new(),
-            merge_builder,
-        }
-    }
-
-    /// Which records to update
-    pub fn with_predicate<E: Into<Expression>>(mut self, predicate: E) -> Self {
+impl UpdateBuilder {
+    /// TODO:
+    pub fn predicate<E: Into<Expression>>(mut self, predicate: E) -> Self {
         self.predicate = Some(predicate.into());
         self
     }
 
-    /// Perform an additonal update expression during the operaton
-    pub fn with_update<S: Into<Column>, E: Into<Expression>>(
+    /// TODO:
+    pub fn update<C: Into<Column>, E: Into<Expression>>(
         mut self,
-        column: S,
+        column: C,
         expression: E,
     ) -> Self {
         self.updates.insert(column.into(), expression.into());
         self
     }
+}
 
-    fn _build(mut self) -> MergeBuilder {
-        let predicate = match self.predicate {
-            Some(predicate) => {
-                match predicate {
-                    Expression::DataFusion(expr) => Some(expr),
-                    //TODO: Have this return a result...
-                    Expression::String(s) => Some(
-                        self.merge_builder
-                            .snapshot
-                            .parse_predicate_expression(s)
-                            .unwrap(),
-                    ),
-                }
-            }
-            None => None,
-        };
-
-        let update = MergeOperation {
-            predicate,
-            updates: self.updates,
-            r#type: self.r#type,
-        };
-
-        match self.class {
-            OperationClass::Match => self.merge_builder.match_operations.push(update),
-            OperationClass::TargetNotMatch => self.merge_builder.not_match_operations.push(update),
-            OperationClass::SourceNotMatch => {
-                self.merge_builder.not_match_source_operations.push(update)
-            }
-        }
-
-        self.merge_builder
+impl InsertBuilder {
+    /// TODO:
+    pub fn predicate<E: Into<Expression>>(mut self, predicate: E) -> Self {
+        self.predicate = Some(predicate.into());
+        self
     }
 
-    /// Perform an additonal update expression during the operaton
-    pub fn when_matched_update(self) -> MergeOperationBuilder {
-        self._build().when_matched_update()
+    /// TODO:
+    pub fn set<C: Into<Column>, E: Into<Expression>>(mut self, column: C, expression: E) -> Self {
+        self.set.insert(column.into(), expression.into());
+        self
     }
+}
 
-    /// Perform an additonal update expression during the operaton
-    pub fn when_not_matched_insert(self) -> MergeOperationBuilder {
-        self._build().when_not_matched_insert()
-    }
+/// TODO
+#[derive(Default)]
+pub struct InsertBuilder {
+    /// Only insert records that match the predicate
+    predicate: Option<Expression>,
+    /// What value each column is inserted with
+    set: HashMap<Column, Expression>,
+}
 
-    /// TODO Add the not match source stuff
+/*
+#[derive(Default)]
+pub struct DeleteBuilder {
+    /// Only delete records that match the predicate
+    predicate: Option<Expression>,
+}
+*/
 
-    /// TODO
-    pub fn build(self) -> MergeBuilder {
-        self._build()
-    }
+#[derive(Debug)]
+enum OperationType {
+    Update,
+    #[allow(dead_code)]
+    Delete,
+    SourceDelete,
+    Insert,
+    Copy,
 }
 
 /// TODO
@@ -302,7 +334,7 @@ pub struct MergeOperation {
     /// Which records to update
     predicate: Option<Expr>,
     /// How to update columns in a record that match the predicate
-    updates: HashMap<Column, Expression>,
+    operations: HashMap<Column, Expr>,
     /// type
     r#type: OperationType,
 }
@@ -450,7 +482,7 @@ async fn execute(
 
     fn update_case(
         operations: Vec<MergeOperation>,
-        ops: &mut Vec<(HashMap<Column, Expression>, OperationType)>,
+        ops: &mut Vec<(HashMap<Column, Expr>, OperationType)>,
         when_expr: &mut Vec<Expr>,
         then_expr: &mut Vec<Expr>,
         base_expr: &Expr,
@@ -464,7 +496,7 @@ async fn execute(
             when_expr.push(predicate);
             then_expr.push(lit(ops.len() as i32));
 
-            ops.push((action.updates, action.r#type));
+            ops.push((action.operations, action.r#type));
         }
     }
 
@@ -534,13 +566,7 @@ async fn execute(
         for (idx, (operations, _delete)) in ops.iter().enumerate() {
             let op = operations
                 .get(&field.get_name().to_owned().into())
-                .map(|expr| {
-                    match expr {
-                        Expression::DataFusion(expr) => expr.to_owned(),
-                        //TODO: Have this return a result...
-                        Expression::String(s) => snapshot.parse_predicate_expression(s).unwrap(),
-                    }
-                })
+                .map(|expr| expr.to_owned())
                 .unwrap_or(col(field.get_name()));
 
             when_expr.push(lit(idx as i32));
@@ -1066,15 +1092,19 @@ mod tests {
 
         let (table, metrics) = DeltaOps(table)
             .merge(source, col("id").eq(col("id_src")))
-            .when_matched_update()
-            .with_update("value", col("value_src"))
-            .with_update("modified", col("modified_src"))
-            .build()
-            .when_not_matched_insert()
-            .with_update("id", col("id_src"))
-            .with_update("value", col("value_src"))
-            .with_update("modified", col("modified_src"))
-            .build()
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("value_src"))
+                    .update("modified", col("modified_src"))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("id_src"))
+                    .set("value", col("value_src"))
+                    .set("modified", col("modified_src"))
+            })
+            .unwrap()
             .await
             .unwrap();
 
