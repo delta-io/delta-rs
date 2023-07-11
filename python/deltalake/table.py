@@ -2,6 +2,7 @@ import json
 import operator
 import warnings
 from dataclasses import dataclass
+from datetime import datetime
 from functools import reduce
 from pathlib import Path
 from typing import (
@@ -461,26 +462,31 @@ given filters.
 
     def restore(
         self,
-        version_to_restore: Optional[int] = None,
-        datetime_to_restore: Optional[str] = None,
+        target: Union[int, datetime, str],
+        *,
         ignore_missing_files: bool = False,
         protocol_downgrade_allowed: bool = False,
     ) -> Dict[str, Any]:
         """
         Run the Restore command on the Delta Table: restore table to a given version or datetime.
 
-        :param version_to_restore: the expected version will restore.
-        :param datetime_to_restore: the expected datetime will restore.
+        :param target: the expected version will restore, which represented by int, date str or datetime.
         :param ignore_missing_files: whether the operation carry on when some data files missing.
         :param protocol_downgrade_allowed: whether the operation when protocol version upgraded.
         :return: the metrics from restore.
         """
-        metrics = self._table.restore(
-            version_to_restore,
-            datetime_to_restore,
-            ignore_missing_files,
-            protocol_downgrade_allowed,
-        )
+        if isinstance(target, datetime):
+            metrics = self._table.restore(
+                target.isoformat(),
+                ignore_missing_files=ignore_missing_files,
+                protocol_downgrade_allowed=protocol_downgrade_allowed,
+            )
+        else:
+            metrics = self._table.restore(
+                target,
+                ignore_missing_files=ignore_missing_files,
+                protocol_downgrade_allowed=protocol_downgrade_allowed,
+            )
         return json.loads(metrics)
 
     def to_pyarrow_dataset(
