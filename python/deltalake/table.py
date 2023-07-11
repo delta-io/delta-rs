@@ -459,6 +459,30 @@ given filters.
         )
         return self.schema().to_pyarrow()
 
+    def restore(
+        self,
+        version_to_restore: Optional[int] = None,
+        datetime_to_restore: Optional[str] = None,
+        ignore_missing_files: bool = False,
+        protocol_downgrade_allowed: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Run the Restore command on the Delta Table: restore table to a given version or datetime.
+
+        :param version_to_restore: the expected version will restore.
+        :param datetime_to_restore: the expected datetime will restore.
+        :param ignore_missing_files: whether the operation carry on when some data files missing.
+        :param protocol_downgrade_allowed: whether the operation when protocol version upgraded.
+        :return: the metrics from restore.
+        """
+        metrics = self._table.restore(
+            version_to_restore,
+            datetime_to_restore,
+            ignore_missing_files,
+            protocol_downgrade_allowed,
+        )
+        return json.loads(metrics)
+
     def to_pyarrow_dataset(
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
