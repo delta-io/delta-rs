@@ -1,21 +1,29 @@
-//! Update records from a Delta Table for records statisfy a predicate
+//! Merge data from a source dataset with the target Delta Table based on a join predicate.
+//! A full outer join is performed which results in source and target records that match,
+//! source records that do not match, or target records that do not match.
 //!
-//! When a predicate is not provided then all records are updated from the Delta
-//! Table. Otherwise a scan of the Delta table is performed to mark any files
-//! that contain records that satisfy the predicate. Once they are determined
-//! then column values are updated with new values provided by the user
-//!
-//!
-//! Predicates MUST be deterministic otherwise undefined behaviour may occur during the
-//! scanning and rewriting phase.
+//! Users can specify update, delete, and insert operations for these categories
+//! and specify additional predicates for finer control. The order of operations specified matter.
+//! See [`MergeBuilder`] for more information
 //!
 //! # Example
 //! ```rust ignore
 //! let table = open_table("../path/to/table")?;
-//! let (table, metrics) = UpdateBuilder::new(table.object_store(), table.state)
-//!     .with_predicate(col("col1").eq(lit(1)))
-//!     .with_update("value", col("value") + lit(20))
-//!     .await?;
+//! let (table, metrics) = DeltaOps(table)
+//!     .merge(source, col("id").eq(col("source.id")))
+//!     .with_source_alias("source")
+//!     .when_matched_update(|update| {
+//!         update
+//!             .update("value", col("source.value") + lit(1))
+//!             .update("modified", col("source.modified"))
+//!     })?
+//!     .when_not_matched_insert(|insert| {
+//!         insert
+//!             .set("id", col("source.id"))
+//!             .set("value", col("source.value"))
+//!             .set("modified", col("source.modified"))
+//!     })?
+//!     .await?
 //! ````
 
 use arrow_schema::SchemaRef;
@@ -75,15 +83,14 @@ const TARGET_UPDATED_METRIC: &str = "num_target_updated_rows";
 const TARGET_DELETED_METRIC: &str = "num_target_deleted_rows";
 
 /// Merge records into a Delta Table.
-/// See this module's documentation for more information
 pub struct MergeBuilder {
     /// The join predicate
     predicate: Expression,
-    /// TODO
+    /// Operations to perform when a source record and target record match
     match_operations: Vec<MergeOperation>,
-    /// TODO
+    /// Operations to perform on source records when they do not pair with a target record
     not_match_operations: Vec<MergeOperation>,
-    /// TODO
+    /// Operations to perform on target records when they do not pair with a source record
     not_match_source_operations: Vec<MergeOperation>,
     ///Prefix the source columns with a user provided prefix
     source_alias: Option<String>,
@@ -128,7 +135,35 @@ impl MergeBuilder {
         }
     }
 
-    /// Perform an additonal update expression during the operaton
+    /// Specify how to update a target record when it matches with a source
+    /// record
+    ///
+    /// The update expressions can specify both source and target columns.
+    ///
+    /// Multiple match clasues can be specified and their predicates are
+    /// evaluated to determine if the corresponding operation are performed.
+    /// Only the first clause that results in an satisfy predicate is executed.
+    /// Ther order of match clauses matter.
+    ///
+    /// #Example
+    /// ```rust ignore
+    /// let table = open_table("../path/to/table")?;
+    /// let (table, metrics) = DeltaOps(table)
+    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .with_source_alias("source")
+    ///     .when_matched_update(|update| {
+    ///         update
+    ///             .predicate(col("source.value").lt(lit(0)))
+    ///             .update("value", lit(0))
+    ///             .update("modified", col("source.modified"))
+    ///     })?
+    ///     .when_matched_update(|update| {
+    ///         update
+    ///             .update("value", col("source.value") + lit(1))
+    ///             .update("modified", col("source.modified"))
+    ///     })?
+    ///     .await?
+    /// ```
     pub fn when_matched_update<F>(mut self, builder: F) -> DeltaResult<MergeBuilder>
     where
         F: FnOnce(UpdateBuilder) -> UpdateBuilder,
@@ -144,7 +179,31 @@ impl MergeBuilder {
         Ok(self)
     }
 
-    /// Perform an additonal update expression during the operaton
+    /// Specify how to update a target record when it matches with a source
+    /// record
+    ///
+    /// Multiple match clasues can be specified and their predicates are
+    /// evaluated to determine if the corresponding operation are performed.
+    /// Only the first clause that results in an satisfy predicate is executed.
+    /// Ther order of match clauses matter.
+    ///
+    /// #Example
+    /// ```rust ignore
+    /// let table = open_table("../path/to/table")?;
+    /// let (table, metrics) = DeltaOps(table)
+    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .with_source_alias("source")
+    ///     .when_matched_delete(|delete| {
+    ///         update
+    ///             .predicate(col("source.delete"))
+    ///     })?
+    ///     .when_matched_update(|update| {
+    ///         update
+    ///             .update("value", col("source.value"))
+    ///             .update("modified", col("source.modified"))
+    ///     })?
+    ///     .await?
+    /// ```
     pub fn when_matched_delete<F>(mut self, builder: F) -> DeltaResult<MergeBuilder>
     where
         F: FnOnce(DeleteBuilder) -> DeleteBuilder,
@@ -160,7 +219,31 @@ impl MergeBuilder {
         Ok(self)
     }
 
-    /// Perform an additonal update expression during the operaton
+    /// Specify how to insert a source record when it does not match with a
+    /// target record
+    ///
+    /// Multiple not match clasues can be specified and their predicates are
+    /// evaluated to determine if the corresponding operation are performed.
+    /// Only the first clause that results in an satisfy predicate is executed.
+    /// Ther order of not match clauses matter.
+    ///
+    /// #Example
+    /// ```rust ignore
+    /// let table = open_table("../path/to/table")?;
+    /// let (table, metrics) = DeltaOps(table)
+    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .with_source_alias("source")
+    ///     .when_matched_delete(|delete| {
+    ///         update
+    ///             .predicate(col("source.delete"))
+    ///     })?
+    ///     .when_matched_update(|update| {
+    ///         update
+    ///             .update("value", col("source.value"))
+    ///             .update("modified", col("source.modified"))
+    ///     })?
+    ///     .await?
+    /// ```
     pub fn when_not_matched_insert<F>(mut self, builder: F) -> DeltaResult<MergeBuilder>
     where
         F: FnOnce(InsertBuilder) -> InsertBuilder,
@@ -176,7 +259,29 @@ impl MergeBuilder {
         Ok(self)
     }
 
-    /// Perform an additonal update expression during the operaton
+    /// Specify how to update a target record when it does not match with a
+    /// source record
+    ///
+    /// The update expressions can specify only target columns.
+    ///
+    /// Multiple source not match clasues can be specified and their predicates
+    /// are evaluated to determine if the corresponding operation are performed.
+    /// Only the first clause that results in an satisfy predicate is executed.
+    /// Ther order of source not match clauses matter.
+    ///
+    /// #Example
+    /// ```rust ignore
+    /// let table = open_table("../path/to/table")?;
+    /// let (table, metrics) = DeltaOps(table)
+    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .with_source_alias("source")
+    ///     .when_not_matched_by_source_update(|update| {
+    ///         update
+    ///             .update("active", lit(false))
+    ///             .update("to_dt", lit("2023-07-11"))
+    ///     })?
+    ///     .await?
+    /// ```
     pub fn when_not_matched_by_source_update<F>(mut self, builder: F) -> DeltaResult<MergeBuilder>
     where
         F: FnOnce(UpdateBuilder) -> UpdateBuilder,
@@ -192,7 +297,25 @@ impl MergeBuilder {
         Ok(self)
     }
 
-    /// Perform an additonal update expression during the operaton
+    /// Specify if a target record is deleted when it does not match with a
+    /// source record
+    ///
+    /// Multiple source not match clasues can be specified and their predicates
+    /// are evaluated to determine if the corresponding operation are performed.
+    /// Only the first clause that results in an satisfy predicate is executed.
+    /// Ther order of source not match clauses matter.
+    ///
+    /// #Example
+    /// ```rust ignore
+    /// let table = open_table("../path/to/table")?;
+    /// let (table, metrics) = DeltaOps(table)
+    ///     .merge(source, col("id").eq(col("source.id")))
+    ///     .with_source_alias("source")
+    ///     .when_not_matched_by_source_delete(|delete| {
+    ///         delete
+    ///     })?
+    ///     .await?
+    /// ```
     pub fn when_not_matched_by_source_delete<F>(mut self, builder: F) -> DeltaResult<MergeBuilder>
     where
         F: FnOnce(DeleteBuilder) -> DeleteBuilder,
@@ -251,7 +374,7 @@ impl MergeBuilder {
 }
 
 #[derive(Default)]
-/// TODO
+/// Builder for update clauses
 pub struct UpdateBuilder {
     /// Only update records that match the predicate
     predicate: Option<Expression>,
@@ -260,13 +383,15 @@ pub struct UpdateBuilder {
 }
 
 impl UpdateBuilder {
-    /// TODO:
+    /// Perform the update operation when the predicate is satisfied
     pub fn predicate<E: Into<Expression>>(mut self, predicate: E) -> Self {
         self.predicate = Some(predicate.into());
         self
     }
 
-    /// TODO:
+    /// How a column from the target table should be updated.
+    /// In the match case the expression may contain both source and target columns.
+    /// In the source not match case the expression may only contain target columns
     pub fn update<C: Into<Column>, E: Into<Expression>>(
         mut self,
         column: C,
@@ -277,21 +402,7 @@ impl UpdateBuilder {
     }
 }
 
-impl InsertBuilder {
-    /// TODO:
-    pub fn predicate<E: Into<Expression>>(mut self, predicate: E) -> Self {
-        self.predicate = Some(predicate.into());
-        self
-    }
-
-    /// TODO:
-    pub fn set<C: Into<Column>, E: Into<Expression>>(mut self, column: C, expression: E) -> Self {
-        self.set.insert(column.into(), expression.into());
-        self
-    }
-}
-
-/// TODO
+/// Builder for insert clauses
 #[derive(Default)]
 pub struct InsertBuilder {
     /// Only insert records that match the predicate
@@ -300,11 +411,33 @@ pub struct InsertBuilder {
     set: HashMap<Column, Expression>,
 }
 
-/// TODO
+impl InsertBuilder {
+    /// Perform the insert operation when the predicate is satisfied
+    pub fn predicate<E: Into<Expression>>(mut self, predicate: E) -> Self {
+        self.predicate = Some(predicate.into());
+        self
+    }
+
+    /// Which values to insert into the target tables. If a target column is not
+    /// specified then null is inserted.
+    pub fn set<C: Into<Column>, E: Into<Expression>>(mut self, column: C, expression: E) -> Self {
+        self.set.insert(column.into(), expression.into());
+        self
+    }
+}
+
+/// Builder for delete clauses
 #[derive(Default)]
 pub struct DeleteBuilder {
-    /// Only delete records that match the predicate
     predicate: Option<Expression>,
+}
+
+impl DeleteBuilder {
+    /// Delete a record when the predicate is satisfied
+    pub fn predicate<E: Into<Expression>>(mut self, predicate: E) -> Self {
+        self.predicate = Some(predicate.into());
+        self
+    }
 }
 
 #[derive(Debug)]
@@ -316,13 +449,11 @@ enum OperationType {
     Copy,
 }
 
-/// TODO
 struct MergeOperation {
     /// Which records to update
     predicate: Option<Expr>,
     /// How to update columns in a record that match the predicate
     operations: HashMap<Column, Expr>,
-    /// type
     r#type: OperationType,
 }
 
@@ -403,8 +534,12 @@ async fn execute(
     };
 
     let schema = snapshot.arrow_schema()?;
-    // Try to prune files that are scanned based on partition pruning.
-    // Can also be extended to columns too
+
+    // TODO: Given the join predicate, remove any expression that involve the
+    // source table and keep expressions that only involve the target table.
+    // This would allow us to perform statistics/partition pruning
+    // E.G Expression source.id = id and to_dt = '9999-12-31' -Becomes-> to_dt = '9999-12-31'
+
     let target = parquet_scan_from_actions(
         snapshot,
         object_store.clone(),
@@ -500,9 +635,15 @@ async fn execute(
         .and(col("__delta_rs_target"))
         .is_true();
 
-    let mut when_expr = Vec::new();
-    let mut then_expr = Vec::new();
-    let mut ops = Vec::new();
+    // Plus 3 for the default operations for each match category
+    let operations_size = match_operations.len()
+        + not_match_source_operations.len()
+        + not_match_target_operations.len()
+        + 3;
+
+    let mut when_expr = Vec::with_capacity(operations_size);
+    let mut then_expr = Vec::with_capacity(operations_size);
+    let mut ops = Vec::with_capacity(operations_size);
 
     fn update_case(
         operations: Vec<MergeOperation>,
@@ -583,11 +724,10 @@ async fn execute(
 
     let mut projection_map = HashMap::new();
     for field in snapshot.schema().unwrap().get_fields() {
-        //TODO: reuse existing vectors and pre-allocate size...
-        let mut when_expr = Vec::new();
-        let mut then_expr = Vec::new();
+        let mut when_expr = Vec::with_capacity(operations_size);
+        let mut then_expr = Vec::with_capacity(operations_size);
 
-        for (idx, (operations, _delete)) in ops.iter().enumerate() {
+        for (idx, (operations, _)) in ops.iter().enumerate() {
             let op = operations
                 .get(&field.get_name().to_owned().into())
                 .map(|expr| expr.to_owned())
