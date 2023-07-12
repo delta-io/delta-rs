@@ -4,9 +4,9 @@ use arrow::array::ArrayRef;
 use arrow::datatypes::{
     DataType, Field as ArrowField, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef,
 };
+use datafusion::datasource::physical_plan::wrap_partition_type_in_dict;
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion::physical_plan::file_format::wrap_partition_type_in_dict;
 use datafusion_common::config::ConfigOptions;
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::{Column, DFSchema, Result as DFResult, TableReference};
@@ -361,6 +361,10 @@ impl ContextProvider for DummyContextProvider {
 
     fn options(&self) -> &ConfigOptions {
         &self.options
+    }
+
+    fn get_window_meta(&self, _name: &str) -> Option<Arc<datafusion_expr::WindowUDF>> {
+        unimplemented!()
     }
 }
 
