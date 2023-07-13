@@ -281,8 +281,8 @@ pub async fn cleanup_expired_logs_for(
     }
 }
 
-// Filter binary from the schema so that it isn't serialized into JSON,
-// as arrow currently does not support this.
+/// Filter binary from the schema so that it isn't serialized into JSON,
+/// as arrow currently does not support this.
 fn filter_binary(schema: &Schema) -> Schema {
     Schema::new(
         schema
