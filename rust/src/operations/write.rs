@@ -21,7 +21,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow_array::{Array, ArrayRef, RecordBatch, StructArray};
 use arrow_cast::{can_cast_types, cast_with_options, CastOptions};
-use arrow_schema::{DataType, Fields, Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{DataType, Fields, SchemaRef as ArrowSchemaRef};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use futures::future::BoxFuture;
@@ -339,7 +339,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         .or_else(|_| this.snapshot.arrow_schema())
                         .unwrap_or(schema.clone());
 
-                    if !can_cast_batch(schema.as_ref(), table_schema.as_ref()) {
+                    if !can_cast_batch(schema.fields(), table_schema.fields()) {
                         return Err(DeltaTableError::Generic(
                             "Updating table schema not yet implemented".to_string(),
                         ));
@@ -473,7 +473,7 @@ impl std::future::IntoFuture for WriteBuilder {
     }
 }
 
-fn can_cast_batch_fields(from_fields: &Fields, to_fields: &Fields) -> bool {
+fn can_cast_batch(from_fields: &Fields, to_fields: &Fields) -> bool {
     if from_fields.len() != to_fields.len() {
         return false;
     }
@@ -483,7 +483,7 @@ fn can_cast_batch_fields(from_fields: &Fields, to_fields: &Fields) -> bool {
             if let (DataType::Struct(fields0), DataType::Struct(fields1)) =
                 (f.data_type(), target_field.data_type())
             {
-                can_cast_batch_fields(fields0, fields1)
+                can_cast_batch(fields0, fields1)
             } else {
                 can_cast_types(f.data_type(), target_field.data_type())
             }
@@ -491,10 +491,6 @@ fn can_cast_batch_fields(from_fields: &Fields, to_fields: &Fields) -> bool {
             false
         }
     })
-}
-
-fn can_cast_batch(from_schema: &ArrowSchema, to_schema: &ArrowSchema) -> bool {
-    can_cast_batch_fields(from_schema.fields(), to_schema.fields())
 }
 
 fn cast_record_batch_columns(
