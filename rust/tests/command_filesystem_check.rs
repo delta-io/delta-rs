@@ -1,4 +1,4 @@
-#![cfg(all(feature = "integration_test"))]
+#![cfg(feature = "integration_test")]
 
 use deltalake::test_utils::{
     set_env_if_not_set, IntegrationContext, StorageIntegration, TestResult, TestTables,
