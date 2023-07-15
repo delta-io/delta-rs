@@ -132,7 +132,7 @@ pub(crate) async fn prepare_commit<'a>(
 /// This is low-level transaction API. If user does not want to maintain the commit loop then
 /// the `DeltaTransaction.commit` is desired to be used as it handles `try_commit_transaction`
 /// with retry logic.
-async fn try_commit_transaction(
+pub(crate) async fn try_commit_transaction(
     storage: &dyn ObjectStore,
     tmp_commit: &Path,
     version: i64,
@@ -164,7 +164,7 @@ pub async fn commit(
 ) -> DeltaResult<i64> {
     let tmp_commit = prepare_commit(storage, &operation, actions, app_metadata).await?;
 
-    let max_attempts = 5;
+    let max_attempts = 15;
     let mut attempt_number = 1;
 
     while attempt_number <= max_attempts {

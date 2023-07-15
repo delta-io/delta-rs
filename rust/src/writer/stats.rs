@@ -13,12 +13,13 @@ use parquet::{
 use super::*;
 use crate::action::{Add, ColumnValueStat, Stats};
 
-pub(crate) fn create_add(
+/// Creates an [`Add`] log action struct.
+pub fn create_add(
     partition_values: &HashMap<String, Option<String>>,
     path: String,
     size: i64,
     file_metadata: &FileMetaData,
-) -> Result<Add, DeltaWriterError> {
+) -> Result<Add, DeltaTableError> {
     let stats = stats_from_file_metadata(partition_values, file_metadata)?;
     let stats_string = serde_json::to_string(&stats)?;
 
@@ -122,6 +123,7 @@ enum StatsScalar {
     Decimal(f64),
     String(String),
     Bytes(Vec<u8>),
+    Uuid(uuid::Uuid),
 }
 
 impl StatsScalar {
@@ -241,6 +243,26 @@ impl StatsScalar {
                 let val = val / 10.0_f64.powi(*scale);
                 Ok(Self::Decimal(val))
             }
+            (Statistics::FixedLenByteArray(v), Some(LogicalType::Uuid)) => {
+                let val = if use_min {
+                    v.min_bytes()
+                } else {
+                    v.max_bytes()
+                };
+
+                if val.len() != 16 {
+                    return Err(DeltaWriterError::StatsParsingFailed {
+                        debug_value: format!("{val:?}"),
+                        logical_type: Some(LogicalType::Uuid),
+                    });
+                }
+
+                let mut bytes = [0; 16];
+                bytes.copy_from_slice(val);
+
+                let val = uuid::Uuid::from_bytes(bytes);
+                Ok(Self::Uuid(val))
+            }
             (stats, _) => Err(DeltaWriterError::StatsParsingFailed {
                 debug_value: format!("{stats:?}"),
                 logical_type: logical_type.clone(),
@@ -271,6 +293,7 @@ impl From<StatsScalar> for serde_json::Value {
                 let escaped_string = String::from_utf8(escaped_bytes).unwrap();
                 serde_json::Value::from(escaped_string)
             }
+            StatsScalar::Uuid(v) => serde_json::Value::from(v.hyphenated().to_string()),
         }
     }
 }
@@ -316,7 +339,7 @@ impl AddAssign for AggregatedStats {
             }
             (lhs, rhs) => lhs.or(rhs),
         };
-        self.max = match (self.min.take(), rhs.max) {
+        self.max = match (self.max.take(), rhs.max) {
             (Some(lhs), Some(rhs)) => {
                 if lhs > rhs {
                     Some(lhs)
@@ -463,6 +486,7 @@ mod tests {
     use lazy_static::lazy_static;
     use parquet::data_type::{ByteArray, FixedLenByteArray};
     use parquet::file::statistics::ValueStatistics;
+    use parquet::{basic::Compression, file::properties::WriterProperties};
     use serde_json::{json, Value};
     use std::collections::HashMap;
     use std::path::Path;
@@ -585,6 +609,20 @@ mod tests {
                 }),
                 Value::from(1243124142314.423),
             ),
+            (
+                simple_parquet_stat!(
+                    Statistics::FixedLenByteArray,
+                    FixedLenByteArray::from(
+                        [
+                            0xc2, 0xe8, 0xc7, 0xf7, 0xd1, 0xf9, 0x4b, 0x49, 0xa5, 0xd9, 0x4b, 0xfe,
+                            0x75, 0xc3, 0x17, 0xe2
+                        ]
+                        .to_vec()
+                    )
+                ),
+                Some(LogicalType::Uuid),
+                Value::from("c2e8c7f7-d1f9-4b49-a5d9-4bfe75c317e2"),
+            ),
         ];
 
         for (stats, logical_type, expected) in cases {
@@ -605,6 +643,12 @@ mod tests {
             .unwrap();
 
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+        writer = writer.with_writer_properties(
+            WriterProperties::builder()
+                .set_compression(Compression::SNAPPY)
+                .set_max_row_group_size(128)
+                .build(),
+        );
 
         let arrow_schema = writer.arrow_schema();
         let batch = record_batch_from_message(arrow_schema, JSON_ROWS.clone().as_ref()).unwrap();
@@ -614,7 +658,7 @@ mod tests {
         assert_eq!(add.len(), 1);
         let stats = add[0].get_stats().unwrap().unwrap();
 
-        let min_max_keys = vec!["meta", "some_int", "some_string", "some_bool"];
+        let min_max_keys = vec!["meta", "some_int", "some_string", "some_bool", "uuid"];
         let mut null_count_keys = vec!["some_list", "some_nested_list"];
         null_count_keys.extend_from_slice(min_max_keys.as_slice());
 
@@ -646,6 +690,9 @@ mod tests {
                 ("date", ColumnValueStat::Value(v)) => {
                     assert_eq!("2021-06-22", v.as_str().unwrap())
                 }
+                ("uuid", ColumnValueStat::Value(v)) => {
+                    assert_eq!("176c770d-92af-4a21-bf76-5d8c5261d659", v.as_str().unwrap())
+                }
                 _ => panic!("Key should not be present"),
             }
         }
@@ -674,6 +721,9 @@ mod tests {
                 ("date", ColumnValueStat::Value(v)) => {
                     assert_eq!("2021-06-22", v.as_str().unwrap())
                 }
+                ("uuid", ColumnValueStat::Value(v)) => {
+                    assert_eq!("a98bea04-d119-4f21-8edc-eb218b5849af", v.as_str().unwrap())
+                }
                 _ => panic!("Key should not be present"),
             }
         }
@@ -700,6 +750,7 @@ mod tests {
                 ("some_list", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("some_nested_list", ColumnCountStat::Value(v)) => assert_eq!(100, *v),
                 ("date", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
+                ("uuid", ColumnCountStat::Value(v)) => assert_eq!(0, *v),
                 _ => panic!("Key should not be present"),
             }
         }
@@ -803,6 +854,7 @@ mod tests {
                     "nullable": true, "metadata": {}
                },
                { "name": "date", "type": "string", "nullable": true, "metadata": {} },
+               { "name": "uuid", "type": "string", "nullable": true, "metadata": {} },
             ]
         });
         static ref V0_COMMIT: String = {
@@ -847,6 +899,7 @@ mod tests {
                 "some_list": ["a", "b", "c"],
                 "some_nested_list": [[42], [84]],
                 "date": "2021-06-22",
+                "uuid": "176c770d-92af-4a21-bf76-5d8c5261d659",
             }))
             .take(100)
             .chain(
@@ -867,6 +920,7 @@ mod tests {
                     "some_list": ["x", "y", "z"],
                     "some_nested_list": [[42], [84]],
                     "date": "2021-06-22",
+                    "uuid": "54f3e867-3f7b-4122-a452-9d74fb4fe1ba",
                 }))
                 .take(100),
             )
@@ -884,6 +938,7 @@ mod tests {
                     },
                     "some_nested_list": [[42], null],
                     "date": "2021-06-22",
+                    "uuid": "a98bea04-d119-4f21-8edc-eb218b5849af",
                 }))
                 .take(100),
             )

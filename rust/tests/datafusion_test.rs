@@ -11,10 +11,11 @@ use arrow::datatypes::{
 use arrow::record_batch::RecordBatch;
 use common::datafusion::context_with_delta_table_factory;
 use datafusion::assert_batches_sorted_eq;
+use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::TableProvider;
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
-use datafusion::physical_plan::{common::collect, file_format::ParquetExec, metrics::Label};
+use datafusion::physical_plan::{common::collect, metrics::Label};
 use datafusion::physical_plan::{visit_execution_plan, ExecutionPlan, ExecutionPlanVisitor};
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::ScalarValue::*;

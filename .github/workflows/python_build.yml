@@ -36,7 +36,7 @@ jobs:
         run: make check-rust
 
   test-minimal:
-    name: Python Build (Python 3.7 PyArrow 7.0.0)
+    name: Python Build (Python 3.7 PyArrow 8.0.0)
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-C debuginfo=0"
@@ -70,7 +70,7 @@ jobs:
           source venv/bin/activate
           make setup
           # Install minimum PyArrow version
-          pip install -e .[pandas,devel] pyarrow==7.0.0
+          pip install -e .[pandas,devel] pyarrow==8.0.0
         env:
           RUSTFLAGS: "-C debuginfo=0"
 

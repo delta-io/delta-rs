@@ -5,8 +5,8 @@
 use bytes::Bytes;
 use futures::stream::BoxStream;
 use object_store::{
-    local::LocalFileSystem, path::Path as ObjectStorePath, Error as ObjectStoreError, GetResult,
-    ListResult, MultipartId, ObjectMeta as ObjStoreObjectMeta, ObjectStore,
+    local::LocalFileSystem, path::Path as ObjectStorePath, Error as ObjectStoreError, GetOptions,
+    GetResult, ListResult, MultipartId, ObjectMeta as ObjStoreObjectMeta, ObjectStore,
     Result as ObjectStoreResult,
 };
 use std::ops::Range;
@@ -151,6 +151,14 @@ impl ObjectStore for FileStorageBackend {
 
     async fn get(&self, location: &ObjectStorePath) -> ObjectStoreResult<GetResult> {
         self.inner.get(location).await
+    }
+
+    async fn get_opts(
+        &self,
+        location: &ObjectStorePath,
+        options: GetOptions,
+    ) -> ObjectStoreResult<GetResult> {
+        self.inner.get_opts(location, options).await
     }
 
     async fn get_range(
