@@ -145,7 +145,7 @@ impl SchemaProvider for ListingSchemaProvider {
 mod tests {
     use super::*;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::catalog::catalog::{CatalogProvider, MemoryCatalogProvider};
+    use datafusion::catalog::{CatalogProvider, MemoryCatalogProvider};
     use datafusion::execution::context::SessionContext;
 
     #[test]

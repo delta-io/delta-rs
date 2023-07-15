@@ -284,6 +284,20 @@ impl Hash for Add {
     }
 }
 
+impl PartialEq for Add {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.size == other.size
+            && self.partition_values == other.partition_values
+            && self.modification_time == other.modification_time
+            && self.data_change == other.data_change
+            && self.stats == other.stats
+            && self.tags == other.tags
+    }
+}
+
+impl Eq for Add {}
+
 impl Add {
     /// Returns the Add action with path decoded.
     pub fn path_decoded(self) -> Result<Self, ProtocolError> {
@@ -594,6 +608,11 @@ pub enum DeltaOperation {
         /// The condition the to be deleted data must match
         predicate: Option<String>,
     },
+    /// Update data matching predicate from delta table
+    Update {
+        /// The update predicate
+        predicate: Option<String>,
+    },
 
     /// Represents a Delta `StreamingUpdate` operation.
     #[serde(rename_all = "camelCase")]
@@ -618,7 +637,14 @@ pub enum DeltaOperation {
     #[serde(rename_all = "camelCase")]
     /// Represents a `FileSystemCheck` operation
     FileSystemCheck {},
-    // TODO: Add more operations
+
+    /// Represents a `Restore` operation
+    Restore {
+        /// Version to restore
+        version: Option<i64>,
+        ///Datetime to restore
+        datetime: Option<i64>,
+    }, // TODO: Add more operations
 }
 
 impl DeltaOperation {
@@ -632,9 +658,11 @@ impl DeltaOperation {
             DeltaOperation::Create { .. } => "CREATE TABLE",
             DeltaOperation::Write { .. } => "WRITE",
             DeltaOperation::Delete { .. } => "DELETE",
+            DeltaOperation::Update { .. } => "UPDATE",
             DeltaOperation::StreamingUpdate { .. } => "STREAMING UPDATE",
             DeltaOperation::Optimize { .. } => "OPTIMIZE",
             DeltaOperation::FileSystemCheck { .. } => "FSCK",
+            DeltaOperation::Restore { .. } => "RESTORE",
         }
     }
 
@@ -675,7 +703,9 @@ impl DeltaOperation {
             | Self::FileSystemCheck {}
             | Self::StreamingUpdate { .. }
             | Self::Write { .. }
-            | Self::Delete { .. } => true,
+            | Self::Delete { .. }
+            | Self::Update { .. }
+            | Self::Restore { .. } => true,
         }
     }
 
@@ -695,6 +725,7 @@ impl DeltaOperation {
             // TODO add more operations
             Self::Write { predicate, .. } => predicate.clone(),
             Self::Delete { predicate, .. } => predicate.clone(),
+            Self::Update { predicate, .. } => predicate.clone(),
             _ => None,
         }
     }
@@ -783,11 +814,7 @@ pub(crate) async fn find_latest_check_point_for_version(
                 continue;
             }
             if cp.is_none() || curr_ver > cp.unwrap().version {
-                cp = Some(CheckPoint {
-                    version: curr_ver,
-                    size: 0,
-                    parts: None,
-                });
+                cp = Some(CheckPoint::new(curr_ver, 0, None));
             }
             continue;
         }
@@ -802,11 +829,7 @@ pub(crate) async fn find_latest_check_point_for_version(
             if cp.is_none() || curr_ver > cp.unwrap().version {
                 let parts_str = captures.get(2).unwrap().as_str();
                 let parts = parts_str.parse().unwrap();
-                cp = Some(CheckPoint {
-                    version: curr_ver,
-                    size: 0,
-                    parts: Some(parts),
-                });
+                cp = Some(CheckPoint::new(curr_ver, 0, Some(parts)));
             }
             continue;
         }

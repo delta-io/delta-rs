@@ -8,6 +8,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt};
 use lazy_static::lazy_static;
+use object_store::GetOptions;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -208,6 +209,13 @@ impl ObjectStore for DeltaObjectStore {
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
         self.storage.get(location).await
+    }
+
+    /// Perform a get request with options
+    ///
+    /// Note: options.range will be ignored if [`GetResult::File`]
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
+        self.storage.get_opts(location, options).await
     }
 
     /// Return the bytes that are stored at the specified location

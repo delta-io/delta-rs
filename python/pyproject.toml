@@ -18,7 +18,7 @@ classifiers = [
     "Programming Language :: Python :: 3.11"
 ]
 dependencies = [
-    "pyarrow>=7",
+    "pyarrow>=8",
     'typing-extensions;python_version<"3.8"',
 ]
 

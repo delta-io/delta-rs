@@ -113,7 +113,7 @@ fn python_type_to_schema(ob: PyObject, py: Python) -> PyResult<SchemaDataType> {
 ///  * "decimal(<precision>, <scale>)"
 ///
 /// :param data_type: string representation of the data type
-#[pyclass(module = "deltalake.schema", text_signature = "(data_type)")]
+#[pyclass(module = "deltalake.schema")]
 #[derive(Clone)]
 pub struct PrimitiveType {
     inner_type: String,
@@ -132,6 +132,7 @@ impl TryFrom<SchemaDataType> for PrimitiveType {
 #[pymethods]
 impl PrimitiveType {
     #[new]
+    #[pyo3(signature = (data_type))]
     fn new(data_type: String) -> PyResult<Self> {
         if data_type.starts_with("decimal") {
             if try_parse_decimal_type(&data_type).is_none() {
@@ -246,10 +247,7 @@ impl PrimitiveType {
 /// ArrayType(PrimitiveType("integer"), contains_null=True)
 /// >>> ArrayType("integer", contains_null=False)
 /// ArrayType(PrimitiveType("integer"), contains_null=False)
-#[pyclass(
-    module = "deltalake.schema",
-    text_signature = "(element_type, contains_null=True)"
-)]
+#[pyclass(module = "deltalake.schema")]
 #[derive(Clone)]
 pub struct ArrayType {
     inner_type: SchemaTypeArray,
@@ -411,10 +409,7 @@ impl ArrayType {
 /// MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=True)
 /// >>> MapType("integer", "string", value_contains_null=False)
 /// MapType(PrimitiveType("integer"), PrimitiveType("string"), value_contains_null=False)
-#[pyclass(
-    module = "deltalake.schema",
-    text_signature = "(key_type, value_type, value_contains_null=True)"
-)]
+#[pyclass(module = "deltalake.schema")]
 #[derive(Clone)]
 pub struct MapType {
     inner_type: SchemaTypeMap,
@@ -597,10 +592,7 @@ impl MapType {
 ///
 /// >>> Field("my_col", "integer", metadata={"custom_metadata": {"test": 2}})
 /// Field("my_col", PrimitiveType("integer"), nullable=True, metadata={"custom_metadata": {"test": 2}})
-#[pyclass(
-    module = "deltalake.schema",
-    text_signature = "(name, ty, nullable=True, metadata=None)"
-)]
+#[pyclass(module = "deltalake.schema")]
 #[derive(Clone)]
 pub struct Field {
     inner: SchemaField,
@@ -609,15 +601,15 @@ pub struct Field {
 #[pymethods]
 impl Field {
     #[new]
-    #[pyo3(signature = (name, ty, nullable = true, metadata = None))]
+    #[pyo3(signature = (name, r#type, nullable = true, metadata = None))]
     fn new(
         name: String,
-        ty: PyObject,
+        r#type: PyObject,
         nullable: bool,
         metadata: Option<PyObject>,
         py: Python,
     ) -> PyResult<Self> {
-        let ty = python_type_to_schema(ty, py)?;
+        let ty = python_type_to_schema(r#type, py)?;
 
         // Serialize and de-serialize JSON (it needs to be valid JSON anyways)
         let metadata: HashMap<String, serde_json::Value> = if let Some(ref json) = metadata {
@@ -778,7 +770,7 @@ impl Field {
 ///
 /// >>> StructType([Field("x", "integer"), Field("y", "string")])
 /// StructType([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveType("string"), nullable=True)])
-#[pyclass(subclass, module = "deltalake.schema", text_signature = "(fields)")]
+#[pyclass(subclass, module = "deltalake.schema")]
 #[derive(Clone)]
 pub struct StructType {
     inner_type: SchemaTypeStruct,
@@ -951,13 +943,13 @@ pub fn schema_to_pyobject(schema: &Schema, py: Python) -> PyResult<PyObject> {
 /// >>> import pyarrow as pa
 /// >>> Schema.from_pyarrow(pa.schema({"x": pa.int32(), "y": pa.string()}))
 /// Schema([Field(x, PrimitiveType("integer"), nullable=True), Field(y, PrimitiveType("string"), nullable=True)])
-#[pyclass(extends = StructType, name = "Schema", module = "deltalake.schema",
-text_signature = "(fields)")]
+#[pyclass(extends = StructType, name = "Schema", module = "deltalake.schema")]
 pub struct PySchema;
 
 #[pymethods]
 impl PySchema {
     #[new]
+    #[pyo3(signature = (fields))]
     fn new(fields: Vec<PyRef<Field>>) -> PyResult<(Self, StructType)> {
         let fields: Vec<SchemaField> = fields
             .into_iter()
