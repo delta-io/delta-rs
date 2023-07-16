@@ -11,7 +11,7 @@
 //! ```rust ignore
 //! let table = DeltaTable::try_from_uri("../path/to/table")
 //! let batch: RecordBatch = ...
-//! let mut writer = RecordBatchWriter::for_table(table, /*storage_options=*/ HashMap::new())
+//! let mut writer = RecordBatchWriter::for_table(table)
 //! writer.write(batch)?;
 //! let actions: Vec<action::Action> = writer.flush()?.iter()
 //!     .map(|add| Action::add(add.into()))
