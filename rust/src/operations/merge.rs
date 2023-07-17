@@ -28,6 +28,7 @@
 
 use arrow_schema::SchemaRef;
 use datafusion::error::Result as DataFusionResult;
+use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::{
     execution::context::SessionState,
     physical_plan::{
@@ -533,7 +534,7 @@ async fn execute(
         Expression::String(s) => snapshot.parse_predicate_expression(s)?,
     };
 
-    let schema = snapshot.arrow_schema()?;
+    let schema = snapshot.input_schema()?;
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
@@ -598,6 +599,11 @@ async fn execute(
     // TODO: Currently a NestedLoopJoin is used but we should target to support SortMergeJoin
     // This would require rewriting the join predicate to only contain equality between left and right columns and pushing some filters down
     // Ideally it would be nice if the optimizer / planner can pick the best join so maybe explore rewriting the entire operation using logical plans.
+
+    // NLJ requires both sides to have one partition for outer joins
+    let target = Arc::new(CoalescePartitionsExec::new(target));
+    let source = Arc::new(CoalescePartitionsExec::new(source));
+
     let join_schema = build_join_schema(&source.schema(), &target.schema(), &JoinType::Full);
     let predicate_expr = create_physical_expr(
         &predicate,
@@ -892,6 +898,7 @@ async fn execute(
     ));
 
     let projection = Arc::new(ProjectionExec::try_new(expressions, projection.clone())?);
+
     let target_count_plan = Arc::new(MetricObserverExec::new(projection, |batch, metrics| {
         MetricBuilder::new(metrics)
             .global_counter(TARGET_INSERTED_METRIC)
@@ -1079,6 +1086,7 @@ mod tests {
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;
     use crate::DeltaTable;
+    use arrow::datatypes::Schema as ArrowSchema;
     use arrow::record_batch::RecordBatch;
     use datafusion::assert_batches_sorted_eq;
     use datafusion::prelude::SessionContext;
@@ -1099,19 +1107,15 @@ mod tests {
         table
     }
 
-    #[tokio::test]
-    async fn test_merge() {
-        let schema = get_arrow_schema(&None);
-        let table = setup_table(None).await;
-
+    async fn write_data(table: DeltaTable, schema: &Arc<ArrowSchema>) -> DeltaTable {
         let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
+            Arc::clone(schema),
             vec![
                 Arc::new(arrow::array::StringArray::from(vec!["A", "B", "C", "D"])),
                 Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
                 Arc::new(arrow::array::StringArray::from(vec![
-                    "2021-02-02",
-                    "2021-02-02",
+                    "2021-02-01",
+                    "2021-02-01",
                     "2021-02-02",
                     "2021-02-02",
                 ])),
@@ -1119,11 +1123,19 @@ mod tests {
         )
         .unwrap();
         // write some data
-        let table = DeltaOps(table)
+        DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
             .await
-            .unwrap();
+            .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_merge() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(None).await;
+
+        let table = write_data(table, &schema).await;
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
 
@@ -1183,7 +1195,97 @@ mod tests {
             "+----+-------+------------+",
             "| id | value | modified   |",
             "+----+-------+------------+",
-            "| A  | 2     | 2021-02-02 |",
+            "| A  | 2     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-02 |",
+            "| C  | 20    | 2023-07-04 |",
+            "| D  | 100   | 2021-02-02 |",
+            "| X  | 30    | 2023-07-04 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_partitions() {
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 2);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        /* Validate the join predicate works with partition columns */
+
+        let (table, metrics) = DeltaOps(table)
+            .merge(
+                source,
+                col("id")
+                    .eq(col("source.id"))
+                    .and(col("modified").eq(lit("2021-02-02"))),
+            )
+            .with_source_alias("source")
+            .when_matched_update(|update| {
+                update
+                    .update("value", col("source.value"))
+                    .update("modified", col("source.modified"))
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate(col("value").eq(lit(1)))
+                    .update("value", col("value") + lit(1))
+            })
+            .unwrap()
+            .when_not_matched_by_source_update(|update| {
+                update
+                    .predicate(col("modified").eq(lit("2021-02-01")))
+                    .update("value", col("value") - lit(1))
+            })
+            .unwrap()
+            .when_not_matched_insert(|insert| {
+                insert
+                    .set("id", col("source.id"))
+                    .set("value", col("source.value"))
+                    .set("modified", col("source.modified"))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 2);
+        assert_eq!(table.get_file_uris().count(), 3);
+        assert_eq!(metrics.num_target_files_added, 3);
+        assert_eq!(metrics.num_target_files_removed, 2);
+        assert_eq!(metrics.num_target_rows_copied, 1);
+        assert_eq!(metrics.num_target_rows_updated, 3);
+        assert_eq!(metrics.num_target_rows_inserted, 2);
+        assert_eq!(metrics.num_target_rows_deleted, 0);
+        assert_eq!(metrics.num_output_rows, 6);
+        assert_eq!(metrics.num_source_rows, 3);
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 2     | 2021-02-01 |",
+            "| B  | 9     | 2021-02-01 |",
             "| B  | 10    | 2021-02-02 |",
             "| C  | 20    | 2023-07-04 |",
             "| D  | 100   | 2021-02-02 |",
