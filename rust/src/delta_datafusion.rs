@@ -1289,7 +1289,7 @@ pub(crate) async fn scan_memory_table(
     join_batches_with_add_actions(batches, map)
 }
 
-pub(crate) async fn find_files<'a>(
+pub async fn find_files<'a>(
     snapshot: &DeltaTableState,
     object_store: ObjectStoreRef,
     schema: Arc<ArrowSchema>,
