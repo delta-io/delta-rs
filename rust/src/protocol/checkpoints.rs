@@ -212,6 +212,7 @@ pub async fn cleanup_expired_logs_for(
             location: Path::from(""),
             last_modified: DateTime::<Utc>::MIN_UTC,
             size: 0,
+            e_tag: None,
         },
     );
     let file_needs_time_adjustment =
@@ -256,6 +257,7 @@ pub async fn cleanup_expired_logs_for(
                     location: current_file.1.location.clone(),
                     last_modified: last_file.1.last_modified.add(Duration::seconds(1)),
                     size: 0,
+                    e_tag: None,
                 },
             );
             maybe_delete_files.push(updated);
@@ -280,6 +282,33 @@ pub async fn cleanup_expired_logs_for(
             last_file = current_file;
         }
     }
+}
+
+/// Filter binary from the schema so that it isn't serialized into JSON,
+/// as arrow currently does not support this.
+fn filter_binary(schema: &Schema) -> Schema {
+    Schema::new(
+        schema
+            .get_fields()
+            .iter()
+            .flat_map(|f| match f.get_type() {
+                SchemaDataType::primitive(p) => {
+                    if p != "binary" {
+                        Some(f.clone())
+                    } else {
+                        None
+                    }
+                }
+                SchemaDataType::r#struct(s) => Some(SchemaField::new(
+                    f.get_name().to_string(),
+                    SchemaDataType::r#struct(filter_binary(&Schema::new(s.get_fields().clone()))),
+                    f.is_nullable(),
+                    f.get_metadata().clone(),
+                )),
+                _ => Some(f.clone()),
+            })
+            .collect::<Vec<_>>(),
+    )
 }
 
 fn parquet_bytes_from_state(
@@ -356,7 +385,7 @@ fn parquet_bytes_from_state(
 
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
-        <ArrowSchema as TryFrom<&Schema>>::try_from(&current_metadata.schema)?,
+        <ArrowSchema as TryFrom<&Schema>>::try_from(&filter_binary(&current_metadata.schema))?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
     );

@@ -149,6 +149,7 @@ fn try_configure_memory(storage_url: &Url) -> DeltaResult<Arc<DynObjectStore>> {
 }
 
 #[cfg(feature = "gcs")]
+#[allow(deprecated)]
 fn try_configure_gcs(
     storage_url: &Url,
     options: &StorageOptions,
@@ -172,6 +173,7 @@ fn try_configure_gcs(
 }
 
 #[cfg(feature = "azure")]
+#[allow(deprecated)]
 fn try_configure_azure(
     storage_url: &Url,
     options: &StorageOptions,
@@ -196,6 +198,7 @@ fn try_configure_azure(
 }
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+#[allow(deprecated)]
 fn try_configure_s3(
     storage_url: &Url,
     options: &StorageOptions,

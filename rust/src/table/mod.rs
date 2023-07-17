@@ -915,7 +915,6 @@ mod tests {
             ])
             .await
             .unwrap();
-
         (dt, tmp_dir)
     }
 }

@@ -10,7 +10,7 @@ pub mod parquet2_read;
 mod parquet_read;
 mod time_utils;
 
-#[cfg(all(feature = "arrow"))]
+#[cfg(feature = "arrow")]
 use arrow_schema::ArrowError;
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -77,7 +77,7 @@ pub enum ProtocolError {
     },
 
     /// Error returned when converting the schema to Arrow format failed.
-    #[cfg(all(feature = "arrow"))]
+    #[cfg(feature = "arrow")]
     #[error("Failed to convert into Arrow schema: {}", .source)]
     Arrow {
         /// Arrow error details returned when converting the schema in Arrow format failed
@@ -285,6 +285,20 @@ impl Hash for Add {
         self.path.hash(state);
     }
 }
+
+impl PartialEq for Add {
+    fn eq(&self, other: &Self) -> bool {
+        self.path == other.path
+            && self.size == other.size
+            && self.partition_values == other.partition_values
+            && self.modification_time == other.modification_time
+            && self.data_change == other.data_change
+            && self.stats == other.stats
+            && self.tags == other.tags
+    }
+}
+
+impl Eq for Add {}
 
 impl Add {
     /// Returns the Add action with path decoded.
@@ -625,7 +639,14 @@ pub enum DeltaOperation {
     #[serde(rename_all = "camelCase")]
     /// Represents a `FileSystemCheck` operation
     FileSystemCheck {},
-    // TODO: Add more operations
+
+    /// Represents a `Restore` operation
+    Restore {
+        /// Version to restore
+        version: Option<i64>,
+        ///Datetime to restore
+        datetime: Option<i64>,
+    }, // TODO: Add more operations
 }
 
 impl DeltaOperation {
@@ -643,6 +664,7 @@ impl DeltaOperation {
             DeltaOperation::StreamingUpdate { .. } => "STREAMING UPDATE",
             DeltaOperation::Optimize { .. } => "OPTIMIZE",
             DeltaOperation::FileSystemCheck { .. } => "FSCK",
+            DeltaOperation::Restore { .. } => "RESTORE",
         }
     }
 
@@ -684,7 +706,8 @@ impl DeltaOperation {
             | Self::StreamingUpdate { .. }
             | Self::Write { .. }
             | Self::Delete { .. }
-            | Self::Update { .. } => true,
+            | Self::Update { .. }
+            | Self::Restore { .. } => true,
         }
     }
 

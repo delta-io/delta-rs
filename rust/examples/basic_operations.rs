@@ -4,7 +4,12 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use deltalake::operations::collect_sendable_stream;
-use deltalake::{protocol::SaveMode, DeltaOps, SchemaDataType, SchemaField};
+use deltalake::{action::SaveMode, DeltaOps, SchemaDataType, SchemaField};
+use parquet::{
+    basic::{Compression, ZstdLevel},
+    file::properties::WriterProperties,
+};
+
 use std::sync::Arc;
 
 fn get_table_columns() -> Vec<SchemaField> {
@@ -55,15 +60,27 @@ async fn main() -> Result<(), deltalake::errors::DeltaTableError> {
 
     assert_eq!(table.version(), 0);
 
+    let writer_properties = WriterProperties::builder()
+        .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap()))
+        .build();
+
     let batch = get_table_batches();
-    let table = DeltaOps(table).write(vec![batch.clone()]).await?;
+    let table = DeltaOps(table)
+        .write(vec![batch.clone()])
+        .with_writer_properties(writer_properties)
+        .await?;
 
     assert_eq!(table.version(), 1);
+
+    let writer_properties = WriterProperties::builder()
+        .set_compression(Compression::ZSTD(ZstdLevel::try_new(3).unwrap()))
+        .build();
 
     // To overwrite instead of append (which is the default), use `.with_save_mode`:
     let table = DeltaOps(table)
         .write(vec![batch.clone()])
         .with_save_mode(SaveMode::Overwrite)
+        .with_writer_properties(writer_properties)
         .await?;
 
     assert_eq!(table.version(), 2);

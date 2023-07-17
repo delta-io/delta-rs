@@ -9,11 +9,12 @@ use serde_json::Value;
 
 use crate::errors::DeltaTableError;
 use crate::operations::transaction::commit;
-use crate::protocol::{Action, Add, ColumnCountStat, DeltaOperation};
+use crate::protocol::{Action, Add, ColumnCountStat, DeltaOperation, SaveMode};
 use crate::DeltaTable;
 
 pub use json::JsonWriter;
 pub use record_batch::RecordBatchWriter;
+pub use stats::create_add;
 
 pub mod json;
 pub mod record_batch;
@@ -140,7 +141,7 @@ pub trait DeltaWriter<T> {
             None
         };
         let operation = DeltaOperation::Write {
-            mode: crate::protocol::SaveMode::Append,
+            mode: SaveMode::Append,
             partition_by,
             predicate: None,
         };
