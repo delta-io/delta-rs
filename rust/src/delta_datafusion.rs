@@ -1085,7 +1085,7 @@ impl TreeNodeVisitor for FindFilesExprProperties {
     }
 }
 
-pub(crate) struct FindFiles {
+pub struct FindFiles {
     pub candidates: Vec<Add>,
     /// Was a physical read to the datastore required to determine the candidates
     pub partition_scan: bool,
