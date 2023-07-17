@@ -4,11 +4,11 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use arrow::compute::take;
-use arrow_array::{Int32Array, RecordBatch, StringArray, UInt32Array};
+use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray, StructArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 
 use crate::operations::create::CreateBuilder;
-use crate::schema::Schema;
+use crate::schema::{Schema, SchemaTypeStruct};
 use crate::table::DeltaTableMetaData;
 use crate::{DeltaTable, DeltaTableBuilder, SchemaDataType, SchemaField};
 
