@@ -13,18 +13,18 @@ use super::file::FileStorageBackend;
 use super::utils::str_is_truthy;
 use crate::errors::{DeltaResult, DeltaTableError};
 
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+#[cfg(any(not(feature = "disable-s3"), feature = "s3-native-tls"))]
 use super::s3::{S3StorageBackend, S3StorageOptions};
 #[cfg(feature = "hdfs")]
 use datafusion_objectstore_hdfs::object_store::hdfs::HadoopFileSystem;
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+#[cfg(any(not(feature = "disable-s3"), feature = "s3-native-tls"))]
 use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
 #[cfg(feature = "azure")]
 use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
 #[cfg(feature = "gcs")]
 use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
 #[cfg(any(
-    feature = "s3",
+    not(feature = "disable-s3"),
     feature = "s3-native-tls",
     feature = "gcs",
     feature = "azure"
@@ -71,7 +71,7 @@ impl StorageOptions {
     }
 
     /// Subset of options relevant for s3 storage
-    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+    #[cfg(any(not(feature = "disable-s3"), feature = "s3-native-tls"))]
     pub fn as_s3_options(&self) -> HashMap<AmazonS3ConfigKey, String> {
         self.0
             .iter()
@@ -197,7 +197,7 @@ fn try_configure_azure(
     })
 }
 
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+#[cfg(any(not(feature = "disable-s3"), feature = "s3-native-tls"))]
 #[allow(deprecated)]
 fn try_configure_s3(
     storage_url: &Url,
@@ -213,7 +213,7 @@ fn try_configure_s3(
     url_prefix_handler(store, storage_url)
 }
 
-#[cfg(not(any(feature = "s3", feature = "s3-native-tls")))]
+#[cfg(not(any(not(feature = "disable-s3"), feature = "s3-native-tls")))]
 fn try_configure_s3(
     storage_url: &Url,
     _options: &StorageOptions,

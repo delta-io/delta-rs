@@ -1,5 +1,5 @@
 #![cfg(all(
-    any(feature = "s3", feature = "s3-native-tls"),
+    any(not(feature = "disable-s3"), feature = "s3-native-tls"),
     feature = "integration_test"
 ))]
 use bytes::Bytes;

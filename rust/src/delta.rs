@@ -909,7 +909,7 @@ pub fn crate_version() -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+    #[cfg(any(not(feature = "disable-s3"), feature = "s3-native-tls"))]
     use crate::builder::DeltaTableBuilder;
     use crate::operations::create::CreateBuilder;
     use pretty_assertions::assert_eq;
@@ -925,7 +925,7 @@ mod tests {
         drop(tmp_dir);
     }
 
-    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+    #[cfg(any(not(feature = "disable-s3"), feature = "s3-native-tls"))]
     #[test]
     fn normalize_table_uri_s3() {
         std::env::set_var("AWS_DEFAULT_REGION", "us-east-1");

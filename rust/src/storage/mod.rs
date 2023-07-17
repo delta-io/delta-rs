@@ -22,7 +22,7 @@ pub mod config;
 pub mod file;
 pub mod utils;
 
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+#[cfg(any(not(feature = "disable-s3"), feature = "s3-native-tls"))]
 pub mod s3;
 
 #[cfg(feature = "datafusion")]

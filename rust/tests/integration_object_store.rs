@@ -22,7 +22,7 @@ async fn test_object_store_azure() -> TestResult {
     Ok(())
 }
 
-#[cfg(feature = "s3")]
+#[cfg(not(feature = "disable-s3"))]
 #[tokio::test]
 #[serial]
 async fn test_object_store_aws() -> TestResult {

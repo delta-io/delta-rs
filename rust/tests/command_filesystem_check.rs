@@ -15,7 +15,7 @@ async fn test_filesystem_check_local() -> TestResult {
     Ok(test_filesystem_check(StorageIntegration::Local).await?)
 }
 
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+#[cfg(any(not(feature = "disable-s3"), feature = "s3-native-tls"))]
 #[tokio::test]
 #[serial]
 async fn test_filesystem_check_aws() -> TestResult {

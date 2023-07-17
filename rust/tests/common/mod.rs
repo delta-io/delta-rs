@@ -20,7 +20,7 @@ pub mod clock;
 pub mod datafusion;
 #[cfg(feature = "hdfs")]
 pub mod hdfs;
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+#[cfg(any(not(feature = "disable-s3"), feature = "s3-native-tls"))]
 pub mod s3;
 pub mod schemas;
 
@@ -47,7 +47,7 @@ impl TestContext {
             Ok("LOCALFS") | Err(std::env::VarError::NotPresent) => setup_local_context().await,
             #[cfg(feature = "azure")]
             Ok("AZURE_GEN2") => adls::setup_azure_gen2_context().await,
-            #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+            #[cfg(any(not(feature = "disable-s3"), feature = "s3-native-tls"))]
             Ok("S3_LOCAL_STACK") => s3::setup_s3_context().await,
             #[cfg(feature = "hdfs")]
             Ok("HDFS") => hdfs::setup_hdfs_context(),
