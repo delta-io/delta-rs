@@ -40,6 +40,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-C debuginfo=0"
+      CARGO_INCREMENTAL: 0
 
     # use the same environment we have for python release
     container: quay.io/pypa/manylinux2014_x86_64:2022-09-24-4f086d0
@@ -88,6 +89,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-C debuginfo=1"
+      CARGO_INCREMENTAL: 0
 
     steps:
       - uses: actions/checkout@v3
@@ -140,6 +142,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-C debuginfo=0"
+      CARGO_INCREMENTAL: 0
 
     steps:
       - uses: actions/checkout@v2
@@ -189,6 +192,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-C debuginfo=0"
+      CARGO_INCREMENTAL: 0
 
     steps:
       - uses: actions/checkout@v3
@@ -228,6 +232,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-C debuginfo=0"
+      CARGO_INCREMENTAL: 0
 
     strategy:
       matrix:
