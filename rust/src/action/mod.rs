@@ -571,6 +571,18 @@ impl Action {
     }
 }
 
+#[allow(clippy::large_enum_variant)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+/// Used to record the operations performed to the Delta Log
+pub struct MergePredicate {
+    /// The type of merge operation performed
+    pub action_type: String,
+    /// The predicate used for the merge operation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<String>,
+}
+
 /// Operation performed when creating a new log entry with one or more actions.
 /// This is a key element of the `CommitInfo` action.
 #[allow(clippy::large_enum_variant)]
@@ -616,9 +628,19 @@ pub enum DeltaOperation {
     },
 
     /// Merge data with a source data with the following predicate
+    #[serde(rename_all = "camelCase")]
     Merge {
         /// The merge predicate
         predicate: Option<String>,
+
+        /// Match operations performed
+        matched_predicates: Vec<MergePredicate>,
+
+        /// Not Match operations performed
+        not_matched_predicates: Vec<MergePredicate>,
+
+        /// Not Match by Source operations performed
+        not_matched_by_source_predicates: Vec<MergePredicate>,
     },
 
     /// Represents a Delta `StreamingUpdate` operation.
@@ -735,6 +757,7 @@ impl DeltaOperation {
             Self::Write { predicate, .. } => predicate.clone(),
             Self::Delete { predicate, .. } => predicate.clone(),
             Self::Update { predicate, .. } => predicate.clone(),
+            Self::Merge { predicate, .. } => predicate.clone(),
             _ => None,
         }
     }

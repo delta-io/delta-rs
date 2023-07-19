@@ -1,10 +1,14 @@
-//! Merge data from a source dataset with the target Delta Table based on a join predicate.
-//! A full outer join is performed which results in source and target records that match,
-//! source records that do not match, or target records that do not match.
+//! Merge data from a source dataset with the target Delta Table based on a join
+//! predicate.  A full outer join is performed which results in source and
+//! target records that match, source records that do not match, or target
+//! records that do not match.
 //!
 //! Users can specify update, delete, and insert operations for these categories
-//! and specify additional predicates for finer control. The order of operations specified matter.
-//! See [`MergeBuilder`] for more information
+//! and specify additional predicates for finer control. The order of operations
+//! specified matter.  See [`MergeBuilder`] for more information
+//!
+//! *WARNING* The current implementation rewrites the entire delta table so only
+//! use on small to medium sized tables. Enhancements tracked at #850
 //!
 //! # Example
 //! ```rust ignore
@@ -55,6 +59,7 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
+use crate::action::MergePredicate;
 use crate::operations::datafusion_utils::MetricObserverExec;
 use crate::{
     action::{Action, DeltaOperation, Remove},
@@ -441,7 +446,7 @@ impl DeleteBuilder {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone)]
 enum OperationType {
     Update,
     Delete,
@@ -538,8 +543,12 @@ async fn execute(
 
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
-    // This would allow us to perform statistics/partition pruning
-    // E.G Expression source.id = id and to_dt = '9999-12-31' -Becomes-> to_dt = '9999-12-31'
+    // This would allow us to perform statistics/partition pruning E.G
+    // Expression source.id = id and to_dt = '9999-12-31' -Becomes-> to_dt =
+    // '9999-12-31'
+    //
+    // If the user specified any not_source_match operations then those
+    // predicates also need to be considered when pruning
 
     let target = parquet_scan_from_actions(
         snapshot,
@@ -657,9 +666,11 @@ async fn execute(
         when_expr: &mut Vec<Expr>,
         then_expr: &mut Vec<Expr>,
         base_expr: &Expr,
-    ) {
-        for action in operations {
-            let predicate = match &action.predicate {
+    ) -> DeltaResult<Vec<MergePredicate>> {
+        let mut predicates = Vec::with_capacity(operations.len());
+
+        for op in operations {
+            let predicate = match &op.predicate {
                 Some(predicate) => base_expr.clone().and(predicate.to_owned()),
                 None => base_expr.clone(),
             };
@@ -667,33 +678,54 @@ async fn execute(
             when_expr.push(predicate);
             then_expr.push(lit(ops.len() as i32));
 
-            ops.push((action.operations, action.r#type));
+            ops.push((op.operations, op.r#type));
+
+            let action_type = match op.r#type {
+                OperationType::Update => "update",
+                OperationType::Delete => "delete",
+                OperationType::Insert => "insert",
+                OperationType::SourceDelete => {
+                    return Err(DeltaTableError::Generic("Invalid action type".to_string()))
+                }
+                OperationType::Copy => {
+                    return Err(DeltaTableError::Generic("Invalid action type".to_string()))
+                }
+            };
+
+            let action_type = action_type.to_string();
+            let predicate = op.predicate.map(|expr| expr.display_name().unwrap());
+
+            predicates.push(MergePredicate {
+                action_type,
+                predicate,
+            });
         }
+        Ok(predicates)
     }
 
-    update_case(
+    let match_operations = update_case(
         match_operations,
         &mut ops,
         &mut when_expr,
         &mut then_expr,
         &matched,
-    );
+    )?;
 
-    update_case(
+    let not_match_target_operations = update_case(
         not_match_target_operations,
         &mut ops,
         &mut when_expr,
         &mut then_expr,
         &not_matched_target,
-    );
+    )?;
 
-    update_case(
+    let not_match_source_operations = update_case(
         not_match_source_operations,
         &mut ops,
         &mut when_expr,
         &mut then_expr,
         &not_matched_source,
-    );
+    )?;
 
     when_expr.push(matched);
     then_expr.push(lit(ops.len() as i32));
@@ -1021,6 +1053,9 @@ async fn execute(
     if !actions.is_empty() {
         let operation = DeltaOperation::Merge {
             predicate: Some(predicate.canonical_name()),
+            matched_predicates: match_operations,
+            not_matched_predicates: not_match_target_operations,
+            not_matched_by_source_predicates: not_match_source_operations,
         };
         version = commit(
             object_store.as_ref(),
@@ -1092,6 +1127,7 @@ mod tests {
     use datafusion::prelude::SessionContext;
     use datafusion_expr::col;
     use datafusion_expr::lit;
+    use serde_json::json;
     use std::sync::Arc;
 
     async fn setup_table(partitions: Option<Vec<&str>>) -> DeltaTable {
@@ -1155,7 +1191,7 @@ mod tests {
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
 
-        let (table, metrics) = DeltaOps(table)
+        let (mut table, metrics) = DeltaOps(table)
             .merge(source, col("id").eq(col("source.id")))
             .with_source_alias("source")
             .when_matched_update(|update| {
@@ -1191,6 +1227,24 @@ mod tests {
         assert_eq!(metrics.num_output_rows, 5);
         assert_eq!(metrics.num_source_rows, 3);
 
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("id = source.id"));
+        assert_eq!(
+            parameters["matchedPredicates"],
+            json!(r#"[{"actionType":"update"}]"#)
+        );
+        assert_eq!(
+            parameters["notMatchedPredicates"],
+            json!(r#"[{"actionType":"insert"}]"#)
+        );
+        // Todo: Expected this predicate to actually be 'value = 1'. Predicate should contain a valid sql expression
+        assert_eq!(
+            parameters["notMatchedBySourcePredicates"],
+            json!(r#"[{"actionType":"update","predicate":"value = Int32(1)"}]"#)
+        );
+
         let expected = vec![
             "+----+-------+------------+",
             "| id | value | modified   |",
@@ -1208,6 +1262,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_merge_partitions() {
+        /* Validate the join predicate works with partition columns */
         let schema = get_arrow_schema(&None);
         let table = setup_table(Some(vec!["modified"])).await;
 
@@ -1230,8 +1285,6 @@ mod tests {
         )
         .unwrap();
         let source = ctx.read_batch(batch).unwrap();
-
-        /* Validate the join predicate works with partition columns */
 
         let (table, metrics) = DeltaOps(table)
             .merge(
@@ -1290,6 +1343,269 @@ mod tests {
             "| C  | 20    | 2023-07-04 |",
             "| D  | 100   | 2021-02-02 |",
             "| X  | 30    | 2023-07-04 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_delete_matched() {
+        // Validate behaviours of match delete
+
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 2);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (mut table, metrics) = DeltaOps(table)
+            .merge(source, col("id").eq(col("source.id")))
+            .with_source_alias("source")
+            .when_matched_delete(|delete| delete)
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 2);
+        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(metrics.num_target_files_added, 2);
+        assert_eq!(metrics.num_target_files_removed, 2);
+        assert_eq!(metrics.num_target_rows_copied, 2);
+        assert_eq!(metrics.num_target_rows_updated, 0);
+        assert_eq!(metrics.num_target_rows_inserted, 0);
+        assert_eq!(metrics.num_target_rows_deleted, 2);
+        assert_eq!(metrics.num_output_rows, 2);
+        assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("id = source.id"));
+        assert_eq!(
+            parameters["matchedPredicates"],
+            json!(r#"[{"actionType":"delete"}]"#)
+        );
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        // Test match delete again but with a predicate
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 2);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (mut table, metrics) = DeltaOps(table)
+            .merge(source, col("id").eq(col("source.id")))
+            .with_source_alias("source")
+            .when_matched_delete(|delete| delete.predicate(col("source.value").lt_eq(lit(10))))
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 2);
+        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(metrics.num_target_files_added, 2);
+        assert_eq!(metrics.num_target_files_removed, 2);
+        assert_eq!(metrics.num_target_rows_copied, 3);
+        assert_eq!(metrics.num_target_rows_updated, 0);
+        assert_eq!(metrics.num_target_rows_inserted, 0);
+        assert_eq!(metrics.num_target_rows_deleted, 1);
+        assert_eq!(metrics.num_output_rows, 3);
+        assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("id = source.id"));
+        assert_eq!(
+            parameters["matchedPredicates"],
+            json!(r#"[{"actionType":"delete","predicate":"source.value <= Int32(10)"}]"#)
+        );
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "| D  | 100   | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+    }
+
+    #[tokio::test]
+    async fn test_merge_delete_not_matched() {
+        // Validate behaviours of not match delete
+
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 2);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (mut table, metrics) = DeltaOps(table)
+            .merge(source, col("id").eq(col("source.id")))
+            .with_source_alias("source")
+            .when_not_matched_by_source_delete(|delete| delete)
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 2);
+        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(metrics.num_target_files_added, 2);
+        assert_eq!(metrics.num_target_files_removed, 2);
+        assert_eq!(metrics.num_target_rows_copied, 2);
+        assert_eq!(metrics.num_target_rows_updated, 0);
+        assert_eq!(metrics.num_target_rows_inserted, 0);
+        assert_eq!(metrics.num_target_rows_deleted, 2);
+        assert_eq!(metrics.num_output_rows, 2);
+        assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("id = source.id"));
+        assert_eq!(
+            parameters["notMatchedBySourcePredicates"],
+            json!(r#"[{"actionType":"delete"}]"#)
+        );
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
+            "+----+-------+------------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        let schema = get_arrow_schema(&None);
+        let table = setup_table(Some(vec!["modified"])).await;
+
+        let table = write_data(table, &schema).await;
+        assert_eq!(table.version(), 1);
+        assert_eq!(table.get_file_uris().count(), 2);
+
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::StringArray::from(vec!["B", "C", "X"])),
+                Arc::new(arrow::array::Int32Array::from(vec![10, 20, 30])),
+                Arc::new(arrow::array::StringArray::from(vec![
+                    "2021-02-02",
+                    "2023-07-04",
+                    "2023-07-04",
+                ])),
+            ],
+        )
+        .unwrap();
+        let source = ctx.read_batch(batch).unwrap();
+
+        let (mut table, metrics) = DeltaOps(table)
+            .merge(source, col("id").eq(col("source.id")))
+            .with_source_alias("source")
+            .when_not_matched_by_source_delete(|delete| {
+                delete.predicate(col("modified").gt(lit("2021-02-01")))
+            })
+            .unwrap()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 2);
+        assert_eq!(table.get_file_uris().count(), 2);
+        assert_eq!(metrics.num_target_files_added, 2);
+        assert_eq!(metrics.num_target_files_removed, 2);
+        assert_eq!(metrics.num_target_rows_copied, 3);
+        assert_eq!(metrics.num_target_rows_updated, 0);
+        assert_eq!(metrics.num_target_rows_inserted, 0);
+        assert_eq!(metrics.num_target_rows_deleted, 1);
+        assert_eq!(metrics.num_output_rows, 3);
+        assert_eq!(metrics.num_source_rows, 3);
+
+        let commit_info = table.history(None).await.unwrap();
+        let last_commit = &commit_info[commit_info.len() - 1];
+        let parameters = last_commit.operation_parameters.clone().unwrap();
+        assert_eq!(parameters["predicate"], json!("id = source.id"));
+        assert_eq!(
+            parameters["notMatchedBySourcePredicates"],
+            json!(r#"[{"actionType":"delete","predicate":"modified > Utf8(\"2021-02-01\")"}]"#)
+        );
+
+        let expected = vec![
+            "+----+-------+------------+",
+            "| id | value | modified   |",
+            "+----+-------+------------+",
+            "| A  | 1     | 2021-02-01 |",
+            "| B  | 10    | 2021-02-01 |",
+            "| C  | 10    | 2021-02-02 |",
             "+----+-------+------------+",
         ];
         let actual = get_data(&table).await;
