@@ -32,7 +32,7 @@ async fn test_object_store_aws() -> TestResult {
 
 // TODO pending emulator support in object store crate
 #[ignore]
-#[cfg(all(feature = "gcs"))]
+#[cfg(feature = "gcs")]
 #[tokio::test]
 #[serial]
 async fn test_object_store_google() -> TestResult {
