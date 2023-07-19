@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.13.0"
+version = "0.13.1"
 rust-version = "1.64"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta.rs"
