@@ -69,6 +69,9 @@ jobs:
       # Disable full debug symbol generation to speed up CI build and keep memory down
       # "1" means line tables only, which is useful for panic tracebacks.
       RUSTFLAGS: -C debuginfo=1
+      # Disable incremental builds by cargo for CI which should save disk space
+      # and hopefully avoid final link "No space left on device"
+      CARGO_INCREMENTAL: 0
 
     steps:
       - uses: actions/checkout@v3
@@ -89,6 +92,7 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     env:
+      CARGO_INCREMENTAL: 0
       # Disable full debug symbol generation to speed up CI build and keep memory down
       # "1" means line tables only, which is useful for panic tracebacks.
       RUSTFLAGS: "-C debuginfo=1"
@@ -146,6 +150,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-C debuginfo=0"
+      CARGO_INCREMENTAL: 0
 
     steps:
       - uses: actions/checkout@v3
