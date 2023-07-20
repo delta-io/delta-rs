@@ -9,17 +9,20 @@ use std::fmt::Formatter;
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
-
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
+//use futures::stream;
+//use futures::FutureExt;
 use lazy_static::lazy_static;
 use log::debug;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use object_store::{path::Path, Error as ObjectStoreError, ObjectStore, GetResult, Result as ObjectStoreResult};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
+
+
 
 use super::action;
 use super::action::{find_latest_check_point_for_version, get_last_checkpoint, Action};
@@ -500,6 +503,41 @@ impl DeltaTable {
         Ok(PeekCommit::New(next_version, actions))
     }
 
+    /// Get the list of actions for the next commit - version that takes in a buffer
+    pub async fn peek_next_commit_with_buffer(
+        &self,
+        current_version: i64,
+        clb: Option<ObjectStoreResult<GetResult>>
+    ) -> Result<PeekCommit, DeltaTableError> {
+        let next_version = current_version + 1;
+
+        let commit_log_bytes = clb;
+
+        let commit_log_bytes = match commit_log_bytes {
+            Some(Err(ObjectStoreError::NotFound { .. })) => return Ok(PeekCommit::UpToDate),
+            Some(Err(err)) => Err(err),
+            Some(Ok(result)) => result.bytes().await,
+            None => todo!()
+        }?;
+
+        debug!("parsing commit with version {next_version}...");
+        let reader = BufReader::new(Cursor::new(commit_log_bytes));
+
+        let mut actions = Vec::new();
+        for re_line in reader.lines() {
+            let line = re_line?;
+            let lstr = line.as_str();
+            let action =
+                serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
+                    json_err: e,
+                    version: next_version,
+                    line,
+                })?;
+            actions.push(action);
+        }
+        Ok(PeekCommit::New(next_version, actions))
+    }
+
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
     /// loading the last checkpoint and incrementally applying each version since.
     #[cfg(any(feature = "parquet", feature = "parquet2"))]
@@ -528,6 +566,26 @@ impl DeltaTable {
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         self.update_incremental(None).await
     }
+    /*
+    pub async fn get_logstream<'a>(&'a mut self) -> impl futures::Stream<Item = ObjectStoreResult<GetResult>> + 'a {
+       let foo = futures::stream::unfold(self.version(),  |i| {
+            let loc = commit_uri_from_version(i+1);
+            /*
+            async move {
+                let result = tokio::task::spawn_blocking(move || {
+                    // Access the storage inside the blocking task.
+                    storage.get(&loc)
+                }).await.unwrap();
+        
+                Some((result, i+1))
+            }*/
+            async move {
+                let result = tokio::spawn( &mut self.storage.get(&loc));
+                Some((result, i+1))
+            }
+        });
+        foo
+    }*/
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
@@ -539,9 +597,55 @@ impl DeltaTable {
             "incremental update with version({}) and max_version({max_version:?})",
             self.version(),
         );
+        
+        // based on example
+        // https://gendignoux.com/blog/2021/04/01/rust-async-streams-futures-part1.html#ordered-buffering
+        // just iterate infinitely as we can check later if we hit max
+        /*let logstream = stream::iter(self.version()..).map(|i| {
+            //let loc = futures::future::ok(commit_uri_from_version(i+1));
+            let loc = Arc::new(commit_uri_from_version(i+1));
+            //loc.and_then({
+            //    |_loc| self.storage.get(&_loc)
+            //})
+            async move {
+                self.storage.get(&loc)
+            }
+        });*/
+        let store = self.storage.clone();
+        let logstream = futures::stream::unfold(self.version(),  |i| {
+            let loc = commit_uri_from_version(i+1).clone();
+            let store2 = store.clone();
+            async move {
+                let result = tokio::spawn( async move {
+                    let store3 = store2.clone();
+                    let out = store3.get(&loc);
+                    out.await
+                });
+                Some((result, i+1))
+            }
+        }).boxed();
+        // why mut?
+        let mut buffer = logstream.buffered(50);
+        
+        while let PeekCommit::New(new_version, actions) = {
+            let buf_res_opt = buffer.next().await;
+            let buf_res = match buf_res_opt {
+                Some(x) => x,
+                None => todo!()
+            };
 
-        while let PeekCommit::New(new_version, actions) =
-            self.peek_next_commit(self.version()).await?
+            let buf = match buf_res {
+                Ok(x) => x,
+                Err(_) => todo!()
+            };
+
+            let foo = buf;
+            match foo {
+                Ok(x) => self.peek_next_commit_with_buffer(self.version(), Some(Ok(x))).await,
+                Err(ObjectStoreError::NotFound { .. }) => Ok(PeekCommit::UpToDate),
+                Err(x) => Err(DeltaTableError::GenericError { source: Box::new(x) })
+            }
+        }?
         {
             debug!("merging table state with version: {new_version}");
             let s = DeltaTableState::from_actions(actions, new_version)?;
@@ -558,7 +662,6 @@ impl DeltaTable {
 
         Ok(())
     }
-
     /// Loads the DeltaTable state for the given version.
     pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
         // check if version is valid
