@@ -11,8 +11,6 @@ use std::sync::Arc;
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
-//use futures::stream;
-//use futures::FutureExt;
 use lazy_static::lazy_static;
 use log::debug;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore, GetResult, Result as ObjectStoreResult};
@@ -21,8 +19,6 @@ use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
-
-
 
 use super::action;
 use super::action::{find_latest_check_point_for_version, get_last_checkpoint, Action};
@@ -566,26 +562,6 @@ impl DeltaTable {
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
         self.update_incremental(None).await
     }
-    /*
-    pub async fn get_logstream<'a>(&'a mut self) -> impl futures::Stream<Item = ObjectStoreResult<GetResult>> + 'a {
-       let foo = futures::stream::unfold(self.version(),  |i| {
-            let loc = commit_uri_from_version(i+1);
-            /*
-            async move {
-                let result = tokio::task::spawn_blocking(move || {
-                    // Access the storage inside the blocking task.
-                    storage.get(&loc)
-                }).await.unwrap();
-        
-                Some((result, i+1))
-            }*/
-            async move {
-                let result = tokio::spawn( &mut self.storage.get(&loc));
-                Some((result, i+1))
-            }
-        });
-        foo
-    }*/
 
     /// Updates the DeltaTable to the latest version by incrementally applying newer versions.
     /// It assumes that the table is already updated to the current version `self.version`.
@@ -598,13 +574,9 @@ impl DeltaTable {
             self.version(),
         );
         
-        // based on example
-        // https://gendignoux.com/blog/2021/04/01/rust-async-streams-futures-part1.html#ordered-buffering
-        // just iterate infinitely as we can check later if we hit max
         let store = self.storage.clone();
         let logstream = futures::stream::iter(self.version()..).map(|i| {
             let store2 = store.clone();
-            //let loc = Arc::new(commit_uri_from_version(i+1));
             let loc = commit_uri_from_version(i+1).clone();
             async move {
                 let out = store2.get(&loc);
@@ -612,12 +584,12 @@ impl DeltaTable {
             }
         });
 
-        // why mut needed here and is it OK?
         let buf_size = 50;
+        // why is mut needed here and is it OK?
         let mut buffer = {
             match max_version {
                 Some(n) => logstream.take((n-self.version()+2).try_into().unwrap()).buffered(buf_size),
-                None => logstream.take(usize::MAX).buffered(buf_size)
+                None => logstream.take(usize::MAX).buffered(buf_size) // need take to have compatible types
             }
         };
 
@@ -628,13 +600,6 @@ impl DeltaTable {
                 None => todo!()
             };
 
-            /*
-            let buf = match buf_res {
-                Ok(x) => x,
-                Err(_) => todo!()
-            };
-
-            let foo = buf;*/
             match buf_res {
                 Ok(x) => self.peek_next_commit_with_buffer(self.version(), Some(Ok(x))).await,
                 Err(ObjectStoreError::NotFound { .. }) => Ok(PeekCommit::UpToDate),
