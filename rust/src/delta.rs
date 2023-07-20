@@ -486,7 +486,7 @@ impl DeltaTable {
         Ok(PeekCommit::New(next_version, actions.unwrap()))
     }
 
-    /// Reads a commit and get list of actions
+    /// Reads a commit and gets list of actions
     async fn get_actions(
         &self,
         version: i64,
@@ -575,7 +575,7 @@ impl DeltaTable {
                     let n_commits = usize::try_from(n - self.version() + 2);
                     match n_commits {
                         Ok(n) => log_stream.take(n).buffered(buf_size),
-                        Err(_) => return Err(DeltaTableError::Generic(String::from("Table version is greater than max_version!")))
+                        Err(err) => return Err(DeltaTableError::GenericError { source: Box::new(err) })
                     }
                 }
             }
@@ -586,7 +586,7 @@ impl DeltaTable {
             match next_commit {
                 Some((v, Ok(x))) => Ok(Some((v, self.get_actions(v,  x.bytes().await?).await.unwrap()))),
                 Some((_, Err(ObjectStoreError::NotFound { .. }))) => Ok(None),
-                Some((_, Err(x))) => Err(DeltaTableError::GenericError { source: Box::new(x) }),  // TODO ??
+                Some((_, Err(err))) => Err(DeltaTableError::GenericError { source: Box::new(err) }),  // TODO ??
                 None => Err(DeltaTableError::Generic(String::from("Log stream closed unexpectedly!")))
             }
         }?
