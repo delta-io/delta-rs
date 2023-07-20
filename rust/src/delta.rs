@@ -565,8 +565,19 @@ impl DeltaTable {
 
         let mut log_buffer = {
             match max_version {
-                Some(n) => log_stream.take((n - self.version() + 2).try_into().unwrap()).buffered(buf_size),
-                None => log_stream.take(usize::MAX).buffered(buf_size) // need take to have compatible types
+                None => {
+                    log_stream.take(usize::MAX).buffered(buf_size)
+                }
+                Some(n) => {
+                    if n - self.version() < 0 {
+                        return Err(DeltaTableError::Generic(String::from("Table version is greater than max_version!")));
+                    }
+                    let n_commits = usize::try_from(n - self.version() + 2);
+                    match n_commits {
+                        Ok(n) => log_stream.take(n).buffered(buf_size),
+                        Err(_) => return Err(DeltaTableError::Generic(String::from("Table version is greater than max_version!")))
+                    }
+                }
             }
         };
         
