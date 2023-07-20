@@ -1,9 +1,10 @@
 #![cfg(feature = "integration_test")]
 
+use deltalake::action::{Action, Add, DeltaOperation, SaveMode};
+use deltalake::operations::transaction::commit;
+use deltalake::operations::DeltaOps;
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
-use deltalake::{
-    action, DeltaTable, DeltaTableBuilder, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
-};
+use deltalake::{DeltaTable, DeltaTableBuilder, Schema, SchemaDataType, SchemaField};
 use std::collections::HashMap;
 use std::future::Future;
 use std::iter::FromIterator;
@@ -54,28 +55,21 @@ async fn prepare_table(
         true,
         HashMap::new(),
     )]);
-    let metadata = DeltaTableMetaData::new(
-        Some("Azure Test Table".to_string()),
-        None,
-        None,
-        schema,
-        vec![],
-        HashMap::new(),
-    );
-    let protocol = action::Protocol {
-        min_reader_version: 1,
-        min_writer_version: 2,
-    };
 
     let table_uri = context.uri_for_table(TestTables::Custom("concurrent_workers".into()));
-    let mut table = DeltaTableBuilder::from_uri(&table_uri)
+
+    let table = DeltaTableBuilder::from_uri(&table_uri)
         .with_allow_http(true)
         .build()?;
-    table.create(metadata, protocol, None, None).await?;
+
+    let table = DeltaOps(table)
+        .create()
+        .with_columns(schema.get_fields().clone())
+        .await?;
 
     assert_eq!(0, table.version());
     assert_eq!(1, table.get_min_reader_version());
-    assert_eq!(2, table.get_min_writer_version());
+    assert_eq!(1, table.get_min_writer_version());
     assert_eq!(0, table.get_files().len());
 
     Ok((table, table_uri))
@@ -135,7 +129,8 @@ impl Worker {
         std::env::set_var("DYNAMO_LOCK_OWNER_NAME", &name);
         let table = DeltaTableBuilder::from_uri(path)
             .with_allow_http(true)
-            .build()
+            .load()
+            .await
             .unwrap();
         Self { table, name }
     }
@@ -153,8 +148,12 @@ impl Worker {
     }
 
     async fn commit_file(&mut self, name: &str) -> i64 {
-        let mut tx = self.table.create_transaction(None);
-        tx.add_action(action::Action::add(action::Add {
+        let operation = DeltaOperation::Write {
+            mode: SaveMode::Append,
+            partition_by: None,
+            predicate: None,
+        };
+        let actions = vec![Action::add(Add {
             path: format!("{}.parquet", name),
             size: 396,
             partition_values: HashMap::new(),
@@ -164,7 +163,17 @@ impl Worker {
             stats: None,
             stats_parsed: None,
             tags: None,
-        }));
-        tx.commit(None, None).await.unwrap()
+        })];
+        let version = commit(
+            self.table.object_store().as_ref(),
+            &actions,
+            operation,
+            &self.table.state,
+            None,
+        )
+        .await
+        .unwrap();
+        self.table.update().await.unwrap();
+        version
     }
 }

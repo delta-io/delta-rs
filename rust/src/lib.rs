@@ -95,7 +95,7 @@ pub mod storage;
 pub mod table_state;
 pub mod time_utils;
 
-#[cfg(all(feature = "arrow"))]
+#[cfg(feature = "arrow")]
 pub mod table_state_arrow;
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]

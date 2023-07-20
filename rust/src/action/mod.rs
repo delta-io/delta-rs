@@ -9,7 +9,7 @@ pub mod parquet2_read;
 #[cfg(feature = "parquet")]
 mod parquet_read;
 
-#[cfg(all(feature = "arrow"))]
+#[cfg(feature = "arrow")]
 use arrow_schema::ArrowError;
 use futures::StreamExt;
 use lazy_static::lazy_static;
@@ -75,7 +75,7 @@ pub enum ProtocolError {
     },
 
     /// Error returned when converting the schema to Arrow format failed.
-    #[cfg(all(feature = "arrow"))]
+    #[cfg(feature = "arrow")]
     #[error("Failed to convert into Arrow schema: {}", .source)]
     Arrow {
         /// Arrow error details returned when converting the schema in Arrow format failed

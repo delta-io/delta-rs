@@ -361,7 +361,11 @@ mod checkpoints_with_tombstones {
             .chain(std::iter::once(Action::add(add.clone())))
             .collect();
 
-        fs_common::commit_actions(table, actions).await;
+        let operation = DeltaOperation::Optimize {
+            predicate: None,
+            target_size: 1000000,
+        };
+        fs_common::commit_actions(table, actions, operation).await;
         (removes, add)
     }
 
