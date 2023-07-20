@@ -563,7 +563,6 @@ impl DeltaTable {
 
         let buf_size = 50; // TODO
 
-        // why is mut needed here and is it OK?
         let mut log_buffer = {
             match max_version {
                 Some(n) => log_stream.take((n - self.version() + 2).try_into().unwrap()).buffered(buf_size),
@@ -572,11 +571,12 @@ impl DeltaTable {
         };
         
         while let Some((new_version, actions)) = {
-            let next_commit = log_buffer.next().await.unwrap();
+            let next_commit = log_buffer.next().await;
             match next_commit {
-                (v, Ok(x)) => Ok(Some((v, self.get_actions(v,  x.bytes().await?).await.unwrap()))),
-                (_, Err(ObjectStoreError::NotFound { .. })) => Ok(None),
-                (_, Err(x)) => Err(DeltaTableError::GenericError { source: Box::new(x) })  // TODO ??
+                Some((v, Ok(x))) => Ok(Some((v, self.get_actions(v,  x.bytes().await?).await.unwrap()))),
+                Some((_, Err(ObjectStoreError::NotFound { .. }))) => Ok(None),
+                Some((_, Err(x))) => Err(DeltaTableError::GenericError { source: Box::new(x) }),  // TODO ??
+                None => Err(DeltaTableError::Generic(String::from("Log stream closed unexpectedly!")))
             }
         }?
         {
