@@ -604,37 +604,23 @@ impl DeltaTable {
         let store = self.storage.clone();
         let logstream = futures::stream::iter(self.version()..).map(|i| {
             let store2 = store.clone();
-            //let loc = futures::future::ok(commit_uri_from_version(i+1));
-            let loc = Arc::new(commit_uri_from_version(i+1));
-            //loc.and_then({
-            //    |_loc| self.storage.get(&_loc)
-            //})
+            //let loc = Arc::new(commit_uri_from_version(i+1));
+            let loc = commit_uri_from_version(i+1).clone();
             async move {
-                let store3 = store2.clone();
-                let out = store3.get(&loc);
+                let out = store2.get(&loc);
                 out.await
             }
         });
 
-        /* // this compiles but seems to be sequential
-        let store = self.storage.clone();
-        let logstream = futures::stream::unfold(self.version(),  |i| {
-            let loc = commit_uri_from_version(i+1).clone();
-            let store2 = store.clone();
-            async move {
-                let result = tokio::spawn( async move {
-                    let store3 = store2.clone();
-                    let out = store3.get(&loc);
-                    out.await
-                });
-                Some((result, i+1))
+        // why mut needed here and is it OK?
+        let buf_size = 50;
+        let mut buffer = {
+            match max_version {
+                Some(n) => logstream.take((n-self.version()+2).try_into().unwrap()).buffered(buf_size),
+                None => logstream.take(usize::MAX).buffered(buf_size)
             }
-        }).boxed();
-        */
+        };
 
-        // why mut?
-        let mut buffer = logstream.buffered(50);
-        
         while let PeekCommit::New(new_version, actions) = {
             let buf_res_opt = buffer.next().await;
             let buf_res = match buf_res_opt {
