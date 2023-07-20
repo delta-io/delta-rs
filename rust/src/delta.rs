@@ -9,11 +9,12 @@ use std::fmt::Formatter;
 use std::io::{BufRead, BufReader, Cursor};
 use std::sync::Arc;
 use std::{cmp::max, cmp::Ordering, collections::HashSet};
+
 use chrono::{DateTime, Utc};
 use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::debug;
-use object_store::{path::Path, Error as ObjectStoreError, ObjectStore, GetResult, Result as ObjectStoreResult};
+use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
 use regex::Regex;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
@@ -481,42 +482,17 @@ impl DeltaTable {
             Ok(result) => result.bytes().await,
         }?;
 
-        debug!("parsing commit with version {next_version}...");
-        let reader = BufReader::new(Cursor::new(commit_log_bytes));
-
-        let mut actions = Vec::new();
-        for re_line in reader.lines() {
-            let line = re_line?;
-            let lstr = line.as_str();
-            let action =
-                serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
-                    json_err: e,
-                    version: next_version,
-                    line,
-                })?;
-            actions.push(action);
-        }
-        Ok(PeekCommit::New(next_version, actions))
+        let actions = self.get_actions(next_version, commit_log_bytes).await;
+        Ok(PeekCommit::New(next_version, actions.unwrap()))
     }
 
-    /// Get the list of actions for the next commit - version that takes in a buffer
-    pub async fn peek_next_commit_with_buffer(
+    /// Reads a commit and get list of actions
+    async fn get_actions(
         &self,
-        current_version: i64,
-        clb: Option<ObjectStoreResult<GetResult>>
-    ) -> Result<PeekCommit, DeltaTableError> {
-        let next_version = current_version + 1;
-
-        let commit_log_bytes = clb;
-
-        let commit_log_bytes = match commit_log_bytes {
-            Some(Err(ObjectStoreError::NotFound { .. })) => return Ok(PeekCommit::UpToDate),
-            Some(Err(err)) => Err(err),
-            Some(Ok(result)) => result.bytes().await,
-            None => todo!()
-        }?;
-
-        debug!("parsing commit with version {next_version}...");
+        version: i64,
+        commit_log_bytes: bytes::Bytes
+    ) -> Result<Vec<Action>, DeltaTableError> {
+        debug!("parsing commit with version {version}...");
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
         let mut actions = Vec::new();
@@ -526,12 +502,12 @@ impl DeltaTable {
             let action =
                 serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
                     json_err: e,
-                    version: next_version,
+                    version: version,
                     line,
                 })?;
             actions.push(action);
         }
-        Ok(PeekCommit::New(next_version, actions))
+        Ok(actions)
     }
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
@@ -573,37 +549,34 @@ impl DeltaTable {
             "incremental update with version({}) and max_version({max_version:?})",
             self.version(),
         );
-        
+
+        // construct stream yielding (version, bytes)
         let store = self.storage.clone();
-        let logstream = futures::stream::iter(self.version()..).map(|i| {
+        let log_stream = futures::stream::iter(self.version() + 1..).map(|i| {
             let store2 = store.clone();
-            let loc = commit_uri_from_version(i+1).clone();
+            let loc = commit_uri_from_version(i).clone();
             async move {
                 let out = store2.get(&loc);
-                out.await
+                (i, out.await)
             }
         });
 
-        let buf_size = 50;
+        let buf_size = 50; // TODO
+
         // why is mut needed here and is it OK?
-        let mut buffer = {
+        let mut log_buffer = {
             match max_version {
-                Some(n) => logstream.take((n-self.version()+2).try_into().unwrap()).buffered(buf_size),
-                None => logstream.take(usize::MAX).buffered(buf_size) // need take to have compatible types
+                Some(n) => log_stream.take((n - self.version() + 2).try_into().unwrap()).buffered(buf_size),
+                None => log_stream.take(usize::MAX).buffered(buf_size) // need take to have compatible types
             }
         };
-
-        while let PeekCommit::New(new_version, actions) = {
-            let buf_res_opt = buffer.next().await;
-            let buf_res = match buf_res_opt {
-                Some(x) => x,
-                None => todo!()
-            };
-
-            match buf_res {
-                Ok(x) => self.peek_next_commit_with_buffer(self.version(), Some(Ok(x))).await,
-                Err(ObjectStoreError::NotFound { .. }) => Ok(PeekCommit::UpToDate),
-                Err(x) => Err(DeltaTableError::GenericError { source: Box::new(x) })
+        
+        while let Some((new_version, actions)) = {
+            let next_commit = log_buffer.next().await.unwrap();
+            match next_commit {
+                (v, Ok(x)) => Ok(Some((v, self.get_actions(v,  x.bytes().await?).await.unwrap()))),
+                (_, Err(ObjectStoreError::NotFound { .. })) => Ok(None),
+                (_, Err(x)) => Err(DeltaTableError::GenericError { source: Box::new(x) })  // TODO ??
             }
         }?
         {
@@ -622,6 +595,7 @@ impl DeltaTable {
 
         Ok(())
     }
+
     /// Loads the DeltaTable state for the given version.
     pub async fn load_version(&mut self, version: i64) -> Result<(), DeltaTableError> {
         // check if version is valid
