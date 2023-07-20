@@ -601,16 +601,22 @@ impl DeltaTable {
         // based on example
         // https://gendignoux.com/blog/2021/04/01/rust-async-streams-futures-part1.html#ordered-buffering
         // just iterate infinitely as we can check later if we hit max
-        /*let logstream = stream::iter(self.version()..).map(|i| {
+        let store = self.storage.clone();
+        let logstream = futures::stream::iter(self.version()..).map(|i| {
+            let store2 = store.clone();
             //let loc = futures::future::ok(commit_uri_from_version(i+1));
             let loc = Arc::new(commit_uri_from_version(i+1));
             //loc.and_then({
             //    |_loc| self.storage.get(&_loc)
             //})
             async move {
-                self.storage.get(&loc)
+                let store3 = store2.clone();
+                let out = store3.get(&loc);
+                out.await
             }
-        });*/
+        });
+
+        /* // this compiles but seems to be sequential
         let store = self.storage.clone();
         let logstream = futures::stream::unfold(self.version(),  |i| {
             let loc = commit_uri_from_version(i+1).clone();
@@ -624,6 +630,8 @@ impl DeltaTable {
                 Some((result, i+1))
             }
         }).boxed();
+        */
+
         // why mut?
         let mut buffer = logstream.buffered(50);
         
@@ -634,13 +642,14 @@ impl DeltaTable {
                 None => todo!()
             };
 
+            /*
             let buf = match buf_res {
                 Ok(x) => x,
                 Err(_) => todo!()
             };
 
-            let foo = buf;
-            match foo {
+            let foo = buf;*/
+            match buf_res {
                 Ok(x) => self.peek_next_commit_with_buffer(self.version(), Some(Ok(x))).await,
                 Err(ObjectStoreError::NotFound { .. }) => Ok(PeekCommit::UpToDate),
                 Err(x) => Err(DeltaTableError::GenericError { source: Box::new(x) })
