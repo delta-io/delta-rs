@@ -424,7 +424,7 @@ pub(crate) fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use object_store::path::Path;
 
     #[test]
     fn test_ensure_table_uri() {
@@ -507,7 +507,7 @@ mod tests {
         }
 
         // Creates non-existent relative directories
-        let relative_path = Path::new("_tmp/test %3F");
+        let relative_path = std::path::Path::new("_tmp/test %3F");
         assert!(!relative_path.exists());
         ensure_table_uri(relative_path.as_os_str().to_str().unwrap()).unwrap();
         assert!(relative_path.exists());
@@ -527,5 +527,66 @@ mod tests {
         let expected = Url::from_directory_path(path).unwrap();
         let url = ensure_table_uri(&expected).unwrap();
         assert_eq!(expected.as_str().trim_end_matches('/'), url.as_str());
+    }
+
+    #[tokio::test]
+    async fn read_delta_table_ignoring_tombstones() {
+        let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+            .without_tombstones()
+            .load()
+            .await
+            .unwrap();
+        assert!(
+            table.get_state().all_tombstones().is_empty(),
+            "loading without tombstones should skip tombstones"
+        );
+
+        assert_eq!(
+            table.get_files(),
+            vec![
+                Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
+                Path::from("part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet")
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_delta_table_ignoring_files() {
+        let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+            .without_files()
+            .load()
+            .await
+            .unwrap();
+
+        assert!(table.get_files().is_empty(), "files should be empty");
+        assert!(
+            table.get_tombstones().next().is_none(),
+            "tombstones should be empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_delta_table_with_ignoring_files_on_apply_log() {
+        let mut table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+            .with_version(0)
+            .without_files()
+            .load()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 0);
+        assert!(table.get_files().is_empty(), "files should be empty");
+        assert!(
+            table.get_tombstones().next().is_none(),
+            "tombstones should be empty"
+        );
+
+        table.update().await.unwrap();
+        assert_eq!(table.version(), 1);
+        assert!(table.get_files().is_empty(), "files should be empty");
+        assert!(
+            table.get_tombstones().next().is_none(),
+            "tombstones should be empty"
+        );
     }
 }
