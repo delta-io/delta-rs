@@ -584,7 +584,7 @@ impl DeltaTable {
         while let Some((new_version, actions)) = {
             let next_commit = log_buffer.next().await;
             match next_commit {
-                Some((v, Ok(x))) => Ok(Some((v, self.get_actions(v,  x.bytes().await?).await.unwrap()))),
+                Some((v, Ok(x))) => Ok(Some((v, self.get_actions(v,  x.bytes().await?).await?))),
                 Some((_, Err(ObjectStoreError::NotFound { .. }))) => Ok(None),
                 Some((_, Err(err))) => Err(DeltaTableError::GenericError { source: Box::new(err) }),  // TODO ??
                 None => Err(DeltaTableError::Generic(String::from("Log stream closed unexpectedly!")))
