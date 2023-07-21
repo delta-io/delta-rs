@@ -31,8 +31,9 @@ use std::sync::Arc;
 async fn main() -> Result<(), DeltaTableError> {
     info!("Logger initialized");
 
-    let table_uri = std::env::var("TABLE_URI")
-        .map_err(|e| DeltaTableError::GenericError { source: Box::new(source) })?;
+    let table_uri = std::env::var("TABLE_URI").map_err(|e| DeltaTableError::GenericError {
+        source: Box::new(e),
+    })?;
     info!("Using the location of: {:?}", table_uri);
 
     let table_path = Path::from(table_uri.as_ref());
