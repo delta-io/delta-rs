@@ -1,0 +1,4 @@
+{
+  "name": "multi_partitioned",
+  "description": "A table with multiple partitioning columns. Partition values include nulls and escape characters."
+}

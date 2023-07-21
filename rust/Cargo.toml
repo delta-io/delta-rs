@@ -94,31 +94,23 @@ dynamodb_lock = { version = "0", default-features = false, optional = true }
 anyhow = "1"
 criterion = "0"
 dotenvy = "0"
+flate2 = "1.0.26"
 maplit = "1"
 pretty_assertions = "1.2.1"
 rand = "0.8"
 serial_test = "2"
+tar = "0.4.39"
 tempdir = "0"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
+ureq = "2.7.1"
 utime = "0.3"
 
 [features]
 azure = ["object_store/azure"]
 arrow = ["dep:arrow", "arrow-array", "arrow-cast", "arrow-ord", "arrow-row", "arrow-schema", "arrow-select", "arrow-buffer"]
 default = ["arrow", "parquet"]
-datafusion = [
-    "dep:datafusion",
-    "datafusion-expr",
-    "datafusion-common",
-    "datafusion-proto",
-    "datafusion-physical-expr",
-    "datafusion-sql",
-    "sqlparser",
-    "arrow",
-    "parquet",
-    "dashmap",
-]
+datafusion = ["dep:datafusion", "datafusion-expr", "datafusion-common", "datafusion-proto", "datafusion-physical-expr", "datafusion-sql", "sqlparser", "arrow", "parquet", "dashmap"]
 datafusion-ext = ["datafusion"]
 gcs = ["object_store/gcp"]
 glue = ["s3", "rusoto_glue/rustls"]
@@ -128,22 +120,8 @@ hdfs = ["datafusion-objectstore-hdfs"]
 integration_test = ["fs_extra", "tempdir"]
 json = ["parquet/json"]
 python = ["arrow/pyarrow"]
-s3-native-tls = [
-    "rusoto_core/native-tls",
-    "rusoto_credential",
-    "rusoto_sts/native-tls",
-    "rusoto_dynamodb/native-tls",
-    "dynamodb_lock/native-tls",
-    "object_store/aws",
-]
-s3 = [
-    "rusoto_core/rustls",
-    "rusoto_credential",
-    "rusoto_sts/rustls",
-    "rusoto_dynamodb/rustls",
-    "dynamodb_lock/rustls",
-    "object_store/aws",
-]
+s3-native-tls = ["rusoto_core/native-tls", "rusoto_credential", "rusoto_sts/native-tls", "rusoto_dynamodb/native-tls", "dynamodb_lock/native-tls", "object_store/aws"]
+s3 = ["rusoto_core/rustls", "rusoto_credential", "rusoto_sts/rustls", "rusoto_dynamodb/rustls", "dynamodb_lock/rustls", "object_store/aws"]
 unity-experimental = ["reqwest", "reqwest-middleware", "reqwest-retry"]
 
 [[bench]]

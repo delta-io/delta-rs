@@ -1,0 +1,4 @@
+{
+  "name": "no_replay",
+  "description": "Table with a checkpoint and prior commits cleaned up"
+}

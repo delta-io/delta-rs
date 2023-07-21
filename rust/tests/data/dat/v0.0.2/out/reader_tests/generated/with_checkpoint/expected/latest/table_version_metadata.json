@@ -1,0 +1,8 @@
+{
+  "version": 3,
+  "properties": {
+    "delta.checkpointInterval": "2"
+  },
+  "min_reader_version": 1,
+  "min_writer_version": 2
+}
