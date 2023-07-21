@@ -550,6 +550,11 @@ impl DeltaTable {
             self.version(),
         );
 
+        let buf_size = self.config.log_buffer_size;
+        if buf_size == 0 {
+            return Err(DeltaTableError::Generic(String::from("Log buffer size cannot be zero!")))
+        }
+
         // construct stream yielding (version, bytes)
         let store = self.storage.clone();
         let log_stream = futures::stream::iter(self.version() + 1..).map(|i| {
@@ -560,9 +565,7 @@ impl DeltaTable {
                 (i, out.await)
             }
         });
-
-        let buf_size = 50; // TODO
-
+        
         let mut log_buffer = {
             match max_version {
                 None => {

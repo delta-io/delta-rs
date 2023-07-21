@@ -67,6 +67,13 @@ pub struct DeltaTableConfig {
     /// Some append-only applications might have no need of tracking any files.
     /// Hence, DeltaTable will be loaded with significant memory reduction.
     pub require_files: bool,
+    /// Controls how many files to buffer from the commit log when updating the table.
+    /// This defaults to 1
+    ///
+    /// Setting a value greater than 1 results in concurrent calls to the storage api.
+    /// This can be helpful to decrease latency if there are many files in the log since the 
+    /// last checkpoint.
+    pub log_buffer_size: usize
 }
 
 impl Default for DeltaTableConfig {
@@ -74,6 +81,7 @@ impl Default for DeltaTableConfig {
         Self {
             require_tombstones: true,
             require_files: true,
+            log_buffer_size: 1
         }
     }
 }
@@ -101,6 +109,13 @@ pub struct DeltaTableLoadOptions {
     /// Some append-only applications might have no need of tracking any files.
     /// Hence, DeltaTable will be loaded with significant memory reduction.
     pub require_files: bool,
+    /// Controls how many files to buffer from the commit log when updating the table.
+    /// This defaults to 1
+    ///
+    /// Setting a value greater than 1 results in concurrent calls to the storage api.
+    /// This can be helpful to decrease latency if there are many files in the log since the 
+    /// last checkpoint.
+    pub log_buffer_size: usize,
 }
 
 impl DeltaTableLoadOptions {
@@ -111,6 +126,7 @@ impl DeltaTableLoadOptions {
             storage_backend: None,
             require_tombstones: true,
             require_files: true,
+            log_buffer_size: 1,
             version: DeltaVersion::default(),
         }
     }
@@ -150,6 +166,12 @@ impl DeltaTableBuilder {
     /// Sets `version` to the builder
     pub fn with_version(mut self, version: i64) -> Self {
         self.options.version = DeltaVersion::Version(version);
+        self
+    }
+
+    /// Sets `log_buffer_size` to the builder
+    pub fn with_buffer(mut self, log_buffer_size: usize) -> Self {
+        self.options.log_buffer_size = log_buffer_size;
         self
     }
 
@@ -238,6 +260,7 @@ impl DeltaTableBuilder {
         let config = DeltaTableConfig {
             require_tombstones: self.options.require_tombstones,
             require_files: self.options.require_files,
+            log_buffer_size: self.options.log_buffer_size,
         };
         Ok(DeltaTable::new(self.build_storage()?, config))
     }
@@ -365,7 +388,7 @@ lazy_static::lazy_static! {
 /// Extra slashes will be removed from the end path as well.
 ///
 /// Will return an error if the location is not valid. For example,
-pub(crate) fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
+pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     let table_uri = table_uri.as_ref();
 
     enum UriType {
