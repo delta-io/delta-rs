@@ -74,15 +74,19 @@ pub mod setup {
 
 /// Utility for comparing a delta table
 /// with a dataframe.
-async fn deltaeq(ctx: &SessionContext, delta_ctx_name: &str, expected: DataFrame) -> bool {
-    let delta_df = ctx.table(delta_ctx_name).await.unwrap();
-    let delta_df_count = delta_df.clone().count().await.unwrap();
-    let counts_eq = delta_df_count == expected.clone().count().await.unwrap();
+async fn deltaeq(
+    ctx: &SessionContext,
+    delta_ctx_name: &str,
+    expected: DataFrame,
+) -> datafusion::common::Result<bool> {
+    let delta_df = ctx.table(delta_ctx_name).await?;
+    let delta_df_count = delta_df.clone().count().await?;
+    let counts_eq = delta_df_count == expected.clone().count().await?;
     if counts_eq {
-        let intersecting_table = &delta_df.intersect(expected).unwrap();
-        intersecting_table.clone().count().await.unwrap() == delta_df_count
+        let intersecting_table = &delta_df.intersect(expected)?;
+        Ok(intersecting_table.clone().count().await? == delta_df_count)
     } else {
-        false
+        Ok(false)
     }
 }
 #[derive(Deserialize, Debug)]
@@ -132,7 +136,7 @@ async fn $test_name() -> TestResult {
         }
         assert!(expected_metadata.version == actual.version());
         ctx.register_table("actual", Arc::new(actual))?;
-        assert!(deltaeq(&ctx, "actual", expected).await);
+        assert!(deltaeq(&ctx, "actual", expected).await?);
     }
     Ok(())
 }
