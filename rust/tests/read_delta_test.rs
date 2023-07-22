@@ -1,14 +1,10 @@
 use chrono::Utc;
 use deltalake::DeltaTableBuilder;
 use deltalake::PeekCommit;
-use deltalake::storage::DeltaObjectStore;
-use object_store::{ObjectStore,GetResult};
-use deltalake::storage::ObjectStoreResult;
 use object_store::path::Path;
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::SystemTime;
-use url::Url;
 
 #[allow(dead_code)]
 mod fs_common;
@@ -532,130 +528,6 @@ async fn test_poll_table_commits() {
     assert!(matches!(peek, PeekCommit::UpToDate));
 }
 
-#[derive(Debug)]
-pub struct SlowStore {
-    inner: DeltaObjectStore
-}
-impl std::fmt::Display for SlowStore {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        self.inner.fmt(f)
-    }
-}
-
-impl SlowStore {
-    pub fn new(location: Url, options: impl Into<deltalake::storage::config::StorageOptions> + Clone) -> deltalake::DeltaResult<Self> {
-        Ok(Self {
-            inner: DeltaObjectStore::try_new(location, options).unwrap()
-        })
-    }
-}
-
-#[async_trait::async_trait]
-impl ObjectStore for SlowStore {
-    /// Save the provided bytes to the specified location.
-    async fn put(&self, location: &Path, bytes: bytes::Bytes) -> ObjectStoreResult<()> {
-        self.inner.put(location, bytes).await
-    }
-
-    /// Return the bytes that are stored at the specified location.
-    async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
-        tokio::time::sleep(tokio::time::Duration::from_secs_f64(0.01)).await;
-        self.inner.get(location).await
-    }
-
-    /// Perform a get request with options
-    ///
-    /// Note: options.range will be ignored if [`GetResult::File`]
-    async fn get_opts(&self, location: &Path, options: object_store::GetOptions) -> ObjectStoreResult<GetResult> {
-        self.inner.get_opts(location, options).await
-    }
-
-    /// Return the bytes that are stored at the specified location
-    /// in the given byte range
-    async fn get_range(&self, location: &Path, range: std::ops::Range<usize>) -> ObjectStoreResult<bytes::Bytes> {
-        self.inner.get_range(location, range).await
-    }
-
-    /// Return the metadata for the specified location
-    async fn head(&self, location: &Path) -> ObjectStoreResult<object_store::ObjectMeta> {
-        self.inner.head(location).await
-    }
-
-    /// Delete the object at the specified location.
-    async fn delete(&self, location: &Path) -> ObjectStoreResult<()> {
-        self.inner.delete(location).await
-    }
-
-    /// List all the objects with the given prefix.
-    ///
-    /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
-    /// `foo/bar_baz/x`.
-    async fn list(
-        &self,
-        prefix: Option<&Path>,
-    ) -> ObjectStoreResult<futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>>> {
-        self.inner.list(prefix).await
-    }
-
-    /// List all the objects with the given prefix and a location greater than `offset`
-    ///
-    /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
-    /// the number of network requests required
-    async fn list_with_offset(
-        &self,
-        prefix: Option<&Path>,
-        offset: &Path,
-    ) -> ObjectStoreResult<futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>>> {
-        self.inner.list_with_offset(prefix, offset).await
-    }
-
-    /// List objects with the given prefix and an implementation specific
-    /// delimiter. Returns common prefixes (directories) in addition to object
-    /// metadata.
-    ///
-    /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
-    /// `foo/bar_baz/x`.
-    async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<object_store::ListResult> {
-        self.inner.list_with_delimiter(prefix).await
-    }
-
-    /// Copy an object from one path to another in the same object store.
-    ///
-    /// If there exists an object at the destination, it will be overwritten.
-    async fn copy(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        self.inner.copy(from, to).await
-    }
-
-    /// Copy an object from one path to another, only if destination is empty.
-    ///
-    /// Will return an error if the destination already has an object.
-    async fn copy_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        self.inner.copy_if_not_exists(from, to).await
-    }
-
-    /// Move an object from one path to another in the same object store.
-    ///
-    /// Will return an error if the destination already has an object.
-    async fn rename_if_not_exists(&self, from: &Path, to: &Path) -> ObjectStoreResult<()> {
-        self.inner.rename_if_not_exists(from, to).await
-    }
-
-    async fn put_multipart(
-        &self,
-        location: &Path,
-    ) -> ObjectStoreResult<(object_store::MultipartId, Box<dyn tokio::io::AsyncWrite + Unpin + Send>)> {
-        self.inner.put_multipart(location).await
-    }
-
-    async fn abort_multipart(
-        &self,
-        location: &Path,
-        multipart_id: &object_store::MultipartId,
-    ) -> ObjectStoreResult<()> {
-        self.inner.abort_multipart(location, multipart_id).await
-    }
-}
-
 #[tokio::test]
 async fn test_log_buffering() {
     let path = "./tests/data/simple_table_with_no_checkpoint";
@@ -663,34 +535,39 @@ async fn test_log_buffering() {
     let buf_size = 10;
 
     let location = deltalake::builder::ensure_table_uri(path).unwrap();
-    let store = std::sync::Arc::new(SlowStore::new(
-        location.clone(), deltalake::storage::config::StorageOptions::from(HashMap::new())
+    
+    // use storage that sleeps 10ms on every `get`
+    let store = std::sync::Arc::new(
+        fs_common::SlowStore::new(
+            location.clone(),
+            deltalake::storage::config::StorageOptions::from(HashMap::new()
+        )
     ).unwrap());
 
-    let mut table_seq = DeltaTableBuilder::from_uri(path).with_storage_backend(store.clone(), location.clone()).with_version(0).with_buffer(1).load().await.unwrap();
-    table_seq.update_incremental(None).await.unwrap();
-
+    let mut seq_version = 0;
     let t = SystemTime::now();
-    for _x in 1..max_iter {
+    for _x in 0..max_iter {
         let mut table_seq = DeltaTableBuilder::from_uri(path).with_storage_backend(store.clone(), location.clone()).with_version(0).with_buffer(1).load().await.unwrap();
         table_seq.update_incremental(None).await.unwrap();
+        seq_version = table_seq.version();
     }
     let time_seq = t.elapsed().unwrap();
 
-    let mut table_buf = DeltaTableBuilder::from_uri(path).with_storage_backend(store.clone(), location.clone()).with_version(0).with_buffer(buf_size).load().await.unwrap();
-    table_buf.update_incremental(None).await.unwrap();
+    let mut buf_version = 0;
     let t2 = SystemTime::now();
-    for _x in 1..max_iter {
+    for _x in 0..max_iter {
         let mut table_buf = DeltaTableBuilder::from_uri(path).with_storage_backend(store.clone(), location.clone()).with_version(0).with_buffer(buf_size).load().await.unwrap();
         table_buf.update_incremental(None).await.unwrap();
+        buf_version = table_buf.version();
     }
     let time_buf = t2.elapsed().unwrap();
 
+    // buffered was at least 2x faster
     assert!(time_buf.as_secs_f64() < 0.5*time_seq.as_secs_f64());
-    assert_eq!(table_seq.version(), 10);
-    assert_eq!(table_buf.version(), 10);
 
-    // TODO assert contents
+    // updates match
+    assert_eq!(seq_version, 10);
+    assert_eq!(buf_version, 10);
 }
 
 #[tokio::test]
