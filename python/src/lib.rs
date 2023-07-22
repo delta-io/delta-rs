@@ -76,12 +76,13 @@ struct RawDeltaTableMetaData {
 #[pymethods]
 impl RawDeltaTable {
     #[new]
-    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false))]
+    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None))]
     fn new(
         table_uri: &str,
         version: Option<i64>,
         storage_options: Option<HashMap<String, String>>,
         without_files: bool,
+        log_buffer_size: Option<usize>,
     ) -> PyResult<Self> {
         let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
         let options = storage_options.clone().unwrap_or_default();
@@ -91,9 +92,11 @@ impl RawDeltaTable {
         if let Some(version) = version {
             builder = builder.with_version(version)
         }
-
         if without_files {
             builder = builder.without_files()
+        }
+        if let Some(buf_size) = log_buffer_size {
+            builder = builder.with_buffer(buf_size);
         }
 
         let table = rt()?.block_on(builder.load()).map_err(PythonError::from)?;
