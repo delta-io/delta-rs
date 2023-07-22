@@ -71,7 +71,7 @@ pub struct DeltaTableConfig {
     /// This defaults to 1
     ///
     /// Setting a value greater than 1 results in concurrent calls to the storage api.
-    /// This can be helpful to decrease latency if there are many files in the log since the 
+    /// This can decrease latency if there are many files in the log since the 
     /// last checkpoint.
     pub log_buffer_size: usize
 }
