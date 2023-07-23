@@ -550,6 +550,15 @@ impl DeltaTable {
             self.version(),
         );
 
+        let max_version = max_version.and_then(|x| {
+            if x <= self.version() {
+                // update to latest version
+                None
+            } else {
+                Some(x)
+            }
+        });
+
         let buf_size = self.config.log_buffer_size;
         if buf_size == 0 {
             return Err(DeltaTableError::Generic(String::from("Log buffer size cannot be zero!")))
@@ -572,10 +581,7 @@ impl DeltaTable {
                     log_stream.take(usize::MAX).buffered(buf_size)
                 }
                 Some(n) => {
-                    if n - self.version() < 0 {
-                        return Err(DeltaTableError::Generic(String::from("Table version is greater than max_version!")));
-                    }
-                    let n_commits = usize::try_from(n - self.version() + 2);
+                    let n_commits = usize::try_from(n - self.version());
                     match n_commits {
                         Ok(n) => log_stream.take(n).buffered(buf_size),
                         Err(err) => return Err(DeltaTableError::GenericError { source: Box::new(err) })
@@ -588,9 +594,9 @@ impl DeltaTable {
             let next_commit = log_buffer.next().await;
             match next_commit {
                 Some((v, Ok(x))) => Ok(Some((v, self.get_actions(v,  x.bytes().await?).await?))),
-                Some((_, Err(ObjectStoreError::NotFound { .. }))) => Ok(None),
-                Some((_, Err(err))) => Err(DeltaTableError::GenericError { source: Box::new(err) }),  // TODO ??
-                None => Err(DeltaTableError::Generic(String::from("Log stream closed unexpectedly!")))
+                Some((_, Err(ObjectStoreError::NotFound { .. }))) => Ok(None), // no more files in the log
+                Some((_, Err(err))) => Err(DeltaTableError::GenericError { source: Box::new(err) }),
+                None => Ok(None) // reached end of stream at max_version
             }
         }?
         {

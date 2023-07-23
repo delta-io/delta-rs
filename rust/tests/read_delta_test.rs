@@ -571,6 +571,33 @@ async fn test_log_buffering() {
 }
 
 #[tokio::test]
+async fn test_log_buffering_success_explicit_version() {
+    let path = "./tests/data/simple_table_with_no_checkpoint";
+    let buf_sizes = [1,2,10,100];
+    for buf_size in buf_sizes {
+        let mut table = DeltaTableBuilder::from_uri(path).with_version(0).with_buffer(buf_size).load().await.unwrap();
+        table.update_incremental(None).await.unwrap();
+        assert_eq!(table.version(), 10);
+        
+        let mut table = DeltaTableBuilder::from_uri(path).with_version(0).with_buffer(buf_size).load().await.unwrap();
+        table.update_incremental(Some(0)).await.unwrap();
+        assert_eq!(table.version(), 10);
+
+        let mut table = DeltaTableBuilder::from_uri(path).with_version(0).with_buffer(buf_size).load().await.unwrap();
+        table.update_incremental(Some(1)).await.unwrap();
+        assert_eq!(table.version(), 1);
+
+        let mut table = DeltaTableBuilder::from_uri(path).with_version(0).with_buffer(buf_size).load().await.unwrap();
+        table.update_incremental(Some(10)).await.unwrap();
+        assert_eq!(table.version(), 10);
+
+        let mut table = DeltaTableBuilder::from_uri(path).with_version(0).with_buffer(buf_size).load().await.unwrap();
+        table.update_incremental(Some(20)).await.unwrap();
+        assert_eq!(table.version(), 10);
+    }
+}
+
+#[tokio::test]
 async fn test_read_vacuumed_log() {
     let path = "./tests/data/checkpoints_vacuumed";
     let table = deltalake::open_table(path).await.unwrap();
