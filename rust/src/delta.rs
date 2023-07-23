@@ -558,11 +558,8 @@ impl DeltaTable {
                 Some(x)
             }
         });
-
+        
         let buf_size = self.config.log_buffer_size;
-        if buf_size == 0 {
-            return Err(DeltaTableError::Generic(String::from("Log buffer size cannot be zero!")))
-        }
 
         // construct stream yielding (version, bytes)
         let store = self.storage.clone();
