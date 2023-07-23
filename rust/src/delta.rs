@@ -550,15 +550,42 @@ impl DeltaTable {
             self.version(),
         );
 
-        let max_version = max_version.and_then(|x| {
-            if x <= self.version() {
-                // update to latest version
-                None
-            } else {
-                Some(x)
+        // update to latest version if given max_version is not larger than current version
+        let max_version = max_version.filter(|x| x > &self.version());
+        let max_version: i64 = match max_version {
+            Some(x) => x,
+            None => {
+                // list files to find max version
+                lazy_static! {
+                    static ref DELTA_LOG_REGEX: Regex =
+                        Regex::new(r#"_delta_log/(\d{20})\.(json|checkpoint).*$"#).unwrap();
+                }
+
+                lazy_static! {
+                    static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
+                }
+
+                let version = async {
+                    let mut ver: i64 = self.version(); // if no files are found, use the current version
+                    let prefix_path = self.storage.log_path();
+                    let prefix = Some(prefix_path);
+                    let offset_path = commit_uri_from_version(self.version()-1);
+                    let mut files = self.storage.list_with_offset(prefix, &offset_path).await?;
+                    while let Some(obj_meta) = files.next().await {
+                        let obj_meta = obj_meta?;
+                        if let Some(captures) = DELTA_LOG_REGEX.captures(obj_meta.location.as_ref()) {
+                            let log_ver_str = captures.get(1).unwrap().as_str();
+                            let log_ver: i64 = log_ver_str.parse().unwrap();
+                            // listing is not ordered
+                            ver = max(ver, log_ver);
+                        }
+                    }
+                    Ok::<i64, DeltaTableError>(ver)
+                };
+                version.await?
             }
-        });
-        
+        };
+
         let buf_size = self.config.log_buffer_size;
 
         // construct stream yielding (version, bytes)
@@ -573,17 +600,10 @@ impl DeltaTable {
         });
         
         let mut log_buffer = {
-            match max_version {
-                None => {
-                    log_stream.take(usize::MAX).buffered(buf_size)
-                }
-                Some(n) => {
-                    let n_commits = usize::try_from(n - self.version());
-                    match n_commits {
-                        Ok(n) => log_stream.take(n).buffered(buf_size),
-                        Err(err) => return Err(DeltaTableError::GenericError { source: Box::new(err) })
-                    }
-                }
+            let n_commits = usize::try_from(max_version - self.version());
+            match n_commits {
+                Ok(n) => log_stream.take(n).buffered(buf_size),
+                Err(err) => return Err(DeltaTableError::GenericError { source: Box::new(err) })
             }
         };
         
@@ -601,7 +621,7 @@ impl DeltaTable {
             let s = DeltaTableState::from_actions(actions, new_version)?;
             self.state
                 .merge(s, self.config.require_tombstones, self.config.require_files);
-            if Some(self.version()) == max_version {
+            if self.version() == max_version {
                 return Ok(());
             }
         }
