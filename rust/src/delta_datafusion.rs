@@ -1085,7 +1085,9 @@ impl TreeNodeVisitor for FindFilesExprProperties {
     }
 }
 
+/// Representing the result of the `find_files` function.
 pub struct FindFiles {
+    /// A list of `Add` objects that match the given predicate
     pub candidates: Vec<Add>,
     /// Was a physical read to the datastore required to determine the candidates
     pub partition_scan: bool,
@@ -1289,6 +1291,7 @@ pub(crate) async fn scan_memory_table(
     join_batches_with_add_actions(batches, map)
 }
 
+/// Finds files in a snapshot that match the provided predicate.
 pub async fn find_files<'a>(
     snapshot: &DeltaTableState,
     object_store: ObjectStoreRef,
