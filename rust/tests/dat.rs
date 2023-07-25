@@ -1,9 +1,11 @@
-use datafusion::prelude::{DataFrame, ParquetReadOptions, SessionContext};
+use datafusion::common::{DFField, DFSchema};
+use datafusion::prelude::*; //{DataFrame, ParquetReadOptions, SessionContext};
 use deltalake::open_table;
 use serde::Deserialize;
 use std::path::Path;
 use std::sync::Arc;
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
+use arrow::datatypes::{DataType, TimeUnit};
 use std::sync::Once;
 
 static INIT: Once = Once::new();
@@ -103,6 +105,7 @@ macro_rules! dat_test {
     ($( $test_name:ident $test:literal),*) => {
         $(
 #[tokio::test]
+#[cfg(feature = "datafusion")]
 async fn $test_name() -> TestResult {
     initialize();
     let test_case = Path::new($test);
@@ -130,7 +133,26 @@ async fn $test_name() -> TestResult {
 
         let expected_metadata: TableVersionMetadata = serde_json::from_reader(expected_metadata_rdr)?;
         let expected = ctx.read_parquet(expected_path.to_str().unwrap(), ParquetReadOptions::default()).await?;
+
         let mut actual = open_table(&actual_path.to_str().unwrap()).await?;
+
+        let expected_schema_fields = &expected.schema().fields();
+        let expected = expected.clone().select(expected_schema_fields.iter().map(
+            |f| {
+                if f.data_type().is_temporal()
+                {
+                    cast(col(f.name()), DataType::Timestamp(TimeUnit::Millisecond, None))
+                }
+                else {
+                    col(f.name())
+                }
+            }
+        ).collect::<Vec<_>>()
+    )?;
+
+
+
+
         if actual.version() != version{
             actual.load_version(version).await?;
         }
