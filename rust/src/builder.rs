@@ -68,12 +68,11 @@ pub struct DeltaTableConfig {
     /// Hence, DeltaTable will be loaded with significant memory reduction.
     pub require_files: bool,
     /// Controls how many files to buffer from the commit log when updating the table.
-    /// The maximum possible value is 50.
     /// This defaults to 1
     ///
     /// Setting a value greater than 1 results in concurrent calls to the storage api.
     /// This can decrease latency if there are many files in the log since the 
-    /// last checkpoint.
+    /// last checkpoint, but will also increase memory usage.
     pub log_buffer_size: usize
 }
 
@@ -82,7 +81,7 @@ impl Default for DeltaTableConfig {
         Self {
             require_tombstones: true,
             require_files: true,
-            log_buffer_size: 1
+            log_buffer_size: num_cpus::get() * 4,
         }
     }
 }
@@ -127,7 +126,7 @@ impl DeltaTableLoadOptions {
             storage_backend: None,
             require_tombstones: true,
             require_files: true,
-            log_buffer_size: 1,
+            log_buffer_size: num_cpus::get() * 4,
             version: DeltaVersion::default(),
         }
     }
@@ -172,9 +171,7 @@ impl DeltaTableBuilder {
 
     /// Sets `log_buffer_size` to the builder
     pub fn with_buffer(mut self, log_buffer_size: usize) -> DeltaResult<Self> {
-        if log_buffer_size > 50 {
-            return Err(DeltaTableError::Generic(String::from("Log buffer size should smaller than 51")));
-        } else if log_buffer_size == 0 {
+        if log_buffer_size == 0 {
             return Err(DeltaTableError::Generic(String::from("Log buffer size should be positive")));
         }
         self.options.log_buffer_size = log_buffer_size;

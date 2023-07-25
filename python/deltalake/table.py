@@ -235,7 +235,7 @@ class DeltaTable:
         :param without_files: If True, will load table without tracking files.
                               Some append-only applications might have no need of tracking any files. So, the
                               DeltaTable will be loaded with a significant memory reduction.
-        :param log_buffer_size: Number of files to buffer when reading the commit log. An integer between 1 and 50.
+        :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
                                 Setting a value greater than 1 results in concurrent calls to the storage api.
                                 This can decrease latency if there are many files in the log since the last checkpoint.
 
@@ -268,7 +268,7 @@ class DeltaTable:
         :param table_name: the table name inside the Data Catalog
         :param data_catalog_id: the identifier of the Data Catalog
         :param version: version of the DeltaTable
-        :param log_buffer_size: Number of files to buffer when reading the commit log. An integer between 1 and 50.
+        :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
                                 Setting a value greater than 1 results in concurrent calls to the storage api.
                                 This can decrease latency if there are many files in the log since the last checkpoint.
         """

@@ -567,7 +567,7 @@ impl DeltaTable {
 
         // construct stream yielding (version, bytes)
         let store = self.storage.clone();
-        let log_stream = futures::stream::iter(self.version() + 1..).map(|i| {
+        let log_stream = futures::stream::iter(self.version() + 1..max_version + 1).map(|i| {
             let store2 = store.clone();
             let loc = commit_uri_from_version(i).clone();
             async move {
@@ -576,14 +576,7 @@ impl DeltaTable {
             }
         });
         
-        let mut log_buffer = {
-            let n_commits = usize::try_from(max_version - self.version());
-            match n_commits {
-                Ok(n) => log_stream.take(n).buffered(buf_size),
-                Err(err) => return Err(DeltaTableError::GenericError { source: Box::new(err) })
-            }
-        };
-        
+        let mut log_buffer = log_stream.buffered(buf_size);
         while let Some((new_version, actions)) = {
             let next_commit = log_buffer.next().await;
             match next_commit {
