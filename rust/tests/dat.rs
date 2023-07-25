@@ -94,8 +94,8 @@ async fn deltaeq(
 struct TableVersionMetadata {
     version: i64,
     properties: serde_json::Value,
-    min_reader_version: i64,
-    min_writer_version: i64,
+    min_reader_version: i32,
+    min_writer_version: i32,
 }
 
 #[macro_export]
@@ -135,6 +135,8 @@ async fn $test_name() -> TestResult {
             actual.load_version(version).await?;
         }
         assert!(expected_metadata.version == actual.version());
+        assert!(expected_metadata.min_reader_version  == actual.get_min_reader_version());
+        assert!(expected_metadata.min_writer_version  == actual.get_min_writer_version());
         ctx.register_table("actual", Arc::new(actual))?;
         assert!(deltaeq(&ctx, "actual", expected).await?);
     }
