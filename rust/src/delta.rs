@@ -416,44 +416,61 @@ impl DeltaTable {
     }
 
     async fn get_latest_version(&mut self) -> Result<i64, DeltaTableError> {
-        let mut version = match get_last_checkpoint(&self.storage).await {
-            Ok(last_check_point) => last_check_point.version + 1,
+        let version_start = match get_last_checkpoint(&self.storage).await {
+            Ok(last_check_point) => last_check_point.version,
             Err(ProtocolError::CheckpointNotFound) => {
                 // no checkpoint, start with version 0
-                0
+                -1
             }
             Err(e) => {
                 return Err(DeltaTableError::from(e));
             }
         };
+        
+        debug!("start with latest checkpoint version: {version_start}");
 
-        debug!("start with latest checkpoint version: {version}");
-
-        // scan logs after checkpoint
-        loop {
-            match self.storage.head(&commit_uri_from_version(version)).await {
-                Ok(meta) => {
-                    // also cache timestamp for version
-                    self.version_timestamp
-                        .insert(version, meta.last_modified.timestamp());
-                    version += 1;
-                }
-                Err(e) => {
-                    match e {
-                        ObjectStoreError::NotFound { .. } => {
-                            version -= 1;
-                            if version < 0 {
-                                return Err(DeltaTableError::not_a_table(self.table_uri()));
-                            }
-                        }
-                        _ => return Err(DeltaTableError::from(e)),
-                    }
-                    break;
-                }
+        let max_version = {
+            // list files to find max version
+            lazy_static! {
+                static ref DELTA_LOG_REGEX: Regex =
+                    Regex::new(r#"_delta_log/(\d{20})\.(json|checkpoint).*$"#).unwrap();
             }
-        }
 
-        Ok(version)
+            lazy_static! {
+                static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
+            }
+
+            let version = async {
+                let mut ver: i64 = version_start;
+                let prefix_path = self.storage.log_path();
+                let prefix = Some(prefix_path);
+                let offset_path = commit_uri_from_version(ver);
+                let mut files = self.storage.list_with_offset(prefix, &offset_path).await?;
+
+                while let Some(obj_meta) = files.next().await {
+                    let obj_meta = obj_meta?;
+                    if let Some(captures) = DELTA_LOG_REGEX.captures(obj_meta.location.as_ref()) {
+                        let log_ver_str = captures.get(1).unwrap().as_str();
+                        let log_ver: i64 = log_ver_str.parse().unwrap();
+
+                        // listing may not be ordered
+                        ver = max(ver, log_ver);
+
+                        // also cache timestamp for version, for faster time-travel
+                        self.version_timestamp.insert(log_ver, obj_meta.last_modified.timestamp());
+                    }
+                }
+                
+                if ver < 0 {
+                    return Err(DeltaTableError::not_a_table(self.table_uri()));
+                }
+
+                Ok::<i64, DeltaTableError>(ver)
+            };
+            version.await?
+        };
+
+        Ok(max_version)
     }
 
     /// Currently loaded version of the table
@@ -554,36 +571,7 @@ impl DeltaTable {
         let max_version = max_version.filter(|x| x > &self.version());
         let max_version: i64 = match max_version {
             Some(x) => x,
-            None => {
-                // list files to find max version
-                lazy_static! {
-                    static ref DELTA_LOG_REGEX: Regex =
-                        Regex::new(r#"_delta_log/(\d{20})\.(json|checkpoint).*$"#).unwrap();
-                }
-
-                lazy_static! {
-                    static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
-                }
-
-                let version = async {
-                    let mut ver: i64 = self.version(); // if no files are found, use the current version
-                    let prefix_path = self.storage.log_path();
-                    let prefix = Some(prefix_path);
-                    let offset_path = commit_uri_from_version(self.version());
-                    let mut files = self.storage.list_with_offset(prefix, &offset_path).await?;
-                    while let Some(obj_meta) = files.next().await {
-                        let obj_meta = obj_meta?;
-                        if let Some(captures) = DELTA_LOG_REGEX.captures(obj_meta.location.as_ref()) {
-                            let log_ver_str = captures.get(1).unwrap().as_str();
-                            let log_ver: i64 = log_ver_str.parse().unwrap();
-                            // listing is not ordered
-                            ver = max(ver, log_ver);
-                        }
-                    }
-                    Ok::<i64, DeltaTableError>(ver)
-                };
-                version.await?
-            }
+            None => self.get_latest_version().await?
         };
 
         let buf_size = self.config.log_buffer_size;
