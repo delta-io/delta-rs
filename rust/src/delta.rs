@@ -381,7 +381,7 @@ impl DeltaTable {
 
         checkpoint_data_paths
     }
-
+    
     /// This method scans delta logs to find the earliest delta log version
     async fn get_earliest_delta_log_version(&self) -> Result<i64, DeltaTableError> {
         // TODO check if regex matches against path
@@ -419,7 +419,7 @@ impl DeltaTable {
         let version_start = match get_last_checkpoint(&self.storage).await {
             Ok(last_check_point) => last_check_point.version,
             Err(ProtocolError::CheckpointNotFound) => {
-                // no checkpoint, start with version 0
+                // no checkpoint
                 -1
             }
             Err(e) => {
@@ -429,48 +429,37 @@ impl DeltaTable {
         
         debug!("start with latest checkpoint version: {version_start}");
 
-        let max_version = {
-            // list files to find max version
-            lazy_static! {
-                static ref DELTA_LOG_REGEX: Regex =
-                    Regex::new(r#"_delta_log/(\d{20})\.(json|checkpoint).*$"#).unwrap();
+        lazy_static! {
+            static ref DELTA_LOG_REGEX: Regex =
+                Regex::new(r#"_delta_log/(\d{20})\.(json|checkpoint).*$"#).unwrap();
+        }
+
+        // list files to find max version
+        let version = async {
+            let mut max_version: i64 = version_start;
+            let prefix = Some(self.storage.log_path());
+            let offset_path = commit_uri_from_version(max_version);
+            let mut files = self.storage.list_with_offset(prefix, &offset_path).await?;
+
+            while let Some(obj_meta) = files.next().await {
+                let obj_meta = obj_meta?;
+                if let Some(captures) = DELTA_LOG_REGEX.captures(obj_meta.location.as_ref()) {
+                    let log_version = captures.get(1).unwrap().as_str().parse().unwrap();
+                    // listing may not be ordered
+                    max_version = max(max_version, log_version);
+                    // also cache timestamp for version, for faster time-travel
+                    self.version_timestamp.insert(log_version, obj_meta.last_modified.timestamp());
+                }
+            }
+            
+            if max_version < 0 {
+                return Err(DeltaTableError::not_a_table(self.table_uri()));
             }
 
-            lazy_static! {
-                static ref DELTA_LOG_PATH: Path = Path::from("_delta_log");
-            }
+            Ok::<i64, DeltaTableError>(max_version)
+        }.await?;
 
-            let version = async {
-                let mut ver: i64 = version_start;
-                let prefix_path = self.storage.log_path();
-                let prefix = Some(prefix_path);
-                let offset_path = commit_uri_from_version(ver);
-                let mut files = self.storage.list_with_offset(prefix, &offset_path).await?;
-
-                while let Some(obj_meta) = files.next().await {
-                    let obj_meta = obj_meta?;
-                    if let Some(captures) = DELTA_LOG_REGEX.captures(obj_meta.location.as_ref()) {
-                        let log_ver_str = captures.get(1).unwrap().as_str();
-                        let log_ver: i64 = log_ver_str.parse().unwrap();
-
-                        // listing may not be ordered
-                        ver = max(ver, log_ver);
-
-                        // also cache timestamp for version, for faster time-travel
-                        self.version_timestamp.insert(log_ver, obj_meta.last_modified.timestamp());
-                    }
-                }
-                
-                if ver < 0 {
-                    return Err(DeltaTableError::not_a_table(self.table_uri()));
-                }
-
-                Ok::<i64, DeltaTableError>(ver)
-            };
-            version.await?
-        };
-
-        Ok(max_version)
+        Ok(version)
     }
 
     /// Currently loaded version of the table
