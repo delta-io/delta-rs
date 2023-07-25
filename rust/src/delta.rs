@@ -569,7 +569,7 @@ impl DeltaTable {
                     let mut ver: i64 = self.version(); // if no files are found, use the current version
                     let prefix_path = self.storage.log_path();
                     let prefix = Some(prefix_path);
-                    let offset_path = commit_uri_from_version(self.version()-1);
+                    let offset_path = commit_uri_from_version(self.version());
                     let mut files = self.storage.list_with_offset(prefix, &offset_path).await?;
                     while let Some(obj_meta) = files.next().await {
                         let obj_meta = obj_meta?;
