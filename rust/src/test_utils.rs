@@ -7,6 +7,7 @@ use object_store::DynObjectStore;
 use serde_json::json;
 use std::sync::Arc;
 use tempdir::TempDir;
+use std::env;
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
@@ -33,8 +34,19 @@ impl IntegrationContext {
         // create a fresh bucket in every context. THis is done via CLI...
         let bucket = match integration {
             StorageIntegration::Local => tmp_dir.as_ref().to_str().unwrap().to_owned(),
-            _ => format!("test-delta-table-{}", Utc::now().timestamp()),
+            StorageIntegration::Onelake => {
+                let account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
+                let container_name = env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or(String::from("delta-rs"));
+                format!("{0}.dfs.fabric.microsoft.com/{1}", account_name,container_name)
+            },
+            StorageIntegration::OnelakeAbfs =>{
+                let account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
+                let container_name = env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or(String::from("delta-rs"));
+                format!("{0}@{1}.dfs.fabric.microsoft.com",container_name,account_name)
+            }        
+            _ => format!("test-delta-table-{}", Utc::now().timestamp()),            
         };
+
         if let StorageIntegration::Google = integration {
             gs_cli::prepare_env();
             let base_url = std::env::var("GOOGLE_BASE_URL")?;
@@ -46,10 +58,13 @@ impl IntegrationContext {
                 account_path.as_path().to_str().unwrap(),
             );
         }
+
         integration.create_bucket(&bucket)?;
         let store_uri = match integration {
             StorageIntegration::Amazon => format!("s3://{}", &bucket),
             StorageIntegration::Microsoft => format!("az://{}", &bucket),
+            StorageIntegration::Onelake => format!("https://{}", &bucket),
+            StorageIntegration::OnelakeAbfs => format!("abfss://{}", &bucket),
             StorageIntegration::Google => format!("gs://{}", &bucket),
             StorageIntegration::Local => format!("file://{}", &bucket),
             StorageIntegration::Hdfs => format!("hdfs://localhost:9000/{}", &bucket),
@@ -80,10 +95,12 @@ impl IntegrationContext {
     }
 
     /// Get the URI for initializing a store at the root
-    pub fn root_uri(&self) -> String {
+    pub fn root_uri(&self) -> String {        
         match self.integration {
             StorageIntegration::Amazon => format!("s3://{}", &self.bucket),
             StorageIntegration::Microsoft => format!("az://{}", &self.bucket),
+            StorageIntegration::Onelake => format!("https://{}", &self.bucket),
+            StorageIntegration::OnelakeAbfs => format!("abfss://{}", &self.bucket),            
             StorageIntegration::Google => format!("gs://{}", &self.bucket),
             StorageIntegration::Local => format!("file://{}", &self.bucket),
             StorageIntegration::Hdfs => format!("hdfs://localhost:9000/{}", &self.bucket),
@@ -149,6 +166,8 @@ impl Drop for IntegrationContext {
             StorageIntegration::Google => {
                 gs_cli::delete_bucket(&self.bucket).unwrap();
             }
+            StorageIntegration::Onelake => (),
+            StorageIntegration::OnelakeAbfs => (),
             StorageIntegration::Local => (),
             StorageIntegration::Hdfs => {
                 hdfs_cli::delete_dir(&self.bucket).unwrap();
@@ -161,17 +180,21 @@ impl Drop for IntegrationContext {
 pub enum StorageIntegration {
     Amazon,
     Microsoft,
+    Onelake,
     Google,
     Local,
     Hdfs,
+    OnelakeAbfs
 }
 
 impl StorageIntegration {
     fn prepare_env(&self) {
         match self {
             Self::Microsoft => az_cli::prepare_env(),
+            Self::Onelake =>  onelake_cli::prepare_env(),
             Self::Amazon => s3_cli::prepare_env(),
             Self::Google => gs_cli::prepare_env(),
+            Self::OnelakeAbfs =>  onelake_cli::prepare_env(),
             Self::Local => (),
             Self::Hdfs => (),
         }
@@ -181,6 +204,12 @@ impl StorageIntegration {
         match self {
             Self::Microsoft => {
                 az_cli::create_container(name)?;
+                Ok(())
+            }
+            Self::Onelake => {
+                Ok(())
+            }
+            Self::OnelakeAbfs => {
                 Ok(())
             }
             Self::Amazon => {
@@ -262,6 +291,19 @@ pub fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
     if std::env::var(key.as_ref()).is_err() {
         std::env::set_var(key.as_ref(), value.as_ref())
     };
+}
+
+//cli for onelake
+pub mod onelake_cli {
+    use super::set_env_if_not_set;        
+     /// prepare_env
+     pub fn prepare_env() {        
+        let token = "eyJ0eXAiOiJKV1QiLCJhbGciOiJSUzI1NiIsIng1dCI6Ii1LSTNROW5OUjdiUm9meG1lWm9YcWJIWkdldyIsImtpZCI6Ii1LSTNROW5OUjdiUm9meG1lWm9YcWJIWkdldyJ9.eyJhdWQiOiJodHRwczovL2FuYWx5c2lzLndpbmRvd3MubmV0L3Bvd2VyYmkvYXBpIiwiaXNzIjoiaHR0cHM6Ly9zdHMud2luZG93cy5uZXQvNzJmOTg4YmYtODZmMS00MWFmLTkxYWItMmQ3Y2QwMTFkYjQ3LyIsImlhdCI6MTY5MDM4NzE3MiwibmJmIjoxNjkwMzg3MTcyLCJleHAiOjE2OTAzOTE5NzQsImFjY3QiOjAsImFjciI6IjEiLCJhaW8iOiJBWVFBZS84VUFBQUF2L2VCOVBpdHk0ZGMrRWJkWHV5TEh3UFVOLytDaDduUGtqLy9SK2ZUVjMrMXRHeHN6UDhMeklhRFFURmdTWm4weURsekRVNXMwaG1IbjlCTklJRmZLMElRVy9vZGJseXU0aDdRWE9qelQ5S0pmeDU1Wk9GM0lSOVhqdXk4dE9LWDZOSEZSL1BlM1dRUXVDY3NQK3I1UVlDaktDV3lObitDNW5CVEhFQXZHb3M9IiwiYW1yIjpbInJzYSIsIm1mYSJdLCJhcHBpZCI6Ijg3MWMwMTBmLTVlNjEtNGZiMS04M2FjLTk4NjEwYTdlOTExMCIsImFwcGlkYWNyIjoiMCIsImNvbnRyb2xzIjpbImFwcF9yZXMiXSwiY29udHJvbHNfYXVkcyI6WyI4NzFjMDEwZi01ZTYxLTRmYjEtODNhYy05ODYxMGE3ZTkxMTAiLCIwMDAwMDAwOS0wMDAwLTAwMDAtYzAwMC0wMDAwMDAwMDAwMDAiLCIwMDAwMDAwMy0wMDAwLTBmZjEtY2UwMC0wMDAwMDAwMDAwMDAiXSwiZGV2aWNlaWQiOiJhNWEwNGMzNC1kNjhkLTQxODktYTA5OS0zNTlmMmUyMTM3YmIiLCJmYW1pbHlfbmFtZSI6Ik11ZGRhc3NpciIsImdpdmVuX25hbWUiOiJNb2hhbW1lZCIsImlwYWRkciI6IjI0MDU6MjAxOmUwMjY6ZTE5YzpkNWVlOmZjY2Q6MWRmNDo5MGUiLCJuYW1lIjoiTW9oYW1tZWQgTXVkZGFzc2lyIChpTGluayBTeXN0ZW1zIEluYykiLCJvaWQiOiI5Yjk3ZWRkZC0yYTgyLTRiYTgtYmYyZi03YWFlM2E1NTIwN2IiLCJvbnByZW1fc2lkIjoiUy0xLTUtMjEtMjEyNzUyMTE4NC0xNjA0MDEyOTIwLTE4ODc5Mjc1MjctNjg3NDI5OTgiLCJwdWlkIjoiMTAwMzIwMDJCNDA5OTgxNyIsInJoIjoiMC5BUm9BdjRqNWN2R0dyMEdScXkxODBCSGJSd2tBQUFBQUFBQUF3QUFBQUFBQUFBQWFBTlEuIiwic2NwIjoidXNlcl9pbXBlcnNvbmF0aW9uIiwic2lnbmluX3N0YXRlIjpbImR2Y19tbmdkIiwiZHZjX2NtcCIsImttc2kiXSwic3ViIjoiaEMtTkI0MDZSYzBiZEpGM056ejFMT0J5Mkl2bTE2RzNwUzM1dW54TEItWSIsInRpZCI6IjcyZjk4OGJmLTg2ZjEtNDFhZi05MWFiLTJkN2NkMDExZGI0NyIsInVuaXF1ZV9uYW1lIjoidi1tbXVkZGFzc2lyQG1pY3Jvc29mdC5jb20iLCJ1cG4iOiJ2LW1tdWRkYXNzaXJAbWljcm9zb2Z0LmNvbSIsInV0aSI6IjJ4NjVKNjg4aWtXU01rSzcxdm9BQUEiLCJ2ZXIiOiIxLjAiLCJ3aWRzIjpbImI3OWZiZjRkLTNlZjktNDY4OS04MTQzLTc2YjE5NGU4NTUwOSJdLCJ4bXNfY2MiOlsiQ1AxIl19.QRzJ8STgBiRYYeFmoF6mxI4u9La8NmYqCiXMx8xkvqEzU2iu_Ma4LrrII6YZRPzU8pwMurL3DrWaiPgOFr3UcTYgSOz5sxVEEyIS0us2RlgoZvIvRh7ikB77tg-sm0FD9BdOBFLOD4J0pkFDtTFgMq8TWZHOZUA6rpOtR1ziJfile-QwDkKoYpIa64caEEahq2o3SrCYD9IU1_9FDfBZSLGfY6aqQ3ucyLHflA3IPoECmoiu4EvqILvkt2G_Nj5GDrcTCctqeNEuupMCKNwT8E7B7nviKIzFObJl_eaohV3c2IgGYOlEVis4QaH4p7HExdthND-hXlgpntkr5Ck4Lg";
+        set_env_if_not_set("AZURE_STORAGE_USE_EMULATOR", "0");
+        set_env_if_not_set("AZURE_STORAGE_ACCOUNT_NAME", "daily-onelake");
+        set_env_if_not_set("AZURE_STORAGE_CONTAINER_NAME", "86bc63cf-5086-42e0-b16d-6bc580d1dc87");        
+        set_env_if_not_set("AZURE_STORAGE_TOKEN", token);
+    }
 }
 
 /// small wrapper around az cli

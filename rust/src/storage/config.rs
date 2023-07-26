@@ -124,6 +124,8 @@ pub(crate) fn configure_store(
                 try_configure_s3(url, options)
             } else if host.contains("dfs.core.windows.net")
                 || host.contains("blob.core.windows.net")
+                || host.contains("dfs.fabric.microsoft.com")
+                || host.contains("blob.fabric.microsoft.com")
             {
                 try_configure_azure(url, options)
             } else {
@@ -179,7 +181,7 @@ fn try_configure_azure(
     options: &StorageOptions,
 ) -> DeltaResult<Arc<DynObjectStore>> {
     let store = MicrosoftAzureBuilder::from_env()
-        .with_url(storage_url.as_ref())
+        .with_url(storage_url.as_ref())        
         .try_with_options(&options.as_azure_options())?
         .with_allow_http(options.allow_http())
         .build()?;
