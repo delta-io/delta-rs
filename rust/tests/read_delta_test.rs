@@ -530,7 +530,14 @@ async fn test_poll_table_commits() {
 
 #[tokio::test]
 async fn test_log_buffering() {
+    let n_commits = 10;
     let path = "./tests/data/simple_table_with_no_checkpoint";
+    let mut table = fs_common::create_table(path, None).await;
+    for _ in 0..n_commits {
+        let a = fs_common::add(3 * 60 * 1000);
+        fs_common::commit_add(&mut table, &a).await;
+    }
+
     let max_iter = 10;
     let buf_size = 10;
 
@@ -572,7 +579,13 @@ async fn test_log_buffering() {
 
 #[tokio::test]
 async fn test_log_buffering_success_explicit_version() {
-    let path = "./tests/data/simple_table_with_no_checkpoint";
+    let n_commits = 10;
+    let path = "./tests/data/simple_table_with_no_checkpoint_2";
+    let mut table = fs_common::create_table(path, None).await;
+    for _ in 0..n_commits {
+        let a = fs_common::add(3 * 60 * 1000);
+        fs_common::commit_add(&mut table, &a).await;
+    }
     let buf_sizes = [1,2,10,50];
     for buf_size in buf_sizes {
         let mut table = DeltaTableBuilder::from_uri(path).with_version(0).with_buffer(buf_size).unwrap().load().await.unwrap();
