@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.13.0"
+version = "0.13.1"
 rust-version = "1.64"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta.rs"
@@ -91,8 +91,6 @@ tempdir = { version = "0", optional = true }
 dynamodb_lock = { version = "0", default-features = false, optional = true }
 
 [dev-dependencies]
-anyhow = "1"
-criterion = "0"
 dotenvy = "0"
 maplit = "1"
 pretty_assertions = "1.2.1"
