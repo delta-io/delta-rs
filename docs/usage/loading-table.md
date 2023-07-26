@@ -109,12 +109,8 @@ version number or datetime string:
 >>> dt.load_with_datetime("2021-11-04 00:05:23.283+00:00")
 ```
 
-::: warning
-::: title
-Warning
-:::
+!!! warning
 
-Previous table versions may not exist if they have been vacuumed, in
-which case an exception will be thrown. See [Vacuuming
-tables](#vacuuming-tables) for more information.
-:::
+    Previous table versions may not exist if they have been vacuumed, in
+    which case an exception will be thrown. See [Vacuuming
+    tables](#vacuuming-tables) for more information.

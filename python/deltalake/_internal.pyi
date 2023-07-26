@@ -13,23 +13,22 @@ from deltalake.writer import AddAction
 
 __version__: str
 
-RawDeltaTable: Any
-rust_core_version: Callable[[], str]
+class RawDeltaTable:
+    ...
 
-write_new_deltalake: Callable[
-    [
-        str,
-        pa.Schema,
-        List[AddAction],
-        str,
-        List[str],
-        Optional[str],
-        Optional[str],
-        Optional[Mapping[str, Optional[str]]],
-        Optional[Dict[str, str]],
-    ],
-    None,
-]
+def rust_core_version() -> str: ...
+
+def write_new_deltalake(
+    table_uri: str,
+    schema: pa.Schema,
+    add_actions: List[AddAction],
+    _mode: str,
+    partition_by: List[str],
+    name: Optional[str],
+    description: Optional[str],
+    configuration: Optional[Mapping[str, Optional[str]]],
+    storage_options: Optional[Dict[str, str]],
+): ...
 
 def batch_distinct(batch: pa.RecordBatch) -> pa.RecordBatch: ...
 
@@ -93,34 +92,21 @@ class Field:
         *,
         nullable: bool = True,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> None:
-        """A named field, with a data type, nullability, and optional metadata."""
+    ) -> None: ...
     name: str
-    """The field name."""
     type: DataType
-    """The field data type."""
     nullable: bool
-    """The field nullability."""
     metadata: Dict[str, Any]
-    """The field metadata."""
 
-    def to_json(self) -> str:
-        """Get the JSON representation of the Field.
+    def to_json(self) -> str: ...
 
-        :rtype: str
-        """
     @staticmethod
-    def from_json(json: str) -> "Field":
-        """Create a new Field from a JSON string.
+    def from_json(json: str) -> "Field": ...
 
-        :param json: A json string representing the Field.
-        :rtype: Field
-        """
-    def to_pyarrow(self) -> pa.Field:
-        """Convert field to a pyarrow.Field."""
+    def to_pyarrow(self) -> pa.Field: ...
+
     @staticmethod
-    def from_pyarrow(type: pa.Field) -> "Field":
-        """Create a new field from pyarrow.Field."""
+    def from_pyarrow(type: pa.Field) -> "Field": ...
 
 class StructType:
     def __init__(self, fields: List[Field]) -> None: ...
@@ -138,41 +124,15 @@ class Schema:
     def __init__(self, fields: List[Field]) -> None: ...
     fields: List[Field]
     invariants: List[Tuple[str, str]]
-    """The list of invariants defined on the table.
-    
-    The first string in each tuple is the field path, the second is the SQL of the invariant.
-    """
 
-    def to_json(self) -> str:
-        """Get the JSON representation of the schema.
+    def to_json(self) -> str: ...
 
-        :rtype: str
-        """
     @staticmethod
-    def from_json(json: str) -> "Schema":
-        """Create a new Schema from a JSON string.
+    def from_json(json: str) -> "Schema": ...
+    def to_pyarrow(self, as_large_types: bool = False) -> pa.Schema: ...
 
-        :param schema_json: a JSON string
-        :rtype: Schema
-        """
-    def to_pyarrow(self, as_large_types: bool = False) -> pa.Schema:
-        """Return equivalent PyArrow schema.
-
-        Note: this conversion is lossy as the Invariants are not stored in pyarrow.Schema.
-
-        :param as_large_types: get schema with all variable size types (list,
-            binary, string) as large variants (with int64 indices). This is for
-            compatibility with systems like Polars that only support the large
-            versions of Arrow types.
-        :rtype: pyarrow.Schema
-        """
     @staticmethod
-    def from_pyarrow(type: pa.Schema) -> "Schema":
-        """Create a new Schema from a pyarrow.Schema.
-
-        :param data_type: a PyArrow schema
-        :rtype: Schema
-        """
+    def from_pyarrow(type: pa.Schema) -> "Schema": ...
 
 class ObjectInputFile:
     @property

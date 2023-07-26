@@ -19,7 +19,7 @@ pub(crate) struct FsConfig {
     pub(crate) options: HashMap<String, String>,
 }
 
-#[pyclass(subclass)]
+#[pyclass(subclass, module = "deltalake._internal")]
 #[derive(Debug, Clone)]
 pub struct DeltaFileSystemHandler {
     pub(crate) inner: Arc<DynObjectStore>,
@@ -265,7 +265,7 @@ impl DeltaFileSystemHandler {
 
 // TODO the C++ implementation track an internal lock on all random access files, DO we need this here?
 // TODO add buffer to store data ...
-#[pyclass(weakref)]
+#[pyclass(weakref, module = "deltalake._internal")]
 #[derive(Debug, Clone)]
 pub struct ObjectInputFile {
     store: Arc<DynObjectStore>,
@@ -433,7 +433,7 @@ impl ObjectInputFile {
 
 // TODO the C++ implementation track an internal lock on all random access files, DO we need this here?
 // TODO add buffer to store data ...
-#[pyclass(weakref)]
+#[pyclass(weakref, module = "deltalake._internal")]
 pub struct ObjectOutputStream {
     store: Arc<DynObjectStore>,
     rt: Arc<Runtime>,
