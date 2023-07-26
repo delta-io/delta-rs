@@ -11,3 +11,25 @@ nav:
       - Querying a Delta Table: usage/querying-delta-tables.md
       - Managing a Delta Table: usage/managing-tables.md
       - Writing Delta Tables: usage/writing-delta-tables.md
+  - API Reference: python_api.md
+
+plugins:
+- autorefs
+- mkdocstrings:
+    handlers:
+      python:
+        path: [../python]
+        rendering:
+          heading_level: 4
+          show_source: false
+          show_symbol_type_in_heading: true
+          show_signature_annotations: true
+          show_root_heading: true
+          members_order: source
+        import:
+          # for cross references
+          - https://arrow.apache.org/docs/objects.inv
+          - https://pandas.pydata.org/docs/objects.inv
+
+markdown_extensions:
+  - admonition
