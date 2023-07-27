@@ -237,7 +237,9 @@ class DeltaTable:
                               DeltaTable will be loaded with a significant memory reduction.
         :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
                                 Setting a value greater than 1 results in concurrent calls to the storage api.
-                                This can decrease latency if there are many files in the log since the last checkpoint.
+                                This can decrease latency if there are many files in the log since the last checkpoint,
+                                but will also increase memory usage. Possible rate limits of the storage backend should
+                                also be considered for optimal performance.
 
         """
         self._storage_options = storage_options

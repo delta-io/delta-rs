@@ -68,11 +68,12 @@ pub struct DeltaTableConfig {
     /// Hence, DeltaTable will be loaded with significant memory reduction.
     pub require_files: bool,
     /// Controls how many files to buffer from the commit log when updating the table.
-    /// This defaults to 1
+    /// This defaults to 4 * number of cpus
     ///
     /// Setting a value greater than 1 results in concurrent calls to the storage api.
     /// This can decrease latency if there are many files in the log since the 
-    /// last checkpoint, but will also increase memory usage.
+    /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
+    /// also be considered for optimal performance.
     pub log_buffer_size: usize
 }
 
@@ -110,11 +111,12 @@ pub struct DeltaTableLoadOptions {
     /// Hence, DeltaTable will be loaded with significant memory reduction.
     pub require_files: bool,
     /// Controls how many files to buffer from the commit log when updating the table.
-    /// This defaults to 1
+    /// This defaults to 4 * number of cpus
     ///
     /// Setting a value greater than 1 results in concurrent calls to the storage api.
     /// This can be helpful to decrease latency if there are many files in the log since the 
-    /// last checkpoint.
+    /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
+    /// also be considered for optimal performance.
     pub log_buffer_size: usize,
 }
 

@@ -488,13 +488,12 @@ impl DeltaTable {
             Ok(result) => result.bytes().await,
         }?;
 
-        let actions = self.get_actions(next_version, commit_log_bytes).await;
+        let actions = Self::get_actions(next_version, commit_log_bytes).await;
         Ok(PeekCommit::New(next_version, actions.unwrap()))
     }
 
     /// Reads a commit and gets list of actions
     async fn get_actions(
-        &self,
         version: i64,
         commit_log_bytes: bytes::Bytes
     ) -> Result<Vec<Action>, DeltaTableError> {
@@ -564,29 +563,29 @@ impl DeltaTable {
         };
 
         let buf_size = self.config.log_buffer_size;
-
-        // construct stream yielding (version, bytes)
-        let store = self.storage.clone();
-        let log_stream = futures::stream::iter(self.version() + 1..max_version + 1).map(|i| {
-            let store2 = store.clone();
-            let loc = commit_uri_from_version(i).clone();
-            async move {
-                let out = store2.get(&loc);
-                (i, out.await)
-            }
-        });
         
-        let mut log_buffer = log_stream.buffered(buf_size);
-        while let Some((new_version, actions)) = {
-            let next_commit = log_buffer.next().await;
-            match next_commit {
-                Some((v, Ok(x))) => Ok(Some((v, self.get_actions(v,  x.bytes().await?).await?))),
-                Some((_, Err(ObjectStoreError::NotFound { .. }))) => Ok(None), // no more files in the log
-                Some((_, Err(err))) => Err(DeltaTableError::GenericError { source: Box::new(err) }),
-                None => Ok(None) // reached end of stream at max_version
-            }
-        }?
-        {
+        let store = self.storage.clone();
+        let mut log_stream = futures::stream::iter(self.version() + 1..max_version + 1)
+            .map(|version| {
+                let store = store.clone();
+                let loc = commit_uri_from_version(version);
+                async move {
+                    let data = store.get(&loc).await?.bytes().await?;
+                    let actions = Self::get_actions(version, data).await?;
+                    Ok((version, actions))
+                }
+            })
+            .buffered(buf_size);
+
+        while let Some(res) = log_stream.next().await {
+            let (new_version, actions) = match res {
+                Ok((version, actions)) => (version, actions),
+                Err(DeltaTableError::ObjectStore {
+                    source: ObjectStoreError::NotFound { .. },
+                }) => break, // no more files in the log
+                Err(err) => return Err(DeltaTableError::from(err)),
+            };
+
             debug!("merging table state with version: {new_version}");
             let s = DeltaTableState::from_actions(actions, new_version)?;
             self.state
@@ -594,7 +593,7 @@ impl DeltaTable {
             if self.version() == max_version {
                 return Ok(());
             }
-        }
+        };
 
         if self.version() == -1 {
             return Err(DeltaTableError::not_a_table(self.table_uri()));
