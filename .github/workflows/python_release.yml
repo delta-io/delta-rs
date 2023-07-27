@@ -39,6 +39,14 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      # We use extra recent Cargo.toml syntax, so we need at least Rust 1.71.0
+      - name: Install newer rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: stable
+          override: true
+
       - name: Publish to pypi (without sdist)
         uses: messense/maturin-action@v1
         env:
