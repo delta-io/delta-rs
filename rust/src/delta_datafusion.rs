@@ -1085,7 +1085,7 @@ impl TreeNodeVisitor for FindFilesExprProperties {
     }
 }
 
-/// Representing the result of the `find_files` function.
+/// Representing the result of the [find_files] function.
 pub struct FindFiles {
     /// A list of `Add` objects that match the given predicate
     pub candidates: Vec<Add>,
