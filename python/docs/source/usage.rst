@@ -513,10 +513,12 @@ exist, making this operation idempotent.
 Restoring tables
 ~~~~~~~~~~~~~~~~
 
+.. py:currentmodule:: deltalake.table
+
 Restoring a table will restore delta table to a specified version or datetime. This
 operation compares the current state of the delta table with the state to be restored.
 And add those missing files into the AddFile actions and add redundant files into
-RemoveFile actions.Then commit into a new version.
+RemoveFile actions. Then commit into a new version.
 
 
 Use :meth:`DeltaTable.restore` to perform the restore operation. Note that if any other
