@@ -23,7 +23,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
@@ -49,7 +49,8 @@ use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistic
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::{
-    ColumnStatistics, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
@@ -520,6 +521,12 @@ pub struct DeltaScan {
     pub table_uri: String,
     /// The parquet scan to wrap
     pub parquet_scan: Arc<dyn ExecutionPlan>,
+}
+
+impl DisplayAs for DeltaScan {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(f, "DeltaScan")
+    }
 }
 
 impl ExecutionPlan for DeltaScan {
@@ -1031,10 +1038,9 @@ impl TreeNodeVisitor for FindFilesExprProperties {
             }
             Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
-            | Expr::Alias(_, _)
+            | Expr::Alias(_)
             | Expr::BinaryExpr(_)
             | Expr::Like(_)
-            | Expr::ILike(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::IsNotNull(_)

@@ -20,6 +20,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    fmt,
     sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -32,7 +33,7 @@ use datafusion::{
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         projection::ProjectionExec,
-        ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+        DisplayAs, DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
     },
     prelude::SessionContext,
 };
@@ -466,6 +467,12 @@ impl UpdateCountExec {
             parent,
             metrics: ExecutionPlanMetricsSet::new(),
         }
+    }
+}
+
+impl DisplayAs for UpdateCountExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(f, "UpdateCountExec")
     }
 }
 
