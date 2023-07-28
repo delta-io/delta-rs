@@ -13,7 +13,7 @@ use tokio::time::sleep;
 
 #[tokio::test]
 async fn cleanup_metadata_fs_test() -> TestResult {
-    let context = IntegrationContext::new(StorageIntegration::Local)?;
+    let context = IntegrationContext::new(StorageIntegration::Local).await?;
     cleanup_metadata_test(&context).await?;
     Ok(())
 }
@@ -22,7 +22,7 @@ async fn cleanup_metadata_fs_test() -> TestResult {
 #[tokio::test]
 #[serial]
 async fn cleanup_metadata_aws_test() -> TestResult {
-    let context = IntegrationContext::new(StorageIntegration::Amazon)?;
+    let context = IntegrationContext::new(StorageIntegration::Amazon).await?;
     cleanup_metadata_test(&context).await?;
     Ok(())
 }

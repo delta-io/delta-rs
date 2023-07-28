@@ -19,7 +19,7 @@ pub struct IntegrationContext {
 }
 
 impl IntegrationContext {
-    pub fn new(
+    pub async fn new(
         integration: StorageIntegration,
     ) -> Result<Self, Box<dyn std::error::Error + 'static>> {
         // environment variables are loaded from .env files if found. Otherwise
@@ -46,7 +46,7 @@ impl IntegrationContext {
                 account_path.as_path().to_str().unwrap(),
             );
         }
-        integration.create_bucket(&bucket)?;
+        integration.create_bucket(&bucket).await?;
         let store_uri = match integration {
             StorageIntegration::Amazon => format!("s3://{}", &bucket),
             StorageIntegration::Microsoft => format!("az://{}", &bucket),
@@ -177,14 +177,14 @@ impl StorageIntegration {
         }
     }
 
-    fn create_bucket(&self, name: impl AsRef<str>) -> std::io::Result<()> {
+    async fn create_bucket(&self, name: impl AsRef<str>) -> std::io::Result<()> {
         match self {
             Self::Microsoft => {
                 az_cli::create_container(name)?;
                 Ok(())
             }
             Self::Amazon => {
-                s3_cli::create_bucket(format!("s3://{}", name.as_ref()))?;
+                s3_cli::create_bucket(name.as_ref()).await.unwrap();
                 set_env_if_not_set(
                     "DYNAMO_LOCK_PARTITION_KEY_VALUE",
                     format!("s3://{}", name.as_ref()),
@@ -336,26 +336,29 @@ pub mod s3_cli {
     use super::set_env_if_not_set;
     use crate::builder::s3_storage_options;
     use std::process::{Command, ExitStatus, Stdio};
+    use rusoto_s3::{S3Client, S3, CreateBucketRequest, CreateBucketOutput, CreateBucketError};
+    use rusoto_credential::EnvironmentProvider;
+    use rusoto_core::{HttpClient, Region, RusotoError};
 
     /// Create a new bucket
-    pub fn create_bucket(bucket_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
-        let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
-            .expect("variable ENDPOINT must be set to connect to S3");
-        let region = std::env::var(s3_storage_options::AWS_REGION)
-            .expect("variable AWS_REGION must be set to connect to S3");
-        let mut child = Command::new("aws")
-            .args([
-                "s3",
-                "mb",
-                bucket_name.as_ref(),
-                "--endpoint-url",
-                &endpoint,
-                "--region",
-                &region,
-            ])
-            .spawn()
-            .expect("aws command is installed");
-        child.wait()
+    pub async fn create_bucket(bucket_name: impl AsRef<str>) -> Result<CreateBucketOutput, RusotoError<CreateBucketError>> {
+        let region_name = std::env::var(s3_storage_options::AWS_REGION)
+         .expect("variable AWS_REGION must be set to connect to S3");
+        let endpoint_url = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
+          .expect("variable ENDPOINT must be set to connect to S3");
+
+        let region = Region::Custom { name: region_name, endpoint: endpoint_url };
+        let s3_client = S3Client::new_with(
+            HttpClient::new().unwrap(),
+            EnvironmentProvider::default(),
+            region
+        );
+        return s3_client.create_bucket(
+            CreateBucketRequest {
+                bucket: bucket_name.as_ref().to_string(),
+                ..CreateBucketRequest::default()
+            }
+        ).await;
     }
 
     /// delete bucket

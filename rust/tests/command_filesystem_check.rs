@@ -46,7 +46,7 @@ async fn test_filesystem_check_hdfs() -> TestResult {
 }
 
 async fn test_filesystem_check(storage: StorageIntegration) -> TestResult {
-    let context = IntegrationContext::new(storage)?;
+    let context = IntegrationContext::new(storage).await?;
     context.load_table(TestTables::Simple).await?;
     let file = "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet";
     let path = Path::from_iter([&TestTables::Simple.as_name(), file]);
@@ -89,7 +89,7 @@ async fn test_filesystem_check(storage: StorageIntegration) -> TestResult {
 #[serial]
 async fn test_filesystem_check_partitioned() -> TestResult {
     let storage = StorageIntegration::Local;
-    let context = IntegrationContext::new(storage)?;
+    let context = IntegrationContext::new(storage).await?;
     context
         .load_table(TestTables::Delta0_8_0Partitioned)
         .await?;
@@ -122,7 +122,7 @@ async fn test_filesystem_check_partitioned() -> TestResult {
 #[serial]
 async fn test_filesystem_check_fails_for_concurrent_delete() -> TestResult {
     // Validate failure when a non dry only executes on the latest version
-    let context = IntegrationContext::new(StorageIntegration::Local)?;
+    let context = IntegrationContext::new(StorageIntegration::Local).await?;
     context.load_table(TestTables::Simple).await?;
     let file = "part-00003-53f42606-6cda-4f13-8d07-599a21197296-c000.snappy.parquet";
     let path = Path::from_iter([&TestTables::Simple.as_name(), file]);
@@ -150,7 +150,7 @@ async fn test_filesystem_check_fails_for_concurrent_delete() -> TestResult {
 #[ignore = "should this actually fail? with conflcit resolution, we are re-trying again."]
 async fn test_filesystem_check_outdated() -> TestResult {
     // Validate failure when a non dry only executes on the latest version
-    let context = IntegrationContext::new(StorageIntegration::Local)?;
+    let context = IntegrationContext::new(StorageIntegration::Local).await?;
     context.load_table(TestTables::Simple).await?;
     let file = "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet";
     let path = Path::from_iter([&TestTables::Simple.as_name(), file]);

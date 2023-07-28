@@ -117,7 +117,7 @@ mod s3 {
 }
 
 async fn read_tables(storage: StorageIntegration) -> TestResult {
-    let context = IntegrationContext::new(storage)?;
+    let context = IntegrationContext::new(storage).await?;
     context.load_table(TestTables::Simple).await?;
     context.load_table(TestTables::Golden).await?;
     context
@@ -136,7 +136,7 @@ async fn read_table_paths(
     table_root: &str,
     upload_path: &str,
 ) -> TestResult {
-    let context = IntegrationContext::new(storage)?;
+    let context = IntegrationContext::new(storage).await?;
     context
         .load_table_with_name(TestTables::Delta0_8_0SpecialPartitioned, upload_path)
         .await?;
