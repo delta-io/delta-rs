@@ -37,7 +37,7 @@ mod azure {
 mod local {
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn test_read_tables_local() -> TestResult {
         read_tables(StorageIntegration::Local).await?;
@@ -103,7 +103,7 @@ mod hdfs {
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 mod s3 {
     use super::*;
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn test_read_tables_aws() -> TestResult {
         read_tables(StorageIntegration::Amazon).await?;

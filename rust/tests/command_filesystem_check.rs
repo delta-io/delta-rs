@@ -16,7 +16,7 @@ async fn test_filesystem_check_local() -> TestResult {
 }
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[serial]
 async fn test_filesystem_check_aws() -> TestResult {
     set_env_if_not_set("AWS_S3_ALLOW_UNSAFE_RENAME", "true");

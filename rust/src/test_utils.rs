@@ -140,7 +140,7 @@ impl Drop for IntegrationContext {
     fn drop(&mut self) {
         match self.integration {
             StorageIntegration::Amazon => {
-                s3_cli::delete_bucket(self.root_uri()).unwrap();
+                s3_cli::delete_bucket(&self.bucket);
                 s3_cli::delete_lock_table().unwrap();
             }
             StorageIntegration::Microsoft => {
@@ -184,7 +184,7 @@ impl StorageIntegration {
                 Ok(())
             }
             Self::Amazon => {
-                s3_cli::create_bucket(name.as_ref()).await.unwrap();
+                s3_cli::create_bucket(name.as_ref()).await;
                 set_env_if_not_set(
                     "DYNAMO_LOCK_PARTITION_KEY_VALUE",
                     format!("s3://{}", name.as_ref()),
@@ -335,48 +335,94 @@ pub mod az_cli {
 pub mod s3_cli {
     use super::set_env_if_not_set;
     use crate::builder::s3_storage_options;
-    use std::process::{Command, ExitStatus, Stdio};
-    use rusoto_s3::{S3Client, S3, CreateBucketRequest, CreateBucketOutput, CreateBucketError};
+    use rusoto_core::{HttpClient, Region};
     use rusoto_credential::EnvironmentProvider;
-    use rusoto_core::{HttpClient, Region, RusotoError};
-
+    use rusoto_s3::{
+        CreateBucketRequest, Delete, DeleteBucketRequest, DeleteObjectsRequest,
+        ListObjectsV2Request, ObjectIdentifier, S3Client, S3,
+    };
+    use std::process::{Command, ExitStatus, Stdio};
     /// Create a new bucket
-    pub async fn create_bucket(bucket_name: impl AsRef<str>) -> Result<CreateBucketOutput, RusotoError<CreateBucketError>> {
-        let region_name = std::env::var(s3_storage_options::AWS_REGION)
-         .expect("variable AWS_REGION must be set to connect to S3");
-        let endpoint_url = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
-          .expect("variable ENDPOINT must be set to connect to S3");
+    pub async fn create_bucket(bucket_name: impl AsRef<str>) {
+        let region = std::env::var(s3_storage_options::AWS_REGION)
+            .expect("variable AWS_REGION must be set to connect to S3");
+        let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
+            .expect("variable ENDPOINT must be set to connect to S3");
 
-        let region = Region::Custom { name: region_name, endpoint: endpoint_url };
         let s3_client = S3Client::new_with(
             HttpClient::new().unwrap(),
             EnvironmentProvider::default(),
-            region
+            Region::Custom {
+                name: region,
+                endpoint: endpoint,
+            },
         );
-        return s3_client.create_bucket(
-            CreateBucketRequest {
+        s3_client
+            .create_bucket(CreateBucketRequest {
                 bucket: bucket_name.as_ref().to_string(),
                 ..CreateBucketRequest::default()
-            }
-        ).await;
+            })
+            .await
+            .unwrap();
     }
 
     /// delete bucket
-    pub fn delete_bucket(bucket_name: impl AsRef<str>) -> std::io::Result<ExitStatus> {
+    pub fn delete_bucket(bucket_name: impl AsRef<str>) {
+        let region = std::env::var(s3_storage_options::AWS_REGION)
+            .expect("variable AWS_REGION must be set to connect to S3");
         let endpoint = std::env::var(s3_storage_options::AWS_ENDPOINT_URL)
             .expect("variable ENDPOINT must be set to connect to S3");
-        let mut child = Command::new("aws")
-            .args([
-                "s3",
-                "rb",
-                bucket_name.as_ref(),
-                "--endpoint-url",
-                &endpoint,
-                "--force",
-            ])
-            .spawn()
-            .expect("aws command is installed");
-        child.wait()
+
+        let s3_client = S3Client::new_with(
+            HttpClient::new().unwrap(),
+            EnvironmentProvider::default(),
+            Region::Custom {
+                name: region,
+                endpoint: endpoint,
+            },
+        );
+
+        futures::executor::block_on(async {
+            // objects must be deleted before the bucket can be deleted
+            let objects: Vec<ObjectIdentifier> = s3_client
+                .list_objects_v2(ListObjectsV2Request {
+                    bucket: bucket_name.as_ref().to_string(),
+                    ..ListObjectsV2Request::default()
+                })
+                .await
+                .unwrap()
+                .contents
+                .into_iter()
+                .flatten()
+                .filter_map(|x| x.key)
+                .map(|key| ObjectIdentifier {
+                    key: key,
+                    version_id: None,
+                })
+                .collect();
+
+            if !objects.is_empty() {
+                s3_client
+                    .delete_objects(DeleteObjectsRequest {
+                        bucket: bucket_name.as_ref().to_string(),
+                        delete: Delete {
+                            objects: objects,
+                            quiet: Some(true),
+                        },
+                        ..DeleteObjectsRequest::default()
+                    })
+                    .await
+                    .unwrap();
+            }
+
+            s3_client
+                .delete_bucket(DeleteBucketRequest {
+                    bucket: bucket_name.as_ref().to_string(),
+                    ..DeleteBucketRequest::default()
+                })
+                .await
+                .unwrap();
+        });
     }
 
     /// copy directory

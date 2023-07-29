@@ -23,7 +23,7 @@ async fn test_object_store_azure() -> TestResult {
 }
 
 #[cfg(feature = "s3")]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[serial]
 async fn test_object_store_aws() -> TestResult {
     test_object_store(StorageIntegration::Amazon, true).await?;

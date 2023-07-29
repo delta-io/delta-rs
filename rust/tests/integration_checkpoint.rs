@@ -19,7 +19,7 @@ async fn cleanup_metadata_fs_test() -> TestResult {
 }
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[serial]
 async fn cleanup_metadata_aws_test() -> TestResult {
     let context = IntegrationContext::new(StorageIntegration::Amazon).await?;
