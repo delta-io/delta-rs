@@ -205,6 +205,7 @@ mod datafusion_utils {
     use arrow_array::RecordBatch;
     use arrow_schema::SchemaRef;
     use datafusion::error::Result as DataFusionResult;
+    use datafusion::physical_plan::DisplayAs;
     use datafusion::physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricsSet},
         ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
@@ -280,6 +281,12 @@ mod datafusion_utils {
                 .field("parent", &self.parent)
                 .field("metrics", &self.metrics)
                 .finish()
+        }
+    }
+
+    impl DisplayAs for MetricObserverExec {
+        fn fmt_as(&self, _: datafusion::physical_plan::DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+            write!(f, "MetricObserverExec")
         }
     }
 

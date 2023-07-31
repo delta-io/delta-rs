@@ -629,7 +629,7 @@ mod tests {
         let preader = SerializedFileReader::new(File::open(path).unwrap()).unwrap();
 
         let mut iter = preader.get_row_iter(None).unwrap();
-        let record = iter.nth(9).unwrap();
+        let record = iter.nth(9).unwrap().unwrap();
         let add_record = record.get_group(1).unwrap();
         let add_action = Add::from_parquet_record(add_record).unwrap();
 
