@@ -285,7 +285,11 @@ mod datafusion_utils {
     }
 
     impl DisplayAs for MetricObserverExec {
-        fn fmt_as(&self, _: datafusion::physical_plan::DisplayFormatType, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        fn fmt_as(
+            &self,
+            _: datafusion::physical_plan::DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
             write!(f, "MetricObserverExec")
         }
     }
