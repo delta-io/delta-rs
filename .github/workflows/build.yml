@@ -67,8 +67,10 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       # Disable full debug symbol generation to speed up CI build and keep memory down
-      # "1" means line tables only, which is useful for panic tracebacks.
-      RUSTFLAGS: -C debuginfo=1
+      RUSTFLAGS: -C debuginfo=line-tables-only
+      # Disable incremental builds by cargo for CI which should save disk space
+      # and hopefully avoid final link "No space left on device"
+      CARGO_INCREMENTAL: 0
 
     steps:
       - uses: actions/checkout@v3
@@ -89,9 +91,10 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     env:
+      CARGO_INCREMENTAL: 0
       # Disable full debug symbol generation to speed up CI build and keep memory down
-      # "1" means line tables only, which is useful for panic tracebacks.
-      RUSTFLAGS: "-C debuginfo=1"
+      # <https://doc.rust-lang.org/cargo/reference/profiles.html>
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
       # https://github.com/rust-lang/cargo/issues/10280
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       RUST_BACKTRACE: "1"
@@ -145,7 +148,8 @@ jobs:
   parquet2_test:
     runs-on: ubuntu-latest
     env:
-      RUSTFLAGS: "-C debuginfo=0"
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
+      CARGO_INCREMENTAL: 0
 
     steps:
       - uses: actions/checkout@v3
