@@ -415,7 +415,6 @@ given filters.
         retention_hours: Optional[int] = None,
         dry_run: bool = True,
         enforce_retention_duration: bool = True,
-        max_concurrent_requests: int = 10,
     ) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
@@ -423,9 +422,6 @@ given filters.
         :param retention_hours: the retention threshold in hours, if none then the value from `configuration.deletedFileRetentionDuration` is used or default of 1 week otherwise.
         :param dry_run: when activated, list only the files, delete otherwise
         :param enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `configuration.deletedFileRetentionDuration`.
-        :param max_concurrent_requests: the maximum number of concurrent requests to send to the backend.
-          Increasing this number may improve performance of vacuuming large tables, however it might also
-          increase the risk of hitting rate limits.
         :return: the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
         if retention_hours:
@@ -436,7 +432,6 @@ given filters.
             dry_run,
             retention_hours,
             enforce_retention_duration,
-            max_concurrent_requests,
         )
 
     @property

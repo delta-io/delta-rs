@@ -113,7 +113,7 @@ impl DeltaTableState {
             }
             for record in preader.get_row_iter(None)? {
                 self.process_action(
-                    action::Action::from_parquet_record(schema, &record)?,
+                    action::Action::from_parquet_record(schema, &record.unwrap())?,
                     table_config.require_tombstones,
                     table_config.require_files,
                 )?;

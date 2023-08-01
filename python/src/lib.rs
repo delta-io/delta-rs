@@ -245,18 +245,16 @@ impl RawDeltaTable {
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced
     /// by the Delta table and are older than the retention threshold.
-    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true, max_concurrent_requests = 10))]
+    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true))]
     pub fn vacuum(
         &mut self,
         dry_run: bool,
         retention_hours: Option<u64>,
         enforce_retention_duration: bool,
-        max_concurrent_requests: usize,
     ) -> PyResult<Vec<String>> {
         let mut cmd = VacuumBuilder::new(self._table.object_store(), self._table.state.clone())
             .with_enforce_retention_duration(enforce_retention_duration)
-            .with_dry_run(dry_run)
-            .with_max_concurrent_requests(max_concurrent_requests);
+            .with_dry_run(dry_run);
         if let Some(retention_period) = retention_hours {
             cmd = cmd.with_retention_period(Duration::hours(retention_period as i64));
         }
