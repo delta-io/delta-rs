@@ -1077,7 +1077,45 @@ mod tests {
 
             assert_eq!(expected, actions);
         }
+        #[tokio::test]
+        async fn test_with_deletion_vector() {
+            // test table with partitions
+            let path = "./tests/data/table_with_deletion_logs";
+            let table = crate::open_table(path).await.unwrap();
+            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
 
+            let mut expected_columns: Vec<(&str, ArrayRef)> = vec![
+        ("path", Arc::new(array::StringArray::from(vec![
+            "k=A/part-00000-b1f1dbbb-70bc-4970-893f-9bb772bf246e.c000.snappy.parquet",
+            "k=__HIVE_DEFAULT_PARTITION__/part-00001-8474ac85-360b-4f58-b3ea-23990c71b932.c000.snappy.parquet"
+        ]))),
+        ("size_bytes", Arc::new(array::Int64Array::from(vec![460, 460]))),
+        ("modification_time", Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
+            1627990384000, 1627990384000
+        ]))),
+        ("data_change", Arc::new(array::BooleanArray::from(vec![true, true]))),
+        ("partition.k", Arc::new(array::StringArray::from(vec![Some("A"), None]))),
+    ];
+            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
+
+            assert_eq!(expected, actions);
+
+            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
+
+            expected_columns[4] = (
+                "partition_values",
+                Arc::new(array::StructArray::new(
+                    Fields::from(vec![Field::new("k", DataType::Utf8, true)]),
+                    vec![Arc::new(array::StringArray::from(vec![Some("A"), None])) as ArrayRef],
+                    None,
+                )),
+            );
+            let expected = RecordBatch::try_from_iter(expected_columns).unwrap();
+
+            assert_eq!(expected, actions);
+        }
         #[tokio::test]
         async fn test_without_partitions() {
             // test table without partitions

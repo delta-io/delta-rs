@@ -346,6 +346,7 @@ mod checkpoints_with_tombstones {
                 partition_values: None,
                 size: None,
                 tags: None,
+                deletion_vector: None,
             })
             .collect();
 
@@ -408,6 +409,7 @@ mod checkpoints_with_tombstones {
             partition_values: None,
             size: Some(100),
             tags: None,
+            deletion_vector: None
         }
     }
 
