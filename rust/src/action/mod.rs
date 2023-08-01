@@ -219,6 +219,41 @@ pub struct AddCDCFile {
     pub tags: Option<HashMap<String, Option<String>>>,
 }
 
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionVector {
+    ///A single character to indicate how to access the DV. Legal options are: ['u', 'i', 'p'].
+    pub storage_type: String,
+
+    ///If storageType = 'u' then <random prefix - optional><base85 encoded uuid>
+    ///If storageType = 'i' then <base85 encoded bytes> of the deletion vector data
+    ///If storageType = 'p' then <absolute path>
+    pub path_or_inline_dv: String,
+
+    ///Start of the data for this DV in number of bytes from the beginning of the file it is stored in. Always None (absent in JSON) when storageType = 'i'.
+    pub offset: Option<i32>,
+
+    ///Size of the serialized DV in bytes (raw data size, i.e. before base85 encoding, if inline).
+    pub size_in_bytes: i32,
+
+    ///Number of rows the given DV logically removes from the file.
+    pub cardinality: i64
+}
+
+
+impl PartialEq for DeletionVector {
+    fn eq(&self, other: &Self) -> bool {
+            self.storage_type == other.storage_type
+            && self.path_or_inline_dv == other.path_or_inline_dv
+            && self.offset == other.offset
+            && self.size_in_bytes == other.size_in_bytes
+            && self.cardinality == other.cardinality
+    }
+}
+
+impl Eq for DeletionVector {}
+
+
 /// Delta log action that describes a parquet data file that is part of the table.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -277,6 +312,9 @@ pub struct Add {
     pub stats_parsed: Option<String>,
     /// Map containing metadata about this file
     pub tags: Option<HashMap<String, Option<String>>>,
+
+    ///Metadata about deletion vector
+    pub deletion_vector: Option<DeletionVector>,
 }
 
 impl Hash for Add {
@@ -294,6 +332,7 @@ impl PartialEq for Add {
             && self.data_change == other.data_change
             && self.stats == other.stats
             && self.tags == other.tags
+            && self.deletion_vector == other.deletion_vector
     }
 }
 
@@ -441,6 +480,8 @@ pub struct Remove {
     pub size: Option<i64>,
     /// Map containing metadata about this file
     pub tags: Option<HashMap<String, Option<String>>>,
+    ///Metadata about deletion vector
+    pub deletion_vector: Option<DeletionVector>,
 }
 
 impl Hash for Remove {
@@ -466,6 +507,7 @@ impl PartialEq for Remove {
             && self.partition_values == other.partition_values
             && self.size == other.size
             && self.tags == other.tags
+            && self.deletion_vector == other.deletion_vector
     }
 }
 

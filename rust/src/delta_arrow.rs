@@ -455,6 +455,20 @@ pub(crate) fn delta_log_schema_for_table(
                     false
                 ),
                 true
+            ),
+            ArrowField::new(
+                "deletionVector",
+                ArrowDataType::Struct(
+                    vec![
+                        ArrowField::new("storageType", ArrowDataType::Utf8, false),
+                        ArrowField::new("pathOrInlineDv", ArrowDataType::Utf8, false),
+                        ArrowField::new("offset", ArrowDataType::Int32, true),
+                        ArrowField::new("sizeInBytes", ArrowDataType::Int32, false),
+                        ArrowField::new("cardinality", ArrowDataType::Int64, false),
+                    ]
+                    .into()
+                ),
+                true
             )
         ];
         static ref REMOVE_FIELDS: Vec<ArrowField> = vec![

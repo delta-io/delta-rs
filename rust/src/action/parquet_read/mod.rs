@@ -8,7 +8,7 @@ use serde_json::json;
 
 use crate::action::{
     Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, MetaData, Protocol, ProtocolError,
-    Remove, Stats, Txn,
+    Remove, Stats, Txn, DeletionVector
 };
 
 fn populate_hashmap_with_option_from_parquet_map(
@@ -40,6 +40,40 @@ impl AddCDCFile {
         let re = Self {
             ..Default::default()
         };
+        Ok(re)
+    }
+}
+
+impl DeletionVector {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
+        let mut re = Self {
+            ..Default::default()
+        };
+        for (i, (name, _)) in record.get_column_iter().enumerate() {
+            match name.as_str() {
+                "storageType" => {                    
+                    re.storage_type = record
+                        .get_string(i)
+                        .map_err(|_| gen_action_type_error("add", "deletionVector.storage_type", "string"))?
+                        .clone();
+                },
+                "pathOrInlineDv" => {                                    
+                    re.path_or_inline_dv = record
+                        .get_string(i)
+                        .map_err(|_| gen_action_type_error("add", "deletionVector.pathOrInlineDv", "string"))?
+                        .clone();
+                },
+                "offset" => {                                    
+                    re.offset = match record
+                        .get_int(i) {
+                            Ok(x)=>Some(x),
+                            _ => None
+                        }
+                        
+                },
+
+            }
+        }
         Ok(re)
     }
 }
@@ -126,6 +160,19 @@ impl Add {
                     }
                     _ => {
                         re.stats_parsed = None;
+                    }
+                },
+                "deletionVector" => match record.get_group(i) {
+                    Ok(deletion_vector) => {
+                        del_vec = { ... Default.get}
+                        re.deletion_vector = Some(
+                            super::DeletionVector { storage_type: 
+                                deletion_vector.
+                                , path_or_inline_dv: (), offset: (), size_in_bytes: (), cardinality: () }
+                        )
+                    }
+                    _ => {
+                        re.deletion_vector = None;
                     }
                 },
                 _ => {
