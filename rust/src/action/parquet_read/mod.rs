@@ -71,7 +71,25 @@ impl DeletionVector {
                         }
                         
                 },
-
+                "sizeInBytes" => {                                    
+                    re.size_in_bytes = record
+                        .get_int(i)
+                        .map_err(|_| gen_action_type_error("add", "deletionVector.sizeInBytes", "int"))?
+                        .clone();
+                },
+                "cardinality" => {                                    
+                    re.cardinality = record
+                        .get_long(i)
+                        .map_err(|_| gen_action_type_error("add", "deletionVector.sizeInBytes", "long"))?
+                        .clone();
+                },
+                _ => {
+                    log::debug!(
+                        "Unexpected field name `{}` for deletion vector: {:?}",
+                        name,
+                        record
+                    );
+                }
             }
         }
         Ok(re)
@@ -163,13 +181,8 @@ impl Add {
                     }
                 },
                 "deletionVector" => match record.get_group(i) {
-                    Ok(deletion_vector) => {
-                        del_vec = { ... Default.get}
-                        re.deletion_vector = Some(
-                            super::DeletionVector { storage_type: 
-                                deletion_vector.
-                                , path_or_inline_dv: (), offset: (), size_in_bytes: (), cardinality: () }
-                        )
+                    Ok(row) => {
+                        re.deletion_vector = Some(DeletionVector::from_parquet_record(row)?);
                     }
                     _ => {
                         re.deletion_vector = None;

@@ -219,6 +219,7 @@ pub struct AddCDCFile {
     pub tags: Option<HashMap<String, Option<String>>>,
 }
 
+/// Describes deleted rows of a parquet file as part of an add or remove action
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DeletionVector {
