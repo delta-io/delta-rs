@@ -25,6 +25,7 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
+use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
@@ -309,6 +310,37 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         cmd = cmd.with_filters(&converted_filters);
 
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    // Run the restore command on the Delta Table: restore table to a given version or datetime
+    #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false))]
+    pub fn restore(
+        &mut self,
+        target: Option<&PyAny>,
+        ignore_missing_files: bool,
+        protocol_downgrade_allowed: bool,
+    ) -> PyResult<String> {
+        let mut cmd = RestoreBuilder::new(self._table.object_store(), self._table.state.clone());
+        if let Some(val) = target {
+            if let Ok(version) = val.extract::<i64>() {
+                cmd = cmd.with_version_to_restore(version)
+            }
+            if let Ok(ds) = val.extract::<&str>() {
+                let datetime = DateTime::<Utc>::from(
+                    DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(|err| {
+                        PyValueError::new_err(format!("Failed to parse datetime string: {err}"))
+                    })?,
+                );
+                cmd = cmd.with_datetime_to_restore(datetime)
+            }
+        }
+        cmd = cmd.with_ignore_missing_files(ignore_missing_files);
+        cmd = cmd.with_protocol_downgrade_allowed(protocol_downgrade_allowed);
         let (table, metrics) = rt()?
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
