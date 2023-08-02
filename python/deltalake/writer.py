@@ -68,7 +68,7 @@ class AddAction:
 @ray.remote
 def batch_validate(pa_table_ref, table, schema, checker, mode, partition_filters):
     def check_data_is_aligned_with_partition_filtering(
-        batch: pa.RecordBatch,
+            batch: pa.RecordBatch,
     ) -> None:
         if table is None:
             return
@@ -125,19 +125,23 @@ def batch_validate(pa_table_ref, table, schema, checker, mode, partition_filters
 
 @ray.remote
 def write_ds(
-    batch_ref,
-    current_version,
-    schema,
-    file_options,
-    filesystem,
-    max_partitions,
-    partitioning,
+        batch_ref,
+        current_version,
+        schema,
+        file_options,
+        filesystem,
+        max_partitions,
+        partitioning,
 ):
     max_open_files: int = 1024
     max_rows_per_file: int = 10 * 1024 * 1024
     min_rows_per_group: int = 64 * 1024
     max_rows_per_group: int = 128 * 1024
-    data = ray.get(batch_ref)
+    print("Batch ref", type(batch_ref))
+
+    data = batch_ref
+    print(type(data))
+    print(data)
     add_actions: List[AddAction] = []
 
     def visitor(written_file: Any) -> None:
@@ -183,21 +187,21 @@ def write_ds(
 
 
 def write_deltalake_ray(
-    table_or_uri: Union[str, Path, DeltaTable],
-    data: Union["ray.data.dataset.Dataset"],
-    *,
-    schema: Optional[pa.Schema] = None,
-    partition_by: Optional[Union[List[str], str]] = None,
-    filesystem: Optional[pa_fs.FileSystem] = None,
-    mode: Literal["error", "append", "overwrite", "ignore"] = "error",
-    file_options: Optional[ds.ParquetFileWriteOptions] = None,
-    max_partitions: Optional[int] = None,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-    configuration: Optional[Mapping[str, Optional[str]]] = None,
-    overwrite_schema: bool = False,
-    storage_options: Optional[Dict[str, str]] = None,
-    partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+        table_or_uri: Union[str, Path, DeltaTable],
+        data: Union["ray.data.dataset.Dataset"],
+        *,
+        schema: Optional[pa.Schema] = None,
+        partition_by: Optional[Union[List[str], str]] = None,
+        filesystem: Optional[pa_fs.FileSystem] = None,
+        mode: Literal["error", "append", "overwrite", "ignore"] = "error",
+        file_options: Optional[ds.ParquetFileWriteOptions] = None,
+        max_partitions: Optional[int] = None,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        configuration: Optional[Mapping[str, Optional[str]]] = None,
+        overwrite_schema: bool = False,
+        storage_options: Optional[Dict[str, str]] = None,
+        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -258,6 +262,8 @@ def write_deltalake_ray(
     if schema is None:
         if isinstance(data, ray.data.dataset.Dataset):
             schema = data.schema()
+            print("schema:")
+            print(schema)
         elif isinstance(data, Iterable):
             raise ValueError("You must provide schema if data is Iterable")
         else:
@@ -280,7 +286,7 @@ def write_deltalake_ray(
 
     if table:  # already exists
         if schema != table.schema().to_pyarrow() and not (
-            mode == "overwrite" and overwrite_schema
+                mode == "overwrite" and overwrite_schema
         ):
             raise ValueError(
                 "Schema of data does not match table schema\n"
@@ -366,58 +372,75 @@ def write_deltalake_ray(
                     partitioning,
                 )
             )
-
-        add_actions = ray.get(add_actions)
-
-    if table is None:
-        _write_new_deltalake(
-            table_uri,
-            schema,
-            add_actions,
-            mode,
-            partition_by or [],
-            name,
-            description,
-            configuration,
-            storage_options,
-        )
     else:
-        table._table.create_write_transaction(
-            add_actions,
-            mode,
-            partition_by or [],
-            schema,
-            partition_filters,
-        )
-        table.update_incremental()
+        add_actions = []
+        for batch_ref in data.to_arrow_refs():
+            add_actions.append(
+                write_ds.remote(
+                    batch_ref,
+                    current_version,
+                    schema,
+                    file_options,
+                    filesystem,
+                    max_partitions,
+                    partitioning,
+                )
+            )
+        new_add_actions = ray.get(add_actions)
+        final_add_actions = []
+        for action in new_add_actions:
+            for sub_action in action:
+                final_add_actions.append(sub_action)
+        if table is None:
+            _write_new_deltalake(
+                table_uri,
+                schema,
+                final_add_actions,
+                mode,
+                partition_by or [],
+                name,
+                description,
+                configuration,
+                storage_options,
+            )
+        else:
+            table._table.create_write_transaction(
+                final_add_actions,
+                mode,
+                partition_by or [],
+                schema,
+                partition_filters,
+            )
+            table.update_incremental()
+        # write_metadata.remote(add_actions,table_uri, schema, mode, partition_by, name, description, configuration, storage_options, table)
 
 
 def write_deltalake(
-    table_or_uri: Union[str, Path, DeltaTable],
-    data: Union[
-        "pd.DataFrame",
-        pa.Table,
-        pa.RecordBatch,
-        Iterable[pa.RecordBatch],
-        RecordBatchReader,
-    ],
-    *,
-    schema: Optional[pa.Schema] = None,
-    partition_by: Optional[Union[List[str], str]] = None,
-    filesystem: Optional[pa_fs.FileSystem] = None,
-    mode: Literal["error", "append", "overwrite", "ignore"] = "error",
-    file_options: Optional[ds.ParquetFileWriteOptions] = None,
-    max_partitions: Optional[int] = None,
-    max_open_files: int = 1024,
-    max_rows_per_file: int = 10 * 1024 * 1024,
-    min_rows_per_group: int = 64 * 1024,
-    max_rows_per_group: int = 128 * 1024,
-    name: Optional[str] = None,
-    description: Optional[str] = None,
-    configuration: Optional[Mapping[str, Optional[str]]] = None,
-    overwrite_schema: bool = False,
-    storage_options: Optional[Dict[str, str]] = None,
-    partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+        table_or_uri: Union[str, Path, DeltaTable],
+        data: Union[
+            "pd.DataFrame",
+            pa.Table,
+            pa.RecordBatch,
+            Iterable[pa.RecordBatch],
+            RecordBatchReader,
+        ],
+        *,
+        schema: Optional[pa.Schema] = None,
+        partition_by: Optional[Union[List[str], str]] = None,
+        filesystem: Optional[pa_fs.FileSystem] = None,
+        mode: Literal["error", "append", "overwrite", "ignore"] = "error",
+        file_options: Optional[ds.ParquetFileWriteOptions] = None,
+        max_partitions: Optional[int] = None,
+        max_open_files: int = 1024,
+        max_rows_per_file: int = 10 * 1024 * 1024,
+        min_rows_per_group: int = 64 * 1024,
+        max_rows_per_group: int = 128 * 1024,
+        name: Optional[str] = None,
+        description: Optional[str] = None,
+        configuration: Optional[Mapping[str, Optional[str]]] = None,
+        overwrite_schema: bool = False,
+        storage_options: Optional[Dict[str, str]] = None,
+        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -505,7 +528,7 @@ def write_deltalake(
 
     if table:  # already exists
         if schema != table.schema().to_pyarrow() and not (
-            mode == "overwrite" and overwrite_schema
+                mode == "overwrite" and overwrite_schema
         ):
             raise ValueError(
                 "Schema of data does not match table schema\n"
@@ -569,7 +592,7 @@ def write_deltalake(
         checker = _DeltaDataChecker(invariants)
 
         def check_data_is_aligned_with_partition_filtering(
-            batch: pa.RecordBatch,
+                batch: pa.RecordBatch,
         ) -> None:
             if table is None:
                 return
@@ -597,8 +620,8 @@ def write_deltalake(
                 }
                 partition = frozenset(partition_map.items())
                 if (
-                    partition not in allowed_partitions
-                    and partition in existed_partitions
+                        partition not in allowed_partitions
+                        and partition in existed_partitions
                 ):
                     partition_repr = " ".join(
                         f"{key}={value}" for key, value in partition_map.items()
@@ -672,15 +695,15 @@ def write_deltalake(
 
 
 def __enforce_append_only(
-    table: Optional[DeltaTable],
-    configuration: Optional[Mapping[str, Optional[str]]],
-    mode: str,
+        table: Optional[DeltaTable],
+        configuration: Optional[Mapping[str, Optional[str]]],
+        mode: str,
 ) -> None:
     """Throw ValueError if table configuration contains delta.appendOnly and mode is not append"""
     if table:
         configuration = table.metadata().configuration
     config_delta_append_only = (
-        configuration and configuration.get("delta.appendOnly", "false") == "true"
+            configuration and configuration.get("delta.appendOnly", "false") == "true"
     )
     if config_delta_append_only and mode != "append":
         raise ValueError(
@@ -704,8 +727,8 @@ class DeltaJSONEncoder(json.JSONEncoder):
 
 
 def try_get_table_and_table_uri(
-    table_or_uri: Union[str, Path, DeltaTable],
-    storage_options: Optional[Dict[str, str]] = None,
+        table_or_uri: Union[str, Path, DeltaTable],
+        storage_options: Optional[Dict[str, str]] = None,
 ) -> Tuple[Optional[DeltaTable], str]:
     """Parses the `table_or_uri`.
 
@@ -729,7 +752,7 @@ def try_get_table_and_table_uri(
 
 
 def try_get_deltatable(
-    table_uri: Union[str, Path], storage_options: Optional[Dict[str, str]]
+        table_uri: Union[str, Path], storage_options: Optional[Dict[str, str]]
 ) -> Optional[DeltaTable]:
     try:
         return DeltaTable(table_uri, storage_options=storage_options)
@@ -755,7 +778,7 @@ def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
 
 
 def get_file_stats_from_metadata(
-    metadata: Any,
+        metadata: Any,
 ) -> Dict[str, Union[int, Dict[str, Any]]]:
     stats = {
         "numRecords": metadata.num_rows,
@@ -772,7 +795,7 @@ def get_file_stats_from_metadata(
         name = metadata.row_group(0).column(column_idx).path_in_schema
         # If stats missing, then we can't know aggregate stats
         if all(
-            group.column(column_idx).is_stats_set for group in iter_groups(metadata)
+                group.column(column_idx).is_stats_set for group in iter_groups(metadata)
         ):
             stats["nullCount"][name] = sum(
                 group.column(column_idx).statistics.null_count
@@ -781,8 +804,8 @@ def get_file_stats_from_metadata(
 
             # Min / max may not exist for some column types, or if all values are null
             if any(
-                group.column(column_idx).statistics.has_min_max
-                for group in iter_groups(metadata)
+                    group.column(column_idx).statistics.has_min_max
+                    for group in iter_groups(metadata)
             ):
                 # Min and Max are recorded in physical type, not logical type
                 # https://stackoverflow.com/questions/66753485/decoding-parquet-min-max-statistics-for-decimal-type
