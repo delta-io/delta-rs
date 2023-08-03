@@ -238,13 +238,12 @@ pub struct DeletionVector {
     pub size_in_bytes: i32,
 
     ///Number of rows the given DV logically removes from the file.
-    pub cardinality: i64
+    pub cardinality: i64,
 }
-
 
 impl PartialEq for DeletionVector {
     fn eq(&self, other: &Self) -> bool {
-            self.storage_type == other.storage_type
+        self.storage_type == other.storage_type
             && self.path_or_inline_dv == other.path_or_inline_dv
             && self.offset == other.offset
             && self.size_in_bytes == other.size_in_bytes
@@ -253,7 +252,6 @@ impl PartialEq for DeletionVector {
 }
 
 impl Eq for DeletionVector {}
-
 
 /// Delta log action that describes a parquet data file that is part of the table.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -1086,16 +1084,34 @@ mod tests {
             let actions = sort_batch_by(&actions, "path").unwrap();
 
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
-        ("path", Arc::new(array::StringArray::from(vec![
-            "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet"
-        ]))),
-        ("size_bytes", Arc::new(array::Int64Array::from(vec![10499]))),       
-        ("deletionVector.storageType", Arc::new(array::StringArray::from(vec!["u"]))),
-        ("deletionVector.pathOrInlineDiv", Arc::new(array::StringArray::from(vec!["Q6Kt3y1b)0MgZSWwPunr"]))),
-        ("deletionVector.offset", Arc::new(array::Int32Array::from(vec![1]))),
-        ("deletionVector.sizeInBytes", Arc::new(array::Int64Array::from(vec![36]))),
-        ("deletionVector.cardinality", Arc::new(array::Int32Array::from(vec![2]))),
-    ];
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet",
+                    ])),
+                ),
+                ("size_bytes", Arc::new(array::Int64Array::from(vec![10499]))),
+                (
+                    "deletionVector.storageType",
+                    Arc::new(array::StringArray::from(vec!["u"])),
+                ),
+                (
+                    "deletionVector.pathOrInlineDiv",
+                    Arc::new(array::StringArray::from(vec!["Q6Kt3y1b)0MgZSWwPunr"])),
+                ),
+                (
+                    "deletionVector.offset",
+                    Arc::new(array::Int32Array::from(vec![1])),
+                ),
+                (
+                    "deletionVector.sizeInBytes",
+                    Arc::new(array::Int64Array::from(vec![36])),
+                ),
+                (
+                    "deletionVector.cardinality",
+                    Arc::new(array::Int32Array::from(vec![2])),
+                ),
+            ];
             let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
 
             assert_eq!(expected, actions);
@@ -1103,10 +1119,13 @@ mod tests {
             let actions = table.get_state().add_actions_table(false).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
-                ("path", Arc::new(array::StringArray::from(vec![
-                    "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet"
-                ]))),
-                ("size_bytes", Arc::new(array::Int64Array::from(vec![10499]))),       
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet",
+                    ])),
+                ),
+                ("size_bytes", Arc::new(array::Int64Array::from(vec![10499]))),
                 (
                     "deletionVector",
                     Arc::new(array::StructArray::new(
@@ -1115,16 +1134,20 @@ mod tests {
                             Field::new("pathOrInlineDiv", DataType::Utf8, false),
                             Field::new("offset", DataType::Int32, true),
                             Field::new("sizeInBytes", DataType::Int64, false),
-                            Field::new("cardinality", DataType::Int32, false)]),
-                        vec![Arc::new(array::StringArray::from(vec!["u"])) as ArrayRef,
-                        Arc::new(array::StringArray::from(vec!["u"])) as ArrayRef,
-                        Arc::new(array::StringArray::from(vec!["Q6Kt3y1b)0MgZSWwPunr"])) as ArrayRef,
-                        Arc::new(array::Int32Array::from(vec![1])) as ArrayRef,
-                        Arc::new(array::Int64Array::from(vec![36])) as ArrayRef,
-                        Arc::new(array::Int32Array::from(vec![2])) as ArrayRef],
+                            Field::new("cardinality", DataType::Int32, false),
+                        ]),
+                        vec![
+                            Arc::new(array::StringArray::from(vec!["u"])) as ArrayRef,
+                            Arc::new(array::StringArray::from(vec!["u"])) as ArrayRef,
+                            Arc::new(array::StringArray::from(vec!["Q6Kt3y1b)0MgZSWwPunr"]))
+                                as ArrayRef,
+                            Arc::new(array::Int32Array::from(vec![1])) as ArrayRef,
+                            Arc::new(array::Int64Array::from(vec![36])) as ArrayRef,
+                            Arc::new(array::Int32Array::from(vec![2])) as ArrayRef,
+                        ],
                         None,
                     )),
-                )
+                ),
             ];
             let expected = RecordBatch::try_from_iter(expected_columns).unwrap();
 
