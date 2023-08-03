@@ -138,10 +138,7 @@ def write_ds(
     min_rows_per_group: int = 64 * 1024
     max_rows_per_group: int = 128 * 1024
     print("Batch ref", type(batch_ref))
-
     data = batch_ref
-    print(type(data))
-    print(data)
     add_actions: List[AddAction] = []
 
     def visitor(written_file: Any) -> None:
@@ -262,8 +259,6 @@ def write_deltalake_ray(
     if schema is None:
         if isinstance(data, ray.data.dataset.Dataset):
             schema = data.schema()
-            print("schema:")
-            print(schema)
         elif isinstance(data, Iterable):
             raise ValueError("You must provide schema if data is Iterable")
         else:
@@ -343,37 +338,22 @@ def write_deltalake_ray(
             )
         )
 
+    add_actions = []
     if table is not None:
         # We don't currently provide a way to set invariants
         # (and maybe never will), so only enforce if already exist.
         invariants = table.schema().invariants
         checker = _DeltaDataChecker(invariants)
 
-        batch_references = []
-        for pa_table_ref in data.to_arrow_refs():
-            batch_references.append(
-                batch_validate.remote(
-                    pa_table_ref, table, schema, checker, mode, partition_filters
-                )
-            )
+        # batch_references = []
+        # for pa_table_ref in data.to_arrow_refs():
+        #     batch_references.append(
+        #         batch_validate.remote(
+        #             pa_table_ref, table, schema, checker, mode, partition_filters
+        #         )
+        #     )
 
         # Validate in batch_references for any exception
-
-        add_actions = []
-        for batch_ref in batch_references:
-            add_actions.append(
-                write_ds.remote(
-                    batch_ref,
-                    current_version,
-                    schema,
-                    file_options,
-                    filesystem,
-                    max_partitions,
-                    partitioning,
-                )
-            )
-    else:
-        add_actions = []
         for batch_ref in data.to_arrow_refs():
             add_actions.append(
                 write_ds.remote(
@@ -386,32 +366,45 @@ def write_deltalake_ray(
                     partitioning,
                 )
             )
-        new_add_actions = ray.get(add_actions)
-        final_add_actions = []
-        for action in new_add_actions:
-            for sub_action in action:
-                final_add_actions.append(sub_action)
-        if table is None:
-            _write_new_deltalake(
-                table_uri,
-                schema,
-                final_add_actions,
-                mode,
-                partition_by or [],
-                name,
-                description,
-                configuration,
-                storage_options,
+    else:
+        for batch_ref in data.to_arrow_refs():
+            add_actions.append(
+                write_ds.remote(
+                    batch_ref,
+                    current_version,
+                    schema,
+                    file_options,
+                    filesystem,
+                    max_partitions,
+                    partitioning,
+                )
             )
-        else:
-            table._table.create_write_transaction(
-                final_add_actions,
-                mode,
-                partition_by or [],
-                schema,
-                partition_filters,
-            )
-            table.update_incremental()
+    new_add_actions = ray.get(add_actions)
+    final_add_actions = []
+    for action in new_add_actions:
+        for sub_action in action:
+            final_add_actions.append(sub_action)
+    if table is None:
+        _write_new_deltalake(
+            table_uri,
+            schema,
+            final_add_actions,
+            mode,
+            partition_by or [],
+            name,
+            description,
+            configuration,
+            storage_options,
+        )
+    else:
+        table._table.create_write_transaction(
+            final_add_actions,
+            mode,
+            partition_by or [],
+            schema,
+            partition_filters,
+        )
+        table.update_incremental()
         # write_metadata.remote(add_actions,table_uri, schema, mode, partition_by, name, description, configuration, storage_options, table)
 
 
