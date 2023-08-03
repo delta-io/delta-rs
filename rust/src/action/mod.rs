@@ -1082,7 +1082,29 @@ mod tests {
             let table = crate::open_table(path).await.unwrap();
             let actions = table.get_state().add_actions_table(true).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
-
+            let actions = actions
+                .project(&[
+                    actions.schema().index_of("path").unwrap(),
+                    actions.schema().index_of("size_bytes").unwrap(),
+                    actions
+                        .schema()
+                        .index_of("deletionVector.storageType")
+                        .unwrap(),
+                    actions
+                        .schema()
+                        .index_of("deletionVector.pathOrInlineDiv")
+                        .unwrap(),
+                    actions.schema().index_of("deletionVector.offset").unwrap(),
+                    actions
+                        .schema()
+                        .index_of("deletionVector.sizeInBytes")
+                        .unwrap(),
+                    actions
+                        .schema()
+                        .index_of("deletionVector.cardinality")
+                        .unwrap(),
+                ])
+                .unwrap();
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 (
                     "path",
@@ -1105,11 +1127,11 @@ mod tests {
                 ),
                 (
                     "deletionVector.sizeInBytes",
-                    Arc::new(array::Int64Array::from(vec![36])),
+                    Arc::new(array::Int32Array::from(vec![36])),
                 ),
                 (
                     "deletionVector.cardinality",
-                    Arc::new(array::Int32Array::from(vec![2])),
+                    Arc::new(array::Int64Array::from(vec![2])),
                 ),
             ];
             let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
@@ -1118,6 +1140,13 @@ mod tests {
 
             let actions = table.get_state().add_actions_table(false).unwrap();
             let actions = sort_batch_by(&actions, "path").unwrap();
+            let actions = actions
+                .project(&[
+                    actions.schema().index_of("path").unwrap(),
+                    actions.schema().index_of("size_bytes").unwrap(),
+                    actions.schema().index_of("deletionVector").unwrap(),
+                ])
+                .unwrap();
             let expected_columns: Vec<(&str, ArrayRef)> = vec![
                 (
                     "path",
@@ -1133,17 +1162,16 @@ mod tests {
                             Field::new("storageType", DataType::Utf8, false),
                             Field::new("pathOrInlineDiv", DataType::Utf8, false),
                             Field::new("offset", DataType::Int32, true),
-                            Field::new("sizeInBytes", DataType::Int64, false),
-                            Field::new("cardinality", DataType::Int32, false),
+                            Field::new("sizeInBytes", DataType::Int32, false),
+                            Field::new("cardinality", DataType::Int64, false),
                         ]),
                         vec![
-                            Arc::new(array::StringArray::from(vec!["u"])) as ArrayRef,
                             Arc::new(array::StringArray::from(vec!["u"])) as ArrayRef,
                             Arc::new(array::StringArray::from(vec!["Q6Kt3y1b)0MgZSWwPunr"]))
                                 as ArrayRef,
                             Arc::new(array::Int32Array::from(vec![1])) as ArrayRef,
-                            Arc::new(array::Int64Array::from(vec![36])) as ArrayRef,
-                            Arc::new(array::Int32Array::from(vec![2])) as ArrayRef,
+                            Arc::new(array::Int32Array::from(vec![36])) as ArrayRef,
+                            Arc::new(array::Int64Array::from(vec![2])) as ArrayRef,
                         ],
                         None,
                     )),
