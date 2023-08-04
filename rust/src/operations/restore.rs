@@ -186,7 +186,7 @@ async fn execute(
                 partition_values: Some(a.partition_values.clone()),
                 size: Some(a.size),
                 tags: a.tags,
-                deletion_vector: a.deletion_vector
+                deletion_vector: a.deletion_vector,
             }
         })
         .collect();

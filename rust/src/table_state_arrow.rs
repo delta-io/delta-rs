@@ -317,29 +317,48 @@ impl DeltaTableState {
             }
         }
         if flatten {
-            Ok(arrow::record_batch::RecordBatch::try_from_iter(
-                vec![("deletionVector.storageType",  Arc::new(storage_type.finish()) as ArrayRef),
-                    ("deletionVector.pathOrInlineDiv", Arc::new(path_or_inline_div.finish()) as ArrayRef),
-                    ("deletionVector.offset", Arc::new(offset.finish()) as ArrayRef),
-                    ("deletionVector.sizeInBytes", Arc::new(size_in_bytes.finish()) as ArrayRef),
-                    ("deletionVector.cardinality", Arc::new(cardinality.finish()) as ArrayRef)
-                    ])?)
+            Ok(arrow::record_batch::RecordBatch::try_from_iter(vec![
+                (
+                    "deletionVector.storageType",
+                    Arc::new(storage_type.finish()) as ArrayRef,
+                ),
+                (
+                    "deletionVector.pathOrInlineDiv",
+                    Arc::new(path_or_inline_div.finish()) as ArrayRef,
+                ),
+                (
+                    "deletionVector.offset",
+                    Arc::new(offset.finish()) as ArrayRef,
+                ),
+                (
+                    "deletionVector.sizeInBytes",
+                    Arc::new(size_in_bytes.finish()) as ArrayRef,
+                ),
+                (
+                    "deletionVector.cardinality",
+                    Arc::new(cardinality.finish()) as ArrayRef,
+                ),
+            ])?)
         } else {
             Ok(arrow::record_batch::RecordBatch::try_from_iter(vec![(
                 "deletionVector",
-                Arc::new(StructArray::new(Fields::from(vec![
-                    Field::new("storageType", DataType::Utf8, false),
-                    Field::new("pathOrInlineDiv", DataType::Utf8, false),
-                    Field::new("offset", DataType::Int32, true),
-                    Field::new("sizeInBytes", DataType::Int32, false),
-                    Field::new("cardinality", DataType::Int64, false),
-                ]), vec![ 
-                    Arc::new(storage_type.finish()) as ArrayRef,
-                    Arc::new(path_or_inline_div.finish()) as ArrayRef,
-                    Arc::new(offset.finish()) as ArrayRef,
-                    Arc::new(size_in_bytes.finish()) as ArrayRef,
-                    Arc::new(cardinality.finish()) as ArrayRef,
-                    ] , None)) as ArrayRef,
+                Arc::new(StructArray::new(
+                    Fields::from(vec![
+                        Field::new("storageType", DataType::Utf8, false),
+                        Field::new("pathOrInlineDiv", DataType::Utf8, false),
+                        Field::new("offset", DataType::Int32, true),
+                        Field::new("sizeInBytes", DataType::Int32, false),
+                        Field::new("cardinality", DataType::Int64, false),
+                    ]),
+                    vec![
+                        Arc::new(storage_type.finish()) as ArrayRef,
+                        Arc::new(path_or_inline_div.finish()) as ArrayRef,
+                        Arc::new(offset.finish()) as ArrayRef,
+                        Arc::new(size_in_bytes.finish()) as ArrayRef,
+                        Arc::new(cardinality.finish()) as ArrayRef,
+                    ],
+                    None,
+                )) as ArrayRef,
             )])?)
         }
     }

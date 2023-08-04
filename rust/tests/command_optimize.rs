@@ -294,7 +294,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         size: Some(add.size),
         partition_values: Some(add.partition_values.clone()),
         tags: Some(HashMap::new()),
-        deletion_vector: add.deletion_vector.clone()
+        deletion_vector: add.deletion_vector.clone(),
     };
 
     let operation = DeltaOperation::Delete { predicate: None };

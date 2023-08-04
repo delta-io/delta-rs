@@ -409,7 +409,7 @@ mod checkpoints_with_tombstones {
             partition_values: None,
             size: Some(100),
             tags: None,
-            deletion_vector: None
+            deletion_vector: None,
         }
     }
 

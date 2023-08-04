@@ -423,7 +423,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         size: Some(add.size),
                         // TODO add file metadata to remove action (tags missing)
                         tags: None,
-                        deletion_vector: add.deletion_vector.clone()
+                        deletion_vector: add.deletion_vector.clone(),
                     })
                 };
 

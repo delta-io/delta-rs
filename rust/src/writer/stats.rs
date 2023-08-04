@@ -38,7 +38,7 @@ pub fn create_add(
         stats: Some(stats_string),
         stats_parsed: None,
         tags: None,
-        deletion_vector: None
+        deletion_vector: None,
     })
 }
 

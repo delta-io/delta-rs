@@ -7,8 +7,8 @@ use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use serde_json::json;
 
 use crate::action::{
-    Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, MetaData, Protocol, ProtocolError,
-    Remove, Stats, Txn, DeletionVector
+    Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, DeletionVector, MetaData, Protocol,
+    ProtocolError, Remove, Stats, Txn,
 };
 
 fn populate_hashmap_with_option_from_parquet_map(
@@ -51,38 +51,38 @@ impl DeletionVector {
         };
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
-                "storageType" => {                    
+                "storageType" => {
                     re.storage_type = record
                         .get_string(i)
-                        .map_err(|_| gen_action_type_error("add", "deletionVector.storage_type", "string"))?
+                        .map_err(|_| {
+                            gen_action_type_error("add", "deletionVector.storage_type", "string")
+                        })?
                         .clone();
-                },
-                "pathOrInlineDv" => {                                    
+                }
+                "pathOrInlineDv" => {
                     re.path_or_inline_dv = record
                         .get_string(i)
-                        .map_err(|_| gen_action_type_error("add", "deletionVector.pathOrInlineDv", "string"))?
+                        .map_err(|_| {
+                            gen_action_type_error("add", "deletionVector.pathOrInlineDv", "string")
+                        })?
                         .clone();
-                },
-                "offset" => {                                    
-                    re.offset = match record
-                        .get_int(i) {
-                            Ok(x)=>Some(x),
-                            _ => None
-                        }
-                        
-                },
-                "sizeInBytes" => {                                    
-                    re.size_in_bytes = record
-                        .get_int(i)
-                        .map_err(|_| gen_action_type_error("add", "deletionVector.sizeInBytes", "int"))?
-                        .clone();
-                },
-                "cardinality" => {                                    
-                    re.cardinality = record
-                        .get_long(i)
-                        .map_err(|_| gen_action_type_error("add", "deletionVector.sizeInBytes", "long"))?
-                        .clone();
-                },
+                }
+                "offset" => {
+                    re.offset = match record.get_int(i) {
+                        Ok(x) => Some(x),
+                        _ => None,
+                    }
+                }
+                "sizeInBytes" => {
+                    re.size_in_bytes = record.get_int(i).map_err(|_| {
+                        gen_action_type_error("add", "deletionVector.sizeInBytes", "int")
+                    })?;
+                }
+                "cardinality" => {
+                    re.cardinality = record.get_long(i).map_err(|_| {
+                        gen_action_type_error("add", "deletionVector.sizeInBytes", "long")
+                    })?;
+                }
                 _ => {
                     log::debug!(
                         "Unexpected field name `{}` for deletion vector: {:?}",
