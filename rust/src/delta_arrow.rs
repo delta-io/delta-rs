@@ -677,7 +677,22 @@ mod tests {
                 }
             })
             .collect();
-        assert_eq!(9, add_fields.len());
+        let field_names: Vec<&String> = add_fields.iter().map(|v| v.name()).collect();
+        assert_eq!(
+            vec![
+                "path",
+                "size",
+                "modificationTime",
+                "dataChange",
+                "stats",
+                "partitionValues",
+                "tags",
+                "deletionVector",
+                "stats_parsed",
+                "partitionValues_parsed"
+            ],
+            field_names
+        );
         let add_field_map: HashMap<_, _> = add_fields
             .iter()
             .map(|f| (f.name().to_owned(), f.clone()))
