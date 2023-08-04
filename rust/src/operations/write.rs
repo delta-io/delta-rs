@@ -27,6 +27,7 @@ use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
+use serde_json::Map;
 
 use super::writer::{DeltaWriter, WriterConfig};
 use super::MAX_SUPPORTED_WRITER_VERSION;
@@ -101,6 +102,8 @@ pub struct WriteBuilder {
     safe_cast: bool,
     /// Parquet writer properties
     writer_properties: Option<WriterProperties>,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<Map<String, serde_json::Value>>,
 }
 
 impl WriteBuilder {
@@ -119,6 +122,7 @@ impl WriteBuilder {
             batches: None,
             safe_cast: false,
             writer_properties: None,
+            app_metadata: None,
         }
     }
 
@@ -184,6 +188,15 @@ impl WriteBuilder {
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(Map::from_iter(metadata));
         self
     }
 
@@ -455,8 +468,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     predicate: this.predicate,
                 },
                 &this.snapshot,
-                // TODO pass through metadata
-                None,
+                this.app_metadata,
             )
             .await?;
 
