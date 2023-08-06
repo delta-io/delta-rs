@@ -8,7 +8,9 @@
 //! specified matter.  See [`MergeBuilder`] for more information
 //!
 //! *WARNING* The current implementation rewrites the entire delta table so only
-//! use on small to medium sized tables. Enhancements tracked at #850
+//! use on small to medium sized tables. The solution also cannot take advantage
+//! of multiple threads and is limited to a single single thread.
+//! Enhancements tracked at #850
 //!
 //! # Example
 //! ```rust ignore
@@ -141,8 +143,7 @@ impl MergeBuilder {
         }
     }
 
-    /// Specify how to update a target record when it matches with a source
-    /// record
+    /// Update a target record when it matches with a source record
     ///
     /// The update expressions can specify both source and target columns.
     ///
@@ -185,8 +186,7 @@ impl MergeBuilder {
         Ok(self)
     }
 
-    /// Specify how to update a target record when it matches with a source
-    /// record
+    /// Delete a target record when it matches with a source record
     ///
     /// Multiple match clasues can be specified and their predicates are
     /// evaluated to determine if the corresponding operation are performed.
@@ -200,13 +200,7 @@ impl MergeBuilder {
     ///     .merge(source, col("id").eq(col("source.id")))
     ///     .with_source_alias("source")
     ///     .when_matched_delete(|delete| {
-    ///         update
-    ///             .predicate(col("source.delete"))
-    ///     })?
-    ///     .when_matched_update(|update| {
-    ///         update
-    ///             .update("value", col("source.value"))
-    ///             .update("modified", col("source.modified"))
+    ///         delete.predicate(col("source.delete"))
     ///     })?
     ///     .await?
     /// ```
@@ -225,8 +219,7 @@ impl MergeBuilder {
         Ok(self)
     }
 
-    /// Specify how to insert a source record when it does not match with a
-    /// target record
+    /// Insert a source record when it does not match with a target record
     ///
     /// Multiple not match clasues can be specified and their predicates are
     /// evaluated to determine if the corresponding operation are performed.
@@ -239,14 +232,11 @@ impl MergeBuilder {
     /// let (table, metrics) = DeltaOps(table)
     ///     .merge(source, col("id").eq(col("source.id")))
     ///     .with_source_alias("source")
-    ///     .when_matched_delete(|delete| {
-    ///         update
-    ///             .predicate(col("source.delete"))
-    ///     })?
-    ///     .when_matched_update(|update| {
-    ///         update
-    ///             .update("value", col("source.value"))
-    ///             .update("modified", col("source.modified"))
+    ///     .when_not_matched_insert(|insert| {
+    ///         insert
+    ///             .set("id", col("source.id"))
+    ///             .set("value", col("source.value"))
+    ///             .set("modified", col("source.modified"))
     ///     })?
     ///     .await?
     /// ```
@@ -265,7 +255,7 @@ impl MergeBuilder {
         Ok(self)
     }
 
-    /// Specify how to update a target record when it does not match with a
+    /// Update a target record when it does not match with a
     /// source record
     ///
     /// The update expressions can specify only target columns.
@@ -303,8 +293,7 @@ impl MergeBuilder {
         Ok(self)
     }
 
-    /// Specify if a target record is deleted when it does not match with a
-    /// source record
+    /// Delete a target record when it does not match with a source record
     ///
     /// Multiple source not match clasues can be specified and their predicates
     /// are evaluated to determine if the corresponding operation are performed.
