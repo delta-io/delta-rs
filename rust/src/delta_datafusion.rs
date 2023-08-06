@@ -414,14 +414,39 @@ impl<'a> DeltaScanBuilder<'a> {
         self
     }
 
+    fn logical_schema(&self) -> DeltaResult<SchemaRef> {
+        let input_schema = self.snapshot.input_schema()?;
+        let mut fields = Vec::new();
+        for field in input_schema.fields.iter() {
+            fields.push(field.to_owned());
+        }
+        if self.add_file_idx {
+            fields.push(Arc::new(Field::new(
+                PATH_COLUMN,
+                arrow_schema::DataType::UInt64,
+                true,
+            )));
+        }
+        Ok(Arc::new(ArrowSchema::new(fields)))
+    }
+
     pub async fn build(self) -> DeltaResult<DeltaScan> {
         let schema = self.snapshot.arrow_schema()?;
-        let logical_schema = self.snapshot.input_schema()?;
+        let logical_schema = if let Some(projection) = self.projection {
+                let input_schema = self.logical_schema()?;
+                let mut fields = vec![];
+                for idx in projection {
+                    fields.push(input_schema.field(*idx).to_owned());
+                }
+                Arc::new(ArrowSchema::new(fields))
+        } else {
+            self.logical_schema()?
+        };
         let logical_filter = self
             .filter
             .map(|expr| logical_expr_to_physical_expr(&expr, &logical_schema));
 
-        println!("here0001");
+
         // Perform Pruning of files to scan
         // TODO: Determine if we can avoid allocs..
         let files = match self.files {
@@ -450,7 +475,6 @@ impl<'a> DeltaScanBuilder<'a> {
                 }
             }
         };
-        println!("here0002");
         // TODO we group files together by their partition values. If the table is partitioned
         // and partitions are somewhat evenly distributed, probably not the worst choice ...
         // However we may want to do some additional balancing in case we are far off from the above.
@@ -470,7 +494,6 @@ impl<'a> DeltaScanBuilder<'a> {
                 .push(part);
         }
 
-        println!("here0003");
         let table_partition_cols = self
             .snapshot
             .current_metadata()
@@ -496,7 +519,6 @@ impl<'a> DeltaScanBuilder<'a> {
             table_partition_cols.push((PATH_COLUMN.to_owned(), DataType::UInt64));
         }
 
-        println!("here0004");
         let scan = ParquetFormat::new()
             .create_physical_plan(
                 self.state,
@@ -526,7 +548,7 @@ impl<'a> DeltaScanBuilder<'a> {
             parquet_scan: scan,
             file_idx_column,
             files: files.iter().map(|action| action.path.clone()).collect(),
-            physical_schema: Some(self.snapshot.arrow_schema()?),
+            logical_schema: Some(logical_schema),
         })
     }
 }
@@ -597,8 +619,8 @@ pub struct DeltaScan {
     pub files: Vec<String>,
     /// The parquet scan to wrap
     pub parquet_scan: Arc<dyn ExecutionPlan>,
-    /// TODO
-    pub physical_schema : Option<Arc<ArrowSchema>>,
+    /// The schema of the table to be used when evaluating expressions
+    pub logical_schema: Option<Arc<ArrowSchema>>,
 }
 
 impl DisplayAs for DeltaScan {
@@ -613,7 +635,6 @@ impl ExecutionPlan for DeltaScan {
     }
 
     fn schema(&self) -> SchemaRef {
-        println!("{:?}", self.parquet_scan.schema());
         self.parquet_scan.schema()
     }
 
@@ -1009,7 +1030,7 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
             parquet_scan: (*inputs)[0].clone(),
             file_idx_column: None,
             files: Vec::new(),
-            physical_schema: None,
+            logical_schema: None,
         };
         Ok(Arc::new(delta_scan))
     }
@@ -1267,33 +1288,19 @@ pub(crate) async fn find_files_scan<'a>(
 ) -> DeltaResult<Vec<Add>> {
     let mut candidate_map: HashMap<usize, Add> = HashMap::new();
 
-    /*
-    let table_partition_cols = snapshot
-        .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)?
-        .partition_columns
-        .clone();
-    */
-
-    //let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-
-    /*
-    let mut table_partition_cols = table_partition_cols
-        .iter()
-        .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
-        .collect::<Result<Vec<_>, ArrowError>>()?;
-    // Append a column called __delta_rs_path to track the file path
-    table_partition_cols.push((PATH_COLUMN.to_owned(), DataType::Utf8));
-
+    // TODO: DeltaScan should be responsible for providing the schmea with
+    // `PATH_COLUMN` provided but we cannot construct it since we don't know the
+    // projection. (I.E there is a cylic dependency) 
+    // Maybe resolve it by constructing a DeltaScan, obtaining the schema, and then
+    // construct another run with the projection included.
     let input_schema = snapshot.input_schema()?;
-
     let mut fields = Vec::new();
     for field in input_schema.fields.iter() {
         fields.push(field.to_owned());
     }
     fields.push(Arc::new(Field::new(
         PATH_COLUMN,
-        arrow_schema::DataType::Boolean,
+        arrow_schema::DataType::UInt64,
         true,
     )));
     let input_schema = Arc::new(ArrowSchema::new(fields));
@@ -1308,24 +1315,15 @@ pub(crate) async fn find_files_scan<'a>(
     // Add path column
     used_columns.push(input_schema.index_of(PATH_COLUMN)?);
 
-    // Project the logical schema so column indicies align between the parquet scan and the expression
-    let mut fields = vec![];
-    for idx in &used_columns {
-        fields.push(input_schema.field(*idx).to_owned());
-    }
-    let input_schema = Arc::new(ArrowSchema::new(fields));
-    let input_dfschema = input_schema.as_ref().clone().try_into()?;
-    */
-
     let scan = DeltaScanBuilder::new(snapshot, store.clone(), state)
         .with_file_idx(true)
         .with_filter(Some(expression.clone()))
-        //.with_projection(Some(&used_columns))
+        .with_projection(Some(&used_columns))
         .build()
         .await?;
     let scan = Arc::new(scan);
 
-    let input_schema = scan.physical_schema.as_ref().to_owned().unwrap();
+    let input_schema = scan.logical_schema.as_ref().to_owned().unwrap();
     let input_dfschema = input_schema.as_ref().clone().try_into()?;
 
     let predicate_expr = create_physical_expr(
@@ -1333,7 +1331,8 @@ pub(crate) async fn find_files_scan<'a>(
         &input_dfschema,
         &input_schema,
         state.execution_props(),
-    ).unwrap();
+    )
+    .unwrap();
 
     let filter: Arc<dyn ExecutionPlan> =
         Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
@@ -1727,7 +1726,7 @@ mod tests {
             parquet_scan: Arc::from(EmptyExec::new(false, schema)),
             file_idx_column: None,
             files: Vec::new(),
-            physical_schema: None
+            logical_schema: None,
         });
         // TODO: Test new column...
         let proto: protobuf::PhysicalPlanNode =

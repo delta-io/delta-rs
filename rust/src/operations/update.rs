@@ -216,9 +216,7 @@ async fn execute(
     let table_partition_cols = current_metadata.partition_columns.clone();
 
     let scan_start = Instant::now();
-    println!("before find files");
     let candidates = find_files(snapshot, object_store.clone(), &state, predicate.clone()).await?;
-    println!("find files");
     metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis() as u64;
 
     if candidates.candidates.is_empty() {
@@ -230,7 +228,6 @@ async fn execute(
     let execution_props = state.execution_props();
     // For each rewrite evaluate the predicate and then modify each expression
     // to either compute the new value or obtain the old one then write these batches
-    println!("find files2");
     let scan = DeltaScanBuilder::new(snapshot, object_store.clone(), &state)
         .with_files(&candidates.candidates)
         .build()
