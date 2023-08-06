@@ -32,7 +32,8 @@ use arrow::datatypes::DataType;
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
-use arrow_array::StringArray;
+use arrow_array::types::UInt64Type;
+use arrow_array::{PrimitiveArray, StringArray};
 use arrow_schema::Field;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
@@ -54,9 +55,7 @@ use datafusion::physical_plan::{
 };
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
-use datafusion_common::{
-    Column, DFSchema, DataFusionError, Result as DataFusionResult, ToDFSchema,
-};
+use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ToDFSchema};
 use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
 use datafusion_expr::logical_plan::CreateExternalTable;
 use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
@@ -68,7 +67,6 @@ use object_store::ObjectMeta;
 use url::Url;
 
 use crate::action::{self, Add};
-use crate::builder::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::ObjectStoreRef;
 use crate::table_state::DeltaTableState;
@@ -361,66 +359,176 @@ pub(crate) fn register_store(store: ObjectStoreRef, env: Arc<RuntimeEnv>) {
     env.register_object_store(url, store);
 }
 
-/// Create a Parquet scan limited to a set of files
-#[allow(clippy::too_many_arguments)]
-pub(crate) async fn parquet_scan_from_actions(
-    snapshot: &DeltaTableState,
+#[derive(Debug)]
+pub(crate) struct DeltaScanBuilder<'a> {
+    snapshot: &'a DeltaTableState,
     object_store: ObjectStoreRef,
-    actions: &[Add],
-    schema: &ArrowSchema,
-    filters: Option<Arc<dyn PhysicalExpr>>,
-    state: &SessionState,
-    projection: Option<&Vec<usize>>,
+    filter: Option<Expr>,
+    state: &'a SessionState,
+    projection: Option<&'a Vec<usize>>,
     limit: Option<usize>,
-) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-    // TODO we group files together by their partition values. If the table is partitioned
-    // and partitions are somewhat evenly distributed, probably not the worst choice ...
-    // However we may want to do some additional balancing in case we are far off from the above.
-    let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-    for action in actions {
-        let part = partitioned_file_from_action(action, schema);
-        file_groups
-            .entry(part.partition_values.clone())
-            .or_default()
-            .push(part);
+    files: Option<&'a [Add]>,
+    add_file_idx: bool,
+}
+
+impl<'a> DeltaScanBuilder<'a> {
+    pub fn new(
+        snapshot: &'a DeltaTableState,
+        object_store: ObjectStoreRef,
+        state: &'a SessionState,
+    ) -> Self {
+        DeltaScanBuilder {
+            snapshot,
+            object_store,
+            filter: None,
+            state,
+            files: None,
+            projection: None,
+            limit: None,
+            add_file_idx: false,
+        }
     }
 
-    let table_partition_cols = snapshot
-        .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)?
-        .partition_columns
-        .clone();
-    let file_schema = Arc::new(ArrowSchema::new(
-        schema
-            .fields()
+    pub fn with_filter(mut self, filter: Option<Expr>) -> Self {
+        self.filter = filter;
+        self
+    }
+
+    pub fn with_files(mut self, files: &'a [Add]) -> Self {
+        self.files = Some(files);
+        self
+    }
+
+    pub fn with_projection(mut self, projection: Option<&'a Vec<usize>>) -> Self {
+        self.projection = projection;
+        self
+    }
+
+    pub fn with_limit(mut self, limit: Option<usize>) -> Self {
+        self.limit = limit;
+        self
+    }
+
+    fn with_file_idx(mut self, add_file_idx: bool) -> Self {
+        self.add_file_idx = add_file_idx;
+        self
+    }
+
+    pub async fn build(self) -> DeltaResult<DeltaScan> {
+        let schema = self.snapshot.arrow_schema()?;
+        let logical_schema = self.snapshot.input_schema()?;
+        let logical_filter = self
+            .filter
+            .map(|expr| logical_expr_to_physical_expr(&expr, &logical_schema));
+
+        println!("here0001");
+        // Perform Pruning of files to scan
+        // TODO: Determine if we can avoid allocs..
+        let files = match self.files {
+            Some(files) => files.to_owned(),
+            None => {
+                if let Some(predicate) = &logical_filter {
+                    let pruning_predicate =
+                        PruningPredicate::try_new(predicate.clone(), logical_schema.clone())?;
+                    let files_to_prune = pruning_predicate.prune(self.snapshot)?;
+                    self.snapshot
+                        .files()
+                        .iter()
+                        .zip(files_to_prune.into_iter())
+                        .filter_map(
+                            |(action, keep)| {
+                                if keep {
+                                    Some(action.to_owned())
+                                } else {
+                                    None
+                                }
+                            },
+                        )
+                        .collect()
+                } else {
+                    self.snapshot.files().to_owned()
+                }
+            }
+        };
+        println!("here0002");
+        // TODO we group files together by their partition values. If the table is partitioned
+        // and partitions are somewhat evenly distributed, probably not the worst choice ...
+        // However we may want to do some additional balancing in case we are far off from the above.
+        let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
+
+        for (idx, action) in files.iter().enumerate() {
+            let mut part = partitioned_file_from_action(action, &schema);
+
+            if self.add_file_idx {
+                part.partition_values
+                    .push(ScalarValue::UInt64(Some(idx as u64)));
+            }
+
+            file_groups
+                .entry(part.partition_values.clone())
+                .or_default()
+                .push(part);
+        }
+
+        println!("here0003");
+        let table_partition_cols = self
+            .snapshot
+            .current_metadata()
+            .ok_or(DeltaTableError::NoMetadata)?
+            .partition_columns
+            .clone();
+
+        let file_schema = Arc::new(ArrowSchema::new(
+            schema
+                .fields()
+                .iter()
+                .filter(|f| !table_partition_cols.contains(f.name()))
+                .cloned()
+                .collect::<Vec<arrow::datatypes::FieldRef>>(),
+        ));
+
+        let mut table_partition_cols = table_partition_cols
             .iter()
-            .filter(|f| !table_partition_cols.contains(f.name()))
-            .cloned()
-            .collect::<Vec<arrow::datatypes::FieldRef>>(),
-    ));
+            .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
+            .collect::<Result<Vec<_>, ArrowError>>()?;
 
-    let table_partition_cols = table_partition_cols
-        .iter()
-        .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
-        .collect::<Result<Vec<_>, ArrowError>>()?;
+        if self.add_file_idx {
+            table_partition_cols.push((PATH_COLUMN.to_owned(), DataType::UInt64));
+        }
 
-    ParquetFormat::new()
-        .create_physical_plan(
-            state,
-            FileScanConfig {
-                object_store_url: object_store.object_store_url(),
-                file_schema,
-                file_groups: file_groups.into_values().collect(),
-                statistics: snapshot.datafusion_table_statistics(),
-                projection: projection.cloned(),
-                limit,
-                table_partition_cols,
-                output_ordering: vec![],
-                infinite_source: false,
-            },
-            filters.as_ref(),
-        )
-        .await
+        println!("here0004");
+        let scan = ParquetFormat::new()
+            .create_physical_plan(
+                self.state,
+                FileScanConfig {
+                    object_store_url: self.object_store.object_store_url(),
+                    file_schema,
+                    file_groups: file_groups.into_values().collect(),
+                    statistics: self.snapshot.datafusion_table_statistics(),
+                    projection: self.projection.cloned(),
+                    limit: self.limit,
+                    table_partition_cols,
+                    output_ordering: vec![],
+                    infinite_source: false,
+                },
+                logical_filter.as_ref(),
+            )
+            .await?;
+
+        let file_idx_column = if self.add_file_idx {
+            Some(PATH_COLUMN.to_owned())
+        } else {
+            None
+        };
+
+        Ok(DeltaScan {
+            table_uri: self.object_store.object_store_url().to_string(),
+            parquet_scan: scan,
+            file_idx_column,
+            files: files.iter().map(|action| action.path.clone()).collect(),
+            physical_schema: Some(self.snapshot.arrow_schema()?),
+        })
+    }
 }
 
 #[async_trait]
@@ -452,53 +560,17 @@ impl TableProvider for DeltaTable {
         filters: &[Expr],
         limit: Option<usize>,
     ) -> DataFusionResult<Arc<dyn ExecutionPlan>> {
-        let schema = self
-            .state
-            .physical_arrow_schema(self.object_store())
+        register_store(self.object_store(), session.runtime_env().clone());
+        let filter_expr = conjunction(filters.iter().cloned());
+
+        let scan = DeltaScanBuilder::new(&self.state, self.object_store(), session)
+            .with_projection(projection)
+            .with_limit(limit)
+            .with_filter(filter_expr)
+            .build()
             .await?;
 
-        register_store(self.object_store(), session.runtime_env().clone());
-
-        let filter_expr = conjunction(filters.iter().cloned())
-            .map(|expr| logical_expr_to_physical_expr(&expr, &schema));
-
-        let actions = if let Some(predicate) = &filter_expr {
-            let pruning_predicate = PruningPredicate::try_new(predicate.clone(), schema.clone())?;
-            let files_to_prune = pruning_predicate.prune(&self.state)?;
-            self.get_state()
-                .files()
-                .iter()
-                .zip(files_to_prune.into_iter())
-                .filter_map(
-                    |(action, keep)| {
-                        if keep {
-                            Some(action.to_owned())
-                        } else {
-                            None
-                        }
-                    },
-                )
-                .collect()
-        } else {
-            self.get_state().files().to_owned()
-        };
-
-        let parquet_scan = parquet_scan_from_actions(
-            &self.state,
-            self.object_store(),
-            &actions,
-            &schema,
-            filter_expr,
-            session,
-            projection,
-            limit,
-        )
-        .await?;
-
-        Ok(Arc::new(DeltaScan {
-            table_uri: ensure_table_uri(self.table_uri())?.as_str().into(),
-            parquet_scan,
-        }))
+        Ok(scan.parquet_scan)
     }
 
     fn supports_filter_pushdown(
@@ -519,8 +591,14 @@ impl TableProvider for DeltaTable {
 pub struct DeltaScan {
     /// The URL of the ObjectStore root
     pub table_uri: String,
+    /// Column that contains an index that maps to the original metadata Add
+    pub file_idx_column: Option<String>,
+    /// Which files were used in the scan
+    pub files: Vec<String>,
     /// The parquet scan to wrap
     pub parquet_scan: Arc<dyn ExecutionPlan>,
+    /// TODO
+    pub physical_schema : Option<Arc<ArrowSchema>>,
 }
 
 impl DisplayAs for DeltaScan {
@@ -535,6 +613,7 @@ impl ExecutionPlan for DeltaScan {
     }
 
     fn schema(&self) -> SchemaRef {
+        println!("{:?}", self.parquet_scan.schema());
         self.parquet_scan.schema()
     }
 
@@ -928,6 +1007,9 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         let delta_scan = DeltaScan {
             table_uri,
             parquet_scan: (*inputs)[0].clone(),
+            file_idx_column: None,
+            files: Vec::new(),
+            physical_schema: None,
         };
         Ok(Arc::new(delta_scan))
     }
@@ -1099,7 +1181,7 @@ pub struct FindFiles {
     pub partition_scan: bool,
 }
 
-fn join_batches_with_add_actions(
+fn join_batches_with_add_actions2(
     batches: Vec<RecordBatch>,
     mut actions: HashMap<String, Add>,
 ) -> DeltaResult<Vec<Add>> {
@@ -1137,39 +1219,65 @@ fn join_batches_with_add_actions(
     }
     Ok(files)
 }
+fn join_batches_with_add_actions(
+    batches: Vec<RecordBatch>,
+    mut actions: HashMap<usize, Add>,
+) -> DeltaResult<Vec<Add>> {
+    // Given RecordBatches that contains `__delta_rs_path` perform a hash join
+    // with actions to obtain original add actions
+
+    let mut files = Vec::with_capacity(batches.iter().map(|batch| batch.num_rows()).sum());
+    for batch in batches {
+        let array = batch
+            .column_by_name(PATH_COLUMN)
+            .ok_or_else(|| {
+                DeltaTableError::Generic(format!("Unable to find column {}", PATH_COLUMN))
+            })?
+            .as_any()
+            .downcast_ref::<PrimitiveArray<UInt64Type>>()
+            .ok_or(DeltaTableError::Generic(format!(
+                "Unable to downcast column {}",
+                PATH_COLUMN
+            )))?;
+        for path in array {
+            let path = path.ok_or(DeltaTableError::Generic(format!(
+                "{} cannot be null",
+                PATH_COLUMN
+            )))?;
+
+            match actions.remove(&(path as usize)) {
+                Some(action) => files.push(action),
+                None => {
+                    return Err(DeltaTableError::Generic(
+                        "Unable to map __delta_rs_path to action.".to_owned(),
+                    ))
+                }
+            }
+        }
+    }
+    Ok(files)
+}
 
 /// Determine which files contain a record that statisfies the predicate
 pub(crate) async fn find_files_scan<'a>(
     snapshot: &DeltaTableState,
     store: ObjectStoreRef,
-    schema: Arc<ArrowSchema>,
-    file_schema: Arc<ArrowSchema>,
-    candidates: Vec<&'a Add>,
     state: &SessionState,
-    expression: &Expr,
+    expression: Expr,
 ) -> DeltaResult<Vec<Add>> {
-    let mut candidate_map: HashMap<String, Add> = HashMap::new();
+    let mut candidate_map: HashMap<usize, Add> = HashMap::new();
 
+    /*
     let table_partition_cols = snapshot
         .current_metadata()
         .ok_or(DeltaTableError::NoMetadata)?
         .partition_columns
         .clone();
+    */
 
-    let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-    for action in candidates {
-        let mut part = partitioned_file_from_action(action, &schema);
-        part.partition_values
-            .push(ScalarValue::Utf8(Some(action.path.clone())));
+    //let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
 
-        file_groups
-            .entry(part.partition_values.clone())
-            .or_default()
-            .push(part);
-
-        candidate_map.insert(action.path.to_owned(), action.to_owned());
-    }
-
+    /*
     let mut table_partition_cols = table_partition_cols
         .iter()
         .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
@@ -1207,38 +1315,41 @@ pub(crate) async fn find_files_scan<'a>(
     }
     let input_schema = Arc::new(ArrowSchema::new(fields));
     let input_dfschema = input_schema.as_ref().clone().try_into()?;
+    */
 
-    let parquet_scan = ParquetFormat::new()
-        .create_physical_plan(
-            state,
-            FileScanConfig {
-                object_store_url: store.object_store_url(),
-                file_schema,
-                file_groups: file_groups.into_values().collect(),
-                statistics: snapshot.datafusion_table_statistics(),
-                projection: Some(used_columns),
-                limit: None,
-                table_partition_cols,
-                infinite_source: false,
-                output_ordering: vec![],
-            },
-            None,
-        )
+    let scan = DeltaScanBuilder::new(snapshot, store.clone(), state)
+        .with_file_idx(true)
+        .with_filter(Some(expression.clone()))
+        //.with_projection(Some(&used_columns))
+        .build()
         .await?;
+    let scan = Arc::new(scan);
+
+    let input_schema = scan.physical_schema.as_ref().to_owned().unwrap();
+    let input_dfschema = input_schema.as_ref().clone().try_into()?;
 
     let predicate_expr = create_physical_expr(
         &Expr::IsTrue(Box::new(expression.clone())),
         &input_dfschema,
         &input_schema,
         state.execution_props(),
-    )?;
+    ).unwrap();
 
     let filter: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(predicate_expr, parquet_scan.clone())?);
+        Arc::new(FilterExec::try_new(predicate_expr, scan.clone())?);
     let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(filter, 1));
 
     let task_ctx = Arc::new(TaskContext::from(state));
     let path_batches = datafusion::physical_plan::collect(limit, task_ctx).await?;
+
+    let mut files: HashMap<String, Add> = snapshot
+        .files()
+        .iter()
+        .map(|add| (add.path.clone(), add.to_owned()))
+        .collect();
+    for (idx, path) in scan.files.iter().enumerate() {
+        candidate_map.insert(idx, files.remove(path).unwrap());
+    }
 
     join_batches_with_add_actions(path_batches, candidate_map)
 }
@@ -1294,42 +1405,22 @@ pub(crate) async fn scan_memory_table(
         .map(|action| (action.path.clone(), action))
         .collect::<HashMap<String, Add>>();
 
-    join_batches_with_add_actions(batches, map)
+    join_batches_with_add_actions2(batches, map)
 }
 
 /// Finds files in a snapshot that match the provided predicate.
 pub async fn find_files<'a>(
     snapshot: &DeltaTableState,
     object_store: ObjectStoreRef,
-    schema: Arc<ArrowSchema>,
     state: &SessionState,
     predicate: Option<Expr>,
 ) -> DeltaResult<FindFiles> {
     let current_metadata = snapshot
         .current_metadata()
         .ok_or(DeltaTableError::NoMetadata)?;
-    let table_partition_cols = current_metadata.partition_columns.clone();
 
     match &predicate {
         Some(predicate) => {
-            let file_schema = Arc::new(ArrowSchema::new(
-                schema
-                    .fields()
-                    .iter()
-                    .filter(|f| !table_partition_cols.contains(f.name()))
-                    .cloned()
-                    .collect::<Vec<_>>(),
-            ));
-
-            let input_schema = snapshot.input_schema()?;
-            let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
-            let expr = create_physical_expr(
-                predicate,
-                &input_dfschema,
-                &input_schema,
-                state.execution_props(),
-            )?;
-
             // Validate the Predicate and determine if it only contains partition columns
             let mut expr_properties = FindFilesExprProperties {
                 partition_only: true,
@@ -1347,26 +1438,9 @@ pub async fn find_files<'a>(
                     partition_scan: true,
                 })
             } else {
-                let pruning_predicate = PruningPredicate::try_new(expr, schema.clone())?;
-                let files_to_prune = pruning_predicate.prune(snapshot)?;
-                let files: Vec<&Add> = snapshot
-                    .files()
-                    .iter()
-                    .zip(files_to_prune.into_iter())
-                    .filter_map(|(action, keep)| if keep { Some(action) } else { None })
-                    .collect();
-
-                // Create a new delta scan plan with only files that have a record
-                let candidates = find_files_scan(
-                    snapshot,
-                    object_store.clone(),
-                    schema.clone(),
-                    file_schema.clone(),
-                    files,
-                    state,
-                    predicate,
-                )
-                .await?;
+                let candidates =
+                    find_files_scan(snapshot, object_store.clone(), state, predicate.to_owned())
+                        .await?;
 
                 Ok(FindFiles {
                     candidates,
@@ -1651,7 +1725,11 @@ mod tests {
         let exec_plan = Arc::from(DeltaScan {
             table_uri: "s3://my_bucket/this/is/some/path".to_string(),
             parquet_scan: Arc::from(EmptyExec::new(false, schema)),
+            file_idx_column: None,
+            files: Vec::new(),
+            physical_schema: None
         });
+        // TODO: Test new column...
         let proto: protobuf::PhysicalPlanNode =
             protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), &codec)
                 .expect("to proto");
