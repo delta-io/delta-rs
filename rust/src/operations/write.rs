@@ -562,7 +562,7 @@ mod tests {
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, TimeUnit};
     use datafusion::assert_batches_sorted_eq;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     #[tokio::test]
     async fn test_create_write() {
@@ -575,33 +575,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
+        assert_eq!(table.state.commit_infos().len(), 1);
 
         // write some data
-        let table = DeltaOps(table)
+        let metadata = Map::from_iter(vec![("k1".to_string(), json!("v1.1"))]);
+        let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
+            .with_metadata(metadata.clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
+        table.load().await.unwrap();
+        assert_eq!(table.state.commit_infos().len(), 2);
+        assert_eq!(
+            table.state.commit_infos()[1]
+                .info
+                .clone()
+                .into_iter()
+                .filter(|(k, _)| k != "clientVersion")
+                .collect::<Map<String, Value>>(),
+            metadata
+        );
 
         // append some data
-        let table = DeltaOps(table)
+        let metadata: Map<String, Value> = Map::from_iter(vec![("k1".to_string(), json!("v1.2"))]);
+        let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
+            .with_metadata(metadata.clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_file_uris().count(), 2);
+        table.load().await.unwrap();
+        assert_eq!(table.state.commit_infos().len(), 3);
+        assert_eq!(
+            table.state.commit_infos()[2]
+                .info
+                .clone()
+                .into_iter()
+                .filter(|(k, _)| k != "clientVersion")
+                .collect::<Map<String, Value>>(),
+            metadata
+        );
 
         // overwrite table
-        let table = DeltaOps(table)
+        let metadata: Map<String, Value> = Map::from_iter(vec![("k2".to_string(), json!("v2.1"))]);
+        let mut table = DeltaOps(table)
             .write(vec![batch])
             .with_save_mode(SaveMode::Overwrite)
+            .with_metadata(metadata.clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 3);
-        assert_eq!(table.get_file_uris().count(), 1)
+        assert_eq!(table.get_file_uris().count(), 1);
+        table.load().await.unwrap();
+        assert_eq!(table.state.commit_infos().len(), 4);
+        assert_eq!(
+            table.state.commit_infos()[3]
+                .info
+                .clone()
+                .into_iter()
+                .filter(|(k, _)| k != "clientVersion")
+                .collect::<Map<String, Value>>(),
+            metadata
+        );
     }
 
     #[tokio::test]
