@@ -223,8 +223,19 @@ pub struct AddCDCFile {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DeletionVector {
-    ///A single character to indicate how to access the DV. Legal options are: ['u', 'i', 'p'].
-    pub storage_type: String,
+    enum StorageType {
+        /// Stored at relative path derived from a UUID.
+        #[serde(rename = "u")]
+        UuidRelativePath,
+        /// Stored as inline string.
+        #[serde(rename = "i")]
+        Inline,
+        /// Stored at an absolute path.
+        #[serde(rename = "p")]
+        AbsolutePath,
+    }
+    
+    pub storage_type: StorageType,
 
     ///If storageType = 'u' then <random prefix - optional><base85 encoded uuid>
     ///If storageType = 'i' then <base85 encoded bytes> of the deletion vector data
