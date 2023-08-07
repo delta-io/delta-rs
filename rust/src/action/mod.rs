@@ -22,6 +22,7 @@ use serde_json::{Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 
 use crate::delta_config::IsolationLevel;
 use crate::errors::DeltaResult;
@@ -48,6 +49,10 @@ pub enum ProtocolError {
     /// A parquet log checkpoint file contains an invalid action.
     #[error("Invalid action in parquet row: {0}")]
     InvalidRow(String),
+
+    /// A transaction log contains invalid deletion vector storage type
+    #[error("Invalid deletion vector storage type: {0}")]
+    InvalidDeletionVectorStorageType(String),
 
     /// A generic action error. The wrapped error string describes the details.
     #[error("Generic action error: {0}")]
@@ -219,22 +224,58 @@ pub struct AddCDCFile {
     pub tags: Option<HashMap<String, Option<String>>>,
 }
 
+///Storage type of deletion vector
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde()]
+pub enum StorageType {
+    /// Stored at relative path derived from a UUID.
+    #[serde(rename = "u")]
+    UuidRelativePath,
+    /// Stored as inline string.
+    #[serde(rename = "i")]
+    Inline,
+    /// Stored at an absolute path.
+    #[serde(rename = "p")]
+    AbsolutePath,
+}
+
+impl Default for StorageType {
+    fn default() -> Self {
+        Self::UuidRelativePath // seems to be used by Databricks and therefore most common
+    }
+}
+
+
+
+impl FromStr for StorageType {
+    type Err = ProtocolError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "u" => Ok(Self::UuidRelativePath),
+            "i" => Ok(Self::Inline),
+            "p" => Ok(Self::AbsolutePath),
+            _ => Err(ProtocolError::InvalidDeletionVectorStorageType(s.to_string()))
+        }
+    }
+}
+
+impl ToString for StorageType {
+    fn to_string(&self) -> String {
+        match self {
+            Self::UuidRelativePath => "u".to_string(),
+            Self::Inline => "i".to_string(),
+            Self::AbsolutePath => "p".to_string()
+        }
+    }
+}
+
 /// Describes deleted rows of a parquet file as part of an add or remove action
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DeletionVector {
-    enum StorageType {
-        /// Stored at relative path derived from a UUID.
-        #[serde(rename = "u")]
-        UuidRelativePath,
-        /// Stored as inline string.
-        #[serde(rename = "i")]
-        Inline,
-        /// Stored at an absolute path.
-        #[serde(rename = "p")]
-        AbsolutePath,
-    }
     
+    ///storageType of the deletion vector. p = Absolute Path, i = Inline, u = UUid Relative Path
     pub storage_type: StorageType,
 
     ///If storageType = 'u' then <random prefix - optional><base85 encoded uuid>

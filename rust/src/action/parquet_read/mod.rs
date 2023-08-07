@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
 use chrono::{SecondsFormat, TimeZone, Utc};
 use num_bigint::BigInt;
@@ -10,6 +10,8 @@ use crate::action::{
     Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, DeletionVector, MetaData, Protocol,
     ProtocolError, Remove, Stats, Txn,
 };
+
+use super::StorageType;
 
 fn populate_hashmap_with_option_from_parquet_map(
     map: &mut HashMap<String, Option<String>>,
@@ -52,12 +54,11 @@ impl DeletionVector {
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
                 "storageType" => {
-                    re.storage_type = record
+                    re.storage_type = StorageType::from_str(record
                         .get_string(i)
                         .map_err(|_| {
                             gen_action_type_error("add", "deletionVector.storage_type", "string")
-                        })?
-                        .clone();
+                        })?)?;
                 }
                 "pathOrInlineDv" => {
                     re.path_or_inline_dv = record

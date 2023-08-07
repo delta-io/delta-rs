@@ -767,7 +767,6 @@ fn current_timestamp() -> i64 {
     since_the_epoch.as_millis().try_into().unwrap()
 }
 
-
 #[derive(FromPyObject)]
 pub struct PyAddAction {
     path: String,
@@ -790,7 +789,7 @@ impl From<&PyAddAction> for action::Add {
             stats: action.stats.clone(),
             stats_parsed: None,
             tags: None,
-            deletion_vector: None
+            deletion_vector: None,
         }
     }
 }

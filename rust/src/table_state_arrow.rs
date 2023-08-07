@@ -299,7 +299,7 @@ impl DeltaTableState {
 
         for add in self.files() {
             if let Some(value) = &add.deletion_vector {
-                storage_type.append_value(value.storage_type.clone());
+                storage_type.append_value(value.storage_type.to_string());
                 path_or_inline_div.append_value(value.path_or_inline_dv.clone());
                 if let Some(ofs) = value.offset {
                     offset.append_value(ofs);
