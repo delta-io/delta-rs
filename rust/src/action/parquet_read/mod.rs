@@ -54,9 +54,8 @@ impl DeletionVector {
         for (i, (name, _)) in record.get_column_iter().enumerate() {
             match name.as_str() {
                 "storageType" => {
-                    re.storage_type = StorageType::from_str(record
-                        .get_string(i)
-                        .map_err(|_| {
+                    re.storage_type =
+                        StorageType::from_str(record.get_string(i).map_err(|_| {
                             gen_action_type_error("add", "deletionVector.storage_type", "string")
                         })?)?;
                 }

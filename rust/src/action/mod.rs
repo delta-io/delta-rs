@@ -245,8 +245,6 @@ impl Default for StorageType {
     }
 }
 
-
-
 impl FromStr for StorageType {
     type Err = ProtocolError;
 
@@ -255,7 +253,9 @@ impl FromStr for StorageType {
             "u" => Ok(Self::UuidRelativePath),
             "i" => Ok(Self::Inline),
             "p" => Ok(Self::AbsolutePath),
-            _ => Err(ProtocolError::InvalidDeletionVectorStorageType(s.to_string()))
+            _ => Err(ProtocolError::InvalidDeletionVectorStorageType(
+                s.to_string(),
+            )),
         }
     }
 }
@@ -265,7 +265,7 @@ impl ToString for StorageType {
         match self {
             Self::UuidRelativePath => "u".to_string(),
             Self::Inline => "i".to_string(),
-            Self::AbsolutePath => "p".to_string()
+            Self::AbsolutePath => "p".to_string(),
         }
     }
 }
@@ -274,7 +274,6 @@ impl ToString for StorageType {
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct DeletionVector {
-    
     ///storageType of the deletion vector. p = Absolute Path, i = Inline, u = UUid Relative Path
     pub storage_type: StorageType,
 
