@@ -148,7 +148,6 @@ async fn excute_non_empty_expr(
         .await?;
     let scan = Arc::new(scan);
 
-    println!("{:?}", scan.file_idx_column);
     // Apply the negation of the filter and rewrite files
     let negated_expression = Expr::Not(Box::new(Expr::IsTrue(Box::new(expression.clone()))));
 
