@@ -304,37 +304,6 @@ def write_deltalake_ray(
     else:  # creating a new table
         current_version = -1
 
-    if partition_by:
-        # partition_schema = pa.schema([schema.field(name) for name in partition_by])
-        partition_schema = pa.schema(
-            filter(lambda x: x[0] in partition_by, [(name, ntype) for name, ntype in zip(schema.names, schema.types)]))
-        partitioning = ds.partitioning(partition_schema, flavor="hive")
-    else:
-        partitioning = None
-
-    add_actions: List[AddAction] = []
-
-    def visitor(written_file: Any) -> None:
-        path, partition_values = get_partitions_from_path(written_file.path)
-        stats = get_file_stats_from_metadata(written_file.metadata)
-
-        # PyArrow added support for written_file.size in 9.0.0
-        if PYARROW_MAJOR_VERSION >= 9:
-            size = written_file.size
-        else:
-            size = filesystem.get_file_info([path])[0].size  # type: ignore
-
-        add_actions.append(
-            AddAction(
-                path,
-                size,
-                partition_values,
-                int(datetime.now().timestamp() * 1000),
-                True,
-                json.dumps(stats, cls=DeltaJSONEncoder),
-            )
-        )
-
     add_actions = []
     if table is not None:
         batch_references = []
@@ -407,6 +376,9 @@ def write_deltalake_ray(
             partition_filters,
         )
         table.update_incremental()
+    print("final_add_actions:")
+    print(final_add_actions)
+    print("Write Successful")
 
 
 def write_deltalake(
