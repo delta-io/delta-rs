@@ -66,7 +66,7 @@ class AddAction:
 
 
 @ray.remote
-def batch_validate(pa_table_ref, new_table_data, schema, mode, partition_filters):
+def batch_validate(pa_table_ref, new_table_data, mode, partition_filters):
     def check_data_is_aligned_with_partition_filtering(
             batch: pa.RecordBatch,
     ) -> None:
@@ -97,11 +97,11 @@ def batch_validate(pa_table_ref, new_table_data, schema, mode, partition_filters
                 partition_repr = " ".join(
                     f"{key}={value}" for key, value in partition_map.items()
                 )
+                print(f"Data contained values for partition {partition_repr}")
                 return False
         return True
 
     def validate_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
-        # checker.check_batch(batch)
         if mode == "overwrite" and partition_filters:
             return check_data_is_aligned_with_partition_filtering(batch)
 
@@ -337,11 +337,6 @@ def write_deltalake_ray(
 
     add_actions = []
     if table is not None:
-        # We don't currently provide a way to set invariants
-        # (and maybe never will), so only enforce if already exist.
-        invariants = table.schema().invariants
-        checker = _DeltaDataChecker(invariants)
-
         batch_references = []
         new_table_data = {"partition_column": table.metadata().partition_columns,
                           "allowed_partitions": table._table.get_active_partitions(partition_filters),
@@ -349,7 +344,7 @@ def write_deltalake_ray(
         for pa_table_ref in data.to_arrow_refs():
             batch_references.append(
                 batch_validate.remote(
-                    pa_table_ref, new_table_data, schema, mode, partition_filters
+                    pa_table_ref, new_table_data, mode, partition_filters
                 )
             )
 
@@ -412,8 +407,6 @@ def write_deltalake_ray(
             partition_filters,
         )
         table.update_incremental()
-        print("Write Successful")
-        # write_metadata.remote(add_actions,table_uri, schema, mode, partition_by, name, description, configuration, storage_options, table)
 
 
 def write_deltalake(
