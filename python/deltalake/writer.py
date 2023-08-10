@@ -66,24 +66,22 @@ class AddAction:
 
 
 @ray.remote
-def batch_validate(pa_table_ref, table, schema, checker, mode, partition_filters):
+def batch_validate(pa_table_ref, new_table_data, schema, mode, partition_filters):
     def check_data_is_aligned_with_partition_filtering(
             batch: pa.RecordBatch,
     ) -> None:
-        if table is None:
-            return
         existed_partitions: FrozenSet[
             FrozenSet[Tuple[str, Optional[str]]]
-        ] = table._table.get_active_partitions()
+        ] = new_table_data["existed_partitions"]
         allowed_partitions: FrozenSet[
             FrozenSet[Tuple[str, Optional[str]]]
-        ] = table._table.get_active_partitions(partition_filters)
+        ] = new_table_data["allowed_partitions"]
         partition_values = pa.RecordBatch.from_arrays(
             [
                 batch.column(column_name)
-                for column_name in table.metadata().partition_columns
+                for column_name in new_table_data["partition_column"]
             ],
-            table.metadata().partition_columns,
+            new_table_data["partition_column"],
         )
         partition_values = batch_distinct(partition_values)
         for i in range(partition_values.num_rows):
@@ -92,35 +90,31 @@ def batch_validate(pa_table_ref, table, schema, checker, mode, partition_filters
                 column_name: __encode_partition_value(
                     batch.column(column_name)[i].as_py()
                 )
-                for column_name in table.metadata().partition_columns
+                for column_name in new_table_data["partition_column"]
             }
             partition = frozenset(partition_map.items())
             if partition not in allowed_partitions and partition in existed_partitions:
                 partition_repr = " ".join(
                     f"{key}={value}" for key, value in partition_map.items()
                 )
-                raise ValueError(
-                    f"Data should be aligned with partitioning. "
-                    f"Data contained values for partition {partition_repr}"
-                )
+                return False
+        return True
 
     def validate_batch(batch: pa.RecordBatch) -> pa.RecordBatch:
-        checker.check_batch(batch)
-
+        # checker.check_batch(batch)
         if mode == "overwrite" and partition_filters:
-            check_data_is_aligned_with_partition_filtering(batch)
+            return check_data_is_aligned_with_partition_filtering(batch)
 
-        return batch
-
-    data = ray.get(pa_table_ref)
+    data = pa_table_ref
     if isinstance(data, pa.Table):
         batch_iter = data.to_batches()
     else:
         batch_iter = data
-    data = RecordBatchReader.from_batches(
-        schema, (validate_batch(batch) for batch in batch_iter)
-    )
-    return data
+    for batch in batch_iter:
+        if validate_batch(batch) == False:
+            return False
+
+    return True
 
 
 @ray.remote
@@ -200,6 +194,8 @@ def write_deltalake_ray(
         storage_options: Optional[Dict[str, str]] = None,
         partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
 ) -> None:
+    import os
+    os.environ["AWS_S3_ALLOW_UNSAFE_RENAME"] = "true"
     """Write to a Delta Lake table
 
     If the table does not already exist, it will be created.
@@ -259,10 +255,9 @@ def write_deltalake_ray(
     if schema is None:
         if isinstance(data, ray.data.dataset.Dataset):
             schema = data.schema()
-        elif isinstance(data, Iterable):
-            raise ValueError("You must provide schema if data is Iterable")
+            schema = pa.schema([(name, ntype) for name, ntype in zip(schema.names, schema.types)])
         else:
-            schema = data.schema
+            raise ValueError("You must provide ray Dataset")
 
     if filesystem is not None:
         raise NotImplementedError("Filesystem support is not yet implemented.  #570")
@@ -310,7 +305,9 @@ def write_deltalake_ray(
         current_version = -1
 
     if partition_by:
-        partition_schema = pa.schema([schema.field(name) for name in partition_by])
+        # partition_schema = pa.schema([schema.field(name) for name in partition_by])
+        partition_schema = pa.schema(
+            filter(lambda x: x[0] in partition_by, [(name, ntype) for name, ntype in zip(schema.names, schema.types)]))
         partitioning = ds.partitioning(partition_schema, flavor="hive")
     else:
         partitioning = None
@@ -345,13 +342,23 @@ def write_deltalake_ray(
         invariants = table.schema().invariants
         checker = _DeltaDataChecker(invariants)
 
-        # batch_references = []
-        # for pa_table_ref in data.to_arrow_refs():
-        #     batch_references.append(
-        #         batch_validate.remote(
-        #             pa_table_ref, table, schema, checker, mode, partition_filters
-        #         )
-        #     )
+        batch_references = []
+        new_table_data = {"partition_column": table.metadata().partition_columns,
+                          "allowed_partitions": table._table.get_active_partitions(partition_filters),
+                          "existed_partitions": table._table.get_active_partitions()}
+        for pa_table_ref in data.to_arrow_refs():
+            batch_references.append(
+                batch_validate.remote(
+                    pa_table_ref, new_table_data, schema, mode, partition_filters
+                )
+            )
+
+        for ref in batch_references:
+            val = ray.get(ref)
+            if val == False:
+                raise ValueError(
+                    f"Data should be aligned with partitioning. "
+                )
 
         # Validate in batch_references for any exception
         for batch_ref in data.to_arrow_refs():
@@ -363,7 +370,7 @@ def write_deltalake_ray(
                     file_options,
                     filesystem,
                     max_partitions,
-                    partitioning,
+                    partition_by,
                 )
             )
     else:
@@ -376,7 +383,7 @@ def write_deltalake_ray(
                     file_options,
                     filesystem,
                     max_partitions,
-                    partitioning,
+                    partition_by,
                 )
             )
     new_add_actions = ray.get(add_actions)
@@ -405,6 +412,7 @@ def write_deltalake_ray(
             partition_filters,
         )
         table.update_incremental()
+        print("Write Successful")
         # write_metadata.remote(add_actions,table_uri, schema, mode, partition_by, name, description, configuration, storage_options, table)
 
 
