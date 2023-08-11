@@ -125,20 +125,25 @@ def write_ds(
         file_options,
         filesystem,
         max_partitions,
-        partitioning,
+        partition_by,
 ):
     max_open_files: int = 1024
     max_rows_per_file: int = 10 * 1024 * 1024
     min_rows_per_group: int = 64 * 1024
     max_rows_per_group: int = 128 * 1024
-    print("Batch ref", type(batch_ref))
     data = batch_ref
     add_actions: List[AddAction] = []
+    if partition_by != None:
+        partition_schema = pa.schema(
+            filter(lambda x: x[0] in partition_by, [(name, ntype) for name, ntype in zip(schema.names, schema.types)]))
+        partitioning = ds.partitioning(partition_schema, flavor="hive")
+    else:
+        partitioning = None
 
     def visitor(written_file: Any) -> None:
+        # TODO Fix the partitioning path
         path, partition_values = get_partitions_from_path(written_file.path)
         stats = get_file_stats_from_metadata(written_file.metadata)
-
         # PyArrow added support for written_file.size in 9.0.0
         if PYARROW_MAJOR_VERSION >= 9:
             size = written_file.size
@@ -155,7 +160,6 @@ def write_ds(
                 json.dumps(stats, cls=DeltaJSONEncoder),
             )
         )
-
     ds.write_dataset(
         data,
         base_dir="/",
@@ -376,8 +380,6 @@ def write_deltalake_ray(
             partition_filters,
         )
         table.update_incremental()
-    print("final_add_actions:")
-    print(final_add_actions)
     print("Write Successful")
 
 
