@@ -21,7 +21,7 @@
 //! ```
 
 use std::any::Any;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::fmt::{self, Debug};
 use std::sync::Arc;
@@ -66,6 +66,7 @@ use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
 use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::ObjectMeta;
+use serde::{Deserialize, Serialize};
 use url::Url;
 
 use crate::action::{self, Add};
@@ -367,14 +368,34 @@ pub(crate) fn logical_schema(
 ) -> DeltaResult<SchemaRef> {
     let input_schema = snapshot.input_schema()?;
     let mut fields = Vec::new();
+    let mut column_names: HashSet<&String> = HashSet::new();
     for field in input_schema.fields.iter() {
         fields.push(field.to_owned());
+        column_names.insert(field.name());
     }
 
     if scan_config.include_file_column {
-        if scan_config.file_column_name.is_none() {
-            //TODO: Ensure this does not conflict with any columns
-            scan_config.file_column_name = Some(PATH_COLUMN.to_owned());
+        match &scan_config.file_column_name {
+            Some(name) => {
+                if column_names.contains(name) {
+                    return Err(DeltaTableError::Generic(format!(
+                        "Unable to add file path column since column with name {} exits",
+                        name
+                    )));
+                }
+            }
+            None => {
+                let prefix = PATH_COLUMN;
+                let mut idx = 0;
+                let mut name = prefix.to_owned();
+
+                while column_names.contains(&name) {
+                    idx += 1;
+                    name = format!("{}_{}", prefix, idx);
+                }
+
+                scan_config.file_column_name = Some(name);
+            }
         }
 
         fields.push(Arc::new(Field::new(
@@ -386,7 +407,7 @@ pub(crate) fn logical_schema(
     Ok(Arc::new(ArrowSchema::new(fields)))
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
 /// Include additonal metadata columns during a [`DeltaScan`]
 pub struct DeltaScanConfig {
     /// Include the source path for each record. The name of this column is determine by `file_column_name`
@@ -473,7 +494,6 @@ impl<'a> DeltaScanBuilder<'a> {
             .map(|expr| logical_expr_to_physical_expr(&expr, &logical_schema));
 
         // Perform Pruning of files to scan
-        // TODO: Determine if we can avoid allocs..
         let files = match self.files {
             Some(files) => files.to_owned(),
             None => {
@@ -500,6 +520,7 @@ impl<'a> DeltaScanBuilder<'a> {
                 }
             }
         };
+
         // TODO we group files together by their partition values. If the table is partitioned
         // and partitions are somewhat evenly distributed, probably not the worst choice ...
         // However we may want to do some additional balancing in case we are far off from the above.
@@ -571,8 +592,7 @@ impl<'a> DeltaScanBuilder<'a> {
             table_uri: self.object_store.object_store_url().to_string(),
             parquet_scan: scan,
             config,
-            files: files.iter().map(|action| action.path.clone()).collect(),
-            logical_schema: Some(logical_schema),
+            logical_schema,
         })
     }
 }
@@ -639,12 +659,17 @@ pub struct DeltaScan {
     pub table_uri: String,
     /// Column that contains an index that maps to the original metadata Add
     pub config: DeltaScanConfig,
-    /// Which files were used in the scan
-    pub files: Vec<String>,
     /// The parquet scan to wrap
     pub parquet_scan: Arc<dyn ExecutionPlan>,
     /// The schema of the table to be used when evaluating expressions
-    pub logical_schema: Option<Arc<ArrowSchema>>,
+    pub logical_schema: Arc<ArrowSchema>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+struct DeltaScanWire {
+    pub table_uri: String,
+    pub config: DeltaScanConfig,
+    pub logical_schema: Arc<ArrowSchema>,
 }
 
 impl DisplayAs for DeltaScan {
@@ -1047,14 +1072,13 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
         inputs: &[Arc<dyn ExecutionPlan>],
         _registry: &dyn FunctionRegistry,
     ) -> Result<Arc<dyn ExecutionPlan>, DataFusionError> {
-        let table_uri: String = serde_json::from_reader(buf)
+        let wire: DeltaScanWire = serde_json::from_reader(buf)
             .map_err(|_| DataFusionError::Internal("Unable to decode DeltaScan".to_string()))?;
         let delta_scan = DeltaScan {
-            table_uri,
+            table_uri: wire.table_uri,
             parquet_scan: (*inputs)[0].clone(),
-            config: DeltaScanConfig::default(),
-            files: Vec::new(),
-            logical_schema: None,
+            config: wire.config,
+            logical_schema: wire.logical_schema,
         };
         Ok(Arc::new(delta_scan))
     }
@@ -1068,7 +1092,13 @@ impl PhysicalExtensionCodec for DeltaPhysicalCodec {
             .as_any()
             .downcast_ref::<DeltaScan>()
             .ok_or_else(|| DataFusionError::Internal("Not a delta scan!".to_string()))?;
-        serde_json::to_writer(buf, delta_scan.table_uri.as_str())
+
+        let wire = DeltaScanWire {
+            table_uri: delta_scan.table_uri.to_owned(),
+            config: delta_scan.config.clone(),
+            logical_schema: delta_scan.logical_schema.clone(),
+        };
+        serde_json::to_writer(buf, &wire)
             .map_err(|_| DataFusionError::Internal("Unable to encode delta scan!".to_string()))?;
         Ok(())
     }
@@ -1241,57 +1271,43 @@ fn join_batches_with_add_actions(
             DeltaTableError::Generic(format!("Unable to find column {}", path_column))
         })?;
 
-        if dict_array {
-            let array = array
-                .as_any()
-                .downcast_ref::<DictionaryArray<UInt16Type>>()
-                .ok_or(DeltaTableError::Generic(format!(
-                    "Unable to downcast column {}",
-                    path_column
-                )))?;
-            let array = array.downcast_dict::<StringArray>().unwrap();
-
-            for path in array {
-                let path = path.ok_or(DeltaTableError::Generic(format!(
-                    "{} cannot be null",
-                    path_column
-                )))?;
-
-                match actions.remove(path) {
-                    Some(action) => files.push(action),
-                    None => {
-                        return Err(DeltaTableError::Generic(
-                            "Unable to map __delta_rs_path to action.".to_owned(),
-                        ))
-                    }
-                }
-            }
-        } else {
-            let array =
-                array
+        let iter: Box<dyn Iterator<Item = Option<&str>>> =
+            if dict_array {
+                let array = array
                     .as_any()
-                    .downcast_ref::<StringArray>()
+                    .downcast_ref::<DictionaryArray<UInt16Type>>()
+                    .ok_or(DeltaTableError::Generic(format!(
+                        "Unable to downcast column {}",
+                        path_column
+                    )))?
+                    .downcast_dict::<StringArray>()
                     .ok_or(DeltaTableError::Generic(format!(
                         "Unable to downcast column {}",
                         path_column
                     )))?;
+                Box::new(array.into_iter())
+            } else {
+                let array = array.as_any().downcast_ref::<StringArray>().ok_or(
+                    DeltaTableError::Generic(format!("Unable to downcast column {}", path_column)),
+                )?;
+                Box::new(array.into_iter())
+            };
 
-            for path in array {
-                let path = path.ok_or(DeltaTableError::Generic(format!(
-                    "{} cannot be null",
-                    path_column
-                )))?;
+        for path in iter {
+            let path = path.ok_or(DeltaTableError::Generic(format!(
+                "{} cannot be null",
+                path_column
+            )))?;
 
-                match actions.remove(path) {
-                    Some(action) => files.push(action),
-                    None => {
-                        return Err(DeltaTableError::Generic(
-                            "Unable to map __delta_rs_path to action.".to_owned(),
-                        ))
-                    }
+            match actions.remove(path) {
+                Some(action) => files.push(action),
+                None => {
+                    return Err(DeltaTableError::Generic(
+                        "Unable to map __delta_rs_path to action.".to_owned(),
+                    ))
                 }
             }
-        };
+        }
     }
     Ok(files)
 }
@@ -1332,8 +1348,8 @@ pub(crate) async fn find_files_scan<'a>(
     let scan = Arc::new(scan);
 
     let config = &scan.config;
-    let input_schema = scan.logical_schema.as_ref().to_owned().unwrap();
-    let input_dfschema = input_schema.as_ref().clone().try_into()?;
+    let input_schema = scan.logical_schema.as_ref().to_owned();
+    let input_dfschema = input_schema.clone().try_into()?;
 
     let predicate_expr = create_physical_expr(
         &Expr::IsTrue(Box::new(expression.clone())),
@@ -1727,12 +1743,10 @@ mod tests {
         ]));
         let exec_plan = Arc::from(DeltaScan {
             table_uri: "s3://my_bucket/this/is/some/path".to_string(),
-            parquet_scan: Arc::from(EmptyExec::new(false, schema)),
+            parquet_scan: Arc::from(EmptyExec::new(false, schema.clone())),
             config: DeltaScanConfig::default(),
-            files: Vec::new(),
-            logical_schema: None,
+            logical_schema: schema.clone(),
         });
-        // TODO: Test new column...
         let proto: protobuf::PhysicalPlanNode =
             protobuf::PhysicalPlanNode::try_from_physical_plan(exec_plan.clone(), &codec)
                 .expect("to proto");
