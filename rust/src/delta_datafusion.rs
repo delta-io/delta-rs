@@ -1552,6 +1552,7 @@ mod tests {
             partition_values_parsed: None,
             data_change: true,
             stats: None,
+            deletion_vector: None,
             stats_parsed: None,
             tags: None,
         };
