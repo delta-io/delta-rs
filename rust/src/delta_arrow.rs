@@ -455,6 +455,20 @@ pub(crate) fn delta_log_schema_for_table(
                     false
                 ),
                 true
+            ),
+            ArrowField::new(
+                "deletionVector",
+                ArrowDataType::Struct(
+                    vec![
+                        ArrowField::new("storageType", ArrowDataType::Utf8, false),
+                        ArrowField::new("pathOrInlineDv", ArrowDataType::Utf8, false),
+                        ArrowField::new("offset", ArrowDataType::Int32, true),
+                        ArrowField::new("sizeInBytes", ArrowDataType::Int32, false),
+                        ArrowField::new("cardinality", ArrowDataType::Int64, false),
+                    ]
+                    .into()
+                ),
+                true
             )
         ];
         static ref REMOVE_FIELDS: Vec<ArrowField> = vec![
@@ -663,7 +677,22 @@ mod tests {
                 }
             })
             .collect();
-        assert_eq!(9, add_fields.len());
+        let field_names: Vec<&String> = add_fields.iter().map(|v| v.name()).collect();
+        assert_eq!(
+            vec![
+                "path",
+                "size",
+                "modificationTime",
+                "dataChange",
+                "stats",
+                "partitionValues",
+                "tags",
+                "deletionVector",
+                "stats_parsed",
+                "partitionValues_parsed"
+            ],
+            field_names
+        );
         let add_field_map: HashMap<_, _> = add_fields
             .iter()
             .map(|f| (f.name().to_owned(), f.clone()))

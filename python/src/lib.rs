@@ -505,6 +505,7 @@ impl RawDeltaTable {
                         extended_file_metadata: Some(old_add.tags.is_some()),
                         partition_values: Some(old_add.partition_values.clone()),
                         size: Some(old_add.size),
+                        deletion_vector: old_add.deletion_vector.clone(),
                         tags: old_add.tags.clone(),
                     });
                     actions.push(remove_action);
@@ -788,6 +789,7 @@ impl From<&PyAddAction> for action::Add {
             stats: action.stats.clone(),
             stats_parsed: None,
             tags: None,
+            deletion_vector: None,
         }
     }
 }

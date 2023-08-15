@@ -83,6 +83,7 @@ pub fn add(offset_millis: i64) -> Add {
         stats: None,
         stats_parsed: None,
         tags: None,
+        deletion_vector: None,
     }
 }
 
