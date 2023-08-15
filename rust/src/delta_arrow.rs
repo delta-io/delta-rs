@@ -311,13 +311,13 @@ macro_rules! arrow_map {
                             ArrowField::new("key", ArrowDataType::Utf8, false),
                             ArrowField::new("value", ArrowDataType::Utf8, true),
                         ]
-                        .into()
+                        .into(),
                     ),
-                    false
+                    false,
                 )),
-                false
+                false,
             ),
-            true
+            true,
         )
     };
     ($fieldname: ident, not_null) => {
@@ -331,15 +331,15 @@ macro_rules! arrow_map {
                             ArrowField::new("key", ArrowDataType::Utf8, false),
                             ArrowField::new("value", ArrowDataType::Utf8, true),
                         ]
-                        .into()
+                        .into(),
                     ),
-                    false
+                    false,
                 )),
-                false
+                false,
             ),
-            false
+            false,
         )
-    }
+    };
 }
 
 macro_rules! arrow_field {
@@ -348,7 +348,7 @@ macro_rules! arrow_field {
     };
     ($fieldname:ident, $type_qual:ident, not_null) => {
         ArrowField::new(stringify!($fieldname), ArrowDataType::$type_qual, false)
-    }
+    };
 }
 
 macro_rules! arrow_list {
@@ -358,9 +358,9 @@ macro_rules! arrow_list {
             ArrowDataType::List(Arc::new(ArrowField::new(
                 stringify!($element_name),
                 ArrowDataType::$type_qual,
-                true
+                true,
             ))),
-            true
+            true,
         )
     };
     ($fieldname:ident, $element_name:ident, $type_qual:ident, not_null) => {
@@ -369,9 +369,9 @@ macro_rules! arrow_list {
             ArrowDataType::List(Arc::new(ArrowField::new(
                 stringify!($element_name),
                 ArrowDataType::$type_qual,
-                true
+                true,
             ))),
-            false
+            false,
         )
     };
 }
@@ -400,7 +400,7 @@ macro_rules! arrow_struct {
 macro_rules! arrow_def {
     ($fieldname:ident $(null)?) => {
         arrow_map!($fieldname, null)
-    };    
+    };
     ($fieldname:ident not_null) => {
         arrow_map!($fieldname, not_null)
     };
@@ -425,24 +425,24 @@ macro_rules! arrow_def {
 }
 
 /// A helper macro to create more readable Arrow field definitions, delimited by commas
-/// 
+///
 /// The argument patterns are as follows:
-/// 
+///
 /// fieldname (null|not_null)?      -- An arrow field of type map with name "fieldname" consisting of Utf8 key-value pairs, and an
 ///                                    optional nullability qualifier (null if not specified).
-/// 
+///
 /// fieldname:type (null|not_null)? --  An Arrow field consisting of an atomic type. For example,
 ///                                     id:Utf8 gets mapped to ArrowField::new("id", ArrowDataType::Utf8, true).
-///                                     where customerCount:Int64 not_null gets mapped to gets mapped to 
+///                                     where customerCount:Int64 not_null gets mapped to gets mapped to
 ///                                     ArrowField::new("customerCount", ArrowDataType::Utf8, true)
-/// 
+///
 /// fieldname[list_element]{list_element_type} (null|not_null)? --  An Arrow list, with the name of the elements wrapped in square brackets
 ///                                                                 and the type of the list elements wrapped in curly brackets. For example,
 ///                                                                 customers[name]{Utf8} is an nullable arrow field of type arrow list consisting
 ///                                                                 of elements called "name" with type Utf8.
-/// 
+///
 /// fieldname[element1, element2, element3, ....] (null|not_null)? -- An arrow struct with name "fieldname" consisting of elements adhering to any of the patterns
-///                                                                   documented, including additional structs arbitrarily nested up to the recursion 
+///                                                                   documented, including additional structs arbitrarily nested up to the recursion
 ///                                                                   limit for Rust macros.
 macro_rules! arrow_defs {
     () => {
@@ -451,7 +451,7 @@ macro_rules! arrow_defs {
     ($($fieldname:ident$(:$type_qual:ident)?$([$($inner:tt)+])?$({$list_type_qual:ident})? $($nullable:ident)?),+) => {
         vec![
             $(arrow_def!($fieldname$(:$type_qual)?$([$($inner)+])?$({$list_type_qual})? $($nullable)?)),+
-        ] 
+        ]
     }
 }
 
@@ -468,8 +468,8 @@ pub(crate) fn delta_log_schema_for_table(
     partition_columns: &[String],
     use_extended_remove_schema: bool,
 ) -> ArrowSchemaRef {
-        lazy_static! {
-            static ref SCHEMA_FIELDS: Vec<ArrowField> = arrow_defs![
+    lazy_static! {
+        static ref SCHEMA_FIELDS: Vec<ArrowField> = arrow_defs![
                 metaData[
                     id:Utf8,
                     name:Utf8,
@@ -489,34 +489,34 @@ pub(crate) fn delta_log_schema_for_table(
                     version:Int64
                 ]
         ];
-            static ref ADD_FIELDS: Vec<ArrowField> = arrow_defs![
-                path:Utf8,
-                size:Int64,
-                modificationTime:Int64,
-                dataChange:Boolean,
-                stats:Utf8,
-                partitionValues,
-                tags,
-                deletionVector[
-                    storageType:Utf8 not_null,
-                    pathOrInlineDv:Utf8 not_null,
-                    offset:Int32 null,
-                    sizeInBytes:Int32 not_null,
-                    cardinality:Int64 not_null
-                ]
-            ];
-            static ref REMOVE_FIELDS: Vec<ArrowField> = arrow_defs![
-                path:Utf8,
-                deletionTimestamp:Int64,
-                dataChange:Boolean,
-                extendedFileMetadata:Boolean
-            ];
-            static ref REMOVE_EXTENDED_FILE_METADATA_FIELDS: Vec<ArrowField> = arrow_defs![
-                size:Int64,
-                partitionValues,
-                tags
-            ];
-        };
+        static ref ADD_FIELDS: Vec<ArrowField> = arrow_defs![
+            path:Utf8,
+            size:Int64,
+            modificationTime:Int64,
+            dataChange:Boolean,
+            stats:Utf8,
+            partitionValues,
+            tags,
+            deletionVector[
+                storageType:Utf8 not_null,
+                pathOrInlineDv:Utf8 not_null,
+                offset:Int32 null,
+                sizeInBytes:Int32 not_null,
+                cardinality:Int64 not_null
+            ]
+        ];
+        static ref REMOVE_FIELDS: Vec<ArrowField> = arrow_defs![
+            path:Utf8,
+            deletionTimestamp:Int64,
+            dataChange:Boolean,
+            extendedFileMetadata:Boolean
+        ];
+        static ref REMOVE_EXTENDED_FILE_METADATA_FIELDS: Vec<ArrowField> = arrow_defs![
+            size:Int64,
+            partitionValues,
+            tags
+        ];
+    };
 
     // create add fields according to the specific data table schema
     let (partition_fields, non_partition_fields): (Vec<ArrowFieldRef>, Vec<ArrowFieldRef>) =
