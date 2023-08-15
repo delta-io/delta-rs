@@ -163,6 +163,7 @@ impl Worker {
             stats: None,
             stats_parsed: None,
             tags: None,
+            deletion_vector: None,
         })];
         let version = commit(
             self.table.object_store().as_ref(),

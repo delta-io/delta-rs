@@ -22,6 +22,7 @@ use serde_json::{Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::str::FromStr;
 
 use crate::delta_config::IsolationLevel;
 use crate::errors::DeltaResult;
@@ -48,6 +49,10 @@ pub enum ProtocolError {
     /// A parquet log checkpoint file contains an invalid action.
     #[error("Invalid action in parquet row: {0}")]
     InvalidRow(String),
+
+    /// A transaction log contains invalid deletion vector storage type
+    #[error("Invalid deletion vector storage type: {0}")]
+    InvalidDeletionVectorStorageType(String),
 
     /// A generic action error. The wrapped error string describes the details.
     #[error("Generic action error: {0}")]
@@ -219,6 +224,86 @@ pub struct AddCDCFile {
     pub tags: Option<HashMap<String, Option<String>>>,
 }
 
+///Storage type of deletion vector
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde()]
+pub enum StorageType {
+    /// Stored at relative path derived from a UUID.
+    #[serde(rename = "u")]
+    UuidRelativePath,
+    /// Stored as inline string.
+    #[serde(rename = "i")]
+    Inline,
+    /// Stored at an absolute path.
+    #[serde(rename = "p")]
+    AbsolutePath,
+}
+
+impl Default for StorageType {
+    fn default() -> Self {
+        Self::UuidRelativePath // seems to be used by Databricks and therefore most common
+    }
+}
+
+impl FromStr for StorageType {
+    type Err = ProtocolError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "u" => Ok(Self::UuidRelativePath),
+            "i" => Ok(Self::Inline),
+            "p" => Ok(Self::AbsolutePath),
+            _ => Err(ProtocolError::InvalidDeletionVectorStorageType(
+                s.to_string(),
+            )),
+        }
+    }
+}
+
+impl ToString for StorageType {
+    fn to_string(&self) -> String {
+        match self {
+            Self::UuidRelativePath => "u".to_string(),
+            Self::Inline => "i".to_string(),
+            Self::AbsolutePath => "p".to_string(),
+        }
+    }
+}
+
+/// Describes deleted rows of a parquet file as part of an add or remove action
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionVector {
+    ///storageType of the deletion vector. p = Absolute Path, i = Inline, u = UUid Relative Path
+    pub storage_type: StorageType,
+
+    ///If storageType = 'u' then <random prefix - optional><base85 encoded uuid>
+    ///If storageType = 'i' then <base85 encoded bytes> of the deletion vector data
+    ///If storageType = 'p' then <absolute path>
+    pub path_or_inline_dv: String,
+
+    ///Start of the data for this DV in number of bytes from the beginning of the file it is stored in. Always None (absent in JSON) when storageType = 'i'.
+    pub offset: Option<i32>,
+
+    ///Size of the serialized DV in bytes (raw data size, i.e. before base85 encoding, if inline).
+    pub size_in_bytes: i32,
+
+    ///Number of rows the given DV logically removes from the file.
+    pub cardinality: i64,
+}
+
+impl PartialEq for DeletionVector {
+    fn eq(&self, other: &Self) -> bool {
+        self.storage_type == other.storage_type
+            && self.path_or_inline_dv == other.path_or_inline_dv
+            && self.offset == other.offset
+            && self.size_in_bytes == other.size_in_bytes
+            && self.cardinality == other.cardinality
+    }
+}
+
+impl Eq for DeletionVector {}
+
 /// Delta log action that describes a parquet data file that is part of the table.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 #[serde(rename_all = "camelCase")]
@@ -277,6 +362,9 @@ pub struct Add {
     pub stats_parsed: Option<String>,
     /// Map containing metadata about this file
     pub tags: Option<HashMap<String, Option<String>>>,
+
+    ///Metadata about deletion vector
+    pub deletion_vector: Option<DeletionVector>,
 }
 
 impl Hash for Add {
@@ -294,6 +382,7 @@ impl PartialEq for Add {
             && self.data_change == other.data_change
             && self.stats == other.stats
             && self.tags == other.tags
+            && self.deletion_vector == other.deletion_vector
     }
 }
 
@@ -441,6 +530,8 @@ pub struct Remove {
     pub size: Option<i64>,
     /// Map containing metadata about this file
     pub tags: Option<HashMap<String, Option<String>>>,
+    ///Metadata about deletion vector
+    pub deletion_vector: Option<DeletionVector>,
 }
 
 impl Hash for Remove {
@@ -466,6 +557,7 @@ impl PartialEq for Remove {
             && self.partition_values == other.partition_values
             && self.size == other.size
             && self.tags == other.tags
+            && self.deletion_vector == other.deletion_vector
     }
 }
 
@@ -1066,7 +1158,112 @@ mod tests {
 
             assert_eq!(expected, actions);
         }
+        #[tokio::test]
+        async fn test_with_deletion_vector() {
+            // test table with partitions
+            let path = "./tests/data/table_with_deletion_logs";
+            let table = crate::open_table(path).await.unwrap();
+            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
+            let actions = actions
+                .project(&[
+                    actions.schema().index_of("path").unwrap(),
+                    actions.schema().index_of("size_bytes").unwrap(),
+                    actions
+                        .schema()
+                        .index_of("deletionVector.storageType")
+                        .unwrap(),
+                    actions
+                        .schema()
+                        .index_of("deletionVector.pathOrInlineDiv")
+                        .unwrap(),
+                    actions.schema().index_of("deletionVector.offset").unwrap(),
+                    actions
+                        .schema()
+                        .index_of("deletionVector.sizeInBytes")
+                        .unwrap(),
+                    actions
+                        .schema()
+                        .index_of("deletionVector.cardinality")
+                        .unwrap(),
+                ])
+                .unwrap();
+            let expected_columns: Vec<(&str, ArrayRef)> = vec![
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet",
+                    ])),
+                ),
+                ("size_bytes", Arc::new(array::Int64Array::from(vec![10499]))),
+                (
+                    "deletionVector.storageType",
+                    Arc::new(array::StringArray::from(vec!["u"])),
+                ),
+                (
+                    "deletionVector.pathOrInlineDiv",
+                    Arc::new(array::StringArray::from(vec!["Q6Kt3y1b)0MgZSWwPunr"])),
+                ),
+                (
+                    "deletionVector.offset",
+                    Arc::new(array::Int32Array::from(vec![1])),
+                ),
+                (
+                    "deletionVector.sizeInBytes",
+                    Arc::new(array::Int32Array::from(vec![36])),
+                ),
+                (
+                    "deletionVector.cardinality",
+                    Arc::new(array::Int64Array::from(vec![2])),
+                ),
+            ];
+            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
 
+            assert_eq!(expected, actions);
+
+            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
+            let actions = actions
+                .project(&[
+                    actions.schema().index_of("path").unwrap(),
+                    actions.schema().index_of("size_bytes").unwrap(),
+                    actions.schema().index_of("deletionVector").unwrap(),
+                ])
+                .unwrap();
+            let expected_columns: Vec<(&str, ArrayRef)> = vec![
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet",
+                    ])),
+                ),
+                ("size_bytes", Arc::new(array::Int64Array::from(vec![10499]))),
+                (
+                    "deletionVector",
+                    Arc::new(array::StructArray::new(
+                        Fields::from(vec![
+                            Field::new("storageType", DataType::Utf8, false),
+                            Field::new("pathOrInlineDiv", DataType::Utf8, false),
+                            Field::new("offset", DataType::Int32, true),
+                            Field::new("sizeInBytes", DataType::Int32, false),
+                            Field::new("cardinality", DataType::Int64, false),
+                        ]),
+                        vec![
+                            Arc::new(array::StringArray::from(vec!["u"])) as ArrayRef,
+                            Arc::new(array::StringArray::from(vec!["Q6Kt3y1b)0MgZSWwPunr"]))
+                                as ArrayRef,
+                            Arc::new(array::Int32Array::from(vec![1])) as ArrayRef,
+                            Arc::new(array::Int32Array::from(vec![36])) as ArrayRef,
+                            Arc::new(array::Int64Array::from(vec![2])) as ArrayRef,
+                        ],
+                        None,
+                    )),
+                ),
+            ];
+            let expected = RecordBatch::try_from_iter(expected_columns).unwrap();
+
+            assert_eq!(expected, actions);
+        }
         #[tokio::test]
         async fn test_without_partitions() {
             // test table without partitions

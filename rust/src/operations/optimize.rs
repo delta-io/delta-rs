@@ -304,6 +304,7 @@ fn create_remove(
         extended_file_metadata: None,
         partition_values: Some(partitions.to_owned()),
         size: Some(size),
+        deletion_vector: None,
         tags: None,
     }))
 }
