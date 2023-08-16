@@ -65,8 +65,8 @@ class AddAction:
     stats: str
 
 
-@ray.remote
-def batch_validate(pa_table_ref, new_table_data, mode, partition_filters):
+@ray.remote(max_task_retries=3, max_retries=3)
+async def batch_validate(pa_table_ref, new_table_data, mode, partition_filters):
     def check_data_is_aligned_with_partition_filtering(
             batch: pa.RecordBatch,
     ) -> None:
@@ -117,8 +117,8 @@ def batch_validate(pa_table_ref, new_table_data, mode, partition_filters):
     return True
 
 
-@ray.remote
-def write_ds(
+@ray.remote(max_task_retries=3, max_retries=3)
+async def write_ds(
         batch_ref,
         current_version,
         schema,
@@ -314,12 +314,18 @@ def write_deltalake_ray(
         new_table_data = {"partition_column": table.metadata().partition_columns,
                           "allowed_partitions": table._table.get_active_partitions(partition_filters),
                           "existed_partitions": table._table.get_active_partitions()}
+        MAX_NUM_PENDING_TASKS = 100
+        result_batch_refs = []
         for pa_table_ref in data.to_arrow_refs():
-            batch_references.append(
-                batch_validate.remote(
+            if len(result_batch_refs) > MAX_NUM_PENDING_TASKS:
+                # update result_refs to only
+                # track the remaining tasks.
+                ready_refs, result_batch_refs = ray.wait(result_batch_refs, num_returns=1)
+                batch_references += ray.get(ready_refs)
+            result_batch_refs.append(batch_validate.remote(
                     pa_table_ref, new_table_data, mode, partition_filters
-                )
-            )
+                ))
+        batch_references += ray.get(result_batch_refs)
 
         for ref in batch_references:
             val = ray.get(ref)
@@ -327,24 +333,35 @@ def write_deltalake_ray(
                 raise ValueError(
                     f"Data should be aligned with partitioning. "
                 )
+        MAX_NUM_PENDING_TASKS = 100
+        result_refs = []
+        for batch_ref in data.to_arrow_refs():
+            if len(result_refs) > MAX_NUM_PENDING_TASKS:
+                # update result_refs to only
+                # track the remaining tasks.
+                ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
+                add_actions += ray.get(ready_refs)
+            result_refs.append(write_ds.remote(
+                    batch_ref,
+                    current_version,
+                    schema,
+                    file_options,
+                    filesystem,
+                    max_partitions,
+                    partition_by,
+                ))
 
-        # Validate in batch_references for any exception
-        for batch_ref in data.to_arrow_refs():
-            add_actions.append(
-                write_ds.remote(
-                    batch_ref,
-                    current_version,
-                    schema,
-                    file_options,
-                    filesystem,
-                    max_partitions,
-                    partition_by,
-                )
-            )
+        add_actions += ray.get(result_refs)
     else:
+        MAX_NUM_PENDING_TASKS = 100
+        result_refs = []
         for batch_ref in data.to_arrow_refs():
-            add_actions.append(
-                write_ds.remote(
+            if len(result_refs) > MAX_NUM_PENDING_TASKS:
+                # update result_refs to only
+                # track the remaining tasks.
+                ready_refs, result_refs = ray.wait(result_refs, num_returns=1)
+                add_actions += ray.get(ready_refs)
+            result_refs.append(write_ds.remote(
                     batch_ref,
                     current_version,
                     schema,
@@ -352,9 +369,9 @@ def write_deltalake_ray(
                     filesystem,
                     max_partitions,
                     partition_by,
-                )
-            )
-    new_add_actions = ray.get(add_actions)
+                ))
+        add_actions += ray.get(result_refs)
+    new_add_actions = add_actions
     final_add_actions = []
     for action in new_add_actions:
         for sub_action in action:
