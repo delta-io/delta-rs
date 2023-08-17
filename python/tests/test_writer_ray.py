@@ -10,16 +10,8 @@ import pyarrow.compute as pc
 import pytest
 import ray
 
-from deltalake import DeltaTable, write_deltalake
+from deltalake import DeltaTable, write_deltalake, write_table
 
-from deltalake import write_table
-
-try:
-    from pandas.testing import assert_frame_equal
-except ModuleNotFoundError:
-    _has_pandas = False
-else:
-    _has_pandas = True
 
 
 def test_input_invalid_datatype(tmp_path: pathlib.Path, sample_data: pa.Table):
@@ -27,6 +19,7 @@ def test_input_invalid_datatype(tmp_path: pathlib.Path, sample_data: pa.Table):
     tmp_path = tmp_path / "path" / "to" / "table"
     with pytest.raises(ValueError):
         write_table.write_deltalake_ray(tmp_path, sample_data)
+
 
 def test_roundtrip_basic(tmp_path: pathlib.Path, sample_data: pa.Table):
     # Check we can create the subdirectory
@@ -101,14 +94,17 @@ def test_update_schema(existing_table: DeltaTable):
     new_data = pa.table({"x": pa.array([1, 2, 3])})
     ray_ds = ray.data.from_arrow_refs([ray.put(new_data)])
     with pytest.raises(ValueError):
-        write_table.write_deltalake_ray(existing_table, ray_ds, mode="append", overwrite_schema=True)
+        write_table.write_deltalake_ray(
+            existing_table, ray_ds, mode="append", overwrite_schema=True
+        )
 
-    write_table.write_deltalake_ray(existing_table, ray_ds, mode="overwrite", overwrite_schema=True)
+    write_table.write_deltalake_ray(
+        existing_table, ray_ds, mode="overwrite", overwrite_schema=True
+    )
 
     read_data = existing_table.to_pyarrow_table()
     assert new_data == read_data
     assert existing_table.schema().to_pyarrow() == new_data.schema
-
 
 
 def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
@@ -215,7 +211,9 @@ def test_append_only_should_append_only_with_the_overwrite_mode(
     config = {"delta.appendOnly": "true"}
 
     ray_ds = ray.data.from_arrow_refs([ray.put(sample_data)])
-    write_table.write_deltalake_ray(tmp_path, ray_ds, mode="append", configuration=config)
+    write_table.write_deltalake_ray(
+        tmp_path, ray_ds, mode="append", configuration=config
+    )
 
     table = DeltaTable(tmp_path)
     write_table.write_deltalake_ray(table, ray_ds, mode="append")
@@ -256,6 +254,7 @@ def get_add_actions(table: DeltaTable) -> List[str]:
             actions.append(log_entry["add"])
 
     return actions
+
 
 def get_add_paths(table: DeltaTable) -> List[str]:
     return [action["path"] for action in get_add_actions(table)]

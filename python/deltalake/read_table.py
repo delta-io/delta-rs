@@ -2,17 +2,17 @@
 Reading Delta Tables with Ray
 """
 # Standard Libraries
-from typing import Optional, List, Dict, Any, Tuple
-
-# External Libraries
-from deltalake import DeltaTable
-
-from ray.data import read_parquet
-from ray.data.dataset import Dataset
-from ray.data.datasource import DefaultParquetMetadataProvider
-from ray.data._internal.arrow_block import ArrowRow
+from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
+from ray.data import read_parquet
+from ray.data._internal.arrow_block import ArrowRow
+from ray.data.dataset import Dataset
+from ray.data.datasource import DefaultParquetMetadataProvider
+
+import pyarrow
+# External Libraries
+from deltalake import DeltaTable
 
 
 def read_delta(
