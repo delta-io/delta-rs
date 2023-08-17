@@ -55,7 +55,7 @@ class AddAction:
     stats: str
 
 
-@ray.remote
+@ray.remote(max_task_retries=3, max_restarts=3)
 class WriterActor:
     async def batch_validate(self, pa_table_ref, new_table_data, mode, partition_filters):
         def __encode_partition_value(val: Any) -> str:
