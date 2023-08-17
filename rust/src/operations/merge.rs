@@ -1014,6 +1014,7 @@ async fn execute(
             data_change: true,
             extended_file_metadata: Some(true),
             partition_values: Some(action.partition_values.clone()),
+            deletion_vector: action.deletion_vector.clone(),
             size: Some(action.size),
             tags: None,
         }))
