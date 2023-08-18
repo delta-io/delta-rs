@@ -14,6 +14,7 @@ use arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
 use arrow::record_batch::RecordBatch;
+use arrow_schema::{DataType, Field};
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::TableProvider;
@@ -34,10 +35,12 @@ use deltalake::action::SaveMode;
 use deltalake::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
 use deltalake::operations::create::CreateBuilder;
 use deltalake::storage::DeltaObjectStore;
+use deltalake::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake::{
     operations::{write::WriteBuilder, DeltaOps},
-    DeltaTable, Schema,
+    DeltaTable, DeltaTableError, Schema, SchemaDataType, SchemaField,
 };
+use std::error::Error;
 
 mod common;
 
@@ -775,14 +778,7 @@ mod local {
 
         let expected_schema = ArrowSchema::new(vec![
             ArrowField::new("c3", ArrowDataType::Int32, true),
-            ArrowField::new(
-                "c1",
-                ArrowDataType::Dictionary(
-                    Box::new(ArrowDataType::UInt16),
-                    Box::new(ArrowDataType::Int32),
-                ),
-                false,
-            ),
+            ArrowField::new("c1", ArrowDataType::Int32, false),
             ArrowField::new(
                 "c2",
                 ArrowDataType::Dictionary(
@@ -1022,4 +1018,96 @@ async fn simple_query(context: &IntegrationContext) -> TestResult {
     );
 
     Ok(())
+}
+
+mod date_partitions {
+    use super::*;
+    
+    async fn setup_test() -> Result<DeltaTable, Box<dyn Error>> {
+        let columns = vec![
+            SchemaField::new(
+                "id".to_owned(),
+                SchemaDataType::primitive("integer".to_owned()),
+                false,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "date".to_owned(),
+                SchemaDataType::primitive("date".to_owned()),
+                false,
+                HashMap::new(),
+            ),
+        ];
+
+        let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
+        let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+        let dt = DeltaOps::try_from_uri(table_uri)
+            .await?
+            .create()
+            .with_columns(columns)
+            .with_partition_columns(["date"])
+            .await?;
+
+        Ok(dt)
+    }
+
+    fn get_batch(ids: Vec<i32>, dates: Vec<i32>) -> Result<RecordBatch, Box<dyn Error>> {
+        let ids_array: PrimitiveArray<arrow_array::types::Int32Type> = Int32Array::from(ids);
+        let date_array = Date32Array::from(dates);
+
+        Ok(RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("date", DataType::Date32, false),
+            ])),
+            vec![Arc::new(ids_array), Arc::new(date_array)],
+        )?)
+    }
+
+    async fn write(
+        writer: &mut RecordBatchWriter,
+        table: &mut DeltaTable,
+        batch: RecordBatch,
+    ) -> Result<(), DeltaTableError> {
+        writer.write(batch).await?;
+        writer.flush_and_commit(table).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_issue_1445_date_partition() -> Result<()> {
+        let ctx = SessionContext::new();
+        let mut dt = setup_test().await.unwrap();
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
+        write(
+            &mut writer,
+            &mut dt,
+            get_batch(vec![2], vec![19517]).unwrap(),
+        )
+        .await?;
+        ctx.register_table("t", Arc::new(dt))?;
+
+        let batches = ctx
+            .sql(
+                r#"SELECT *
+            FROM t
+            WHERE date > '2023-06-07'
+            "#,
+            )
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+----+------------+",
+            "| id | date       |",
+            "+----+------------+",
+            "| 2  | 2023-06-09 |",
+            "+----+------------+",
+        ];
+
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
 }
