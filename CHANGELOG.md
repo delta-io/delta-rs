@@ -1,5 +1,125 @@
 # Changelog
 
+## [rust-v0.13.1](https://github.com/delta-io/delta-rs/tree/rust-v0.13.1) (2023-07-18)
+
+**Fixed bugs:**
+
+* Revert premature merge of an attempted fix for binary column statistics [\#1544](https://github.com/delta-io/delta-rs/pull/1544)
+
+## [rust-v0.13.0](https://github.com/delta-io/delta-rs/tree/rust-v0.13.0) (2023-07-15)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.12.0...rust-v0.13.0)
+
+**Implemented enhancements:**
+
+- Add nested struct supports [\#1518](https://github.com/delta-io/delta-rs/issues/1518)
+- Support FixedLenByteArray UUID statistics as a logical scalar [\#1483](https://github.com/delta-io/delta-rs/issues/1483)
+- Exposing create\_add in the API [\#1458](https://github.com/delta-io/delta-rs/issues/1458)
+- Update features table on README [\#1404](https://github.com/delta-io/delta-rs/issues/1404)
+- docs\(python\): show data catalog options in Python API reference [\#1347](https://github.com/delta-io/delta-rs/issues/1347)
+- Add optimization to only list log files starting at a certain name [\#1252](https://github.com/delta-io/delta-rs/issues/1252)
+- Support configuring parquet compression [\#1235](https://github.com/delta-io/delta-rs/issues/1235)
+- parallel processing in Optimize command [\#1171](https://github.com/delta-io/delta-rs/issues/1171)
+
+**Fixed bugs:**
+
+- get\_add\_actions\(\) MAX is not showing complete value [\#1534](https://github.com/delta-io/delta-rs/issues/1534)
+- Can't get stats's minValues in add actions [\#1515](https://github.com/delta-io/delta-rs/issues/1515)
+- Pyarrow is\_null filter not working as expected after loading using deltalake [\#1496](https://github.com/delta-io/delta-rs/issues/1496)
+- Can't write to table that uses generated columns [\#1495](https://github.com/delta-io/delta-rs/issues/1495)
+- Json error: Binary is not supported by JSON when writing checkpoint files [\#1493](https://github.com/delta-io/delta-rs/issues/1493)
+- \_last\_checkpoint size field is incorrect [\#1468](https://github.com/delta-io/delta-rs/issues/1468)
+- Error when Z Ordering a larger dataset [\#1459](https://github.com/delta-io/delta-rs/issues/1459)
+- Timestamp parsing issue [\#1455](https://github.com/delta-io/delta-rs/issues/1455)
+- File options are ignored when writing delta [\#1444](https://github.com/delta-io/delta-rs/issues/1444)
+- Slack Invite Link No Longer Valid [\#1425](https://github.com/delta-io/delta-rs/issues/1425)
+- `cleanup_metadata` doesn't remove `.checkpoint.parquet` files [\#1420](https://github.com/delta-io/delta-rs/issues/1420)
+- The test of reading the data from the blob storage located in Azurite container failed [\#1415](https://github.com/delta-io/delta-rs/issues/1415)
+- The test of reading the data from the bucket located in Minio container failed [\#1408](https://github.com/delta-io/delta-rs/issues/1408)
+- Datafusion: unreachable code reached when parsing statistics with missing columns [\#1374](https://github.com/delta-io/delta-rs/issues/1374)
+- vacuum is very slow on Cloudflare R2 [\#1366](https://github.com/delta-io/delta-rs/issues/1366)
+
+**Closed issues:**
+
+- Expose Compression Options or WriterProperties for writing to Delta [\#1469](https://github.com/delta-io/delta-rs/issues/1469)
+- Support out-of-core Z-order using DataFusion [\#1460](https://github.com/delta-io/delta-rs/issues/1460)
+- Expose Z-order in Python [\#1442](https://github.com/delta-io/delta-rs/issues/1442)
+
+**Merged pull requests:**
+
+- chore: fix the latest clippy warnings with the newer rustc's [\#1536](https://github.com/delta-io/delta-rs/pull/1536) ([rtyler](https://github.com/rtyler))
+- docs: show data catalog options in Python API reference [\#1532](https://github.com/delta-io/delta-rs/pull/1532) ([omkar-foss](https://github.com/omkar-foss))
+- fix: handle nulls in file-level stats [\#1520](https://github.com/delta-io/delta-rs/pull/1520) ([wjones127](https://github.com/wjones127))
+- feat: add nested struct supports [\#1519](https://github.com/delta-io/delta-rs/pull/1519) ([haruband](https://github.com/haruband))
+- fix: tiny typo in AggregatedStats [\#1516](https://github.com/delta-io/delta-rs/pull/1516) ([haruband](https://github.com/haruband))
+- refactor: unify with\_predicate for delete ops [\#1512](https://github.com/delta-io/delta-rs/pull/1512) ([Blajda](https://github.com/Blajda))
+- chore: remove deprecated table functions [\#1511](https://github.com/delta-io/delta-rs/pull/1511) ([roeap](https://github.com/roeap))
+- chore: update datafusion and related crates [\#1504](https://github.com/delta-io/delta-rs/pull/1504) ([roeap](https://github.com/roeap))
+- feat: implement restore operation [\#1502](https://github.com/delta-io/delta-rs/pull/1502) ([loleek](https://github.com/loleek))
+- chore: fix mypy failure [\#1500](https://github.com/delta-io/delta-rs/pull/1500) ([wjones127](https://github.com/wjones127))
+- fix: avoid writing statistics for binary columns to fix JSON error [\#1498](https://github.com/delta-io/delta-rs/pull/1498) ([ChewingGlass](https://github.com/ChewingGlass))
+- feat\(rust\): expose WriterProperties method on RecordBatchWriter and DeltaWriter [\#1497](https://github.com/delta-io/delta-rs/pull/1497) ([theelderbeever](https://github.com/theelderbeever))
+- feat: add UUID statistics handling [\#1484](https://github.com/delta-io/delta-rs/pull/1484) ([atefsaw](https://github.com/atefsaw))
+- feat: expose create\_add to the public [\#1482](https://github.com/delta-io/delta-rs/pull/1482) ([atefsaw](https://github.com/atefsaw))
+- fix: add `sizeInBytes` to \_last\_checkpoint and change `size` to \# of actions [\#1477](https://github.com/delta-io/delta-rs/pull/1477) ([cmackenzie1](https://github.com/cmackenzie1))
+- fix\(python\): match Field signatures [\#1463](https://github.com/delta-io/delta-rs/pull/1463) ([guilhem-dvr](https://github.com/guilhem-dvr))
+- feat: handle larger z-order jobs with streaming output and spilling [\#1461](https://github.com/delta-io/delta-rs/pull/1461) ([wjones127](https://github.com/wjones127))
+- chore: increment python version [\#1449](https://github.com/delta-io/delta-rs/pull/1449) ([wjones127](https://github.com/wjones127))
+- chore: upgrade to arrow 40 and datafusion 26 [\#1448](https://github.com/delta-io/delta-rs/pull/1448) ([rtyler](https://github.com/rtyler))
+- feat\(python\): expose z-order in Python [\#1443](https://github.com/delta-io/delta-rs/pull/1443) ([wjones127](https://github.com/wjones127))
+- ci: prune CI/CD pipelines [\#1433](https://github.com/delta-io/delta-rs/pull/1433) ([roeap](https://github.com/roeap))
+- refactor: remove `LoadCheckpointError` and `ApplyLogError` [\#1432](https://github.com/delta-io/delta-rs/pull/1432) ([roeap](https://github.com/roeap))
+- feat: update writers to include compression method in file name [\#1431](https://github.com/delta-io/delta-rs/pull/1431) ([Blajda](https://github.com/Blajda))
+- refactor: move checkpoint and errors into separate module [\#1430](https://github.com/delta-io/delta-rs/pull/1430) ([roeap](https://github.com/roeap))
+- feat: add z-order optimize [\#1429](https://github.com/delta-io/delta-rs/pull/1429) ([wjones127](https://github.com/wjones127))
+- fix: casting when data to be written does not match table schema [\#1427](https://github.com/delta-io/delta-rs/pull/1427) ([Blajda](https://github.com/Blajda))
+- docs: update README.adoc to fix expired Slack link [\#1426](https://github.com/delta-io/delta-rs/pull/1426) ([dennyglee](https://github.com/dennyglee))
+- chore: remove no-longer-necessary build.rs for Rust bindings [\#1424](https://github.com/delta-io/delta-rs/pull/1424) ([rtyler](https://github.com/rtyler))
+- chore: remove the delta-checkpoint lambda which I have moved to a new repo [\#1423](https://github.com/delta-io/delta-rs/pull/1423) ([rtyler](https://github.com/rtyler))
+- refactor: rewrite redundant\_async\_block [\#1422](https://github.com/delta-io/delta-rs/pull/1422) ([cmackenzie1](https://github.com/cmackenzie1))
+- fix: update cleanup regex to include `checkpoint.parquet` files [\#1421](https://github.com/delta-io/delta-rs/pull/1421) ([cmackenzie1](https://github.com/cmackenzie1))
+- docs: update features table in README [\#1414](https://github.com/delta-io/delta-rs/pull/1414) ([ognis1205](https://github.com/ognis1205))
+- fix: `get_prune_stats` returns homogenous `ArrayRef` [\#1413](https://github.com/delta-io/delta-rs/pull/1413) ([cmackenzie1](https://github.com/cmackenzie1))
+- feat: explicit python exceptions [\#1409](https://github.com/delta-io/delta-rs/pull/1409) ([roeap](https://github.com/roeap))
+- feat: implement update operation [\#1390](https://github.com/delta-io/delta-rs/pull/1390) ([Blajda](https://github.com/Blajda))
+- feat: allow concurrent file compaction [\#1383](https://github.com/delta-io/delta-rs/pull/1383) ([wjones127](https://github.com/wjones127))
+
+## [rust-v0.12.0](https://github.com/delta-io/delta-rs/tree/rust-v0.12.0) (2023-05-30)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.11.0...rust-v0.12.0)
+
+**Implemented enhancements:**
+
+- Release delta-rs `0.11.0` \(next release after `0.10.0`\)  [\#1362](https://github.com/delta-io/delta-rs/issues/1362)
+- Support writing statistics for date columns in Rust [\#1209](https://github.com/delta-io/delta-rs/issues/1209)
+
+**Fixed bugs:**
+
+- Rust writer in operations makes a lot of data copies [\#1394](https://github.com/delta-io/delta-rs/issues/1394)
+- Unable to read timestamp fields from column statistics [\#1372](https://github.com/delta-io/delta-rs/issues/1372)
+- Unable to write custom metadata via configuration since version 0.9.0 [\#1353](https://github.com/delta-io/delta-rs/issues/1353)
+- .get\_add\_actions\(\) returns wrong column statistics when dataSkippingNumIndexedCols property of the table was changed [\#1223](https://github.com/delta-io/delta-rs/issues/1223)
+- Ensure decimal statistics are written correctly in Rust [\#1208](https://github.com/delta-io/delta-rs/issues/1208)
+
+**Merged pull requests:**
+
+- feat: add list\_with\_offset to DeltaObjectStore [\#1410](https://github.com/delta-io/delta-rs/pull/1410) ([ognis1205](https://github.com/ognis1205))
+- chore: type-check friendlier exports [\#1407](https://github.com/delta-io/delta-rs/pull/1407) ([roeap](https://github.com/roeap))
+- chore: remove ancillary crates from the git tree [\#1406](https://github.com/delta-io/delta-rs/pull/1406) ([rtyler](https://github.com/rtyler))
+- chore: bump the version for the next release [\#1405](https://github.com/delta-io/delta-rs/pull/1405) ([rtyler](https://github.com/rtyler))
+- feat: more efficient parquet writer and more statistics [\#1397](https://github.com/delta-io/delta-rs/pull/1397) ([wjones127](https://github.com/wjones127))
+- perf: improve record batch partitioning [\#1396](https://github.com/delta-io/delta-rs/pull/1396) ([roeap](https://github.com/roeap))
+- chore: bump datafusion to 25 [\#1389](https://github.com/delta-io/delta-rs/pull/1389) ([roeap](https://github.com/roeap))
+- refactor!: remove `DeltaDataType` aliases [\#1388](https://github.com/delta-io/delta-rs/pull/1388) ([cmackenzie1](https://github.com/cmackenzie1))
+- feat: vacuum with concurrent requests [\#1382](https://github.com/delta-io/delta-rs/pull/1382) ([wjones127](https://github.com/wjones127))
+- feat: add datafusion storage catalog [\#1381](https://github.com/delta-io/delta-rs/pull/1381) ([roeap](https://github.com/roeap))
+- docs: updated schema.rs to use the right signature for decimal data type in documentation [\#1377](https://github.com/delta-io/delta-rs/pull/1377) ([rahulj51](https://github.com/rahulj51))
+- fix: delete operation when partition and non partition columns are used [\#1375](https://github.com/delta-io/delta-rs/pull/1375) ([Blajda](https://github.com/Blajda))
+- fix: add conversion for string for `Field::TimestampMicros` \(\#1372\) [\#1373](https://github.com/delta-io/delta-rs/pull/1373) ([cmackenzie1](https://github.com/cmackenzie1))
+- fix: allow user defined config keys [\#1365](https://github.com/delta-io/delta-rs/pull/1365) ([roeap](https://github.com/roeap))
+- ci: disable full debug symbol generation [\#1364](https://github.com/delta-io/delta-rs/pull/1364) ([roeap](https://github.com/roeap))
+- fix: include stats for all columns \(\#1223\) [\#1342](https://github.com/delta-io/delta-rs/pull/1342) ([mrjoe7](https://github.com/mrjoe7))
+
 ## [rust-v0.11.0](https://github.com/delta-io/delta-rs/tree/rust-v0.11.0) (2023-05-12)
 
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.10.0...rust-v0.11.0)

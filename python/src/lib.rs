@@ -25,6 +25,7 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
+use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
@@ -244,18 +245,16 @@ impl RawDeltaTable {
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced
     /// by the Delta table and are older than the retention threshold.
-    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true, max_concurrent_requests = 10))]
+    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true))]
     pub fn vacuum(
         &mut self,
         dry_run: bool,
         retention_hours: Option<u64>,
         enforce_retention_duration: bool,
-        max_concurrent_requests: usize,
     ) -> PyResult<Vec<String>> {
         let mut cmd = VacuumBuilder::new(self._table.object_store(), self._table.state.clone())
             .with_enforce_retention_duration(enforce_retention_duration)
-            .with_dry_run(dry_run)
-            .with_max_concurrent_requests(max_concurrent_requests);
+            .with_dry_run(dry_run);
         if let Some(retention_period) = retention_hours {
             cmd = cmd.with_retention_period(Duration::hours(retention_period as i64));
         }
@@ -291,16 +290,18 @@ impl RawDeltaTable {
     }
 
     /// Run z-order variation of optimize
-    #[pyo3(signature = (z_order_columns, partition_filters = None, target_size = None, max_concurrent_tasks = None))]
+    #[pyo3(signature = (z_order_columns, partition_filters = None, target_size = None, max_concurrent_tasks = None, max_spill_size = 20 * 1024 * 1024 * 1024))]
     pub fn z_order_optimize(
         &mut self,
         z_order_columns: Vec<String>,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
         target_size: Option<i64>,
         max_concurrent_tasks: Option<usize>,
+        max_spill_size: usize,
     ) -> PyResult<String> {
         let mut cmd = OptimizeBuilder::new(self._table.object_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
+            .with_max_spill_size(max_spill_size)
             .with_type(OptimizeType::ZOrder(z_order_columns));
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
@@ -309,6 +310,37 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         cmd = cmd.with_filters(&converted_filters);
 
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    // Run the restore command on the Delta Table: restore table to a given version or datetime
+    #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false))]
+    pub fn restore(
+        &mut self,
+        target: Option<&PyAny>,
+        ignore_missing_files: bool,
+        protocol_downgrade_allowed: bool,
+    ) -> PyResult<String> {
+        let mut cmd = RestoreBuilder::new(self._table.object_store(), self._table.state.clone());
+        if let Some(val) = target {
+            if let Ok(version) = val.extract::<i64>() {
+                cmd = cmd.with_version_to_restore(version)
+            }
+            if let Ok(ds) = val.extract::<&str>() {
+                let datetime = DateTime::<Utc>::from(
+                    DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(|err| {
+                        PyValueError::new_err(format!("Failed to parse datetime string: {err}"))
+                    })?,
+                );
+                cmd = cmd.with_datetime_to_restore(datetime)
+            }
+        }
+        cmd = cmd.with_ignore_missing_files(ignore_missing_files);
+        cmd = cmd.with_protocol_downgrade_allowed(protocol_downgrade_allowed);
         let (table, metrics) = rt()?
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
@@ -473,6 +505,7 @@ impl RawDeltaTable {
                         extended_file_metadata: Some(old_add.tags.is_some()),
                         partition_values: Some(old_add.partition_values.clone()),
                         size: Some(old_add.size),
+                        deletion_vector: old_add.deletion_vector.clone(),
                         tags: old_add.tags.clone(),
                     });
                     actions.push(remove_action);
@@ -579,6 +612,14 @@ fn json_value_to_py(value: &serde_json::Value, py: Python) -> PyObject {
 ///
 /// PyArrow uses this expression to determine which Dataset fragments may be
 /// skipped during a scan.
+///
+/// Partition values are translated to equality expressions (if they are valid)
+/// or is_null expression otherwise. For example, if the partition is
+/// {"date": "2021-01-01", "x": null}, then the expression is:
+/// field(date) = "2021-01-01" AND x IS NULL
+///
+/// Statistics are translated into inequalities. If there are null values, then
+/// they must be OR'd with is_null.
 fn filestats_to_expression<'py>(
     py: Python<'py>,
     schema: &PyArrowType<ArrowSchema>,
@@ -614,10 +655,27 @@ fn filestats_to_expression<'py>(
                     .call1((column,))?
                     .call_method1("__eq__", (converted_value,)),
             );
+        } else {
+            expressions.push(field.call1((column,))?.call_method0("is_null"));
         }
     }
 
     if let Some(stats) = stats {
+        let mut has_nulls_set: HashSet<String> = HashSet::new();
+
+        for (col_name, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
+            ColumnCountStat::Value(val) => Some((k, val)),
+            _ => None,
+        }) {
+            if *null_count == 0 {
+                expressions.push(field.call1((col_name,))?.call_method0("is_valid"));
+            } else if *null_count == stats.num_records {
+                expressions.push(field.call1((col_name,))?.call_method0("is_null"));
+            } else {
+                has_nulls_set.insert(col_name.clone());
+            }
+        }
+
         for (col_name, minimum) in stats.min_values.iter().filter_map(|(k, v)| match v {
             ColumnValueStat::Value(val) => Some((k.clone(), json_value_to_py(val, py))),
             // TODO(wjones127): Handle nested field statistics.
@@ -626,7 +684,17 @@ fn filestats_to_expression<'py>(
         }) {
             let maybe_minimum = cast_to_type(&col_name, minimum, &schema.0);
             if let Ok(minimum) = maybe_minimum {
-                expressions.push(field.call1((col_name,))?.call_method1("__ge__", (minimum,)));
+                let field_expr = field.call1((&col_name,))?;
+                let expr = field_expr.call_method1("__ge__", (minimum,));
+                let expr = if has_nulls_set.contains(&col_name) {
+                    // col >= min_value OR col is null
+                    let is_null_expr = field_expr.call_method0("is_null");
+                    expr?.call_method1("__or__", (is_null_expr?,))
+                } else {
+                    // col >= min_value
+                    expr
+                };
+                expressions.push(expr);
             }
         }
 
@@ -636,20 +704,17 @@ fn filestats_to_expression<'py>(
         }) {
             let maybe_maximum = cast_to_type(&col_name, maximum, &schema.0);
             if let Ok(maximum) = maybe_maximum {
-                expressions.push(field.call1((col_name,))?.call_method1("__le__", (maximum,)));
-            }
-        }
-
-        for (col_name, null_count) in stats.null_count.iter().filter_map(|(k, v)| match v {
-            ColumnCountStat::Value(val) => Some((k, val)),
-            _ => None,
-        }) {
-            if *null_count == stats.num_records {
-                expressions.push(field.call1((col_name.clone(),))?.call_method0("is_null"));
-            }
-
-            if *null_count == 0 {
-                expressions.push(field.call1((col_name.clone(),))?.call_method0("is_valid"));
+                let field_expr = field.call1((&col_name,))?;
+                let expr = field_expr.call_method1("__le__", (maximum,));
+                let expr = if has_nulls_set.contains(&col_name) {
+                    // col <= max_value OR col is null
+                    let is_null_expr = field_expr.call_method0("is_null");
+                    expr?.call_method1("__or__", (is_null_expr?,))
+                } else {
+                    // col <= max_value
+                    expr
+                };
+                expressions.push(expr);
             }
         }
     }
@@ -659,7 +724,7 @@ fn filestats_to_expression<'py>(
     } else {
         expressions
             .into_iter()
-            .reduce(|accum, item| accum?.getattr("__and__")?.call1((item?,)))
+            .reduce(|accum, item| accum?.call_method1("__and__", (item?,)))
             .transpose()
     }
 }
@@ -724,6 +789,7 @@ impl From<&PyAddAction> for action::Add {
             stats: action.stats.clone(),
             stats_parsed: None,
             tags: None,
+            deletion_vector: None,
         }
     }
 }
@@ -773,7 +839,7 @@ fn write_new_deltalake(
     Ok(())
 }
 
-#[pyclass(name = "DeltaDataChecker", text_signature = "(invariants)")]
+#[pyclass(name = "DeltaDataChecker")]
 struct PyDeltaDataChecker {
     inner: DeltaDataChecker,
     rt: tokio::runtime::Runtime,
@@ -782,6 +848,7 @@ struct PyDeltaDataChecker {
 #[pymethods]
 impl PyDeltaDataChecker {
     #[new]
+    #[pyo3(signature = (invariants))]
     fn new(invariants: Vec<(String, String)>) -> Self {
         let invariants: Vec<Invariant> = invariants
             .into_iter()

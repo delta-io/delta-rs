@@ -211,6 +211,7 @@ pub async fn cleanup_expired_logs_for(
             location: Path::from(""),
             last_modified: DateTime::<Utc>::MIN_UTC,
             size: 0,
+            e_tag: None,
         },
     );
     let file_needs_time_adjustment =
@@ -255,6 +256,7 @@ pub async fn cleanup_expired_logs_for(
                     location: current_file.1.location.clone(),
                     last_modified: last_file.1.last_modified.add(Duration::seconds(1)),
                     size: 0,
+                    e_tag: None,
                 },
             );
             maybe_delete_files.push(updated);

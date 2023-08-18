@@ -23,7 +23,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
@@ -36,8 +36,9 @@ use arrow_array::StringArray;
 use arrow_schema::Field;
 use async_trait::async_trait;
 use chrono::{DateTime, NaiveDateTime, Utc};
-use datafusion::datasource::datasource::TableProviderFactory;
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
+use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -45,11 +46,11 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion::physical_plan::file_format::FileScanConfig;
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::{
-    ColumnStatistics, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
@@ -520,6 +521,12 @@ pub struct DeltaScan {
     pub table_uri: String,
     /// The parquet scan to wrap
     pub parquet_scan: Arc<dyn ExecutionPlan>,
+}
+
+impl DisplayAs for DeltaScan {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(f, "DeltaScan")
+    }
 }
 
 impl ExecutionPlan for DeltaScan {
@@ -1031,10 +1038,9 @@ impl TreeNodeVisitor for FindFilesExprProperties {
             }
             Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
-            | Expr::Alias(_, _)
+            | Expr::Alias(_)
             | Expr::BinaryExpr(_)
             | Expr::Like(_)
-            | Expr::ILike(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::IsNotNull(_)
@@ -1085,7 +1091,9 @@ impl TreeNodeVisitor for FindFilesExprProperties {
     }
 }
 
-pub(crate) struct FindFiles {
+/// Representing the result of the [find_files] function.
+pub struct FindFiles {
+    /// A list of `Add` objects that match the given predicate
     pub candidates: Vec<Add>,
     /// Was a physical read to the datastore required to determine the candidates
     pub partition_scan: bool,
@@ -1289,7 +1297,8 @@ pub(crate) async fn scan_memory_table(
     join_batches_with_add_actions(batches, map)
 }
 
-pub(crate) async fn find_files<'a>(
+/// Finds files in a snapshot that match the provided predicate.
+pub async fn find_files<'a>(
     snapshot: &DeltaTableState,
     object_store: ObjectStoreRef,
     schema: Arc<ArrowSchema>,
@@ -1377,7 +1386,6 @@ mod tests {
     use arrow::array::StructArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
-    use datafusion::from_slice::FromSlice;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
@@ -1544,6 +1552,7 @@ mod tests {
             partition_values_parsed: None,
             data_change: true,
             stats: None,
+            deletion_vector: None,
             stats_parsed: None,
             tags: None,
         };
@@ -1558,6 +1567,7 @@ mod tests {
                 location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
                 last_modified: Utc.timestamp_millis_opt(1660497727833).unwrap(),
                 size: 10644,
+                e_tag: None
             },
             partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),
             range: None,
@@ -1575,8 +1585,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["a", "b", "c", "d"])),
-                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c", "d"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
             ],
         )
         .unwrap();

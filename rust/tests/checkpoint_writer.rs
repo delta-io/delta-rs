@@ -231,7 +231,7 @@ mod checkpoints_with_tombstones {
         let row_iter = reader.get_row_iter(None).unwrap();
         let mut actions = Vec::new();
         for record in row_iter {
-            actions.push(Action::from_parquet_record(schema, &record).unwrap())
+            actions.push(Action::from_parquet_record(schema, &record.unwrap()).unwrap())
         }
         (schema.clone(), actions)
     }
@@ -346,6 +346,7 @@ mod checkpoints_with_tombstones {
                 partition_values: None,
                 size: None,
                 tags: None,
+                deletion_vector: None,
             })
             .collect();
 
@@ -361,7 +362,11 @@ mod checkpoints_with_tombstones {
             .chain(std::iter::once(Action::add(add.clone())))
             .collect();
 
-        fs_common::commit_actions(table, actions).await;
+        let operation = DeltaOperation::Optimize {
+            predicate: None,
+            target_size: 1000000,
+        };
+        fs_common::commit_actions(table, actions, operation).await;
         (removes, add)
     }
 
@@ -404,6 +409,7 @@ mod checkpoints_with_tombstones {
             partition_values: None,
             size: Some(100),
             tags: None,
+            deletion_vector: None,
         }
     }
 

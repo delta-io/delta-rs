@@ -20,6 +20,7 @@
 
 use std::{
     collections::{HashMap, HashSet},
+    fmt,
     sync::Arc,
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
@@ -32,7 +33,7 @@ use datafusion::{
     physical_plan::{
         metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
         projection::ProjectionExec,
-        ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+        DisplayAs, DisplayFormatType, ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
     },
     prelude::SessionContext,
 };
@@ -56,32 +57,7 @@ use crate::{
     DeltaResult, DeltaTable, DeltaTableError,
 };
 
-use super::{transaction::commit, write::write_execution_plan};
-
-/// Used to represent user input of either a Datafusion expression or string expression
-pub enum Expression {
-    /// Datafusion Expression
-    DataFusion(Expr),
-    /// String Expression
-    String(String),
-}
-
-impl From<Expr> for Expression {
-    fn from(val: Expr) -> Self {
-        Expression::DataFusion(val)
-    }
-}
-
-impl From<&str> for Expression {
-    fn from(val: &str) -> Self {
-        Expression::String(val.to_string())
-    }
-}
-impl From<String> for Expression {
-    fn from(val: String) -> Self {
-        Expression::String(val)
-    }
-}
+use super::{datafusion_utils::Expression, transaction::commit, write::write_execution_plan};
 
 /// Updates records in the Delta Table.
 /// See this module's documentation for more information
@@ -420,6 +396,7 @@ async fn execute(
             extended_file_metadata: Some(true),
             partition_values: Some(action.partition_values),
             size: Some(action.size),
+            deletion_vector: action.deletion_vector,
             tags: None,
         }))
     }
@@ -491,6 +468,12 @@ impl UpdateCountExec {
             parent,
             metrics: ExecutionPlanMetricsSet::new(),
         }
+    }
+}
+
+impl DisplayAs for UpdateCountExec {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(f, "UpdateCountExec")
     }
 }
 
@@ -596,7 +579,6 @@ mod tests {
     use arrow::record_batch::RecordBatch;
     use arrow_array::Int32Array;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::from_slice::FromSlice;
     use datafusion::prelude::*;
     use std::sync::Arc;
 
@@ -650,9 +632,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-02",
@@ -701,9 +683,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-03",
@@ -756,9 +738,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-03",
