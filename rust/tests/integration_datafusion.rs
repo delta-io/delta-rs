@@ -1022,7 +1022,7 @@ async fn simple_query(context: &IntegrationContext) -> TestResult {
 
 mod date_partitions {
     use super::*;
-    
+
     async fn setup_test() -> Result<DeltaTable, Box<dyn Error>> {
         let columns = vec![
             SchemaField::new(

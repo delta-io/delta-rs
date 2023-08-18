@@ -506,16 +506,13 @@ pub(crate) fn delta_log_schema_for_table(
             ]
         ];
         static ref REMOVE_FIELDS: Vec<ArrowField> = arrow_defs![
-            path:Utf8,
-            deletionTimestamp:Int64,
-            dataChange:Boolean,
-            extendedFileMetadata:Boolean
+            path: Utf8,
+            deletionTimestamp: Int64,
+            dataChange: Boolean,
+            extendedFileMetadata: Boolean
         ];
-        static ref REMOVE_EXTENDED_FILE_METADATA_FIELDS: Vec<ArrowField> = arrow_defs![
-            size:Int64,
-            partitionValues,
-            tags
-        ];
+        static ref REMOVE_EXTENDED_FILE_METADATA_FIELDS: Vec<ArrowField> =
+            arrow_defs![size: Int64, partitionValues, tags];
     };
 
     // create add fields according to the specific data table schema
