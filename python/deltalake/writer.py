@@ -220,7 +220,7 @@ def write_deltalake(
         if PYARROW_MAJOR_VERSION >= 9:
             size = written_file.size
         else:
-            size = filesystem.get_file_info([path])[0].size
+            size = filesystem.get_file_info([path])[0].size  # type: ignore
 
         add_actions.append(
             AddAction(
