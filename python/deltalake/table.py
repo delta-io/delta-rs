@@ -2,6 +2,7 @@ import json
 import operator
 import warnings
 from dataclasses import dataclass
+from datetime import datetime
 from functools import reduce
 from pathlib import Path
 from typing import (
@@ -414,7 +415,6 @@ given filters.
         retention_hours: Optional[int] = None,
         dry_run: bool = True,
         enforce_retention_duration: bool = True,
-        max_concurrent_requests: int = 10,
     ) -> List[str]:
         """
         Run the Vacuum command on the Delta Table: list and delete files no longer referenced by the Delta table and are older than the retention threshold.
@@ -422,9 +422,6 @@ given filters.
         :param retention_hours: the retention threshold in hours, if none then the value from `configuration.deletedFileRetentionDuration` is used or default of 1 week otherwise.
         :param dry_run: when activated, list only the files, delete otherwise
         :param enforce_retention_duration: when disabled, accepts retention hours smaller than the value from `configuration.deletedFileRetentionDuration`.
-        :param max_concurrent_requests: the maximum number of concurrent requests to send to the backend.
-          Increasing this number may improve performance of vacuuming large tables, however it might also
-          increase the risk of hitting rate limits.
         :return: the list of files no longer referenced by the Delta Table and are older than the retention threshold.
         """
         if retention_hours:
@@ -435,7 +432,6 @@ given filters.
             dry_run,
             retention_hours,
             enforce_retention_duration,
-            max_concurrent_requests,
         )
 
     @property
@@ -459,6 +455,35 @@ given filters.
         )
         return self.schema().to_pyarrow()
 
+    def restore(
+        self,
+        target: Union[int, datetime, str],
+        *,
+        ignore_missing_files: bool = False,
+        protocol_downgrade_allowed: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Run the Restore command on the Delta Table: restore table to a given version or datetime.
+
+        :param target: the expected version will restore, which represented by int, date str or datetime.
+        :param ignore_missing_files: whether the operation carry on when some data files missing.
+        :param protocol_downgrade_allowed: whether the operation when protocol version upgraded.
+        :return: the metrics from restore.
+        """
+        if isinstance(target, datetime):
+            metrics = self._table.restore(
+                target.isoformat(),
+                ignore_missing_files=ignore_missing_files,
+                protocol_downgrade_allowed=protocol_downgrade_allowed,
+            )
+        else:
+            metrics = self._table.restore(
+                target,
+                ignore_missing_files=ignore_missing_files,
+                protocol_downgrade_allowed=protocol_downgrade_allowed,
+            )
+        return json.loads(metrics)
+
     def to_pyarrow_dataset(
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
@@ -476,7 +501,7 @@ given filters.
         """
         if self.protocol().min_reader_version > MAX_SUPPORTED_READER_VERSION:
             raise DeltaProtocolError(
-                f"The table's minimum reader version is {self.protocol().min_reader_version}"
+                f"The table's minimum reader version is {self.protocol().min_reader_version} "
                 f"but deltalake only supports up to version {MAX_SUPPORTED_READER_VERSION}."
             )
 

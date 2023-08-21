@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::{collections::HashMap, str::FromStr};
 
 use chrono::{SecondsFormat, TimeZone, Utc};
 use num_bigint::BigInt;
@@ -7,9 +7,11 @@ use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use serde_json::json;
 
 use crate::action::{
-    Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, MetaData, Protocol, ProtocolError,
-    Remove, Stats, Txn,
+    Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, DeletionVector, MetaData, Protocol,
+    ProtocolError, Remove, Stats, Txn,
 };
+
+use super::StorageType;
 
 fn populate_hashmap_with_option_from_parquet_map(
     map: &mut HashMap<String, Option<String>>,
@@ -40,6 +42,56 @@ impl AddCDCFile {
         let re = Self {
             ..Default::default()
         };
+        Ok(re)
+    }
+}
+
+impl DeletionVector {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
+        let mut re = Self {
+            ..Default::default()
+        };
+        for (i, (name, _)) in record.get_column_iter().enumerate() {
+            match name.as_str() {
+                "storageType" => {
+                    re.storage_type =
+                        StorageType::from_str(record.get_string(i).map_err(|_| {
+                            gen_action_type_error("add", "deletionVector.storage_type", "string")
+                        })?)?;
+                }
+                "pathOrInlineDv" => {
+                    re.path_or_inline_dv = record
+                        .get_string(i)
+                        .map_err(|_| {
+                            gen_action_type_error("add", "deletionVector.pathOrInlineDv", "string")
+                        })?
+                        .clone();
+                }
+                "offset" => {
+                    re.offset = match record.get_int(i) {
+                        Ok(x) => Some(x),
+                        _ => None,
+                    }
+                }
+                "sizeInBytes" => {
+                    re.size_in_bytes = record.get_int(i).map_err(|_| {
+                        gen_action_type_error("add", "deletionVector.sizeInBytes", "int")
+                    })?;
+                }
+                "cardinality" => {
+                    re.cardinality = record.get_long(i).map_err(|_| {
+                        gen_action_type_error("add", "deletionVector.sizeInBytes", "long")
+                    })?;
+                }
+                _ => {
+                    log::debug!(
+                        "Unexpected field name `{}` for deletion vector: {:?}",
+                        name,
+                        record
+                    );
+                }
+            }
+        }
         Ok(re)
     }
 }
@@ -126,6 +178,14 @@ impl Add {
                     }
                     _ => {
                         re.stats_parsed = None;
+                    }
+                },
+                "deletionVector" => match record.get_group(i) {
+                    Ok(row) => {
+                        re.deletion_vector = Some(DeletionVector::from_parquet_record(row)?);
+                    }
+                    _ => {
+                        re.deletion_vector = None;
                     }
                 },
                 _ => {
@@ -629,7 +689,7 @@ mod tests {
         let preader = SerializedFileReader::new(File::open(path).unwrap()).unwrap();
 
         let mut iter = preader.get_row_iter(None).unwrap();
-        let record = iter.nth(9).unwrap();
+        let record = iter.nth(9).unwrap().unwrap();
         let add_record = record.get_group(1).unwrap();
         let add_action = Add::from_parquet_record(add_record).unwrap();
 

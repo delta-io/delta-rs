@@ -194,7 +194,7 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
 
     let result = DeltaOps(context.table)
         .restore()
-        .ignore_missing_files(true)
+        .with_ignore_missing_files(true)
         .with_version_to_restore(1)
         .await;
     assert!(result.is_ok());
