@@ -95,7 +95,7 @@ impl IntegrationContext {
     }
 
     /// Get the URI for initializing a store at the root
-    pub fn root_uri(&self) -> String {        
+    pub fn root_uri(&self) -> String {
         match self.integration {
             StorageIntegration::Amazon => format!("s3://{}", &self.bucket),
             StorageIntegration::Microsoft => format!("az://{}", &self.bucket),
