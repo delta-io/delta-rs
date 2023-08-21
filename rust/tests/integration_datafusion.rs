@@ -651,7 +651,11 @@ mod local {
             // binary fails since arrow does not implement a natural order
             // The current Datafusion pruning implementation does not work for binary columns since they do not have a natural order. See #1214
             // Timestamp and date are disabled since the hive path contains illegal Windows values. see #1215
-            if column == "float32"
+            if column == "int64"
+                || column == "int32"
+                || column == "int16"
+                || column == "int8"
+                || column == "float32"
                 || column == "float64"
                 || column == "decimal"
                 || column == "binary"
