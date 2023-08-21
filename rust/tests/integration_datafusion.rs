@@ -575,7 +575,7 @@ mod local {
             if column == "decimal" || column == "date" || column == "binary" {
                 continue;
             }
-            println!("Test Column: {} value: {}", column, file1_value);
+            println!("[Unwrapped] Test Column: {} value: {}", column, file1_value);
 
             // Equality
             let e = col(column).eq(file1_value.clone());
@@ -660,6 +660,8 @@ mod local {
             {
                 continue;
             }
+
+            println!("[Wrapped] Test Column: {} value: {}", column, file1_value);
 
             let partitions = vec![column.to_owned()];
             let batch = create_all_types_batch(3, 0, 0);
