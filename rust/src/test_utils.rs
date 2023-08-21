@@ -37,7 +37,7 @@ impl IntegrationContext {
             StorageIntegration::Onelake => {
                 let account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
                 let container_name = env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or(String::from("delta-rs"));
-                format!("{0}.dfs.fabric.microsoft.com/{1}", account_name,container_name)
+                format!("{0}.dfs.fabric.microsoft.com/{1}", account_name, container_name)
             },
             StorageIntegration::OnelakeAbfs =>{
                 let account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
