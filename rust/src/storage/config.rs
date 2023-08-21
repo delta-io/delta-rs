@@ -181,7 +181,7 @@ fn try_configure_azure(
     options: &StorageOptions,
 ) -> DeltaResult<Arc<DynObjectStore>> {
     let store = MicrosoftAzureBuilder::from_env()
-        .with_url(storage_url.as_ref())        
+        .with_url(storage_url.as_ref())
         .try_with_options(&options.as_azure_options())?
         .with_allow_http(options.allow_http())
         .build()?;
