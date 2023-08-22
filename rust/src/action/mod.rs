@@ -112,7 +112,7 @@ fn decode_path(raw_path: &str) -> Result<String, ProtocolError> {
 }
 
 /// Struct used to represent minValues and maxValues in add action statistics.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(untagged)]
 pub enum ColumnValueStat {
     /// Composite HashMap representation of statistics.
@@ -140,7 +140,7 @@ impl ColumnValueStat {
 }
 
 /// Struct used to represent nullCount in add action statistics.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
 #[serde(untagged)]
 pub enum ColumnCountStat {
     /// Composite HashMap representation of statistics.
@@ -181,6 +181,44 @@ pub struct Stats {
     pub max_values: HashMap<String, ColumnValueStat>,
     /// The number of null values for all columns.
     pub null_count: HashMap<String, ColumnCountStat>,
+}
+
+/// Statistics associated with Add actions contained in the Delta log.
+/// min_values, max_values and null_count are optional to allow them to be missing
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct PartialStats {
+    /// Number of records in the file associated with the log action.
+    pub num_records: i64,
+
+    // start of per column stats
+    /// Contains a value smaller than all values present in the file for all columns.
+    pub min_values: Option<HashMap<String, ColumnValueStat>>,
+    /// Contains a value larger than all values present in the file for all columns.
+    pub max_values: Option<HashMap<String, ColumnValueStat>>,
+    /// The number of null values for all columns.
+    pub null_count: Option<HashMap<String, ColumnCountStat>>,
+}
+
+impl PartialStats {
+    /// Fills in missing HashMaps
+    pub fn as_stats(&self) -> Stats {
+        Stats {
+            num_records: self.num_records,
+            min_values: match &self.min_values {
+                Some(minv) => minv.clone(),
+                None => HashMap::default()
+            },
+            max_values: match &self.max_values {
+                Some(maxv) => maxv.clone(),
+                None => HashMap::default()
+            },
+            null_count: match &self.null_count {
+                Some(nc) => nc.clone(),
+                None => HashMap::default()
+            },
+        }
+    }
 }
 
 /// File stats parsed from raw parquet format.
@@ -419,9 +457,15 @@ impl Add {
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
     pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        self.stats
+        let ps: Result<Option<PartialStats>, serde_json::error::Error> = self.stats
             .as_ref()
-            .map_or(Ok(None), |s| serde_json::from_str(s))
+            .map_or(Ok(None), |s| serde_json::from_str(s));
+
+        match ps {
+            Ok(Some(partial)) => Ok(Some(partial.as_stats())),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e)
+        }
     }
 }
 
