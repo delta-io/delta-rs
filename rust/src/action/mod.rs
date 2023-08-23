@@ -22,6 +22,7 @@ use serde_json::{Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::mem::take;
 use std::str::FromStr;
 
 use crate::delta_config::IsolationLevel;
@@ -112,7 +113,7 @@ fn decode_path(raw_path: &str) -> Result<String, ProtocolError> {
 }
 
 /// Struct used to represent minValues and maxValues in add action statistics.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum ColumnValueStat {
     /// Composite HashMap representation of statistics.
@@ -140,7 +141,7 @@ impl ColumnValueStat {
 }
 
 /// Struct used to represent nullCount in add action statistics.
-#[derive(Serialize, Deserialize, Debug, PartialEq, Eq, Clone)]
+#[derive(Serialize, Deserialize, Debug, PartialEq, Eq)]
 #[serde(untagged)]
 pub enum ColumnCountStat {
     /// Composite HashMap representation of statistics.
@@ -202,19 +203,22 @@ struct PartialStats {
 
 impl PartialStats {
     /// Fills in missing HashMaps
-    pub fn as_stats(&self) -> Stats {
+    pub fn as_stats(&mut self) -> Stats {
+        let min_values = take(&mut self.min_values);
+        let max_values = take(&mut self.max_values);
+        let null_count = take(&mut self.null_count);
         Stats {
             num_records: self.num_records,
-            min_values: match &self.min_values {
-                Some(minv) => minv.clone(),
+            min_values: match min_values {
+                Some(minv) => minv,
                 None => HashMap::default()
             },
-            max_values: match &self.max_values {
-                Some(maxv) => maxv.clone(),
+            max_values: match max_values {
+                Some(maxv) => maxv,
                 None => HashMap::default()
             },
-            null_count: match &self.null_count {
-                Some(nc) => nc.clone(),
+            null_count: match null_count {
+                Some(nc) => nc,
                 None => HashMap::default()
             },
         }
@@ -462,7 +466,7 @@ impl Add {
             .map_or(Ok(None), |s| serde_json::from_str(s));
 
         match ps {
-            Ok(Some(partial)) => Ok(Some(partial.as_stats())),
+            Ok(Some(mut partial)) => Ok(Some(partial.as_stats())),
             Ok(None) => Ok(None),
             Err(e) => Err(e)
         }
