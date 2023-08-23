@@ -1048,6 +1048,26 @@ mod tests {
     }
 
     #[test]
+    fn test_load_table_partial_stats() {
+        let action = Add {
+            stats: Some(
+                serde_json::json!({
+                    "numRecords": 22
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        let stats = action.get_stats().unwrap().unwrap();
+
+        assert_eq!(stats.num_records, 22);
+        assert_eq!(stats.min_values.len(), 0);
+        assert_eq!(stats.max_values.len(), 0);
+        assert_eq!(stats.null_count.len(), 0);
+    }
+
+    #[test]
     fn test_read_commit_info() {
         let raw = r#"
         {
