@@ -211,15 +211,15 @@ impl PartialStats {
             num_records: self.num_records,
             min_values: match min_values {
                 Some(minv) => minv,
-                None => HashMap::default()
+                None => HashMap::default(),
             },
             max_values: match max_values {
                 Some(maxv) => maxv,
-                None => HashMap::default()
+                None => HashMap::default(),
             },
             null_count: match null_count {
                 Some(nc) => nc,
-                None => HashMap::default()
+                None => HashMap::default(),
             },
         }
     }
@@ -461,14 +461,15 @@ impl Add {
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
     pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        let ps: Result<Option<PartialStats>, serde_json::error::Error> = self.stats
+        let ps: Result<Option<PartialStats>, serde_json::error::Error> = self
+            .stats
             .as_ref()
             .map_or(Ok(None), |s| serde_json::from_str(s));
 
         match ps {
             Ok(Some(mut partial)) => Ok(Some(partial.as_stats())),
             Ok(None) => Ok(None),
-            Err(e) => Err(e)
+            Err(e) => Err(e),
         }
     }
 }
