@@ -387,7 +387,7 @@ impl DeltaTable {
         // TODO check if regex matches against path
         lazy_static! {
             static ref DELTA_LOG_REGEX: Regex =
-                Regex::new(r#"^_delta_log/(\d{20})\.(json|checkpoint)*$"#).unwrap();
+                Regex::new(r"^_delta_log/(\d{20})\.(json|checkpoint)*$").unwrap();
         }
 
         let mut current_delta_log_ver = i64::MAX;

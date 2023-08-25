@@ -19,7 +19,7 @@ const STORE_NAME: &str = "DeltaLocalObjectStore";
 /// Error raised by storage lock client
 #[derive(thiserror::Error, Debug)]
 #[allow(dead_code)]
-pub(self) enum LocalFileSystemError {
+pub enum LocalFileSystemError {
     #[error("Object exists already at path: {} ({:?})", path, source)]
     AlreadyExists {
         path: String,
