@@ -106,8 +106,8 @@ impl DeltaTableState {
         let stats = self
             .files()
             .iter()
-            .fold(
-                Some(Statistics {
+            .try_fold(
+                Statistics {
                     num_rows: Some(0),
                     total_byte_size: Some(0),
                     column_statistics: Some(vec![
@@ -120,9 +120,8 @@ impl DeltaTableState {
                         self.schema().unwrap().get_fields().len()
                     ]),
                     is_exact: true,
-                }),
+                },
                 |acc, action| {
-                    let acc = acc?;
                     let new_stats = action
                         .get_stats()
                         .unwrap_or_else(|_| Some(action::Stats::default()))?;
@@ -468,7 +467,7 @@ impl TableProvider for DeltaTable {
             self.get_state()
                 .files()
                 .iter()
-                .zip(files_to_prune.into_iter())
+                .zip(files_to_prune)
                 .filter_map(
                     |(action, keep)| {
                         if keep {
