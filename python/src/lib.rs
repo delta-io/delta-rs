@@ -464,7 +464,7 @@ impl RawDeltaTable {
             .into_iter()
             .map(|part| PyFrozenSet::new(py, part.iter()))
             .collect::<Result<_, PyErr>>()?;
-        PyFrozenSet::new(py, active_partitions.into_iter())
+        PyFrozenSet::new(py, active_partitions)
     }
 
     fn create_write_transaction(
