@@ -930,9 +930,9 @@ pub(crate) async fn find_latest_check_point_for_version(
 ) -> Result<Option<CheckPoint>, ProtocolError> {
     lazy_static! {
         static ref CHECKPOINT_REGEX: Regex =
-            Regex::new(r#"^_delta_log/(\d{20})\.checkpoint\.parquet$"#).unwrap();
+            Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.parquet$").unwrap();
         static ref CHECKPOINT_PARTS_REGEX: Regex =
-            Regex::new(r#"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$"#).unwrap();
+            Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap();
     }
 
     let mut cp: Option<CheckPoint> = None;
