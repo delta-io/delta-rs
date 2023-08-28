@@ -504,9 +504,11 @@ impl DeltaTable {
     /// loading the last checkpoint and incrementally applying each version since.
     #[cfg(any(feature = "parquet", feature = "parquet2"))]
     pub async fn update(&mut self) -> Result<(), DeltaTableError> {
+        dbg!("hello");
         match get_last_checkpoint(&self.storage).await {
             Ok(last_check_point) => {
                 debug!("update with latest checkpoint {last_check_point:?}");
+                dbg!(&last_check_point);
                 if Some(last_check_point) == self.last_check_point {
                     self.update_incremental(None).await
                 } else {
@@ -519,7 +521,10 @@ impl DeltaTable {
                 debug!("update without checkpoint");
                 self.update_incremental(None).await
             }
-            Err(err) => Err(DeltaTableError::from(err)),
+            Err(err) => {
+                dbg!(&err);
+                Err(DeltaTableError::from(err))
+            },
         }
     }
 

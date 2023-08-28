@@ -117,6 +117,7 @@ tempdir = "0"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 utime = "0.3"
+fs_extra = "1.2.0"
 
 [features]
 azure = ["object_store/azure"]
