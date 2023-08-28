@@ -87,7 +87,7 @@ impl DeltaTableState {
             Ok(Either::Left(
                 self.files()
                     .iter()
-                    .zip(pruning_predicate.prune(self)?.into_iter())
+                    .zip(pruning_predicate.prune(self)?)
                     .filter_map(
                         |(action, keep_file)| {
                             if keep_file {
@@ -239,7 +239,7 @@ impl<'a> AddContainer<'a> {
         Ok(self
             .inner
             .iter()
-            .zip(pruning_predicate.prune(self)?.into_iter())
+            .zip(pruning_predicate.prune(self)?)
             .filter_map(
                 |(action, keep_file)| {
                     if keep_file {

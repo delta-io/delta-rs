@@ -655,7 +655,7 @@ mod tests {
             delta_log_schema_for_table(table_schema.clone(), partition_columns.as_slice(), false);
 
         // verify top-level schema contains all expected fields and they are named correctly.
-        let expected_fields = vec!["metaData", "protocol", "txn", "remove", "add"];
+        let expected_fields = ["metaData", "protocol", "txn", "remove", "add"];
         for f in log_schema.fields().iter() {
             assert!(expected_fields.contains(&f.name().as_str()));
         }
@@ -768,7 +768,7 @@ mod tests {
             })
             .collect();
         assert_eq!(7, remove_fields.len());
-        let expected_fields = vec![
+        let expected_fields = [
             "path",
             "deletionTimestamp",
             "dataChange",
