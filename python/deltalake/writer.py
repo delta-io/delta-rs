@@ -162,14 +162,13 @@ def write_deltalake(
     if filesystem is not None:
         raise NotImplementedError("Filesystem support is not yet implemented.  #570")
 
+    if table is not None:
+        storage_options = table._storage_options or {}
+        storage_options.update(storage_options or {})
+
+    filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
-
-    if filesystem is None:
-        if table is not None:
-            storage_options = table._storage_options or {}
-            storage_options.update(storage_options or {})
-
-        filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
     if isinstance(partition_by, str):
         partition_by = [partition_by]
