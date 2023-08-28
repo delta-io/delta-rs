@@ -218,8 +218,10 @@ def write_deltalake(
         # PyArrow added support for written_file.size in 9.0.0
         if PYARROW_MAJOR_VERSION >= 9:
             size = written_file.size
-        else:
+        elif filesystem is not None:
             size = filesystem.get_file_info([path])[0].size
+        else:
+            size = 0
 
         add_actions.append(
             AddAction(
