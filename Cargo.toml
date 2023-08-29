@@ -1,6 +1,7 @@
 [workspace]
 members = ["rust", "python"]
 exclude = ["proofs", "delta-inspect"]
+resolver = "2"
 
 [profile.release-with-debug]
 inherits = "release"
@@ -14,23 +15,23 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # arrow
-arrow = { version = "43" }
-arrow-array = { version = "43" }
-arrow-buffer = { version = "43" }
-arrow-cast = { version = "43" }
-arrow-ord = { version = "43" }
-arrow-row = { version = "43" }
-arrow-schema = { version = "43" }
-arrow-select = { version = "43" }
-parquet = { version = "43" }
+arrow = { version = "45" }
+arrow-array = { version = "45" }
+arrow-buffer = { version = "45" }
+arrow-cast = { version = "45" }
+arrow-ord = { version = "45" }
+arrow-row = { version = "45" }
+arrow-schema = { version = "45" }
+arrow-select = { version = "45" }
+parquet = { version = "45" }
 
 # datafusion
-datafusion = { version = "28" }
-datafusion-expr = { version = "28" }
-datafusion-common = { version = "28" }
-datafusion-proto = { version = "28" }
-datafusion-sql = { version = "28" }
-datafusion-physical-expr = { version = "28" }
+datafusion = { version = "30" }
+datafusion-expr = { version = "30" }
+datafusion-common = { version = "30" }
+datafusion-proto = { version = "30" }
+datafusion-sql = { version = "30" }
+datafusion-physical-expr = { version = "30" }
 
 # serde
 serde = { version = "1", features = ["derive"] }
