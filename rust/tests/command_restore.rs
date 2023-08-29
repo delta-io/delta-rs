@@ -138,7 +138,7 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     let history = table.history(Some(10)).await?;
     let timestamp = history.get(1).unwrap().timestamp.unwrap();
     let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
-    let datetime: DateTime<Utc> = DateTime::from_utc(naive, Utc);
+    let datetime: DateTime<Utc> = Utc.from_utc_datetime(&naive);
 
     // datetime and version both set
     let result = DeltaOps(table)
