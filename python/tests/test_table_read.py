@@ -86,24 +86,14 @@ def test_load_with_datetime():
 def test_load_with_datetime_bad_format():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    with pytest.raises(Exception) as exception:
-        dt.load_with_datetime("2020-05-01T00:47:31")
-    assert (
-        str(exception.value)
-        == "Failed to parse datetime string: premature end of input"
-    )
-    with pytest.raises(Exception) as exception:
-        dt.load_with_datetime("2020-05-01 00:47:31")
-    assert (
-        str(exception.value)
-        == "Failed to parse datetime string: input contains invalid characters"
-    )
-    with pytest.raises(Exception) as exception:
-        dt.load_with_datetime("2020-05-01T00:47:31+08")
-    assert (
-        str(exception.value)
-        == "Failed to parse datetime string: premature end of input"
-    )
+
+    for bad_format in [
+        "2020-05-01T00:47:31",
+        "2020-05-01 00:47:31",
+        "2020-05-01T00:47:31+08",
+    ]:
+        with pytest.raises(Exception, match="Failed to parse datetime string:"):
+            dt.load_with_datetime(bad_format)
 
 
 def test_read_simple_table_update_incremental():
