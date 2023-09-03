@@ -675,7 +675,13 @@ impl DeltaTable {
     ) -> Result<Vec<Path>, DeltaTableError> {
         Ok(self
             .get_active_add_actions_by_partitions(filters)?
-            .map(|add| Path::from(add.path.as_ref()))
+            .map(|add| {
+                // Try to preserve percent encoding if possible
+                match Path::parse(&add.path) {
+                    Ok(path) => path,
+                    Err(_) => Path::from(add.path.as_ref()),
+                }
+            })
             .collect())
     }
 

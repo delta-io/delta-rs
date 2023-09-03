@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, NamedTuple, Optional
 
@@ -44,7 +45,7 @@ for path in reader_case_path.iterdir():
 
 failing_cases = {
     "multi_partitioned_2": "Waiting for PyArrow 11.0.0 for decimal cast support (#1078)",
-    "multi_partitioned": "Escaped characters in data file paths aren't yet handled (#1079)",
+    "multi_partitioned": "Test case handles binary poorly",
 }
 
 
@@ -63,6 +64,10 @@ def test_dat(case: ReadCase):
 
     # Load table
     dt = DeltaTable(str(delta_root), version=version)
+
+    # Verify table paths can be found
+    for path in dt.file_uris():
+        assert os.path.exists(path)
 
     # Compare protocol versions
     assert dt.protocol().min_reader_version == version_metadata["min_reader_version"]
