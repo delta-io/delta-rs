@@ -239,7 +239,7 @@ class DeltaTable:
                                 Setting a value greater than 1 results in concurrent calls to the storage api.
                                 This can decrease latency if there are many files in the log since the last checkpoint,
                                 but will also increase memory usage. Possible rate limits of the storage backend should
-                                also be considered for optimal performance.
+                                also be considered for optimal performance. Defaults to 4 * number of cpus.
 
         """
         self._storage_options = storage_options
@@ -272,7 +272,9 @@ class DeltaTable:
         :param version: version of the DeltaTable
         :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
                                 Setting a value greater than 1 results in concurrent calls to the storage api.
-                                This can decrease latency if there are many files in the log since the last checkpoint.
+                                This can decrease latency if there are many files in the log since the last checkpoint,
+                                but will also increase memory usage. Possible rate limits of the storage backend should
+                                also be considered for optimal performance. Defaults to 4 * number of cpus.
         """
         table_uri = RawDeltaTable.get_table_uri_from_data_catalog(
             data_catalog=data_catalog.value,
