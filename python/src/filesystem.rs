@@ -101,14 +101,15 @@ impl DeltaFileSystemHandler {
         let mut infos = Vec::new();
         for file_path in paths {
             let path = Path::from(file_path);
-            let listed = self
-                .rt
-                .block_on(self.inner.list_with_delimiter(Some(&path)))
-                .map_err(PythonError::from)?;
+            let listed = py.allow_threads(|| {
+                self.rt
+                    .block_on(self.inner.list_with_delimiter(Some(&path)))
+                    .map_err(PythonError::from)
+            })?;
 
             // TODO is there a better way to figure out if we are in a directory?
             if listed.objects.is_empty() && listed.common_prefixes.is_empty() {
-                let maybe_meta = self.rt.block_on(self.inner.head(&path));
+                let maybe_meta = py.allow_threads(|| self.rt.block_on(self.inner.head(&path)));
                 match maybe_meta {
                     Ok(meta) => {
                         let kwargs = HashMap::from([
@@ -385,7 +386,7 @@ impl ObjectInputFile {
     }
 
     #[pyo3(signature = (nbytes = None))]
-    fn read(&mut self, nbytes: Option<i64>) -> PyResult<Py<PyBytes>> {
+    fn read<'py>(&mut self, nbytes: Option<i64>, py: Python<'py>) -> PyResult<Py<PyBytes>> {
         self.check_closed()?;
         let range = match nbytes {
             Some(len) => {
@@ -403,13 +404,18 @@ impl ObjectInputFile {
         let nbytes = (range.end - range.start) as i64;
         self.pos += nbytes;
         let data = if nbytes > 0 {
-            self.rt
-                .block_on(self.store.get_range(&self.path, range))
-                .map_err(PythonError::from)?
+            py.allow_threads(|| {
+                self.rt
+                    .block_on(self.store.get_range(&self.path, range))
+                    .map_err(PythonError::from)
+            })?
         } else {
             "".into()
         };
-        Python::with_gil(|py| Ok(PyBytes::new(py, data.as_ref()).into_py(py)))
+        // TODO: PyBytes copies the buffer. If we move away from the limited CPython
+        // API (the stable C API), we could implement the buffer protocol for
+        // bytes::Bytes and return this zero-copy.
+        Ok(PyBytes::new(py, data.as_ref()).into_py(py))
     }
 
     fn fileno(&self) -> PyResult<()> {
@@ -477,9 +483,9 @@ impl ObjectOutputStream {
 
 #[pymethods]
 impl ObjectOutputStream {
-    fn close(&mut self) -> PyResult<()> {
+    fn close<'py>(&mut self, py: Python<'py>) -> PyResult<()> {
         self.closed = true;
-        match self.rt.block_on(self.writer.shutdown()) {
+        py.allow_threads(|| match self.rt.block_on(self.writer.shutdown()) {
             Ok(_) => Ok(()),
             Err(err) => {
                 self.rt
@@ -487,7 +493,7 @@ impl ObjectOutputStream {
                     .map_err(PythonError::from)?;
                 Err(PyIOError::new_err(err.to_string()))
             }
-        }
+        })
     }
 
     fn isatty(&self) -> PyResult<bool> {
@@ -533,7 +539,9 @@ impl ObjectOutputStream {
     fn write(&mut self, data: &PyBytes) -> PyResult<i64> {
         self.check_closed()?;
         let len = data.as_bytes().len() as i64;
-        match self.rt.block_on(self.writer.write_all(data.as_bytes())) {
+        let py = data.py();
+        let data = data.as_bytes();
+        py.allow_threads(|| match self.rt.block_on(self.writer.write_all(data)) {
             Ok(_) => Ok(len),
             Err(err) => {
                 self.rt
@@ -541,11 +549,11 @@ impl ObjectOutputStream {
                     .map_err(PythonError::from)?;
                 Err(PyIOError::new_err(err.to_string()))
             }
-        }
+        })
     }
 
-    fn flush(&mut self) -> PyResult<()> {
-        match self.rt.block_on(self.writer.flush()) {
+    fn flush<'py>(&mut self, py: Python<'py>) -> PyResult<()> {
+        py.allow_threads(|| match self.rt.block_on(self.writer.flush()) {
             Ok(_) => Ok(()),
             Err(err) => {
                 self.rt
@@ -553,7 +561,7 @@ impl ObjectOutputStream {
                     .map_err(PythonError::from)?;
                 Err(PyIOError::new_err(err.to_string()))
             }
-        }
+        })
     }
 
     fn fileno(&self) -> PyResult<()> {

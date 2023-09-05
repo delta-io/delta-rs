@@ -26,6 +26,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 
 # "stdlib"
+bytes = { workspace = true }
 chrono = { workspace = true }
 env_logger = "0"
 lazy_static = "1"
