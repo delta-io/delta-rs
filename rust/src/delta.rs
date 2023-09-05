@@ -431,7 +431,7 @@ impl DeltaTable {
 
         lazy_static! {
             static ref DELTA_LOG_REGEX: Regex =
-                Regex::new(r#"_delta_log/(\d{20})\.(json|checkpoint).*$"#).unwrap();
+                Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint).*$").unwrap();
         }
 
         // list files to find max version
@@ -509,8 +509,8 @@ impl DeltaTable {
             let action =
                 serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
                     json_err: e,
-                    version: version,
                     line,
+                    version
                 })?;
             actions.push(action);
         }
@@ -585,7 +585,7 @@ impl DeltaTable {
                 Err(DeltaTableError::ObjectStore {
                     source: ObjectStoreError::NotFound { .. },
                 }) => break, // no more files in the log
-                Err(err) => return Err(DeltaTableError::from(err)),
+                Err(err) => return Err(err),
             };
 
             debug!("merging table state with version: {new_version}");
