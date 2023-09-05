@@ -510,7 +510,7 @@ impl DeltaTable {
                 serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
                     json_err: e,
                     line,
-                    version
+                    version,
                 })?;
             actions.push(action);
         }

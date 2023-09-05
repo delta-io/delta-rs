@@ -282,7 +282,9 @@ class DeltaTable:
             database_name=database_name,
             table_name=table_name,
         )
-        return cls(table_uri=table_uri, version=version, log_buffer_size=log_buffer_size)
+        return cls(
+            table_uri=table_uri, version=version, log_buffer_size=log_buffer_size
+        )
 
     def version(self) -> int:
         """
