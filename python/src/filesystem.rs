@@ -386,7 +386,7 @@ impl ObjectInputFile {
     }
 
     #[pyo3(signature = (nbytes = None))]
-    fn read<'py>(&mut self, nbytes: Option<i64>, py: Python<'py>) -> PyResult<Py<PyBytes>> {
+    fn read(&mut self, nbytes: Option<i64>, py: Python<'_>) -> PyResult<Py<PyBytes>> {
         self.check_closed()?;
         let range = match nbytes {
             Some(len) => {
@@ -483,7 +483,7 @@ impl ObjectOutputStream {
 
 #[pymethods]
 impl ObjectOutputStream {
-    fn close<'py>(&mut self, py: Python<'py>) -> PyResult<()> {
+    fn close(&mut self, py: Python<'_>) -> PyResult<()> {
         self.closed = true;
         py.allow_threads(|| match self.rt.block_on(self.writer.shutdown()) {
             Ok(_) => Ok(()),
@@ -552,7 +552,7 @@ impl ObjectOutputStream {
         })
     }
 
-    fn flush<'py>(&mut self, py: Python<'py>) -> PyResult<()> {
+    fn flush(&mut self, py: Python<'_>) -> PyResult<()> {
         py.allow_threads(|| match self.rt.block_on(self.writer.flush()) {
             Ok(_) => Ok(()),
             Err(err) => {
