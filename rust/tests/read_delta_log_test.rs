@@ -36,7 +36,7 @@ async fn test_log_buffering() {
         let mut table_seq = DeltaTableBuilder::from_uri(path)
             .with_storage_backend(store.clone(), location.clone())
             .with_version(0)
-            .with_buffer(1)
+            .with_log_buffer_size(1)
             .unwrap()
             .load()
             .await
@@ -52,7 +52,7 @@ async fn test_log_buffering() {
         let mut table_buf = DeltaTableBuilder::from_uri(path)
             .with_storage_backend(store.clone(), location.clone())
             .with_version(0)
-            .with_buffer(buf_size)
+            .with_log_buffer_size(buf_size)
             .unwrap()
             .load()
             .await
@@ -83,7 +83,7 @@ async fn test_log_buffering_success_explicit_version() {
     for buf_size in buf_sizes {
         let mut table = DeltaTableBuilder::from_uri(path)
             .with_version(0)
-            .with_buffer(buf_size)
+            .with_log_buffer_size(buf_size)
             .unwrap()
             .load()
             .await
@@ -93,7 +93,7 @@ async fn test_log_buffering_success_explicit_version() {
 
         let mut table = DeltaTableBuilder::from_uri(path)
             .with_version(0)
-            .with_buffer(buf_size)
+            .with_log_buffer_size(buf_size)
             .unwrap()
             .load()
             .await
@@ -103,7 +103,7 @@ async fn test_log_buffering_success_explicit_version() {
 
         let mut table = DeltaTableBuilder::from_uri(path)
             .with_version(0)
-            .with_buffer(buf_size)
+            .with_log_buffer_size(buf_size)
             .unwrap()
             .load()
             .await
@@ -113,7 +113,7 @@ async fn test_log_buffering_success_explicit_version() {
 
         let mut table = DeltaTableBuilder::from_uri(path)
             .with_version(0)
-            .with_buffer(buf_size)
+            .with_log_buffer_size(buf_size)
             .unwrap()
             .load()
             .await
@@ -123,7 +123,7 @@ async fn test_log_buffering_success_explicit_version() {
 
         let mut table = DeltaTableBuilder::from_uri(path)
             .with_version(0)
-            .with_buffer(buf_size)
+            .with_log_buffer_size(buf_size)
             .unwrap()
             .load()
             .await
@@ -138,7 +138,7 @@ async fn test_log_buffering_fail() {
     let path = "./tests/data/simple_table_with_no_checkpoint";
     let table_err = DeltaTableBuilder::from_uri(path)
         .with_version(0)
-        .with_buffer(0)
+        .with_log_buffer_size(0)
         .is_err();
     assert!(table_err);
 }
