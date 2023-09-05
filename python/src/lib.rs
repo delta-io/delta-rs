@@ -96,7 +96,9 @@ impl RawDeltaTable {
             builder = builder.without_files()
         }
         if let Some(buf_size) = log_buffer_size {
-            builder = builder.with_log_buffer_size(buf_size).map_err(PythonError::from)?;
+            builder = builder
+                .with_log_buffer_size(buf_size)
+                .map_err(PythonError::from)?;
         }
 
         let table = rt()?.block_on(builder.load()).map_err(PythonError::from)?;
