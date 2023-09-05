@@ -381,7 +381,7 @@ impl DeltaTable {
 
         checkpoint_data_paths
     }
-    
+
     /// This method scans delta logs to find the earliest delta log version
     async fn get_earliest_delta_log_version(&self) -> Result<i64, DeltaTableError> {
         // TODO check if regex matches against path
@@ -426,7 +426,7 @@ impl DeltaTable {
                 return Err(DeltaTableError::from(e));
             }
         };
-        
+
         debug!("start with latest checkpoint version: {version_start}");
 
         lazy_static! {
@@ -448,16 +448,18 @@ impl DeltaTable {
                     // listing may not be ordered
                     max_version = max(max_version, log_version);
                     // also cache timestamp for version, for faster time-travel
-                    self.version_timestamp.insert(log_version, obj_meta.last_modified.timestamp());
+                    self.version_timestamp
+                        .insert(log_version, obj_meta.last_modified.timestamp());
                 }
             }
-            
+
             if max_version < 0 {
                 return Err(DeltaTableError::not_a_table(self.table_uri()));
             }
 
             Ok::<i64, DeltaTableError>(max_version)
-        }.await?;
+        }
+        .await?;
 
         Ok(version)
     }
@@ -495,7 +497,7 @@ impl DeltaTable {
     /// Reads a commit and gets list of actions
     async fn get_actions(
         version: i64,
-        commit_log_bytes: bytes::Bytes
+        commit_log_bytes: bytes::Bytes,
     ) -> Result<Vec<Action>, DeltaTableError> {
         debug!("parsing commit with version {version}...");
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
@@ -559,11 +561,11 @@ impl DeltaTable {
         let max_version = max_version.filter(|x| x > &self.version());
         let max_version: i64 = match max_version {
             Some(x) => x,
-            None => self.get_latest_version().await?
+            None => self.get_latest_version().await?,
         };
 
         let buf_size = self.config.log_buffer_size;
-        
+
         let store = self.storage.clone();
         let mut log_stream = futures::stream::iter(self.version() + 1..max_version + 1)
             .map(|version| {
@@ -593,7 +595,7 @@ impl DeltaTable {
             if self.version() == max_version {
                 return Ok(());
             }
-        };
+        }
 
         if self.version() == -1 {
             return Err(DeltaTableError::not_a_table(self.table_uri()));

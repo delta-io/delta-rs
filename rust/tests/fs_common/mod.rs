@@ -2,15 +2,15 @@ use chrono::Utc;
 use deltalake::action::{Action, Add, DeltaOperation, Remove, SaveMode};
 use deltalake::operations::create::CreateBuilder;
 use deltalake::operations::transaction::commit;
+use deltalake::storage::{DeltaObjectStore, GetResult, ObjectStoreResult};
 use deltalake::{DeltaTable, Schema, SchemaDataType, SchemaField};
-use deltalake::storage::{DeltaObjectStore, ObjectStoreResult, GetResult};
-use object_store::ObjectStore;
-use url::Url;
 use object_store::path::Path as StorePath;
+use object_store::ObjectStore;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use url::Url;
 use uuid::Uuid;
 
 pub fn cleanup_dir_except<P: AsRef<Path>>(path: P, ignore_files: Vec<String>) {
@@ -127,10 +127,9 @@ pub async fn commit_actions(
     version
 }
 
-
 #[derive(Debug)]
 pub struct SlowStore {
-    inner: DeltaObjectStore
+    inner: DeltaObjectStore,
 }
 impl std::fmt::Display for SlowStore {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
@@ -140,9 +139,12 @@ impl std::fmt::Display for SlowStore {
 
 #[allow(dead_code)]
 impl SlowStore {
-    pub fn new(location: Url, options: impl Into<deltalake::storage::config::StorageOptions> + Clone) -> deltalake::DeltaResult<Self> {
+    pub fn new(
+        location: Url,
+        options: impl Into<deltalake::storage::config::StorageOptions> + Clone,
+    ) -> deltalake::DeltaResult<Self> {
         Ok(Self {
-            inner: DeltaObjectStore::try_new(location, options).unwrap()
+            inner: DeltaObjectStore::try_new(location, options).unwrap(),
         })
     }
 }
@@ -163,13 +165,21 @@ impl ObjectStore for SlowStore {
     /// Perform a get request with options
     ///
     /// Note: options.range will be ignored if [`GetResult::File`]
-    async fn get_opts(&self, location: &StorePath, options: object_store::GetOptions) -> ObjectStoreResult<GetResult> {
+    async fn get_opts(
+        &self,
+        location: &StorePath,
+        options: object_store::GetOptions,
+    ) -> ObjectStoreResult<GetResult> {
         self.inner.get_opts(location, options).await
     }
 
     /// Return the bytes that are stored at the specified location
     /// in the given byte range
-    async fn get_range(&self, location: &StorePath, range: std::ops::Range<usize>) -> ObjectStoreResult<bytes::Bytes> {
+    async fn get_range(
+        &self,
+        location: &StorePath,
+        range: std::ops::Range<usize>,
+    ) -> ObjectStoreResult<bytes::Bytes> {
         self.inner.get_range(location, range).await
     }
 
@@ -190,7 +200,9 @@ impl ObjectStore for SlowStore {
     async fn list(
         &self,
         prefix: Option<&StorePath>,
-    ) -> ObjectStoreResult<futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>>> {
+    ) -> ObjectStoreResult<
+        futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>>,
+    > {
         self.inner.list(prefix).await
     }
 
@@ -202,7 +214,9 @@ impl ObjectStore for SlowStore {
         &self,
         prefix: Option<&StorePath>,
         offset: &StorePath,
-    ) -> ObjectStoreResult<futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>>> {
+    ) -> ObjectStoreResult<
+        futures::stream::BoxStream<'_, ObjectStoreResult<object_store::ObjectMeta>>,
+    > {
         self.inner.list_with_offset(prefix, offset).await
     }
 
@@ -212,7 +226,10 @@ impl ObjectStore for SlowStore {
     ///
     /// Prefixes are evaluated on a path segment basis, i.e. `foo/bar/` is a prefix of `foo/bar/x` but not of
     /// `foo/bar_baz/x`.
-    async fn list_with_delimiter(&self, prefix: Option<&StorePath>) -> ObjectStoreResult<object_store::ListResult> {
+    async fn list_with_delimiter(
+        &self,
+        prefix: Option<&StorePath>,
+    ) -> ObjectStoreResult<object_store::ListResult> {
         self.inner.list_with_delimiter(prefix).await
     }
 
@@ -233,14 +250,21 @@ impl ObjectStore for SlowStore {
     /// Move an object from one path to another in the same object store.
     ///
     /// Will return an error if the destination already has an object.
-    async fn rename_if_not_exists(&self, from: &StorePath, to: &StorePath) -> ObjectStoreResult<()> {
+    async fn rename_if_not_exists(
+        &self,
+        from: &StorePath,
+        to: &StorePath,
+    ) -> ObjectStoreResult<()> {
         self.inner.rename_if_not_exists(from, to).await
     }
 
     async fn put_multipart(
         &self,
         location: &StorePath,
-    ) -> ObjectStoreResult<(object_store::MultipartId, Box<dyn tokio::io::AsyncWrite + Unpin + Send>)> {
+    ) -> ObjectStoreResult<(
+        object_store::MultipartId,
+        Box<dyn tokio::io::AsyncWrite + Unpin + Send>,
+    )> {
         self.inner.put_multipart(location).await
     }
 

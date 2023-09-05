@@ -20,19 +20,27 @@ async fn test_log_buffering() {
     let buf_size = 10;
 
     let location = deltalake::builder::ensure_table_uri(path).unwrap();
-    
+
     // use storage that sleeps 10ms on every `get`
     let store = std::sync::Arc::new(
         fs_common::SlowStore::new(
             location.clone(),
-            deltalake::storage::config::StorageOptions::from(HashMap::new()
+            deltalake::storage::config::StorageOptions::from(HashMap::new()),
         )
-    ).unwrap());
+        .unwrap(),
+    );
 
     let mut seq_version = 0;
     let t = SystemTime::now();
     for _x in 0..max_iter {
-        let mut table_seq = DeltaTableBuilder::from_uri(path).with_storage_backend(store.clone(), location.clone()).with_version(0).with_buffer(1).unwrap().load().await.unwrap();
+        let mut table_seq = DeltaTableBuilder::from_uri(path)
+            .with_storage_backend(store.clone(), location.clone())
+            .with_version(0)
+            .with_buffer(1)
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
         table_seq.update_incremental(None).await.unwrap();
         seq_version = table_seq.version();
     }
@@ -41,14 +49,21 @@ async fn test_log_buffering() {
     let mut buf_version = 0;
     let t2 = SystemTime::now();
     for _x in 0..max_iter {
-        let mut table_buf = DeltaTableBuilder::from_uri(path).with_storage_backend(store.clone(), location.clone()).with_version(0).with_buffer(buf_size).unwrap().load().await.unwrap();
+        let mut table_buf = DeltaTableBuilder::from_uri(path)
+            .with_storage_backend(store.clone(), location.clone())
+            .with_version(0)
+            .with_buffer(buf_size)
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
         table_buf.update_incremental(None).await.unwrap();
         buf_version = table_buf.version();
     }
     let time_buf = t2.elapsed().unwrap();
 
     // buffered was at least 2x faster
-    assert!(time_buf.as_secs_f64() < 0.5*time_seq.as_secs_f64());
+    assert!(time_buf.as_secs_f64() < 0.5 * time_seq.as_secs_f64());
 
     // updates match
     assert_eq!(seq_version, 10);
@@ -64,25 +79,55 @@ async fn test_log_buffering_success_explicit_version() {
         let a = fs_common::add(3 * 60 * 1000);
         fs_common::commit_add(&mut table, &a).await;
     }
-    let buf_sizes = [1,2,10,50];
+    let buf_sizes = [1, 2, 10, 50];
     for buf_size in buf_sizes {
-        let mut table = DeltaTableBuilder::from_uri(path).with_version(0).with_buffer(buf_size).unwrap().load().await.unwrap();
+        let mut table = DeltaTableBuilder::from_uri(path)
+            .with_version(0)
+            .with_buffer(buf_size)
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
         table.update_incremental(None).await.unwrap();
         assert_eq!(table.version(), 10);
-        
-        let mut table = DeltaTableBuilder::from_uri(path).with_version(0).with_buffer(buf_size).unwrap().load().await.unwrap();
+
+        let mut table = DeltaTableBuilder::from_uri(path)
+            .with_version(0)
+            .with_buffer(buf_size)
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
         table.update_incremental(Some(0)).await.unwrap();
         assert_eq!(table.version(), 10);
 
-        let mut table = DeltaTableBuilder::from_uri(path).with_version(0).with_buffer(buf_size).unwrap().load().await.unwrap();
+        let mut table = DeltaTableBuilder::from_uri(path)
+            .with_version(0)
+            .with_buffer(buf_size)
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
         table.update_incremental(Some(1)).await.unwrap();
         assert_eq!(table.version(), 1);
 
-        let mut table = DeltaTableBuilder::from_uri(path).with_version(0).with_buffer(buf_size).unwrap().load().await.unwrap();
+        let mut table = DeltaTableBuilder::from_uri(path)
+            .with_version(0)
+            .with_buffer(buf_size)
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
         table.update_incremental(Some(10)).await.unwrap();
         assert_eq!(table.version(), 10);
 
-        let mut table = DeltaTableBuilder::from_uri(path).with_version(0).with_buffer(buf_size).unwrap().load().await.unwrap();
+        let mut table = DeltaTableBuilder::from_uri(path)
+            .with_version(0)
+            .with_buffer(buf_size)
+            .unwrap()
+            .load()
+            .await
+            .unwrap();
         table.update_incremental(Some(20)).await.unwrap();
         assert_eq!(table.version(), 10);
     }
@@ -91,6 +136,9 @@ async fn test_log_buffering_success_explicit_version() {
 #[tokio::test]
 async fn test_log_buffering_fail() {
     let path = "./tests/data/simple_table_with_no_checkpoint";
-    let table_err = DeltaTableBuilder::from_uri(path).with_version(0).with_buffer(0).is_err();
+    let table_err = DeltaTableBuilder::from_uri(path)
+        .with_version(0)
+        .with_buffer(0)
+        .is_err();
     assert!(table_err);
 }

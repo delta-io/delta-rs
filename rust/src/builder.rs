@@ -71,10 +71,10 @@ pub struct DeltaTableConfig {
     /// This defaults to 4 * number of cpus
     ///
     /// Setting a value greater than 1 results in concurrent calls to the storage api.
-    /// This can decrease latency if there are many files in the log since the 
+    /// This can decrease latency if there are many files in the log since the
     /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
     /// also be considered for optimal performance.
-    pub log_buffer_size: usize
+    pub log_buffer_size: usize,
 }
 
 impl Default for DeltaTableConfig {
@@ -114,7 +114,7 @@ pub struct DeltaTableLoadOptions {
     /// This defaults to 4 * number of cpus
     ///
     /// Setting a value greater than 1 results in concurrent calls to the storage api.
-    /// This can be helpful to decrease latency if there are many files in the log since the 
+    /// This can be helpful to decrease latency if there are many files in the log since the
     /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
     /// also be considered for optimal performance.
     pub log_buffer_size: usize,
@@ -174,7 +174,9 @@ impl DeltaTableBuilder {
     /// Sets `log_buffer_size` to the builder
     pub fn with_buffer(mut self, log_buffer_size: usize) -> DeltaResult<Self> {
         if log_buffer_size == 0 {
-            return Err(DeltaTableError::Generic(String::from("Log buffer size should be positive")));
+            return Err(DeltaTableError::Generic(String::from(
+                "Log buffer size should be positive",
+            )));
         }
         self.options.log_buffer_size = log_buffer_size;
         Ok(self)
