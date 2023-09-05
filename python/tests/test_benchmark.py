@@ -9,11 +9,13 @@ from deltalake import DeltaTable, write_deltalake
 
 # NOTE: make sure to run these in release mode with
 # MATURIN_EXTRA_ARGS=--release make develop
+# When profiling, use:
+# MATURIN_EXTRA_ARGS="--profile release-with-debug" make develop
 
 
 @pytest.fixture()
 def sample_table() -> pa.Table:
-    max_size_bytes = 10 * 128 * 1024 * 1024
+    max_size_bytes = 128 * 1024 * 1024
     ncols = 20
     nrows = max_size_bytes // 20 // 8
     tab = pa.table({f"x{i}": standard_normal(nrows) for i in range(ncols)})
@@ -45,13 +47,7 @@ def test_benchmark_write(benchmark, sample_table, tmp_path):
 
 @pytest.mark.benchmark(group="read")
 def test_benchmark_read(benchmark, sample_table, tmp_path):
-    write_deltalake(
-        str(tmp_path),
-        sample_table,
-        max_rows_per_file=100_000,
-        max_rows_per_group=10_000,
-        min_rows_per_group=10_000,
-    )
+    write_deltalake(str(tmp_path), sample_table)
     dt = DeltaTable(str(tmp_path))
 
     result = benchmark(dt.to_pyarrow_table)
@@ -60,13 +56,7 @@ def test_benchmark_read(benchmark, sample_table, tmp_path):
 
 @pytest.mark.benchmark(group="read")
 def test_benchmark_read_pyarrow(benchmark, sample_table, tmp_path):
-    write_deltalake(
-        str(tmp_path),
-        sample_table,
-        max_rows_per_file=100_000,
-        max_rows_per_group=10_000,
-        min_rows_per_group=10_000,
-    )
+    write_deltalake(str(tmp_path), sample_table)
     dt = DeltaTable(str(tmp_path))
 
     fs = pa_fs.SubTreeFileSystem(str(tmp_path), pa_fs.LocalFileSystem())
