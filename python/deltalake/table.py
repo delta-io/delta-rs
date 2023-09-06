@@ -2,6 +2,7 @@ import json
 import operator
 import warnings
 from dataclasses import dataclass
+from datetime import datetime
 from functools import reduce
 from pathlib import Path
 from typing import (
@@ -454,6 +455,35 @@ given filters.
         )
         return self.schema().to_pyarrow()
 
+    def restore(
+        self,
+        target: Union[int, datetime, str],
+        *,
+        ignore_missing_files: bool = False,
+        protocol_downgrade_allowed: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Run the Restore command on the Delta Table: restore table to a given version or datetime.
+
+        :param target: the expected version will restore, which represented by int, date str or datetime.
+        :param ignore_missing_files: whether the operation carry on when some data files missing.
+        :param protocol_downgrade_allowed: whether the operation when protocol version upgraded.
+        :return: the metrics from restore.
+        """
+        if isinstance(target, datetime):
+            metrics = self._table.restore(
+                target.isoformat(),
+                ignore_missing_files=ignore_missing_files,
+                protocol_downgrade_allowed=protocol_downgrade_allowed,
+            )
+        else:
+            metrics = self._table.restore(
+                target,
+                ignore_missing_files=ignore_missing_files,
+                protocol_downgrade_allowed=protocol_downgrade_allowed,
+            )
+        return json.loads(metrics)
+
     def to_pyarrow_dataset(
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
@@ -471,7 +501,7 @@ given filters.
         """
         if self.protocol().min_reader_version > MAX_SUPPORTED_READER_VERSION:
             raise DeltaProtocolError(
-                f"The table's minimum reader version is {self.protocol().min_reader_version}"
+                f"The table's minimum reader version is {self.protocol().min_reader_version} "
                 f"but deltalake only supports up to version {MAX_SUPPORTED_READER_VERSION}."
             )
 
