@@ -506,16 +506,13 @@ pub(crate) fn delta_log_schema_for_table(
             ]
         ];
         static ref REMOVE_FIELDS: Vec<ArrowField> = arrow_defs![
-            path:Utf8,
-            deletionTimestamp:Int64,
-            dataChange:Boolean,
-            extendedFileMetadata:Boolean
+            path: Utf8,
+            deletionTimestamp: Int64,
+            dataChange: Boolean,
+            extendedFileMetadata: Boolean
         ];
-        static ref REMOVE_EXTENDED_FILE_METADATA_FIELDS: Vec<ArrowField> = arrow_defs![
-            size:Int64,
-            partitionValues,
-            tags
-        ];
+        static ref REMOVE_EXTENDED_FILE_METADATA_FIELDS: Vec<ArrowField> =
+            arrow_defs![size: Int64, partitionValues, tags];
     };
 
     // create add fields according to the specific data table schema
@@ -658,7 +655,7 @@ mod tests {
             delta_log_schema_for_table(table_schema.clone(), partition_columns.as_slice(), false);
 
         // verify top-level schema contains all expected fields and they are named correctly.
-        let expected_fields = vec!["metaData", "protocol", "txn", "remove", "add"];
+        let expected_fields = ["metaData", "protocol", "txn", "remove", "add"];
         for f in log_schema.fields().iter() {
             assert!(expected_fields.contains(&f.name().as_str()));
         }
@@ -771,7 +768,7 @@ mod tests {
             })
             .collect();
         assert_eq!(7, remove_fields.len());
-        let expected_fields = vec![
+        let expected_fields = [
             "path",
             "deletionTimestamp",
             "dataChange",
