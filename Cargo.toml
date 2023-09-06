@@ -1,6 +1,7 @@
 [workspace]
 members = ["rust", "python"]
 exclude = ["proofs", "delta-inspect"]
+resolver = "2"
 
 [profile.release-with-debug]
 inherits = "release"
@@ -14,15 +15,15 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # arrow
-arrow = { version = "46.0.0" }
-arrow-array = { version = "46.0.0" }
-arrow-buffer = { version = "46.0.0" }
-arrow-cast = { version = "46.0.0" }
-arrow-ord = { version = "46.0.0" }
-arrow-row = { version = "46.0.0" }
-arrow-schema = { version = "46.0.0" }
-arrow-select = { version = "46.0.0" }
-parquet = { version = "46.0.0" }
+arrow = { version = "45" }
+arrow-array = { version = "45" }
+arrow-buffer = { version = "45" }
+arrow-cast = { version = "45" }
+arrow-ord = { version = "45" }
+arrow-row = { version = "45" }
+arrow-schema = { version = "45" }
+arrow-select = { version = "45" }
+parquet = { version = "45" }
 
 # datafusion
 datafusion = { version = "30" }
