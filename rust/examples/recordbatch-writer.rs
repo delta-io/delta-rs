@@ -36,6 +36,7 @@ async fn main() -> Result<(), DeltaTableError> {
     })?;
     info!("Using the location of: {:?}", table_uri);
 
+    // Using Path::from can double encode the uri
     let table_path = Path::from(table_uri.as_ref());
 
     let maybe_table = deltalake::open_table(&table_path).await;

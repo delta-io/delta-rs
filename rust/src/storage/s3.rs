@@ -1,5 +1,6 @@
 //! AWS S3 storage backend.
 
+use super::get_path;
 use super::utils::str_is_truthy;
 use crate::builder::{s3_storage_options, str_option};
 use bytes::Bytes;
@@ -145,7 +146,7 @@ impl S3LockClient {
             }
 
             let mut rename_result = s3
-                .rename_no_replace(&Path::from(data.source), &Path::from(data.destination))
+                .rename_no_replace(&get_path(data.source), &get_path(data.destination))
                 .await;
 
             if lock.acquired_expired_lock {

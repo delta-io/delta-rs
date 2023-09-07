@@ -1,7 +1,9 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use deltalake::storage::{DynObjectStore, ListResult, MultipartId, ObjectStoreError, Path};
+use deltalake::storage::{
+    get_path, DynObjectStore, ListResult, MultipartId, ObjectStoreError, Path,
+};
 use deltalake::DeltaTableBuilder;
 use pyo3::exceptions::{PyIOError, PyNotImplementedError, PyValueError};
 use pyo3::prelude::*;
@@ -57,8 +59,8 @@ impl DeltaFileSystemHandler {
     }
 
     fn copy_file(&self, src: String, dest: String) -> PyResult<()> {
-        let from_path = Path::from(src);
-        let to_path = Path::from(dest);
+        let from_path = get_path(src);
+        let to_path = get_path(dest);
         self.rt
             .block_on(self.inner.copy(&from_path, &to_path))
             .map_err(PythonError::from)?;
@@ -71,7 +73,7 @@ impl DeltaFileSystemHandler {
     }
 
     fn delete_dir(&self, path: String) -> PyResult<()> {
-        let path = Path::from(path);
+        let path = get_path(path);
         self.rt
             .block_on(delete_dir(self.inner.as_ref(), &path))
             .map_err(PythonError::from)?;
@@ -79,7 +81,7 @@ impl DeltaFileSystemHandler {
     }
 
     fn delete_file(&self, path: String) -> PyResult<()> {
-        let path = Path::from(path);
+        let path = get_path(path);
         self.rt
             .block_on(self.inner.delete(&path))
             .map_err(PythonError::from)?;
@@ -100,7 +102,7 @@ impl DeltaFileSystemHandler {
 
         let mut infos = Vec::new();
         for file_path in paths {
-            let path = Path::from(file_path);
+            let path = get_path(file_path);
             let listed = py.allow_threads(|| {
                 self.rt
                     .block_on(self.inner.list_with_delimiter(Some(&path)))
@@ -160,7 +162,7 @@ impl DeltaFileSystemHandler {
             fs.call_method("FileInfo", (loc, type_), Some(kwargs.into_py_dict(py)))
         };
 
-        let path = Path::from(base_dir);
+        let path = get_path(base_dir);
         let list_result = match self
             .rt
             .block_on(walk_tree(self.inner.clone(), &path, recursive))
@@ -216,8 +218,8 @@ impl DeltaFileSystemHandler {
     }
 
     fn move_file(&self, src: String, dest: String) -> PyResult<()> {
-        let from_path = Path::from(src);
-        let to_path = Path::from(dest);
+        let from_path = get_path(src);
+        let to_path = get_path(dest);
         // TODO check the if not exists semantics
         self.rt
             .block_on(self.inner.rename(&from_path, &to_path))
@@ -226,7 +228,7 @@ impl DeltaFileSystemHandler {
     }
 
     fn open_input_file(&self, path: String) -> PyResult<ObjectInputFile> {
-        let path = Path::from(path);
+        let path = get_path(path);
         let file = self
             .rt
             .block_on(ObjectInputFile::try_new(
@@ -244,7 +246,7 @@ impl DeltaFileSystemHandler {
         path: String,
         #[allow(unused)] metadata: Option<HashMap<String, String>>,
     ) -> PyResult<ObjectOutputStream> {
-        let path = Path::from(path);
+        let path = get_path(path);
         let file = self
             .rt
             .block_on(ObjectOutputStream::try_new(

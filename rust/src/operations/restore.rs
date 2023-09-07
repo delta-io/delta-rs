@@ -26,13 +26,12 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
-use object_store::path::Path;
 use object_store::ObjectStore;
 use serde::Serialize;
 
 use crate::action::{Action, Add, DeltaOperation, Remove};
 use crate::operations::transaction::{prepare_commit, try_commit_transaction, TransactionError};
-use crate::storage::ObjectStoreRef;
+use crate::storage::{ObjectStoreRef, get_path};
 use crate::table_state::DeltaTableState;
 use crate::{action, DeltaResult, DeltaTable, DeltaTableConfig, DeltaTableError, ObjectStoreError};
 
@@ -252,7 +251,7 @@ async fn check_files_available(
     files: &Vec<action::Add>,
 ) -> DeltaResult<()> {
     for file in files {
-        let file_path = Path::from(file.path.clone());
+        let file_path = get_path(file.path.clone());
         match object_store.head(&file_path).await {
             Ok(_) => {}
             Err(ObjectStoreError::NotFound { .. }) => {

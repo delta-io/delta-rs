@@ -134,6 +134,8 @@ pub mod test_utils;
 
 #[cfg(test)]
 mod tests {
+    use crate::storage::get_path;
+
     use super::*;
     use std::collections::HashMap;
 
@@ -414,10 +416,10 @@ mod tests {
         assert_eq!(
             table.get_files(),
             vec![
-                Path::from(
+                get_path(
                     "x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
                 ),
-                Path::from(
+                get_path(
                     "x=B%20B/part-00015-e9abbc6f-85e9-457b-be8e-e9f5b8a22890.c000.snappy.parquet"
                 )
             ]
@@ -429,7 +431,7 @@ mod tests {
         }];
         assert_eq!(
             table.get_files_by_partitions(&filters).unwrap(),
-            vec![Path::from(
+            vec![get_path(
                 "x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
             )]
         );

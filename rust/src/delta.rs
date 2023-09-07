@@ -28,7 +28,7 @@ use super::schema::*;
 use super::table_state::DeltaTableState;
 use crate::action::{Add, ProtocolError, Stats};
 use crate::errors::DeltaTableError;
-use crate::storage::{commit_uri_from_version, ObjectStoreRef};
+use crate::storage::{commit_uri_from_version, get_path, ObjectStoreRef};
 
 // TODO re-exports only for transition
 pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
@@ -675,7 +675,7 @@ impl DeltaTable {
     ) -> Result<Vec<Path>, DeltaTableError> {
         Ok(self
             .get_active_add_actions_by_partitions(filters)?
-            .map(|add| Path::from(add.path.as_ref()))
+            .map(|add| get_path(&add.path))
             .collect())
     }
 

@@ -98,6 +98,13 @@ impl TryFrom<&Add> for ObjectMeta {
     }
 }
 
+/// Creates a path by first parsing it. If it's valid, return, else convert via Path::from
+pub fn get_path<S: Into<String>>(path: S) -> Path {
+    let p = path.into();
+    Path::parse(&p).unwrap_or_else(|_| Path::from(p))
+}
+
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -122,5 +129,17 @@ mod tests {
         );
         assert_eq!(meta.size, 123);
         assert_eq!(meta.last_modified.timestamp_millis(), 123456789);
+    }
+
+    #[test]
+    fn test_get_path() {
+        // unencoded
+        let p = "/partition_date=partition_date=2023-08-28 00:00:00/path.parquet";
+        assert_eq!(get_path(p), Path::from(p));
+
+        // encoded
+        let p2 = "/partition_date=partition_date=2023-08-28 00%3A00%3A00/path.parquet";
+        assert_ne!(get_path(p2), Path::from(p2)); // RHS is double encoded here
+        assert_eq!(get_path(p2), Path::parse(p2).unwrap());
     }
 }

@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use crate::action::Add;
-use crate::storage::ObjectStoreRef;
+use crate::storage::{ObjectStoreRef, get_path};
 use crate::writer::record_batch::{divide_by_partition_values, PartitionResult};
 use crate::writer::stats::create_add;
 use crate::writer::utils::{
@@ -247,7 +247,7 @@ impl PartitionWriterConfig {
             .map_err(|err| WriteError::FileName {
                 source: Box::new(err),
             })?;
-        let prefix = Path::from(part_path.as_ref());
+        let prefix = get_path(part_path);
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
                 .set_created_by(format!("delta-rs version {}", crate_version()))
@@ -420,7 +420,7 @@ mod tests {
         assert_eq!(files.len(), 1);
         assert_eq!(files.len(), adds.len());
         let head = object_store
-            .head(&Path::from(adds[0].path.clone()))
+            .head(&get_path(adds[0].path.clone()))
             .await
             .unwrap();
         assert_eq!(head.size, adds[0].size as usize)

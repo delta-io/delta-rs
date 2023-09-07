@@ -16,6 +16,7 @@ use crate::errors::DeltaTableError;
 use crate::partitions::{DeltaTablePartition, PartitionFilter};
 use crate::schema::SchemaDataType;
 use crate::storage::commit_uri_from_version;
+use crate::storage::get_path;
 use crate::Schema;
 use crate::{DeltaTable, DeltaTableMetaData};
 
@@ -204,7 +205,7 @@ impl DeltaTableState {
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.files.iter().map(|add| Path::from(add.path.as_ref()))
+        self.files.iter().map(|add| get_path(&add.path))
     }
 
     /// HashMap containing the last txn version stored for every app id writing txn
