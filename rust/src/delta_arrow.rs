@@ -63,20 +63,17 @@ impl TryFrom<&schema::SchemaTypeMap> for ArrowField {
     type Error = ArrowError;
 
     fn try_from(a: &schema::SchemaTypeMap) -> Result<Self, ArrowError> {
-        Ok(ArrowField::new(
+        Ok(ArrowField::new_map(
+            "entires",
             "entries",
-            ArrowDataType::Struct(
-                vec![
-                    ArrowField::new("key", ArrowDataType::try_from(a.get_key_type())?, false),
-                    ArrowField::new(
-                        "value",
-                        ArrowDataType::try_from(a.get_value_type())?,
-                        a.get_value_contains_null(),
-                    ),
-                ]
-                .into(),
+            ArrowField::new("key", ArrowDataType::try_from(a.get_key_type())?, false),
+            ArrowField::new(
+                "value",
+                ArrowDataType::try_from(a.get_value_type())?,
+                a.get_value_contains_null(),
             ),
-            false, // always non-null
+            false,
+            false,
         ))
     }
 }
@@ -167,7 +164,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                         ]
                         .into(),
                     ),
-                    true,
+                    false,
                 )),
                 false,
             )),
@@ -305,7 +302,7 @@ macro_rules! arrow_map {
             stringify!($fieldname),
             ArrowDataType::Map(
                 Arc::new(ArrowField::new(
-                    "key_value",
+                    "entries",
                     ArrowDataType::Struct(
                         vec![
                             ArrowField::new("key", ArrowDataType::Utf8, false),
@@ -325,11 +322,11 @@ macro_rules! arrow_map {
             stringify!($fieldname),
             ArrowDataType::Map(
                 Arc::new(ArrowField::new(
-                    "key_value",
+                    "entries",
                     ArrowDataType::Struct(
                         vec![
                             ArrowField::new("key", ArrowDataType::Utf8, false),
-                            ArrowField::new("value", ArrowDataType::Utf8, true),
+                            ArrowField::new("value", ArrowDataType::Utf8, false),
                         ]
                         .into(),
                     ),
@@ -637,6 +634,13 @@ fn null_count_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::ArrayData;
+    use arrow::datatypes::DataType;
+    use arrow_array::Array;
+    use arrow_array::{make_array, ArrayRef, MapArray, StringArray, StructArray};
+    use arrow_buffer::{Buffer, ToByteSlice};
+    use arrow_schema::Field;
+
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -840,7 +844,7 @@ mod tests {
     fn test_delta_from_arrow_map_type() {
         let arrow_map = ArrowDataType::Map(
             Arc::new(ArrowField::new(
-                "key_value",
+                "entries",
                 ArrowDataType::Struct(
                     vec![
                         ArrowField::new("key", ArrowDataType::Int8, false),
@@ -848,7 +852,7 @@ mod tests {
                     ]
                     .into(),
                 ),
-                true,
+                false,
             )),
             false,
         );
@@ -877,7 +881,47 @@ mod tests {
         let entry_offsets = vec![0u32, 1, 1, 4, 5, 5];
         let num_rows = keys.len();
 
-        let map_array = arrow::array::MapArray::new_from_strings(
+        // Copied the function `new_from_string` with the patched code from https://github.com/apache/arrow-rs/pull/4808
+        // This should be reverted back [`MapArray::new_from_strings`] once arrow is upgraded in this project.
+        fn new_from_strings<'a>(
+            keys: impl Iterator<Item = &'a str>,
+            values: &dyn Array,
+            entry_offsets: &[u32],
+        ) -> Result<MapArray, ArrowError> {
+            let entry_offsets_buffer = Buffer::from(entry_offsets.to_byte_slice());
+            let keys_data = StringArray::from_iter_values(keys);
+
+            let keys_field = Arc::new(Field::new("keys", DataType::Utf8, false));
+            let values_field = Arc::new(Field::new(
+                "values",
+                values.data_type().clone(),
+                values.null_count() > 0,
+            ));
+
+            let entry_struct = StructArray::from(vec![
+                (keys_field, Arc::new(keys_data) as ArrayRef),
+                (values_field, make_array(values.to_data())),
+            ]);
+
+            let map_data_type = DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    entry_struct.data_type().clone(),
+                    false,
+                )),
+                false,
+            );
+
+            let map_data = ArrayData::builder(map_data_type)
+                .len(entry_offsets.len() - 1)
+                .add_buffer(entry_offsets_buffer)
+                .add_child_data(entry_struct.into_data())
+                .build()?;
+
+            Ok(MapArray::from(map_data))
+        }
+
+        let map_array = new_from_strings(
             keys.into_iter(),
             &arrow::array::BinaryArray::from(values),
             entry_offsets.as_slice(),
