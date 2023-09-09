@@ -28,10 +28,12 @@ use std::sync::Arc;
  * example code for writing to Delta tables
  */
 #[tokio::main]
-async fn main() -> Result<(), anyhow::Error> {
+async fn main() -> Result<(), DeltaTableError> {
     info!("Logger initialized");
 
-    let table_uri = std::env::var("TABLE_URI")?;
+    let table_uri = std::env::var("TABLE_URI").map_err(|e| DeltaTableError::GenericError {
+        source: Box::new(e),
+    })?;
     info!("Using the location of: {:?}", table_uri);
 
     let table_path = Path::from(table_uri.as_ref());

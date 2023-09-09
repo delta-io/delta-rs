@@ -19,14 +19,15 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use arrow_array::RecordBatch;
+use arrow_array::{Array, ArrayRef, RecordBatch, StructArray};
 use arrow_cast::{can_cast_types, cast_with_options, CastOptions};
-use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_schema::{DataType, Fields, SchemaRef as ArrowSchemaRef};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
+use serde_json::Map;
 
 use super::writer::{DeltaWriter, WriterConfig};
 use super::MAX_SUPPORTED_WRITER_VERSION;
@@ -101,6 +102,8 @@ pub struct WriteBuilder {
     safe_cast: bool,
     /// Parquet writer properties
     writer_properties: Option<WriterProperties>,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<Map<String, serde_json::Value>>,
 }
 
 impl WriteBuilder {
@@ -119,6 +122,7 @@ impl WriteBuilder {
             batches: None,
             safe_cast: false,
             writer_properties: None,
+            app_metadata: None,
         }
     }
 
@@ -184,6 +188,15 @@ impl WriteBuilder {
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(Map::from_iter(metadata));
         self
     }
 
@@ -339,7 +352,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         .or_else(|_| this.snapshot.arrow_schema())
                         .unwrap_or(schema.clone());
 
-                    if !can_cast_batch(schema.as_ref(), table_schema.as_ref()) {
+                    if !can_cast_batch(schema.fields(), table_schema.fields()) {
                         return Err(DeltaTableError::Generic(
                             "Updating table schema not yet implemented".to_string(),
                         ));
@@ -423,6 +436,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         size: Some(add.size),
                         // TODO add file metadata to remove action (tags missing)
                         tags: None,
+                        deletion_vector: add.deletion_vector.clone(),
                     })
                 };
 
@@ -455,8 +469,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     predicate: this.predicate,
                 },
                 &this.snapshot,
-                // TODO pass through metadata
-                None,
+                this.app_metadata,
             )
             .await?;
 
@@ -473,17 +486,53 @@ impl std::future::IntoFuture for WriteBuilder {
     }
 }
 
-fn can_cast_batch(from_schema: &ArrowSchema, to_schema: &ArrowSchema) -> bool {
-    if from_schema.fields.len() != to_schema.fields.len() {
+fn can_cast_batch(from_fields: &Fields, to_fields: &Fields) -> bool {
+    if from_fields.len() != to_fields.len() {
         return false;
     }
-    from_schema.all_fields().iter().all(|f| {
-        if let Ok(target_field) = to_schema.field_with_name(f.name()) {
-            can_cast_types(f.data_type(), target_field.data_type())
+
+    from_fields.iter().all(|f| {
+        if let Some((_, target_field)) = to_fields.find(f.name()) {
+            if let (DataType::Struct(fields0), DataType::Struct(fields1)) =
+                (f.data_type(), target_field.data_type())
+            {
+                can_cast_batch(fields0, fields1)
+            } else {
+                can_cast_types(f.data_type(), target_field.data_type())
+            }
         } else {
             false
         }
     })
+}
+
+fn cast_record_batch_columns(
+    batch: &RecordBatch,
+    fields: &Fields,
+    cast_options: &CastOptions,
+) -> Result<Vec<Arc<(dyn Array)>>, arrow_schema::ArrowError> {
+    fields
+        .iter()
+        .map(|f| {
+            let col = batch.column_by_name(f.name()).unwrap();
+            if let (DataType::Struct(_), DataType::Struct(child_fields)) =
+                (col.data_type(), f.data_type())
+            {
+                let child_batch = RecordBatch::from(StructArray::from(col.into_data()));
+                let child_columns =
+                    cast_record_batch_columns(&child_batch, child_fields, cast_options)?;
+                Ok(Arc::new(StructArray::new(
+                    child_fields.clone(),
+                    child_columns.clone(),
+                    None,
+                )) as ArrayRef)
+            } else if !col.data_type().equals_datatype(f.data_type()) {
+                cast_with_options(col, f.data_type(), cast_options)
+            } else {
+                Ok(col.clone())
+            }
+        })
+        .collect::<Result<Vec<_>, _>>()
 }
 
 fn cast_record_batch(
@@ -496,18 +545,7 @@ fn cast_record_batch(
         ..Default::default()
     };
 
-    let columns = target_schema
-        .all_fields()
-        .iter()
-        .map(|f| {
-            let col = batch.column_by_name(f.name()).unwrap();
-            if !col.data_type().equals_datatype(f.data_type()) {
-                cast_with_options(col, f.data_type(), &cast_options)
-            } else {
-                Ok(col.clone())
-            }
-        })
-        .collect::<Result<Vec<_>, _>>()?;
+    let columns = cast_record_batch_columns(batch, target_schema.fields(), &cast_options)?;
     Ok(RecordBatch::try_new(target_schema, columns)?)
 }
 
@@ -516,13 +554,16 @@ mod tests {
     use super::*;
     use crate::operations::DeltaOps;
     use crate::writer::test_utils::datafusion::get_data;
-    use crate::writer::test_utils::{get_delta_schema, get_record_batch};
+    use crate::writer::test_utils::{
+        get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
+        get_record_batch_with_nested_struct,
+    };
     use arrow::datatypes::Field;
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, TimeUnit};
     use datafusion::assert_batches_sorted_eq;
-    use serde_json::json;
+    use serde_json::{json, Value};
 
     #[tokio::test]
     async fn test_create_write() {
@@ -535,33 +576,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
+        assert_eq!(table.state.commit_infos().len(), 1);
 
         // write some data
-        let table = DeltaOps(table)
+        let metadata = Map::from_iter(vec![("k1".to_string(), json!("v1.1"))]);
+        let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
+            .with_metadata(metadata.clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
+        table.load().await.unwrap();
+        assert_eq!(table.state.commit_infos().len(), 2);
+        assert_eq!(
+            table.state.commit_infos()[1]
+                .info
+                .clone()
+                .into_iter()
+                .filter(|(k, _)| k != "clientVersion")
+                .collect::<Map<String, Value>>(),
+            metadata
+        );
 
         // append some data
-        let table = DeltaOps(table)
+        let metadata: Map<String, Value> = Map::from_iter(vec![("k1".to_string(), json!("v1.2"))]);
+        let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
+            .with_metadata(metadata.clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_file_uris().count(), 2);
+        table.load().await.unwrap();
+        assert_eq!(table.state.commit_infos().len(), 3);
+        assert_eq!(
+            table.state.commit_infos()[2]
+                .info
+                .clone()
+                .into_iter()
+                .filter(|(k, _)| k != "clientVersion")
+                .collect::<Map<String, Value>>(),
+            metadata
+        );
 
         // overwrite table
-        let table = DeltaOps(table)
+        let metadata: Map<String, Value> = Map::from_iter(vec![("k2".to_string(), json!("v2.1"))]);
+        let mut table = DeltaOps(table)
             .write(vec![batch])
             .with_save_mode(SaveMode::Overwrite)
+            .with_metadata(metadata.clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 3);
-        assert_eq!(table.get_file_uris().count(), 1)
+        assert_eq!(table.get_file_uris().count(), 1);
+        table.load().await.unwrap();
+        assert_eq!(table.state.commit_infos().len(), 4);
+        assert_eq!(
+            table.state.commit_infos()[3]
+                .info
+                .clone()
+                .into_iter()
+                .filter(|(k, _)| k != "clientVersion")
+                .collect::<Map<String, Value>>(),
+            metadata
+        );
     }
 
     #[tokio::test]
@@ -742,5 +823,36 @@ mod tests {
 
         let table = DeltaOps(table).write(vec![batch.clone()]).await;
         assert!(table.is_err())
+    }
+
+    #[tokio::test]
+    async fn test_nested_struct() {
+        let table_schema = get_delta_schema_with_nested_struct();
+        let batch = get_record_batch_with_nested_struct();
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(table_schema.get_fields().clone())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let table = DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+
+        let actual = get_data(&table).await;
+        let expected = DataType::Struct(Fields::from(vec![Field::new(
+            "count",
+            DataType::Int32,
+            true,
+        )]));
+        assert_eq!(
+            actual[0].column_by_name("nested").unwrap().data_type(),
+            &expected
+        );
     }
 }

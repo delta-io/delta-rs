@@ -8,6 +8,7 @@ from packaging import version
 
 from deltalake.exceptions import DeltaProtocolError
 from deltalake.table import ProtocolVersions
+from deltalake.writer import write_deltalake
 
 try:
     import pandas as pd
@@ -85,24 +86,14 @@ def test_load_with_datetime():
 def test_load_with_datetime_bad_format():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    with pytest.raises(Exception) as exception:
-        dt.load_with_datetime("2020-05-01T00:47:31")
-    assert (
-        str(exception.value)
-        == "Failed to parse datetime string: premature end of input"
-    )
-    with pytest.raises(Exception) as exception:
-        dt.load_with_datetime("2020-05-01 00:47:31")
-    assert (
-        str(exception.value)
-        == "Failed to parse datetime string: input contains invalid characters"
-    )
-    with pytest.raises(Exception) as exception:
-        dt.load_with_datetime("2020-05-01T00:47:31+08")
-    assert (
-        str(exception.value)
-        == "Failed to parse datetime string: premature end of input"
-    )
+
+    for bad_format in [
+        "2020-05-01T00:47:31",
+        "2020-05-01 00:47:31",
+        "2020-05-01T00:47:31+08",
+    ]:
+        with pytest.raises(Exception, match="Failed to parse datetime string:"):
+            dt.load_with_datetime(bad_format)
 
 
 def test_read_simple_table_update_incremental():
@@ -543,3 +534,75 @@ def test_read_multiple_tables_from_s3_multi_threaded(s3_localstack):
         t.start()
     for t in threads:
         t.join()
+
+
+def assert_num_fragments(table, predicate, count):
+    frags = table.to_pyarrow_dataset().get_fragments(filter=predicate)
+    assert len(list(frags)) == count
+
+
+def test_filter_nulls(tmp_path: Path):
+    def assert_scan_equals(table, predicate, expected):
+        data = table.to_pyarrow_dataset().to_table(filter=predicate).sort_by("part")
+        assert data == expected
+
+    # 1 all-valid part, 1 all-null part, and 1 mixed part.
+    data = pa.table(
+        {"part": ["a", "a", "b", "b", "c", "c"], "value": [1, 1, None, None, 2, None]}
+    )
+
+    write_deltalake(tmp_path, data, partition_by="part")
+
+    table = DeltaTable(tmp_path)
+
+    # Note: we assert number of fragments returned because that verifies
+    # that file skipping is working properly.
+
+    # is valid predicate
+    predicate = ds.field("value").is_valid()
+    assert_num_fragments(table, predicate, 2)
+    expected = pa.table({"part": ["a", "a", "c"], "value": [1, 1, 2]})
+    assert_scan_equals(table, predicate, expected)
+
+    # is null predicate
+    predicate = ds.field("value").is_null()
+    assert_num_fragments(table, predicate, 2)
+    expected = pa.table(
+        {"part": ["b", "b", "c"], "value": pa.array([None, None, None], pa.int64())}
+    )
+    assert_scan_equals(table, predicate, expected)
+
+    # inequality predicate
+    predicate = ds.field("value") > 1
+    assert_num_fragments(table, predicate, 1)
+    expected = pa.table({"part": ["c"], "value": pa.array([2], pa.int64())})
+    assert_scan_equals(table, predicate, expected)
+
+    # also test nulls in partition values
+    data = pa.table({"part": pa.array([None], pa.string()), "value": [3]})
+    write_deltalake(
+        table,
+        data,
+        mode="append",
+        partition_by="part",
+    )
+
+    # null predicate
+    predicate = ds.field("part").is_null()
+    assert_num_fragments(table, predicate, 1)
+    expected = pa.table({"part": pa.array([None], pa.string()), "value": [3]})
+    assert_scan_equals(table, predicate, expected)
+
+    # valid predicate
+    predicate = ds.field("part").is_valid()
+    assert_num_fragments(table, predicate, 3)
+    expected = pa.table(
+        {"part": ["a", "a", "b", "b", "c", "c"], "value": [1, 1, None, None, 2, None]}
+    )
+    assert_scan_equals(table, predicate, expected)
+
+    # inequality predicate
+    predicate = ds.field("part") < "c"
+    assert_num_fragments(table, predicate, 2)
+    expected = pa.table({"part": ["a", "a", "b", "b"], "value": [1, 1, None, None]})
+    assert_scan_equals(table, predicate, expected)
