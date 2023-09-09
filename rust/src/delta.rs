@@ -29,6 +29,7 @@ use super::table_state::DeltaTableState;
 use crate::action::{Add, ProtocolError, Stats};
 use crate::errors::DeltaTableError;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
+use crate::checkpoints::create_checkpoint_for;
 
 // TODO re-exports only for transition
 pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
@@ -713,6 +714,27 @@ impl DeltaTable {
         self.state
             .file_paths_iter()
             .map(|path| self.storage.to_uri(&path))
+    }
+
+    /// Attempts to create a checkpoint if versions since last is None or is met, returns true if created, false if not
+    pub async fn create_check_point(&mut self, versions_since_last: Option<i64>) -> Result<bool, ProtocolError> {
+        let last_check_point_version = match self.last_check_point {
+            Some(cp) => cp.version,
+            None => 0
+        };
+
+        match versions_since_last {
+            None => {},
+            Some(v) => {
+                if (self.version() - last_check_point_version) < v {
+                    return Ok(false);
+                }
+            }
+        }
+
+        self.last_check_point = Some(create_checkpoint_for(self.version(), self.get_state(), self.storage.as_ref()).await?);
+
+        Ok(true)
     }
 
     /// Returns statistics for files, in order

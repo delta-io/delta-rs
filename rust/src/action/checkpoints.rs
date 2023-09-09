@@ -109,11 +109,11 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     Ok(())
 }
 
-async fn create_checkpoint_for(
+pub(crate) async fn create_checkpoint_for(
     version: i64,
     state: &DeltaTableState,
     storage: &DeltaObjectStore,
-) -> Result<(), ProtocolError> {
+) -> Result<CheckPoint, ProtocolError> {
     // TODO: checkpoints _can_ be multi-part... haven't actually found a good reference for
     // an appropriate split point yet though so only writing a single part currently.
     // See https://github.com/delta-io/delta-rs/issues/288
@@ -136,7 +136,7 @@ async fn create_checkpoint_for(
         .put(&last_checkpoint_path, last_checkpoint_content)
         .await?;
 
-    Ok(())
+    Ok(checkpoint)
 }
 
 async fn flush_delete_files<T: Fn(&(i64, ObjectMeta)) -> bool>(
