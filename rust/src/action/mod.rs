@@ -22,6 +22,7 @@ use serde_json::{Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::mem::take;
 use std::str::FromStr;
 
 use crate::delta_config::IsolationLevel;
@@ -181,6 +182,47 @@ pub struct Stats {
     pub max_values: HashMap<String, ColumnValueStat>,
     /// The number of null values for all columns.
     pub null_count: HashMap<String, ColumnCountStat>,
+}
+
+/// Statistics associated with Add actions contained in the Delta log.
+/// min_values, max_values and null_count are optional to allow them to be missing
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct PartialStats {
+    /// Number of records in the file associated with the log action.
+    pub num_records: i64,
+
+    // start of per column stats
+    /// Contains a value smaller than all values present in the file for all columns.
+    pub min_values: Option<HashMap<String, ColumnValueStat>>,
+    /// Contains a value larger than all values present in the file for all columns.
+    pub max_values: Option<HashMap<String, ColumnValueStat>>,
+    /// The number of null values for all columns.
+    pub null_count: Option<HashMap<String, ColumnCountStat>>,
+}
+
+impl PartialStats {
+    /// Fills in missing HashMaps
+    pub fn as_stats(&mut self) -> Stats {
+        let min_values = take(&mut self.min_values);
+        let max_values = take(&mut self.max_values);
+        let null_count = take(&mut self.null_count);
+        Stats {
+            num_records: self.num_records,
+            min_values: match min_values {
+                Some(minv) => minv,
+                None => HashMap::default(),
+            },
+            max_values: match max_values {
+                Some(maxv) => maxv,
+                None => HashMap::default(),
+            },
+            null_count: match null_count {
+                Some(nc) => nc,
+                None => HashMap::default(),
+            },
+        }
+    }
 }
 
 /// File stats parsed from raw parquet format.
@@ -419,9 +461,16 @@ impl Add {
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
     pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        self.stats
+        let ps: Result<Option<PartialStats>, serde_json::error::Error> = self
+            .stats
             .as_ref()
-            .map_or(Ok(None), |s| serde_json::from_str(s))
+            .map_or(Ok(None), |s| serde_json::from_str(s));
+
+        match ps {
+            Ok(Some(mut partial)) => Ok(Some(partial.as_stats())),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -913,9 +962,9 @@ pub(crate) async fn find_latest_check_point_for_version(
 ) -> Result<Option<CheckPoint>, ProtocolError> {
     lazy_static! {
         static ref CHECKPOINT_REGEX: Regex =
-            Regex::new(r#"^_delta_log/(\d{20})\.checkpoint\.parquet$"#).unwrap();
+            Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.parquet$").unwrap();
         static ref CHECKPOINT_PARTS_REGEX: Regex =
-            Regex::new(r#"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$"#).unwrap();
+            Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap();
     }
 
     let mut cp: Option<CheckPoint> = None;
@@ -1033,6 +1082,26 @@ mod tests {
                 .unwrap(),
             1
         );
+    }
+
+    #[test]
+    fn test_load_table_partial_stats() {
+        let action = Add {
+            stats: Some(
+                serde_json::json!({
+                    "numRecords": 22
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        let stats = action.get_stats().unwrap().unwrap();
+
+        assert_eq!(stats.num_records, 22);
+        assert_eq!(stats.min_values.len(), 0);
+        assert_eq!(stats.max_values.len(), 0);
+        assert_eq!(stats.null_count.len(), 0);
     }
 
     #[test]
