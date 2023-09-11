@@ -64,7 +64,7 @@ impl TryFrom<&schema::SchemaTypeMap> for ArrowField {
 
     fn try_from(a: &schema::SchemaTypeMap) -> Result<Self, ArrowError> {
         Ok(ArrowField::new_map(
-            "entires",
+            "map",
             "entries",
             ArrowField::new("key", ArrowDataType::try_from(a.get_key_type())?, false),
             ArrowField::new(
