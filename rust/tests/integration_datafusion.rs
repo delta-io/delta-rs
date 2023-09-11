@@ -45,6 +45,8 @@ use std::error::Error;
 mod common;
 
 mod local {
+    use deltalake::{writer::JsonWriter, SchemaTypeMap};
+
     use super::*;
     #[tokio::test]
     #[serial]
@@ -927,6 +929,55 @@ mod local {
             "| 2023-05-24T00:01:25.014025 | 24          | 2023-05-24 |",
             "| 2023-05-24T00:01:25.014072 | 90          | 2023-05-24 |",
             "+----------------------------+-------------+------------+",
+        ];
+
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_issue_1619_parquet_panic_using_map_type() -> Result<()> {
+        let _ = tokio::fs::remove_dir_all("./tests/data/issue-1619").await;
+        let fields: Vec<SchemaField> = vec![SchemaField::new(
+            "metadata".to_string(),
+            SchemaDataType::map(SchemaTypeMap::new(
+                Box::new(SchemaDataType::primitive("string".to_string())),
+                Box::new(SchemaDataType::primitive("string".to_string())),
+                true,
+            )),
+            true,
+            HashMap::new(),
+        )];
+        let schema = deltalake::Schema::new(fields);
+        let table = deltalake::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
+        let _ = DeltaOps::from(table)
+            .create()
+            .with_columns(schema.get_fields().to_owned())
+            .await?;
+
+        let mut table = deltalake::open_table("./tests/data/issue-1619").await?;
+
+        let mut writer = JsonWriter::for_table(&table).unwrap();
+        let _ = writer
+            .write(vec![
+                serde_json::json!({"metadata": {"hello": "world", "something": null}}),
+            ])
+            .await
+            .unwrap();
+        writer.flush_and_commit(&mut table).await.unwrap();
+
+        let ctx = SessionContext::new();
+        ctx.register_table("t", Arc::new(table))?;
+
+        let batches = ctx.sql(r#"SELECT * FROM t"#).await?.collect().await?;
+
+        let expected = vec![
+            "+-----------------------------+",
+            "| metadata                    |",
+            "+-----------------------------+",
+            "| {hello: world, something: } |", // unclear why it doesn't say `null` for something...
+            "+-----------------------------+",
         ];
 
         assert_batches_sorted_eq!(&expected, &batches);
