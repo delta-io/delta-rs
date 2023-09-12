@@ -1322,10 +1322,12 @@ pub(crate) async fn find_files_scan<'a>(
         .map(|add| (add.path.clone(), add.to_owned()))
         .collect();
 
-    let mut scan_config = DeltaScanConfig::default();
-    scan_config.include_file_column = true;
+    let mut scan_config = DeltaScanConfig {
+        include_file_column: true,
+        ..Default::default()
+    };
 
-    let logical_schema = logical_schema(&snapshot, &mut scan_config)?;
+    let logical_schema = logical_schema(snapshot, &mut scan_config)?;
 
     // Identify which columns we need to project
     let mut used_columns = expression

@@ -62,10 +62,11 @@ use std::{
 };
 
 use crate::action::MergePredicate;
+use crate::delta_datafusion::DeltaScanBuilder;
 use crate::operations::datafusion_utils::MetricObserverExec;
 use crate::{
     action::{Action, DeltaOperation, Remove},
-    delta_datafusion::{parquet_scan_from_actions, register_store},
+    delta_datafusion::register_store,
     operations::write::write_execution_plan,
     storage::{DeltaObjectStore, ObjectStoreRef},
     table_state::DeltaTableState,
@@ -528,8 +529,6 @@ async fn execute(
         Expression::String(s) => snapshot.parse_predicate_expression(s)?,
     };
 
-    let schema = snapshot.input_schema()?;
-
     // TODO: Given the join predicate, remove any expression that involve the
     // source table and keep expressions that only involve the target table.
     // This would allow us to perform statistics/partition pruning E.G
@@ -539,17 +538,11 @@ async fn execute(
     // If the user specified any not_source_match operations then those
     // predicates also need to be considered when pruning
 
-    let target = parquet_scan_from_actions(
-        snapshot,
-        object_store.clone(),
-        snapshot.files(),
-        &schema,
-        None,
-        &state,
-        None,
-        None,
-    )
-    .await?;
+    let target = Arc::new(
+        DeltaScanBuilder::new(snapshot, object_store.clone(), &state)
+            .build()
+            .await?,
+    );
 
     let source = source.create_physical_plan().await?;
 
