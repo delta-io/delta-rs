@@ -68,6 +68,7 @@ mod local {
             partition_values: None,
             size: None,
             tags: None,
+            deletion_vector: None,
         };
 
         assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);

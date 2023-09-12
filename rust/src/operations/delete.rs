@@ -237,6 +237,7 @@ async fn execute(
             extended_file_metadata: Some(true),
             partition_values: Some(action.partition_values),
             size: Some(action.size),
+            deletion_vector: None,
             tags: None,
         }))
     }

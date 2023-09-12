@@ -36,7 +36,7 @@ use arrow_array::types::UInt16Type;
 use arrow_array::{DictionaryArray, StringArray};
 use arrow_schema::Field;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{NaiveDateTime, TimeZone, Utc};
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
 use datafusion::datasource::physical_plan::{
     wrap_partition_type_in_dict, wrap_partition_value_in_dict, FileScanConfig,
@@ -107,8 +107,8 @@ impl DeltaTableState {
         let stats = self
             .files()
             .iter()
-            .fold(
-                Some(Statistics {
+            .try_fold(
+                Statistics {
                     num_rows: Some(0),
                     total_byte_size: Some(0),
                     column_statistics: Some(vec![
@@ -121,9 +121,8 @@ impl DeltaTableState {
                         self.schema().unwrap().get_fields().len()
                     ]),
                     is_exact: true,
-                }),
+                },
                 |acc, action| {
-                    let acc = acc?;
                     let new_stats = action
                         .get_stats()
                         .unwrap_or_else(|_| Some(action::Stats::default()))?;
@@ -636,7 +635,7 @@ impl TableProvider for DeltaTable {
             .build()
             .await?;
 
-        Ok(scan.parquet_scan)
+        Ok(Arc::new(scan))
     }
 
     fn supports_filter_pushdown(
@@ -801,10 +800,8 @@ pub(crate) fn partitioned_file_from_action(
 
     let ts_secs = action.modification_time / 1000;
     let ts_ns = (action.modification_time % 1000) * 1_000_000;
-    let last_modified = DateTime::<Utc>::from_utc(
-        NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap(),
-        Utc,
-    );
+    let last_modified =
+        Utc.from_utc_datetime(&NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap());
     PartitionedFile {
         object_meta: ObjectMeta {
             last_modified,
@@ -1645,6 +1642,7 @@ mod tests {
             partition_values_parsed: None,
             data_change: true,
             stats: None,
+            deletion_vector: None,
             stats_parsed: None,
             tags: None,
         };

@@ -2,6 +2,7 @@ import json
 import operator
 import warnings
 from dataclasses import dataclass
+from datetime import datetime
 from functools import reduce
 from pathlib import Path
 from typing import (
@@ -221,6 +222,7 @@ class DeltaTable:
         version: Optional[int] = None,
         storage_options: Optional[Dict[str, str]] = None,
         without_files: bool = False,
+        log_buffer_size: Optional[int] = None,
     ):
         """
         Create the Delta Table from a path with an optional version.
@@ -233,6 +235,12 @@ class DeltaTable:
         :param without_files: If True, will load table without tracking files.
                               Some append-only applications might have no need of tracking any files. So, the
                               DeltaTable will be loaded with a significant memory reduction.
+        :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
+                                Setting a value greater than 1 results in concurrent calls to the storage api.
+                                This can decrease latency if there are many files in the log since the last checkpoint,
+                                but will also increase memory usage. Possible rate limits of the storage backend should
+                                also be considered for optimal performance. Defaults to 4 * number of cpus.
+
         """
         self._storage_options = storage_options
         self._table = RawDeltaTable(
@@ -240,6 +248,7 @@ class DeltaTable:
             version=version,
             storage_options=storage_options,
             without_files=without_files,
+            log_buffer_size=log_buffer_size,
         )
         self._metadata = Metadata(self._table)
 
@@ -251,6 +260,7 @@ class DeltaTable:
         table_name: str,
         data_catalog_id: Optional[str] = None,
         version: Optional[int] = None,
+        log_buffer_size: Optional[int] = None,
     ) -> "DeltaTable":
         """
         Create the Delta Table from a Data Catalog.
@@ -260,6 +270,11 @@ class DeltaTable:
         :param table_name: the table name inside the Data Catalog
         :param data_catalog_id: the identifier of the Data Catalog
         :param version: version of the DeltaTable
+        :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
+                                Setting a value greater than 1 results in concurrent calls to the storage api.
+                                This can decrease latency if there are many files in the log since the last checkpoint,
+                                but will also increase memory usage. Possible rate limits of the storage backend should
+                                also be considered for optimal performance. Defaults to 4 * number of cpus.
         """
         table_uri = RawDeltaTable.get_table_uri_from_data_catalog(
             data_catalog=data_catalog.value,
@@ -267,7 +282,9 @@ class DeltaTable:
             database_name=database_name,
             table_name=table_name,
         )
-        return cls(table_uri=table_uri, version=version)
+        return cls(
+            table_uri=table_uri, version=version, log_buffer_size=log_buffer_size
+        )
 
     def version(self) -> int:
         """
@@ -454,6 +471,35 @@ given filters.
         )
         return self.schema().to_pyarrow()
 
+    def restore(
+        self,
+        target: Union[int, datetime, str],
+        *,
+        ignore_missing_files: bool = False,
+        protocol_downgrade_allowed: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Run the Restore command on the Delta Table: restore table to a given version or datetime.
+
+        :param target: the expected version will restore, which represented by int, date str or datetime.
+        :param ignore_missing_files: whether the operation carry on when some data files missing.
+        :param protocol_downgrade_allowed: whether the operation when protocol version upgraded.
+        :return: the metrics from restore.
+        """
+        if isinstance(target, datetime):
+            metrics = self._table.restore(
+                target.isoformat(),
+                ignore_missing_files=ignore_missing_files,
+                protocol_downgrade_allowed=protocol_downgrade_allowed,
+            )
+        else:
+            metrics = self._table.restore(
+                target,
+                ignore_missing_files=ignore_missing_files,
+                protocol_downgrade_allowed=protocol_downgrade_allowed,
+            )
+        return json.loads(metrics)
+
     def to_pyarrow_dataset(
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
@@ -471,7 +517,7 @@ given filters.
         """
         if self.protocol().min_reader_version > MAX_SUPPORTED_READER_VERSION:
             raise DeltaProtocolError(
-                f"The table's minimum reader version is {self.protocol().min_reader_version}"
+                f"The table's minimum reader version is {self.protocol().min_reader_version} "
                 f"but deltalake only supports up to version {MAX_SUPPORTED_READER_VERSION}."
             )
 
