@@ -208,6 +208,28 @@ def test_read_table_with_stats():
         assert data.num_rows == 0
 
 
+def test_read_special_partition():
+    table_path = "../rust/tests/data/delta-0.8.0-special-partition"
+    dt = DeltaTable(table_path)
+
+    file1 = (
+        r"x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
+    )
+    file2 = (
+        r"x=B%20B/part-00015-e9abbc6f-85e9-457b-be8e-e9f5b8a22890.c000.snappy.parquet"
+    )
+
+    assert set(dt.files()) == {file1, file2}
+
+    assert dt.files([("x", "=", "A/A")]) == [file1]
+    assert dt.files([("x", "=", "B B")]) == [file2]
+    assert dt.files([("x", "=", "c")]) == []
+
+    table = dt.to_pyarrow_table()
+
+    assert set(table["x"].to_pylist()) == {"A/A", "B B"}
+
+
 def test_read_partitioned_table_metadata():
     table_path = "../rust/tests/data/delta-0.8.0-partitioned"
     dt = DeltaTable(table_path)
