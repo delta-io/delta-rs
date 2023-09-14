@@ -29,7 +29,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use arrow::array::{Array, UInt32Array};
-use arrow::compute::{lexicographical_partition_ranges, take, SortColumn};
+use arrow::compute::{take, SortColumn};
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
@@ -372,7 +372,8 @@ pub(crate) fn divide_by_partition_values(
         })
         .collect::<Result<Vec<_>, DeltaWriterError>>()?;
 
-    let partition_ranges = lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
+    #[allow(warnings)]
+    let partition_ranges =  arrow::compute::lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
 
     for range in partition_ranges {
         // get row indices for current partition
