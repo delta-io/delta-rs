@@ -681,6 +681,18 @@ pub struct CommitInfo {
     pub info: Map<String, serde_json::Value>,
 }
 
+/// The domain metadata action contains a configuration (string) for a named metadata domain
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainMetaData {
+    /// Identifier for this domain (system or user-provided)
+    pub domain: String,
+    /// String containing configuration for the metadata domain
+    pub configuration: String,
+    /// When `true` the action serves as a tombstone
+    pub removed: bool,
+}
+
 /// Represents an action in the Delta log. The Delta log is an aggregate of all actions performed
 /// on the table, so the full list of actions is required to properly read a table.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -701,6 +713,8 @@ pub enum Action {
     protocol(Protocol),
     /// Describes commit provenance information for the table.
     commitInfo(CommitInfo),
+    /// Describe s the configuration for a named metadata domain
+    domainMetadata(DomainMetaData),
 }
 
 impl Action {
@@ -1161,6 +1175,13 @@ mod tests {
         let info = serde_json::from_str::<CommitInfo>(raw).expect("should parse");
         assert!(info.info.contains_key("additionalField"));
         assert!(info.info.contains_key("additionalStruct"));
+    }
+
+    #[test]
+    fn test_read_domain_metadata() {
+        let buf = r#"{"domainMetadata":{"domain":"delta.liquid","configuration":"{\"clusteringColumns\":[{\"physicalName\":[\"id\"]}],\"domainName\":\"delta.liquid\"}","removed":false}}"#;
+        let _action: Action =
+            serde_json::from_str(buf).expect("Expected to be able to deserialize");
     }
 
     #[cfg(feature = "arrow")]
