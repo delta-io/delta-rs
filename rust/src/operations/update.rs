@@ -25,18 +25,12 @@ use std::{
 };
 
 use arrow::datatypes::Schema as ArrowSchema;
-use arrow_array::RecordBatch;
-use arrow_schema::{Field, SchemaRef};
+use arrow_schema::Field;
 use datafusion::{
     execution::context::SessionState,
-    physical_plan::{
-        metrics::{ExecutionPlanMetricsSet, MetricBuilder, MetricsSet},
-        projection::ProjectionExec,
-        ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
-    },
+    physical_plan::{metrics::MetricBuilder, projection::ProjectionExec, ExecutionPlan},
     prelude::SessionContext,
 };
-use datafusion_common::Result as DataFusionResult;
 use datafusion_common::{Column, DFSchema, ScalarValue};
 use datafusion_expr::{case, col, lit, when, Expr};
 use datafusion_physical_expr::{
@@ -44,7 +38,7 @@ use datafusion_physical_expr::{
     expressions::{self},
     PhysicalExpr,
 };
-use futures::{future::BoxFuture, Stream, StreamExt};
+use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
 
@@ -56,7 +50,11 @@ use crate::{
     DeltaResult, DeltaTable, DeltaTableError,
 };
 
-use super::{datafusion_utils::Expression, transaction::commit, write::write_execution_plan};
+use super::{
+    datafusion_utils::{Expression, MetricObserverExec},
+    transaction::commit,
+    write::write_execution_plan,
+};
 
 /// Updates records in the Delta Table.
 /// See this module's documentation for more information
@@ -290,7 +288,22 @@ async fn execute(
     let projection_predicate: Arc<dyn ExecutionPlan> =
         Arc::new(ProjectionExec::try_new(expressions, parquet_scan)?);
 
-    let count_plan = Arc::new(UpdateCountExec::new(projection_predicate.clone()));
+    let count_plan = Arc::new(MetricObserverExec::new(
+        projection_predicate.clone(),
+        |batch, metrics| {
+            let array = batch.column_by_name("__delta_rs_update_predicate").unwrap();
+            let copied_rows = array.null_count();
+            let num_updated = array.len() - copied_rows;
+
+            MetricBuilder::new(metrics)
+                .global_counter("num_updated_rows")
+                .add(num_updated);
+
+            MetricBuilder::new(metrics)
+                .global_counter("num_copied_rows")
+                .add(copied_rows);
+        },
+    ));
 
     // Perform another projection but instead calculate updated values based on
     // the predicate value.  If the predicate is true then evalute the user
@@ -395,6 +408,7 @@ async fn execute(
             extended_file_metadata: Some(true),
             partition_values: Some(action.partition_values),
             size: Some(action.size),
+            deletion_vector: action.deletion_vector,
             tags: None,
         }))
     }
@@ -451,111 +465,6 @@ impl std::future::IntoFuture for UpdateBuilder {
 
             Ok((table, metrics))
         })
-    }
-}
-
-#[derive(Debug)]
-struct UpdateCountExec {
-    parent: Arc<dyn ExecutionPlan>,
-    metrics: ExecutionPlanMetricsSet,
-}
-
-impl UpdateCountExec {
-    pub fn new(parent: Arc<dyn ExecutionPlan>) -> Self {
-        UpdateCountExec {
-            parent,
-            metrics: ExecutionPlanMetricsSet::new(),
-        }
-    }
-}
-
-impl ExecutionPlan for UpdateCountExec {
-    fn as_any(&self) -> &dyn std::any::Any {
-        self
-    }
-
-    fn schema(&self) -> arrow_schema::SchemaRef {
-        self.parent.schema()
-    }
-
-    fn output_partitioning(&self) -> datafusion::physical_plan::Partitioning {
-        self.parent.output_partitioning()
-    }
-
-    fn output_ordering(&self) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
-        self.parent.output_ordering()
-    }
-
-    fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
-        vec![self.parent.clone()]
-    }
-
-    fn execute(
-        &self,
-        partition: usize,
-        context: Arc<datafusion::execution::context::TaskContext>,
-    ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream> {
-        let res = self.parent.execute(partition, context)?;
-        Ok(Box::pin(UpdateCountStream {
-            schema: self.schema(),
-            input: res,
-            metrics: self.metrics.clone(),
-        }))
-    }
-
-    fn statistics(&self) -> datafusion_common::Statistics {
-        self.parent.statistics()
-    }
-
-    fn with_new_children(
-        self: Arc<Self>,
-        children: Vec<Arc<dyn ExecutionPlan>>,
-    ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
-        ExecutionPlan::with_new_children(self.parent.clone(), children)
-    }
-
-    fn metrics(&self) -> Option<MetricsSet> {
-        Some(self.metrics.clone_inner())
-    }
-}
-
-struct UpdateCountStream {
-    schema: SchemaRef,
-    input: SendableRecordBatchStream,
-    metrics: ExecutionPlanMetricsSet,
-}
-
-impl Stream for UpdateCountStream {
-    type Item = DataFusionResult<RecordBatch>;
-
-    fn poll_next(
-        mut self: std::pin::Pin<&mut Self>,
-        cx: &mut std::task::Context<'_>,
-    ) -> std::task::Poll<Option<Self::Item>> {
-        self.input.poll_next_unpin(cx).map(|x| match x {
-            Some(Ok(batch)) => {
-                let array = batch.column_by_name("__delta_rs_update_predicate").unwrap();
-                let copied_rows = array.null_count();
-                let num_updated = array.len() - copied_rows;
-                let c1 = MetricBuilder::new(&self.metrics).global_counter("num_updated_rows");
-                c1.add(num_updated);
-
-                let c2 = MetricBuilder::new(&self.metrics).global_counter("num_copied_rows");
-                c2.add(copied_rows);
-                Some(Ok(batch))
-            }
-            other => other,
-        })
-    }
-
-    fn size_hint(&self) -> (usize, Option<usize>) {
-        self.input.size_hint()
-    }
-}
-
-impl RecordBatchStream for UpdateCountStream {
-    fn schema(&self) -> SchemaRef {
-        self.schema.clone()
     }
 }
 

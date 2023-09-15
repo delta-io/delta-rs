@@ -304,6 +304,7 @@ fn create_remove(
         extended_file_metadata: None,
         partition_values: Some(partitions.to_owned()),
         size: Some(size),
+        deletion_vector: None,
         tags: None,
     }))
 }
@@ -1179,11 +1180,11 @@ pub(super) mod zorder {
             .map(|i| (i * value_size) as i32)
             .collect::<Vec<i32>>();
 
-        let out_arr = BinaryArray::new_unchecked(
+        let out_arr = BinaryArray::try_new(
             OffsetBuffer::new(ScalarBuffer::from(offsets)),
             Buffer::from_vec(out),
             None,
-        );
+        )?;
 
         Ok(Arc::new(out_arr))
     }

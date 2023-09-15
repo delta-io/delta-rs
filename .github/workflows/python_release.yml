@@ -39,6 +39,14 @@ jobs:
     steps:
       - uses: actions/checkout@v3
 
+      # We use extra recent Cargo.toml syntax, so we need at least Rust 1.71.0
+      - name: Install newer rust
+        uses: actions-rs/toolchain@v1
+        with:
+          profile: default
+          toolchain: stable
+          override: true
+
       - name: Publish to pypi (without sdist)
         uses: messense/maturin-action@v1
         env:
@@ -95,6 +103,8 @@ jobs:
           target: x86_64-unknown-linux-gnu
           command: publish
           args: --skip-existing -m python/Cargo.toml ${{ env.FEATURES_FLAG }}
+          # for openssl build
+          before-script-linux: yum install -y perl-IPC-Cmd
 
       - name: Publish manylinux to pypi aarch64 (without sdist)
         uses: messense/maturin-action@v1
@@ -104,6 +114,8 @@ jobs:
           target: aarch64-unknown-linux-gnu
           command: publish
           args: --skip-existing -m python/Cargo.toml --no-sdist ${{ env.FEATURES_FLAG }}
+          # for openssl build
+          before-script-linux: yum install -y perl-IPC-Cmd
 
   release-docs:
     needs:
