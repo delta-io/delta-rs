@@ -9,54 +9,112 @@ use maplit::hashmap;
 use object_store::path::Path;
 use serial_test::serial;
 
+#[allow(dead_code)]
+mod fs_common;
+
 static TEST_PREFIXES: &[&str] = &["my table", "你好/😊"];
 
 /// TEST_PREFIXES as they should appear in object stores.
 static TEST_PREFIXES_ENCODED: &[&str] = &["my%20table", "%E4%BD%A0%E5%A5%BD/%F0%9F%98%8A"];
 
-#[tokio::test]
-#[serial]
-async fn test_read_tables_local() -> TestResult {
-    read_tables(StorageIntegration::Local).await?;
+#[cfg(feature = "azure")]
+mod azure {
+    use super::*;
 
-    for prefix in TEST_PREFIXES {
-        read_table_paths(StorageIntegration::Local, prefix, prefix).await?;
+    #[tokio::test]
+    #[serial]
+    async fn test_read_tables_azure() -> TestResult {
+        read_tables(StorageIntegration::Microsoft).await?;
+
+        for (prefix, prefix_encoded) in TEST_PREFIXES.iter().zip(TEST_PREFIXES_ENCODED.iter()) {
+            read_table_paths(StorageIntegration::Microsoft, prefix, prefix_encoded).await?;
+        }
+
+        Ok(())
     }
-
-    Ok(())
 }
 
-#[cfg(feature = "azure")]
-#[tokio::test]
-#[serial]
-async fn test_read_tables_azure() -> TestResult {
-    read_tables(StorageIntegration::Microsoft).await?;
+mod local {
+    use super::*;
 
-    for (prefix, prefix_encoded) in TEST_PREFIXES.iter().zip(TEST_PREFIXES_ENCODED.iter()) {
-        read_table_paths(StorageIntegration::Microsoft, prefix, prefix_encoded).await?;
+    #[tokio::test]
+    #[serial]
+    async fn test_read_tables_local() -> TestResult {
+        read_tables(StorageIntegration::Local).await?;
+
+        for prefix in TEST_PREFIXES {
+            read_table_paths(StorageIntegration::Local, prefix, prefix).await?;
+        }
+
+        Ok(())
     }
 
-    Ok(())
+    #[tokio::test]
+    async fn test_action_reconciliation() {
+        let path = "./tests/data/action_reconciliation";
+        let mut table = fs_common::create_table(path, None).await;
+
+        // Add a file.
+        let a = fs_common::add(3 * 60 * 1000);
+        assert_eq!(1, fs_common::commit_add(&mut table, &a).await);
+        assert_eq!(table.get_files(), vec![Path::from(a.path.clone())]);
+
+        // Remove added file.
+        let r = deltalake::action::Remove {
+            path: a.path.clone(),
+            deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
+            data_change: false,
+            extended_file_metadata: None,
+            partition_values: None,
+            size: None,
+            tags: None,
+            deletion_vector: None,
+        };
+
+        assert_eq!(2, fs_common::commit_removes(&mut table, vec![&r]).await);
+        assert_eq!(table.get_files().len(), 0);
+        assert_eq!(
+            table
+                .get_state()
+                .all_tombstones()
+                .iter()
+                .map(|r| r.path.as_str())
+                .collect::<Vec<_>>(),
+            vec![a.path.as_str()]
+        );
+
+        // Add removed file back.
+        assert_eq!(3, fs_common::commit_add(&mut table, &a).await);
+        assert_eq!(table.get_files(), vec![Path::from(a.path)]);
+        // tombstone is removed.
+        assert_eq!(table.get_state().all_tombstones().len(), 0);
+    }
 }
 
 #[cfg(feature = "hdfs")]
-#[tokio::test]
-#[serial]
-async fn test_read_tables_hdfs() -> TestResult {
-    Ok(read_tables(StorageIntegration::Hdfs).await?)
+mod hdfs {
+    use super::*;
+    #[tokio::test]
+    #[serial]
+    async fn test_read_tables_hdfs() -> TestResult {
+        Ok(read_tables(StorageIntegration::Hdfs).await?)
+    }
 }
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-#[tokio::test]
-#[serial]
-async fn test_read_tables_aws() -> TestResult {
-    read_tables(StorageIntegration::Amazon).await?;
+mod s3 {
+    use super::*;
+    #[tokio::test]
+    #[serial]
+    async fn test_read_tables_aws() -> TestResult {
+        read_tables(StorageIntegration::Amazon).await?;
 
-    for (prefix, prefix_encoded) in TEST_PREFIXES.iter().zip(TEST_PREFIXES_ENCODED.iter()) {
-        read_table_paths(StorageIntegration::Amazon, prefix, prefix_encoded).await?;
+        for (prefix, prefix_encoded) in TEST_PREFIXES.iter().zip(TEST_PREFIXES_ENCODED.iter()) {
+            read_table_paths(StorageIntegration::Amazon, prefix, prefix_encoded).await?;
+        }
+
+        Ok(())
     }
-
-    Ok(())
 }
 
 async fn read_tables(storage: StorageIntegration) -> TestResult {

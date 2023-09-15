@@ -146,6 +146,7 @@ impl FileSystemCheckPlan {
                 extended_file_metadata: None,
                 partition_values: Some(file.partition_values),
                 size: Some(file.size),
+                deletion_vector: None,
                 tags: file.tags,
             }));
         }
