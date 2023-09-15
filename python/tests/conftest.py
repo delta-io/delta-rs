@@ -167,7 +167,7 @@ def azurite_env_vars(monkeypatch, azurite_creds):
         monkeypatch.setenv(key, value)
 
 
-@pytest.fixture()
+@pytest.fixture(scope="session")
 def azurite_sas_creds(azurite_creds):
     endpoint_url = (
         f"http://localhost:10000/{azurite_creds['AZURE_STORAGE_ACCOUNT_NAME']}"
