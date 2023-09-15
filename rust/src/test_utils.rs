@@ -5,9 +5,9 @@ use chrono::Utc;
 use fs_extra::dir::{copy, CopyOptions};
 use object_store::DynObjectStore;
 use serde_json::json;
+use std::env;
 use std::sync::Arc;
 use tempdir::TempDir;
-use std::env;
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 
@@ -35,16 +35,26 @@ impl IntegrationContext {
         let bucket = match integration {
             StorageIntegration::Local => tmp_dir.as_ref().to_str().unwrap().to_owned(),
             StorageIntegration::Onelake => {
-                let account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
-                let container_name = env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or(String::from("delta-rs"));
-                format!("{0}.dfs.fabric.microsoft.com/{1}", account_name, container_name)
-            },
-            StorageIntegration::OnelakeAbfs =>{
-                let account_name = env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
-                let container_name = env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or(String::from("delta-rs"));
-                format!("{0}@{1}.dfs.fabric.microsoft.com", container_name, account_name)
-            }        
-            _ => format!("test-delta-table-{}", Utc::now().timestamp()),            
+                let account_name =
+                    env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
+                let container_name =
+                    env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or(String::from("delta-rs"));
+                format!(
+                    "{0}.dfs.fabric.microsoft.com/{1}",
+                    account_name, container_name
+                )
+            }
+            StorageIntegration::OnelakeAbfs => {
+                let account_name =
+                    env::var("AZURE_STORAGE_ACCOUNT_NAME").unwrap_or(String::from("onelake"));
+                let container_name =
+                    env::var("AZURE_STORAGE_CONTAINER_NAME").unwrap_or(String::from("delta-rs"));
+                format!(
+                    "{0}@{1}.dfs.fabric.microsoft.com",
+                    container_name, account_name
+                )
+            }
+            _ => format!("test-delta-table-{}", Utc::now().timestamp()),
         };
 
         if let StorageIntegration::Google = integration {
@@ -100,7 +110,7 @@ impl IntegrationContext {
             StorageIntegration::Amazon => format!("s3://{}", &self.bucket),
             StorageIntegration::Microsoft => format!("az://{}", &self.bucket),
             StorageIntegration::Onelake => format!("https://{}", &self.bucket),
-            StorageIntegration::OnelakeAbfs => format!("abfss://{}", &self.bucket),            
+            StorageIntegration::OnelakeAbfs => format!("abfss://{}", &self.bucket),
             StorageIntegration::Google => format!("gs://{}", &self.bucket),
             StorageIntegration::Local => format!("file://{}", &self.bucket),
             StorageIntegration::Hdfs => format!("hdfs://localhost:9000/{}", &self.bucket),
@@ -184,17 +194,17 @@ pub enum StorageIntegration {
     Google,
     Local,
     Hdfs,
-    OnelakeAbfs
+    OnelakeAbfs,
 }
 
 impl StorageIntegration {
     fn prepare_env(&self) {
         match self {
             Self::Microsoft => az_cli::prepare_env(),
-            Self::Onelake =>  onelake_cli::prepare_env(),
+            Self::Onelake => onelake_cli::prepare_env(),
             Self::Amazon => s3_cli::prepare_env(),
             Self::Google => gs_cli::prepare_env(),
-            Self::OnelakeAbfs =>  onelake_cli::prepare_env(),
+            Self::OnelakeAbfs => onelake_cli::prepare_env(),
             Self::Local => (),
             Self::Hdfs => (),
         }
@@ -206,12 +216,8 @@ impl StorageIntegration {
                 az_cli::create_container(name)?;
                 Ok(())
             }
-            Self::Onelake => {
-                Ok(())
-            }
-            Self::OnelakeAbfs => {
-                Ok(())
-            }
+            Self::Onelake => Ok(()),
+            Self::OnelakeAbfs => Ok(()),
             Self::Amazon => {
                 s3_cli::create_bucket(format!("s3://{}", name.as_ref()))?;
                 set_env_if_not_set(
@@ -295,13 +301,16 @@ pub fn set_env_if_not_set(key: impl AsRef<str>, value: impl AsRef<str>) {
 
 //cli for onelake
 pub mod onelake_cli {
-    use super::set_env_if_not_set;        
-     /// prepare_env
-     pub fn prepare_env() {        
+    use super::set_env_if_not_set;
+    /// prepare_env
+    pub fn prepare_env() {
         let token = "jwt-token";
         set_env_if_not_set("AZURE_STORAGE_USE_EMULATOR", "0");
         set_env_if_not_set("AZURE_STORAGE_ACCOUNT_NAME", "daily-onelake");
-        set_env_if_not_set("AZURE_STORAGE_CONTAINER_NAME", "86bc63cf-5086-42e0-b16d-6bc580d1dc87");        
+        set_env_if_not_set(
+            "AZURE_STORAGE_CONTAINER_NAME",
+            "86bc63cf-5086-42e0-b16d-6bc580d1dc87",
+        );
         set_env_if_not_set("AZURE_STORAGE_TOKEN", token);
     }
 }

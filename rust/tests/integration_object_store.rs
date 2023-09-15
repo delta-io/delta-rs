@@ -66,9 +66,9 @@ async fn test_object_store_hdfs() -> TestResult {
     Ok(())
 }
 
-async fn read_write_test_onelake(integration: StorageIntegration, path: &Path) -> TestResult{
+async fn read_write_test_onelake(integration: StorageIntegration, path: &Path) -> TestResult {
     let context = IntegrationContext::new(integration)?;
-    
+
     //println!("line 102-{:#?}",context.root_uri());
 
     let delta_store = DeltaTableBuilder::from_uri(&context.root_uri())
@@ -77,7 +77,7 @@ async fn read_write_test_onelake(integration: StorageIntegration, path: &Path) -
 
     //println!("{:#?}",delta_store);
 
-    let expected = Bytes::from_static(b"test world from delta-rs on friday");  
+    let expected = Bytes::from_static(b"test world from delta-rs on friday");
 
     delta_store.put(path, expected.clone()).await.unwrap();
     let fetched = delta_store.get(path).await.unwrap().bytes().await.unwrap();

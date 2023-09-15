@@ -373,7 +373,8 @@ pub(crate) fn divide_by_partition_values(
         .collect::<Result<Vec<_>, DeltaWriterError>>()?;
 
     #[allow(warnings)]
-    let partition_ranges =  arrow::compute::lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
+    let partition_ranges =
+        arrow::compute::lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
 
     for range in partition_ranges {
         // get row indices for current partition
