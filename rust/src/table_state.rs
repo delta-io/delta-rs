@@ -113,7 +113,7 @@ impl DeltaTableState {
             }
             for record in preader.get_row_iter(None)? {
                 self.process_action(
-                    action::Action::from_parquet_record(schema, &record)?,
+                    action::Action::from_parquet_record(schema, &record.unwrap())?,
                     table_config.require_tombstones,
                     table_config.require_files,
                 )?;
@@ -204,7 +204,10 @@ impl DeltaTableState {
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.files.iter().map(|add| Path::from(add.path.as_ref()))
+        self.files.iter().map(|add| match Path::parse(&add.path) {
+            Ok(path) => path,
+            Err(_) => Path::from(add.path.as_ref()),
+        })
     }
 
     /// HashMap containing the last txn version stored for every app id writing txn

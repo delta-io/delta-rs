@@ -414,12 +414,14 @@ mod tests {
         assert_eq!(
             table.get_files(),
             vec![
-                Path::from(
+                Path::parse(
                     "x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
-                ),
-                Path::from(
+                )
+                .unwrap(),
+                Path::parse(
                     "x=B%20B/part-00015-e9abbc6f-85e9-457b-be8e-e9f5b8a22890.c000.snappy.parquet"
                 )
+                .unwrap()
             ]
         );
 
@@ -429,9 +431,10 @@ mod tests {
         }];
         assert_eq!(
             table.get_files_by_partitions(&filters).unwrap(),
-            vec![Path::from(
+            vec![Path::parse(
                 "x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
-            )]
+            )
+            .unwrap()]
         );
     }
 

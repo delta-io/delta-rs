@@ -508,3 +508,24 @@ the method will raise an error.
 
 This method could also be used to insert a new partition if one doesn't already
 exist, making this operation idempotent.
+
+
+Restoring tables
+~~~~~~~~~~~~~~~~
+
+.. py:currentmodule:: deltalake.table
+
+Restoring a table will restore delta table to a specified version or datetime. This
+operation compares the current state of the delta table with the state to be restored.
+And add those missing files into the AddFile actions and add redundant files into
+RemoveFile actions. Then commit into a new version.
+
+
+Use :meth:`DeltaTable.restore` to perform the restore operation. Note that if any other
+concurrent operation was performed on the table, restore will fail.
+
+.. code-block:: python
+
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.restore(1)
+    {'numRemovedFile': 5, 'numRestoredFile': 22}

@@ -25,6 +25,7 @@ use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
+use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
@@ -75,12 +76,13 @@ struct RawDeltaTableMetaData {
 #[pymethods]
 impl RawDeltaTable {
     #[new]
-    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false))]
+    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None))]
     fn new(
         table_uri: &str,
         version: Option<i64>,
         storage_options: Option<HashMap<String, String>>,
         without_files: bool,
+        log_buffer_size: Option<usize>,
     ) -> PyResult<Self> {
         let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
         let options = storage_options.clone().unwrap_or_default();
@@ -90,9 +92,13 @@ impl RawDeltaTable {
         if let Some(version) = version {
             builder = builder.with_version(version)
         }
-
         if without_files {
             builder = builder.without_files()
+        }
+        if let Some(buf_size) = log_buffer_size {
+            builder = builder
+                .with_log_buffer_size(buf_size)
+                .map_err(PythonError::from)?;
         }
 
         let table = rt()?.block_on(builder.load()).map_err(PythonError::from)?;
@@ -244,18 +250,16 @@ impl RawDeltaTable {
 
     /// Run the Vacuum command on the Delta Table: list and delete files no longer referenced
     /// by the Delta table and are older than the retention threshold.
-    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true, max_concurrent_requests = 10))]
+    #[pyo3(signature = (dry_run, retention_hours = None, enforce_retention_duration = true))]
     pub fn vacuum(
         &mut self,
         dry_run: bool,
         retention_hours: Option<u64>,
         enforce_retention_duration: bool,
-        max_concurrent_requests: usize,
     ) -> PyResult<Vec<String>> {
         let mut cmd = VacuumBuilder::new(self._table.object_store(), self._table.state.clone())
             .with_enforce_retention_duration(enforce_retention_duration)
-            .with_dry_run(dry_run)
-            .with_max_concurrent_requests(max_concurrent_requests);
+            .with_dry_run(dry_run);
         if let Some(retention_period) = retention_hours {
             cmd = cmd.with_retention_period(Duration::hours(retention_period as i64));
         }
@@ -311,6 +315,37 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         cmd = cmd.with_filters(&converted_filters);
 
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    // Run the restore command on the Delta Table: restore table to a given version or datetime
+    #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false))]
+    pub fn restore(
+        &mut self,
+        target: Option<&PyAny>,
+        ignore_missing_files: bool,
+        protocol_downgrade_allowed: bool,
+    ) -> PyResult<String> {
+        let mut cmd = RestoreBuilder::new(self._table.object_store(), self._table.state.clone());
+        if let Some(val) = target {
+            if let Ok(version) = val.extract::<i64>() {
+                cmd = cmd.with_version_to_restore(version)
+            }
+            if let Ok(ds) = val.extract::<&str>() {
+                let datetime = DateTime::<Utc>::from(
+                    DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(|err| {
+                        PyValueError::new_err(format!("Failed to parse datetime string: {err}"))
+                    })?,
+                );
+                cmd = cmd.with_datetime_to_restore(datetime)
+            }
+        }
+        cmd = cmd.with_ignore_missing_files(ignore_missing_files);
+        cmd = cmd.with_protocol_downgrade_allowed(protocol_downgrade_allowed);
         let (table, metrics) = rt()?
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
@@ -434,7 +469,7 @@ impl RawDeltaTable {
             .into_iter()
             .map(|part| PyFrozenSet::new(py, part.iter()))
             .collect::<Result<_, PyErr>>()?;
-        PyFrozenSet::new(py, active_partitions.into_iter())
+        PyFrozenSet::new(py, active_partitions)
     }
 
     fn create_write_transaction(
@@ -475,6 +510,7 @@ impl RawDeltaTable {
                         extended_file_metadata: Some(old_add.tags.is_some()),
                         partition_values: Some(old_add.partition_values.clone()),
                         size: Some(old_add.size),
+                        deletion_vector: old_add.deletion_vector.clone(),
                         tags: old_add.tags.clone(),
                     });
                     actions.push(remove_action);
@@ -758,6 +794,7 @@ impl From<&PyAddAction> for action::Add {
             stats: action.stats.clone(),
             stats_parsed: None,
             tags: None,
+            deletion_vector: None,
         }
     }
 }

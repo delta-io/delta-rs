@@ -63,20 +63,17 @@ impl TryFrom<&schema::SchemaTypeMap> for ArrowField {
     type Error = ArrowError;
 
     fn try_from(a: &schema::SchemaTypeMap) -> Result<Self, ArrowError> {
-        Ok(ArrowField::new(
+        Ok(ArrowField::new_map(
+            "map",
             "entries",
-            ArrowDataType::Struct(
-                vec![
-                    ArrowField::new("key", ArrowDataType::try_from(a.get_key_type())?, false),
-                    ArrowField::new(
-                        "value",
-                        ArrowDataType::try_from(a.get_value_type())?,
-                        a.get_value_contains_null(),
-                    ),
-                ]
-                .into(),
+            ArrowField::new("key", ArrowDataType::try_from(a.get_key_type())?, false),
+            ArrowField::new(
+                "value",
+                ArrowDataType::try_from(a.get_value_type())?,
+                a.get_value_contains_null(),
             ),
-            false, // always non-null
+            false,
+            false,
         ))
     }
 }
@@ -167,7 +164,7 @@ impl TryFrom<&schema::SchemaDataType> for ArrowDataType {
                         ]
                         .into(),
                     ),
-                    true,
+                    false,
                 )),
                 false,
             )),
@@ -299,6 +296,162 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
     }
 }
 
+macro_rules! arrow_map {
+    ($fieldname: ident, null) => {
+        ArrowField::new(
+            stringify!($fieldname),
+            ArrowDataType::Map(
+                Arc::new(ArrowField::new(
+                    "entries",
+                    ArrowDataType::Struct(
+                        vec![
+                            ArrowField::new("key", ArrowDataType::Utf8, false),
+                            ArrowField::new("value", ArrowDataType::Utf8, true),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            ),
+            true,
+        )
+    };
+    ($fieldname: ident, not_null) => {
+        ArrowField::new(
+            stringify!($fieldname),
+            ArrowDataType::Map(
+                Arc::new(ArrowField::new(
+                    "entries",
+                    ArrowDataType::Struct(
+                        vec![
+                            ArrowField::new("key", ArrowDataType::Utf8, false),
+                            ArrowField::new("value", ArrowDataType::Utf8, false),
+                        ]
+                        .into(),
+                    ),
+                    false,
+                )),
+                false,
+            ),
+            false,
+        )
+    };
+}
+
+macro_rules! arrow_field {
+    ($fieldname:ident, $type_qual:ident, null) => {
+        ArrowField::new(stringify!($fieldname), ArrowDataType::$type_qual, true)
+    };
+    ($fieldname:ident, $type_qual:ident, not_null) => {
+        ArrowField::new(stringify!($fieldname), ArrowDataType::$type_qual, false)
+    };
+}
+
+macro_rules! arrow_list {
+    ($fieldname:ident, $element_name:ident, $type_qual:ident, null) => {
+        ArrowField::new(
+            stringify!($fieldname),
+            ArrowDataType::List(Arc::new(ArrowField::new(
+                stringify!($element_name),
+                ArrowDataType::$type_qual,
+                true,
+            ))),
+            true,
+        )
+    };
+    ($fieldname:ident, $element_name:ident, $type_qual:ident, not_null) => {
+        ArrowField::new(
+            stringify!($fieldname),
+            ArrowDataType::List(Arc::new(ArrowField::new(
+                stringify!($element_name),
+                ArrowDataType::$type_qual,
+                true,
+            ))),
+            false,
+        )
+    };
+}
+
+macro_rules! arrow_struct {
+    ($fieldname:ident, [$($inner:tt)+], null) => {
+        ArrowField::new(
+            stringify!($fieldname),
+            ArrowDataType::Struct(
+                arrow_defs! [$($inner)+].into()
+            ),
+            true
+        )
+    };
+    ($fieldname:ident, [$($inner:tt)+], not_null) => {
+        ArrowField::new(
+            stringify!($fieldname),
+            ArrowDataType::Struct(
+                arrow_defs! [$($inner)+].into()
+            ),
+            false
+        )
+    }
+}
+
+macro_rules! arrow_def {
+    ($fieldname:ident $(null)?) => {
+        arrow_map!($fieldname, null)
+    };
+    ($fieldname:ident not_null) => {
+        arrow_map!($fieldname, not_null)
+    };
+    ($fieldname:ident[$inner_name:ident]{$type_qual:ident} $(null)?) => {
+        arrow_list!($fieldname, $inner_name, $type_qual, null)
+    };
+    ($fieldname:ident[$inner_name:ident]{$type_qual:ident} not_null) => {
+        arrow_list!($fieldname, $inner_name, $type_qual, not_null)
+    };
+    ($fieldname:ident:$type_qual:ident $(null)?) => {
+        arrow_field!($fieldname, $type_qual, null)
+    };
+    ($fieldname:ident:$type_qual:ident not_null) => {
+        arrow_field!($fieldname, $type_qual, not_null)
+    };
+    ($fieldname:ident[$($inner:tt)+] $(null)?) => {
+        arrow_struct!($fieldname, [$($inner)+], null)
+    };
+    ($fieldname:ident[$($inner:tt)+] not_null) => {
+        arrow_struct!($fieldname, [$($inner)+], not_null)
+    }
+}
+
+/// A helper macro to create more readable Arrow field definitions, delimited by commas
+///
+/// The argument patterns are as follows:
+///
+/// fieldname (null|not_null)?      -- An arrow field of type map with name "fieldname" consisting of Utf8 key-value pairs, and an
+///                                    optional nullability qualifier (null if not specified).
+///
+/// fieldname:type (null|not_null)? --  An Arrow field consisting of an atomic type. For example,
+///                                     id:Utf8 gets mapped to ArrowField::new("id", ArrowDataType::Utf8, true).
+///                                     where customerCount:Int64 not_null gets mapped to gets mapped to
+///                                     ArrowField::new("customerCount", ArrowDataType::Utf8, true)
+///
+/// fieldname[list_element]{list_element_type} (null|not_null)? --  An Arrow list, with the name of the elements wrapped in square brackets
+///                                                                 and the type of the list elements wrapped in curly brackets. For example,
+///                                                                 customers[name]{Utf8} is an nullable arrow field of type arrow list consisting
+///                                                                 of elements called "name" with type Utf8.
+///
+/// fieldname[element1, element2, element3, ....] (null|not_null)? -- An arrow struct with name "fieldname" consisting of elements adhering to any of the patterns
+///                                                                   documented, including additional structs arbitrarily nested up to the recursion
+///                                                                   limit for Rust macros.
+macro_rules! arrow_defs {
+    () => {
+        vec![] as Vec<ArrowField>
+    };
+    ($($fieldname:ident$(:$type_qual:ident)?$([$($inner:tt)+])?$({$list_type_qual:ident})? $($nullable:ident)?),+) => {
+        vec![
+            $(arrow_def!($fieldname$(:$type_qual)?$([$($inner)+])?$({$list_type_qual})? $($nullable)?)),+
+        ]
+    }
+}
+
 /// Returns an arrow schema representing the delta log for use in checkpoints
 ///
 /// # Arguments
@@ -313,196 +466,51 @@ pub(crate) fn delta_log_schema_for_table(
     use_extended_remove_schema: bool,
 ) -> ArrowSchemaRef {
     lazy_static! {
-        static ref SCHEMA_FIELDS: Vec<ArrowField> = vec![
-            ArrowField::new(
-                "metaData",
-                ArrowDataType::Struct(
-                    vec![
-                        ArrowField::new("id", ArrowDataType::Utf8, true),
-                        ArrowField::new("name", ArrowDataType::Utf8, true),
-                        ArrowField::new("description", ArrowDataType::Utf8, true),
-                        ArrowField::new("schemaString", ArrowDataType::Utf8, true),
-                        ArrowField::new("createdTime", ArrowDataType::Int64, true),
-                        ArrowField::new(
-                            "partitionColumns",
-                            ArrowDataType::List(Arc::new(ArrowField::new(
-                                "element",
-                                ArrowDataType::Utf8,
-                                true
-                            ))),
-                            true
-                        ),
-                        ArrowField::new(
-                            "configuration",
-                            ArrowDataType::Map(
-                                Arc::new(ArrowField::new(
-                                    "key_value",
-                                    ArrowDataType::Struct(
-                                        vec![
-                                            ArrowField::new("key", ArrowDataType::Utf8, false),
-                                            ArrowField::new("value", ArrowDataType::Utf8, true),
-                                        ]
-                                        .into()
-                                    ),
-                                    false
-                                )),
-                                false
-                            ),
-                            true
-                        ),
-                        ArrowField::new(
-                            "format",
-                            ArrowDataType::Struct(
-                                vec![
-                                    ArrowField::new("provider", ArrowDataType::Utf8, true),
-                                    ArrowField::new(
-                                        "options",
-                                        ArrowDataType::Map(
-                                            Arc::new(ArrowField::new(
-                                                "key_value",
-                                                ArrowDataType::Struct(
-                                                    vec![
-                                                        ArrowField::new(
-                                                            "key",
-                                                            ArrowDataType::Utf8,
-                                                            false
-                                                        ),
-                                                        ArrowField::new(
-                                                            "value",
-                                                            ArrowDataType::Utf8,
-                                                            true
-                                                        ),
-                                                    ]
-                                                    .into()
-                                                ),
-                                                false
-                                            )),
-                                            false
-                                        ),
-                                        false
-                                    )
-                                ]
-                                .into()
-                            ),
-                            true
-                        ),
-                    ]
-                    .into()
-                ),
-                true
-            ),
-            ArrowField::new(
-                "protocol",
-                ArrowDataType::Struct(
-                    vec![
-                        ArrowField::new("minReaderVersion", ArrowDataType::Int32, true),
-                        ArrowField::new("minWriterVersion", ArrowDataType::Int32, true),
-                    ]
-                    .into()
-                ),
-                true
-            ),
-            ArrowField::new(
-                "txn",
-                ArrowDataType::Struct(
-                    vec![
-                        ArrowField::new("appId", ArrowDataType::Utf8, true),
-                        ArrowField::new("version", ArrowDataType::Int64, true),
-                    ]
-                    .into()
-                ),
-                true
-            ),
+        static ref SCHEMA_FIELDS: Vec<ArrowField> = arrow_defs![
+                metaData[
+                    id:Utf8,
+                    name:Utf8,
+                    description:Utf8,
+                    schemaString:Utf8,
+                    createdTime:Int64,
+                    partitionColumns[element]{Utf8},
+                    configuration,
+                    format[provider:Utf8, options]
+                ],
+                protocol[
+                    minReaderVersion:Int32,
+                    minWriterVersion:Int32
+                ],
+                txn[
+                    appId:Utf8,
+                    version:Int64
+                ]
         ];
-        static ref ADD_FIELDS: Vec<ArrowField> = vec![
-            ArrowField::new("path", ArrowDataType::Utf8, true),
-            ArrowField::new("size", ArrowDataType::Int64, true),
-            ArrowField::new("modificationTime", ArrowDataType::Int64, true),
-            ArrowField::new("dataChange", ArrowDataType::Boolean, true),
-            ArrowField::new("stats", ArrowDataType::Utf8, true),
-            ArrowField::new(
-                "partitionValues",
-                ArrowDataType::Map(
-                    Arc::new(ArrowField::new(
-                        "key_value",
-                        ArrowDataType::Struct(
-                            vec![
-                                ArrowField::new("key", ArrowDataType::Utf8, false),
-                                ArrowField::new("value", ArrowDataType::Utf8, true),
-                            ]
-                            .into()
-                        ),
-                        false
-                    )),
-                    false
-                ),
-                true
-            ),
-            ArrowField::new(
-                "tags",
-                ArrowDataType::Map(
-                    Arc::new(ArrowField::new(
-                        "key_value",
-                        ArrowDataType::Struct(
-                            vec![
-                                ArrowField::new("key", ArrowDataType::Utf8, false),
-                                ArrowField::new("value", ArrowDataType::Utf8, true),
-                            ]
-                            .into()
-                        ),
-                        false
-                    )),
-                    false
-                ),
-                true
-            )
+        static ref ADD_FIELDS: Vec<ArrowField> = arrow_defs![
+            path:Utf8,
+            size:Int64,
+            modificationTime:Int64,
+            dataChange:Boolean,
+            stats:Utf8,
+            partitionValues,
+            tags,
+            deletionVector[
+                storageType:Utf8 not_null,
+                pathOrInlineDv:Utf8 not_null,
+                offset:Int32 null,
+                sizeInBytes:Int32 not_null,
+                cardinality:Int64 not_null
+            ]
         ];
-        static ref REMOVE_FIELDS: Vec<ArrowField> = vec![
-            ArrowField::new("path", ArrowDataType::Utf8, true),
-            ArrowField::new("deletionTimestamp", ArrowDataType::Int64, true),
-            ArrowField::new("dataChange", ArrowDataType::Boolean, true),
-            ArrowField::new("extendedFileMetadata", ArrowDataType::Boolean, true),
+        static ref REMOVE_FIELDS: Vec<ArrowField> = arrow_defs![
+            path: Utf8,
+            deletionTimestamp: Int64,
+            dataChange: Boolean,
+            extendedFileMetadata: Boolean
         ];
-        static ref REMOVE_EXTENDED_FILE_METADATA_FIELDS: Vec<ArrowField> = vec![
-            ArrowField::new("size", ArrowDataType::Int64, true),
-            ArrowField::new(
-                "partitionValues",
-                ArrowDataType::Map(
-                    Arc::new(ArrowField::new(
-                        "key_value",
-                        ArrowDataType::Struct(
-                            vec![
-                                ArrowField::new("key", ArrowDataType::Utf8, false),
-                                ArrowField::new("value", ArrowDataType::Utf8, true),
-                            ]
-                            .into()
-                        ),
-                        false
-                    )),
-                    false
-                ),
-                true
-            ),
-            ArrowField::new(
-                "tags",
-                ArrowDataType::Map(
-                    Arc::new(ArrowField::new(
-                        "key_value",
-                        ArrowDataType::Struct(
-                            vec![
-                                ArrowField::new("key", ArrowDataType::Utf8, false),
-                                ArrowField::new("value", ArrowDataType::Utf8, true),
-                            ]
-                            .into()
-                        ),
-                        false
-                    )),
-                    false
-                ),
-                true
-            )
-        ];
-    }
+        static ref REMOVE_EXTENDED_FILE_METADATA_FIELDS: Vec<ArrowField> =
+            arrow_defs![size: Int64, partitionValues, tags];
+    };
 
     // create add fields according to the specific data table schema
     let (partition_fields, non_partition_fields): (Vec<ArrowFieldRef>, Vec<ArrowFieldRef>) =
@@ -626,6 +634,13 @@ fn null_count_schema_for_fields(dest: &mut Vec<ArrowField>, f: &ArrowField) {
 
 #[cfg(test)]
 mod tests {
+    use arrow::array::ArrayData;
+    use arrow::datatypes::DataType;
+    use arrow_array::Array;
+    use arrow_array::{make_array, ArrayRef, MapArray, StringArray, StructArray};
+    use arrow_buffer::{Buffer, ToByteSlice};
+    use arrow_schema::Field;
+
     use super::*;
     use std::collections::HashMap;
     use std::sync::Arc;
@@ -644,7 +659,7 @@ mod tests {
             delta_log_schema_for_table(table_schema.clone(), partition_columns.as_slice(), false);
 
         // verify top-level schema contains all expected fields and they are named correctly.
-        let expected_fields = vec!["metaData", "protocol", "txn", "remove", "add"];
+        let expected_fields = ["metaData", "protocol", "txn", "remove", "add"];
         for f in log_schema.fields().iter() {
             assert!(expected_fields.contains(&f.name().as_str()));
         }
@@ -663,7 +678,22 @@ mod tests {
                 }
             })
             .collect();
-        assert_eq!(9, add_fields.len());
+        let field_names: Vec<&String> = add_fields.iter().map(|v| v.name()).collect();
+        assert_eq!(
+            vec![
+                "path",
+                "size",
+                "modificationTime",
+                "dataChange",
+                "stats",
+                "partitionValues",
+                "tags",
+                "deletionVector",
+                "stats_parsed",
+                "partitionValues_parsed"
+            ],
+            field_names
+        );
         let add_field_map: HashMap<_, _> = add_fields
             .iter()
             .map(|f| (f.name().to_owned(), f.clone()))
@@ -742,7 +772,7 @@ mod tests {
             })
             .collect();
         assert_eq!(7, remove_fields.len());
-        let expected_fields = vec![
+        let expected_fields = [
             "path",
             "deletionTimestamp",
             "dataChange",
@@ -814,7 +844,7 @@ mod tests {
     fn test_delta_from_arrow_map_type() {
         let arrow_map = ArrowDataType::Map(
             Arc::new(ArrowField::new(
-                "key_value",
+                "entries",
                 ArrowDataType::Struct(
                     vec![
                         ArrowField::new("key", ArrowDataType::Int8, false),
@@ -822,7 +852,7 @@ mod tests {
                     ]
                     .into(),
                 ),
-                true,
+                false,
             )),
             false,
         );
@@ -851,7 +881,47 @@ mod tests {
         let entry_offsets = vec![0u32, 1, 1, 4, 5, 5];
         let num_rows = keys.len();
 
-        let map_array = arrow::array::MapArray::new_from_strings(
+        // Copied the function `new_from_string` with the patched code from https://github.com/apache/arrow-rs/pull/4808
+        // This should be reverted back [`MapArray::new_from_strings`] once arrow is upgraded in this project.
+        fn new_from_strings<'a>(
+            keys: impl Iterator<Item = &'a str>,
+            values: &dyn Array,
+            entry_offsets: &[u32],
+        ) -> Result<MapArray, ArrowError> {
+            let entry_offsets_buffer = Buffer::from(entry_offsets.to_byte_slice());
+            let keys_data = StringArray::from_iter_values(keys);
+
+            let keys_field = Arc::new(Field::new("keys", DataType::Utf8, false));
+            let values_field = Arc::new(Field::new(
+                "values",
+                values.data_type().clone(),
+                values.null_count() > 0,
+            ));
+
+            let entry_struct = StructArray::from(vec![
+                (keys_field, Arc::new(keys_data) as ArrayRef),
+                (values_field, make_array(values.to_data())),
+            ]);
+
+            let map_data_type = DataType::Map(
+                Arc::new(Field::new(
+                    "entries",
+                    entry_struct.data_type().clone(),
+                    false,
+                )),
+                false,
+            );
+
+            let map_data = ArrayData::builder(map_data_type)
+                .len(entry_offsets.len() - 1)
+                .add_buffer(entry_offsets_buffer)
+                .add_child_data(entry_struct.into_data())
+                .build()?;
+
+            Ok(MapArray::from(map_data))
+        }
+
+        let map_array = new_from_strings(
             keys.into_iter(),
             &arrow::array::BinaryArray::from(values),
             entry_offsets.as_slice(),
