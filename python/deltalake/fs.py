@@ -12,23 +12,47 @@ class DeltaStorageHandler(DeltaFileSystemHandler, FileSystemHandler):
     DeltaStorageHandler is a concrete implementations of a PyArrow FileSystemHandler.
     """
 
-    def open_input_file(self, path: str) -> pa.PythonFile:
+    known_sizes: Dict[str, int] = {}
+
+    def __new__(  # type:ignore
+        cls,
+        table_uri: str,
+        storage_options: Optional[Dict[str, str]] = None,
+        known_sizes: Optional[Dict[str, int]] = None,
+    ):
+        return super().__new__(
+            cls, table_uri=table_uri, options=storage_options  # type:ignore
+        )
+
+    def __init__(
+        self,
+        table_uri: str,
+        storage_options: Optional[Dict[str, str]] = None,
+        known_sizes: Optional[Dict[str, int]] = None,
+    ):
+        if known_sizes:
+            self.known_sizes = known_sizes
+        return
+
+    def open_input_file(self, path: str, size: Optional[int] = None) -> pa.PythonFile:
         """
         Open an input file for random access reading.
 
         :param source: The source to open for reading.
         :return:  NativeFile
         """
-        return pa.PythonFile(DeltaFileSystemHandler.open_input_file(self, path))
+        size = self.known_sizes.get(path)
+        return pa.PythonFile(DeltaFileSystemHandler.open_input_file(self, path, size))
 
-    def open_input_stream(self, path: str) -> pa.PythonFile:
+    def open_input_stream(self, path: str, size: Optional[int] = None) -> pa.PythonFile:
         """
         Open an input stream for sequential reading.
 
         :param source: The source to open for reading.
         :return:  NativeFile
         """
-        return pa.PythonFile(DeltaFileSystemHandler.open_input_file(self, path))
+        size = self.known_sizes.get(path)
+        return pa.PythonFile(DeltaFileSystemHandler.open_input_file(self, path, size))
 
     def open_output_stream(
         self, path: str, metadata: Optional[Dict[str, str]] = None

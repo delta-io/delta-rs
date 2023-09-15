@@ -254,7 +254,7 @@ class DeltaFileSystemHandler:
         """
     def normalize_path(self, path: str) -> str:
         """Normalize filesystem path."""
-    def open_input_file(self, path: str) -> ObjectInputFile:
+    def open_input_file(self, path: str, size: int | None = None) -> ObjectInputFile:
         """Open an input file for random access reading."""
     def open_output_stream(
         self, path: str, metadata: dict[str, str] | None = None

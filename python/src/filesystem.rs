@@ -246,7 +246,7 @@ impl DeltaFileSystemHandler {
         Ok(())
     }
 
-    fn open_input_file(&self, path: String) -> PyResult<ObjectInputFile> {
+    fn open_input_file(&self, path: String, size: Option<i64>) -> PyResult<ObjectInputFile> {
         let path = Self::parse_path(&path);
         let file = self
             .rt
@@ -254,6 +254,7 @@ impl DeltaFileSystemHandler {
                 Arc::clone(&self.rt),
                 self.inner.clone(),
                 path,
+                size,
             ))
             .map_err(PythonError::from)?;
         Ok(file)
@@ -306,11 +307,18 @@ impl ObjectInputFile {
         rt: Arc<Runtime>,
         store: Arc<DynObjectStore>,
         path: Path,
+        size: Option<i64>,
     ) -> Result<Self, ObjectStoreError> {
-        // Issue a HEAD Object to get the content-length and ensure any
+        // If file size is not given, issue a HEAD Object to get the content-length and ensure any
         // errors (e.g. file not found) don't wait until the first read() call.
-        let meta = store.head(&path).await?;
-        let content_length = meta.size as i64;
+        let content_length = match size {
+            Some(s) => s,
+            None => {
+                let meta = store.head(&path).await?;
+                meta.size as i64
+            }
+        };
+
         // TODO make sure content length is valid
         // https://github.com/apache/arrow/blob/f184255cbb9bf911ea2a04910f711e1a924b12b8/cpp/src/arrow/filesystem/s3fs.cc#L1083
         Ok(Self {
