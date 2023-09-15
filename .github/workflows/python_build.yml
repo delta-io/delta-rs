@@ -66,6 +66,8 @@ jobs:
 
       - name: Build and install deltalake
         run: |
+          # Needed for openssl build
+          yum install -y perl-IPC-Cmd
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate
@@ -123,13 +125,13 @@ jobs:
       - name: Run tests
         run: |
           source venv/bin/activate
-          python -m pytest -m '((s3 or azure) and integration) or not integration'
+          python -m pytest -m '((s3 or azure) and integration) or not integration and not benchmark'
 
       - name: Test without pandas
         run: |
           source venv/bin/activate
           pip uninstall --yes pandas
-          python -m pytest -m "not pandas and not integration"
+          python -m pytest -m "not pandas and not integration and not benchmark"
           pip install pandas
 
       - name: Build Sphinx documentation
