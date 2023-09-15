@@ -212,8 +212,6 @@ impl ObjectStore for DeltaObjectStore {
     }
 
     /// Perform a get request with options
-    ///
-    /// Note: options.range will be ignored if [`GetResult::File`]
     async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
         self.storage.get_opts(location, options).await
     }
