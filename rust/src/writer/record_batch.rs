@@ -423,10 +423,20 @@ mod tests {
     use std::path::Path;
 
     #[tokio::test]
+    async fn test_buffer_len_includes_unflushed_row_group() {
+        let batch = get_record_batch(None, false);
+        let table = create_initialized_table(&vec![]).await;
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        writer.write(batch).await.unwrap();
+
+        assert!(writer.buffer_len() > 0);
+    }
+
+    #[tokio::test]
     async fn test_divide_record_batch_no_partition() {
         let batch = get_record_batch(None, false);
-        let partition_cols = vec![];
-        let table = create_initialized_table(&partition_cols).await;
+        let table = create_initialized_table(&vec![]).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
