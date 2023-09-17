@@ -29,7 +29,7 @@
 use std::{collections::HashMap, sync::Arc};
 
 use arrow::array::{Array, UInt32Array};
-use arrow::compute::{lexicographical_partition_ranges, take, SortColumn};
+use arrow::compute::{partition, take};
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
@@ -364,24 +364,19 @@ pub(crate) fn divide_by_partition_values(
     let indices = lexsort_to_indices(sort_columns.columns());
     let sorted_partition_columns = partition_columns
         .iter()
-        .map(|c| {
-            Ok(SortColumn {
-                values: take(values.column(schema.index_of(c)?), &indices, None)?,
-                options: None,
-            })
-        })
+        .map(|c| Ok(take(values.column(schema.index_of(c)?), &indices, None)?))
         .collect::<Result<Vec<_>, DeltaWriterError>>()?;
 
-    let partition_ranges = lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
+    let partition_ranges = partition(sorted_partition_columns.as_slice())?;
 
-    for range in partition_ranges {
+    for range in partition_ranges.ranges().into_iter() {
         // get row indices for current partition
         let idx: UInt32Array = (range.start..range.end)
             .map(|i| Some(indices.value(i)))
             .collect();
 
-        let partition_key_iter = sorted_partition_columns.iter().map(|c| {
-            stringified_partition_value(&c.values.slice(range.start, range.end - range.start))
+        let partition_key_iter = sorted_partition_columns.iter().map(|col| {
+            stringified_partition_value(&col.slice(range.start, range.end - range.start))
         });
 
         let mut partition_values = HashMap::new();
