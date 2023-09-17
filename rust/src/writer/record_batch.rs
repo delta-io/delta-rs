@@ -333,7 +333,7 @@ impl PartitionWriter {
     /// Returns the current byte length of the in memory buffer.
     /// This may be used by the caller to decide when to finalize the file write.
     pub fn buffer_len(&self) -> usize {
-        self.buffer.len()
+        self.buffer.len() + self.arrow_writer.in_progress_size()
     }
 }
 
