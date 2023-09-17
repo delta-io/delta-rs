@@ -436,7 +436,8 @@ mod tests {
     #[tokio::test]
     async fn test_divide_record_batch_no_partition() {
         let batch = get_record_batch(None, false);
-        let table = create_initialized_table(&vec![]).await;
+        let partition_cols = vec![];
+        let table = create_initialized_table(&partition_cols).await;
         let mut writer = RecordBatchWriter::for_table(&table).unwrap();
 
         let partitions = writer.divide_by_partition_values(&batch).unwrap();
