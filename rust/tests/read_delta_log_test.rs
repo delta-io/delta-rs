@@ -1,4 +1,4 @@
-use deltalake::DeltaTableBuilder;
+use deltalake::{DeltaResult, DeltaTableBuilder};
 use pretty_assertions::assert_eq;
 use std::collections::HashMap;
 use std::time::SystemTime;
@@ -141,4 +141,11 @@ async fn test_log_buffering_fail() {
         .with_log_buffer_size(0)
         .is_err();
     assert!(table_err);
+}
+
+#[tokio::test]
+async fn test_read_liquid_table() -> DeltaResult<()> {
+    let path = "./tests/data/table_with_liquid_clustering";
+    let _table = deltalake::open_table(&path).await?;
+    Ok(())
 }
