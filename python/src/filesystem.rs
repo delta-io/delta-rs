@@ -125,7 +125,12 @@ impl DeltaFileSystemHandler {
                     Ok(meta) => {
                         let kwargs = HashMap::from([
                             ("size", meta.size as i64),
-                            ("mtime_ns", meta.last_modified.timestamp_nanos()),
+                            (
+                                "mtime_ns",
+                                meta.last_modified.timestamp_nanos_opt().ok_or(
+                                    PyValueError::new_err("last modified datetime out of range"),
+                                )?,
+                            ),
                         ]);
                         infos.push(to_file_info(
                             meta.location.as_ref(),
@@ -212,7 +217,12 @@ impl DeltaFileSystemHandler {
                 .map(|meta| {
                     let kwargs = HashMap::from([
                         ("size", meta.size as i64),
-                        ("mtime_ns", meta.last_modified.timestamp_nanos()),
+                        (
+                            "mtime_ns",
+                            meta.last_modified.timestamp_nanos_opt().ok_or(
+                                PyValueError::new_err("last modified datetime out of range"),
+                            )?,
+                        ),
                     ]);
                     to_file_info(
                         meta.location.to_string(),
