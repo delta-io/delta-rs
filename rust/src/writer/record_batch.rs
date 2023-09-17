@@ -333,7 +333,7 @@ impl PartitionWriter {
     /// Returns the current byte length of the in memory buffer.
     /// This may be used by the caller to decide when to finalize the file write.
     pub fn buffer_len(&self) -> usize {
-        self.buffer.len()
+        self.buffer.len() + self.arrow_writer.in_progress_size()
     }
 }
 
@@ -421,6 +421,18 @@ mod tests {
     };
     use arrow::json::ReaderBuilder;
     use std::path::Path;
+
+    #[tokio::test]
+    async fn test_buffer_len_includes_unflushed_row_group() {
+        let batch = get_record_batch(None, false);
+        let partition_cols = vec![];
+        let table = create_initialized_table(&partition_cols).await;
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        writer.write(batch).await.unwrap();
+
+        assert!(writer.buffer_len() > 0);
+    }
 
     #[tokio::test]
     async fn test_divide_record_batch_no_partition() {
