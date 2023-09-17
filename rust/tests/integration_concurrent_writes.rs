@@ -17,7 +17,7 @@ async fn test_concurrent_writes_local() -> TestResult {
 }
 
 #[cfg(feature = "s3")]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn concurrent_writes_s3() -> TestResult {
     test_concurrent_writes(StorageIntegration::Amazon).await?;
     Ok(())
@@ -40,7 +40,7 @@ async fn test_concurrent_writes_hdfs() -> TestResult {
 }
 
 async fn test_concurrent_writes(integration: StorageIntegration) -> TestResult {
-    let context = IntegrationContext::new(integration)?;
+    let context = IntegrationContext::new(integration).await?;
     let (_table, table_uri) = prepare_table(&context).await?;
     run_test(|name| Worker::new(&table_uri, name)).await;
     Ok(())

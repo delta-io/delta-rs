@@ -37,7 +37,7 @@ mod azure {
 mod local {
     use super::*;
 
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn test_read_tables_local() -> TestResult {
         read_tables(StorageIntegration::Local).await?;
@@ -104,7 +104,7 @@ mod hdfs {
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 mod s3 {
     use super::*;
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread")]
     #[serial]
     async fn test_read_tables_aws() -> TestResult {
         read_tables(StorageIntegration::Amazon).await?;
@@ -118,7 +118,7 @@ mod s3 {
 }
 
 async fn read_tables(storage: StorageIntegration) -> TestResult {
-    let context = IntegrationContext::new(storage)?;
+    let context = IntegrationContext::new(storage).await?;
     context.load_table(TestTables::Simple).await?;
     context.load_table(TestTables::Golden).await?;
     context
@@ -137,7 +137,7 @@ async fn read_table_paths(
     table_root: &str,
     upload_path: &str,
 ) -> TestResult {
-    let context = IntegrationContext::new(storage)?;
+    let context = IntegrationContext::new(storage).await?;
     context
         .load_table_with_name(TestTables::Delta0_8_0SpecialPartitioned, upload_path)
         .await?;

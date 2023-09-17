@@ -23,7 +23,7 @@ async fn test_object_store_azure() -> TestResult {
 }
 
 #[cfg(feature = "s3")]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[serial]
 async fn test_object_store_aws() -> TestResult {
     test_object_store(StorageIntegration::Amazon, true).await?;
@@ -49,7 +49,7 @@ async fn test_object_store_hdfs() -> TestResult {
 }
 
 async fn test_object_store(integration: StorageIntegration, skip_copy: bool) -> TestResult {
-    let context = IntegrationContext::new(integration)?;
+    let context = IntegrationContext::new(integration).await?;
     let delta_store = DeltaTableBuilder::from_uri(&context.root_uri())
         .with_allow_http(true)
         .build_storage()?;
@@ -425,7 +425,7 @@ async fn test_object_store_prefixes_local() -> TestResult {
 }
 
 async fn test_object_store_prefixes(integration: StorageIntegration) -> TestResult {
-    let context = IntegrationContext::new(integration)?;
+    let context = IntegrationContext::new(integration).await?;
     let prefixes = &["table path", "table path/hello%3F", "你好/😊"];
     for prefix in prefixes {
         let rooturi = format!("{}/{}", context.root_uri(), prefix);

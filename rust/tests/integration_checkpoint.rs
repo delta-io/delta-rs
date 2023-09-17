@@ -13,16 +13,16 @@ use tokio::time::sleep;
 
 #[tokio::test]
 async fn cleanup_metadata_fs_test() -> TestResult {
-    let context = IntegrationContext::new(StorageIntegration::Local)?;
+    let context = IntegrationContext::new(StorageIntegration::Local).await?;
     cleanup_metadata_test(&context).await?;
     Ok(())
 }
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 #[serial]
 async fn cleanup_metadata_aws_test() -> TestResult {
-    let context = IntegrationContext::new(StorageIntegration::Amazon)?;
+    let context = IntegrationContext::new(StorageIntegration::Amazon).await?;
     cleanup_metadata_test(&context).await?;
     Ok(())
 }
