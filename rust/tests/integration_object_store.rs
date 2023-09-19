@@ -22,6 +22,10 @@ async fn test_object_store_azure() -> TestResult {
     Ok(())
 }
 
+// NOTE: This test is ignored based on [this
+// comment](https://github.com/delta-io/delta-rs/pull/1564#issuecomment-1721048753) and we should
+// figure out a way to re-enable this test at least in the GitHub Actions CI environment
+#[ignore]
 #[cfg(feature = "azure")]
 #[tokio::test]
 #[serial]
@@ -31,6 +35,10 @@ async fn test_object_store_onelake() -> TestResult {
     Ok(())
 }
 
+// NOTE: This test is ignored based on [this
+// comment](https://github.com/delta-io/delta-rs/pull/1564#issuecomment-1721048753) and we should
+// figure out a way to re-enable this test at least in the GitHub Actions CI environment
+#[ignore]
 #[cfg(feature = "azure")]
 #[tokio::test]
 #[serial]
