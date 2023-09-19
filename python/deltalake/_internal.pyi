@@ -205,7 +205,12 @@ class ObjectOutputStream:
 class DeltaFileSystemHandler:
     """Implementation of pyarrow.fs.FileSystemHandler for use with pyarrow.fs.PyFileSystem"""
 
-    def __init__(self, root: str, options: dict[str, str] | None = None) -> None: ...
+    def __init__(
+        self,
+        root: str,
+        options: dict[str, str] | None = None,
+        known_sizes: dict[str, int] | None = None,
+    ) -> None: ...
     def get_type_name(self) -> str: ...
     def copy_file(self, src: str, dst: str) -> None:
         """Copy a file.

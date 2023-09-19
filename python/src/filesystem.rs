@@ -25,6 +25,7 @@ pub struct DeltaFileSystemHandler {
     pub(crate) inner: Arc<DynObjectStore>,
     pub(crate) rt: Arc<Runtime>,
     pub(crate) config: FsConfig,
+    pub(crate) known_sizes: Option<HashMap<String, i64>>,
 }
 
 impl DeltaFileSystemHandler {
@@ -41,8 +42,12 @@ impl DeltaFileSystemHandler {
 #[pymethods]
 impl DeltaFileSystemHandler {
     #[new]
-    #[pyo3(signature = (table_uri, options = None))]
-    fn new(table_uri: &str, options: Option<HashMap<String, String>>) -> PyResult<Self> {
+    #[pyo3(signature = (table_uri, options = None, known_sizes = None))]
+    fn new(
+        table_uri: &str,
+        options: Option<HashMap<String, String>>,
+        known_sizes: Option<HashMap<String, i64>>,
+    ) -> PyResult<Self> {
         let storage = DeltaTableBuilder::from_uri(table_uri)
             .with_storage_options(options.clone().unwrap_or_default())
             .build_storage()
@@ -54,6 +59,7 @@ impl DeltaFileSystemHandler {
                 root_url: table_uri.into(),
                 options: options.unwrap_or_default(),
             },
+            known_sizes,
         })
     }
 
@@ -246,7 +252,12 @@ impl DeltaFileSystemHandler {
         Ok(())
     }
 
-    fn open_input_file(&self, path: String, size: Option<i64>) -> PyResult<ObjectInputFile> {
+    fn open_input_file(&self, path: String) -> PyResult<ObjectInputFile> {
+        let size = match &self.known_sizes {
+            Some(sz) => sz.get(&path),
+            None => None,
+        };
+
         let path = Self::parse_path(&path);
         let file = self
             .rt
@@ -254,7 +265,7 @@ impl DeltaFileSystemHandler {
                 Arc::clone(&self.rt),
                 self.inner.clone(),
                 path,
-                size,
+                size.copied(),
             ))
             .map_err(PythonError::from)?;
         Ok(file)
