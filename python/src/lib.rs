@@ -564,6 +564,7 @@ impl RawDeltaTable {
             inner: self._table.object_store(),
             rt: Arc::new(rt()?),
             config: self._config.clone(),
+            known_sizes: None,
         })
     }
 
