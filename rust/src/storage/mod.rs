@@ -1,24 +1,26 @@
 //! Object storage backend abstraction layer for Delta Table transaction logs and data
 
-pub mod config;
-pub mod file;
-pub mod utils;
-
-use self::config::StorageOptions;
-use crate::DeltaResult;
-
-use bytes::Bytes;
-use futures::{stream::BoxStream, StreamExt};
-use lazy_static::lazy_static;
-use serde::de::{Error, SeqAccess, Visitor};
-use serde::ser::SerializeSeq;
-use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::Range;
 use std::sync::Arc;
+
+use bytes::Bytes;
+use futures::{stream::BoxStream, StreamExt};
+use lazy_static::lazy_static;
+use object_store::GetOptions;
+use serde::de::{Error, SeqAccess, Visitor};
+use serde::ser::SerializeSeq;
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use tokio::io::AsyncWrite;
 use url::Url;
+
+use self::config::StorageOptions;
+use crate::errors::DeltaResult;
+
+pub mod config;
+pub mod file;
+pub mod utils;
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 pub mod s3;
@@ -72,7 +74,7 @@ impl DeltaObjectStore {
     ///
     /// # Arguments
     ///
-    /// * `storage` - A shared reference to an [`ObjectStore`](object_store::ObjectStore) with "/" pointing at delta table root (i.e. where `_delta_log` is located).
+    /// * `storage` - A shared reference to an [`object_store::ObjectStore`] with "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storage location of `storage`.
     pub fn new(storage: Arc<DynObjectStore>, location: Url) -> Self {
         Self {
@@ -207,6 +209,13 @@ impl ObjectStore for DeltaObjectStore {
     /// Return the bytes that are stored at the specified location.
     async fn get(&self, location: &Path) -> ObjectStoreResult<GetResult> {
         self.storage.get(location).await
+    }
+
+    /// Perform a get request with options
+    ///
+    /// Note: options.range will be ignored if [`object_store::GetResultPayload::File`]
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
+        self.storage.get_opts(location, options).await
     }
 
     /// Return the bytes that are stored at the specified location

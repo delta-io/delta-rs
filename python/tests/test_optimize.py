@@ -23,7 +23,26 @@ def test_optimize_run_table(
 
     dt = DeltaTable(table_path)
     old_version = dt.version()
-    dt.optimize()
+    with pytest.warns(DeprecationWarning):
+        dt.optimize()
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "OPTIMIZE"
+    assert dt.version() == old_version + 1
+
+
+def test_z_order_optimize(
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
+):
+    write_deltalake(tmp_path, sample_data, mode="append")
+    write_deltalake(tmp_path, sample_data, mode="append")
+    write_deltalake(tmp_path, sample_data, mode="append")
+
+    dt = DeltaTable(tmp_path)
+    old_version = dt.version()
+
+    dt.optimize.z_order(["date32", "timestamp"])
+
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
     assert dt.version() == old_version + 1

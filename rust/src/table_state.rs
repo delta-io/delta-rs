@@ -1,20 +1,23 @@
 //! The module for delta table state.
 
-use crate::action::{self, Action, Add};
-use crate::delta_config::TableConfig;
-use crate::partitions::{DeltaTablePartition, PartitionFilter};
-use crate::schema::SchemaDataType;
-use crate::storage::commit_uri_from_version;
-use crate::Schema;
-use crate::{ApplyLogError, DeltaTable, DeltaTableError, DeltaTableMetaData};
-use chrono::Utc;
-use lazy_static::lazy_static;
-use object_store::{path::Path, ObjectStore};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::collections::HashSet;
 use std::convert::TryFrom;
 use std::io::{BufRead, BufReader, Cursor};
+
+use chrono::Utc;
+use lazy_static::lazy_static;
+use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
+use serde::{Deserialize, Serialize};
+
+use crate::action::{self, Action, Add, ProtocolError};
+use crate::delta_config::TableConfig;
+use crate::errors::DeltaTableError;
+use crate::partitions::{DeltaTablePartition, PartitionFilter};
+use crate::schema::SchemaDataType;
+use crate::storage::commit_uri_from_version;
+use crate::Schema;
+use crate::{DeltaTable, DeltaTableMetaData};
 
 #[cfg(any(feature = "parquet", feature = "parquet2"))]
 use super::{CheckPoint, DeltaTableConfig};
@@ -32,6 +35,8 @@ pub struct DeltaTableState {
     files: Vec<action::Add>,
     // Information added to individual commits
     commit_infos: Vec<action::CommitInfo>,
+    // Domain metadatas provided by the system or user
+    domain_metadatas: Vec<action::DomainMetaData>,
     app_transaction_version: HashMap<String, i64>,
     min_reader_version: i32,
     min_writer_version: i32,
@@ -59,9 +64,13 @@ impl DeltaTableState {
     }
 
     /// Construct a delta table state object from commit version.
-    pub async fn from_commit(table: &DeltaTable, version: i64) -> Result<Self, ApplyLogError> {
+    pub async fn from_commit(table: &DeltaTable, version: i64) -> Result<Self, ProtocolError> {
         let commit_uri = commit_uri_from_version(version);
-        let commit_log_bytes = table.storage.get(&commit_uri).await?.bytes().await?;
+        let commit_log_bytes = match table.storage.get(&commit_uri).await {
+            Ok(get) => Ok(get.bytes().await?),
+            Err(ObjectStoreError::NotFound { .. }) => Err(ProtocolError::EndOfLog),
+            Err(source) => Err(ProtocolError::ObjectStore { source }),
+        }?;
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
         let mut new_state = DeltaTableState::with_version(version);
@@ -78,7 +87,7 @@ impl DeltaTableState {
     }
 
     /// Construct a delta table state object from a list of actions
-    pub fn from_actions(actions: Vec<Action>, version: i64) -> Result<Self, ApplyLogError> {
+    pub fn from_actions(actions: Vec<Action>, version: i64) -> Result<Self, ProtocolError> {
         let mut new_state = DeltaTableState::with_version(version);
         for action in actions {
             new_state.process_action(action, true, true)?;
@@ -100,13 +109,13 @@ impl DeltaTableState {
             let preader = SerializedFileReader::new(data)?;
             let schema = preader.metadata().file_metadata().schema();
             if !schema.is_group() {
-                return Err(DeltaTableError::from(action::ActionError::Generic(
+                return Err(DeltaTableError::from(action::ProtocolError::Generic(
                     "Action record in checkpoint should be a struct".to_string(),
                 )));
             }
             for record in preader.get_row_iter(None)? {
                 self.process_action(
-                    action::Action::from_parquet_record(schema, &record)?,
+                    action::Action::from_parquet_record(schema, &record.unwrap())?,
                     table_config.require_tombstones,
                     table_config.require_files,
                 )?;
@@ -123,7 +132,7 @@ impl DeltaTableState {
 
             for row_group in metadata.row_groups {
                 for action in actions_from_row_group(row_group, &mut reader)
-                    .map_err(action::ActionError::from)?
+                    .map_err(action::ProtocolError::from)?
                 {
                     self.process_action(
                         action,
@@ -197,7 +206,10 @@ impl DeltaTableState {
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.files.iter().map(|add| Path::from(add.path.as_ref()))
+        self.files.iter().map(|add| match Path::parse(&add.path) {
+            Ok(path) => path,
+            Err(_) => Path::from(add.path.as_ref()),
+        })
     }
 
     /// HashMap containing the last txn version stored for every app id writing txn
@@ -309,7 +321,7 @@ impl DeltaTableState {
         action: action::Action,
         require_tombstones: bool,
         require_files: bool,
-    ) -> Result<(), ApplyLogError> {
+    ) -> Result<(), ProtocolError> {
         match action {
             // TODO: optionally load CDC into TableState
             action::Action::cdc(_v) => {}
@@ -329,8 +341,7 @@ impl DeltaTableState {
                 self.min_writer_version = v.min_writer_version;
             }
             action::Action::metaData(v) => {
-                let md = DeltaTableMetaData::try_from(v)
-                    .map_err(|e| ApplyLogError::InvalidJson { source: e })?;
+                let md = DeltaTableMetaData::try_from(v)?;
                 let table_config = TableConfig(&md.configuration);
                 self.tombstone_retention_millis =
                     table_config.deleted_file_retention_duration().as_millis() as i64;
@@ -347,6 +358,9 @@ impl DeltaTableState {
             }
             action::Action::commitInfo(v) => {
                 self.commit_infos.push(v);
+            }
+            action::Action::domainMetadata(v) => {
+                self.domain_metadatas.push(v);
             }
         }
 
@@ -403,6 +417,7 @@ mod tests {
             tombstones: Default::default(),
             files: vec![],
             commit_infos: vec![],
+            domain_metadatas: vec![],
             app_transaction_version: Default::default(),
             min_reader_version: 0,
             min_writer_version: 0,
@@ -426,6 +441,7 @@ mod tests {
             version: -1,
             files: vec![],
             commit_infos: vec![],
+            domain_metadatas: vec![],
             tombstones: HashSet::new(),
             current_metadata: None,
             min_reader_version: 1,

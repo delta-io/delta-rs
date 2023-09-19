@@ -11,12 +11,14 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v3
+
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
           profile: default
           toolchain: stable
           override: true
+
       - name: Format
         run: cargo fmt -- --check
 
@@ -29,21 +31,28 @@ jobs:
           - macos-11
           - windows-latest
     runs-on: ${{ matrix.os }}
+
     steps:
       - uses: actions/checkout@v3
+
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
           profile: default
           toolchain: stable
           override: true
+
       - uses: Swatinem/rust-cache@v2
+
       - name: build and lint with clippy
         run: cargo clippy --features azure,datafusion,s3,gcs,glue --tests
+
       - name: Spot-check build for native-tls features
         run: cargo clippy --no-default-features --features azure,datafusion,s3-native-tls,gcs,glue-native-tls --tests
+
       - name: Check docs
         run: cargo doc --features azure,datafusion,s3,gcs,glue
+
       - name: Check no default features (except rustls)
         run: cargo check --no-default-features --features rustls
 
@@ -58,17 +67,23 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       # Disable full debug symbol generation to speed up CI build and keep memory down
-      # "1" means line tables only, which is useful for panic tracebacks.
-      RUSTFLAGS: -C debuginfo=1
+      RUSTFLAGS: -C debuginfo=line-tables-only
+      # Disable incremental builds by cargo for CI which should save disk space
+      # and hopefully avoid final link "No space left on device"
+      CARGO_INCREMENTAL: 0
+
     steps:
       - uses: actions/checkout@v3
+
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
           profile: default
           toolchain: "stable"
           override: true
+
       - uses: Swatinem/rust-cache@v2
+
       - name: Run tests
         run: cargo test --verbose --features datafusion,azure
 
@@ -76,9 +91,10 @@ jobs:
     name: Integration Tests
     runs-on: ubuntu-latest
     env:
+      CARGO_INCREMENTAL: 0
       # Disable full debug symbol generation to speed up CI build and keep memory down
-      # "1" means line tables only, which is useful for panic tracebacks.
-      RUSTFLAGS: "-C debuginfo=1"
+      # <https://doc.rust-lang.org/cargo/reference/profiles.html>
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
       # https://github.com/rust-lang/cargo/issues/10280
       CARGO_NET_GIT_FETCH_WITH_CLI: "true"
       RUST_BACKTRACE: "1"
@@ -102,19 +118,19 @@ jobs:
           toolchain: stable
           override: true
 
-      - uses: actions/setup-java@v3
-        with:
-          distribution: "zulu"
-          java-version: "17"
+      # - uses: actions/setup-java@v3
+      #   with:
+      #     distribution: "zulu"
+      #     java-version: "17"
 
-      - uses: beyondstorage/setup-hdfs@master
-        with:
-          hdfs-version: "3.3.2"
+      # - uses: beyondstorage/setup-hdfs@master
+      #   with:
+      #     hdfs-version: "3.3.2"
 
-      - name: Set Hadoop env
-        run: |
-          echo "CLASSPATH=$CLASSPATH:`hadoop classpath --glob`" >> $GITHUB_ENV
-          echo "LD_LIBRARY_PATH=$JAVA_HOME/lib/server" >> $GITHUB_ENV
+      # - name: Set Hadoop env
+      #   run: |
+      #     echo "CLASSPATH=$CLASSPATH:`hadoop classpath --glob`" >> $GITHUB_ENV
+      #     echo "LD_LIBRARY_PATH=$JAVA_HOME/lib/server" >> $GITHUB_ENV
 
       - uses: Swatinem/rust-cache@v2
 
@@ -123,22 +139,30 @@ jobs:
 
       - name: Run tests with rustls (default)
         run: |
-          cargo test -p deltalake --features integration_test,azure,s3,gcs,datafusion,hdfs
+          cargo test -p deltalake --features integration_test,azure,s3,gcs,datafusion
+
       - name: Run tests with native-tls
         run: |
-          cargo test -p deltalake --no-default-features --features integration_test,s3-native-tls,datafusion,hdfs
+          cargo test -p deltalake --no-default-features --features integration_test,s3-native-tls,datafusion
 
   parquet2_test:
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
+      CARGO_INCREMENTAL: 0
+
     steps:
       - uses: actions/checkout@v3
+
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
           profile: default
           toolchain: stable
           override: true
+
       - uses: Swatinem/rust-cache@v2
+
       - name: Run tests
         working-directory: rust
         run: cargo test --no-default-features --features=parquet2

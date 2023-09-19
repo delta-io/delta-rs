@@ -11,21 +11,25 @@
 //! let mut table = open_table("../path/to/table")?;
 //! let (table, metrics) = FileSystemCheckBuilder::new(table.object_store(), table.state).await?;
 //! ````
-use crate::action::{Action, Add, DeltaOperation, Remove};
-use crate::operations::transaction::commit;
-use crate::storage::DeltaObjectStore;
-use crate::table_state::DeltaTableState;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
-use futures::future::BoxFuture;
-use futures::StreamExt;
-pub use object_store::path::Path;
-use object_store::ObjectStore;
+
 use std::collections::HashMap;
 use std::fmt::Debug;
 use std::sync::Arc;
 use std::time::SystemTime;
 use std::time::UNIX_EPOCH;
+
+use futures::future::BoxFuture;
+use futures::StreamExt;
+pub use object_store::path::Path;
+use object_store::ObjectStore;
 use url::{ParseError, Url};
+
+use crate::action::{Action, Add, DeltaOperation, Remove};
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::operations::transaction::commit;
+use crate::storage::DeltaObjectStore;
+use crate::table_state::DeltaTableState;
+use crate::DeltaTable;
 
 /// Audit the Delta Table's active files with the underlying file system.
 /// See this module's documentaiton for more information
@@ -142,6 +146,7 @@ impl FileSystemCheckPlan {
                 extended_file_metadata: None,
                 partition_values: Some(file.partition_values),
                 size: Some(file.size),
+                deletion_vector: None,
                 tags: file.tags,
             }));
         }

@@ -4,7 +4,7 @@ use chrono::Utc;
 use deltalake::checkpoints::{cleanup_expired_logs_for, create_checkpoint};
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult};
 use deltalake::writer::{DeltaWriter, JsonWriter};
-use deltalake::{DeltaOps, DeltaResult, DeltaTableBuilder, ObjectStore, SchemaDataType};
+use deltalake::{errors::DeltaResult, DeltaOps, DeltaTableBuilder, ObjectStore, SchemaDataType};
 use object_store::path::Path;
 use serde_json::json;
 use serial_test::serial;

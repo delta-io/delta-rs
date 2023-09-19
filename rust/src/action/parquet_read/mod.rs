@@ -1,14 +1,17 @@
+use std::{collections::HashMap, str::FromStr};
+
 use chrono::{SecondsFormat, TimeZone, Utc};
 use num_bigint::BigInt;
 use num_traits::cast::ToPrimitive;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use serde_json::json;
-use std::collections::HashMap;
 
 use crate::action::{
-    Action, ActionError, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, MetaData, Protocol,
-    Remove, Stats, Txn,
+    Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, DeletionVector, MetaData, Protocol,
+    ProtocolError, Remove, Stats, Txn,
 };
+
+use super::StorageType;
 
 fn populate_hashmap_with_option_from_parquet_map(
     map: &mut HashMap<String, Option<String>>,
@@ -28,14 +31,14 @@ fn populate_hashmap_with_option_from_parquet_map(
     Ok(())
 }
 
-fn gen_action_type_error(action: &str, field: &str, expected_type: &str) -> ActionError {
-    ActionError::InvalidField(format!(
+fn gen_action_type_error(action: &str, field: &str, expected_type: &str) -> ProtocolError {
+    ProtocolError::InvalidField(format!(
         "type for {field} in {action} action should be {expected_type}"
     ))
 }
 
 impl AddCDCFile {
-    fn from_parquet_record(_record: &parquet::record::Row) -> Result<Self, ActionError> {
+    fn from_parquet_record(_record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let re = Self {
             ..Default::default()
         };
@@ -43,8 +46,58 @@ impl AddCDCFile {
     }
 }
 
+impl DeletionVector {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
+        let mut re = Self {
+            ..Default::default()
+        };
+        for (i, (name, _)) in record.get_column_iter().enumerate() {
+            match name.as_str() {
+                "storageType" => {
+                    re.storage_type =
+                        StorageType::from_str(record.get_string(i).map_err(|_| {
+                            gen_action_type_error("add", "deletionVector.storage_type", "string")
+                        })?)?;
+                }
+                "pathOrInlineDv" => {
+                    re.path_or_inline_dv = record
+                        .get_string(i)
+                        .map_err(|_| {
+                            gen_action_type_error("add", "deletionVector.pathOrInlineDv", "string")
+                        })?
+                        .clone();
+                }
+                "offset" => {
+                    re.offset = match record.get_int(i) {
+                        Ok(x) => Some(x),
+                        _ => None,
+                    }
+                }
+                "sizeInBytes" => {
+                    re.size_in_bytes = record.get_int(i).map_err(|_| {
+                        gen_action_type_error("add", "deletionVector.sizeInBytes", "int")
+                    })?;
+                }
+                "cardinality" => {
+                    re.cardinality = record.get_long(i).map_err(|_| {
+                        gen_action_type_error("add", "deletionVector.sizeInBytes", "long")
+                    })?;
+                }
+                _ => {
+                    log::debug!(
+                        "Unexpected field name `{}` for deletion vector: {:?}",
+                        name,
+                        record
+                    );
+                }
+            }
+        }
+        Ok(re)
+    }
+}
+
 impl Add {
-    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
             ..Default::default()
         };
@@ -81,7 +134,7 @@ impl Add {
                         parquet_map,
                     )
                     .map_err(|estr| {
-                        ActionError::InvalidField(format!(
+                        ProtocolError::InvalidField(format!(
                             "Invalid partitionValues for add action: {estr}",
                         ))
                     })?;
@@ -101,7 +154,7 @@ impl Add {
                         let mut tags = HashMap::new();
                         populate_hashmap_with_option_from_parquet_map(&mut tags, tags_map)
                             .map_err(|estr| {
-                                ActionError::InvalidField(format!(
+                                ProtocolError::InvalidField(format!(
                                     "Invalid tags for add action: {estr}",
                                 ))
                             })?;
@@ -127,6 +180,14 @@ impl Add {
                         re.stats_parsed = None;
                     }
                 },
+                "deletionVector" => match record.get_group(i) {
+                    Ok(row) => {
+                        re.deletion_vector = Some(DeletionVector::from_parquet_record(row)?);
+                    }
+                    _ => {
+                        re.deletion_vector = None;
+                    }
+                },
                 _ => {
                     log::debug!(
                         "Unexpected field name `{}` for add action: {:?}",
@@ -142,7 +203,7 @@ impl Add {
 
     /// Returns the composite HashMap representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
-    pub fn get_stats_parsed(&self) -> Result<Option<Stats>, ActionError> {
+    pub fn get_stats_parsed(&self) -> Result<Option<Stats>, ProtocolError> {
         self.stats_parsed.as_ref().map_or(Ok(None), |record| {
                 let mut stats = Stats::default();
 
@@ -304,7 +365,7 @@ fn convert_date_to_string(value: i32) -> Result<String, &'static str> {
 }
 
 impl MetaData {
-    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
             ..Default::default()
         };
@@ -365,7 +426,7 @@ impl MetaData {
                         configuration_map,
                     )
                     .map_err(|estr| {
-                        ActionError::InvalidField(format!(
+                        ProtocolError::InvalidField(format!(
                             "Invalid configuration for metaData action: {estr}",
                         ))
                     })?;
@@ -389,7 +450,7 @@ impl MetaData {
                                 options_map,
                             )
                             .map_err(|estr| {
-                                ActionError::InvalidField(format!(
+                                ProtocolError::InvalidField(format!(
                                     "Invalid format.options for metaData action: {estr}",
                                 ))
                             })?;
@@ -415,7 +476,7 @@ impl MetaData {
 }
 
 impl Remove {
-    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
             data_change: true,
             extended_file_metadata: Some(false),
@@ -454,7 +515,7 @@ impl Remove {
                             parquet_map,
                         )
                         .map_err(|estr| {
-                            ActionError::InvalidField(format!(
+                            ProtocolError::InvalidField(format!(
                                 "Invalid partitionValues for remove action: {estr}",
                             ))
                         })?;
@@ -467,7 +528,7 @@ impl Remove {
                         let mut tags = HashMap::new();
                         populate_hashmap_with_option_from_parquet_map(&mut tags, tags_map)
                             .map_err(|estr| {
-                                ActionError::InvalidField(format!(
+                                ProtocolError::InvalidField(format!(
                                     "Invalid tags for remove action: {estr}",
                                 ))
                             })?;
@@ -496,7 +557,7 @@ impl Remove {
 }
 
 impl Txn {
-    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
             ..Default::default()
         };
@@ -532,7 +593,7 @@ impl Txn {
 }
 
 impl Protocol {
-    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ActionError> {
+    fn from_parquet_record(record: &parquet::record::Row) -> Result<Self, ProtocolError> {
         let mut re = Self {
             ..Default::default()
         };
@@ -569,7 +630,7 @@ impl Action {
     pub fn from_parquet_record(
         schema: &parquet::schema::types::Type,
         record: &parquet::record::Row,
-    ) -> Result<Self, ActionError> {
+    ) -> Result<Self, ProtocolError> {
         // find column that's not none
         let (col_idx, col_data) = {
             let mut col_idx = None;
@@ -589,7 +650,7 @@ impl Action {
             match (col_idx, col_data) {
                 (Some(idx), Some(group)) => (idx, group),
                 _ => {
-                    return Err(ActionError::InvalidRow(
+                    return Err(ProtocolError::InvalidRow(
                         "Parquet action row only contains null columns".to_string(),
                     ));
                 }
@@ -607,7 +668,7 @@ impl Action {
             "protocol" => Action::protocol(Protocol::from_parquet_record(col_data)?),
             "cdc" => Action::cdc(AddCDCFile::from_parquet_record(col_data)?),
             name => {
-                return Err(ActionError::InvalidField(format!(
+                return Err(ProtocolError::InvalidField(format!(
                     "Unexpected action from checkpoint: {name}",
                 )));
             }
@@ -628,7 +689,7 @@ mod tests {
         let preader = SerializedFileReader::new(File::open(path).unwrap()).unwrap();
 
         let mut iter = preader.get_row_iter(None).unwrap();
-        let record = iter.nth(9).unwrap();
+        let record = iter.nth(9).unwrap().unwrap();
         let add_record = record.get_group(1).unwrap();
         let add_action = Add::from_parquet_record(add_record).unwrap();
 

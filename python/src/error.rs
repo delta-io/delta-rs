@@ -1,6 +1,6 @@
 use arrow_schema::ArrowError;
-use deltalake::checkpoints::CheckpointError;
-use deltalake::{DeltaTableError, ObjectStoreError};
+use deltalake::action::ProtocolError;
+use deltalake::{errors::DeltaTableError, ObjectStoreError};
 use pyo3::exceptions::{
     PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyValueError,
 };
@@ -59,16 +59,20 @@ fn arrow_to_py(err: ArrowError) -> PyErr {
     }
 }
 
-fn checkpoint_to_py(err: CheckpointError) -> PyErr {
+fn checkpoint_to_py(err: ProtocolError) -> PyErr {
     match err {
-        CheckpointError::Io { source } => PyIOError::new_err(source.to_string()),
-        CheckpointError::Arrow { source } => arrow_to_py(source),
-        CheckpointError::DeltaTable { source } => inner_to_py_err(source),
-        CheckpointError::ObjectStore { source } => object_store_to_py(source),
-        CheckpointError::MissingMetaData => DeltaProtocolError::new_err("Table metadata missing"),
-        CheckpointError::PartitionValueNotParseable(err) => PyValueError::new_err(err),
-        CheckpointError::JSONSerialization { source } => PyValueError::new_err(source.to_string()),
-        CheckpointError::Parquet { source } => PyIOError::new_err(source.to_string()),
+        ProtocolError::Arrow { source } => arrow_to_py(source),
+        ProtocolError::ObjectStore { source } => object_store_to_py(source),
+        ProtocolError::EndOfLog => DeltaProtocolError::new_err("End of log"),
+        ProtocolError::NoMetaData => DeltaProtocolError::new_err("Table metadata missing"),
+        ProtocolError::CheckpointNotFound => DeltaProtocolError::new_err(err.to_string()),
+        ProtocolError::InvalidField(err) => PyValueError::new_err(err),
+        ProtocolError::InvalidRow(err) => PyValueError::new_err(err),
+        ProtocolError::InvalidDeletionVectorStorageType(err) => PyValueError::new_err(err),
+        ProtocolError::SerializeOperation { source } => PyValueError::new_err(source.to_string()),
+        ProtocolError::ParquetParseError { source } => PyIOError::new_err(source.to_string()),
+        ProtocolError::IO { source } => PyIOError::new_err(source.to_string()),
+        ProtocolError::Generic(msg) => DeltaError::new_err(msg),
     }
 }
 
@@ -81,7 +85,7 @@ pub enum PythonError {
     #[error("Error in arrow")]
     Arrow(#[from] ArrowError),
     #[error("Error in checkpoint")]
-    Checkpoint(#[from] CheckpointError),
+    Protocol(#[from] ProtocolError),
 }
 
 impl From<PythonError> for pyo3::PyErr {
@@ -90,7 +94,7 @@ impl From<PythonError> for pyo3::PyErr {
             PythonError::DeltaTable(err) => inner_to_py_err(err),
             PythonError::ObjectStore(err) => object_store_to_py(err),
             PythonError::Arrow(err) => arrow_to_py(err),
-            PythonError::Checkpoint(err) => checkpoint_to_py(err),
+            PythonError::Protocol(err) => checkpoint_to_py(err),
         }
     }
 }
