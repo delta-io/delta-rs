@@ -167,7 +167,7 @@ impl RetryExt for reqwest::RequestBuilder {
 
                             }
 
-                            let sleep = backoff.next();
+                            let sleep = backoff.tick();
                             retries += 1;
                             info!("Encountered server error, backing off for {} seconds, retry {} of {}", sleep.as_secs_f32(), retries, max_retries);
                             tokio::time::sleep(sleep).await;
@@ -194,7 +194,7 @@ impl RetryExt for reqwest::RequestBuilder {
                                 source: Some(e)
                             })
                         }
-                        let sleep = backoff.next();
+                        let sleep = backoff.tick();
                         retries += 1;
                         info!("Encountered request error ({}) backing off for {} seconds, retry {} of {}", e, sleep.as_secs_f32(), retries, max_retries);
                         tokio::time::sleep(sleep).await;
