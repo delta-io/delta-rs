@@ -522,10 +522,13 @@ given filters.
             )
 
         if not filesystem:
+            file_sizes = self.get_add_actions().to_pydict()
+            file_sizes = {
+                x: y for x, y in zip(file_sizes["path"], file_sizes["size_bytes"])
+            }
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler(
-                    self._table.table_uri(),
-                    self._storage_options,
+                    self._table.table_uri(), self._storage_options, file_sizes
                 )
             )
 
