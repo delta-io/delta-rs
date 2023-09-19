@@ -4,7 +4,7 @@
   </a>
 </p>
 <p align="center">
-  A native Rust library for Delta Lake, with bindings into Python
+  A native Rust library for Delta Lake, with bindings to Python
   <br>
   <a href="https://delta-io.github.io/delta-rs/python/">Python docs</a>
   ·
@@ -38,7 +38,7 @@
 </p>
 
 The Delta Lake project aims to unlock the power of the Deltalake for as many users and projects as possible
-by providing native low level APIs aimed at developers and integrators, as well as a high level operations
+by providing native low-level APIs aimed at developers and integrators, as well as a high-level operations
 API that lets you query, inspect, and operate your Delta Lake with ease.
 
 | Source                | Downloads                         | Installation Command    | Docs            |
@@ -62,8 +62,8 @@ API that lets you query, inspect, and operate your Delta Lake with ease.
 
 ## Quick Start
 
-The `deltalake` library aim to adopt familiar patterns from other libraries in data processing,
-so getting started should look famililiar.
+The `deltalake` library aims to adopt patterns from other libraries in data processing,
+so getting started should look familiar.
 
 ```py3
 from deltalake import DeltaTable
@@ -74,14 +74,14 @@ import pandas as pd
 df = pd.DataFrame({"id": [1, 2], "value": ["foo", "boo"]})
 write_deltalake("./data/delta", df)
 
-# load data from delta table
+# Load data from the delta table
 dt = DeltaTable("./data/delta")
 df2 = dt.to_pandas()
 
 assert df == df2
 ```
 
-The same table written can also be loaded using the core Rust crate:
+The same table can also be loaded using the core Rust crate:
 
 ```rs
 use deltalake::{open_table, DeltaTableError};
@@ -99,6 +99,8 @@ async fn main() -> Result<(), DeltaTableError> {
 }
 ```
 
+You can also try Delta Lake docker at [DockerHub](https://go.delta.io/dockerhub) | [Docker Repo](https://go.delta.io/docker)
+
 ## Get Involved
 
 We encourage you to reach out, and are [commited](https://github.com/delta-io/delta-rs/blob/main/CODE_OF_CONDUCT.md)
@@ -110,7 +112,7 @@ to provide a welcoming community.
 
 ## Integrations
 
-Libraries and framewors that interoperate with delta-rs - in alphabetical order.
+Libraries and frameworks that interoperate with delta-rs - in alphabetical order.
 
 - [AWS SDK for Pandas](https://github.com/aws/aws-sdk-pandas)
 - [ballista][ballista]
@@ -123,7 +125,7 @@ Libraries and framewors that interoperate with delta-rs - in alphabetical order.
 
 ## Features
 
-The following section outline some core features like supported [storage backends](#cloud-integrations)
+The following section outlines some core features like supported [storage backends](#cloud-integrations)
 and [operations](#supported-operations) that can be performed against tables. The state of implementation
 of features outlined in the Delta [protocol][protocol] is also [tracked](#protocol-support-level).
 
@@ -177,8 +179,8 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 [datafusion]: https://github.com/apache/arrow-datafusion
 [ballista]: https://github.com/apache/arrow-ballista
 [polars]: https://github.com/pola-rs/polars
-[open]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueOpened.svg
-[done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueClosed.svg
+[open]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueNeutral.svg
+[done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChanges.svg
 [roadmap]: https://github.com/delta-io/delta-rs/issues/1128
 [merge-py]: https://github.com/delta-io/delta-rs/issues/1357
 [merge-rs]: https://github.com/delta-io/delta-rs/issues/850

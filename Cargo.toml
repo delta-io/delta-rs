@@ -15,15 +15,15 @@ debug = "line-tables-only"
 
 [workspace.dependencies]
 # arrow
-arrow = { version = "46.0.0" }
-arrow-array = { version = "46.0.0" }
-arrow-buffer = { version = "46.0.0" }
-arrow-cast = { version = "46.0.0" }
-arrow-ord = { version = "46.0.0" }
-arrow-row = { version = "46.0.0" }
-arrow-schema = { version = "46.0.0" }
-arrow-select = { version = "46.0.0" }
-parquet = { version = "46.0.0" }
+arrow = { version = "46" }
+arrow-array = { version = "46" }
+arrow-buffer = { version = "46" }
+arrow-cast = { version = "46" }
+arrow-ord = { version = "46" }
+arrow-row = { version = "46" }
+arrow-schema = { version = "46" }
+arrow-select = { version = "46" }
+parquet = { version = "46" }
 
 # datafusion
 datafusion = { version = "31" }
@@ -39,7 +39,7 @@ serde_json = "1"
 
 # "stdlib"
 bytes = { version = "1" }
-chrono = { version = "=0.4.30", default-features = false, features = ["clock"] }
+chrono = { version = "0.4", default-features = false, features = ["clock"] }
 regex = { version = "1" }
 thiserror = { version = "1" }
 url = { version = "2" }
