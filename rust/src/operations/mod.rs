@@ -202,8 +202,8 @@ impl AsRef<DeltaTable> for DeltaOps {
 mod datafusion_utils {
     use std::sync::Arc;
 
-    use arrow_array::RecordBatch;
     use arrow_schema::SchemaRef;
+    use datafusion::arrow::record_batch::RecordBatch;
     use datafusion::error::Result as DataFusionResult;
     use datafusion::physical_plan::DisplayAs;
     use datafusion::physical_plan::{
