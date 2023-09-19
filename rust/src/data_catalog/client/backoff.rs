@@ -28,7 +28,7 @@ impl Default for BackoffConfig {
 
 /// [`Backoff`] can be created from a [`BackoffConfig`]
 ///
-/// Consecutive calls to [`Backoff::next`] will return the next backoff interval
+/// Consecutive calls to [`Backoff::tick`] will return the next backoff interval
 pub struct Backoff {
     init_backoff: f64,
     next_backoff_secs: f64,
