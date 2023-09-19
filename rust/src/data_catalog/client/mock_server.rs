@@ -19,6 +19,12 @@ pub struct MockServer {
     url: String,
 }
 
+impl Default for MockServer {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl MockServer {
     pub fn new() -> Self {
         let responses: Arc<Mutex<VecDeque<ResponseFn>>> =

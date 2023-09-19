@@ -72,7 +72,7 @@ impl Backoff {
     }
 
     /// Returns the next backoff duration to wait for
-    pub fn next(&mut self) -> Duration {
+    pub fn tick(&mut self) -> Duration {
         let range = self.init_backoff..(self.next_backoff_secs * self.base);
 
         let rand_backoff = match self.rng.as_mut() {
@@ -109,7 +109,7 @@ mod tests {
         let mut backoff = Backoff::new_with_rng(&config, Some(rng));
 
         for _ in 0..20 {
-            assert_eq!(backoff.next().as_secs_f64(), init_backoff_secs);
+            assert_eq!(backoff.tick().as_secs_f64(), init_backoff_secs);
         }
 
         // Create a static rng that takes the maximum of the range
@@ -118,7 +118,7 @@ mod tests {
 
         for i in 0..20 {
             let value = (base.powi(i) * init_backoff_secs).min(max_backoff_secs);
-            assert_fuzzy_eq(backoff.next().as_secs_f64(), value);
+            assert_fuzzy_eq(backoff.tick().as_secs_f64(), value);
         }
 
         // Create a static rng that takes the mid point of the range
@@ -127,7 +127,7 @@ mod tests {
 
         let mut value = init_backoff_secs;
         for _ in 0..20 {
-            assert_fuzzy_eq(backoff.next().as_secs_f64(), value);
+            assert_fuzzy_eq(backoff.tick().as_secs_f64(), value);
             value =
                 (init_backoff_secs + (value * base - init_backoff_secs) / 2.).min(max_backoff_secs);
         }
