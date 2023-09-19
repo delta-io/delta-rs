@@ -706,8 +706,8 @@ class TableOptimizer:
         :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
             file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
             faster, but will also use more memory.
-        :param min_commit_interval: minimum interval in seconds before a new commit is created used for
-            long running executions.
+        :param min_commit_interval: minimum interval in seconds before a new commit is created. Interval is
+            useful for long running executions.
         :return: the metrics from optimize
         """
         metrics = self.table._table.compact_optimize(
@@ -739,8 +739,8 @@ class TableOptimizer:
             file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
             faster, but will also use more memory.
         :param max_spill_size: the maximum number of bytes to spill to disk. Defaults to 20GB.
-        :param min_commit_interval: minimum interval in seconds before a new commit is created used for
-            long running executions.
+        :param min_commit_interval: minimum interval in seconds before a new commit is created. Interval is
+            useful for long running executions.
         :return: the metrics from optimize
         """
         metrics = self.table._table.z_order_optimize(
