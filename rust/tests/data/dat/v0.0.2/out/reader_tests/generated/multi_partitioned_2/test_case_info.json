@@ -1,0 +1,4 @@
+{
+  "name": "multi_partitioned_2",
+  "description": "Multiple levels of partitioning, with boolean, timestamp, and decimal partition columns"
+}

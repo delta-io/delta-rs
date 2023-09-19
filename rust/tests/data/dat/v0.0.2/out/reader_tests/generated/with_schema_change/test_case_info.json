@@ -1,0 +1,4 @@
+{
+  "name": "with_schema_change",
+  "description": "Table which has schema change using overwriteSchema=True."
+}
