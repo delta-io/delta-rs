@@ -46,3 +46,21 @@ def test_z_order_optimize(
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
     assert dt.version() == old_version + 1
+
+
+def test_optimize_min_commit_interval(
+    tmp_path: pathlib.Path,
+    sample_data: pa.Table,
+):
+    write_deltalake(tmp_path, sample_data, partition_by="utf8", mode="append")
+    write_deltalake(tmp_path, sample_data, partition_by="utf8", mode="append")
+    write_deltalake(tmp_path, sample_data, partition_by="utf8", mode="append")
+
+    dt = DeltaTable(tmp_path)
+    old_version = dt.version()
+
+    dt.optimize.z_order(["date32", "timestamp"], min_commit_interval=0)
+
+    last_action = dt.history(1)[0]
+    assert last_action["operation"] == "OPTIMIZE"
+    assert dt.version() == old_version + 5

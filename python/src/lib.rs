@@ -9,6 +9,7 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::future::IntoFuture;
 use std::sync::Arc;
+use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::pyarrow::PyArrowType;
@@ -271,17 +272,21 @@ impl RawDeltaTable {
     }
 
     /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
-    #[pyo3(signature = (partition_filters = None, target_size = None, max_concurrent_tasks = None))]
+    #[pyo3(signature = (partition_filters = None, target_size = None, max_concurrent_tasks = None, min_commit_interval = None))]
     pub fn compact_optimize(
         &mut self,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
         target_size: Option<i64>,
         max_concurrent_tasks: Option<usize>,
+        min_commit_interval: Option<u64>,
     ) -> PyResult<String> {
         let mut cmd = OptimizeBuilder::new(self._table.object_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
+        }
+        if let Some(commit_interval) = min_commit_interval {
+            cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
         }
         let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
             .map_err(PythonError::from)?;
@@ -295,7 +300,7 @@ impl RawDeltaTable {
     }
 
     /// Run z-order variation of optimize
-    #[pyo3(signature = (z_order_columns, partition_filters = None, target_size = None, max_concurrent_tasks = None, max_spill_size = 20 * 1024 * 1024 * 1024))]
+    #[pyo3(signature = (z_order_columns, partition_filters = None, target_size = None, max_concurrent_tasks = None, max_spill_size = 20 * 1024 * 1024 * 1024, min_commit_interval = None))]
     pub fn z_order_optimize(
         &mut self,
         z_order_columns: Vec<String>,
@@ -303,6 +308,7 @@ impl RawDeltaTable {
         target_size: Option<i64>,
         max_concurrent_tasks: Option<usize>,
         max_spill_size: usize,
+        min_commit_interval: Option<u64>,
     ) -> PyResult<String> {
         let mut cmd = OptimizeBuilder::new(self._table.object_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
@@ -311,6 +317,10 @@ impl RawDeltaTable {
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
         }
+        if let Some(commit_interval) = min_commit_interval {
+            cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
+        }
+
         let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
             .map_err(PythonError::from)?;
         cmd = cmd.with_filters(&converted_filters);

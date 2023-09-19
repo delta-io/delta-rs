@@ -688,6 +688,7 @@ class TableOptimizer:
         partition_filters: Optional[FilterType] = None,
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
+        min_commit_interval: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -705,10 +706,12 @@ class TableOptimizer:
         :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
             file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
             faster, but will also use more memory.
+        :param min_commit_interval: minimum interval in seconds before a new commit is created used for
+            long running executions.
         :return: the metrics from optimize
         """
         metrics = self.table._table.compact_optimize(
-            partition_filters, target_size, max_concurrent_tasks
+            partition_filters, target_size, max_concurrent_tasks, min_commit_interval
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -720,6 +723,7 @@ class TableOptimizer:
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
         max_spill_size: int = 20 * 1024 * 1024 * 1024,
+        min_commit_interval: Optional[int] = None,
     ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
@@ -735,6 +739,8 @@ class TableOptimizer:
             file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
             faster, but will also use more memory.
         :param max_spill_size: the maximum number of bytes to spill to disk. Defaults to 20GB.
+        :param min_commit_interval: minimum interval in seconds before a new commit is created used for
+            long running executions.
         :return: the metrics from optimize
         """
         metrics = self.table._table.z_order_optimize(
@@ -743,6 +749,7 @@ class TableOptimizer:
             target_size,
             max_concurrent_tasks,
             max_spill_size,
+            min_commit_interval,
         )
         self.table.update_incremental()
         return json.loads(metrics)
