@@ -28,29 +28,28 @@
 //! ```
 use std::{collections::HashMap, sync::Arc};
 
-use super::{
-    stats::create_add,
-    utils::{
-        arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
-        stringified_partition_value, PartitionPath,
-    },
-    DeltaWriter, DeltaWriterError,
-};
-use crate::builder::DeltaTableBuilder;
-use crate::writer::utils::ShareableBuffer;
-use crate::DeltaTableError;
-use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
 use arrow::array::{Array, UInt32Array};
-use arrow::compute::{lexicographical_partition_ranges, take, SortColumn};
+use arrow::compute::{partition, take};
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow_array::ArrayRef;
 use arrow_row::{RowConverter, SortField};
 use bytes::Bytes;
-use object_store::ObjectStore;
+use object_store::{path::Path, ObjectStore};
 use parquet::{arrow::ArrowWriter, errors::ParquetError};
 use parquet::{basic::Compression, file::properties::WriterProperties};
+use uuid::Uuid;
+
+use super::stats::create_add;
+use super::utils::{
+    arrow_schema_without_partitions, next_data_path, record_batch_without_partitions,
+    stringified_partition_value, PartitionPath, ShareableBuffer,
+};
+use super::{DeltaWriter, DeltaWriterError};
+use crate::builder::DeltaTableBuilder;
+use crate::errors::DeltaTableError;
+use crate::{action::Add, storage::DeltaObjectStore, DeltaTable, DeltaTableMetaData, Schema};
 
 /// Writes messages to a delta lake table.
 pub struct RecordBatchWriter {
@@ -197,6 +196,12 @@ impl RecordBatchWriter {
         Ok(())
     }
 
+    /// Sets the writer properties for the underlying arrow writer.
+    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
+        self.writer_properties = writer_properties;
+        self
+    }
+
     fn divide_by_partition_values(
         &mut self,
         values: &RecordBatch,
@@ -228,7 +233,11 @@ impl DeltaWriter<RecordBatch> for RecordBatchWriter {
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
-            let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
+            let prefix =
+                PartitionPath::from_hashmap(&self.partition_columns, &writer.partition_values)?;
+            let prefix = Path::parse(prefix)?;
+            let uuid = Uuid::new_v4();
+            let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
             self.storage.put(&path, obj_bytes).await?;
@@ -324,7 +333,7 @@ impl PartitionWriter {
     /// Returns the current byte length of the in memory buffer.
     /// This may be used by the caller to decide when to finalize the file write.
     pub fn buffer_len(&self) -> usize {
-        self.buffer.len()
+        self.buffer.len() + self.arrow_writer.in_progress_size()
     }
 }
 
@@ -355,24 +364,19 @@ pub(crate) fn divide_by_partition_values(
     let indices = lexsort_to_indices(sort_columns.columns());
     let sorted_partition_columns = partition_columns
         .iter()
-        .map(|c| {
-            Ok(SortColumn {
-                values: take(values.column(schema.index_of(c)?), &indices, None)?,
-                options: None,
-            })
-        })
+        .map(|c| Ok(take(values.column(schema.index_of(c)?), &indices, None)?))
         .collect::<Result<Vec<_>, DeltaWriterError>>()?;
 
-    let partition_ranges = lexicographical_partition_ranges(sorted_partition_columns.as_slice())?;
+    let partition_ranges = partition(sorted_partition_columns.as_slice())?;
 
-    for range in partition_ranges {
+    for range in partition_ranges.ranges().into_iter() {
         // get row indices for current partition
         let idx: UInt32Array = (range.start..range.end)
             .map(|i| Some(indices.value(i)))
             .collect();
 
-        let partition_key_iter = sorted_partition_columns.iter().map(|c| {
-            stringified_partition_value(&c.values.slice(range.start, range.end - range.start))
+        let partition_key_iter = sorted_partition_columns.iter().map(|col| {
+            stringified_partition_value(&col.slice(range.start, range.end - range.start))
         });
 
         let mut partition_values = HashMap::new();
@@ -417,6 +421,18 @@ mod tests {
     };
     use arrow::json::ReaderBuilder;
     use std::path::Path;
+
+    #[tokio::test]
+    async fn test_buffer_len_includes_unflushed_row_group() {
+        let batch = get_record_batch(None, false);
+        let partition_cols = vec![];
+        let table = create_initialized_table(&partition_cols).await;
+        let mut writer = RecordBatchWriter::for_table(&table).unwrap();
+
+        writer.write(batch).await.unwrap();
+
+        assert!(writer.buffer_len() > 0);
+    }
 
     #[tokio::test]
     async fn test_divide_record_batch_no_partition() {

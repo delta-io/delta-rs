@@ -19,26 +19,28 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use super::writer::{DeltaWriter, WriterConfig};
-use super::MAX_SUPPORTED_WRITER_VERSION;
-use super::{transaction::commit, CreateBuilder};
-use crate::action::{Action, Add, DeltaOperation, Remove, SaveMode};
-use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::delta_datafusion::DeltaDataChecker;
-use crate::schema::Schema;
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
-use crate::table_state::DeltaTableState;
-use crate::writer::record_batch::divide_by_partition_values;
-use crate::writer::utils::PartitionPath;
-
-use arrow_array::RecordBatch;
-use arrow_cast::{can_cast_types, cast};
-use arrow_schema::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
+use arrow_array::{Array, ArrayRef, RecordBatch, StructArray};
+use arrow_cast::{can_cast_types, cast_with_options, CastOptions};
+use arrow_schema::{DataType, Fields, SchemaRef as ArrowSchemaRef};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
+use serde_json::Map;
+
+use super::writer::{DeltaWriter, WriterConfig};
+use super::MAX_SUPPORTED_WRITER_VERSION;
+use super::{transaction::commit, CreateBuilder};
+use crate::action::{Action, Add, DeltaOperation, Remove, SaveMode};
+use crate::delta::DeltaTable;
+use crate::delta_datafusion::DeltaDataChecker;
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::schema::Schema;
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
+use crate::table_state::DeltaTableState;
+use crate::writer::record_batch::divide_by_partition_values;
+use crate::writer::utils::PartitionPath;
 
 #[derive(thiserror::Error, Debug)]
 enum WriteError {
@@ -96,6 +98,12 @@ pub struct WriteBuilder {
     write_batch_size: Option<usize>,
     /// RecordBatches to be written into the table
     batches: Option<Vec<RecordBatch>>,
+    /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
+    safe_cast: bool,
+    /// Parquet writer properties
+    writer_properties: Option<WriterProperties>,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<Map<String, serde_json::Value>>,
 }
 
 impl WriteBuilder {
@@ -112,6 +120,9 @@ impl WriteBuilder {
             target_file_size: None,
             write_batch_size: None,
             batches: None,
+            safe_cast: false,
+            writer_properties: None,
+            app_metadata: None,
         }
     }
 
@@ -167,6 +178,28 @@ impl WriteBuilder {
         self
     }
 
+    /// Specify the safety of the casting operation
+    /// how to handle cast failures, either return NULL (safe=true) or return ERR (safe=false)
+    pub fn with_cast_safety(mut self, safe: bool) -> Self {
+        self.safe_cast = safe;
+        self
+    }
+
+    /// Specify the writer properties to use when writing a parquet file
+    pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
+        self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(Map::from_iter(metadata));
+        self
+    }
+
     async fn check_preconditions(&self) -> DeltaResult<Vec<Action>> {
         match self.store.is_delta_table_location().await? {
             true => {
@@ -216,20 +249,26 @@ pub(crate) async fn write_execution_plan(
     target_file_size: Option<usize>,
     write_batch_size: Option<usize>,
     writer_properties: Option<WriterProperties>,
+    safe_cast: bool,
 ) -> DeltaResult<Vec<Add>> {
     let invariants = snapshot
         .current_metadata()
         .and_then(|meta| meta.schema.get_invariants().ok())
         .unwrap_or_default();
+
+    // Use input schema to prevent wrapping partitions columns into a dictionary.
+    let schema = snapshot.input_schema().unwrap_or(plan.schema());
+
     let checker = DeltaDataChecker::new(invariants);
 
     // Write data to disk
     let mut tasks = vec![];
     for i in 0..plan.output_partitioning().partition_count() {
         let inner_plan = plan.clone();
+        let inner_schema = schema.clone();
         let task_ctx = Arc::new(TaskContext::from(&state));
         let config = WriterConfig::new(
-            inner_plan.schema(),
+            inner_schema.clone(),
             partition_columns.clone(),
             writer_properties.clone(),
             target_file_size,
@@ -237,14 +276,13 @@ pub(crate) async fn write_execution_plan(
         );
         let mut writer = DeltaWriter::new(object_store.clone(), config);
         let checker_stream = checker.clone();
-        let schema = inner_plan.schema().clone();
         let mut stream = inner_plan.execute(i, task_ctx)?;
         let handle: tokio::task::JoinHandle<DeltaResult<Vec<Add>>> =
             tokio::task::spawn(async move {
                 while let Some(maybe_batch) = stream.next().await {
                     let batch = maybe_batch?;
                     checker_stream.check_batch(&batch).await?;
-                    let arr = cast_record_batch(&batch, schema.clone())?;
+                    let arr = cast_record_batch(&batch, inner_schema.clone(), safe_cast)?;
                     writer.write(&arr).await?;
                 }
                 writer.close().await
@@ -314,7 +352,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         .or_else(|_| this.snapshot.arrow_schema())
                         .unwrap_or(schema.clone());
 
-                    if !can_cast_batch(schema.as_ref(), table_schema.as_ref()) {
+                    if !can_cast_batch(schema.fields(), table_schema.fields()) {
                         return Err(DeltaTableError::Generic(
                             "Updating table schema not yet implemented".to_string(),
                         ));
@@ -374,7 +412,8 @@ impl std::future::IntoFuture for WriteBuilder {
                 this.store.clone(),
                 this.target_file_size,
                 this.write_batch_size,
-                None,
+                this.writer_properties,
+                this.safe_cast,
             )
             .await?;
             actions.extend(add_actions.into_iter().map(Action::add));
@@ -397,6 +436,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         size: Some(add.size),
                         // TODO add file metadata to remove action (tags missing)
                         tags: None,
+                        deletion_vector: add.deletion_vector.clone(),
                     })
                 };
 
@@ -429,8 +469,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     predicate: this.predicate,
                 },
                 &this.snapshot,
-                // TODO pass through metadata
-                None,
+                this.app_metadata,
             )
             .await?;
 
@@ -447,35 +486,66 @@ impl std::future::IntoFuture for WriteBuilder {
     }
 }
 
-fn can_cast_batch(from_schema: &ArrowSchema, to_schema: &ArrowSchema) -> bool {
-    if from_schema.fields.len() != to_schema.fields.len() {
+fn can_cast_batch(from_fields: &Fields, to_fields: &Fields) -> bool {
+    if from_fields.len() != to_fields.len() {
         return false;
     }
-    from_schema.all_fields().iter().all(|f| {
-        if let Ok(target_field) = to_schema.field_with_name(f.name()) {
-            can_cast_types(f.data_type(), target_field.data_type())
+
+    from_fields.iter().all(|f| {
+        if let Some((_, target_field)) = to_fields.find(f.name()) {
+            if let (DataType::Struct(fields0), DataType::Struct(fields1)) =
+                (f.data_type(), target_field.data_type())
+            {
+                can_cast_batch(fields0, fields1)
+            } else {
+                can_cast_types(f.data_type(), target_field.data_type())
+            }
         } else {
             false
         }
     })
 }
 
-fn cast_record_batch(
+fn cast_record_batch_columns(
     batch: &RecordBatch,
-    target_schema: ArrowSchemaRef,
-) -> DeltaResult<RecordBatch> {
-    let columns = target_schema
-        .all_fields()
+    fields: &Fields,
+    cast_options: &CastOptions,
+) -> Result<Vec<Arc<(dyn Array)>>, arrow_schema::ArrowError> {
+    fields
         .iter()
         .map(|f| {
             let col = batch.column_by_name(f.name()).unwrap();
-            if !col.data_type().equals_datatype(f.data_type()) {
-                cast(col, f.data_type())
+            if let (DataType::Struct(_), DataType::Struct(child_fields)) =
+                (col.data_type(), f.data_type())
+            {
+                let child_batch = RecordBatch::from(StructArray::from(col.into_data()));
+                let child_columns =
+                    cast_record_batch_columns(&child_batch, child_fields, cast_options)?;
+                Ok(Arc::new(StructArray::new(
+                    child_fields.clone(),
+                    child_columns.clone(),
+                    None,
+                )) as ArrayRef)
+            } else if !col.data_type().equals_datatype(f.data_type()) {
+                cast_with_options(col, f.data_type(), cast_options)
             } else {
                 Ok(col.clone())
             }
         })
-        .collect::<Result<Vec<_>, _>>()?;
+        .collect::<Result<Vec<_>, _>>()
+}
+
+fn cast_record_batch(
+    batch: &RecordBatch,
+    target_schema: ArrowSchemaRef,
+    safe: bool,
+) -> DeltaResult<RecordBatch> {
+    let cast_options = CastOptions {
+        safe,
+        ..Default::default()
+    };
+
+    let columns = cast_record_batch_columns(batch, target_schema.fields(), &cast_options)?;
     Ok(RecordBatch::try_new(target_schema, columns)?)
 }
 
@@ -483,8 +553,17 @@ fn cast_record_batch(
 mod tests {
     use super::*;
     use crate::operations::DeltaOps;
-    use crate::writer::test_utils::{get_delta_schema, get_record_batch};
-    use serde_json::json;
+    use crate::writer::test_utils::datafusion::get_data;
+    use crate::writer::test_utils::{
+        get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
+        get_record_batch_with_nested_struct,
+    };
+    use arrow::datatypes::Field;
+    use arrow::datatypes::Schema as ArrowSchema;
+    use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
+    use arrow_schema::{DataType, TimeUnit};
+    use datafusion::assert_batches_sorted_eq;
+    use serde_json::{json, Value};
 
     #[tokio::test]
     async fn test_create_write() {
@@ -497,33 +576,171 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
+        assert_eq!(table.state.commit_infos().len(), 1);
 
         // write some data
-        let table = DeltaOps(table)
+        let metadata = Map::from_iter(vec![("k1".to_string(), json!("v1.1"))]);
+        let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
+            .with_metadata(metadata.clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
+        table.load().await.unwrap();
+        assert_eq!(table.state.commit_infos().len(), 2);
+        assert_eq!(
+            table.state.commit_infos()[1]
+                .info
+                .clone()
+                .into_iter()
+                .filter(|(k, _)| k != "clientVersion")
+                .collect::<Map<String, Value>>(),
+            metadata
+        );
 
         // append some data
-        let table = DeltaOps(table)
+        let metadata: Map<String, Value> = Map::from_iter(vec![("k1".to_string(), json!("v1.2"))]);
+        let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
+            .with_metadata(metadata.clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_file_uris().count(), 2);
+        table.load().await.unwrap();
+        assert_eq!(table.state.commit_infos().len(), 3);
+        assert_eq!(
+            table.state.commit_infos()[2]
+                .info
+                .clone()
+                .into_iter()
+                .filter(|(k, _)| k != "clientVersion")
+                .collect::<Map<String, Value>>(),
+            metadata
+        );
 
         // overwrite table
-        let table = DeltaOps(table)
+        let metadata: Map<String, Value> = Map::from_iter(vec![("k2".to_string(), json!("v2.1"))]);
+        let mut table = DeltaOps(table)
             .write(vec![batch])
             .with_save_mode(SaveMode::Overwrite)
+            .with_metadata(metadata.clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 3);
-        assert_eq!(table.get_file_uris().count(), 1)
+        assert_eq!(table.get_file_uris().count(), 1);
+        table.load().await.unwrap();
+        assert_eq!(table.state.commit_infos().len(), 4);
+        assert_eq!(
+            table.state.commit_infos()[3]
+                .info
+                .clone()
+                .into_iter()
+                .filter(|(k, _)| k != "clientVersion")
+                .collect::<Map<String, Value>>(),
+            metadata
+        );
+    }
+
+    #[tokio::test]
+    async fn test_write_different_types() {
+        // Ensure write data is casted when data of a different type from the table is provided.
+
+        // Validate String -> Int is err
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            DataType::Int32,
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(Int32Array::from(vec![Some(0), None]))],
+        )
+        .unwrap();
+        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            DataType::Utf8,
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec![
+                Some("Test123".to_owned()),
+                Some("123".to_owned()),
+                None,
+            ]))],
+        )
+        .unwrap();
+
+        // Test cast options
+        let table = DeltaOps::from(table)
+            .write(vec![batch.clone()])
+            .with_cast_safety(true)
+            .await
+            .unwrap();
+
+        let expected = [
+            "+-------+",
+            "| value |",
+            "+-------+",
+            "|       |",
+            "|       |",
+            "|       |",
+            "| 123   |",
+            "| 0     |",
+            "+-------+",
+        ];
+        let actual = get_data(&table).await;
+        assert_batches_sorted_eq!(&expected, &actual);
+
+        let res = DeltaOps::from(table).write(vec![batch]).await;
+        assert!(res.is_err());
+
+        // Validate the datetime -> string behavior
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            arrow::datatypes::DataType::Utf8,
+            true,
+        )]));
+
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(StringArray::from(vec![Some(
+                "2023-06-03 15:35:00".to_owned(),
+            )]))],
+        )
+        .unwrap();
+        let table = DeltaOps::new_in_memory().write(vec![batch]).await.unwrap();
+
+        let schema = Arc::new(ArrowSchema::new(vec![Field::new(
+            "value",
+            DataType::Timestamp(TimeUnit::Microsecond, None),
+            true,
+        )]));
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![Arc::new(TimestampMicrosecondArray::from(vec![Some(10000)]))],
+        )
+        .unwrap();
+
+        let _res = DeltaOps::from(table).write(vec![batch]).await.unwrap();
+        let expected = [
+            "+-------------------------+",
+            "| value                   |",
+            "+-------------------------+",
+            "| 1970-01-01T00:00:00.010 |",
+            "| 2023-06-03 15:35:00     |",
+            "+-------------------------+",
+        ];
+        let actual = get_data(&_res).await;
+        assert_batches_sorted_eq!(&expected, &actual);
     }
 
     #[tokio::test]
@@ -606,5 +823,36 @@ mod tests {
 
         let table = DeltaOps(table).write(vec![batch.clone()]).await;
         assert!(table.is_err())
+    }
+
+    #[tokio::test]
+    async fn test_nested_struct() {
+        let table_schema = get_delta_schema_with_nested_struct();
+        let batch = get_record_batch_with_nested_struct();
+
+        let table = DeltaOps::new_in_memory()
+            .create()
+            .with_columns(table_schema.get_fields().clone())
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 0);
+
+        let table = DeltaOps(table)
+            .write(vec![batch.clone()])
+            .with_save_mode(SaveMode::Append)
+            .await
+            .unwrap();
+        assert_eq!(table.version(), 1);
+
+        let actual = get_data(&table).await;
+        let expected = DataType::Struct(Fields::from(vec![Field::new(
+            "count",
+            DataType::Int32,
+            true,
+        )]));
+        assert_eq!(
+            actual[0].column_by_name("nested").unwrap().data_type(),
+            &expected
+        );
     }
 }

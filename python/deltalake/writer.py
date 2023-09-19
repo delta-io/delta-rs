@@ -162,14 +162,13 @@ def write_deltalake(
     if filesystem is not None:
         raise NotImplementedError("Filesystem support is not yet implemented.  #570")
 
+    if table is not None:
+        storage_options = table._storage_options or {}
+        storage_options.update(storage_options or {})
+
+    filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
-
-    if filesystem is None:
-        if table is not None:
-            storage_options = table._storage_options or {}
-            storage_options.update(storage_options or {})
-
-        filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
     if isinstance(partition_by, str):
         partition_by = [partition_by]
@@ -219,8 +218,10 @@ def write_deltalake(
         # PyArrow added support for written_file.size in 9.0.0
         if PYARROW_MAJOR_VERSION >= 9:
             size = written_file.size
+        elif filesystem is not None:
+            size = filesystem.get_file_info([path])[0].size
         else:
-            size = filesystem.get_file_info([path])[0].size  # type: ignore
+            size = 0
 
         add_actions.append(
             AddAction(

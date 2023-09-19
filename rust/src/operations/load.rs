@@ -6,9 +6,10 @@ use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
 use datafusion::physical_plan::{ExecutionPlan, SendableRecordBatchStream};
 use futures::future::BoxFuture;
 
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::DeltaObjectStore;
 use crate::table_state::DeltaTableState;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
+use crate::DeltaTable;
 
 #[derive(Debug, Clone)]
 pub struct LoadBuilder {

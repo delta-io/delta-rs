@@ -1,15 +1,16 @@
 //! Utility functions for working across Delta tables
 
 use std::collections::HashMap;
+use std::sync::Arc;
 
-use crate::action::Add;
-use crate::builder::DeltaTableBuilder;
-use crate::{DeltaResult, DeltaTableError};
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{NaiveDateTime, TimeZone, Utc};
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectMeta, Result as ObjectStoreResult};
-use std::sync::Arc;
+
+use crate::action::Add;
+use crate::builder::DeltaTableBuilder;
+use crate::errors::{DeltaResult, DeltaTableError};
 
 /// Copies the contents from the `from` location into the `to` location
 pub async fn copy_table(
@@ -79,22 +80,20 @@ impl TryFrom<&Add> for ObjectMeta {
     type Error = DeltaTableError;
 
     fn try_from(value: &Add) -> DeltaResult<Self> {
-        let last_modified = DateTime::<Utc>::from_utc(
-            NaiveDateTime::from_timestamp_millis(value.modification_time).ok_or(
-                DeltaTableError::InvalidAction {
-                    source: crate::action::ActionError::InvalidField(format!(
-                        "invalid modification_time: {:?}",
-                        value.modification_time
-                    )),
-                },
+        let last_modified = Utc.from_utc_datetime(
+            &NaiveDateTime::from_timestamp_millis(value.modification_time).ok_or(
+                DeltaTableError::from(crate::action::ProtocolError::InvalidField(format!(
+                    "invalid modification_time: {:?}",
+                    value.modification_time
+                ))),
             )?,
-            Utc,
         );
         Ok(Self {
             // TODO this won't work for absolute paths, since Paths are always relative to store.
             location: Path::parse(value.path.as_str())?,
             last_modified,
             size: value.size as usize,
+            e_tag: None,
         })
     }
 }

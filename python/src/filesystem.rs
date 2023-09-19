@@ -27,6 +27,17 @@ pub struct DeltaFileSystemHandler {
     pub(crate) config: FsConfig,
 }
 
+impl DeltaFileSystemHandler {
+    fn parse_path(path: &str) -> Path {
+        // Path::from will percent-encode the input, while Path::parse won't. So
+        // we should prefer Path::parse.
+        match Path::parse(path) {
+            Ok(path) => path,
+            Err(_) => Path::from(path),
+        }
+    }
+}
+
 #[pymethods]
 impl DeltaFileSystemHandler {
     #[new]
@@ -57,8 +68,8 @@ impl DeltaFileSystemHandler {
     }
 
     fn copy_file(&self, src: String, dest: String) -> PyResult<()> {
-        let from_path = Path::from(src);
-        let to_path = Path::from(dest);
+        let from_path = Self::parse_path(&src);
+        let to_path = Self::parse_path(&dest);
         self.rt
             .block_on(self.inner.copy(&from_path, &to_path))
             .map_err(PythonError::from)?;
@@ -71,7 +82,7 @@ impl DeltaFileSystemHandler {
     }
 
     fn delete_dir(&self, path: String) -> PyResult<()> {
-        let path = Path::from(path);
+        let path = Self::parse_path(&path);
         self.rt
             .block_on(delete_dir(self.inner.as_ref(), &path))
             .map_err(PythonError::from)?;
@@ -79,7 +90,7 @@ impl DeltaFileSystemHandler {
     }
 
     fn delete_file(&self, path: String) -> PyResult<()> {
-        let path = Path::from(path);
+        let path = Self::parse_path(&path);
         self.rt
             .block_on(self.inner.delete(&path))
             .map_err(PythonError::from)?;
@@ -100,20 +111,26 @@ impl DeltaFileSystemHandler {
 
         let mut infos = Vec::new();
         for file_path in paths {
-            let path = Path::from(file_path);
-            let listed = self
-                .rt
-                .block_on(self.inner.list_with_delimiter(Some(&path)))
-                .map_err(PythonError::from)?;
+            let path = Self::parse_path(&file_path);
+            let listed = py.allow_threads(|| {
+                self.rt
+                    .block_on(self.inner.list_with_delimiter(Some(&path)))
+                    .map_err(PythonError::from)
+            })?;
 
             // TODO is there a better way to figure out if we are in a directory?
             if listed.objects.is_empty() && listed.common_prefixes.is_empty() {
-                let maybe_meta = self.rt.block_on(self.inner.head(&path));
+                let maybe_meta = py.allow_threads(|| self.rt.block_on(self.inner.head(&path)));
                 match maybe_meta {
                     Ok(meta) => {
                         let kwargs = HashMap::from([
                             ("size", meta.size as i64),
-                            ("mtime_ns", meta.last_modified.timestamp_nanos()),
+                            (
+                                "mtime_ns",
+                                meta.last_modified.timestamp_nanos_opt().ok_or(
+                                    PyValueError::new_err("last modified datetime out of range"),
+                                )?,
+                            ),
                         ]);
                         infos.push(to_file_info(
                             meta.location.as_ref(),
@@ -159,7 +176,7 @@ impl DeltaFileSystemHandler {
             fs.call_method("FileInfo", (loc, type_), Some(kwargs.into_py_dict(py)))
         };
 
-        let path = Path::from(base_dir);
+        let path = Self::parse_path(&base_dir);
         let list_result = match self
             .rt
             .block_on(walk_tree(self.inner.clone(), &path, recursive))
@@ -200,7 +217,12 @@ impl DeltaFileSystemHandler {
                 .map(|meta| {
                     let kwargs = HashMap::from([
                         ("size", meta.size as i64),
-                        ("mtime_ns", meta.last_modified.timestamp_nanos()),
+                        (
+                            "mtime_ns",
+                            meta.last_modified.timestamp_nanos_opt().ok_or(
+                                PyValueError::new_err("last modified datetime out of range"),
+                            )?,
+                        ),
                     ]);
                     to_file_info(
                         meta.location.to_string(),
@@ -215,8 +237,8 @@ impl DeltaFileSystemHandler {
     }
 
     fn move_file(&self, src: String, dest: String) -> PyResult<()> {
-        let from_path = Path::from(src);
-        let to_path = Path::from(dest);
+        let from_path = Self::parse_path(&src);
+        let to_path = Self::parse_path(&dest);
         // TODO check the if not exists semantics
         self.rt
             .block_on(self.inner.rename(&from_path, &to_path))
@@ -225,7 +247,7 @@ impl DeltaFileSystemHandler {
     }
 
     fn open_input_file(&self, path: String) -> PyResult<ObjectInputFile> {
-        let path = Path::from(path);
+        let path = Self::parse_path(&path);
         let file = self
             .rt
             .block_on(ObjectInputFile::try_new(
@@ -243,7 +265,7 @@ impl DeltaFileSystemHandler {
         path: String,
         #[allow(unused)] metadata: Option<HashMap<String, String>>,
     ) -> PyResult<ObjectOutputStream> {
-        let path = Path::from(path);
+        let path = Self::parse_path(&path);
         let file = self
             .rt
             .block_on(ObjectOutputStream::try_new(
@@ -385,7 +407,7 @@ impl ObjectInputFile {
     }
 
     #[pyo3(signature = (nbytes = None))]
-    fn read(&mut self, nbytes: Option<i64>) -> PyResult<Py<PyBytes>> {
+    fn read(&mut self, nbytes: Option<i64>, py: Python<'_>) -> PyResult<Py<PyBytes>> {
         self.check_closed()?;
         let range = match nbytes {
             Some(len) => {
@@ -403,13 +425,18 @@ impl ObjectInputFile {
         let nbytes = (range.end - range.start) as i64;
         self.pos += nbytes;
         let data = if nbytes > 0 {
-            self.rt
-                .block_on(self.store.get_range(&self.path, range))
-                .map_err(PythonError::from)?
+            py.allow_threads(|| {
+                self.rt
+                    .block_on(self.store.get_range(&self.path, range))
+                    .map_err(PythonError::from)
+            })?
         } else {
             "".into()
         };
-        Python::with_gil(|py| Ok(PyBytes::new(py, data.as_ref()).into_py(py)))
+        // TODO: PyBytes copies the buffer. If we move away from the limited CPython
+        // API (the stable C API), we could implement the buffer protocol for
+        // bytes::Bytes and return this zero-copy.
+        Ok(PyBytes::new(py, data.as_ref()).into_py(py))
     }
 
     fn fileno(&self) -> PyResult<()> {
@@ -477,9 +504,9 @@ impl ObjectOutputStream {
 
 #[pymethods]
 impl ObjectOutputStream {
-    fn close(&mut self) -> PyResult<()> {
+    fn close(&mut self, py: Python<'_>) -> PyResult<()> {
         self.closed = true;
-        match self.rt.block_on(self.writer.shutdown()) {
+        py.allow_threads(|| match self.rt.block_on(self.writer.shutdown()) {
             Ok(_) => Ok(()),
             Err(err) => {
                 self.rt
@@ -487,7 +514,7 @@ impl ObjectOutputStream {
                     .map_err(PythonError::from)?;
                 Err(PyIOError::new_err(err.to_string()))
             }
-        }
+        })
     }
 
     fn isatty(&self) -> PyResult<bool> {
@@ -533,7 +560,9 @@ impl ObjectOutputStream {
     fn write(&mut self, data: &PyBytes) -> PyResult<i64> {
         self.check_closed()?;
         let len = data.as_bytes().len() as i64;
-        match self.rt.block_on(self.writer.write_all(data.as_bytes())) {
+        let py = data.py();
+        let data = data.as_bytes();
+        py.allow_threads(|| match self.rt.block_on(self.writer.write_all(data)) {
             Ok(_) => Ok(len),
             Err(err) => {
                 self.rt
@@ -541,11 +570,11 @@ impl ObjectOutputStream {
                     .map_err(PythonError::from)?;
                 Err(PyIOError::new_err(err.to_string()))
             }
-        }
+        })
     }
 
-    fn flush(&mut self) -> PyResult<()> {
-        match self.rt.block_on(self.writer.flush()) {
+    fn flush(&mut self, py: Python<'_>) -> PyResult<()> {
+        py.allow_threads(|| match self.rt.block_on(self.writer.flush()) {
             Ok(_) => Ok(()),
             Err(err) => {
                 self.rt
@@ -553,7 +582,7 @@ impl ObjectOutputStream {
                     .map_err(PythonError::from)?;
                 Err(PyIOError::new_err(err.to_string()))
             }
-        }
+        })
     }
 
     fn fileno(&self) -> PyResult<()> {

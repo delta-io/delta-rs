@@ -12,8 +12,9 @@ use datafusion_common::DataFusionError;
 use futures::TryStreamExt;
 use object_store::ObjectStore;
 
+use crate::errors::DeltaResult;
 use crate::storage::config::{configure_store, StorageOptions};
-use crate::{ensure_table_uri, open_table_with_storage_options, DeltaResult};
+use crate::{ensure_table_uri, open_table_with_storage_options};
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 
@@ -144,7 +145,7 @@ impl SchemaProvider for ListingSchemaProvider {
 mod tests {
     use super::*;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::catalog::catalog::{CatalogProvider, MemoryCatalogProvider};
+    use datafusion::catalog::{CatalogProvider, MemoryCatalogProvider};
     use datafusion::execution::context::SessionContext;
 
     #[test]

@@ -4,14 +4,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
 
-use crate::delta::{DeltaResult, DeltaTable, DeltaTableError};
-use crate::storage::config::StorageOptions;
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
-
 use chrono::{DateTime, FixedOffset, Utc};
 use object_store::DynObjectStore;
 use serde::{Deserialize, Serialize};
 use url::Url;
+
+use crate::delta::DeltaTable;
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::storage::config::StorageOptions;
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 
 #[allow(dead_code)]
 #[derive(Debug, thiserror::Error)]
@@ -66,6 +67,14 @@ pub struct DeltaTableConfig {
     /// Some append-only applications might have no need of tracking any files.
     /// Hence, DeltaTable will be loaded with significant memory reduction.
     pub require_files: bool,
+    /// Controls how many files to buffer from the commit log when updating the table.
+    /// This defaults to 4 * number of cpus
+    ///
+    /// Setting a value greater than 1 results in concurrent calls to the storage api.
+    /// This can decrease latency if there are many files in the log since the
+    /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
+    /// also be considered for optimal performance.
+    pub log_buffer_size: usize,
 }
 
 impl Default for DeltaTableConfig {
@@ -73,6 +82,7 @@ impl Default for DeltaTableConfig {
         Self {
             require_tombstones: true,
             require_files: true,
+            log_buffer_size: num_cpus::get() * 4,
         }
     }
 }
@@ -100,6 +110,14 @@ pub struct DeltaTableLoadOptions {
     /// Some append-only applications might have no need of tracking any files.
     /// Hence, DeltaTable will be loaded with significant memory reduction.
     pub require_files: bool,
+    /// Controls how many files to buffer from the commit log when updating the table.
+    /// This defaults to 4 * number of cpus
+    ///
+    /// Setting a value greater than 1 results in concurrent calls to the storage api.
+    /// This can be helpful to decrease latency if there are many files in the log since the
+    /// last checkpoint, but will also increase memory usage. Possible rate limits of the storage backend should
+    /// also be considered for optimal performance.
+    pub log_buffer_size: usize,
 }
 
 impl DeltaTableLoadOptions {
@@ -110,6 +128,7 @@ impl DeltaTableLoadOptions {
             storage_backend: None,
             require_tombstones: true,
             require_files: true,
+            log_buffer_size: num_cpus::get() * 4,
             version: DeltaVersion::default(),
         }
     }
@@ -150,6 +169,17 @@ impl DeltaTableBuilder {
     pub fn with_version(mut self, version: i64) -> Self {
         self.options.version = DeltaVersion::Version(version);
         self
+    }
+
+    /// Sets `log_buffer_size` to the builder
+    pub fn with_log_buffer_size(mut self, log_buffer_size: usize) -> DeltaResult<Self> {
+        if log_buffer_size == 0 {
+            return Err(DeltaTableError::Generic(String::from(
+                "Log buffer size should be positive",
+            )));
+        }
+        self.options.log_buffer_size = log_buffer_size;
+        Ok(self)
     }
 
     /// specify the timestamp given as ISO-8601/RFC-3339 timestamp
@@ -237,6 +267,7 @@ impl DeltaTableBuilder {
         let config = DeltaTableConfig {
             require_tombstones: self.options.require_tombstones,
             require_files: self.options.require_files,
+            log_buffer_size: self.options.log_buffer_size,
         };
         Ok(DeltaTable::new(self.build_storage()?, config))
     }
@@ -364,7 +395,7 @@ lazy_static::lazy_static! {
 /// Extra slashes will be removed from the end path as well.
 ///
 /// Will return an error if the location is not valid. For example,
-pub(crate) fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
+pub fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
     let table_uri = table_uri.as_ref();
 
     enum UriType {
@@ -423,7 +454,7 @@ pub(crate) fn ensure_table_uri(table_uri: impl AsRef<str>) -> DeltaResult<Url> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
+    use object_store::path::Path;
 
     #[test]
     fn test_ensure_table_uri() {
@@ -506,7 +537,7 @@ mod tests {
         }
 
         // Creates non-existent relative directories
-        let relative_path = Path::new("_tmp/test %3F");
+        let relative_path = std::path::Path::new("_tmp/test %3F");
         assert!(!relative_path.exists());
         ensure_table_uri(relative_path.as_os_str().to_str().unwrap()).unwrap();
         assert!(relative_path.exists());
@@ -526,5 +557,66 @@ mod tests {
         let expected = Url::from_directory_path(path).unwrap();
         let url = ensure_table_uri(&expected).unwrap();
         assert_eq!(expected.as_str().trim_end_matches('/'), url.as_str());
+    }
+
+    #[tokio::test]
+    async fn read_delta_table_ignoring_tombstones() {
+        let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+            .without_tombstones()
+            .load()
+            .await
+            .unwrap();
+        assert!(
+            table.get_state().all_tombstones().is_empty(),
+            "loading without tombstones should skip tombstones"
+        );
+
+        assert_eq!(
+            table.get_files(),
+            vec![
+                Path::from("part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet"),
+                Path::from("part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet")
+            ]
+        );
+    }
+
+    #[tokio::test]
+    async fn read_delta_table_ignoring_files() {
+        let table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+            .without_files()
+            .load()
+            .await
+            .unwrap();
+
+        assert!(table.get_files().is_empty(), "files should be empty");
+        assert!(
+            table.get_tombstones().next().is_none(),
+            "tombstones should be empty"
+        );
+    }
+
+    #[tokio::test]
+    async fn read_delta_table_with_ignoring_files_on_apply_log() {
+        let mut table = DeltaTableBuilder::from_uri("./tests/data/delta-0.8.0")
+            .with_version(0)
+            .without_files()
+            .load()
+            .await
+            .unwrap();
+
+        assert_eq!(table.version(), 0);
+        assert!(table.get_files().is_empty(), "files should be empty");
+        assert!(
+            table.get_tombstones().next().is_none(),
+            "tombstones should be empty"
+        );
+
+        table.update().await.unwrap();
+        assert_eq!(table.version(), 1);
+        assert!(table.get_files().is_empty(), "files should be empty");
+        assert!(
+            table.get_tombstones().next().is_none(),
+            "tombstones should be empty"
+        );
     }
 }

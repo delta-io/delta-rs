@@ -23,18 +23,22 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
 use arrow::compute::{cast_with_options, CastOptions};
+use arrow::datatypes::DataType;
 use arrow::datatypes::{DataType as ArrowDataType, Schema as ArrowSchema, SchemaRef, TimeUnit};
 use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
+use arrow_array::StringArray;
+use arrow_schema::Field;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, Utc};
-use datafusion::datasource::datasource::TableProviderFactory;
+use chrono::{NaiveDateTime, TimeZone, Utc};
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
+use datafusion::datasource::physical_plan::FileScanConfig;
+use datafusion::datasource::provider::TableProviderFactory;
 use datafusion::datasource::{listing::PartitionedFile, MemTable, TableProvider, TableType};
 use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
 use datafusion::execution::runtime_env::RuntimeEnv;
@@ -42,14 +46,20 @@ use datafusion::execution::FunctionRegistry;
 use datafusion::optimizer::utils::conjunction;
 use datafusion::physical_expr::PhysicalSortExpr;
 use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistics};
-use datafusion::physical_plan::file_format::FileScanConfig;
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::{
-    ColumnStatistics, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::scalar::ScalarValue;
-use datafusion_common::{Column, DataFusionError, Result as DataFusionResult, ToDFSchema};
+use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
+use datafusion_common::{
+    Column, DFSchema, DataFusionError, Result as DataFusionResult, ToDFSchema,
+};
+use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
 use datafusion_expr::logical_plan::CreateExternalTable;
-use datafusion_expr::{Expr, Extension, LogicalPlan, TableProviderFilterPushDown};
+use datafusion_expr::{col, Expr, Extension, LogicalPlan, TableProviderFilterPushDown, Volatility};
 use datafusion_physical_expr::execution_props::ExecutionProps;
 use datafusion_physical_expr::{create_physical_expr, PhysicalExpr};
 use datafusion_proto::logical_plan::LogicalExtensionCodec;
@@ -57,13 +67,14 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::ObjectMeta;
 use url::Url;
 
-use crate::action::Add;
+use crate::action::{self, Add};
 use crate::builder::ensure_table_uri;
+use crate::errors::{DeltaResult, DeltaTableError};
 use crate::storage::ObjectStoreRef;
 use crate::table_state::DeltaTableState;
-use crate::{action, open_table, open_table_with_storage_options, SchemaDataType};
-use crate::{DeltaResult, Invariant};
-use crate::{DeltaTable, DeltaTableError};
+use crate::{open_table, open_table_with_storage_options, DeltaTable, Invariant, SchemaDataType};
+
+const PATH_COLUMN: &str = "__delta_rs_path";
 
 impl From<DeltaTableError> for DataFusionError {
     fn from(err: DeltaTableError) -> Self {
@@ -95,8 +106,8 @@ impl DeltaTableState {
         let stats = self
             .files()
             .iter()
-            .fold(
-                Some(Statistics {
+            .try_fold(
+                Statistics {
                     num_rows: Some(0),
                     total_byte_size: Some(0),
                     column_statistics: Some(vec![
@@ -109,9 +120,8 @@ impl DeltaTableState {
                         self.schema().unwrap().get_fields().len()
                     ]),
                     is_exact: true,
-                }),
+                },
                 |acc, action| {
-                    let acc = acc?;
                     let new_stats = action
                         .get_stats()
                         .unwrap_or_else(|_| Some(action::Stats::default()))?;
@@ -404,7 +414,7 @@ pub(crate) async fn parquet_scan_from_actions(
                 projection: projection.cloned(),
                 limit,
                 table_partition_cols,
-                output_ordering: None,
+                output_ordering: vec![],
                 infinite_source: false,
             },
             filters.as_ref(),
@@ -457,7 +467,7 @@ impl TableProvider for DeltaTable {
             self.get_state()
                 .files()
                 .iter()
-                .zip(files_to_prune.into_iter())
+                .zip(files_to_prune)
                 .filter_map(
                     |(action, keep)| {
                         if keep {
@@ -510,6 +520,12 @@ pub struct DeltaScan {
     pub table_uri: String,
     /// The parquet scan to wrap
     pub parquet_scan: Arc<dyn ExecutionPlan>,
+}
+
+impl DisplayAs for DeltaScan {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(f, "DeltaScan")
+    }
 }
 
 impl ExecutionPlan for DeltaScan {
@@ -635,10 +651,8 @@ pub(crate) fn partitioned_file_from_action(
 
     let ts_secs = action.modification_time / 1000;
     let ts_ns = (action.modification_time % 1000) * 1_000_000;
-    let last_modified = DateTime::<Utc>::from_utc(
-        NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap(),
-        Utc,
-    );
+    let last_modified =
+        Utc.from_utc_datetime(&NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap());
     PartitionedFile {
         object_meta: ObjectMeta {
             last_modified,
@@ -687,7 +701,10 @@ pub(crate) fn to_correct_scalar_value(
                 let cast_arr = cast_with_options(
                     &time_nanos.to_array(),
                     field_dt,
-                    &CastOptions { safe: false },
+                    &CastOptions {
+                        safe: false,
+                        ..Default::default()
+                    },
                 )
                 .ok()?;
                 Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)
@@ -704,7 +721,10 @@ pub(crate) fn to_correct_scalar_value(
                 let cast_arr = cast_with_options(
                     &time_nanos.to_array(),
                     field_dt,
-                    &CastOptions { safe: false },
+                    &CastOptions {
+                        safe: false,
+                        ..Default::default()
+                    },
                 )
                 .ok()?;
                 Some(ScalarValue::try_from_array(&cast_arr, 0).ok()?)
@@ -989,12 +1009,380 @@ impl TableProviderFactory for DeltaTableFactory {
     }
 }
 
+pub(crate) struct FindFilesExprProperties {
+    pub partition_columns: Vec<String>,
+
+    pub partition_only: bool,
+    pub result: DeltaResult<()>,
+}
+
+/// Ensure only expressions that make sense are accepted, check for
+/// non-deterministic functions, and determine if the expression only contains
+/// partition columns
+impl TreeNodeVisitor for FindFilesExprProperties {
+    type N = Expr;
+
+    fn pre_visit(&mut self, expr: &Self::N) -> datafusion_common::Result<VisitRecursion> {
+        // TODO: We can likely relax the volatility to STABLE. Would require further
+        // research to confirm the same value is generated during the scan and
+        // rewrite phases.
+
+        match expr {
+            Expr::Column(c) => {
+                if !self.partition_columns.contains(&c.name) {
+                    self.partition_only = false;
+                }
+            }
+            Expr::ScalarVariable(_, _)
+            | Expr::Literal(_)
+            | Expr::Alias(_)
+            | Expr::BinaryExpr(_)
+            | Expr::Like(_)
+            | Expr::SimilarTo(_)
+            | Expr::Not(_)
+            | Expr::IsNotNull(_)
+            | Expr::IsNull(_)
+            | Expr::IsTrue(_)
+            | Expr::IsFalse(_)
+            | Expr::IsUnknown(_)
+            | Expr::IsNotTrue(_)
+            | Expr::IsNotFalse(_)
+            | Expr::IsNotUnknown(_)
+            | Expr::Negative(_)
+            | Expr::InList { .. }
+            | Expr::GetIndexedField(_)
+            | Expr::Between(_)
+            | Expr::Case(_)
+            | Expr::Cast(_)
+            | Expr::TryCast(_) => (),
+            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
+                let v = fun.volatility();
+                if v > Volatility::Immutable {
+                    self.result = Err(DeltaTableError::Generic(format!(
+                        "Find files predicate contains nondeterministic function {}",
+                        fun
+                    )));
+                    return Ok(VisitRecursion::Stop);
+                }
+            }
+            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
+                let v = fun.signature.volatility;
+                if v > Volatility::Immutable {
+                    self.result = Err(DeltaTableError::Generic(format!(
+                        "Find files predicate contains nondeterministic function {}",
+                        fun.name
+                    )));
+                    return Ok(VisitRecursion::Stop);
+                }
+            }
+            _ => {
+                self.result = Err(DeltaTableError::Generic(format!(
+                    "Find files predicate contains unsupported expression {}",
+                    expr
+                )));
+                return Ok(VisitRecursion::Stop);
+            }
+        }
+
+        Ok(VisitRecursion::Continue)
+    }
+}
+
+/// Representing the result of the [find_files] function.
+pub struct FindFiles {
+    /// A list of `Add` objects that match the given predicate
+    pub candidates: Vec<Add>,
+    /// Was a physical read to the datastore required to determine the candidates
+    pub partition_scan: bool,
+}
+
+fn join_batches_with_add_actions(
+    batches: Vec<RecordBatch>,
+    mut actions: HashMap<String, Add>,
+) -> DeltaResult<Vec<Add>> {
+    // Given RecordBatches that contains `__delta_rs_path` perform a hash join
+    // with actions to obtain original add actions
+
+    let mut files = Vec::with_capacity(batches.iter().map(|batch| batch.num_rows()).sum());
+    for batch in batches {
+        let array = batch
+            .column_by_name(PATH_COLUMN)
+            .ok_or_else(|| {
+                DeltaTableError::Generic(format!("Unable to find column {}", PATH_COLUMN))
+            })?
+            .as_any()
+            .downcast_ref::<StringArray>()
+            .ok_or(DeltaTableError::Generic(format!(
+                "Unable to downcast column {}",
+                PATH_COLUMN
+            )))?;
+        for path in array {
+            let path = path.ok_or(DeltaTableError::Generic(format!(
+                "{} cannot be null",
+                PATH_COLUMN
+            )))?;
+
+            match actions.remove(path) {
+                Some(action) => files.push(action),
+                None => {
+                    return Err(DeltaTableError::Generic(
+                        "Unable to map __delta_rs_path to action.".to_owned(),
+                    ))
+                }
+            }
+        }
+    }
+    Ok(files)
+}
+
+/// Determine which files contain a record that statisfies the predicate
+pub(crate) async fn find_files_scan<'a>(
+    snapshot: &DeltaTableState,
+    store: ObjectStoreRef,
+    schema: Arc<ArrowSchema>,
+    file_schema: Arc<ArrowSchema>,
+    candidates: Vec<&'a Add>,
+    state: &SessionState,
+    expression: &Expr,
+) -> DeltaResult<Vec<Add>> {
+    let mut candidate_map: HashMap<String, Add> = HashMap::new();
+
+    let table_partition_cols = snapshot
+        .current_metadata()
+        .ok_or(DeltaTableError::NoMetadata)?
+        .partition_columns
+        .clone();
+
+    let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
+    for action in candidates {
+        let mut part = partitioned_file_from_action(action, &schema);
+        part.partition_values
+            .push(ScalarValue::Utf8(Some(action.path.clone())));
+
+        file_groups
+            .entry(part.partition_values.clone())
+            .or_default()
+            .push(part);
+
+        candidate_map.insert(action.path.to_owned(), action.to_owned());
+    }
+
+    let mut table_partition_cols = table_partition_cols
+        .iter()
+        .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
+        .collect::<Result<Vec<_>, ArrowError>>()?;
+    // Append a column called __delta_rs_path to track the file path
+    table_partition_cols.push((PATH_COLUMN.to_owned(), DataType::Utf8));
+
+    let input_schema = snapshot.input_schema()?;
+
+    let mut fields = Vec::new();
+    for field in input_schema.fields.iter() {
+        fields.push(field.to_owned());
+    }
+    fields.push(Arc::new(Field::new(
+        PATH_COLUMN,
+        arrow_schema::DataType::Boolean,
+        true,
+    )));
+    let input_schema = Arc::new(ArrowSchema::new(fields));
+
+    // Identify which columns we need to project
+    let mut used_columns = expression
+        .to_columns()?
+        .into_iter()
+        .map(|column| input_schema.index_of(&column.name))
+        .collect::<Result<Vec<usize>, ArrowError>>()
+        .unwrap();
+    // Add path column
+    used_columns.push(input_schema.index_of(PATH_COLUMN)?);
+
+    // Project the logical schema so column indicies align between the parquet scan and the expression
+    let mut fields = vec![];
+    for idx in &used_columns {
+        fields.push(input_schema.field(*idx).to_owned());
+    }
+    let input_schema = Arc::new(ArrowSchema::new(fields));
+    let input_dfschema = input_schema.as_ref().clone().try_into()?;
+
+    let parquet_scan = ParquetFormat::new()
+        .create_physical_plan(
+            state,
+            FileScanConfig {
+                object_store_url: store.object_store_url(),
+                file_schema,
+                file_groups: file_groups.into_values().collect(),
+                statistics: snapshot.datafusion_table_statistics(),
+                projection: Some(used_columns),
+                limit: None,
+                table_partition_cols,
+                infinite_source: false,
+                output_ordering: vec![],
+            },
+            None,
+        )
+        .await?;
+
+    let predicate_expr = create_physical_expr(
+        &Expr::IsTrue(Box::new(expression.clone())),
+        &input_dfschema,
+        &input_schema,
+        state.execution_props(),
+    )?;
+
+    let filter: Arc<dyn ExecutionPlan> =
+        Arc::new(FilterExec::try_new(predicate_expr, parquet_scan.clone())?);
+    let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(filter, 1));
+
+    let task_ctx = Arc::new(TaskContext::from(state));
+    let path_batches = datafusion::physical_plan::collect(limit, task_ctx).await?;
+
+    join_batches_with_add_actions(path_batches, candidate_map)
+}
+
+pub(crate) async fn scan_memory_table(
+    snapshot: &DeltaTableState,
+    predicate: &Expr,
+) -> DeltaResult<Vec<Add>> {
+    let actions = snapshot.files().to_owned();
+
+    let batch = snapshot.add_actions_table(true)?;
+    let mut arrays = Vec::new();
+    let mut fields = Vec::new();
+
+    let schema = batch.schema();
+
+    arrays.push(
+        batch
+            .column_by_name("path")
+            .ok_or(DeltaTableError::Generic(
+                "Column with name `path` does not exist".to_owned(),
+            ))?
+            .to_owned(),
+    );
+    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
+
+    for field in schema.fields() {
+        if field.name().starts_with("partition.") {
+            let name = field.name().strip_prefix("partition.").unwrap();
+
+            arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
+            fields.push(Field::new(
+                name,
+                field.data_type().to_owned(),
+                field.is_nullable(),
+            ));
+        }
+    }
+
+    let schema = Arc::new(ArrowSchema::new(fields));
+    let batch = RecordBatch::try_new(schema, arrays)?;
+    let mem_table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
+
+    let ctx = SessionContext::new();
+    let mut df = ctx.read_table(Arc::new(mem_table))?;
+    df = df
+        .filter(predicate.to_owned())?
+        .select(vec![col(PATH_COLUMN)])?;
+    let batches = df.collect().await?;
+
+    let map = actions
+        .into_iter()
+        .map(|action| (action.path.clone(), action))
+        .collect::<HashMap<String, Add>>();
+
+    join_batches_with_add_actions(batches, map)
+}
+
+/// Finds files in a snapshot that match the provided predicate.
+pub async fn find_files<'a>(
+    snapshot: &DeltaTableState,
+    object_store: ObjectStoreRef,
+    schema: Arc<ArrowSchema>,
+    state: &SessionState,
+    predicate: Option<Expr>,
+) -> DeltaResult<FindFiles> {
+    let current_metadata = snapshot
+        .current_metadata()
+        .ok_or(DeltaTableError::NoMetadata)?;
+    let table_partition_cols = current_metadata.partition_columns.clone();
+
+    match &predicate {
+        Some(predicate) => {
+            let file_schema = Arc::new(ArrowSchema::new(
+                schema
+                    .fields()
+                    .iter()
+                    .filter(|f| !table_partition_cols.contains(f.name()))
+                    .cloned()
+                    .collect::<Vec<_>>(),
+            ));
+
+            let input_schema = snapshot.input_schema()?;
+            let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
+            let expr = create_physical_expr(
+                predicate,
+                &input_dfschema,
+                &input_schema,
+                state.execution_props(),
+            )?;
+
+            // Validate the Predicate and determine if it only contains partition columns
+            let mut expr_properties = FindFilesExprProperties {
+                partition_only: true,
+                partition_columns: current_metadata.partition_columns.clone(),
+                result: Ok(()),
+            };
+
+            TreeNode::visit(predicate, &mut expr_properties)?;
+            expr_properties.result?;
+
+            if expr_properties.partition_only {
+                let candidates = scan_memory_table(snapshot, predicate).await?;
+                Ok(FindFiles {
+                    candidates,
+                    partition_scan: true,
+                })
+            } else {
+                let pruning_predicate = PruningPredicate::try_new(expr, schema.clone())?;
+                let files_to_prune = pruning_predicate.prune(snapshot)?;
+                let files: Vec<&Add> = snapshot
+                    .files()
+                    .iter()
+                    .zip(files_to_prune.into_iter())
+                    .filter_map(|(action, keep)| if keep { Some(action) } else { None })
+                    .collect();
+
+                // Create a new delta scan plan with only files that have a record
+                let candidates = find_files_scan(
+                    snapshot,
+                    object_store.clone(),
+                    schema.clone(),
+                    file_schema.clone(),
+                    files,
+                    state,
+                    predicate,
+                )
+                .await?;
+
+                Ok(FindFiles {
+                    candidates,
+                    partition_scan: false,
+                })
+            }
+        }
+        None => Ok(FindFiles {
+            candidates: snapshot.files().to_owned(),
+            partition_scan: true,
+        }),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use arrow::array::StructArray;
     use arrow::datatypes::{DataType, Field, Schema};
     use chrono::{TimeZone, Utc};
-    use datafusion::from_slice::FromSlice;
     use datafusion::physical_plan::empty::EmptyExec;
     use datafusion_proto::physical_plan::AsExecutionPlan;
     use datafusion_proto::protobuf;
@@ -1161,6 +1549,7 @@ mod tests {
             partition_values_parsed: None,
             data_change: true,
             stats: None,
+            deletion_vector: None,
             stats_parsed: None,
             tags: None,
         };
@@ -1175,6 +1564,7 @@ mod tests {
                 location: Path::from("year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string()), 
                 last_modified: Utc.timestamp_millis_opt(1660497727833).unwrap(),
                 size: 10644,
+                e_tag: None
             },
             partition_values: [ScalarValue::Int64(Some(2015)), ScalarValue::Int64(Some(1))].to_vec(),
             range: None,
@@ -1192,8 +1582,8 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["a", "b", "c", "d"])),
-                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec!["a", "b", "c", "d"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
             ],
         )
         .unwrap();

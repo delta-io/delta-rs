@@ -19,22 +19,29 @@ jobs:
         uses: actions/setup-python@v2
         with:
           python-version: 3.7
+
       - name: Check Python
         run: |
           pip install ruff black mypy types-dataclasses typing-extensions
           make check-python
+
       - name: Install minimal stable with clippy and rustfmt
         uses: actions-rs/toolchain@v1
         with:
           profile: default
           toolchain: stable
           override: true
+
       - name: Check Rust
         run: make check-rust
 
   test-minimal:
-    name: Python Build (Python 3.7 PyArrow 7.0.0)
+    name: Python Build (Python 3.7 PyArrow 8.0.0)
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
+      CARGO_INCREMENTAL: 0
+
     # use the same environment we have for python release
     container: quay.io/pypa/manylinux2014_x86_64:2022-09-24-4f086d0
     steps:
@@ -59,12 +66,16 @@ jobs:
 
       - name: Build and install deltalake
         run: |
+          # Needed for openssl build
+          yum install -y perl-IPC-Cmd
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate
           make setup
           # Install minimum PyArrow version
-          pip install -e .[pandas,devel] pyarrow==7.0.0
+          pip install -e .[pandas,devel] pyarrow==8.0.0
+        env:
+          RUSTFLAGS: "-C debuginfo=line-tables-only"
 
       - name: Run tests
         run: |
@@ -78,6 +89,10 @@ jobs:
   test:
     name: Python Build (Python 3.10 PyArrow latest)
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=1"
+      CARGO_INCREMENTAL: 0
+
     steps:
       - uses: actions/checkout@v3
 
@@ -102,31 +117,35 @@ jobs:
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate
-          make develop      
-              
+          make develop
+
       - name: Download Data Acceptance Tests (DAT) files
         run: make setup-dat
 
       - name: Run tests
         run: |
           source venv/bin/activate
-          python -m pytest -m '((s3 or azure) and integration) or not integration'
+          python -m pytest -m '((s3 or azure) and integration) or not integration and not benchmark'
 
       - name: Test without pandas
         run: |
           source venv/bin/activate
           pip uninstall --yes pandas
-          python -m pytest -m "not pandas and not integration"
+          python -m pytest -m "not pandas and not integration and not benchmark"
           pip install pandas
 
       - name: Build Sphinx documentation
         run: |
           source venv/bin/activate
           make build-documentation
-  
+
   benchmark:
     name: Python Benchmark
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
+      CARGO_INCREMENTAL: 0
+
     steps:
       - uses: actions/checkout@v2
 
@@ -142,30 +161,30 @@ jobs:
       - uses: actions/setup-python@v4
         with:
           python-version: "3.10"
-      
+
       - name: Build deltalake in release mode
         run: |
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate
           MATURIN_EXTRA_ARGS=--release make develop
-      
+
       # Download previous benchmark result from cache (if exists)
       - name: Download previous benchmark data
         uses: actions/cache@v2
         with:
           path: ./cache
           key: ${{ runner.os }}-benchmark
-      
+
       - name: Run benchmark
         run: |
           source venv/bin/activate
-          pytest tests/test_benchmark.py --benchmark-json output.json
-        
+          pytest tests/test_benchmark.py -m benchmark --benchmark-json output.json
+
       - name: Store benchmark result
         uses: benchmark-action/github-action-benchmark@v1
         with:
-          tool: 'pytest'
+          tool: "pytest"
           output-file-path: python/output.json
           external-data-json-path: ./cache/benchmark-data.json
           fail-on-alert: true
@@ -173,6 +192,10 @@ jobs:
   test-pyspark:
     name: PySpark Integration Tests
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
+      CARGO_INCREMENTAL: 0
+
     steps:
       - uses: actions/checkout@v3
 
@@ -209,9 +232,13 @@ jobs:
   multi-python-running:
     name: Running with Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
+    env:
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
+      CARGO_INCREMENTAL: 0
+
     strategy:
       matrix:
-        python-version: ["3.7", "3.8", "3.9", "3.10"]
+        python-version: ["3.7", "3.8", "3.9", "3.10", "3.11"]
 
     steps:
       - uses: actions/checkout@v3
