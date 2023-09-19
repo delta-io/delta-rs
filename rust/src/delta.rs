@@ -427,7 +427,9 @@ impl DeltaTable {
             }
         };
 
-        debug!("start with latest checkpoint version: {version_start}");
+        debug!("latest checkpoint version: {version_start}");
+
+        let version_start = max(self.version(), version_start);
 
         lazy_static! {
             static ref DELTA_LOG_REGEX: Regex =
