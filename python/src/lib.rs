@@ -113,15 +113,17 @@ impl RawDeltaTable {
     }
 
     #[classmethod]
+    #[pyo3(signature = (data_catalog, database_name, table_name, data_catalog_id, catalog_options = None))]
     fn get_table_uri_from_data_catalog(
         _cls: &PyType,
         data_catalog: &str,
         database_name: &str,
         table_name: &str,
         data_catalog_id: Option<String>,
+        catalog_options: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
-        let data_catalog =
-            deltalake::data_catalog::get_data_catalog(data_catalog).map_err(|_| {
+        let data_catalog = deltalake::data_catalog::get_data_catalog(data_catalog, catalog_options)
+            .map_err(|_| {
                 PyValueError::new_err(format!("Catalog '{}' not available.", data_catalog))
             })?;
         let table_uri = rt()?

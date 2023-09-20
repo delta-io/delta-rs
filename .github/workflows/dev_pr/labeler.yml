@@ -30,4 +30,3 @@ proofs:
 
 tlaplus:
   - tlaplus/**/*
-
