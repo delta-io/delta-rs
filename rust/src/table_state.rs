@@ -35,6 +35,8 @@ pub struct DeltaTableState {
     files: Vec<action::Add>,
     // Information added to individual commits
     commit_infos: Vec<action::CommitInfo>,
+    // Domain metadatas provided by the system or user
+    domain_metadatas: Vec<action::DomainMetaData>,
     app_transaction_version: HashMap<String, i64>,
     min_reader_version: i32,
     min_writer_version: i32,
@@ -204,7 +206,10 @@ impl DeltaTableState {
     /// Returns an iterator of file names present in the loaded state
     #[inline]
     pub fn file_paths_iter(&self) -> impl Iterator<Item = Path> + '_ {
-        self.files.iter().map(|add| Path::from(add.path.as_ref()))
+        self.files.iter().map(|add| match Path::parse(&add.path) {
+            Ok(path) => path,
+            Err(_) => Path::from(add.path.as_ref()),
+        })
     }
 
     /// HashMap containing the last txn version stored for every app id writing txn
@@ -355,6 +360,9 @@ impl DeltaTableState {
             action::Action::commitInfo(v) => {
                 self.commit_infos.push(v);
             }
+            action::Action::domainMetadata(v) => {
+                self.domain_metadatas.push(v);
+            }
         }
 
         Ok(())
@@ -410,6 +418,7 @@ mod tests {
             tombstones: Default::default(),
             files: vec![],
             commit_infos: vec![],
+            domain_metadatas: vec![],
             app_transaction_version: Default::default(),
             min_reader_version: 0,
             min_writer_version: 0,
@@ -433,6 +442,7 @@ mod tests {
             version: -1,
             files: vec![],
             commit_infos: vec![],
+            domain_metadatas: vec![],
             tombstones: HashSet::new(),
             current_metadata: None,
             min_reader_version: 1,

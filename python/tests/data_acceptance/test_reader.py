@@ -1,4 +1,5 @@
 import json
+import os
 from pathlib import Path
 from typing import Any, Dict, NamedTuple, Optional
 
@@ -44,9 +45,7 @@ for path in reader_case_path.iterdir():
 
 failing_cases = {
     "multi_partitioned_2": "Waiting for PyArrow 11.0.0 for decimal cast support (#1078)",
-    "nested_types": "Waiting for PyArrow 11.0.0 so we can ignore internal field names in equality",
-    "multi_partitioned": "Escaped characters in data file paths aren't yet handled (#1079)",
-    "no_stats": "We don't yet support files without stats (#582)",
+    "multi_partitioned": "Test case handles binary poorly",
 }
 
 
@@ -65,6 +64,10 @@ def test_dat(case: ReadCase):
 
     # Load table
     dt = DeltaTable(str(delta_root), version=version)
+
+    # Verify table paths can be found
+    for path in dt.file_uris():
+        assert os.path.exists(path)
 
     # Compare protocol versions
     assert dt.protocol().min_reader_version == version_metadata["min_reader_version"]
@@ -85,7 +88,11 @@ def test_dat(case: ReadCase):
 
 def assert_tables_equal(first: pa.Table, second: pa.Table) -> None:
     assert first.schema == second.schema
-    sort_keys = [(col, "ascending") for col in first.column_names]
+    sort_keys = [
+        (col, "ascending")
+        for i, col in enumerate(first.column_names)
+        if not pa.types.is_nested(first.schema.field(i).type)
+    ]
     first_sorted = first.sort_by(sort_keys)
     second_sorted = second.sort_by(sort_keys)
     assert first_sorted == second_sorted

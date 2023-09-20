@@ -66,6 +66,8 @@ jobs:
 
       - name: Build and install deltalake
         run: |
+          # Needed for openssl build
+          yum install -y perl-IPC-Cmd
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate

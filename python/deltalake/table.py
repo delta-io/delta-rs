@@ -222,6 +222,7 @@ class DeltaTable:
         version: Optional[int] = None,
         storage_options: Optional[Dict[str, str]] = None,
         without_files: bool = False,
+        log_buffer_size: Optional[int] = None,
     ):
         """
         Create the Delta Table from a path with an optional version.
@@ -234,6 +235,12 @@ class DeltaTable:
         :param without_files: If True, will load table without tracking files.
                               Some append-only applications might have no need of tracking any files. So, the
                               DeltaTable will be loaded with a significant memory reduction.
+        :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
+                                Setting a value greater than 1 results in concurrent calls to the storage api.
+                                This can decrease latency if there are many files in the log since the last checkpoint,
+                                but will also increase memory usage. Possible rate limits of the storage backend should
+                                also be considered for optimal performance. Defaults to 4 * number of cpus.
+
         """
         self._storage_options = storage_options
         self._table = RawDeltaTable(
@@ -241,6 +248,7 @@ class DeltaTable:
             version=version,
             storage_options=storage_options,
             without_files=without_files,
+            log_buffer_size=log_buffer_size,
         )
         self._metadata = Metadata(self._table)
 
@@ -252,6 +260,7 @@ class DeltaTable:
         table_name: str,
         data_catalog_id: Optional[str] = None,
         version: Optional[int] = None,
+        log_buffer_size: Optional[int] = None,
     ) -> "DeltaTable":
         """
         Create the Delta Table from a Data Catalog.
@@ -261,6 +270,11 @@ class DeltaTable:
         :param table_name: the table name inside the Data Catalog
         :param data_catalog_id: the identifier of the Data Catalog
         :param version: version of the DeltaTable
+        :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
+                                Setting a value greater than 1 results in concurrent calls to the storage api.
+                                This can decrease latency if there are many files in the log since the last checkpoint,
+                                but will also increase memory usage. Possible rate limits of the storage backend should
+                                also be considered for optimal performance. Defaults to 4 * number of cpus.
         """
         table_uri = RawDeltaTable.get_table_uri_from_data_catalog(
             data_catalog=data_catalog.value,
@@ -268,7 +282,9 @@ class DeltaTable:
             database_name=database_name,
             table_name=table_name,
         )
-        return cls(table_uri=table_uri, version=version)
+        return cls(
+            table_uri=table_uri, version=version, log_buffer_size=log_buffer_size
+        )
 
     def version(self) -> int:
         """
@@ -506,10 +522,13 @@ given filters.
             )
 
         if not filesystem:
+            file_sizes = self.get_add_actions().to_pydict()
+            file_sizes = {
+                x: y for x, y in zip(file_sizes["path"], file_sizes["size_bytes"])
+            }
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler(
-                    self._table.table_uri(),
-                    self._storage_options,
+                    self._table.table_uri(), self._storage_options, file_sizes
                 )
             )
 

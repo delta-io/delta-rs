@@ -22,6 +22,7 @@ use serde_json::{Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::mem::take;
 use std::str::FromStr;
 
 use crate::delta_config::IsolationLevel;
@@ -181,6 +182,47 @@ pub struct Stats {
     pub max_values: HashMap<String, ColumnValueStat>,
     /// The number of null values for all columns.
     pub null_count: HashMap<String, ColumnCountStat>,
+}
+
+/// Statistics associated with Add actions contained in the Delta log.
+/// min_values, max_values and null_count are optional to allow them to be missing
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct PartialStats {
+    /// Number of records in the file associated with the log action.
+    pub num_records: i64,
+
+    // start of per column stats
+    /// Contains a value smaller than all values present in the file for all columns.
+    pub min_values: Option<HashMap<String, ColumnValueStat>>,
+    /// Contains a value larger than all values present in the file for all columns.
+    pub max_values: Option<HashMap<String, ColumnValueStat>>,
+    /// The number of null values for all columns.
+    pub null_count: Option<HashMap<String, ColumnCountStat>>,
+}
+
+impl PartialStats {
+    /// Fills in missing HashMaps
+    pub fn as_stats(&mut self) -> Stats {
+        let min_values = take(&mut self.min_values);
+        let max_values = take(&mut self.max_values);
+        let null_count = take(&mut self.null_count);
+        Stats {
+            num_records: self.num_records,
+            min_values: match min_values {
+                Some(minv) => minv,
+                None => HashMap::default(),
+            },
+            max_values: match max_values {
+                Some(maxv) => maxv,
+                None => HashMap::default(),
+            },
+            null_count: match null_count {
+                Some(nc) => nc,
+                None => HashMap::default(),
+            },
+        }
+    }
 }
 
 /// File stats parsed from raw parquet format.
@@ -419,9 +461,16 @@ impl Add {
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
     pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        self.stats
+        let ps: Result<Option<PartialStats>, serde_json::error::Error> = self
+            .stats
             .as_ref()
-            .map_or(Ok(None), |s| serde_json::from_str(s))
+            .map_or(Ok(None), |s| serde_json::from_str(s));
+
+        match ps {
+            Ok(Some(mut partial)) => Ok(Some(partial.as_stats())),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -632,6 +681,18 @@ pub struct CommitInfo {
     pub info: Map<String, serde_json::Value>,
 }
 
+/// The domain metadata action contains a configuration (string) for a named metadata domain
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainMetaData {
+    /// Identifier for this domain (system or user-provided)
+    pub domain: String,
+    /// String containing configuration for the metadata domain
+    pub configuration: String,
+    /// When `true` the action serves as a tombstone
+    pub removed: bool,
+}
+
 /// Represents an action in the Delta log. The Delta log is an aggregate of all actions performed
 /// on the table, so the full list of actions is required to properly read a table.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -652,6 +713,8 @@ pub enum Action {
     protocol(Protocol),
     /// Describes commit provenance information for the table.
     commitInfo(CommitInfo),
+    /// Describe s the configuration for a named metadata domain
+    domainMetadata(DomainMetaData),
 }
 
 impl Action {
@@ -662,6 +725,18 @@ impl Action {
             ..Default::default()
         })
     }
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+/// Used to record the operations performed to the Delta Log
+pub struct MergePredicate {
+    /// The type of merge operation performed
+    pub action_type: String,
+    /// The predicate used for the merge operation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<String>,
 }
 
 /// Operation performed when creating a new log entry with one or more actions.
@@ -701,10 +776,27 @@ pub enum DeltaOperation {
         /// The condition the to be deleted data must match
         predicate: Option<String>,
     },
+
     /// Update data matching predicate from delta table
     Update {
         /// The update predicate
         predicate: Option<String>,
+    },
+
+    /// Merge data with a source data with the following predicate
+    #[serde(rename_all = "camelCase")]
+    Merge {
+        /// The merge predicate
+        predicate: Option<String>,
+
+        /// Match operations performed
+        matched_predicates: Vec<MergePredicate>,
+
+        /// Not Match operations performed
+        not_matched_predicates: Vec<MergePredicate>,
+
+        /// Not Match by Source operations performed
+        not_matched_by_source_predicates: Vec<MergePredicate>,
     },
 
     /// Represents a Delta `StreamingUpdate` operation.
@@ -752,6 +844,7 @@ impl DeltaOperation {
             DeltaOperation::Write { .. } => "WRITE",
             DeltaOperation::Delete { .. } => "DELETE",
             DeltaOperation::Update { .. } => "UPDATE",
+            DeltaOperation::Merge { .. } => "MERGE",
             DeltaOperation::StreamingUpdate { .. } => "STREAMING UPDATE",
             DeltaOperation::Optimize { .. } => "OPTIMIZE",
             DeltaOperation::FileSystemCheck { .. } => "FSCK",
@@ -797,6 +890,7 @@ impl DeltaOperation {
             | Self::StreamingUpdate { .. }
             | Self::Write { .. }
             | Self::Delete { .. }
+            | Self::Merge { .. }
             | Self::Update { .. }
             | Self::Restore { .. } => true,
         }
@@ -819,6 +913,7 @@ impl DeltaOperation {
             Self::Write { predicate, .. } => predicate.clone(),
             Self::Delete { predicate, .. } => predicate.clone(),
             Self::Update { predicate, .. } => predicate.clone(),
+            Self::Merge { predicate, .. } => predicate.clone(),
             _ => None,
         }
     }
@@ -881,9 +976,9 @@ pub(crate) async fn find_latest_check_point_for_version(
 ) -> Result<Option<CheckPoint>, ProtocolError> {
     lazy_static! {
         static ref CHECKPOINT_REGEX: Regex =
-            Regex::new(r#"^_delta_log/(\d{20})\.checkpoint\.parquet$"#).unwrap();
+            Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.parquet$").unwrap();
         static ref CHECKPOINT_PARTS_REGEX: Regex =
-            Regex::new(r#"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$"#).unwrap();
+            Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap();
     }
 
     let mut cp: Option<CheckPoint> = None;
@@ -1004,6 +1099,26 @@ mod tests {
     }
 
     #[test]
+    fn test_load_table_partial_stats() {
+        let action = Add {
+            stats: Some(
+                serde_json::json!({
+                    "numRecords": 22
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        let stats = action.get_stats().unwrap().unwrap();
+
+        assert_eq!(stats.num_records, 22);
+        assert_eq!(stats.min_values.len(), 0);
+        assert_eq!(stats.max_values.len(), 0);
+        assert_eq!(stats.null_count.len(), 0);
+    }
+
+    #[test]
     fn test_read_commit_info() {
         let raw = r#"
         {
@@ -1060,6 +1175,13 @@ mod tests {
         let info = serde_json::from_str::<CommitInfo>(raw).expect("should parse");
         assert!(info.info.contains_key("additionalField"));
         assert!(info.info.contains_key("additionalStruct"));
+    }
+
+    #[test]
+    fn test_read_domain_metadata() {
+        let buf = r#"{"domainMetadata":{"domain":"delta.liquid","configuration":"{\"clusteringColumns\":[{\"physicalName\":[\"id\"]}],\"domainName\":\"delta.liquid\"}","removed":false}}"#;
+        let _action: Action =
+            serde_json::from_str(buf).expect("Expected to be able to deserialize");
     }
 
     #[cfg(feature = "arrow")]

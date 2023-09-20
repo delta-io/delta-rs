@@ -1,6 +1,7 @@
 import os
 import pathlib
 import subprocess
+import time
 from datetime import date, datetime, timedelta
 from decimal import Decimal
 from time import sleep
@@ -11,11 +12,15 @@ import pytest
 from deltalake import DeltaTable, write_deltalake
 
 
-def wait_till_host_is_available(host: str, timeout_sec: int = 30):
+def wait_till_host_is_available(host: str, timeout_sec: int = 0.5):
     spacing = 2
+    start = time.monotonic()
     while True:
+        if time.monotonic() - start > timeout_sec:
+            raise TimeoutError(f"Host {host} is not available after {timeout_sec} sec")
+
         try:
-            subprocess.run(["curl", host], timeout=500, check=True)
+            subprocess.run(["curl", host], timeout=timeout_sec * 1000, check=True)
         except Exception:
             pass
         else:
@@ -162,7 +167,7 @@ def azurite_env_vars(monkeypatch, azurite_creds):
         monkeypatch.setenv(key, value)
 
 
-@pytest.fixture()
+@pytest.fixture(scope="session")
 def azurite_sas_creds(azurite_creds):
     endpoint_url = (
         f"http://localhost:10000/{azurite_creds['AZURE_STORAGE_ACCOUNT_NAME']}"

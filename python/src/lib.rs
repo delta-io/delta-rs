@@ -77,12 +77,13 @@ struct RawDeltaTableMetaData {
 #[pymethods]
 impl RawDeltaTable {
     #[new]
-    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false))]
+    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None))]
     fn new(
         table_uri: &str,
         version: Option<i64>,
         storage_options: Option<HashMap<String, String>>,
         without_files: bool,
+        log_buffer_size: Option<usize>,
     ) -> PyResult<Self> {
         let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
         let options = storage_options.clone().unwrap_or_default();
@@ -92,9 +93,13 @@ impl RawDeltaTable {
         if let Some(version) = version {
             builder = builder.with_version(version)
         }
-
         if without_files {
             builder = builder.without_files()
+        }
+        if let Some(buf_size) = log_buffer_size {
+            builder = builder
+                .with_log_buffer_size(buf_size)
+                .map_err(PythonError::from)?;
         }
 
         let table = rt()?.block_on(builder.load()).map_err(PythonError::from)?;
@@ -108,15 +113,17 @@ impl RawDeltaTable {
     }
 
     #[classmethod]
+    #[pyo3(signature = (data_catalog, database_name, table_name, data_catalog_id, catalog_options = None))]
     fn get_table_uri_from_data_catalog(
         _cls: &PyType,
         data_catalog: &str,
         database_name: &str,
         table_name: &str,
         data_catalog_id: Option<String>,
+        catalog_options: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
-        let data_catalog =
-            deltalake::data_catalog::get_data_catalog(data_catalog).map_err(|_| {
+        let data_catalog = deltalake::data_catalog::get_data_catalog(data_catalog, catalog_options)
+            .map_err(|_| {
                 PyValueError::new_err(format!("Catalog '{}' not available.", data_catalog))
             })?;
         let table_uri = rt()?
@@ -465,7 +472,7 @@ impl RawDeltaTable {
             .into_iter()
             .map(|part| PyFrozenSet::new(py, part.iter()))
             .collect::<Result<_, PyErr>>()?;
-        PyFrozenSet::new(py, active_partitions.into_iter())
+        PyFrozenSet::new(py, active_partitions)
     }
 
     fn create_write_transaction(
@@ -558,6 +565,7 @@ impl RawDeltaTable {
             inner: self._table.object_store(),
             rt: Arc::new(rt()?),
             config: self._config.clone(),
+            known_sizes: None,
         })
     }
 

@@ -109,7 +109,8 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     Ok(())
 }
 
-async fn create_checkpoint_for(
+/// Creates checkpoint for a given table version, table state and object store
+pub async fn create_checkpoint_for(
     version: i64,
     state: &DeltaTableState,
     storage: &DeltaObjectStore,
@@ -180,7 +181,7 @@ pub async fn cleanup_expired_logs_for(
 ) -> Result<i32, ProtocolError> {
     lazy_static! {
         static ref DELTA_LOG_REGEX: Regex =
-            Regex::new(r#"_delta_log/(\d{20})\.(json|checkpoint).*$"#).unwrap();
+            Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint).*$").unwrap();
     }
 
     let mut deleted_log_num = 0;

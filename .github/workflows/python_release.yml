@@ -103,6 +103,8 @@ jobs:
           target: x86_64-unknown-linux-gnu
           command: publish
           args: --skip-existing -m python/Cargo.toml ${{ env.FEATURES_FLAG }}
+          # for openssl build
+          before-script-linux: yum install -y perl-IPC-Cmd
 
       - name: Publish manylinux to pypi aarch64 (without sdist)
         uses: messense/maturin-action@v1
@@ -112,6 +114,8 @@ jobs:
           target: aarch64-unknown-linux-gnu
           command: publish
           args: --skip-existing -m python/Cargo.toml --no-sdist ${{ env.FEATURES_FLAG }}
+          # for openssl build
+          before-script-linux: yum install -y perl-IPC-Cmd
 
   release-docs:
     needs:
