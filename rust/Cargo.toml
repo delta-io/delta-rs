@@ -62,11 +62,8 @@ tokio = { workspace = true, features = [
 
 # other deps (these should be organized and pulled into workspace.dependencies as necessary)
 cfg-if = "1"
-datafusion-objectstore-hdfs = { version = "0.1.3", default-features = false, features = [
-    "hdfs3",
-    "try_spawn_blocking",
-], optional = true }
 errno = "0.3"
+hyper = { version = "0.14", optional = true }
 itertools = "0.11"
 lazy_static = "1"
 log = "0"
@@ -78,6 +75,14 @@ once_cell = "1.16.0"
 parking_lot = "0.12"
 parquet2 = { version = "0.17", optional = true }
 percent-encoding = "2"
+tracing = { version = "0.1", optional = true }
+rand = "0.8"
+
+# hdfs
+datafusion-objectstore-hdfs = { version = "0.1.3", default-features = false, features = [
+    "hdfs3",
+    "try_spawn_blocking",
+], optional = true }
 
 # S3 lock client
 rusoto_core = { version = "0.47", default-features = false, optional = true }
@@ -93,8 +98,6 @@ reqwest = { version = "0.11.18", default-features = false, features = [
     "rustls-tls",
     "json",
 ], optional = true }
-reqwest-middleware = { version = "0.2.1", optional = true }
-reqwest-retry = { version = "0.2.2", optional = true }
 
 # Datafusion
 dashmap = { version = "5", optional = true }
@@ -117,6 +120,7 @@ tempdir = "0"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 utime = "0.3"
+hyper = { version = "0.14", features = ["server"] }
 
 [features]
 azure = ["object_store/azure"]
@@ -145,8 +149,8 @@ datafusion = [
 ]
 datafusion-ext = ["datafusion"]
 gcs = ["object_store/gcp"]
-glue = ["s3", "rusoto_glue/rustls"]
-glue-native-tls = ["s3-native-tls", "rusoto_glue"]
+glue = ["s3", "rusoto_glue/rustls", "tracing", "hyper"]
+glue-native-tls = ["s3-native-tls", "rusoto_glue", "tracing", "hyper"]
 hdfs = ["datafusion-objectstore-hdfs"]
 # used only for integration testing
 integration_test = ["fs_extra", "tempdir"]
@@ -168,7 +172,7 @@ s3 = [
     "dynamodb_lock/rustls",
     "object_store/aws",
 ]
-unity-experimental = ["reqwest", "reqwest-middleware", "reqwest-retry"]
+unity-experimental = ["reqwest", "tracing", "hyper"]
 
 [[bench]]
 name = "read_checkpoint"
