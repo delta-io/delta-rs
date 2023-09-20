@@ -63,4 +63,7 @@ def test_optimize_min_commit_interval(
 
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
+    # The table has 5 distinct partitions, each of which are Z-ordered
+    # independently. So with min_commit_interval=0, each will get its
+    # own commit.
     assert dt.version() == old_version + 5
