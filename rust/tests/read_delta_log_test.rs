@@ -149,3 +149,13 @@ async fn test_read_liquid_table() -> DeltaResult<()> {
     let _table = deltalake::open_table(&path).await?;
     Ok(())
 }
+
+// test for: https://github.com/delta-io/delta-rs/issues/1302
+#[tokio::test]
+async fn read_delta_table_from_dlt() {
+    let table = deltalake::open_table("./tests/data/delta-live-table")
+        .await
+        .unwrap();
+    assert_eq!(table.version(), 1);
+    assert!(table.schema().is_some());
+}
