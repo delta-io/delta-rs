@@ -724,7 +724,7 @@ class TableOptimizer:
         >>> dt.optimize.z_order(["timestamp"], min_commit_interval=time_delta)
         """
         if isinstance(min_commit_interval, timedelta):
-            commit_interval = timedelta.seconds
+            commit_interval = min_commit_interval.seconds
         else:
             commit_interval = min_commit_interval
 
@@ -772,7 +772,7 @@ class TableOptimizer:
         >>> dt.optimize.compact(min_commit_interval=time_delta)
         """
         if isinstance(min_commit_interval, timedelta):
-            commit_interval = timedelta.seconds
+            commit_interval = min_commit_interval.seconds
         else:
             commit_interval = min_commit_interval
 

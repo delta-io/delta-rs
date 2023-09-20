@@ -2,7 +2,7 @@ import pathlib
 
 import pyarrow as pa
 import pytest
-
+from datetime import timedelta
 from deltalake import DeltaTable, write_deltalake
 
 
@@ -59,7 +59,7 @@ def test_optimize_min_commit_interval(
     dt = DeltaTable(tmp_path)
     old_version = dt.version()
 
-    dt.optimize.z_order(["date32", "timestamp"], min_commit_interval=0)
+    dt.optimize.z_order(["date32", "timestamp"], min_commit_interval=timedelta(0))
 
     last_action = dt.history(1)[0]
     assert last_action["operation"] == "OPTIMIZE"
