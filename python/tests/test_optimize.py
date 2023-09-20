@@ -1,8 +1,9 @@
 import pathlib
+from datetime import timedelta
 
 import pyarrow as pa
 import pytest
-from datetime import timedelta
+
 from deltalake import DeltaTable, write_deltalake
 
 
