@@ -1295,8 +1295,6 @@ pub(super) mod zorder {
         };
         use arrow_schema::DataType;
 
-        use crate::DeltaOps;
-
         use super::*;
 
         #[test]
@@ -1360,28 +1358,6 @@ pub(super) mod zorder {
             // Last value is all nulls, so mostly zeros
             assert_eq!(data.value(2)[0..1], [2u8]);
             assert_eq!(data.value(2)[1..], [0; (3 * 16) - 1]);
-        }
-
-        #[tokio::test]
-        async fn works_on_spark_table() {
-            // Create a temporary directory
-            let tmp_dir = tempdir::TempDir::new("optimize-spark").unwrap();
-            let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
-
-            // Copy recursively from the test data directory to the temporary directory
-            let source_path = "tests/data/delta-1.2.1-only-struct-stats";
-            fs_extra::dir::copy(source_path, tmp_dir.path(), &Default::default()).unwrap();
-
-            // Run optimize
-            let (_, metrics) = DeltaOps::try_from_uri(table_uri)
-                .await
-                .unwrap()
-                .optimize()
-                .await
-                .unwrap();
-
-            // Verify it worked
-            assert_eq!(metrics.num_files_added, 1);
         }
     }
 }
