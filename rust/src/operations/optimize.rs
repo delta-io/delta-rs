@@ -1370,11 +1370,12 @@ pub(super) mod zorder {
 
             // Copy recursively from the test data directory to the temporary directory
             let source_path = "tests/data/delta-1.2.1-only-struct-stats";
-            fs_extra::dir::copy(source_path, tmp_dir.path(), &Default::default())
-                .unwrap();
+            fs_extra::dir::copy(source_path, tmp_dir.path(), &Default::default()).unwrap();
 
             // Run optimize
-            let (_, metrics) = DeltaOps::try_from_uri(table_uri).await.unwrap()
+            let (_, metrics) = DeltaOps::try_from_uri(table_uri)
+                .await
+                .unwrap()
                 .optimize()
                 .await
                 .unwrap();

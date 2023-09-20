@@ -543,7 +543,7 @@ impl DeltaTable {
             Err(err) => {
                 dbg!(&err);
                 Err(DeltaTableError::from(err))
-            },
+            }
         }
     }
 
