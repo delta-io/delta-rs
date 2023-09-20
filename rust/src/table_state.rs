@@ -263,7 +263,6 @@ impl DeltaTableState {
         require_tombstones: bool,
         require_files: bool,
     ) {
-        dbg!(&new_state);
         if !new_state.tombstones.is_empty() {
             self.files
                 .retain(|a| !new_state.tombstones.contains(a.path.as_str()));
