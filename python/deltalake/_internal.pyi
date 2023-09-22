@@ -16,8 +16,6 @@ __version__: str
 RawDeltaTable: Any
 rust_core_version: Callable[[], str]
 
-class PyDeltaTableError(BaseException): ...
-
 write_new_deltalake: Callable[
     [
         str,
@@ -95,18 +93,34 @@ class Field:
         *,
         nullable: bool = True,
         metadata: Optional[Dict[str, Any]] = None,
-    ) -> None: ...
+    ) -> None:
+        """A named field, with a data type, nullability, and optional metadata."""
     name: str
+    """The field name."""
     type: DataType
+    """The field data type."""
     nullable: bool
+    """The field nullability."""
     metadata: Dict[str, Any]
+    """The field metadata."""
 
-    def to_json(self) -> str: ...
+    def to_json(self) -> str:
+        """Get the JSON representation of the Field.
+
+        :rtype: str
+        """
     @staticmethod
-    def from_json(json: str) -> "Field": ...
-    def to_pyarrow(self) -> pa.Field: ...
+    def from_json(json: str) -> "Field":
+        """Create a new Field from a JSON string.
+
+        :param json: A json string representing the Field.
+        :rtype: Field
+        """
+    def to_pyarrow(self) -> pa.Field:
+        """Convert field to a pyarrow.Field."""
     @staticmethod
-    def from_pyarrow(type: pa.Field) -> "Field": ...
+    def from_pyarrow(type: pa.Field) -> "Field":
+        """Create a new field from pyarrow.Field."""
 
 class StructType:
     def __init__(self, fields: List[Field]) -> None: ...
@@ -124,13 +138,41 @@ class Schema:
     def __init__(self, fields: List[Field]) -> None: ...
     fields: List[Field]
     invariants: List[Tuple[str, str]]
+    """The list of invariants defined on the table.
+    
+    The first string in each tuple is the field path, the second is the SQL of the invariant.
+    """
 
-    def to_json(self) -> str: ...
+    def to_json(self) -> str:
+        """Get the JSON representation of the schema.
+
+        :rtype: str
+        """
     @staticmethod
-    def from_json(json: str) -> "Schema": ...
-    def to_pyarrow(self, as_large_types: bool = False) -> pa.Schema: ...
+    def from_json(json: str) -> "Schema":
+        """Create a new Schema from a JSON string.
+
+        :param schema_json: a JSON string
+        :rtype: Schema
+        """
+    def to_pyarrow(self, as_large_types: bool = False) -> pa.Schema:
+        """Return equivalent PyArrow schema.
+
+        Note: this conversion is lossy as the Invariants are not stored in pyarrow.Schema.
+
+        :param as_large_types: get schema with all variable size types (list,
+            binary, string) as large variants (with int64 indices). This is for
+            compatibility with systems like Polars that only support the large
+            versions of Arrow types.
+        :rtype: pyarrow.Schema
+        """
     @staticmethod
-    def from_pyarrow(type: pa.Schema) -> "Schema": ...
+    def from_pyarrow(type: pa.Schema) -> "Schema":
+        """Create a new Schema from a pyarrow.Schema.
+
+        :param data_type: a PyArrow schema
+        :rtype: Schema
+        """
 
 class ObjectInputFile:
     @property
@@ -163,7 +205,12 @@ class ObjectOutputStream:
 class DeltaFileSystemHandler:
     """Implementation of pyarrow.fs.FileSystemHandler for use with pyarrow.fs.PyFileSystem"""
 
-    def __init__(self, root: str, options: dict[str, str] | None = None) -> None: ...
+    def __init__(
+        self,
+        root: str,
+        options: dict[str, str] | None = None,
+        known_sizes: dict[str, int] | None = None,
+    ) -> None: ...
     def get_type_name(self) -> str: ...
     def copy_file(self, src: str, dst: str) -> None:
         """Copy a file.
@@ -222,3 +269,23 @@ class DeltaFileSystemHandler:
 class DeltaDataChecker:
     def __init__(self, invariants: List[Tuple[str, str]]) -> None: ...
     def check_batch(self, batch: pa.RecordBatch) -> None: ...
+
+class DeltaError(Exception):
+    """The base class for Delta-specific errors."""
+
+    pass
+
+class TableNotFoundError(DeltaError):
+    """Raised when a Delta table cannot be loaded from a location."""
+
+    pass
+
+class CommitFailedError(DeltaError):
+    """Raised when a commit to a Delta table fails."""
+
+    pass
+
+class DeltaProtocolError(DeltaError):
+    """Raised when a violation with the Delta protocol specs ocurred."""
+
+    pass

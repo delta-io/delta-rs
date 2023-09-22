@@ -4,9 +4,6 @@ use std::fmt::Display;
 use std::io::Write;
 use std::sync::Arc;
 
-use crate::writer::DeltaWriterError;
-use crate::DeltaResult;
-
 use arrow::array::{
     as_boolean_array, as_generic_binary_array, as_primitive_array, as_string_array, Array,
 };
@@ -20,8 +17,14 @@ use arrow::json::ReaderBuilder;
 use arrow::record_batch::*;
 use object_store::path::Path;
 use parking_lot::RwLock;
+use parquet::basic::Compression;
+use parquet::file::properties::WriterProperties;
+use parquet::schema::types::ColumnPath;
 use serde_json::Value;
 use uuid::Uuid;
+
+use crate::errors::DeltaResult;
+use crate::writer::DeltaWriterError;
 
 const NULL_PARTITION_VALUE_DATA_PATH: &str = "__HIVE_DEFAULT_PARTITION__";
 const PARTITION_DATE_FORMAT: &str = "%Y-%m-%d";
@@ -75,33 +78,46 @@ impl Display for PartitionPath {
     }
 }
 
-// TODO: parquet files have a 5 digit zero-padded prefix and a "c\d{3}" suffix that
-// I have not been able to find documentation for yet.
+/// Generate the name of the file to be written
+/// prefix: The location of the file to be written
+/// part_count: Used the indicate that single logical partition was split into multiple physical files
+///     starts at 0. Is typically used when writer splits that data due to file size constraints
 pub(crate) fn next_data_path(
-    partition_columns: &[String],
-    partition_values: &HashMap<String, Option<String>>,
-    part: Option<i32>,
-) -> Result<Path, DeltaWriterError> {
-    // TODO: what does 00000 mean?
-    // TODO (roeap): my understanding is, that the values are used as a counter - i.e. if a single batch of
-    // data written to one partition needs to be split due to desired file size constraints.
-    let first_part = match part {
-        Some(count) => format!("{count:0>5}"),
-        _ => "00000".to_string(),
-    };
-    let uuid_part = Uuid::new_v4();
-    // TODO: what does c000 mean?
-    let last_part = "c000";
-
-    // NOTE: If we add a non-snappy option, file name must change
-    let file_name = format!("part-{first_part}-{uuid_part}-{last_part}.snappy.parquet");
-
-    if partition_columns.is_empty() {
-        return Ok(Path::from(file_name));
+    prefix: &Path,
+    part_count: usize,
+    writer_id: &Uuid,
+    writer_properties: &WriterProperties,
+) -> Path {
+    fn compression_to_str(compression: &Compression) -> &str {
+        match compression {
+            // This is to match HADOOP's convention
+            // https://github.com/apache/parquet-mr/blob/c4977579ab3b149ea045a177b039f055b5408e8f/parquet-common/src/main/java/org/apache/parquet/hadoop/metadata/CompressionCodecName.java#L27-L34
+            Compression::UNCOMPRESSED => "",
+            Compression::SNAPPY => ".snappy",
+            Compression::GZIP(_) => ".gz",
+            Compression::LZO => ".lzo",
+            Compression::BROTLI(_) => ".br",
+            Compression::LZ4 => ".lz4",
+            Compression::ZSTD(_) => ".zstd",
+            Compression::LZ4_RAW => ".lz4raw",
+        }
     }
 
-    let partition_key = PartitionPath::from_hashmap(partition_columns, partition_values)?;
-    Ok(Path::from(format!("{partition_key}/{file_name}")))
+    // We can not access the default column properties but the current implementation will return
+    // the default compression when the column is not found
+    let column_path = ColumnPath::new(Vec::new());
+    let compression = writer_properties.compression(&column_path);
+
+    let part = format!("{:0>5}", part_count);
+
+    // TODO: what does c000 mean?
+    let file_name = format!(
+        "part-{}-{}-c000{}.parquet",
+        part,
+        writer_id,
+        compression_to_str(&compression)
+    );
+    prefix.child(file_name)
 }
 
 /// Convert a vector of json values to a RecordBatch
@@ -291,6 +307,7 @@ mod tests {
         TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
         UInt32Array, UInt64Array, UInt8Array,
     };
+    use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
 
     #[test]
     fn test_stringified_partition_value() {
@@ -346,5 +363,69 @@ mod tests {
                 result
             )
         }
+    }
+
+    #[test]
+    fn test_data_path() {
+        let prefix = Path::parse("x=0/y=0").unwrap();
+        let uuid = Uuid::parse_str("02f09a3f-1624-3b1d-8409-44eff7708208").unwrap();
+
+        // Validated against Spark
+        let props = WriterProperties::builder()
+            .set_compression(Compression::UNCOMPRESSED)
+            .build();
+
+        assert_eq!(
+            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.parquet"
+        );
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::SNAPPY)
+            .build();
+        assert_eq!(
+            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.snappy.parquet"
+        );
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::GZIP(GzipLevel::default()))
+            .build();
+        assert_eq!(
+            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.gz.parquet"
+        );
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::LZ4)
+            .build();
+        assert_eq!(
+            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.lz4.parquet"
+        );
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::ZSTD(ZstdLevel::default()))
+            .build();
+        assert_eq!(
+            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.zstd.parquet"
+        );
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::LZ4_RAW)
+            .build();
+        assert_eq!(
+            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.lz4raw.parquet"
+        );
+
+        let props = WriterProperties::builder()
+            .set_compression(Compression::BROTLI(BrotliLevel::default()))
+            .build();
+        assert_eq!(
+            next_data_path(&prefix, 1, &uuid, &props).as_ref(),
+            "x=0/y=0/part-00001-02f09a3f-1624-3b1d-8409-44eff7708208-c000.br.parquet"
+        );
     }
 }

@@ -170,7 +170,7 @@ def test_delta_field():
     # TODO: are there field names we should reject?
 
     for name, ty, nullable, metadata in args:
-        field = Field(name, ty, nullable=nullable, metadata=metadata)
+        field = Field(name=name, type=ty, nullable=nullable, metadata=metadata)
 
         assert field.name == name
         assert field.type == (PrimitiveType(ty) if isinstance(ty, str) else ty)

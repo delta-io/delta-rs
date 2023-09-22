@@ -11,7 +11,7 @@ use url::Url;
 
 use super::file::FileStorageBackend;
 use super::utils::str_is_truthy;
-use crate::{DeltaResult, DeltaTableError};
+use crate::errors::{DeltaResult, DeltaTableError};
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 use super::s3::{S3StorageBackend, S3StorageOptions};
@@ -129,6 +129,8 @@ pub(crate) fn configure_store(
                 try_configure_s3(url, options)
             } else if host.contains("dfs.core.windows.net")
                 || host.contains("blob.core.windows.net")
+                || host.contains("dfs.fabric.microsoft.com")
+                || host.contains("blob.fabric.microsoft.com")
             {
                 try_configure_azure(url, options)
             } else {
@@ -154,6 +156,7 @@ fn try_configure_memory(storage_url: &Url) -> DeltaResult<Arc<DynObjectStore>> {
 }
 
 #[cfg(feature = "gcs")]
+#[allow(deprecated)]
 fn try_configure_gcs(
     storage_url: &Url,
     options: &StorageOptions,
@@ -177,6 +180,7 @@ fn try_configure_gcs(
 }
 
 #[cfg(feature = "azure")]
+#[allow(deprecated)]
 fn try_configure_azure(
     storage_url: &Url,
     options: &StorageOptions,
@@ -202,6 +206,7 @@ fn try_configure_azure(
 }
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+#[allow(deprecated)]
 fn try_configure_s3(
     storage_url: &Url,
     options: &StorageOptions,

@@ -7,8 +7,8 @@ use dynamodb_lock::{DynamoError, LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE
 use futures::stream::BoxStream;
 use object_store::path::Path;
 use object_store::{
-    DynObjectStore, Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta,
-    ObjectStore, Result as ObjectStoreResult,
+    DynObjectStore, Error as ObjectStoreError, GetOptions, GetResult, ListResult, MultipartId,
+    ObjectMeta, ObjectStore, Result as ObjectStoreResult,
 };
 use rusoto_core::{HttpClient, Region};
 use rusoto_credential::AutoRefreshingProvider;
@@ -451,6 +451,10 @@ impl ObjectStore for S3StorageBackend {
         self.inner.get(location).await
     }
 
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
+        self.inner.get_opts(location, options).await
+    }
+
     async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
         self.inner.get_range(location, range).await
     }
@@ -468,6 +472,14 @@ impl ObjectStore for S3StorageBackend {
         prefix: Option<&Path>,
     ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
         self.inner.list(prefix).await
+    }
+
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
+        self.inner.list_with_offset(prefix, offset).await
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {

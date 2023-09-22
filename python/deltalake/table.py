@@ -2,12 +2,14 @@ import json
 import operator
 import warnings
 from dataclasses import dataclass
+from datetime import datetime
 from functools import reduce
 from pathlib import Path
 from typing import (
     TYPE_CHECKING,
     Any,
     Dict,
+    Iterable,
     List,
     NamedTuple,
     Optional,
@@ -28,15 +30,11 @@ from pyarrow.dataset import (
 if TYPE_CHECKING:
     import pandas
 
-from ._internal import PyDeltaTableError, RawDeltaTable
+from ._internal import RawDeltaTable
 from .data_catalog import DataCatalog
+from .exceptions import DeltaProtocolError
 from .fs import DeltaStorageHandler
 from .schema import Schema
-
-
-class DeltaTableProtocolError(PyDeltaTableError):
-    pass
-
 
 MAX_SUPPORTED_READER_VERSION = 1
 MAX_SUPPORTED_WRITER_VERSION = 2
@@ -224,6 +222,7 @@ class DeltaTable:
         version: Optional[int] = None,
         storage_options: Optional[Dict[str, str]] = None,
         without_files: bool = False,
+        log_buffer_size: Optional[int] = None,
     ):
         """
         Create the Delta Table from a path with an optional version.
@@ -236,6 +235,12 @@ class DeltaTable:
         :param without_files: If True, will load table without tracking files.
                               Some append-only applications might have no need of tracking any files. So, the
                               DeltaTable will be loaded with a significant memory reduction.
+        :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
+                                Setting a value greater than 1 results in concurrent calls to the storage api.
+                                This can decrease latency if there are many files in the log since the last checkpoint,
+                                but will also increase memory usage. Possible rate limits of the storage backend should
+                                also be considered for optimal performance. Defaults to 4 * number of cpus.
+
         """
         self._storage_options = storage_options
         self._table = RawDeltaTable(
@@ -243,6 +248,7 @@ class DeltaTable:
             version=version,
             storage_options=storage_options,
             without_files=without_files,
+            log_buffer_size=log_buffer_size,
         )
         self._metadata = Metadata(self._table)
 
@@ -254,6 +260,7 @@ class DeltaTable:
         table_name: str,
         data_catalog_id: Optional[str] = None,
         version: Optional[int] = None,
+        log_buffer_size: Optional[int] = None,
     ) -> "DeltaTable":
         """
         Create the Delta Table from a Data Catalog.
@@ -263,6 +270,11 @@ class DeltaTable:
         :param table_name: the table name inside the Data Catalog
         :param data_catalog_id: the identifier of the Data Catalog
         :param version: version of the DeltaTable
+        :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
+                                Setting a value greater than 1 results in concurrent calls to the storage api.
+                                This can decrease latency if there are many files in the log since the last checkpoint,
+                                but will also increase memory usage. Possible rate limits of the storage backend should
+                                also be considered for optimal performance. Defaults to 4 * number of cpus.
         """
         table_uri = RawDeltaTable.get_table_uri_from_data_catalog(
             data_catalog=data_catalog.value,
@@ -270,7 +282,9 @@ class DeltaTable:
             database_name=database_name,
             table_name=table_name,
         )
-        return cls(table_uri=table_uri, version=version)
+        return cls(
+            table_uri=table_uri, version=version, log_buffer_size=log_buffer_size
+        )
 
     def version(self) -> int:
         """
@@ -430,31 +444,17 @@ given filters.
             if retention_hours < 0:
                 raise ValueError("The retention periods should be positive.")
 
-        return self._table.vacuum(dry_run, retention_hours, enforce_retention_duration)
+        return self._table.vacuum(
+            dry_run,
+            retention_hours,
+            enforce_retention_duration,
+        )
 
+    @property
     def optimize(
         self,
-        partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
-        target_size: Optional[int] = None,
-    ) -> Dict[str, Any]:
-        """
-        Compacts small files to reduce the total number of files in the table.
-
-        This operation is idempotent; if run twice on the same table (assuming it has
-        not been updated) it will do nothing the second time.
-
-        If this operation happens concurrently with any operations other than append,
-        it will fail.
-
-        :param partition_filters: the partition filters that will be used for getting the matched files
-        :param target_size: desired file size after bin-packing files, in bytes. If not
-          provided, will attempt to read the table configuration value ``delta.targetFileSize``.
-          If that value isn't set, will use default value of 256MB.
-        :return: the metrics from optimize
-        """
-        metrics = self._table.optimize(partition_filters, target_size)
-        self.update_incremental()
-        return json.loads(metrics)
+    ) -> "TableOptimizer":
+        return TableOptimizer(self)
 
     def pyarrow_schema(self) -> pyarrow.Schema:
         """
@@ -470,6 +470,35 @@ given filters.
             stacklevel=2,
         )
         return self.schema().to_pyarrow()
+
+    def restore(
+        self,
+        target: Union[int, datetime, str],
+        *,
+        ignore_missing_files: bool = False,
+        protocol_downgrade_allowed: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Run the Restore command on the Delta Table: restore table to a given version or datetime.
+
+        :param target: the expected version will restore, which represented by int, date str or datetime.
+        :param ignore_missing_files: whether the operation carry on when some data files missing.
+        :param protocol_downgrade_allowed: whether the operation when protocol version upgraded.
+        :return: the metrics from restore.
+        """
+        if isinstance(target, datetime):
+            metrics = self._table.restore(
+                target.isoformat(),
+                ignore_missing_files=ignore_missing_files,
+                protocol_downgrade_allowed=protocol_downgrade_allowed,
+            )
+        else:
+            metrics = self._table.restore(
+                target,
+                ignore_missing_files=ignore_missing_files,
+                protocol_downgrade_allowed=protocol_downgrade_allowed,
+            )
+        return json.loads(metrics)
 
     def to_pyarrow_dataset(
         self,
@@ -487,16 +516,19 @@ given filters.
         :return: the PyArrow dataset in PyArrow
         """
         if self.protocol().min_reader_version > MAX_SUPPORTED_READER_VERSION:
-            raise DeltaTableProtocolError(
-                f"The table's minimum reader version is {self.protocol().min_reader_version}"
+            raise DeltaProtocolError(
+                f"The table's minimum reader version is {self.protocol().min_reader_version} "
                 f"but deltalake only supports up to version {MAX_SUPPORTED_READER_VERSION}."
             )
 
         if not filesystem:
+            file_sizes = self.get_add_actions().to_pydict()
+            file_sizes = {
+                x: y for x, y in zip(file_sizes["path"], file_sizes["size_bytes"])
+            }
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler(
-                    self._table.table_uri(),
-                    self._storage_options,
+                    self._table.table_uri(), self._storage_options, file_sizes
                 )
             )
 
@@ -627,3 +659,93 @@ given filters.
         2  x=1/0-91820cbf-f698-45fb-886d-5d5f5669530b-0.p...         565 1970-01-20 08:40:08.071         True            1            1             0      4      4
         """
         return self._table.get_add_actions(flatten)
+
+
+class TableOptimizer:
+    """API for various table optimization commands."""
+
+    def __init__(self, table: DeltaTable):
+        self.table = table
+
+    def __call__(
+        self,
+        partition_filters: Optional[FilterType] = None,
+        target_size: Optional[int] = None,
+        max_concurrent_tasks: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        .. deprecated:: 0.10.0
+            Use :meth:`compact` instead, which has the same signature.
+        """
+
+        warnings.warn(
+            "Call to deprecated method DeltaTable.optimize. Use DeltaTable.optimize.compact() instead.",
+            category=DeprecationWarning,
+            stacklevel=2,
+        )
+
+        return self.compact(partition_filters, target_size, max_concurrent_tasks)
+
+    def compact(
+        self,
+        partition_filters: Optional[FilterType] = None,
+        target_size: Optional[int] = None,
+        max_concurrent_tasks: Optional[int] = None,
+    ) -> Dict[str, Any]:
+        """
+        Compacts small files to reduce the total number of files in the table.
+
+        This operation is idempotent; if run twice on the same table (assuming it has
+        not been updated) it will do nothing the second time.
+
+        If this operation happens concurrently with any operations other than append,
+        it will fail.
+
+        :param partition_filters: the partition filters that will be used for getting the matched files
+        :param target_size: desired file size after bin-packing files, in bytes. If not
+          provided, will attempt to read the table configuration value ``delta.targetFileSize``.
+          If that value isn't set, will use default value of 256MB.
+        :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
+            file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
+            faster, but will also use more memory.
+        :return: the metrics from optimize
+        """
+        metrics = self.table._table.compact_optimize(
+            partition_filters, target_size, max_concurrent_tasks
+        )
+        self.table.update_incremental()
+        return json.loads(metrics)
+
+    def z_order(
+        self,
+        columns: Iterable[str],
+        partition_filters: Optional[FilterType] = None,
+        target_size: Optional[int] = None,
+        max_concurrent_tasks: Optional[int] = None,
+        max_spill_size: int = 20 * 1024 * 1024 * 1024,
+    ) -> Dict[str, Any]:
+        """
+        Reorders the data using a Z-order curve to improve data skipping.
+
+        This also performs compaction, so the same parameters as compact() apply.
+
+        :param columns: the columns to use for Z-ordering. There must be at least one column.
+        :param partition_filters: the partition filters that will be used for getting the matched files
+        :param target_size: desired file size after bin-packing files, in bytes. If not
+          provided, will attempt to read the table configuration value ``delta.targetFileSize``.
+          If that value isn't set, will use default value of 256MB.
+        :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
+            file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
+            faster, but will also use more memory.
+        :param max_spill_size: the maximum number of bytes to spill to disk. Defaults to 20GB.
+        :return: the metrics from optimize
+        """
+        metrics = self.table._table.z_order_optimize(
+            list(columns),
+            partition_filters,
+            target_size,
+            max_concurrent_tasks,
+            max_spill_size,
+        )
+        self.table.update_incremental()
+        return json.loads(metrics)

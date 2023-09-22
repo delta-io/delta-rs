@@ -6,7 +6,7 @@ use std::sync::Arc;
 use super::stats::create_add;
 use super::utils::{
     arrow_schema_without_partitions, next_data_path, record_batch_from_message,
-    record_batch_without_partitions, stringified_partition_value,
+    record_batch_without_partitions, stringified_partition_value, PartitionPath,
 };
 use super::{DeltaWriter, DeltaWriterError};
 use crate::builder::DeltaTableBuilder;
@@ -17,12 +17,14 @@ use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::*;
 use bytes::Bytes;
 use log::{info, warn};
+use object_store::path::Path;
 use object_store::ObjectStore;
 use parquet::{
     arrow::ArrowWriter, basic::Compression, errors::ParquetError,
     file::properties::WriterProperties,
 };
 use serde_json::Value;
+use uuid::Uuid;
 
 type BadValue = (Value, ParquetError);
 
@@ -308,27 +310,25 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
     async fn write(&mut self, values: Vec<Value>) -> Result<(), DeltaTableError> {
         let mut partial_writes: Vec<(Value, ParquetError)> = Vec::new();
         let arrow_schema = self.arrow_schema();
+        let divided = self.divide_by_partition_values(values)?;
+        let partition_columns = self.partition_columns.clone();
+        let writer_properties = self.writer_properties.clone();
 
-        for (key, values) in self.divide_by_partition_values(values)? {
+        for (key, values) in divided {
             match self.arrow_writers.get_mut(&key) {
-                Some(writer) => collect_partial_write_failure(
-                    &mut partial_writes,
-                    writer
-                        .write_values(&self.partition_columns, arrow_schema.clone(), values)
-                        .await,
-                )?,
+                Some(writer) => {
+                    let result = writer
+                        .write_values(&partition_columns, arrow_schema.clone(), values)
+                        .await;
+                    collect_partial_write_failure(&mut partial_writes, result)?;
+                }
                 None => {
-                    let schema =
-                        arrow_schema_without_partitions(&arrow_schema, &self.partition_columns);
-                    let mut writer = DataArrowWriter::new(schema, self.writer_properties.clone())?;
-
-                    collect_partial_write_failure(
-                        &mut partial_writes,
-                        writer
-                            .write_values(&self.partition_columns, self.arrow_schema(), values)
-                            .await,
-                    )?;
-
+                    let schema = arrow_schema_without_partitions(&arrow_schema, &partition_columns);
+                    let mut writer = DataArrowWriter::new(schema, writer_properties.clone())?;
+                    let result = writer
+                        .write_values(&partition_columns, arrow_schema.clone(), values)
+                        .await;
+                    collect_partial_write_failure(&mut partial_writes, result)?;
                     self.arrow_writers.insert(key, writer);
                 }
             }
@@ -361,7 +361,12 @@ impl DeltaWriter<Vec<Value>> for JsonWriter {
 
         for (_, writer) in writers {
             let metadata = writer.arrow_writer.close()?;
-            let path = next_data_path(&self.partition_columns, &writer.partition_values, None)?;
+            let prefix =
+                PartitionPath::from_hashmap(&self.partition_columns, &writer.partition_values)?;
+            let prefix = Path::parse(prefix)?;
+            let uuid = Uuid::new_v4();
+
+            let path = next_data_path(&prefix, 0, &uuid, &writer.writer_properties);
             let obj_bytes = Bytes::from(writer.buffer.to_vec());
             let file_size = obj_bytes.len() as i64;
             self.storage.put(&path, obj_bytes).await?;

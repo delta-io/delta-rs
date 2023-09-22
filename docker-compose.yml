@@ -18,8 +18,9 @@ services:
       test: [ "CMD", "curl", "-f", "http://localhost:4566/health" ]
 
   fake-gcs:
-    image: fsouza/fake-gcs-server
-    command: ["-scheme", "http", "-port", "4443", "-external-url", "http://[::]:4443", "-backend", "memory"]
+    # Custom image - see fsouza/fake-gcs-server#1164
+    image: tustvold/fake-gcs-server
+    command: ["-scheme", "http", "-public-host", "localhost:4443", "-backend", "memory"]
     ports:
       - 4443:4443
 

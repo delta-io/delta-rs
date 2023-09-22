@@ -1,11 +1,52 @@
 [workspace]
-members = [
-    "rust",
-    "python",
-    "aws/delta-checkpoint",
-]
+members = ["rust", "python"]
 exclude = ["proofs", "delta-inspect"]
+resolver = "2"
 
 [profile.release-with-debug]
 inherits = "release"
 debug = true
+
+# Reducing the debuginfo for the test profile in order to trim the disk and RAM
+# usage during development
+# <https://github.com/delta-io/delta-rs/issues/1550?
+[profile.test]
+debug = "line-tables-only"
+
+[workspace.dependencies]
+# arrow
+arrow = { version = "46" }
+arrow-array = { version = "46" }
+arrow-buffer = { version = "46" }
+arrow-cast = { version = "46" }
+arrow-ord = { version = "46" }
+arrow-row = { version = "46" }
+arrow-schema = { version = "46" }
+arrow-select = { version = "46" }
+parquet = { version = "46" }
+
+# datafusion
+datafusion = { version = "31" }
+datafusion-expr = { version = "31" }
+datafusion-common = { version = "31" }
+datafusion-proto = { version = "31" }
+datafusion-sql = { version = "31" }
+datafusion-physical-expr = { version = "31" }
+
+# serde
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+
+# "stdlib"
+bytes = { version = "1" }
+chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
+regex = { version = "1" }
+thiserror = { version = "1" }
+url = { version = "2" }
+uuid = { version = "1" }
+
+# runtime / async
+async-trait = { version = "0.1" }
+futures = { version = "0.3" }
+tokio = { version = "1" }
+num_cpus = { version = "1" }

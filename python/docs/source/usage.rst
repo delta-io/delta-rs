@@ -417,17 +417,34 @@ into a large file. Bin-packing reduces the number of API calls required for read
 Optimizing will increments the table's version and creates remove actions for optimized files.
 Optimize does not delete files from storage. To delete files that were removed, call :meth:`DeltaTable.vacuum`.
 
-Use :meth:`DeltaTable.optimize` to perform the optimize operation. Note that this method will fail if a
-concurrent writer performs an operation that removes any files (such as an overwrite).
+``DeltaTable.optimize`` returns a :class:`TableOptimizer` object which provides
+methods for optimizing the table. Note that these method will fail if a concurrent
+writer performs an operation that removes any files (such as an overwrite).
+
+For just file compaction, use the :meth:`TableOptimizer.compact` method:
 
 .. code-block:: python
 
     >>> dt = DeltaTable("../rust/tests/data/simple_table")
-    >>> dt.optimize()
+    >>> dt.optimize.compact()
     {'numFilesAdded': 1, 'numFilesRemoved': 5,
      'filesAdded': {'min': 555, 'max': 555, 'avg': 555.0, 'totalFiles': 1, 'totalSize': 555},
      'filesRemoved': {'min': 262, 'max': 429, 'avg': 362.2, 'totalFiles': 5, 'totalSize': 1811},
      'partitionsOptimized': 1, 'numBatches': 1, 'totalConsideredFiles': 5,
+     'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
+
+For improved data skipping, use the :meth:`TableOptimizer.z_order` method. This
+is slower than just file compaction, but can improve performance for queries that
+filter on multiple columns at once.
+
+.. code-block:: python
+
+    >>> dt = DeltaTable("../rust/tests/data/COVID-19_NYT")
+    >>> dt.optimize.z_order(["date", "county"])
+    {'numFilesAdded': 1, 'numFilesRemoved': 8,
+     'filesAdded': {'min': 2473439, 'max': 2473439, 'avg': 2473439.0, 'totalFiles': 1, 'totalSize': 2473439},
+     'filesRemoved': {'min': 325440, 'max': 895702, 'avg': 773810.625, 'totalFiles': 8, 'totalSize': 6190485},
+     'partitionsOptimized': 0, 'numBatches': 1, 'totalConsideredFiles': 8,
      'totalFilesSkipped': 0, 'preserveInsertionOrder': True}
 
 Writing Delta Tables
@@ -491,3 +508,24 @@ the method will raise an error.
 
 This method could also be used to insert a new partition if one doesn't already
 exist, making this operation idempotent.
+
+
+Restoring tables
+~~~~~~~~~~~~~~~~
+
+.. py:currentmodule:: deltalake.table
+
+Restoring a table will restore delta table to a specified version or datetime. This
+operation compares the current state of the delta table with the state to be restored.
+And add those missing files into the AddFile actions and add redundant files into
+RemoveFile actions. Then commit into a new version.
+
+
+Use :meth:`DeltaTable.restore` to perform the restore operation. Note that if any other
+concurrent operation was performed on the table, restore will fail.
+
+.. code-block:: python
+
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.restore(1)
+    {'numRemovedFile': 5, 'numRestoredFile': 22}

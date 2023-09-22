@@ -1,6 +1,6 @@
 [package]
 name = "deltalake"
-version = "0.12.0"
+version = "0.15.0"
 rust-version = "1.64"
 authors = ["Qingping Hou <dave2008713@gmail.com>"]
 homepage = "https://github.com/delta-io/delta.rs"
@@ -12,46 +12,80 @@ repository = "https://github.com/delta-io/delta.rs"
 readme = "README.md"
 edition = "2021"
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
-arrow = { version = "39", optional = true }
-arrow-array = { version = "39", optional = true }
-arrow-cast = { version = "39", optional = true }
-arrow-ord = { version = "39", optional = true }
-arrow-row = { version = "39", optional = true }
-arrow-schema = { version = "39", optional = true }
-arrow-select = { version = "39", optional = true }
-async-trait = "0.1"
-bytes = "1"
-chrono = { version = "0.4.22", default-features = false, features = ["clock"] }
-cfg-if = "1"
-datafusion-objectstore-hdfs = { version = "0.1.3", default-features = false, features = [
-    "hdfs3",
-    "try_spawn_blocking",
+# arrow
+arrow = { workspace = true, optional = true }
+arrow-array = { workspace = true, optional = true }
+arrow-buffer = { workspace = true, optional = true }
+arrow-cast = { workspace = true, optional = true }
+arrow-ord = { workspace = true, optional = true }
+arrow-row = { workspace = true, optional = true }
+arrow-schema = { workspace = true, optional = true }
+arrow-select = { workspace = true, optional = true }
+parquet = { workspace = true, features = [
+    "async",
+    "object_store",
 ], optional = true }
+
+# datafusion
+datafusion = { workspace = true, optional = true }
+datafusion-expr = { workspace = true, optional = true }
+datafusion-common = { workspace = true, optional = true }
+datafusion-proto = { workspace = true, optional = true }
+datafusion-sql = { workspace = true, optional = true }
+datafusion-physical-expr = { workspace = true, optional = true }
+
+# serde
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }
+
+# "stdlib"
+bytes = { workspace = true }
+chrono = { workspace = true, default-features = false, features = ["clock"] }
+regex = { workspace = true }
+thiserror = { workspace = true }
+uuid = { workspace = true, features = ["serde", "v4"] }
+url = { workspace = true }
+
+# runtime
+async-trait = { workspace = true }
+futures = { workspace = true }
+num_cpus = { workspace = true }
+tokio = { workspace = true, features = [
+    "macros",
+    "rt",
+    "rt-multi-thread",
+    "sync",
+    "fs",
+    "parking_lot",
+] }
+
+# other deps (these should be organized and pulled into workspace.dependencies as necessary)
+cfg-if = "1"
 errno = "0.3"
-futures = "0.3"
-itertools = "0.10"
+hyper = { version = "0.14", optional = true }
+itertools = "0.11"
 lazy_static = "1"
 log = "0"
 libc = ">=0.2.90, <1"
 num-bigint = "0.4"
 num-traits = "0.2.15"
-object_store = "0.5.6"
+object_store = "0.7"
 once_cell = "1.16.0"
 parking_lot = "0.12"
-parquet = { version = "39", features = [
-    "async",
-    "object_store",
-], optional = true }
 parquet2 = { version = "0.17", optional = true }
 percent-encoding = "2"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-thiserror = "1"
-tokio = { version = "1", features = ["macros", "rt", "parking_lot"] }
-regex = "1"
-uuid = { version = "1", features = ["serde", "v4"] }
-url = "2.3"
+tracing = { version = "0.1", optional = true }
+rand = "0.8"
+
+# hdfs
+datafusion-objectstore-hdfs = { version = "0.1.3", default-features = false, features = [
+    "hdfs3",
+    "try_spawn_blocking",
+], optional = true }
 
 # S3 lock client
 rusoto_core = { version = "0.47", default-features = false, optional = true }
@@ -63,24 +97,15 @@ rusoto_dynamodb = { version = "0.47", default-features = false, optional = true 
 rusoto_glue = { version = "0.47", default-features = false, optional = true }
 
 # Unity
-reqwest = { version = "0.11", default-features = false, features = [
+reqwest = { version = "0.11.18", default-features = false, features = [
     "rustls-tls",
     "json",
 ], optional = true }
-reqwest-middleware = { version = "0.2.1", optional = true }
-reqwest-retry = { version = "0.2.2", optional = true }
 
 # Datafusion
 dashmap = { version = "5", optional = true }
-datafusion = { version = "25", optional = true }
-datafusion-expr = { version = "25", optional = true }
-datafusion-common = { version = "25", optional = true }
-datafusion-proto = { version = "25", optional = true }
-datafusion-sql = { version = "25", optional = true }
-datafusion-physical-expr = { version = "25", optional = true }
 
-
-sqlparser = { version = "0.33", optional = true }
+sqlparser = { version = "0.37", optional = true }
 
 # NOTE dependencies only for integration tests
 fs_extra = { version = "1.2.0", optional = true }
@@ -89,8 +114,6 @@ tempdir = { version = "0", optional = true }
 dynamodb_lock = { version = "0", default-features = false, optional = true }
 
 [dev-dependencies]
-anyhow = "1"
-criterion = "0"
 dotenvy = "0"
 maplit = "1"
 pretty_assertions = "1.2.1"
@@ -100,13 +123,20 @@ tempdir = "0"
 tempfile = "3"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 utime = "0.3"
-
-[build-dependencies]
-glibc_version = "0"
+hyper = { version = "0.14", features = ["server"] }
 
 [features]
 azure = ["object_store/azure"]
-arrow = ["dep:arrow", "arrow-array", "arrow-cast", "arrow-ord", "arrow-row", "arrow-schema", "arrow-select"]
+arrow = [
+    "dep:arrow",
+    "arrow-array",
+    "arrow-cast",
+    "arrow-ord",
+    "arrow-row",
+    "arrow-schema",
+    "arrow-select",
+    "arrow-buffer",
+]
 default = ["arrow", "parquet"]
 datafusion = [
     "dep:datafusion",
@@ -122,8 +152,8 @@ datafusion = [
 ]
 datafusion-ext = ["datafusion"]
 gcs = ["object_store/gcp"]
-glue = ["s3", "rusoto_glue/rustls"]
-glue-native-tls = ["s3-native-tls", "rusoto_glue"]
+glue = ["s3", "rusoto_glue/rustls", "tracing", "hyper"]
+glue-native-tls = ["s3-native-tls", "rusoto_glue", "tracing", "hyper"]
 hdfs = ["datafusion-objectstore-hdfs"]
 # used only for integration testing
 integration_test = ["fs_extra", "tempdir"]
@@ -136,7 +166,6 @@ s3-native-tls = [
     "rusoto_dynamodb/native-tls",
     "dynamodb_lock/native-tls",
     "object_store/aws",
-    "object_store/aws_profile",
 ]
 s3 = [
     "rusoto_core/rustls",
@@ -145,9 +174,8 @@ s3 = [
     "rusoto_dynamodb/rustls",
     "dynamodb_lock/rustls",
     "object_store/aws",
-    "object_store/aws_profile",
 ]
-unity-experimental = ["reqwest", "reqwest-middleware", "reqwest-retry"]
+unity-experimental = ["reqwest", "tracing", "hyper"]
 
 [[bench]]
 name = "read_checkpoint"

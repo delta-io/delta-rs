@@ -17,60 +17,38 @@
 //!     .await?;
 //! ````
 
-use crate::action::DeltaOperation;
-use crate::delta::DeltaResult;
-use crate::delta_datafusion::parquet_scan_from_actions;
-use crate::delta_datafusion::partitioned_file_from_action;
-use crate::delta_datafusion::register_store;
-use crate::operations::transaction::commit;
-use crate::operations::write::write_execution_plan;
-use crate::storage::DeltaObjectStore;
-use crate::storage::ObjectStoreRef;
-use crate::table_state::DeltaTableState;
-use crate::DeltaTable;
-use crate::DeltaTableError;
-
-use crate::action::{Action, Add, Remove};
-use arrow::array::StringArray;
-use arrow::datatypes::DataType;
-use arrow::datatypes::Field;
-use arrow::datatypes::Schema as ArrowSchema;
-use arrow::error::ArrowError;
-use arrow::record_batch::RecordBatch;
-use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
-use datafusion::datasource::listing::PartitionedFile;
-use datafusion::datasource::MemTable;
-use datafusion::execution::context::{SessionContext, SessionState, TaskContext};
-use datafusion::physical_expr::create_physical_expr;
-use datafusion::physical_optimizer::pruning::PruningPredicate;
-use datafusion::physical_plan::file_format::FileScanConfig;
-use datafusion::physical_plan::filter::FilterExec;
-use datafusion::physical_plan::limit::LocalLimitExec;
-use datafusion::physical_plan::ExecutionPlan;
-use datafusion::physical_plan::RecordBatchStream;
-use datafusion::prelude::Expr;
-use datafusion_common::scalar::ScalarValue;
-use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
-use datafusion_common::DFSchema;
-use datafusion_expr::expr::{ScalarFunction, ScalarUDF};
-use datafusion_expr::{col, Volatility};
-use futures::future::BoxFuture;
-use futures::stream::StreamExt;
-use parquet::file::properties::WriterProperties;
-use serde_json::Map;
-use serde_json::Value;
-use std::collections::HashMap;
-use std::pin::Pin;
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-const PATH_COLUMN: &str = "__delta_rs_path";
+use crate::action::{Action, Add, Remove};
+use datafusion::execution::context::{SessionContext, SessionState};
+use datafusion::physical_expr::create_physical_expr;
+use datafusion::physical_plan::filter::FilterExec;
+use datafusion::physical_plan::ExecutionPlan;
+use datafusion::prelude::Expr;
+use datafusion_common::scalar::ScalarValue;
+use datafusion_common::DFSchema;
+use futures::future::BoxFuture;
+use parquet::file::properties::WriterProperties;
+use serde_json::Map;
+use serde_json::Value;
+
+use crate::action::DeltaOperation;
+use crate::delta_datafusion::{find_files, parquet_scan_from_actions, register_store};
+use crate::errors::{DeltaResult, DeltaTableError};
+use crate::operations::transaction::commit;
+use crate::operations::write::write_execution_plan;
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
+use crate::table_state::DeltaTableState;
+use crate::DeltaTable;
+
+use super::datafusion_utils::Expression;
 
 /// Delete Records from the Delta Table.
 /// See this module's documentaiton for more information
 pub struct DeleteBuilder {
     /// Which records to delete
-    predicate: Option<Expr>,
+    predicate: Option<Expression>,
     /// A snapshot of the table's state
     snapshot: DeltaTableState,
     /// Delta object store for handling data files
@@ -102,218 +80,6 @@ pub struct DeleteMetrics {
     pub rewrite_time_ms: u128,
 }
 
-/// Determine which files contain a record that statisfies the predicate
-async fn find_files<'a>(
-    snapshot: &DeltaTableState,
-    store: ObjectStoreRef,
-    schema: Arc<ArrowSchema>,
-    file_schema: Arc<ArrowSchema>,
-    candidates: Vec<&'a Add>,
-    state: &SessionState,
-    expression: &Expr,
-) -> DeltaResult<Vec<&'a Add>> {
-    let mut files = Vec::new();
-    let mut candidate_map: HashMap<String, &'a Add> = HashMap::new();
-
-    let table_partition_cols = snapshot
-        .current_metadata()
-        .ok_or(DeltaTableError::NoMetadata)?
-        .partition_columns
-        .clone();
-
-    let mut file_groups: HashMap<Vec<ScalarValue>, Vec<PartitionedFile>> = HashMap::new();
-    for action in candidates {
-        let mut part = partitioned_file_from_action(action, &schema);
-        part.partition_values
-            .push(ScalarValue::Utf8(Some(action.path.clone())));
-
-        file_groups
-            .entry(part.partition_values.clone())
-            .or_default()
-            .push(part);
-
-        candidate_map.insert(action.path.to_owned(), action);
-    }
-
-    let mut table_partition_cols = table_partition_cols
-        .iter()
-        .map(|c| Ok((c.to_owned(), schema.field_with_name(c)?.data_type().clone())))
-        .collect::<Result<Vec<_>, ArrowError>>()?;
-    // Append a column called __delta_rs_path to track the file path
-    table_partition_cols.push((PATH_COLUMN.to_owned(), DataType::Utf8));
-
-    let input_schema = snapshot.input_schema()?;
-    let input_dfschema: DFSchema = input_schema.clone().as_ref().clone().try_into()?;
-
-    let predicate_expr = create_physical_expr(
-        &Expr::IsTrue(Box::new(expression.clone())),
-        &input_dfschema,
-        &input_schema,
-        state.execution_props(),
-    )?;
-
-    let parquet_scan = ParquetFormat::new()
-        .create_physical_plan(
-            state,
-            FileScanConfig {
-                object_store_url: store.object_store_url(),
-                file_schema,
-                file_groups: file_groups.into_values().collect(),
-                statistics: snapshot.datafusion_table_statistics(),
-                projection: None,
-                limit: None,
-                table_partition_cols,
-                infinite_source: false,
-                output_ordering: None,
-            },
-            None,
-        )
-        .await?;
-
-    let filter: Arc<dyn ExecutionPlan> =
-        Arc::new(FilterExec::try_new(predicate_expr, parquet_scan.clone())?);
-    let limit: Arc<dyn ExecutionPlan> = Arc::new(LocalLimitExec::new(filter, 1));
-
-    let task_ctx = Arc::new(TaskContext::from(state));
-    let partitions = limit.output_partitioning().partition_count();
-    let mut tasks = Vec::with_capacity(partitions);
-
-    for i in 0..partitions {
-        let stream = limit.execute(i, task_ctx.clone())?;
-        tasks.push(handle_stream(stream));
-    }
-
-    for res in futures::future::join_all(tasks).await.into_iter() {
-        let path = res?;
-        if let Some(path) = path {
-            match candidate_map.remove(&path) {
-                Some(action) => files.push(action),
-                None => {
-                    return Err(DeltaTableError::Generic(
-                        "Unable to map __delta_rs_path to action.".to_owned(),
-                    ))
-                }
-            }
-        }
-    }
-
-    Ok(files)
-}
-
-async fn handle_stream(
-    mut stream: Pin<Box<dyn RecordBatchStream + Send>>,
-) -> Result<Option<String>, DeltaTableError> {
-    if let Some(maybe_batch) = stream.next().await {
-        let batch: RecordBatch = maybe_batch?;
-        if batch.num_rows() > 1 {
-            return Err(DeltaTableError::Generic(
-                "Find files returned multiple records for batch".to_owned(),
-            ));
-        }
-        let array = batch
-            .column_by_name(PATH_COLUMN)
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or(DeltaTableError::Generic(format!(
-                "Unable to downcast column {}",
-                PATH_COLUMN
-            )))?;
-
-        let path = array
-            .into_iter()
-            .next()
-            .unwrap()
-            .ok_or(DeltaTableError::Generic(format!(
-                "{} cannot be null",
-                PATH_COLUMN
-            )))?;
-        return Ok(Some(path.to_string()));
-    }
-
-    Ok(None)
-}
-
-struct ExprProperties {
-    partition_columns: Vec<String>,
-
-    partition_only: bool,
-    result: DeltaResult<()>,
-}
-
-/// Ensure only expressions that make sense are accepted, check for
-/// non-deterministic functions, and determine if the expression only contains
-/// partition columns
-impl TreeNodeVisitor for ExprProperties {
-    type N = Expr;
-
-    fn pre_visit(&mut self, expr: &Self::N) -> datafusion_common::Result<VisitRecursion> {
-        // TODO: We can likely relax the volatility to STABLE. Would require further
-        // research to confirm the same value is generated during the scan and
-        // rewrite phases.
-
-        match expr {
-            Expr::Column(c) => {
-                if !self.partition_columns.contains(&c.name) {
-                    self.partition_only = false;
-                }
-            }
-            Expr::ScalarVariable(_, _)
-            | Expr::Literal(_)
-            | Expr::Alias(_, _)
-            | Expr::BinaryExpr(_)
-            | Expr::Like(_)
-            | Expr::ILike(_)
-            | Expr::SimilarTo(_)
-            | Expr::Not(_)
-            | Expr::IsNotNull(_)
-            | Expr::IsNull(_)
-            | Expr::IsTrue(_)
-            | Expr::IsFalse(_)
-            | Expr::IsUnknown(_)
-            | Expr::IsNotTrue(_)
-            | Expr::IsNotFalse(_)
-            | Expr::IsNotUnknown(_)
-            | Expr::Negative(_)
-            | Expr::InList { .. }
-            | Expr::GetIndexedField(_)
-            | Expr::Between(_)
-            | Expr::Case(_)
-            | Expr::Cast(_)
-            | Expr::TryCast(_) => (),
-            Expr::ScalarFunction(ScalarFunction { fun, .. }) => {
-                let v = fun.volatility();
-                if v > Volatility::Immutable {
-                    self.result = Err(DeltaTableError::Generic(format!(
-                        "Delete predicate contains nondeterministic function {}",
-                        fun
-                    )));
-                    return Ok(VisitRecursion::Stop);
-                }
-            }
-            Expr::ScalarUDF(ScalarUDF { fun, .. }) => {
-                let v = fun.signature.volatility;
-                if v > Volatility::Immutable {
-                    self.result = Err(DeltaTableError::Generic(format!(
-                        "Delete predicate contains nondeterministic function {}",
-                        fun.name
-                    )));
-                    return Ok(VisitRecursion::Stop);
-                }
-            }
-            _ => {
-                self.result = Err(DeltaTableError::Generic(format!(
-                    "Delete predicate contains unsupported expression {}",
-                    expr
-                )));
-                return Ok(VisitRecursion::Stop);
-            }
-        }
-
-        Ok(VisitRecursion::Continue)
-    }
-}
-
 impl DeleteBuilder {
     /// Create a new [`DeleteBuilder`]
     pub fn new(object_store: ObjectStoreRef, snapshot: DeltaTableState) -> Self {
@@ -328,20 +94,9 @@ impl DeleteBuilder {
     }
 
     /// A predicate that determines if a record is deleted
-    pub fn with_predicate(mut self, predicate: Expr) -> Self {
-        self.predicate = Some(predicate);
+    pub fn with_predicate<E: Into<Expression>>(mut self, predicate: E) -> Self {
+        self.predicate = Some(predicate.into());
         self
-    }
-
-    /// Parse the provided query into a Datafusion expression
-    pub fn with_str_predicate(
-        mut self,
-        predicate: impl AsRef<str>,
-    ) -> Result<Self, DeltaTableError> {
-        let expr = self.snapshot.parse_predicate_expression(predicate)?;
-        self.predicate = Some(expr);
-
-        Ok(self)
     }
 
     /// The Datafusion session state to use
@@ -372,12 +127,11 @@ async fn excute_non_empty_expr(
     state: &SessionState,
     expression: &Expr,
     metrics: &mut DeleteMetrics,
+    rewrite: &[Add],
     writer_properties: Option<WriterProperties>,
-) -> DeltaResult<(Vec<Add>, Vec<Add>)> {
+) -> DeltaResult<Vec<Add>> {
     // For each identified file perform a parquet scan + filter + limit (1) + count.
     // If returned count is not zero then append the file to be rewritten and removed from the log. Otherwise do nothing to the file.
-
-    let scan_start = Instant::now();
 
     let schema = snapshot.arrow_schema()?;
     let input_schema = snapshot.input_schema()?;
@@ -388,50 +142,11 @@ async fn excute_non_empty_expr(
         .ok_or(DeltaTableError::NoMetadata)?
         .partition_columns
         .clone();
-    let file_schema = Arc::new(ArrowSchema::new(
-        schema
-            .fields()
-            .iter()
-            .filter(|f| !table_partition_cols.contains(f.name()))
-            .cloned()
-            .collect::<Vec<_>>(),
-    ));
-    let expr = create_physical_expr(
-        expression,
-        &input_dfschema,
-        &input_schema,
-        state.execution_props(),
-    )?;
 
-    let pruning_predicate = PruningPredicate::try_new(expr, schema.clone())?;
-    let files_to_prune = pruning_predicate.prune(snapshot)?;
-    let files: Vec<&Add> = snapshot
-        .files()
-        .iter()
-        .zip(files_to_prune.into_iter())
-        .filter_map(|(action, keep)| if keep { Some(action) } else { None })
-        .collect();
-
-    // Create a new delta scan plan with only files that have a record
-    let rewrite = find_files(
-        snapshot,
-        object_store.clone(),
-        schema.clone(),
-        file_schema.clone(),
-        files,
-        state,
-        expression,
-    )
-    .await?;
-
-    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_millis();
-    let write_start = Instant::now();
-
-    let rewrite: Vec<Add> = rewrite.into_iter().map(|s| s.to_owned()).collect();
     let parquet_scan = parquet_scan_from_actions(
         snapshot,
         object_store.clone(),
-        &rewrite,
+        rewrite,
         &schema,
         None,
         state,
@@ -461,9 +176,9 @@ async fn excute_non_empty_expr(
         Some(snapshot.table_config().target_file_size() as usize),
         None,
         writer_properties,
+        false,
     )
     .await?;
-    metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis();
 
     let read_records = parquet_scan.metrics().and_then(|m| m.output_rows());
     let filter_records = filter.metrics().and_then(|m| m.output_rows());
@@ -472,7 +187,7 @@ async fn excute_non_empty_expr(
         .zip(filter_records)
         .map(|(read, filter)| read - filter);
 
-    Ok((add_actions, rewrite))
+    Ok(add_actions)
 }
 
 async fn execute(
@@ -483,60 +198,53 @@ async fn execute(
     writer_properties: Option<WriterProperties>,
     app_metadata: Option<Map<String, Value>>,
 ) -> DeltaResult<((Vec<Action>, i64), DeleteMetrics)> {
-    let mut metrics = DeleteMetrics::default();
     let exec_start = Instant::now();
+    let mut metrics = DeleteMetrics::default();
+    let schema = snapshot.arrow_schema()?;
 
-    let (add_actions, to_delete) = match &predicate {
-        Some(expr) => {
-            let current_metadata = snapshot
-                .current_metadata()
-                .ok_or(DeltaTableError::NoMetadata)?;
-
-            let mut expr_properties = ExprProperties {
-                partition_only: true,
-                partition_columns: current_metadata.partition_columns.clone(),
-                result: Ok(()),
-            };
-
-            TreeNode::visit(expr, &mut expr_properties)?;
-            expr_properties.result?;
-
-            if expr_properties.partition_only {
-                // If the expression only refers to partition columns, we can perform
-                // the deletion just by removing entire files, so there is no need to
-                // do an scan.
-                let scan_start = Instant::now();
-                let remove = scan_memory_table(snapshot, expr).await?;
-                metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
-                (Vec::new(), remove)
-            } else {
-                excute_non_empty_expr(
-                    snapshot,
-                    object_store.clone(),
-                    &state,
-                    expr,
-                    &mut metrics,
-                    writer_properties,
-                )
-                .await?
-            }
-        }
-        None => (Vec::<Add>::new(), snapshot.files().to_owned()),
-    };
+    let scan_start = Instant::now();
+    let candidates = find_files(
+        snapshot,
+        object_store.clone(),
+        schema.clone(),
+        &state,
+        predicate.clone(),
+    )
+    .await?;
+    metrics.scan_time_ms = Instant::now().duration_since(scan_start).as_micros();
 
     let predicate = predicate.unwrap_or(Expr::Literal(ScalarValue::Boolean(Some(true))));
+
+    let add = if candidates.partition_scan {
+        Vec::new()
+    } else {
+        let write_start = Instant::now();
+        let add = excute_non_empty_expr(
+            snapshot,
+            object_store.clone(),
+            &state,
+            &predicate,
+            &mut metrics,
+            &candidates.candidates,
+            writer_properties,
+        )
+        .await?;
+        metrics.rewrite_time_ms = Instant::now().duration_since(write_start).as_millis();
+        add
+    };
+    let remove = candidates.candidates;
 
     let deletion_timestamp = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
         .as_millis() as i64;
 
-    let mut actions: Vec<Action> = add_actions.into_iter().map(Action::add).collect();
+    let mut actions: Vec<Action> = add.into_iter().map(Action::add).collect();
     let mut version = snapshot.version();
-    metrics.num_removed_files = to_delete.len();
+    metrics.num_removed_files = remove.len();
     metrics.num_added_files = actions.len();
 
-    for action in to_delete {
+    for action in remove {
         actions.push(Action::remove(Remove {
             path: action.path,
             deletion_timestamp: Some(deletion_timestamp),
@@ -544,6 +252,7 @@ async fn execute(
             extended_file_metadata: Some(true),
             partition_values: Some(action.partition_values),
             size: Some(action.size),
+            deletion_vector: None,
             tags: None,
         }))
     }
@@ -568,78 +277,6 @@ async fn execute(
     Ok(((actions, version), metrics))
 }
 
-async fn scan_memory_table(snapshot: &DeltaTableState, predicate: &Expr) -> DeltaResult<Vec<Add>> {
-    let actions = snapshot.files().to_owned();
-
-    let batch = snapshot.add_actions_table(true)?;
-    let mut arrays = Vec::new();
-    let mut fields = Vec::new();
-
-    let schema = batch.schema();
-
-    arrays.push(
-        batch
-            .column_by_name("path")
-            .ok_or(DeltaTableError::Generic(
-                "Column with name `path` does not exist".to_owned(),
-            ))?
-            .to_owned(),
-    );
-    fields.push(Field::new(PATH_COLUMN, DataType::Utf8, false));
-
-    for field in schema.fields() {
-        if field.name().starts_with("partition.") {
-            let name = field.name().strip_prefix("partition.").unwrap();
-
-            arrays.push(batch.column_by_name(field.name()).unwrap().to_owned());
-            fields.push(Field::new(
-                name,
-                field.data_type().to_owned(),
-                field.is_nullable(),
-            ));
-        }
-    }
-
-    let schema = Arc::new(ArrowSchema::new(fields));
-    let batch = RecordBatch::try_new(schema, arrays)?;
-    let mem_table = MemTable::try_new(batch.schema(), vec![vec![batch]])?;
-
-    let ctx = SessionContext::new();
-    let mut df = ctx.read_table(Arc::new(mem_table))?;
-    df = df
-        .filter(predicate.to_owned())?
-        .select(vec![col(PATH_COLUMN)])?;
-    let batches = df.collect().await?;
-
-    let mut map = HashMap::new();
-    for action in actions {
-        map.insert(action.path.clone(), action);
-    }
-    let mut files = Vec::new();
-
-    for batch in batches {
-        let array = batch
-            .column_by_name(PATH_COLUMN)
-            .unwrap()
-            .as_any()
-            .downcast_ref::<StringArray>()
-            .ok_or(DeltaTableError::Generic(format!(
-                "Unable to downcast column {}",
-                PATH_COLUMN
-            )))?;
-        for path in array {
-            let path = path.ok_or(DeltaTableError::Generic(format!(
-                "{} cannot be null",
-                PATH_COLUMN
-            )))?;
-            let value = map.remove(path).unwrap();
-            files.push(value);
-        }
-    }
-
-    Ok(files)
-}
-
 impl std::future::IntoFuture for DeleteBuilder {
     type Output = DeltaResult<(DeltaTable, DeleteMetrics)>;
     type IntoFuture = BoxFuture<'static, Self::Output>;
@@ -657,8 +294,16 @@ impl std::future::IntoFuture for DeleteBuilder {
                 session.state()
             });
 
+            let predicate = match this.predicate {
+                Some(predicate) => match predicate {
+                    Expression::DataFusion(expr) => Some(expr),
+                    Expression::String(s) => Some(this.snapshot.parse_predicate_expression(s)?),
+                },
+                None => None,
+            };
+
             let ((actions, version), metrics) = execute(
-                this.predicate,
+                predicate,
                 this.store.clone(),
                 &this.snapshot,
                 state,
@@ -681,13 +326,13 @@ mod tests {
 
     use crate::action::*;
     use crate::operations::DeltaOps;
+    use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::{get_arrow_schema, get_delta_schema};
     use crate::DeltaTable;
     use arrow::array::Int32Array;
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
     use datafusion::assert_batches_sorted_eq;
-    use datafusion::from_slice::FromSlice;
     use datafusion::prelude::*;
     use std::sync::Arc;
 
@@ -704,17 +349,6 @@ mod tests {
         table
     }
 
-    async fn get_data(table: DeltaTable) -> Vec<RecordBatch> {
-        let ctx = SessionContext::new();
-        ctx.register_table("test", Arc::new(table)).unwrap();
-        ctx.sql("select * from test")
-            .await
-            .unwrap()
-            .collect()
-            .await
-            .unwrap()
-    }
-
     #[tokio::test]
     async fn test_delete_default() {
         let schema = get_arrow_schema(&None);
@@ -723,9 +357,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-02",
@@ -752,8 +386,7 @@ mod tests {
         assert_eq!(metrics.num_deleted_rows, None);
         assert_eq!(metrics.num_copied_rows, None);
 
-        // Scan and rewrite is not required
-        assert_eq!(metrics.scan_time_ms, 0);
+        // rewrite is not required
         assert_eq!(metrics.rewrite_time_ms, 0);
 
         // Deletes with no changes to state must not commit
@@ -777,9 +410,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice([1, 10, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![1, 10, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-02",
@@ -801,9 +434,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice([0, 20, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![0, 20, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2021-02-02",
                     "2021-02-02",
@@ -850,7 +483,7 @@ mod tests {
             "+----+-------+------------+",
         ];
 
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -898,7 +531,7 @@ mod tests {
             "| 2     |",
             "+-------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
 
         // Validate behaviour of less than
@@ -919,7 +552,7 @@ mod tests {
             "| 4     |",
             "+-------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
 
         // Validate behaviour of less plus not null
@@ -938,7 +571,7 @@ mod tests {
             "| 4     |",
             "+-------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -952,9 +585,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice([0, 20, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![0, 20, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2021-02-03",
                     "2021-02-02",
@@ -997,7 +630,7 @@ mod tests {
             "+----+-------+------------+",
         ];
 
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 
@@ -1010,9 +643,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             Arc::clone(&schema),
             vec![
-                Arc::new(arrow::array::StringArray::from_slice(["A", "B", "A", "A"])),
-                Arc::new(arrow::array::Int32Array::from_slice([0, 20, 10, 100])),
-                Arc::new(arrow::array::StringArray::from_slice([
+                Arc::new(arrow::array::StringArray::from(vec!["A", "B", "A", "A"])),
+                Arc::new(arrow::array::Int32Array::from(vec![0, 20, 10, 100])),
+                Arc::new(arrow::array::StringArray::from(vec![
                     "2021-02-02",
                     "2021-02-03",
                     "2021-02-02",
@@ -1058,7 +691,7 @@ mod tests {
             "| B  | 20    | 2021-02-03 |",
             "+----+-------+------------+",
         ];
-        let actual = get_data(table).await;
+        let actual = get_data(&table).await;
         assert_batches_sorted_eq!(&expected, &actual);
     }
 

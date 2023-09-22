@@ -10,12 +10,14 @@ license = {file = "LICENSE.txt"}
 requires-python = ">=3.7"
 keywords = ["deltalake", "delta", "datalake", "pandas", "arrow"]
 classifiers = [
-    "Development Status :: 3 - Alpha",
     "License :: OSI Approved :: Apache Software License",
-    "Programming Language :: Python :: 3 :: Only"
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11"
 ]
 dependencies = [
-    "pyarrow>=7",
+    "pyarrow>=8,<=12",
     'typing-extensions;python_version<"3.8"',
 ]
 
@@ -80,17 +82,13 @@ select = [
     # isort
     "I"
 ]
-unfixable = ["F401"]
 ignore = ["E501"]
-
-[tool.ruff.per-file-ignores]
-"deltalake/__init__.py" = ["F401"]
 
 [tool.ruff.isort]
 known-first-party = ["deltalake"]
 
 [tool.pytest.ini_options]
-addopts = "--cov=deltalake -v -m 'not integration'"
+addopts = "--cov=deltalake -v -m 'not integration and not benchmark'"
 testpaths = [
     "tests",
 ]

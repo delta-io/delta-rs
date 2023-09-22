@@ -2,22 +2,25 @@
 //!
 //! See [crate::table_state::DeltaTableState].
 
-use crate::action::{ColumnCountStat, ColumnValueStat, Stats};
-use crate::table_state::DeltaTableState;
-use crate::DeltaTableError;
-use crate::SchemaDataType;
-use crate::SchemaTypeStruct;
-use arrow::array::{
-    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float64Array, Int64Array, NullArray,
-    StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
-};
-use arrow::compute::cast;
-use arrow::compute::kernels::cast_utils::Parser;
-use arrow::datatypes::{DataType, Date32Type, Field, Fields, TimeUnit, TimestampMicrosecondType};
-use itertools::Itertools;
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::sync::Arc;
+
+use arrow::compute::cast;
+use arrow::compute::kernels::cast_utils::Parser;
+use arrow_array::types::{Date32Type, TimestampMicrosecondType};
+use arrow_array::{
+    Array, ArrayRef, BinaryArray, BooleanArray, Date32Array, Float64Array, Int64Array, NullArray,
+    StringArray, StructArray, TimestampMicrosecondArray, TimestampMillisecondArray,
+};
+use arrow_schema::{DataType, Field, Fields, TimeUnit};
+use itertools::Itertools;
+
+use crate::action::{ColumnCountStat, ColumnValueStat, Stats};
+use crate::errors::DeltaTableError;
+use crate::table_state::DeltaTableState;
+use crate::SchemaDataType;
+use crate::SchemaTypeStruct;
 
 impl DeltaTableState {
     /// Get an [arrow::record_batch::RecordBatch] containing add action data.
@@ -108,7 +111,17 @@ impl DeltaTableState {
                     .zip(stats.columns().iter().map(Arc::clone)),
             );
         }
-
+        if self.files().iter().any(|add| add.deletion_vector.is_some()) {
+            let delvs = self.deletion_vectors_as_batch(flatten)?;
+            arrays.extend(
+                delvs
+                    .schema()
+                    .fields
+                    .iter()
+                    .map(|field| Cow::Owned(field.name().clone()))
+                    .zip(delvs.columns().iter().map(Arc::clone)),
+            );
+        }
         if self.files().iter().any(|add| {
             add.tags
                 .as_ref()
@@ -269,6 +282,83 @@ impl DeltaTableState {
             Ok(arrow::record_batch::RecordBatch::try_from_iter(vec![(
                 "tags",
                 Arc::new(StructArray::new(Fields::from(fields), arrays, None)) as ArrayRef,
+            )])?)
+        }
+    }
+
+    fn deletion_vectors_as_batch(
+        &self,
+        flatten: bool,
+    ) -> Result<arrow::record_batch::RecordBatch, DeltaTableError> {
+        let capacity = self.files().len();
+        let mut storage_type = arrow::array::StringBuilder::with_capacity(capacity, 1);
+        let mut path_or_inline_div = arrow::array::StringBuilder::with_capacity(capacity, 64);
+        let mut offset = arrow::array::Int32Builder::with_capacity(capacity);
+        let mut size_in_bytes = arrow::array::Int32Builder::with_capacity(capacity);
+        let mut cardinality = arrow::array::Int64Builder::with_capacity(capacity);
+
+        for add in self.files() {
+            if let Some(value) = &add.deletion_vector {
+                storage_type.append_value(value.storage_type.to_string());
+                path_or_inline_div.append_value(value.path_or_inline_dv.clone());
+                if let Some(ofs) = value.offset {
+                    offset.append_value(ofs);
+                } else {
+                    offset.append_null();
+                }
+                size_in_bytes.append_value(value.size_in_bytes);
+                cardinality.append_value(value.cardinality);
+            } else {
+                storage_type.append_null();
+                path_or_inline_div.append_null();
+                offset.append_null();
+                size_in_bytes.append_null();
+                cardinality.append_null();
+            }
+        }
+        if flatten {
+            Ok(arrow::record_batch::RecordBatch::try_from_iter(vec![
+                (
+                    "deletionVector.storageType",
+                    Arc::new(storage_type.finish()) as ArrayRef,
+                ),
+                (
+                    "deletionVector.pathOrInlineDiv",
+                    Arc::new(path_or_inline_div.finish()) as ArrayRef,
+                ),
+                (
+                    "deletionVector.offset",
+                    Arc::new(offset.finish()) as ArrayRef,
+                ),
+                (
+                    "deletionVector.sizeInBytes",
+                    Arc::new(size_in_bytes.finish()) as ArrayRef,
+                ),
+                (
+                    "deletionVector.cardinality",
+                    Arc::new(cardinality.finish()) as ArrayRef,
+                ),
+            ])?)
+        } else {
+            Ok(arrow::record_batch::RecordBatch::try_from_iter(vec![(
+                "deletionVector",
+                Arc::new(StructArray::new(
+                    Fields::from(vec![
+                        Field::new("storageType", DataType::Utf8, false),
+                        Field::new("pathOrInlineDiv", DataType::Utf8, false),
+                        Field::new("offset", DataType::Int32, true),
+                        Field::new("sizeInBytes", DataType::Int32, false),
+                        Field::new("cardinality", DataType::Int64, false),
+                    ]),
+                    vec![
+                        Arc::new(storage_type.finish()) as ArrayRef,
+                        Arc::new(path_or_inline_div.finish()) as ArrayRef,
+                        Arc::new(offset.finish()) as ArrayRef,
+                        Arc::new(size_in_bytes.finish()) as ArrayRef,
+                        Arc::new(cardinality.finish()) as ArrayRef,
+                    ],
+                    None,
+                )) as ArrayRef,
             )])?)
         }
     }

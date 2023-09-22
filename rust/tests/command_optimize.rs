@@ -1,22 +1,26 @@
 #![cfg(all(feature = "arrow", feature = "parquet"))]
 
-use arrow::datatypes::Schema as ArrowSchema;
-use arrow::{
-    array::{Int32Array, StringArray},
-    datatypes::{DataType, Field},
-    record_batch::RecordBatch,
-};
-use deltalake::action::{Action, Remove};
-use deltalake::operations::optimize::{create_merge_plan, MetricDetails, Metrics};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use std::{collections::HashMap, error::Error, sync::Arc};
+
+use arrow_array::{Int32Array, RecordBatch, StringArray};
+use arrow_schema::{DataType, Field, Schema as ArrowSchema};
+use arrow_select::concat::concat_batches;
+use deltalake::action::{Action, DeltaOperation, Remove};
+use deltalake::errors::DeltaTableError;
+use deltalake::operations::optimize::{create_merge_plan, MetricDetails, Metrics, OptimizeType};
+use deltalake::operations::transaction::commit;
 use deltalake::operations::DeltaOps;
+use deltalake::storage::ObjectStoreRef;
 use deltalake::writer::{DeltaWriter, RecordBatchWriter};
-use deltalake::{DeltaTable, DeltaTableError, PartitionFilter, SchemaDataType, SchemaField};
+use deltalake::{DeltaTable, PartitionFilter, Path, SchemaDataType, SchemaField};
+use futures::TryStreamExt;
+use object_store::ObjectStore;
+use parquet::arrow::async_reader::ParquetObjectReader;
+use parquet::arrow::ParquetRecordBatchStreamBuilder;
 use parquet::file::properties::WriterProperties;
 use rand::prelude::*;
 use serde_json::json;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
-use std::{collections::HashMap, error::Error, sync::Arc};
 use tempdir::TempDir;
 
 struct Context {
@@ -188,6 +192,7 @@ async fn write(
 ) -> Result<(), DeltaTableError> {
     writer.write(batch).await?;
     writer.flush_and_commit(table).await?;
+    table.update().await?;
     Ok(())
 }
 
@@ -263,6 +268,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     //create the merge plan, remove a file, and execute the plan.
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
+        OptimizeType::Compact,
         &dt.state,
         &filter,
         None,
@@ -270,7 +276,7 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
     )?;
 
     let uri = context.tmp_dir.path().to_str().to_owned().unwrap();
-    let mut other_dt = deltalake::open_table(uri).await?;
+    let other_dt = deltalake::open_table(uri).await?;
     let add = &other_dt.get_state().files()[0];
     let remove = Remove {
         path: add.path.clone(),
@@ -285,14 +291,23 @@ async fn test_conflict_for_remove_actions() -> Result<(), Box<dyn Error>> {
         size: Some(add.size),
         partition_values: Some(add.partition_values.clone()),
         tags: Some(HashMap::new()),
+        deletion_vector: add.deletion_vector.clone(),
     };
 
-    #[allow(deprecated)]
-    let mut transaction = other_dt.create_transaction(None);
-    transaction.add_action(Action::remove(remove));
-    transaction.commit(None, None).await?;
+    let operation = DeltaOperation::Delete { predicate: None };
+    commit(
+        other_dt.object_store().as_ref(),
+        &vec![Action::remove(remove)],
+        operation,
+        &other_dt.state,
+        None,
+    )
+    .await?;
 
-    let maybe_metrics = plan.execute(dt.object_store(), &dt.state).await;
+    let maybe_metrics = plan
+        .execute(dt.object_store(), &dt.state, 1, 20, None)
+        .await;
+
     assert!(maybe_metrics.is_err());
     assert_eq!(dt.version(), version + 1);
     Ok(())
@@ -321,9 +336,9 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
 
     let version = dt.version();
 
-    //create the merge plan, remove a file, and execute the plan.
     let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
     let plan = create_merge_plan(
+        OptimizeType::Compact,
         &dt.state,
         &filter,
         None,
@@ -340,9 +355,57 @@ async fn test_no_conflict_for_append_actions() -> Result<(), Box<dyn Error>> {
     )
     .await?;
 
-    let metrics = plan.execute(dt.object_store(), &dt.state).await?;
+    let metrics = plan
+        .execute(dt.object_store(), &dt.state, 1, 20, None)
+        .await?;
     assert_eq!(metrics.num_files_added, 1);
     assert_eq!(metrics.num_files_removed, 2);
+
+    dt.update().await.unwrap();
+    assert_eq!(dt.version(), version + 2);
+    Ok(())
+}
+
+#[tokio::test]
+/// Validate that optimize creates multiple commits when min_commin_interval is set
+async fn test_commit_interval() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    // expect it to perform 2 merges, one in each partition
+    for partition in ["2022-05-22", "2022-05-23"] {
+        for _i in 0..2 {
+            write(
+                &mut writer,
+                &mut dt,
+                tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], partition)?,
+            )
+            .await?;
+        }
+    }
+
+    let version = dt.version();
+
+    let plan = create_merge_plan(
+        OptimizeType::Compact,
+        &dt.state,
+        &[],
+        None,
+        WriterProperties::builder().build(),
+    )?;
+
+    let metrics = plan
+        .execute(
+            dt.object_store(),
+            &dt.state,
+            1,
+            20,
+            Some(Duration::from_secs(0)), // this will cause as many commits as num_files_added
+        )
+        .await?;
+    assert_eq!(metrics.num_files_added, 2);
+    assert_eq!(metrics.num_files_removed, 4);
 
     dt.update().await.unwrap();
     assert_eq!(dt.version(), version + 2);
@@ -492,4 +555,245 @@ async fn test_commit_info() -> Result<(), Box<dyn Error>> {
     // assert_eq!(parameters["predicate"], None);
 
     Ok(())
+}
+
+#[tokio::test]
+async fn test_zorder_rejects_zero_columns() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let dt = context.table;
+
+    // Rejects zero columns
+    let result = DeltaOps(dt)
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec![]))
+        .await;
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Z-order requires at least one column"));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_zorder_rejects_nonexistent_columns() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let dt = context.table;
+
+    // Rejects non-existent columns
+    let result = DeltaOps(dt)
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec!["non-existent".to_string()]))
+        .await;
+    assert!(result.is_err());
+    assert!(result.unwrap_err().to_string().contains(
+        "Z-order columns must be present in the table schema. Unknown columns: [\"non-existent\"]"
+    ));
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_zorder_rejects_partition_column() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 2), (1, 3), (1, 4)], "2022-05-22")?,
+    )
+    .await?;
+    // Rejects partition columns
+    let result = DeltaOps(dt)
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec!["date".to_string()]))
+        .await;
+    assert!(result.is_err());
+    assert!(result
+        .unwrap_err()
+        .to_string()
+        .contains("Z-order columns cannot be partition columns. Found: [\"date\"]"));
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_zorder_unpartitioned() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(false).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 1), (1, 2), (1, 2)], "1970-01-01")?,
+    )
+    .await?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 1), (2, 2), (1, 2)], "1970-01-04")?,
+    )
+    .await?;
+
+    let optimize = DeltaOps(dt).optimize().with_type(OptimizeType::ZOrder(vec![
+        "date".to_string(),
+        "x".to_string(),
+        "y".to_string(),
+    ]));
+    let (dt, metrics) = optimize.await?;
+
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+    assert_eq!(metrics.total_files_skipped, 0);
+    assert_eq!(metrics.total_considered_files, 2);
+
+    // Check data
+    let files = dt.get_files();
+    assert_eq!(files.len(), 1);
+
+    let actual = read_parquet_file(&files[0], dt.object_store()).await?;
+    let expected = RecordBatch::try_new(
+        actual.schema(),
+        // Note that the order is not hierarchically sorted.
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 1, 1, 1, 2])),
+            Arc::new(Int32Array::from(vec![1, 1, 2, 2, 2, 2])),
+            Arc::new(StringArray::from(vec![
+                "1970-01-01",
+                "1970-01-04",
+                "1970-01-01",
+                "1970-01-01",
+                "1970-01-04",
+                "1970-01-04",
+            ])),
+        ],
+    )?;
+
+    assert_eq!(actual, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_zorder_partitioned() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    // Write data in sorted order. Each value is a power of 2, so will affect
+    // a new bit in the z-ordering.
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 1), (1, 2), (1, 4)], "2022-05-22")?,
+    )
+    .await?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(2, 1), (2, 2), (2, 4)], "2022-05-22")?,
+    )
+    .await?;
+
+    // This batch doesn't matter; we just use it to test partition filtering
+    write(
+        &mut writer,
+        &mut dt,
+        tuples_to_batch(vec![(1, 1), (1, 1), (1, 1)], "2022-05-23")?,
+    )
+    .await?;
+
+    let filter = vec![PartitionFilter::try_from(("date", "=", "2022-05-22"))?];
+
+    let optimize = DeltaOps(dt)
+        .optimize()
+        .with_type(OptimizeType::ZOrder(vec!["x".to_string(), "y".to_string()]))
+        .with_filters(&filter);
+    let (dt, metrics) = optimize.await?;
+
+    assert_eq!(metrics.num_files_added, 1);
+    assert_eq!(metrics.num_files_removed, 2);
+
+    // Check data
+    let files = dt.get_files_by_partitions(&filter)?;
+    assert_eq!(files.len(), 1);
+
+    let actual = read_parquet_file(&files[0], dt.object_store()).await?;
+    let expected = RecordBatch::try_new(
+        actual.schema(),
+        // Note that the order is not hierarchically sorted.
+        vec![
+            Arc::new(Int32Array::from(vec![1, 2, 1, 2, 1, 2])),
+            Arc::new(Int32Array::from(vec![1, 1, 2, 2, 4, 4])),
+        ],
+    )?;
+
+    assert_eq!(actual, expected);
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_zorder_respects_target_size() -> Result<(), Box<dyn Error>> {
+    let context = setup_test(true).await?;
+    let mut dt = context.table;
+    let mut writer = RecordBatchWriter::for_table(&dt)?;
+
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(6_000_000), "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(9_000_000), "2022-05-22")?,
+    )
+    .await?;
+    write(
+        &mut writer,
+        &mut dt,
+        generate_random_batch(records_for_size(2_000_000), "2022-05-22")?,
+    )
+    .await?;
+
+    let optimize = DeltaOps(dt)
+        .optimize()
+        .with_writer_properties(
+            WriterProperties::builder()
+                .set_compression(parquet::basic::Compression::UNCOMPRESSED)
+                // Easier to hit the target size with a smaller row group size
+                .set_max_row_group_size(64 * 1024)
+                .build(),
+        )
+        .with_type(OptimizeType::ZOrder(vec!["x".to_string(), "y".to_string()]))
+        .with_target_size(10_000_000);
+    let (_, metrics) = optimize.await?;
+
+    assert_eq!(metrics.num_files_added, 2);
+    assert_eq!(metrics.num_files_removed, 3);
+
+    // Allow going a little over the target size
+    assert!(metrics.files_added.max < 11_000_000);
+
+    Ok(())
+}
+
+async fn read_parquet_file(
+    path: &Path,
+    object_store: ObjectStoreRef,
+) -> Result<RecordBatch, Box<dyn Error>> {
+    let file = object_store.head(path).await?;
+    let file_reader = ParquetObjectReader::new(object_store, file);
+    let batches = ParquetRecordBatchStreamBuilder::new(file_reader)
+        .await?
+        .build()?
+        .try_collect::<Vec<_>>()
+        .await?;
+    Ok(concat_batches(&batches[0].schema(), &batches)?)
 }

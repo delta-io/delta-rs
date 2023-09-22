@@ -15,9 +15,10 @@ from packaging import version
 from pyarrow.dataset import ParquetFileFormat, ParquetReadOptions
 from pyarrow.lib import RecordBatchReader
 
-from deltalake import DeltaTable, PyDeltaTableError, write_deltalake
+from deltalake import DeltaTable, write_deltalake
+from deltalake.exceptions import CommitFailedError, DeltaProtocolError
 from deltalake.table import ProtocolVersions
-from deltalake.writer import DeltaTableProtocolError, try_get_table_and_table_uri
+from deltalake.writer import try_get_table_and_table_uri
 
 try:
     from pandas.testing import assert_frame_equal
@@ -425,7 +426,7 @@ def test_writer_null_stats(tmp_path: pathlib.Path):
 
 def test_writer_fails_on_protocol(existing_table: DeltaTable, sample_data: pa.Table):
     existing_table.protocol = Mock(return_value=ProtocolVersions(1, 3))
-    with pytest.raises(DeltaTableProtocolError):
+    with pytest.raises(DeltaProtocolError):
         write_deltalake(existing_table, sample_data, mode="overwrite")
 
 
@@ -882,7 +883,7 @@ def test_concurrency(existing_table: DeltaTable, sample_data: pa.Table):
     for t in threads:
         t.join()
 
-    assert isinstance(exception, PyDeltaTableError)
+    assert isinstance(exception, CommitFailedError)
     assert (
         "a concurrent transaction deleted the same data your transaction deletes"
         in str(exception)

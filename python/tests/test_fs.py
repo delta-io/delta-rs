@@ -6,7 +6,8 @@ import pyarrow.parquet as pq
 import pytest
 from pyarrow.fs import FileType
 
-from deltalake import DeltaTable, PyDeltaTableError
+from deltalake import DeltaTable
+from deltalake.exceptions import DeltaProtocolError
 from deltalake.fs import DeltaStorageHandler
 from deltalake.writer import write_deltalake
 
@@ -94,7 +95,7 @@ def test_roundtrip_s3_env(s3_localstack, sample_data: pa.Table, monkeypatch):
     table_path = "s3://deltars/roundtrip"
 
     # Create new table with path
-    with pytest.raises(PyDeltaTableError, match="Atomic rename requires a LockClient"):
+    with pytest.raises(DeltaProtocolError, match="Atomic rename requires a LockClient"):
         write_deltalake(table_path, sample_data)
 
     monkeypatch.setenv("AWS_S3_ALLOW_UNSAFE_RENAME", "true")
@@ -122,7 +123,7 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
     table_path = "s3://deltars/roundtrip2"
 
     # Fails without any credentials
-    with pytest.raises(PyDeltaTableError):
+    with pytest.raises(IOError):
         anon_storage_options = {
             "AWS_ENDPOINT_URL": s3_localstack_creds["AWS_ENDPOINT_URL"],
             # Grants anonymous access. If we don't do this, will timeout trying
@@ -172,7 +173,7 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=15, method="thread")
+@pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip"
 
@@ -194,7 +195,7 @@ def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=15, method="thread")
+@pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip2"
 
@@ -216,7 +217,7 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=15, method="thread")
+@pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip3"
 
@@ -229,7 +230,7 @@ def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip4"
     azurite_sas_creds["SAS_TOKEN"] = urllib.parse.unquote(

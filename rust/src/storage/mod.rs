@@ -8,6 +8,7 @@ use std::sync::Arc;
 use bytes::Bytes;
 use futures::{stream::BoxStream, StreamExt};
 use lazy_static::lazy_static;
+use object_store::GetOptions;
 use serde::de::{Error, SeqAccess, Visitor};
 use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
@@ -15,7 +16,14 @@ use tokio::io::AsyncWrite;
 use url::Url;
 
 use self::config::StorageOptions;
-use crate::DeltaResult;
+use crate::errors::DeltaResult;
+
+pub mod config;
+pub mod file;
+pub mod utils;
+
+#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+pub mod s3;
 
 #[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
@@ -74,8 +82,7 @@ impl DeltaObjectStore {
     ///
     /// # Arguments
     ///
-    /// * `storage` - A shared reference to an [`ObjectStore`] with "/" pointing at delta table root
-    ///    (i.e. where `_delta_log` is located).
+    /// * `storage` - A shared reference to an [`object_store::ObjectStore`] with "/" pointing at delta table root (i.e. where `_delta_log` is located).
     /// * `location` - A url corresponding to the storage location of `storage`.
     ///
     /// [ObjectStore]: object_store::ObjectStore
@@ -216,6 +223,13 @@ impl ObjectStore for DeltaObjectStore {
         self.storage.get(location).await
     }
 
+    /// Perform a get request with options
+    ///
+    /// Note: options.range will be ignored if [`object_store::GetResultPayload::File`]
+    async fn get_opts(&self, location: &Path, options: GetOptions) -> ObjectStoreResult<GetResult> {
+        self.storage.get_opts(location, options).await
+    }
+
     /// Return the bytes that are stored at the specified location
     /// in the given byte range
     async fn get_range(&self, location: &Path, range: Range<usize>) -> ObjectStoreResult<Bytes> {
@@ -241,6 +255,18 @@ impl ObjectStore for DeltaObjectStore {
         prefix: Option<&Path>,
     ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
         self.storage.list(prefix).await
+    }
+
+    /// List all the objects with the given prefix and a location greater than `offset`
+    ///
+    /// Some stores, such as S3 and GCS, may be able to push `offset` down to reduce
+    /// the number of network requests required
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
+        self.storage.list_with_offset(prefix, offset).await
     }
 
     /// List objects with the given prefix and an implementation specific

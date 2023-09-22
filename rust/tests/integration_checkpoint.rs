@@ -1,10 +1,15 @@
 #![cfg(feature = "integration_test")]
 
-use deltalake::checkpoints::cleanup_expired_logs_for;
+use chrono::Utc;
+use deltalake::checkpoints::{cleanup_expired_logs_for, create_checkpoint};
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult};
-use deltalake::{DeltaTableBuilder, ObjectStore};
+use deltalake::writer::{DeltaWriter, JsonWriter};
+use deltalake::{errors::DeltaResult, DeltaOps, DeltaTableBuilder, ObjectStore, SchemaDataType};
+use object_store::path::Path;
+use serde_json::json;
 use serial_test::serial;
 use std::time::Duration;
+use tokio::time::sleep;
 
 #[tokio::test]
 async fn cleanup_metadata_fs_test() -> TestResult {
@@ -101,6 +106,108 @@ async fn cleanup_metadata_test(context: &IntegrationContext) -> TestResult {
 
     // after test cleanup
     object_store.delete(&log_path(2)).await.unwrap();
+
+    Ok(())
+}
+
+#[tokio::test]
+async fn test_issue_1420_cleanup_expired_logs_for() -> DeltaResult<()> {
+    let _ = std::fs::remove_dir_all("./tests/data/issue_1420");
+
+    let mut table = DeltaOps::try_from_uri("./tests/data/issue_1420")
+        .await?
+        .create()
+        .with_column(
+            "id",
+            SchemaDataType::primitive("integer".to_string()),
+            false,
+            None,
+        )
+        .await?;
+
+    let mut writer = JsonWriter::for_table(&table)?;
+    writer.write(vec![json!({"id": 1})]).await?;
+    writer.flush_and_commit(&mut table).await?; // v1
+
+    let ts = Utc::now(); // use this ts for log retention expiry
+    sleep(Duration::from_secs(1)).await;
+
+    writer.write(vec![json!({"id": 2})]).await?;
+    writer.flush_and_commit(&mut table).await?; // v2
+    assert_eq!(table.version(), 2);
+
+    create_checkpoint(&table).await.unwrap(); // v2.checkpoint.parquet
+
+    // Should delete v1 but not v2 or v2.checkpoint.parquet
+    cleanup_expired_logs_for(
+        table.version(),
+        table.object_store().as_ref(),
+        ts.timestamp_millis(),
+    )
+    .await?;
+
+    assert!(
+        table
+            .object_store()
+            .head(&Path::from(format!("_delta_log/{:020}.json", 1)))
+            .await
+            .is_err(),
+        "commit should not exist"
+    );
+
+    assert!(
+        table
+            .object_store()
+            .head(&Path::from(format!("_delta_log/{:020}.json", 2)))
+            .await
+            .is_ok(),
+        "commit should exist"
+    );
+
+    assert!(
+        table
+            .object_store()
+            .head(&Path::from(format!(
+                "_delta_log/{:020}.checkpoint.parquet",
+                2
+            )))
+            .await
+            .is_ok(),
+        "checkpoint should exist"
+    );
+
+    // pretend time advanced but there is no new versions after v2
+    // v2 and v2.checkpoint.parquet should still be there
+    let ts = Utc::now();
+    sleep(Duration::from_secs(1)).await;
+
+    cleanup_expired_logs_for(
+        table.version(),
+        table.object_store().as_ref(),
+        ts.timestamp_millis(),
+    )
+    .await?;
+
+    assert!(
+        table
+            .object_store()
+            .head(&Path::from(format!("_delta_log/{:020}.json", 2)))
+            .await
+            .is_ok(),
+        "commit should exist"
+    );
+
+    assert!(
+        table
+            .object_store()
+            .head(&Path::from(format!(
+                "_delta_log/{:020}.checkpoint.parquet",
+                2
+            )))
+            .await
+            .is_ok(),
+        "checkpoint should exist"
+    );
 
     Ok(())
 }
