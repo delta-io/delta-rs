@@ -53,7 +53,7 @@ impl ObjectStoreScheme {
     /// Create an [`ObjectStoreScheme`] from the provided [`Url`]
     ///
     /// Returns the [`ObjectStoreScheme`] and the remaining [`Path`]
-    fn parse(url: &Url) -> Result<(Self, Path), ObjectStoreError> {
+    fn parse(url: &Url, options: &mut StorageOptions) -> Result<(Self, Path), ObjectStoreError> {
         let strip_bucket = || Some(url.path().strip_prefix('/')?.split_once('/')?.1);
 
         let (scheme, path) = match (url.scheme(), url.host_str()) {
@@ -69,6 +69,19 @@ impl ObjectStoreScheme {
             ("https", Some(host)) => {
                 if host.ends_with("dfs.core.windows.net") || host.ends_with("blob.core.windows.net")
                 {
+                    (Self::MicrosoftAzure, url.path())
+                } else if host.contains("dfs.fabric.microsoft.com")
+                    || host.contains("blob.fabric.microsoft.com")
+                {
+                    if !options
+                        .as_azure_options()
+                        .contains_key(&AzureConfigKey::UseFabricEndpoint)
+                    {
+                        options.0.insert(
+                            AzureConfigKey::UseFabricEndpoint.as_ref().to_string(),
+                            "true".to_string(),
+                        );
+                    }
                     (Self::MicrosoftAzure, url.path())
                 } else if host.ends_with("amazonaws.com") {
                     match host.starts_with("s3") {
@@ -197,11 +210,12 @@ impl From<HashMap<String, String>> for StorageOptions {
         Self::new(value)
     }
 }
+
 pub(crate) fn configure_store(
     url: &Url,
     options: &mut StorageOptions,
 ) -> DeltaResult<Arc<DynObjectStore>> {
-    let (scheme, _prefix) = ObjectStoreScheme::parse(url)?;
+    let (scheme, _prefix) = ObjectStoreScheme::parse(url, options)?;
     match scheme {
         ObjectStoreScheme::Local => Ok(Arc::new(LocalFileSystem::new_with_prefix(
             url.to_file_path()
