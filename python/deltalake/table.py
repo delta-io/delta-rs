@@ -724,14 +724,10 @@ class TableOptimizer:
         >>> dt.optimize.z_order(["timestamp"], min_commit_interval=time_delta)
         """
         if isinstance(min_commit_interval, timedelta):
-            commit_interval = int(min_commit_interval.total_seconds())
-        elif isinstance(min_commit_interval, int):
-            commit_interval = min_commit_interval
-        else:
-            commit_interval = None
+            min_commit_interval = int(min_commit_interval.total_seconds())
 
         metrics = self.table._table.compact_optimize(
-            partition_filters, target_size, max_concurrent_tasks, commit_interval
+            partition_filters, target_size, max_concurrent_tasks, min_commit_interval
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -774,11 +770,7 @@ class TableOptimizer:
         >>> dt.optimize.compact(min_commit_interval=time_delta)
         """
         if isinstance(min_commit_interval, timedelta):
-            commit_interval = int(min_commit_interval.total_seconds())
-        elif isinstance(min_commit_interval, int):
-            commit_interval = min_commit_interval
-        else:
-            commit_interval = None
+            min_commit_interval = int(min_commit_interval.total_seconds())
 
         metrics = self.table._table.z_order_optimize(
             list(columns),
@@ -786,7 +778,7 @@ class TableOptimizer:
             target_size,
             max_concurrent_tasks,
             max_spill_size,
-            commit_interval,
+            min_commit_interval,
         )
         self.table.update_incremental()
         return json.loads(metrics)
