@@ -506,6 +506,12 @@ impl Default for Format {
     }
 }
 
+/// Return a default empty schema to be used for edge-cases when a schema is missing
+fn default_schema() -> String {
+    warn!("A `metaData` action was missing a `schemaString` and has been given an empty schema");
+    r#"{"type":"struct",  "fields": []}"#.into()
+}
+
 /// Action that describes the metadata of the table.
 /// This is a top-level action in Delta log entries.
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -520,6 +526,7 @@ pub struct MetaData {
     /// Specification of the encoding for the files stored in the table
     pub format: Format,
     /// Schema of the table
+    #[serde(default = "default_schema")]
     pub schema_string: String,
     /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
