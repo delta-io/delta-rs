@@ -73,6 +73,7 @@ impl ObjectStoreScheme {
                 } else if host.contains("dfs.fabric.microsoft.com")
                     || host.contains("blob.fabric.microsoft.com")
                 {
+                    #[cfg(feature = "azure")]
                     if !options
                         .as_azure_options()
                         .contains_key(&AzureConfigKey::UseFabricEndpoint)
