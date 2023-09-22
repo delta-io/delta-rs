@@ -28,12 +28,6 @@ pub mod s3;
 #[cfg(feature = "datafusion")]
 use datafusion::datasource::object_store::ObjectStoreUrl;
 
-pub mod config;
-pub mod file;
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-pub mod s3;
-pub mod utils;
-
 pub use object_store::path::{Path, DELIMITER};
 pub use object_store::{
     DynObjectStore, Error as ObjectStoreError, GetResult, ListResult, MultipartId, ObjectMeta,
