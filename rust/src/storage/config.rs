@@ -116,7 +116,7 @@ impl StorageOptions {
         if let Ok(value) = std::env::var("AZURE_STORAGE_USE_HTTP") {
             options.insert("allow_http".into(), value);
         }
-        if let Ok(value) = std::env::var("AWS_STORAGE_ALLOW_HTTP") {
+        if let Ok(value) = std::env::var("AWS_ALLOW_HTTP") {
             options.insert("allow_http".into(), value);
         }
         Self(options)
