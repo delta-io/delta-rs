@@ -691,7 +691,7 @@ class TableOptimizer:
         partition_filters: Optional[FilterType] = None,
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
-        min_commit_interval: Optional[int | timedelta] = None,
+        min_commit_interval: Optional[Union[int, timedelta]] = None,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -724,7 +724,7 @@ class TableOptimizer:
         >>> dt.optimize.z_order(["timestamp"], min_commit_interval=time_delta)
         """
         if isinstance(min_commit_interval, timedelta):
-            commit_interval = min_commit_interval.seconds
+            commit_interval = int(min_commit_interval.total_seconds())
         else:
             commit_interval = min_commit_interval
 
@@ -741,7 +741,7 @@ class TableOptimizer:
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
         max_spill_size: int = 20 * 1024 * 1024 * 1024,
-        min_commit_interval: Optional[int | timedelta] = None,
+        min_commit_interval: Optional[Union[int, timedelta]] = None,
     ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
@@ -772,7 +772,7 @@ class TableOptimizer:
         >>> dt.optimize.compact(min_commit_interval=time_delta)
         """
         if isinstance(min_commit_interval, timedelta):
-            commit_interval = min_commit_interval.seconds
+            commit_interval = int(min_commit_interval.total_seconds())
         else:
             commit_interval = min_commit_interval
 
