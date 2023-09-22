@@ -12,6 +12,9 @@ repository = "https://github.com/delta-io/delta.rs"
 readme = "README.md"
 edition = "2021"
 
+[package.metadata.docs.rs]
+all-features = true
+
 [dependencies]
 # arrow
 arrow = { workspace = true, optional = true }
