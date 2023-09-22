@@ -30,6 +30,8 @@ use object_store::gcp::GoogleConfigKey;
 ))]
 use std::str::FromStr;
 
+mod azure;
+
 /// Recognises various URL formats, identifying the relevant [`ObjectStore`](crate::ObjectStore)
 #[derive(Debug, Eq, PartialEq)]
 enum ObjectStoreScheme {
@@ -53,7 +55,10 @@ impl ObjectStoreScheme {
     /// Create an [`ObjectStoreScheme`] from the provided [`Url`]
     ///
     /// Returns the [`ObjectStoreScheme`] and the remaining [`Path`]
-    fn parse(url: &Url, options: &mut StorageOptions) -> Result<(Self, Path), ObjectStoreError> {
+    fn parse(
+        url: &Url,
+        #[allow(unused)] options: &mut StorageOptions,
+    ) -> Result<(Self, Path), ObjectStoreError> {
         let strip_bucket = || Some(url.path().strip_prefix('/')?.split_once('/')?.1);
 
         let (scheme, path) = match (url.scheme(), url.host_str()) {
@@ -129,8 +134,10 @@ impl StorageOptions {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if let Ok(config_key) = AzureConfigKey::from_str(&key.to_ascii_lowercase()) {
-                    self.0
-                        .insert(config_key.as_ref().to_string(), value.to_string());
+                    if !self.0.contains_key(config_key.as_ref()) {
+                        self.0
+                            .insert(config_key.as_ref().to_string(), value.to_string());
+                    }
                 }
             }
         }
@@ -142,8 +149,10 @@ impl StorageOptions {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if let Ok(config_key) = GoogleConfigKey::from_str(&key.to_ascii_lowercase()) {
-                    self.0
-                        .insert(config_key.as_ref().to_string(), value.to_string());
+                    if !self.0.contains_key(config_key.as_ref()) {
+                        self.0
+                            .insert(config_key.as_ref().to_string(), value.to_string());
+                    }
                 }
             }
         }
@@ -155,8 +164,10 @@ impl StorageOptions {
         for (os_key, os_value) in std::env::vars_os() {
             if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
                 if let Ok(config_key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
-                    self.0
-                        .insert(config_key.as_ref().to_string(), value.to_string());
+                    if !self.0.contains_key(config_key.as_ref()) {
+                        self.0
+                            .insert(config_key.as_ref().to_string(), value.to_string());
+                    }
                 }
             }
         }
@@ -226,49 +237,23 @@ pub(crate) fn configure_store(
         )?)),
         #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
         ObjectStoreScheme::AmazonS3 => {
-            if options.0.is_empty() {
-                options.with_env_s3();
-            }
-            if let Ok((store, prefix)) = parse_url_opts(url, options.as_s3_options()) {
-                let store = S3StorageBackend::try_new(
-                    Arc::new(store),
-                    S3StorageOptions::from_map(&options.0),
-                )?;
-                Ok(Arc::new(PrefixStore::new(store, prefix)))
-            } else {
-                options.with_env_s3();
-                let (store, prefix) = parse_url_opts(url, options.as_s3_options())?;
-                let store = S3StorageBackend::try_new(
-                    Arc::new(store),
-                    S3StorageOptions::from_map(&options.0),
-                )?;
-                Ok(Arc::new(PrefixStore::new(store, prefix)))
-            }
+            options.with_env_s3();
+            let (store, prefix) = parse_url_opts(url, options.as_s3_options())?;
+            let store =
+                S3StorageBackend::try_new(Arc::new(store), S3StorageOptions::from_map(&options.0))?;
+            Ok(Arc::new(PrefixStore::new(store, prefix)))
         }
         #[cfg(feature = "azure")]
         ObjectStoreScheme::MicrosoftAzure => {
-            if options.0.is_empty() {
-                options.with_env_azure();
-            }
-            if let Ok((store, prefix)) = parse_url_opts(url, options.as_azure_options()) {
-                Ok(Arc::new(PrefixStore::new(store, prefix)))
-            } else {
-                options.with_env_azure();
-                let (store, prefix) = parse_url_opts(url, options.as_azure_options())?;
-                Ok(Arc::new(PrefixStore::new(store, prefix)))
-            }
+            let config = azure::AzureConfigHelper::try_new(options.as_azure_options())?.build()?;
+            let (store, prefix) = parse_url_opts(url, config)?;
+            Ok(Arc::new(PrefixStore::new(store, prefix)))
         }
         #[cfg(feature = "gcs")]
         ObjectStoreScheme::GoogleCloudStorage => {
-            if options.0.is_empty() {
-                options.with_env_gcs();
-            }
-            if let Ok((store, prefix)) = parse_url_opts(url, options.as_gcs_options()) {
-                Ok(Arc::new(PrefixStore::new(store, prefix)))
-            } else {
-                let (store, prefix) = parse_url_opts(url, options.as_gcs_options())?;
-                Ok(Arc::new(PrefixStore::new(store, prefix)))
-            }
+            options.with_env_gcs();
+            let (store, prefix) = parse_url_opts(url, options.as_gcs_options())?;
+            Ok(Arc::new(PrefixStore::new(store, prefix)))
         }
         #[cfg(feature = "hdfs")]
         ObjectStoreScheme::Hdfs => {
