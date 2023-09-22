@@ -725,8 +725,10 @@ class TableOptimizer:
         """
         if isinstance(min_commit_interval, timedelta):
             commit_interval = int(min_commit_interval.total_seconds())
-        else:
+        elif isinstance(min_commit_interval, int):
             commit_interval = min_commit_interval
+        else:
+            commit_interval = None
 
         metrics = self.table._table.compact_optimize(
             partition_filters, target_size, max_concurrent_tasks, commit_interval
@@ -773,8 +775,10 @@ class TableOptimizer:
         """
         if isinstance(min_commit_interval, timedelta):
             commit_interval = int(min_commit_interval.total_seconds())
-        else:
+        elif isinstance(min_commit_interval, int):
             commit_interval = min_commit_interval
+        else:
+            commit_interval = None
 
         metrics = self.table._table.z_order_optimize(
             list(columns),
