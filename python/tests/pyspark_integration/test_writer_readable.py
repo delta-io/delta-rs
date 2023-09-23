@@ -34,7 +34,7 @@ def test_basic_read(sample_data: pa.Table, existing_table: DeltaTable):
 @pytest.mark.pyspark
 @pytest.mark.integration
 def test_partitioned(tmp_path: pathlib.Path, sample_data: pa.Table):
-    partition_cols = ["date32", "utf8"]
+    partition_cols = ["date32", "utf8", "timestamp", "bool"]
 
     # Add null values to sample data to verify we can read null partitions
     sample_data_with_null = sample_data

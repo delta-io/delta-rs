@@ -17,6 +17,7 @@ from typing import (
     Tuple,
     Union,
 )
+from urllib.parse import unquote, quote
 
 from deltalake.fs import DeltaStorageHandler
 
@@ -207,12 +208,15 @@ def write_deltalake(
         partition_schema = pa.schema([schema.field(name) for name in partition_by])
         partitioning = ds.partitioning(partition_schema, flavor="hive")
     else:
+        partition_schema = pa.schema([])
         partitioning = None
 
     add_actions: List[AddAction] = []
 
     def visitor(written_file: Any) -> None:
-        path, partition_values = get_partitions_from_path(written_file.path)
+        path, partition_values = get_partitions_from_path(
+            written_file.path, partition_schema=partition_schema
+        )
         stats = get_file_stats_from_metadata(written_file.metadata)
 
         # PyArrow added support for written_file.size in 9.0.0
@@ -225,7 +229,7 @@ def write_deltalake(
 
         add_actions.append(
             AddAction(
-                path,
+                quote(path),
                 size,
                 partition_values,
                 int(datetime.now().timestamp() * 1000),
@@ -409,7 +413,17 @@ def try_get_deltatable(
         return None
 
 
-def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
+quoted_types = [
+    pa.timestamp("s"),
+    pa.timestamp("ms"),
+    pa.timestamp("us"),
+    pa.timestamp("ns"),
+]
+
+
+def get_partitions_from_path(
+    path: str, partition_schema: pa.Schema
+) -> Tuple[str, Dict[str, Optional[str]]]:
     if path[0] == "/":
         path = path[1:]
     parts = path.split("/")
@@ -422,7 +436,10 @@ def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
         if value == "__HIVE_DEFAULT_PARTITION__":
             out[key] = None
         else:
-            out[key] = value
+            if partition_schema.field(key).type in quoted_types:
+                out[key] = unquote(value)
+            else:
+                out[key] = value
     return path, out
 
 
