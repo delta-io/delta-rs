@@ -242,9 +242,18 @@ pub(crate) fn configure_store(
         ObjectStoreScheme::AmazonS3 => {
             options.with_env_s3();
             let (store, prefix) = parse_url_opts(url, options.as_s3_options())?;
-            let store =
-                S3StorageBackend::try_new(Arc::new(store), S3StorageOptions::from_map(&options.0))?;
-            url_prefix_handler(store, prefix)
+            if options
+                .as_s3_options()
+                .contains_key(&AmazonS3ConfigKey::CopyIfNotExists)
+            {
+                url_prefix_handler(store, prefix)
+            } else {
+                let store = S3StorageBackend::try_new(
+                    Arc::new(store),
+                    S3StorageOptions::from_map(&options.0),
+                )?;
+                url_prefix_handler(store, prefix)
+            }
         }
         #[cfg(feature = "azure")]
         ObjectStoreScheme::MicrosoftAzure => {
