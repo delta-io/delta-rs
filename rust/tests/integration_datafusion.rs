@@ -202,7 +202,7 @@ mod local {
 
         // Create target Delta Table
         let target_table = CreateBuilder::new()
-            .with_location("memory://target")
+            .with_location("memory:///target")
             .with_columns(fields)
             .with_table_name("target")
             .await?;
