@@ -9,6 +9,8 @@ from deltalake import DeltaTable, write_deltalake
 
 # NOTE: make sure to run these in release mode with
 # MATURIN_EXTRA_ARGS=--release make develop
+# When profiling, use:
+# MATURIN_EXTRA_ARGS="--profile release-with-debug" make develop
 
 
 @pytest.fixture()

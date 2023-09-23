@@ -124,6 +124,8 @@ pub(crate) fn configure_store(
                 try_configure_s3(url, options)
             } else if host.contains("dfs.core.windows.net")
                 || host.contains("blob.core.windows.net")
+                || host.contains("dfs.fabric.microsoft.com")
+                || host.contains("blob.fabric.microsoft.com")
             {
                 try_configure_azure(url, options)
             } else {

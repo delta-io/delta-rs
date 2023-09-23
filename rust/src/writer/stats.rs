@@ -38,6 +38,7 @@ pub fn create_add(
         stats: Some(stats_string),
         stats_parsed: None,
         tags: None,
+        deletion_vector: None,
     })
 }
 
@@ -120,7 +121,7 @@ enum StatsScalar {
     Date(chrono::NaiveDate),
     Timestamp(chrono::NaiveDateTime),
     // We are serializing to f64 later and the ordering should be the same
-    Decimal(String),
+    Decimal(f64),
     String(String),
     Bytes(Vec<u8>),
     Uuid(uuid::Uuid),
@@ -157,7 +158,7 @@ impl StatsScalar {
             (Statistics::Int32(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
                 // Spark serializes these as numbers
-                Ok(Self::Decimal(val.to_string()))
+                Ok(Self::Decimal(val))
             }
             (Statistics::Int32(v), _) => Ok(Self::Int32(get_stat!(v))),
             // Int64 can be timestamp, decimal, or integer
@@ -184,7 +185,7 @@ impl StatsScalar {
             (Statistics::Int64(v), Some(LogicalType::Decimal { scale, .. })) => {
                 let val = get_stat!(v) as f64 / 10.0_f64.powi(*scale);
                 // Spark serializes these as numbers
-                Ok(Self::Decimal(val.to_string()))
+                Ok(Self::Decimal(val))
             }
             (Statistics::Int64(v), _) => Ok(Self::Int64(get_stat!(v))),
             (Statistics::Float(v), _) => Ok(Self::Float32(get_stat!(v))),
@@ -220,16 +221,16 @@ impl StatsScalar {
 
                 let val = if val.len() <= 4 {
                     let mut bytes = [0; 4];
-                    bytes[(4 - val.len())..4].copy_from_slice(val);
-                    i32::from_be_bytes(bytes).to_string()
+                    bytes[..val.len()].copy_from_slice(val);
+                    i32::from_be_bytes(bytes) as f64
                 } else if val.len() <= 8 {
                     let mut bytes = [0; 8];
-                    bytes[(8 - val.len())..8].copy_from_slice(val);
-                    i64::from_be_bytes(bytes).to_string()
+                    bytes[..val.len()].copy_from_slice(val);
+                    i64::from_be_bytes(bytes) as f64
                 } else if val.len() <= 16 {
                     let mut bytes = [0; 16];
-                    bytes[(16 - val.len())..16].copy_from_slice(val);
-                    i128::from_be_bytes(bytes).to_string()
+                    bytes[..val.len()].copy_from_slice(val);
+                    i128::from_be_bytes(bytes) as f64
                 } else {
                     return Err(DeltaWriterError::StatsParsingFailed {
                         debug_value: format!("{val:?}"),
@@ -240,21 +241,8 @@ impl StatsScalar {
                     });
                 };
 
-                let decimal_string = if val.len() > *scale as usize {
-                    let (integer_part, fractional_part) = val.split_at(val.len() - *scale as usize);
-                    if fractional_part.is_empty() {
-                        integer_part.to_string()
-                    } else {
-                        format!("{}.{}", integer_part, fractional_part)
-                    }
-                } else if *scale < 0 {
-                    let abs_scale = scale.unsigned_abs() as usize;
-                    let decimal_zeros = "0".repeat(abs_scale);
-                    format!("{}{}", val, decimal_zeros)
-                } else {
-                    format!("0.{}", val)
-                };
-                Ok(Self::Decimal(decimal_string))
+                let val = val / 10.0_f64.powi(*scale);
+                Ok(Self::Decimal(val))
             }
             (Statistics::FixedLenByteArray(v), Some(LogicalType::Uuid)) => {
                 let val = if use_min {
@@ -541,7 +529,7 @@ mod tests {
                     scale: 3,
                     precision: 4,
                 }),
-                Value::from("1.234"),
+                Value::from(1.234),
             ),
             (
                 simple_parquet_stat!(Statistics::Int32, 1234),
@@ -549,7 +537,7 @@ mod tests {
                     scale: -1,
                     precision: 4,
                 }),
-                Value::from("12340"),
+                Value::from(12340.0),
             ),
             (
                 simple_parquet_stat!(Statistics::Int32, 737821),
@@ -586,7 +574,7 @@ mod tests {
                     scale: 3,
                     precision: 4,
                 }),
-                Value::from("1.234"),
+                Value::from(1.234),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1234),
@@ -594,7 +582,7 @@ mod tests {
                     scale: -1,
                     precision: 4,
                 }),
-                Value::from("12340"),
+                Value::from(12340.0),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1234),
@@ -620,7 +608,7 @@ mod tests {
                     scale: 3,
                     precision: 16,
                 }),
-                Value::from("1243124142314.423"),
+                Value::from(1243124142314.423),
             ),
             (
                 simple_parquet_stat!(

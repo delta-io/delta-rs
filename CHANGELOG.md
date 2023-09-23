@@ -1,5 +1,68 @@
 # Changelog
 
+## [rust-v0.15.0](https://github.com/delta-io/delta-rs/tree/rust-v0.15.0) (2023-09-06)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.14.0...rust-v0.15.0)
+
+**Implemented enhancements:**
+
+- Configurable number of retries for transaction commit loop [\#1595](https://github.com/delta-io/delta-rs/issues/1595)
+
+**Fixed bugs:**
+
+- Unable to read table using VM Managed Identity on Azure [\#1462](https://github.com/delta-io/delta-rs/issues/1462)
+- Unable to query by partition column  [\#1445](https://github.com/delta-io/delta-rs/issues/1445)
+
+**Merged pull requests:**
+
+- fix: update python test [\#1608](https://github.com/delta-io/delta-rs/pull/1608) ([wjones127](https://github.com/wjones127))
+- chore: update datafusion to 30, arrow to 45 [\#1606](https://github.com/delta-io/delta-rs/pull/1606) ([scsmithr](https://github.com/scsmithr))
+- fix: just make pyarrow 12 the max [\#1603](https://github.com/delta-io/delta-rs/pull/1603) ([wjones127](https://github.com/wjones127))
+- fix: support partial statistics in JSON [\#1599](https://github.com/delta-io/delta-rs/pull/1599) ([CurtHagenlocher](https://github.com/CurtHagenlocher))
+- feat: allow configurable number of `commit` attempts [\#1596](https://github.com/delta-io/delta-rs/pull/1596) ([cmackenzie1](https://github.com/cmackenzie1))
+- fix: querying on date partitions \(fixes \#1445\) [\#1594](https://github.com/delta-io/delta-rs/pull/1594) ([watfordkcf](https://github.com/watfordkcf))
+- refactor: clean up arrow schema defs [\#1590](https://github.com/delta-io/delta-rs/pull/1590) ([polynomialherder](https://github.com/polynomialherder))
+- feat: add metadata for operations::write::WriteBuilder [\#1584](https://github.com/delta-io/delta-rs/pull/1584) ([abhimanyusinghgaur](https://github.com/abhimanyusinghgaur))
+- feat: add metadata for deletion vectors [\#1583](https://github.com/delta-io/delta-rs/pull/1583) ([aersam](https://github.com/aersam))
+- fix: remove alpha classifier [\#1578](https://github.com/delta-io/delta-rs/pull/1578) ([marcelotrevisani](https://github.com/marcelotrevisani))
+- refactor: use pa.table.cast in delta\_arrow\_schema\_from\_pandas [\#1573](https://github.com/delta-io/delta-rs/pull/1573) ([ion-elgreco](https://github.com/ion-elgreco))
+
+## [rust-v0.14.0](https://github.com/delta-io/delta-rs/tree/rust-v0.14.0) (2023-08-01)
+
+[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.13.0...rust-v0.14.0)
+
+**Implemented enhancements:**
+
+- Define common dependencies in Cargo Workspace [\#1572](https://github.com/delta-io/delta-rs/issues/1572)
+- Make `delta_datafusion::find_files` public [\#1559](https://github.com/delta-io/delta-rs/issues/1559)
+
+**Fixed bugs:**
+
+- Excessive integration test sizes causing builds to fail [\#1550](https://github.com/delta-io/delta-rs/issues/1550)
+- Slack invite link is not working [\#1530](https://github.com/delta-io/delta-rs/issues/1530)
+
+**Merged pull requests:**
+
+- fix: correct whitespace in delta protocol reader minimum version error message [\#1576](https://github.com/delta-io/delta-rs/pull/1576) ([polynomialherder](https://github.com/polynomialherder))
+- chore: move deps to `[workspace.dependencies]` [\#1575](https://github.com/delta-io/delta-rs/pull/1575) ([cmackenzie1](https://github.com/cmackenzie1))
+- chore: update `datafusion` to `28` and arrow to `43` [\#1571](https://github.com/delta-io/delta-rs/pull/1571) ([cmackenzie1](https://github.com/cmackenzie1))
+- ci: don't run benchmark in debug mode [\#1566](https://github.com/delta-io/delta-rs/pull/1566) ([wjones127](https://github.com/wjones127))
+- ci: install newer rust for macos python release [\#1565](https://github.com/delta-io/delta-rs/pull/1565) ([wjones127](https://github.com/wjones127))
+- feat: make find\_files public [\#1560](https://github.com/delta-io/delta-rs/pull/1560) ([yjshen](https://github.com/yjshen))
+- feat!: bulk delete for vacuum [\#1556](https://github.com/delta-io/delta-rs/pull/1556) ([Blajda](https://github.com/Blajda))
+- chore: address some integration test bloat of disk usage for development [\#1552](https://github.com/delta-io/delta-rs/pull/1552) ([rtyler](https://github.com/rtyler))
+- docs: port docs to mkdocs [\#1548](https://github.com/delta-io/delta-rs/pull/1548) ([MrPowers](https://github.com/MrPowers))
+- chore: disable incremental builds in CI for saving space [\#1545](https://github.com/delta-io/delta-rs/pull/1545) ([rtyler](https://github.com/rtyler))
+- fix: revert premature merge of an attempted fix for binary column statistics [\#1544](https://github.com/delta-io/delta-rs/pull/1544) ([rtyler](https://github.com/rtyler))
+- chore: increment python version [\#1542](https://github.com/delta-io/delta-rs/pull/1542) ([wjones127](https://github.com/wjones127))
+- feat: add restore command in python binding [\#1529](https://github.com/delta-io/delta-rs/pull/1529) ([loleek](https://github.com/loleek))
+
+## [rust-v0.13.1](https://github.com/delta-io/delta-rs/tree/rust-v0.13.1) (2023-07-18)
+
+**Fixed bugs:**
+
+* Revert premature merge of an attempted fix for binary column statistics [\#1544](https://github.com/delta-io/delta-rs/pull/1544)
+
 ## [rust-v0.13.0](https://github.com/delta-io/delta-rs/tree/rust-v0.13.0) (2023-07-15)
 
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.12.0...rust-v0.13.0)

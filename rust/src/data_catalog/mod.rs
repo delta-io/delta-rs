@@ -1,7 +1,12 @@
 //! Catalog abstraction for Delta Table
 
-use std::fmt::Debug;
+use std::{collections::HashMap, fmt::Debug};
 
+#[cfg(feature = "unity-experimental")]
+pub use unity::*;
+
+#[cfg(feature = "unity-experimental")]
+pub mod client;
 #[cfg(feature = "glue")]
 pub mod glue;
 #[cfg(feature = "datafusion")]
@@ -15,6 +20,34 @@ pub type DataCatalogResult<T> = Result<T, DataCatalogError>;
 /// Error enum that represents a CatalogError.
 #[derive(thiserror::Error, Debug)]
 pub enum DataCatalogError {
+    /// A generic error qualified in the message
+    #[error("Error in {catalog} catalog: {source}")]
+    Generic {
+        /// Name of the catalog
+        catalog: &'static str,
+
+        /// Error message
+        source: Box<dyn std::error::Error + Send + Sync + 'static>,
+    },
+
+    /// A generic error qualified in the message
+    #[cfg(feature = "unity-experimental")]
+    #[error("{source}")]
+    Retry {
+        /// Error message
+        #[from]
+        source: client::retry::RetryError,
+    },
+
+    #[error("Request error: {source}")]
+    #[cfg(feature = "unity-experimental")]
+    /// Error from reqwest library
+    RequestError {
+        /// The underlying reqwest_middleware::Error
+        #[from]
+        source: reqwest::Error,
+    },
+
     /// Missing metadata in the catalog
     #[cfg(feature = "glue")]
     #[error("Missing Metadata {metadata} in the Data Catalog ")]
@@ -63,20 +96,21 @@ pub enum DataCatalogError {
     #[error("Invalid Databricks personal access token")]
     InvalidAccessToken,
 
-    /// Databricks API client error
-    #[cfg(feature = "unity-experimental")]
-    #[error("API client error: {source}")]
-    APIClientError {
-        /// The underlying unity::GetTableError
-        #[from]
-        source: unity::GetTableError,
-    },
-
     /// Error representing an invalid Data Catalog.
     #[error("This data catalog doesn't exist: {data_catalog}")]
     InvalidDataCatalog {
         /// The catalog input
         data_catalog: String,
+    },
+
+    /// Unknown configuration key
+    #[error("Unknown configuration key '{catalog}' in '{key}' catalog.")]
+    UnknownConfigKey {
+        /// Name of the catalog
+        catalog: &'static str,
+
+        /// configuration key
+        key: String,
     },
 }
 
@@ -93,7 +127,10 @@ pub trait DataCatalog: Send + Sync + Debug {
 }
 
 /// Get the Data Catalog
-pub fn get_data_catalog(data_catalog: &str) -> Result<Box<dyn DataCatalog>, DataCatalogError> {
+pub fn get_data_catalog(
+    data_catalog: &str,
+    #[allow(unused)] options: Option<HashMap<String, String>>,
+) -> Result<Box<dyn DataCatalog>, DataCatalogError> {
     match data_catalog {
         #[cfg(feature = "gcp")]
         "gcp" => unimplemented!("GCP Data Catalog is not implemented"),
@@ -104,7 +141,16 @@ pub fn get_data_catalog(data_catalog: &str) -> Result<Box<dyn DataCatalog>, Data
         #[cfg(feature = "glue")]
         "glue" => Ok(Box::new(glue::GlueDataCatalog::new()?)),
         #[cfg(feature = "unity-experimental")]
-        "unity" => Ok(Box::new(unity::UnityCatalog::new()?)),
+        "unity" => {
+            let catalog = if let Some(opts) = options {
+                unity::UnityCatalogBuilder::default()
+                    .try_with_options(opts)?
+                    .build()
+            } else {
+                unity::UnityCatalogBuilder::from_env().build()
+            }?;
+            Ok(Box::new(catalog))
+        }
         _ => Err(DataCatalogError::InvalidDataCatalog {
             data_catalog: data_catalog.to_string(),
         }),

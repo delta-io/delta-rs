@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{NaiveDateTime, TimeZone, Utc};
 use futures::{StreamExt, TryStreamExt};
 use object_store::path::Path;
 use object_store::{DynObjectStore, ObjectMeta, Result as ObjectStoreResult};
@@ -80,14 +80,13 @@ impl TryFrom<&Add> for ObjectMeta {
     type Error = DeltaTableError;
 
     fn try_from(value: &Add) -> DeltaResult<Self> {
-        let last_modified = DateTime::<Utc>::from_utc(
-            NaiveDateTime::from_timestamp_millis(value.modification_time).ok_or(
-                DeltaTableError::from(crate::protocol::ProtocolError::InvalidField(format!(
+        let last_modified = Utc.from_utc_datetime(
+            &NaiveDateTime::from_timestamp_millis(value.modification_time).ok_or(
+                DeltaTableError::from(crate::action::ProtocolError::InvalidField(format!(
                     "invalid modification_time: {:?}",
                     value.modification_time
                 ))),
             )?,
-            Utc,
         );
         Ok(Self {
             // TODO this won't work for absolute paths, since Paths are always relative to store.

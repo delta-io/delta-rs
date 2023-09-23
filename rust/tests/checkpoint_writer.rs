@@ -7,90 +7,10 @@ use deltalake::protocol::DeltaOperation;
 
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 mod simple_checkpoint {
-    use arrow::datatypes::Schema as ArrowSchema;
-    use arrow_array::{BinaryArray, Decimal128Array, RecordBatch};
-    use arrow_schema::{DataType, Field};
-    use deltalake::writer::{DeltaWriter, RecordBatchWriter};
     use deltalake::*;
     use pretty_assertions::assert_eq;
-    use std::collections::HashMap;
-    use std::error::Error;
     use std::fs;
     use std::path::{Path, PathBuf};
-    use std::sync::Arc;
-
-    struct Context {
-        pub table: DeltaTable,
-    }
-
-    async fn setup_test() -> Result<Context, Box<dyn Error>> {
-        let columns = vec![
-            SchemaField::new(
-                "bin".to_owned(),
-                SchemaDataType::primitive("binary".to_owned()),
-                false,
-                HashMap::new(),
-            ),
-            SchemaField::new(
-                "dec".to_owned(),
-                SchemaDataType::primitive("decimal(23,0)".to_owned()),
-                false,
-                HashMap::new(),
-            ),
-        ];
-
-        let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
-        let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
-        let dt = DeltaOps::try_from_uri(table_uri)
-            .await?
-            .create()
-            .with_columns(columns)
-            .await?;
-
-        Ok(Context { table: dt })
-    }
-
-    fn get_batch(items: Vec<&[u8]>, decimals: Vec<i128>) -> Result<RecordBatch, Box<dyn Error>> {
-        let x_array = BinaryArray::from(items);
-        let dec_array = Decimal128Array::from(decimals).with_precision_and_scale(23, 0)?;
-
-        Ok(RecordBatch::try_new(
-            Arc::new(ArrowSchema::new(vec![
-                Field::new("bin", DataType::Binary, false),
-                Field::new("dec", DataType::Decimal128(23, 0), false),
-            ])),
-            vec![Arc::new(x_array), Arc::new(dec_array)],
-        )?)
-    }
-
-    async fn write(
-        writer: &mut RecordBatchWriter,
-        table: &mut DeltaTable,
-        batch: RecordBatch,
-    ) -> Result<(), DeltaTableError> {
-        writer.write(batch).await?;
-        writer.flush_and_commit(table).await?;
-        Ok(())
-    }
-
-    #[tokio::test]
-    async fn test_checkpoint_write_binary_stats() -> Result<(), Box<dyn Error>> {
-        let context = setup_test().await?;
-        let mut dt = context.table;
-        let mut writer = RecordBatchWriter::for_table(&dt)?;
-
-        write(
-            &mut writer,
-            &mut dt,
-            get_batch(vec![&[1, 2]], vec![18446744073709551614])?,
-        )
-        .await?;
-
-        // Just checking that this doesn't fail. https://github.com/delta-io/delta-rs/issues/1493
-        checkpoints::create_checkpoint(&dt).await?;
-
-        Ok(())
-    }
 
     #[tokio::test]
     async fn simple_checkpoint_test() {
@@ -310,7 +230,7 @@ mod checkpoints_with_tombstones {
         let row_iter = reader.get_row_iter(None).unwrap();
         let mut actions = Vec::new();
         for record in row_iter {
-            actions.push(Action::from_parquet_record(schema, &record).unwrap())
+            actions.push(Action::from_parquet_record(schema, &record.unwrap()).unwrap())
         }
         (schema.clone(), actions)
     }
@@ -425,6 +345,7 @@ mod checkpoints_with_tombstones {
                 partition_values: None,
                 size: None,
                 tags: None,
+                deletion_vector: None,
             })
             .collect();
 
@@ -486,6 +407,7 @@ mod checkpoints_with_tombstones {
             partition_values: None,
             size: Some(100),
             tags: None,
+            deletion_vector: None,
         }
     }
 

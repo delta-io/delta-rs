@@ -39,7 +39,8 @@ jobs:
     name: Python Build (Python 3.7 PyArrow 8.0.0)
     runs-on: ubuntu-latest
     env:
-      RUSTFLAGS: "-C debuginfo=0"
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
+      CARGO_INCREMENTAL: 0
 
     # use the same environment we have for python release
     container: quay.io/pypa/manylinux2014_x86_64:2022-09-24-4f086d0
@@ -65,6 +66,8 @@ jobs:
 
       - name: Build and install deltalake
         run: |
+          # Needed for openssl build
+          yum install -y perl-IPC-Cmd
           pip install virtualenv
           virtualenv venv
           source venv/bin/activate
@@ -72,7 +75,7 @@ jobs:
           # Install minimum PyArrow version
           pip install -e .[pandas,devel] pyarrow==8.0.0
         env:
-          RUSTFLAGS: "-C debuginfo=0"
+          RUSTFLAGS: "-C debuginfo=line-tables-only"
 
       - name: Run tests
         run: |
@@ -88,6 +91,7 @@ jobs:
     runs-on: ubuntu-latest
     env:
       RUSTFLAGS: "-C debuginfo=1"
+      CARGO_INCREMENTAL: 0
 
     steps:
       - uses: actions/checkout@v3
@@ -121,13 +125,13 @@ jobs:
       - name: Run tests
         run: |
           source venv/bin/activate
-          python -m pytest -m '((s3 or azure) and integration) or not integration'
+          python -m pytest -m '((s3 or azure) and integration) or not integration and not benchmark'
 
       - name: Test without pandas
         run: |
           source venv/bin/activate
           pip uninstall --yes pandas
-          python -m pytest -m "not pandas and not integration"
+          python -m pytest -m "not pandas and not integration and not benchmark"
           pip install pandas
 
       - name: Build Sphinx documentation
@@ -139,7 +143,8 @@ jobs:
     name: Python Benchmark
     runs-on: ubuntu-latest
     env:
-      RUSTFLAGS: "-C debuginfo=0"
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
+      CARGO_INCREMENTAL: 0
 
     steps:
       - uses: actions/checkout@v2
@@ -188,7 +193,8 @@ jobs:
     name: PySpark Integration Tests
     runs-on: ubuntu-latest
     env:
-      RUSTFLAGS: "-C debuginfo=0"
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
+      CARGO_INCREMENTAL: 0
 
     steps:
       - uses: actions/checkout@v3
@@ -227,7 +233,8 @@ jobs:
     name: Running with Python ${{ matrix.python-version }}
     runs-on: ubuntu-latest
     env:
-      RUSTFLAGS: "-C debuginfo=0"
+      RUSTFLAGS: "-C debuginfo=line-tables-only"
+      CARGO_INCREMENTAL: 0
 
     strategy:
       matrix:

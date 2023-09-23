@@ -23,6 +23,8 @@ use serde_json::{Map, Value};
 use std::borrow::Borrow;
 use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
+use std::mem::take;
+use std::str::FromStr;
 
 use crate::errors::DeltaResult;
 use crate::storage::ObjectStoreRef;
@@ -51,10 +53,15 @@ pub enum ProtocolError {
     #[error("Invalid action in parquet row: {0}")]
     InvalidRow(String),
 
+    /// A transaction log contains invalid deletion vector storage type
+    #[error("Invalid deletion vector storage type: {0}")]
+    InvalidDeletionVectorStorageType(String),
+
     /// A generic action error. The wrapped error string describes the details.
     #[error("Generic action error: {0}")]
     Generic(String),
 
+    #[cfg(any(feature = "parquet", feature = "parquet2"))]
     /// Error returned when parsing checkpoint parquet using the parquet crate.
     #[error("Failed to parse parquet checkpoint: {source}")]
     ParquetParseError {
@@ -179,6 +186,47 @@ pub struct Stats {
     pub null_count: HashMap<String, ColumnCountStat>,
 }
 
+/// Statistics associated with Add actions contained in the Delta log.
+/// min_values, max_values and null_count are optional to allow them to be missing
+#[derive(Serialize, Deserialize, Debug, Default, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+struct PartialStats {
+    /// Number of records in the file associated with the log action.
+    pub num_records: i64,
+
+    // start of per column stats
+    /// Contains a value smaller than all values present in the file for all columns.
+    pub min_values: Option<HashMap<String, ColumnValueStat>>,
+    /// Contains a value larger than all values present in the file for all columns.
+    pub max_values: Option<HashMap<String, ColumnValueStat>>,
+    /// The number of null values for all columns.
+    pub null_count: Option<HashMap<String, ColumnCountStat>>,
+}
+
+impl PartialStats {
+    /// Fills in missing HashMaps
+    pub fn as_stats(&mut self) -> Stats {
+        let min_values = take(&mut self.min_values);
+        let max_values = take(&mut self.max_values);
+        let null_count = take(&mut self.null_count);
+        Stats {
+            num_records: self.num_records,
+            min_values: match min_values {
+                Some(minv) => minv,
+                None => HashMap::default(),
+            },
+            max_values: match max_values {
+                Some(maxv) => maxv,
+                None => HashMap::default(),
+            },
+            null_count: match null_count {
+                Some(nc) => nc,
+                None => HashMap::default(),
+            },
+        }
+    }
+}
+
 /// File stats parsed from raw parquet format.
 #[derive(Debug, Default)]
 pub struct StatsParsed {
@@ -219,6 +267,86 @@ pub struct AddCDCFile {
     /// Map containing metadata about this file
     pub tags: Option<HashMap<String, Option<String>>>,
 }
+
+///Storage type of deletion vector
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde()]
+pub enum StorageType {
+    /// Stored at relative path derived from a UUID.
+    #[serde(rename = "u")]
+    UuidRelativePath,
+    /// Stored as inline string.
+    #[serde(rename = "i")]
+    Inline,
+    /// Stored at an absolute path.
+    #[serde(rename = "p")]
+    AbsolutePath,
+}
+
+impl Default for StorageType {
+    fn default() -> Self {
+        Self::UuidRelativePath // seems to be used by Databricks and therefore most common
+    }
+}
+
+impl FromStr for StorageType {
+    type Err = ProtocolError;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s {
+            "u" => Ok(Self::UuidRelativePath),
+            "i" => Ok(Self::Inline),
+            "p" => Ok(Self::AbsolutePath),
+            _ => Err(ProtocolError::InvalidDeletionVectorStorageType(
+                s.to_string(),
+            )),
+        }
+    }
+}
+
+impl ToString for StorageType {
+    fn to_string(&self) -> String {
+        match self {
+            Self::UuidRelativePath => "u".to_string(),
+            Self::Inline => "i".to_string(),
+            Self::AbsolutePath => "p".to_string(),
+        }
+    }
+}
+
+/// Describes deleted rows of a parquet file as part of an add or remove action
+#[derive(Serialize, Deserialize, Clone, Debug, Default)]
+#[serde(rename_all = "camelCase")]
+pub struct DeletionVector {
+    ///storageType of the deletion vector. p = Absolute Path, i = Inline, u = UUid Relative Path
+    pub storage_type: StorageType,
+
+    ///If storageType = 'u' then <random prefix - optional><base85 encoded uuid>
+    ///If storageType = 'i' then <base85 encoded bytes> of the deletion vector data
+    ///If storageType = 'p' then <absolute path>
+    pub path_or_inline_dv: String,
+
+    ///Start of the data for this DV in number of bytes from the beginning of the file it is stored in. Always None (absent in JSON) when storageType = 'i'.
+    pub offset: Option<i32>,
+
+    ///Size of the serialized DV in bytes (raw data size, i.e. before base85 encoding, if inline).
+    pub size_in_bytes: i32,
+
+    ///Number of rows the given DV logically removes from the file.
+    pub cardinality: i64,
+}
+
+impl PartialEq for DeletionVector {
+    fn eq(&self, other: &Self) -> bool {
+        self.storage_type == other.storage_type
+            && self.path_or_inline_dv == other.path_or_inline_dv
+            && self.offset == other.offset
+            && self.size_in_bytes == other.size_in_bytes
+            && self.cardinality == other.cardinality
+    }
+}
+
+impl Eq for DeletionVector {}
 
 /// Delta log action that describes a parquet data file that is part of the table.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -278,6 +406,9 @@ pub struct Add {
     pub stats_parsed: Option<String>,
     /// Map containing metadata about this file
     pub tags: Option<HashMap<String, Option<String>>>,
+
+    ///Metadata about deletion vector
+    pub deletion_vector: Option<DeletionVector>,
 }
 
 impl Hash for Add {
@@ -295,6 +426,7 @@ impl PartialEq for Add {
             && self.data_change == other.data_change
             && self.stats == other.stats
             && self.tags == other.tags
+            && self.deletion_vector == other.deletion_vector
     }
 }
 
@@ -331,9 +463,16 @@ impl Add {
     /// Returns the serde_json representation of stats contained in the action if present.
     /// Since stats are defined as optional in the protocol, this may be None.
     pub fn get_json_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
-        self.stats
+        let ps: Result<Option<PartialStats>, serde_json::error::Error> = self
+            .stats
             .as_ref()
-            .map_or(Ok(None), |s| serde_json::from_str(s))
+            .map_or(Ok(None), |s| serde_json::from_str(s));
+
+        match ps {
+            Ok(Some(mut partial)) => Ok(Some(partial.as_stats())),
+            Ok(None) => Ok(None),
+            Err(e) => Err(e),
+        }
     }
 }
 
@@ -369,6 +508,12 @@ impl Default for Format {
     }
 }
 
+/// Return a default empty schema to be used for edge-cases when a schema is missing
+fn default_schema() -> String {
+    warn!("A `metaData` action was missing a `schemaString` and has been given an empty schema");
+    r#"{"type":"struct",  "fields": []}"#.into()
+}
+
 /// Action that describes the metadata of the table.
 /// This is a top-level action in Delta log entries.
 #[derive(Serialize, Deserialize, Debug, Default, Clone)]
@@ -383,6 +528,7 @@ pub struct MetaData {
     /// Specification of the encoding for the files stored in the table
     pub format: Format,
     /// Schema of the table
+    #[serde(default = "default_schema")]
     pub schema_string: String,
     /// An array containing the names of columns by which the data should be partitioned
     pub partition_columns: Vec<String>,
@@ -442,6 +588,8 @@ pub struct Remove {
     pub size: Option<i64>,
     /// Map containing metadata about this file
     pub tags: Option<HashMap<String, Option<String>>>,
+    ///Metadata about deletion vector
+    pub deletion_vector: Option<DeletionVector>,
 }
 
 impl Hash for Remove {
@@ -467,6 +615,7 @@ impl PartialEq for Remove {
             && self.partition_values == other.partition_values
             && self.size == other.size
             && self.tags == other.tags
+            && self.deletion_vector == other.deletion_vector
     }
 }
 
@@ -541,6 +690,18 @@ pub struct CommitInfo {
     pub info: Map<String, serde_json::Value>,
 }
 
+/// The domain metadata action contains a configuration (string) for a named metadata domain
+#[derive(Serialize, Deserialize, Debug, Clone, Default, PartialEq)]
+#[serde(rename_all = "camelCase")]
+pub struct DomainMetaData {
+    /// Identifier for this domain (system or user-provided)
+    pub domain: String,
+    /// String containing configuration for the metadata domain
+    pub configuration: String,
+    /// When `true` the action serves as a tombstone
+    pub removed: bool,
+}
+
 /// Represents an action in the Delta log. The Delta log is an aggregate of all actions performed
 /// on the table, so the full list of actions is required to properly read a table.
 #[derive(Serialize, Deserialize, Debug, Clone)]
@@ -561,6 +722,8 @@ pub enum Action {
     protocol(Protocol),
     /// Describes commit provenance information for the table.
     commitInfo(CommitInfo),
+    /// Describe s the configuration for a named metadata domain
+    domainMetadata(DomainMetaData),
 }
 
 impl Action {
@@ -571,6 +734,18 @@ impl Action {
             ..Default::default()
         })
     }
+}
+
+#[allow(clippy::large_enum_variant)]
+#[derive(Serialize, Deserialize, Debug, Clone)]
+#[serde(rename_all = "camelCase")]
+/// Used to record the operations performed to the Delta Log
+pub struct MergePredicate {
+    /// The type of merge operation performed
+    pub action_type: String,
+    /// The predicate used for the merge operation
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub predicate: Option<String>,
 }
 
 /// Operation performed when creating a new log entry with one or more actions.
@@ -610,10 +785,27 @@ pub enum DeltaOperation {
         /// The condition the to be deleted data must match
         predicate: Option<String>,
     },
+
     /// Update data matching predicate from delta table
     Update {
         /// The update predicate
         predicate: Option<String>,
+    },
+
+    /// Merge data with a source data with the following predicate
+    #[serde(rename_all = "camelCase")]
+    Merge {
+        /// The merge predicate
+        predicate: Option<String>,
+
+        /// Match operations performed
+        matched_predicates: Vec<MergePredicate>,
+
+        /// Not Match operations performed
+        not_matched_predicates: Vec<MergePredicate>,
+
+        /// Not Match by Source operations performed
+        not_matched_by_source_predicates: Vec<MergePredicate>,
     },
 
     /// Represents a Delta `StreamingUpdate` operation.
@@ -661,6 +853,7 @@ impl DeltaOperation {
             DeltaOperation::Write { .. } => "WRITE",
             DeltaOperation::Delete { .. } => "DELETE",
             DeltaOperation::Update { .. } => "UPDATE",
+            DeltaOperation::Merge { .. } => "MERGE",
             DeltaOperation::StreamingUpdate { .. } => "STREAMING UPDATE",
             DeltaOperation::Optimize { .. } => "OPTIMIZE",
             DeltaOperation::FileSystemCheck { .. } => "FSCK",
@@ -706,6 +899,7 @@ impl DeltaOperation {
             | Self::StreamingUpdate { .. }
             | Self::Write { .. }
             | Self::Delete { .. }
+            | Self::Merge { .. }
             | Self::Update { .. }
             | Self::Restore { .. } => true,
         }
@@ -728,6 +922,7 @@ impl DeltaOperation {
             Self::Write { predicate, .. } => predicate.clone(),
             Self::Delete { predicate, .. } => predicate.clone(),
             Self::Update { predicate, .. } => predicate.clone(),
+            Self::Merge { predicate, .. } => predicate.clone(),
             _ => None,
         }
     }
@@ -790,9 +985,9 @@ pub(crate) async fn find_latest_check_point_for_version(
 ) -> Result<Option<CheckPoint>, ProtocolError> {
     lazy_static! {
         static ref CHECKPOINT_REGEX: Regex =
-            Regex::new(r#"^_delta_log/(\d{20})\.checkpoint\.parquet$"#).unwrap();
+            Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.parquet$").unwrap();
         static ref CHECKPOINT_PARTS_REGEX: Regex =
-            Regex::new(r#"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$"#).unwrap();
+            Regex::new(r"^_delta_log/(\d{20})\.checkpoint\.\d{10}\.(\d{10})\.parquet$").unwrap();
     }
 
     let mut cp: Option<CheckPoint> = None;
@@ -913,6 +1108,26 @@ mod tests {
     }
 
     #[test]
+    fn test_load_table_partial_stats() {
+        let action = Add {
+            stats: Some(
+                serde_json::json!({
+                    "numRecords": 22
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        };
+
+        let stats = action.get_stats().unwrap().unwrap();
+
+        assert_eq!(stats.num_records, 22);
+        assert_eq!(stats.min_values.len(), 0);
+        assert_eq!(stats.max_values.len(), 0);
+        assert_eq!(stats.null_count.len(), 0);
+    }
+
+    #[test]
     fn test_read_commit_info() {
         let raw = r#"
         {
@@ -969,5 +1184,568 @@ mod tests {
         let info = serde_json::from_str::<CommitInfo>(raw).expect("should parse");
         assert!(info.info.contains_key("additionalField"));
         assert!(info.info.contains_key("additionalStruct"));
+    }
+
+    #[test]
+    fn test_read_domain_metadata() {
+        let buf = r#"{"domainMetadata":{"domain":"delta.liquid","configuration":"{\"clusteringColumns\":[{\"physicalName\":[\"id\"]}],\"domainName\":\"delta.liquid\"}","removed":false}}"#;
+        let _action: Action =
+            serde_json::from_str(buf).expect("Expected to be able to deserialize");
+    }
+
+    #[cfg(feature = "arrow")]
+    mod arrow_tests {
+        use arrow::array::{self, ArrayRef, StructArray};
+        use arrow::compute::kernels::cast_utils::Parser;
+        use arrow::compute::sort_to_indices;
+        use arrow::datatypes::{DataType, Date32Type, Field, Fields, TimestampMicrosecondType};
+        use arrow::record_batch::RecordBatch;
+        use std::sync::Arc;
+        fn sort_batch_by(batch: &RecordBatch, column: &str) -> arrow::error::Result<RecordBatch> {
+            let sort_column = batch.column(batch.schema().column_with_name(column).unwrap().0);
+            let sort_indices = sort_to_indices(sort_column, None, None)?;
+            let schema = batch.schema();
+            let sorted_columns: Vec<(&String, ArrayRef)> = schema
+                .fields()
+                .iter()
+                .zip(batch.columns().iter())
+                .map(|(field, column)| {
+                    Ok((
+                        field.name(),
+                        arrow::compute::take(column, &sort_indices, None)?,
+                    ))
+                })
+                .collect::<arrow::error::Result<_>>()?;
+            RecordBatch::try_from_iter(sorted_columns)
+        }
+        #[tokio::test]
+        async fn test_with_partitions() {
+            // test table with partitions
+            let path = "./tests/data/delta-0.8.0-null-partition";
+            let table = crate::open_table(path).await.unwrap();
+            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
+
+            let mut expected_columns: Vec<(&str, ArrayRef)> = vec![
+        ("path", Arc::new(array::StringArray::from(vec![
+            "k=A/part-00000-b1f1dbbb-70bc-4970-893f-9bb772bf246e.c000.snappy.parquet",
+            "k=__HIVE_DEFAULT_PARTITION__/part-00001-8474ac85-360b-4f58-b3ea-23990c71b932.c000.snappy.parquet"
+        ]))),
+        ("size_bytes", Arc::new(array::Int64Array::from(vec![460, 460]))),
+        ("modification_time", Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
+            1627990384000, 1627990384000
+        ]))),
+        ("data_change", Arc::new(array::BooleanArray::from(vec![true, true]))),
+        ("partition.k", Arc::new(array::StringArray::from(vec![Some("A"), None]))),
+    ];
+            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
+
+            assert_eq!(expected, actions);
+
+            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
+
+            expected_columns[4] = (
+                "partition_values",
+                Arc::new(array::StructArray::new(
+                    Fields::from(vec![Field::new("k", DataType::Utf8, true)]),
+                    vec![Arc::new(array::StringArray::from(vec![Some("A"), None])) as ArrayRef],
+                    None,
+                )),
+            );
+            let expected = RecordBatch::try_from_iter(expected_columns).unwrap();
+
+            assert_eq!(expected, actions);
+        }
+        #[tokio::test]
+        async fn test_with_deletion_vector() {
+            // test table with partitions
+            let path = "./tests/data/table_with_deletion_logs";
+            let table = crate::open_table(path).await.unwrap();
+            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
+            let actions = actions
+                .project(&[
+                    actions.schema().index_of("path").unwrap(),
+                    actions.schema().index_of("size_bytes").unwrap(),
+                    actions
+                        .schema()
+                        .index_of("deletionVector.storageType")
+                        .unwrap(),
+                    actions
+                        .schema()
+                        .index_of("deletionVector.pathOrInlineDiv")
+                        .unwrap(),
+                    actions.schema().index_of("deletionVector.offset").unwrap(),
+                    actions
+                        .schema()
+                        .index_of("deletionVector.sizeInBytes")
+                        .unwrap(),
+                    actions
+                        .schema()
+                        .index_of("deletionVector.cardinality")
+                        .unwrap(),
+                ])
+                .unwrap();
+            let expected_columns: Vec<(&str, ArrayRef)> = vec![
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet",
+                    ])),
+                ),
+                ("size_bytes", Arc::new(array::Int64Array::from(vec![10499]))),
+                (
+                    "deletionVector.storageType",
+                    Arc::new(array::StringArray::from(vec!["u"])),
+                ),
+                (
+                    "deletionVector.pathOrInlineDiv",
+                    Arc::new(array::StringArray::from(vec!["Q6Kt3y1b)0MgZSWwPunr"])),
+                ),
+                (
+                    "deletionVector.offset",
+                    Arc::new(array::Int32Array::from(vec![1])),
+                ),
+                (
+                    "deletionVector.sizeInBytes",
+                    Arc::new(array::Int32Array::from(vec![36])),
+                ),
+                (
+                    "deletionVector.cardinality",
+                    Arc::new(array::Int64Array::from(vec![2])),
+                ),
+            ];
+            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
+
+            assert_eq!(expected, actions);
+
+            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
+            let actions = actions
+                .project(&[
+                    actions.schema().index_of("path").unwrap(),
+                    actions.schema().index_of("size_bytes").unwrap(),
+                    actions.schema().index_of("deletionVector").unwrap(),
+                ])
+                .unwrap();
+            let expected_columns: Vec<(&str, ArrayRef)> = vec![
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "part-00000-cb251d5e-b665-437a-a9a7-fbfc5137c77d.c000.snappy.parquet",
+                    ])),
+                ),
+                ("size_bytes", Arc::new(array::Int64Array::from(vec![10499]))),
+                (
+                    "deletionVector",
+                    Arc::new(array::StructArray::new(
+                        Fields::from(vec![
+                            Field::new("storageType", DataType::Utf8, false),
+                            Field::new("pathOrInlineDiv", DataType::Utf8, false),
+                            Field::new("offset", DataType::Int32, true),
+                            Field::new("sizeInBytes", DataType::Int32, false),
+                            Field::new("cardinality", DataType::Int64, false),
+                        ]),
+                        vec![
+                            Arc::new(array::StringArray::from(vec!["u"])) as ArrayRef,
+                            Arc::new(array::StringArray::from(vec!["Q6Kt3y1b)0MgZSWwPunr"]))
+                                as ArrayRef,
+                            Arc::new(array::Int32Array::from(vec![1])) as ArrayRef,
+                            Arc::new(array::Int32Array::from(vec![36])) as ArrayRef,
+                            Arc::new(array::Int64Array::from(vec![2])) as ArrayRef,
+                        ],
+                        None,
+                    )),
+                ),
+            ];
+            let expected = RecordBatch::try_from_iter(expected_columns).unwrap();
+
+            assert_eq!(expected, actions);
+        }
+        #[tokio::test]
+        async fn test_without_partitions() {
+            // test table without partitions
+            let path = "./tests/data/simple_table";
+            let table = crate::open_table(path).await.unwrap();
+
+            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
+
+            let expected_columns: Vec<(&str, ArrayRef)> = vec![
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "part-00000-2befed33-c358-4768-a43c-3eda0d2a499d-c000.snappy.parquet",
+                        "part-00000-c1777d7d-89d9-4790-b38a-6ee7e24456b1-c000.snappy.parquet",
+                        "part-00001-7891c33d-cedc-47c3-88a6-abcfb049d3b4-c000.snappy.parquet",
+                        "part-00004-315835fe-fb44-4562-98f6-5e6cfa3ae45d-c000.snappy.parquet",
+                        "part-00007-3a0e4727-de0d-41b6-81ef-5223cf40f025-c000.snappy.parquet",
+                    ])),
+                ),
+                (
+                    "size_bytes",
+                    Arc::new(array::Int64Array::from(vec![262, 262, 429, 429, 429])),
+                ),
+                (
+                    "modification_time",
+                    Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
+                        1587968626000,
+                        1587968602000,
+                        1587968602000,
+                        1587968602000,
+                        1587968602000,
+                    ])),
+                ),
+                (
+                    "data_change",
+                    Arc::new(array::BooleanArray::from(vec![
+                        true, true, true, true, true,
+                    ])),
+                ),
+            ];
+            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
+
+            assert_eq!(expected, actions);
+
+            let actions = table.get_state().add_actions_table(false).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
+
+            // For now, this column is ignored.
+            // expected_columns.push((
+            //     "partition_values",
+            //     new_null_array(&DataType::Struct(vec![]), 5),
+            // ));
+            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
+
+            assert_eq!(expected, actions);
+        }
+
+        #[tokio::test]
+        async fn test_with_stats() {
+            // test table with stats
+            let path = "./tests/data/delta-0.8.0";
+            let table = crate::open_table(path).await.unwrap();
+            let actions = table.get_state().add_actions_table(true).unwrap();
+            let actions = sort_batch_by(&actions, "path").unwrap();
+
+            let expected_columns: Vec<(&str, ArrayRef)> = vec![
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "part-00000-04ec9591-0b73-459e-8d18-ba5711d6cbe1-c000.snappy.parquet",
+                        "part-00000-c9b90f86-73e6-46c8-93ba-ff6bfaf892a1-c000.snappy.parquet",
+                    ])),
+                ),
+                (
+                    "size_bytes",
+                    Arc::new(array::Int64Array::from(vec![440, 440])),
+                ),
+                (
+                    "modification_time",
+                    Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
+                        1615043776000,
+                        1615043767000,
+                    ])),
+                ),
+                (
+                    "data_change",
+                    Arc::new(array::BooleanArray::from(vec![true, true])),
+                ),
+                ("num_records", Arc::new(array::Int64Array::from(vec![2, 2]))),
+                (
+                    "null_count.value",
+                    Arc::new(array::Int64Array::from(vec![0, 0])),
+                ),
+                ("min.value", Arc::new(array::Int32Array::from(vec![2, 0]))),
+                ("max.value", Arc::new(array::Int32Array::from(vec![4, 2]))),
+            ];
+            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
+
+            assert_eq!(expected, actions);
+        }
+
+        #[tokio::test]
+        async fn test_only_struct_stats() {
+            // test table with no json stats
+            let path = "./tests/data/delta-1.2.1-only-struct-stats";
+            let mut table = crate::open_table(path).await.unwrap();
+            table.load_version(1).await.unwrap();
+
+            let actions = table.get_state().add_actions_table(true).unwrap();
+
+            let expected_columns: Vec<(&str, ArrayRef)> = vec![
+                (
+                    "path",
+                    Arc::new(array::StringArray::from(vec![
+                        "part-00000-7a509247-4f58-4453-9202-51d75dee59af-c000.snappy.parquet",
+                    ])),
+                ),
+                ("size_bytes", Arc::new(array::Int64Array::from(vec![5489]))),
+                (
+                    "modification_time",
+                    Arc::new(arrow::array::TimestampMillisecondArray::from(vec![
+                        1666652373000,
+                    ])),
+                ),
+                (
+                    "data_change",
+                    Arc::new(array::BooleanArray::from(vec![true])),
+                ),
+                ("num_records", Arc::new(array::Int64Array::from(vec![1]))),
+                (
+                    "null_count.integer",
+                    Arc::new(array::Int64Array::from(vec![0])),
+                ),
+                ("min.integer", Arc::new(array::Int32Array::from(vec![0]))),
+                ("max.integer", Arc::new(array::Int32Array::from(vec![0]))),
+                (
+                    "null_count.null",
+                    Arc::new(array::Int64Array::from(vec![1])),
+                ),
+                ("min.null", Arc::new(array::NullArray::new(1))),
+                ("max.null", Arc::new(array::NullArray::new(1))),
+                (
+                    "null_count.boolean",
+                    Arc::new(array::Int64Array::from(vec![0])),
+                ),
+                ("min.boolean", Arc::new(array::NullArray::new(1))),
+                ("max.boolean", Arc::new(array::NullArray::new(1))),
+                (
+                    "null_count.double",
+                    Arc::new(array::Int64Array::from(vec![0])),
+                ),
+                (
+                    "min.double",
+                    Arc::new(array::Float64Array::from(vec![1.234])),
+                ),
+                (
+                    "max.double",
+                    Arc::new(array::Float64Array::from(vec![1.234])),
+                ),
+                (
+                    "null_count.decimal",
+                    Arc::new(array::Int64Array::from(vec![0])),
+                ),
+                (
+                    "min.decimal",
+                    Arc::new(
+                        array::Decimal128Array::from_iter_values([-567800])
+                            .with_precision_and_scale(8, 5)
+                            .unwrap(),
+                    ),
+                ),
+                (
+                    "max.decimal",
+                    Arc::new(
+                        array::Decimal128Array::from_iter_values([-567800])
+                            .with_precision_and_scale(8, 5)
+                            .unwrap(),
+                    ),
+                ),
+                (
+                    "null_count.string",
+                    Arc::new(array::Int64Array::from(vec![0])),
+                ),
+                (
+                    "min.string",
+                    Arc::new(array::StringArray::from(vec!["string"])),
+                ),
+                (
+                    "max.string",
+                    Arc::new(array::StringArray::from(vec!["string"])),
+                ),
+                (
+                    "null_count.binary",
+                    Arc::new(array::Int64Array::from(vec![0])),
+                ),
+                ("min.binary", Arc::new(array::NullArray::new(1))),
+                ("max.binary", Arc::new(array::NullArray::new(1))),
+                (
+                    "null_count.date",
+                    Arc::new(array::Int64Array::from(vec![0])),
+                ),
+                (
+                    "min.date",
+                    Arc::new(array::Date32Array::from(vec![Date32Type::parse(
+                        "2022-10-24",
+                    )])),
+                ),
+                (
+                    "max.date",
+                    Arc::new(array::Date32Array::from(vec![Date32Type::parse(
+                        "2022-10-24",
+                    )])),
+                ),
+                (
+                    "null_count.timestamp",
+                    Arc::new(array::Int64Array::from(vec![0])),
+                ),
+                (
+                    "min.timestamp",
+                    Arc::new(array::TimestampMicrosecondArray::from(vec![
+                        TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
+                    ])),
+                ),
+                (
+                    "max.timestamp",
+                    Arc::new(array::TimestampMicrosecondArray::from(vec![
+                        TimestampMicrosecondType::parse("2022-10-24T22:59:32.846Z"),
+                    ])),
+                ),
+                (
+                    "null_count.struct.struct_element",
+                    Arc::new(array::Int64Array::from(vec![0])),
+                ),
+                (
+                    "min.struct.struct_element",
+                    Arc::new(array::StringArray::from(vec!["struct_value"])),
+                ),
+                (
+                    "max.struct.struct_element",
+                    Arc::new(array::StringArray::from(vec!["struct_value"])),
+                ),
+                ("null_count.map", Arc::new(array::Int64Array::from(vec![0]))),
+                (
+                    "null_count.array",
+                    Arc::new(array::Int64Array::from(vec![0])),
+                ),
+                (
+                    "null_count.nested_struct.struct_element.nested_struct_element",
+                    Arc::new(array::Int64Array::from(vec![0])),
+                ),
+                (
+                    "min.nested_struct.struct_element.nested_struct_element",
+                    Arc::new(array::StringArray::from(vec!["nested_struct_value"])),
+                ),
+                (
+                    "max.nested_struct.struct_element.nested_struct_element",
+                    Arc::new(array::StringArray::from(vec!["nested_struct_value"])),
+                ),
+                (
+                    "null_count.struct_of_array_of_map.struct_element",
+                    Arc::new(array::Int64Array::from(vec![0])),
+                ),
+                (
+                    "tags.INSERTION_TIME",
+                    Arc::new(array::StringArray::from(vec!["1666652373000000"])),
+                ),
+                (
+                    "tags.OPTIMIZE_TARGET_SIZE",
+                    Arc::new(array::StringArray::from(vec!["268435456"])),
+                ),
+            ];
+            let expected = RecordBatch::try_from_iter(expected_columns.clone()).unwrap();
+
+            assert_eq!(
+                expected
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().as_str())
+                    .collect::<Vec<&str>>(),
+                actions
+                    .schema()
+                    .fields()
+                    .iter()
+                    .map(|field| field.name().as_str())
+                    .collect::<Vec<&str>>()
+            );
+            assert_eq!(expected, actions);
+
+            let actions = table.get_state().add_actions_table(false).unwrap();
+            // For brevity, just checking a few nested columns in stats
+
+            assert_eq!(
+                actions
+                    .get_field_at_path(&[
+                        "null_count",
+                        "nested_struct",
+                        "struct_element",
+                        "nested_struct_element"
+                    ])
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<array::Int64Array>()
+                    .unwrap(),
+                &array::Int64Array::from(vec![0]),
+            );
+
+            assert_eq!(
+                actions
+                    .get_field_at_path(&[
+                        "min",
+                        "nested_struct",
+                        "struct_element",
+                        "nested_struct_element"
+                    ])
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<array::StringArray>()
+                    .unwrap(),
+                &array::StringArray::from(vec!["nested_struct_value"]),
+            );
+
+            assert_eq!(
+                actions
+                    .get_field_at_path(&[
+                        "max",
+                        "nested_struct",
+                        "struct_element",
+                        "nested_struct_element"
+                    ])
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<array::StringArray>()
+                    .unwrap(),
+                &array::StringArray::from(vec!["nested_struct_value"]),
+            );
+
+            assert_eq!(
+                actions
+                    .get_field_at_path(&["null_count", "struct_of_array_of_map", "struct_element"])
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<array::Int64Array>()
+                    .unwrap(),
+                &array::Int64Array::from(vec![0])
+            );
+
+            assert_eq!(
+                actions
+                    .get_field_at_path(&["tags", "OPTIMIZE_TARGET_SIZE"])
+                    .unwrap()
+                    .as_any()
+                    .downcast_ref::<array::StringArray>()
+                    .unwrap(),
+                &array::StringArray::from(vec!["268435456"])
+            );
+        }
+
+        /// Trait to make it easier to access nested fields
+        trait NestedTabular {
+            fn get_field_at_path(&self, path: &[&str]) -> Option<ArrayRef>;
+        }
+
+        impl NestedTabular for RecordBatch {
+            fn get_field_at_path(&self, path: &[&str]) -> Option<ArrayRef> {
+                // First, get array in the batch
+                let (first_key, remainder) = path.split_at(1);
+                let mut col = self.column(self.schema().column_with_name(first_key[0])?.0);
+
+                if remainder.is_empty() {
+                    return Some(Arc::clone(col));
+                }
+
+                for segment in remainder {
+                    col = col
+                        .as_any()
+                        .downcast_ref::<StructArray>()?
+                        .column_by_name(segment)?;
+                }
+
+                Some(Arc::clone(col))
+            }
+        }
     }
 }

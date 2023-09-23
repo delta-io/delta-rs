@@ -388,7 +388,7 @@ impl DeltaTable {
         // TODO check if regex matches against path
         lazy_static! {
             static ref DELTA_LOG_REGEX: Regex =
-                Regex::new(r#"^_delta_log/(\d{20})\.(json|checkpoint)*$"#).unwrap();
+                Regex::new(r"^_delta_log/(\d{20})\.(json|checkpoint)*$").unwrap();
         }
 
         let mut current_delta_log_ver = i64::MAX;
@@ -417,42 +417,52 @@ impl DeltaTable {
     }
 
     async fn get_latest_version(&mut self) -> Result<i64, DeltaTableError> {
-        let mut version = match get_last_checkpoint(&self.storage).await {
-            Ok(last_check_point) => last_check_point.version + 1,
+        let version_start = match get_last_checkpoint(&self.storage).await {
+            Ok(last_check_point) => last_check_point.version,
             Err(ProtocolError::CheckpointNotFound) => {
-                // no checkpoint, start with version 0
-                0
+                // no checkpoint
+                -1
             }
             Err(e) => {
                 return Err(DeltaTableError::from(e));
             }
         };
 
-        debug!("start with latest checkpoint version: {version}");
+        debug!("latest checkpoint version: {version_start}");
 
-        // scan logs after checkpoint
-        loop {
-            match self.storage.head(&commit_uri_from_version(version)).await {
-                Ok(meta) => {
-                    // also cache timestamp for version
+        let version_start = max(self.version(), version_start);
+
+        lazy_static! {
+            static ref DELTA_LOG_REGEX: Regex =
+                Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint).*$").unwrap();
+        }
+
+        // list files to find max version
+        let version = async {
+            let mut max_version: i64 = version_start;
+            let prefix = Some(self.storage.log_path());
+            let offset_path = commit_uri_from_version(max_version);
+            let mut files = self.storage.list_with_offset(prefix, &offset_path).await?;
+
+            while let Some(obj_meta) = files.next().await {
+                let obj_meta = obj_meta?;
+                if let Some(captures) = DELTA_LOG_REGEX.captures(obj_meta.location.as_ref()) {
+                    let log_version = captures.get(1).unwrap().as_str().parse().unwrap();
+                    // listing may not be ordered
+                    max_version = max(max_version, log_version);
+                    // also cache timestamp for version, for faster time-travel
                     self.version_timestamp
-                        .insert(version, meta.last_modified.timestamp());
-                    version += 1;
-                }
-                Err(e) => {
-                    match e {
-                        ObjectStoreError::NotFound { .. } => {
-                            version -= 1;
-                            if version < 0 {
-                                return Err(DeltaTableError::not_a_table(self.table_uri()));
-                            }
-                        }
-                        _ => return Err(DeltaTableError::from(e)),
-                    }
-                    break;
+                        .insert(log_version, obj_meta.last_modified.timestamp());
                 }
             }
+
+            if max_version < 0 {
+                return Err(DeltaTableError::not_a_table(self.table_uri()));
+            }
+
+            Ok::<i64, DeltaTableError>(max_version)
         }
+        .await?;
 
         Ok(version)
     }
@@ -483,7 +493,16 @@ impl DeltaTable {
             Ok(result) => result.bytes().await,
         }?;
 
-        debug!("parsing commit with version {next_version}...");
+        let actions = Self::get_actions(next_version, commit_log_bytes).await;
+        Ok(PeekCommit::New(next_version, actions.unwrap()))
+    }
+
+    /// Reads a commit and gets list of actions
+    async fn get_actions(
+        version: i64,
+        commit_log_bytes: bytes::Bytes,
+    ) -> Result<Vec<Action>, DeltaTableError> {
+        debug!("parsing commit with version {version}...");
         let reader = BufReader::new(Cursor::new(commit_log_bytes));
 
         let mut actions = Vec::new();
@@ -493,12 +512,12 @@ impl DeltaTable {
             let action =
                 serde_json::from_str(lstr).map_err(|e| DeltaTableError::InvalidJsonLog {
                     json_err: e,
-                    version: next_version,
                     line,
+                    version,
                 })?;
             actions.push(action);
         }
-        Ok(PeekCommit::New(next_version, actions))
+        Ok(actions)
     }
 
     /// Updates the DeltaTable to the most recent state committed to the transaction log by
@@ -541,14 +560,42 @@ impl DeltaTable {
             self.version(),
         );
 
-        while let PeekCommit::New(new_version, actions) =
-            self.peek_next_commit(self.version()).await?
-        {
+        // update to latest version if given max_version is not larger than current version
+        let max_version = max_version.filter(|x| x > &self.version());
+        let max_version: i64 = match max_version {
+            Some(x) => x,
+            None => self.get_latest_version().await?,
+        };
+
+        let buf_size = self.config.log_buffer_size;
+
+        let store = self.storage.clone();
+        let mut log_stream = futures::stream::iter(self.version() + 1..max_version + 1)
+            .map(|version| {
+                let store = store.clone();
+                let loc = commit_uri_from_version(version);
+                async move {
+                    let data = store.get(&loc).await?.bytes().await?;
+                    let actions = Self::get_actions(version, data).await?;
+                    Ok((version, actions))
+                }
+            })
+            .buffered(buf_size);
+
+        while let Some(res) = log_stream.next().await {
+            let (new_version, actions) = match res {
+                Ok((version, actions)) => (version, actions),
+                Err(DeltaTableError::ObjectStore {
+                    source: ObjectStoreError::NotFound { .. },
+                }) => break, // no more files in the log
+                Err(err) => return Err(err),
+            };
+
             debug!("merging table state with version: {new_version}");
             let s = DeltaTableState::from_actions(actions, new_version)?;
             self.state
                 .merge(s, self.config.require_tombstones, self.config.require_files);
-            if Some(self.version()) == max_version {
+            if self.version() == max_version {
                 return Ok(());
             }
         }
@@ -676,7 +723,13 @@ impl DeltaTable {
     ) -> Result<Vec<Path>, DeltaTableError> {
         Ok(self
             .get_active_add_actions_by_partitions(filters)?
-            .map(|add| Path::from(add.path.as_ref()))
+            .map(|add| {
+                // Try to preserve percent encoding if possible
+                match Path::parse(&add.path) {
+                    Ok(path) => path,
+                    Err(_) => Path::from(add.path.as_ref()),
+                }
+            })
             .collect())
     }
 

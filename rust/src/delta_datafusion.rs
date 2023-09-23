@@ -23,7 +23,7 @@
 use std::any::Any;
 use std::collections::HashMap;
 use std::convert::TryFrom;
-use std::fmt::Debug;
+use std::fmt::{self, Debug};
 use std::sync::Arc;
 
 use arrow::array::ArrayRef;
@@ -35,7 +35,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::StringArray;
 use arrow_schema::Field;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{NaiveDateTime, TimeZone, Utc};
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::datasource::provider::TableProviderFactory;
@@ -49,7 +49,8 @@ use datafusion::physical_optimizer::pruning::{PruningPredicate, PruningStatistic
 use datafusion::physical_plan::filter::FilterExec;
 use datafusion::physical_plan::limit::LocalLimitExec;
 use datafusion::physical_plan::{
-    ColumnStatistics, ExecutionPlan, Partitioning, SendableRecordBatchStream, Statistics,
+    ColumnStatistics, DisplayAs, DisplayFormatType, ExecutionPlan, Partitioning,
+    SendableRecordBatchStream, Statistics,
 };
 use datafusion_common::scalar::ScalarValue;
 use datafusion_common::tree_node::{TreeNode, TreeNodeVisitor, VisitRecursion};
@@ -105,8 +106,8 @@ impl DeltaTableState {
         let stats = self
             .files()
             .iter()
-            .fold(
-                Some(Statistics {
+            .try_fold(
+                Statistics {
                     num_rows: Some(0),
                     total_byte_size: Some(0),
                     column_statistics: Some(vec![
@@ -119,9 +120,8 @@ impl DeltaTableState {
                         self.schema().unwrap().get_fields().len()
                     ]),
                     is_exact: true,
-                }),
+                },
                 |acc, action| {
-                    let acc = acc?;
                     let new_stats = action
                         .get_stats()
                         .unwrap_or_else(|_| Some(protocol::Stats::default()))?;
@@ -467,7 +467,7 @@ impl TableProvider for DeltaTable {
             self.get_state()
                 .files()
                 .iter()
-                .zip(files_to_prune.into_iter())
+                .zip(files_to_prune)
                 .filter_map(
                     |(action, keep)| {
                         if keep {
@@ -520,6 +520,12 @@ pub struct DeltaScan {
     pub table_uri: String,
     /// The parquet scan to wrap
     pub parquet_scan: Arc<dyn ExecutionPlan>,
+}
+
+impl DisplayAs for DeltaScan {
+    fn fmt_as(&self, _t: DisplayFormatType, f: &mut fmt::Formatter) -> std::fmt::Result {
+        write!(f, "DeltaScan")
+    }
 }
 
 impl ExecutionPlan for DeltaScan {
@@ -645,10 +651,8 @@ pub(crate) fn partitioned_file_from_action(
 
     let ts_secs = action.modification_time / 1000;
     let ts_ns = (action.modification_time % 1000) * 1_000_000;
-    let last_modified = DateTime::<Utc>::from_utc(
-        NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap(),
-        Utc,
-    );
+    let last_modified =
+        Utc.from_utc_datetime(&NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap());
     PartitionedFile {
         object_meta: ObjectMeta {
             last_modified,
@@ -1031,10 +1035,9 @@ impl TreeNodeVisitor for FindFilesExprProperties {
             }
             Expr::ScalarVariable(_, _)
             | Expr::Literal(_)
-            | Expr::Alias(_, _)
+            | Expr::Alias(_)
             | Expr::BinaryExpr(_)
             | Expr::Like(_)
-            | Expr::ILike(_)
             | Expr::SimilarTo(_)
             | Expr::Not(_)
             | Expr::IsNotNull(_)
@@ -1085,7 +1088,9 @@ impl TreeNodeVisitor for FindFilesExprProperties {
     }
 }
 
-pub(crate) struct FindFiles {
+/// Representing the result of the [find_files] function.
+pub struct FindFiles {
+    /// A list of `Add` objects that match the given predicate
     pub candidates: Vec<Add>,
     /// Was a physical read to the datastore required to determine the candidates
     pub partition_scan: bool,
@@ -1289,7 +1294,8 @@ pub(crate) async fn scan_memory_table(
     join_batches_with_add_actions(batches, map)
 }
 
-pub(crate) async fn find_files<'a>(
+/// Finds files in a snapshot that match the provided predicate.
+pub async fn find_files<'a>(
     snapshot: &DeltaTableState,
     object_store: ObjectStoreRef,
     schema: Arc<ArrowSchema>,
@@ -1543,6 +1549,7 @@ mod tests {
             partition_values_parsed: None,
             data_change: true,
             stats: None,
+            deletion_vector: None,
             stats_parsed: None,
             tags: None,
         };

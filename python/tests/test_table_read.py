@@ -2,6 +2,7 @@ import os
 from datetime import datetime
 from pathlib import Path
 from threading import Barrier, Thread
+from types import SimpleNamespace
 from unittest.mock import Mock
 
 from packaging import version
@@ -86,24 +87,14 @@ def test_load_with_datetime():
 def test_load_with_datetime_bad_format():
     table_path = "../rust/tests/data/simple_table"
     dt = DeltaTable(table_path)
-    with pytest.raises(Exception) as exception:
-        dt.load_with_datetime("2020-05-01T00:47:31")
-    assert (
-        str(exception.value)
-        == "Failed to parse datetime string: premature end of input"
-    )
-    with pytest.raises(Exception) as exception:
-        dt.load_with_datetime("2020-05-01 00:47:31")
-    assert (
-        str(exception.value)
-        == "Failed to parse datetime string: input contains invalid characters"
-    )
-    with pytest.raises(Exception) as exception:
-        dt.load_with_datetime("2020-05-01T00:47:31+08")
-    assert (
-        str(exception.value)
-        == "Failed to parse datetime string: premature end of input"
-    )
+
+    for bad_format in [
+        "2020-05-01T00:47:31",
+        "2020-05-01 00:47:31",
+        "2020-05-01T00:47:31+08",
+    ]:
+        with pytest.raises(Exception, match="Failed to parse datetime string:"):
+            dt.load_with_datetime(bad_format)
 
 
 def test_read_simple_table_update_incremental():
@@ -112,6 +103,25 @@ def test_read_simple_table_update_incremental():
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [0, 1, 2, 3, 4]}
     dt.update_incremental()
     assert dt.to_pyarrow_dataset().to_table().to_pydict() == {"id": [5, 7, 9]}
+
+
+def test_read_simple_table_file_sizes_failure():
+    table_path = "../rust/tests/data/simple_table"
+    dt = DeltaTable(table_path)
+    add_actions = dt.get_add_actions().to_pydict()
+
+    # set all sizes to -1, the idea is to break the reading, to check
+    # that input file sizes are actually used
+    add_actions_modified = {
+        x: [-1 for item in x] if x == "size_bytes" else y
+        for x, y in add_actions.items()
+    }
+    dt.get_add_actions = lambda: SimpleNamespace(
+        to_pydict=lambda: add_actions_modified
+    )  # type:ignore
+
+    with pytest.raises(OSError, match="Cannot seek past end of file."):
+        dt.to_pyarrow_dataset().to_table().to_pydict()
 
 
 def test_read_partitioned_table_to_dict():
@@ -216,6 +226,28 @@ def test_read_table_with_stats():
 
         data = dataset.to_table(filter=filter_expr)
         assert data.num_rows == 0
+
+
+def test_read_special_partition():
+    table_path = "../rust/tests/data/delta-0.8.0-special-partition"
+    dt = DeltaTable(table_path)
+
+    file1 = (
+        r"x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
+    )
+    file2 = (
+        r"x=B%20B/part-00015-e9abbc6f-85e9-457b-be8e-e9f5b8a22890.c000.snappy.parquet"
+    )
+
+    assert set(dt.files()) == {file1, file2}
+
+    assert dt.files([("x", "=", "A/A")]) == [file1]
+    assert dt.files([("x", "=", "B B")]) == [file2]
+    assert dt.files([("x", "=", "c")]) == []
+
+    table = dt.to_pyarrow_table()
+
+    assert set(table["x"].to_pylist()) == {"A/A", "B B"}
 
 
 def test_read_partitioned_table_metadata():

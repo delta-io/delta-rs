@@ -110,7 +110,8 @@ pub async fn create_checkpoint_from_table_uri_and_cleanup(
     Ok(())
 }
 
-async fn create_checkpoint_for(
+/// Creates checkpoint for a given table version, table state and object store
+pub async fn create_checkpoint_for(
     version: i64,
     state: &DeltaTableState,
     storage: &DeltaObjectStore,
@@ -181,7 +182,7 @@ pub async fn cleanup_expired_logs_for(
 ) -> Result<i32, ProtocolError> {
     lazy_static! {
         static ref DELTA_LOG_REGEX: Regex =
-            Regex::new(r#"_delta_log/(\d{20})\.(json|checkpoint).*$"#).unwrap();
+            Regex::new(r"_delta_log/(\d{20})\.(json|checkpoint).*$").unwrap();
     }
 
     let mut deleted_log_num = 0;
@@ -284,33 +285,6 @@ pub async fn cleanup_expired_logs_for(
     }
 }
 
-/// Filter binary from the schema so that it isn't serialized into JSON,
-/// as arrow currently does not support this.
-fn filter_binary(schema: &Schema) -> Schema {
-    Schema::new(
-        schema
-            .get_fields()
-            .iter()
-            .flat_map(|f| match f.get_type() {
-                SchemaDataType::primitive(p) => {
-                    if p != "binary" {
-                        Some(f.clone())
-                    } else {
-                        None
-                    }
-                }
-                SchemaDataType::r#struct(s) => Some(SchemaField::new(
-                    f.get_name().to_string(),
-                    SchemaDataType::r#struct(filter_binary(&Schema::new(s.get_fields().clone()))),
-                    f.is_nullable(),
-                    f.get_metadata().clone(),
-                )),
-                _ => Some(f.clone()),
-            })
-            .collect::<Vec<_>>(),
-    )
-}
-
 fn parquet_bytes_from_state(
     state: &DeltaTableState,
 ) -> Result<(CheckPoint, bytes::Bytes), ProtocolError> {
@@ -385,7 +359,7 @@ fn parquet_bytes_from_state(
 
     // Create the arrow schema that represents the Checkpoint parquet file.
     let arrow_schema = delta_log_schema_for_table(
-        <ArrowSchema as TryFrom<&Schema>>::try_from(&filter_binary(&current_metadata.schema))?,
+        <ArrowSchema as TryFrom<&Schema>>::try_from(&current_metadata.schema)?,
         current_metadata.partition_columns.as_slice(),
         use_extended_remove_schema,
     );

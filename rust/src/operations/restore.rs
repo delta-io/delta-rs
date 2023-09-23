@@ -28,6 +28,7 @@ use chrono::{DateTime, Utc};
 use futures::future::BoxFuture;
 use object_store::path::Path;
 use object_store::ObjectStore;
+use serde::Serialize;
 
 use crate::operations::transaction::{prepare_commit, try_commit_transaction, TransactionError};
 use crate::protocol::{Action, Add, DeltaOperation, Protocol, Remove};
@@ -57,7 +58,8 @@ impl From<RestoreError> for DeltaTableError {
 }
 
 /// Metrics from Restore
-#[derive(Default, Debug)]
+#[derive(Default, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct RestoreMetrics {
     /// Number of files removed
     pub num_removed_file: usize,
@@ -109,13 +111,13 @@ impl RestoreBuilder {
 
     /// Set whether to ignore missing files which delete manually or by vacuum.
     /// If true, continue to run when encountering missing files.
-    pub fn ignore_missing_files(mut self, ignore_missing_files: bool) -> Self {
+    pub fn with_ignore_missing_files(mut self, ignore_missing_files: bool) -> Self {
         self.ignore_missing_files = ignore_missing_files;
         self
     }
 
     /// Set whether allow to downgrade protocol
-    pub fn protocol_downgrade_allowed(mut self, protocol_downgrade_allowed: bool) -> Self {
+    pub fn with_protocol_downgrade_allowed(mut self, protocol_downgrade_allowed: bool) -> Self {
         self.protocol_downgrade_allowed = protocol_downgrade_allowed;
         self
     }
@@ -184,6 +186,7 @@ async fn execute(
                 partition_values: Some(a.partition_values.clone()),
                 size: Some(a.size),
                 tags: a.tags,
+                deletion_vector: a.deletion_vector,
             }
         })
         .collect();

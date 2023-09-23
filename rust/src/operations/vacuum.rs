@@ -28,6 +28,7 @@ use std::sync::Arc;
 use chrono::{Duration, Utc};
 use futures::future::BoxFuture;
 use futures::{StreamExt, TryStreamExt};
+use object_store::Error;
 use object_store::{path::Path, ObjectStore};
 
 use crate::errors::{DeltaResult, DeltaTableError};
@@ -80,8 +81,6 @@ pub struct VacuumBuilder {
     retention_period: Option<Duration>,
     /// Validate the retention period is not below the retention period configured in the table
     enforce_retention_duration: bool,
-    /// Maximum number of concurrent requests to make
-    max_concurrent_requests: usize,
     /// Don't delete the files. Just determine which files can be deleted
     dry_run: bool,
     /// Override the source of time
@@ -106,7 +105,6 @@ impl VacuumBuilder {
             store,
             retention_period: None,
             enforce_retention_duration: true,
-            max_concurrent_requests: 10,
             dry_run: false,
             clock: None,
         }
@@ -127,12 +125,6 @@ impl VacuumBuilder {
     /// Check if the specified retention period is less than the table's minimum
     pub fn with_enforce_retention_duration(mut self, enforce: bool) -> Self {
         self.enforce_retention_duration = enforce;
-        self
-    }
-
-    /// Set the maximum number of concurrent requests to make
-    pub fn with_max_concurrent_requests(mut self, max_concurrent_requests: usize) -> Self {
-        self.max_concurrent_requests = max_concurrent_requests;
         self
     }
 
@@ -186,10 +178,7 @@ impl VacuumBuilder {
             files_to_delete.push(obj_meta.location);
         }
 
-        Ok(VacuumPlan {
-            files_to_delete,
-            max_concurrent_requests: self.max_concurrent_requests,
-        })
+        Ok(VacuumPlan { files_to_delete })
     }
 }
 
@@ -225,8 +214,6 @@ impl std::future::IntoFuture for VacuumBuilder {
 struct VacuumPlan {
     /// What files are to be deleted
     pub files_to_delete: Vec<Path>,
-    /// How many concurrent requests to make
-    pub max_concurrent_requests: usize,
 }
 
 impl VacuumPlan {
@@ -239,13 +226,17 @@ impl VacuumPlan {
             });
         }
 
-        let files_deleted = futures::stream::iter(self.files_to_delete)
-            .map(|path| {
-                let store = store.clone();
-                async move { store.delete(&path).await.map(|_| path) }
+        let locations = futures::stream::iter(self.files_to_delete)
+            .map(Result::Ok)
+            .boxed();
+
+        let files_deleted = store
+            .delete_stream(locations)
+            .map(|res| match res {
+                Ok(path) => Ok(path.to_string()),
+                Err(Error::NotFound { path, .. }) => Ok(path),
+                Err(err) => Err(err),
             })
-            .buffer_unordered(self.max_concurrent_requests)
-            .map_ok(|path| path.to_string())
             .try_collect::<Vec<_>>()
             .await?;
 
