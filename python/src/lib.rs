@@ -326,13 +326,31 @@ impl RawDeltaTable {
     }
 
 
-    #[pyo3(signature = (source, predicate))]
-    pub fn merge(
+    #[pyo3(signature = (source, predicate, source_alias, strict_cast, writer_properties,
+        mached_update_updates, 
+        matched_update_predicate, 
+        matched_delete_predicate, 
+        not_matched_insert_updates,
+        not_matched_insert_predicate,
+        not_matched_by_source_update_updates,
+        not_matched_by_source_update_predicate,
+        not_matched_by_source_delete_predicate,
+    ))]
+    pub fn merge_execute(
         &mut self,
         source: str,
         predicate,
-    ) -> PyResult<String> {
-        
+    ) -> PyResult<String>  {
+
+
+
+
+
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
     }
 
     // Run the restore command on the Delta Table: restore table to a given version or datetime
