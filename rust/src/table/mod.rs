@@ -31,7 +31,7 @@ use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 pub mod builder;
 pub mod config;
 pub mod state;
-#[cfg(all(feature = "arrow"))]
+#[cfg(feature = "arrow")]
 pub mod state_arrow;
 
 /// Metadata for a checkpoint file

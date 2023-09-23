@@ -60,7 +60,7 @@ mod local {
         assert_eq!(table.get_files(), vec![Path::from(a.path.clone())]);
 
         // Remove added file.
-        let r = deltalake::action::Remove {
+        let r = deltalake::protocol::Remove {
             path: a.path.clone(),
             deletion_timestamp: Some(chrono::Utc::now().timestamp_millis()),
             data_change: false,

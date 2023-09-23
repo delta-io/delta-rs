@@ -6,7 +6,7 @@ use num_traits::cast::ToPrimitive;
 use parquet::record::{Field, ListAccessor, MapAccessor, RowAccessor};
 use serde_json::json;
 
-use crate::action::{
+use crate::protocol::{
     Action, Add, AddCDCFile, ColumnCountStat, ColumnValueStat, DeletionVector, MetaData, Protocol,
     ProtocolError, Remove, Stats, Txn,
 };
@@ -217,7 +217,7 @@ impl Add {
                         "minValues" => if let Ok(row) = record.get_group(i) {
                             for (name, field) in row.get_column_iter() {
                                 if !matches!(field, Field::Null) {
-                                    if let Some(values) = field_to_value_stat(&field, name) {
+                                    if let Some(values) = field_to_value_stat(field, name) {
                                         stats.min_values.insert(name.clone(), values);
                                     }
                                 }
@@ -228,7 +228,7 @@ impl Add {
                         "maxValues" => if let Ok(row) = record.get_group(i) {
                             for (name, field) in row.get_column_iter() {
                                 if !matches!(field, Field::Null) {
-                                    if let Some(values) = field_to_value_stat(&field, name) {
+                                    if let Some(values) = field_to_value_stat(field, name) {
                                         stats.max_values.insert(name.clone(), values);
                                     }
                                 }
@@ -239,7 +239,7 @@ impl Add {
                         "nullCount" => if let Ok(row) = record.get_group(i) {
                             for (name, field) in row.get_column_iter() {
                                 if !matches!(field, Field::Null) {
-                                    if let Some(count) = field_to_count_stat(&field, name) {
+                                    if let Some(count) = field_to_count_stat(field, name) {
                                         stats.null_count.insert(name.clone(), count);
                                     }
                                 }

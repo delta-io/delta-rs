@@ -19,7 +19,7 @@ async fn test_log_buffering() {
     let max_iter = 10;
     let buf_size = 10;
 
-    let location = deltalake::builder::ensure_table_uri(path).unwrap();
+    let location = deltalake::table::builder::ensure_table_uri(path).unwrap();
 
     // use storage that sleeps 10ms on every `get`
     let store = std::sync::Arc::new(

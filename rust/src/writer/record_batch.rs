@@ -9,8 +9,6 @@ use std::{collections::HashMap, sync::Arc};
 
 use arrow::array::{Array, UInt32Array};
 use arrow::compute::{partition, take};
-use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
-use arrow::error::ArrowError;
 use arrow::record_batch::RecordBatch;
 use arrow_array::ArrayRef;
 use arrow_row::{RowConverter, SortField};

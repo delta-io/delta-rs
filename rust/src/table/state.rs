@@ -360,7 +360,7 @@ impl DeltaTableState {
             protocol::Action::commitInfo(v) => {
                 self.commit_infos.push(v);
             }
-            action::Action::domainMetadata(v) => {
+            protocol::Action::domainMetadata(v) => {
                 self.domain_metadatas.push(v);
             }
         }

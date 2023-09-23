@@ -103,12 +103,12 @@ where
     assert_eq!(map.len() as i64, WORKERS * COMMITS);
 
     // check that we have unique and ascending versions committed
-    let mut versions = Vec::from_iter(map.keys().map(|x| x.clone()));
+    let mut versions = Vec::from_iter(map.keys().copied());
     versions.sort();
     assert_eq!(versions, Vec::from_iter(1i64..=WORKERS * COMMITS));
 
     // check that each file for each worker is committed as expected
-    let mut files = Vec::from_iter(map.values().map(|x| x.clone()));
+    let mut files = Vec::from_iter(map.values().cloned());
     files.sort();
     let mut expected = Vec::new();
     for w in 0..WORKERS {

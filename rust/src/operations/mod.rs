@@ -213,7 +213,7 @@ mod datafusion_utils {
     use datafusion_expr::Expr;
     use futures::{Stream, StreamExt};
 
-    use crate::{table_state::DeltaTableState, DeltaResult};
+    use crate::{table::state::DeltaTableState, DeltaResult};
 
     /// Used to represent user input of either a Datafusion expression or string expression
     pub enum Expression {
