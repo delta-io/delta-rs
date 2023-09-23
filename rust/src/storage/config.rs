@@ -2,13 +2,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use object_store::local::LocalFileSystem;
+use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::prefix::PrefixStore;
-use object_store::{parse_url_opts, DynObjectStore, Error as ObjectStoreError};
+use object_store::{parse_url_opts, DynObjectStore, Error as ObjectStoreError, ObjectStore};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
+use super::file::FileStorageBackend;
 use super::utils::str_is_truthy;
 use crate::errors::{DeltaResult, DeltaTableError};
 
@@ -30,6 +31,7 @@ use object_store::gcp::GoogleConfigKey;
 ))]
 use std::str::FromStr;
 
+#[cfg(feature = "azure")]
 mod azure;
 
 /// Recognises various URL formats, identifying the relevant [`ObjectStore`](crate::ObjectStore)
@@ -229,31 +231,32 @@ pub(crate) fn configure_store(
 ) -> DeltaResult<Arc<DynObjectStore>> {
     let (scheme, _prefix) = ObjectStoreScheme::parse(url, options)?;
     match scheme {
-        ObjectStoreScheme::Local => Ok(Arc::new(LocalFileSystem::new_with_prefix(
-            url.to_file_path()
-                .map_err(|_| DeltaTableError::InvalidTableLocation(url.to_string()))?
-                .to_str()
-                .ok_or_else(|| DeltaTableError::InvalidTableLocation(url.to_string()))?,
-        )?)),
+        ObjectStoreScheme::Local => {
+            let path = url
+                .to_file_path()
+                .map_err(|_| DeltaTableError::InvalidTableLocation(url.to_string()))?;
+            Ok(Arc::new(FileStorageBackend::try_new(path)?))
+        }
+        ObjectStoreScheme::Memory => url_prefix_handler(InMemory::new(), Path::parse(url.path())?),
         #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
         ObjectStoreScheme::AmazonS3 => {
             options.with_env_s3();
             let (store, prefix) = parse_url_opts(url, options.as_s3_options())?;
             let store =
                 S3StorageBackend::try_new(Arc::new(store), S3StorageOptions::from_map(&options.0))?;
-            Ok(Arc::new(PrefixStore::new(store, prefix)))
+            url_prefix_handler(store, prefix)
         }
         #[cfg(feature = "azure")]
         ObjectStoreScheme::MicrosoftAzure => {
             let config = azure::AzureConfigHelper::try_new(options.as_azure_options())?.build()?;
             let (store, prefix) = parse_url_opts(url, config)?;
-            Ok(Arc::new(PrefixStore::new(store, prefix)))
+            url_prefix_handler(store, prefix)
         }
         #[cfg(feature = "gcs")]
         ObjectStoreScheme::GoogleCloudStorage => {
             options.with_env_gcs();
             let (store, prefix) = parse_url_opts(url, options.as_gcs_options())?;
-            Ok(Arc::new(PrefixStore::new(store, prefix)))
+            url_prefix_handler(store, prefix)
         }
         #[cfg(feature = "hdfs")]
         ObjectStoreScheme::Hdfs => {
@@ -263,7 +266,7 @@ pub(crate) fn configure_store(
                     url.as_ref()
                 ))
             })?;
-            Ok(Arc::new(PrefixStore::new(store, _prefix)))
+            url_prefix_handler(store, _prefix)
         }
         #[cfg(not(feature = "hdfs"))]
         ObjectStoreScheme::Hdfs => Err(DeltaTableError::MissingFeature {
@@ -272,8 +275,16 @@ pub(crate) fn configure_store(
         }),
         _ => {
             let (store, prefix) = parse_url_opts(url, options.0.clone())?;
-            Ok(Arc::new(PrefixStore::new(store, prefix)))
+            url_prefix_handler(store, prefix)
         }
+    }
+}
+
+fn url_prefix_handler<T: ObjectStore>(store: T, prefix: Path) -> DeltaResult<Arc<DynObjectStore>> {
+    if prefix != Path::from("/") {
+        Ok(Arc::new(PrefixStore::new(store, prefix)))
+    } else {
+        Ok(Arc::new(store))
     }
 }
 
