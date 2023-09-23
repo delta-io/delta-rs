@@ -661,6 +661,22 @@ given filters.
         return self._table.get_add_actions(flatten)
 
 
+class TableMerger:
+    """API for various table MERGE commands."""
+    
+    def __init__(self, table: DeltaTable):
+        self.table = table
+    
+    def __call__( # this is when you do dt.merge()
+        self,
+        source: DeltaTable,
+        predicate: str
+    ):
+        return self.table._table.merge(
+            source = source,
+            predicate = predicate
+        ) # Which should return DelteMergeBuilder object
+
 class TableOptimizer:
     """API for various table optimization commands."""
 

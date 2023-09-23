@@ -24,6 +24,7 @@ use deltalake::checkpoints::create_checkpoint;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
+use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
@@ -322,6 +323,16 @@ impl RawDeltaTable {
             .map_err(PythonError::from)?;
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+
+    #[pyo3(signature = (source, predicate))]
+    pub fn merge(
+        &mut self,
+        source: str,
+        predicate,
+    ) -> PyResult<String> {
+        
     }
 
     // Run the restore command on the Delta Table: restore table to a given version or datetime
