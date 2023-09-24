@@ -186,5 +186,9 @@ name = "basic_operations"
 required-features = ["datafusion"]
 
 [[example]]
+name = "load_table"
+required-features = ["datafusion"]
+
+[[example]]
 name = "recordbatch-writer"
 required-features = ["arrow"]
