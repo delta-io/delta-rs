@@ -208,15 +208,12 @@ def write_deltalake(
         partition_schema = pa.schema([schema.field(name) for name in partition_by])
         partitioning = ds.partitioning(partition_schema, flavor="hive")
     else:
-        partition_schema = pa.schema([])
         partitioning = None
 
     add_actions: List[AddAction] = []
 
     def visitor(written_file: Any) -> None:
-        path, partition_values = get_partitions_from_path(
-            written_file.path, partition_schema=partition_schema
-        )
+        path, partition_values = get_partitions_from_path(written_file.path)
         stats = get_file_stats_from_metadata(written_file.metadata)
 
         # PyArrow added support for written_file.size in 9.0.0
@@ -413,17 +410,7 @@ def try_get_deltatable(
         return None
 
 
-quoted_types = [
-    pa.timestamp("s"),
-    pa.timestamp("ms"),
-    pa.timestamp("us"),
-    pa.timestamp("ns"),
-]
-
-
-def get_partitions_from_path(
-    path: str, partition_schema: pa.Schema
-) -> Tuple[str, Dict[str, Optional[str]]]:
+def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
     if path[0] == "/":
         path = path[1:]
     parts = path.split("/")
@@ -436,10 +423,7 @@ def get_partitions_from_path(
         if value == "__HIVE_DEFAULT_PARTITION__":
             out[key] = None
         else:
-            if partition_schema.field(key).type in quoted_types:
-                out[key] = unquote(value)
-            else:
-                out[key] = value
+            out[key] = unquote(value)
     return path, out
 
 
