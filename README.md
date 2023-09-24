@@ -130,7 +130,6 @@ and [operations](#supported-operations) that can be performed against tables. Th
 of features outlined in the Delta [protocol][protocol] is also [tracked](#protocol-support-level).
 
 ### Cloud Integrations
-![done]
 
 | Storage              |         Rust          |        Python         | Comment                             |
 | -------------------- | :-------------------: | :-------------------: | ----------------------------------- |
