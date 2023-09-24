@@ -15,13 +15,12 @@ use arrow::datatypes::{
 };
 use arrow::json::ReaderBuilder;
 use arrow::record_batch::*;
-use object_store::path::Path;
+use object_store::path::{Path, PathPart};
 use parking_lot::RwLock;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
 use serde_json::Value;
-use urlencoding::encode;
 use uuid::Uuid;
 
 use crate::errors::DeltaResult;
@@ -46,12 +45,14 @@ impl PartitionPath {
             let partition_value = partition_values
                 .get(k)
                 .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
-            let partition_value = if let Some(val) = partition_value.as_deref() {
-                encode(val).into_owned()
+            let path_part = if let Some(val) = partition_value.as_deref() {
+                let part = PathPart::from(val);
+                let encoded = part.as_ref();
+                format!("{k}={encoded}")
             } else {
-                NULL_PARTITION_VALUE_DATA_PATH.to_string()
+                format!("{k}={NULL_PARTITION_VALUE_DATA_PATH}")
             };
-            path_parts.push(format!("{k}={partition_value}"));
+            path_parts.push(path_part);
         }
 
         Ok(PartitionPath {

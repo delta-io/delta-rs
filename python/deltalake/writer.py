@@ -227,7 +227,7 @@ def write_deltalake(
 
         add_actions.append(
             AddAction(
-                quote(path),
+                path,
                 size,
                 partition_values,
                 int(datetime.now().timestamp() * 1000),
