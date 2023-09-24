@@ -31,11 +31,11 @@ if TYPE_CHECKING:
     import pandas
 
 from ._internal import RawDeltaTable
+from ._util import encode_partition_value
 from .data_catalog import DataCatalog
 from .exceptions import DeltaProtocolError
 from .fs import DeltaStorageHandler
 from .schema import Schema
-from ._util import encode_partition_value
 
 MAX_SUPPORTED_READER_VERSION = 1
 MAX_SUPPORTED_WRITER_VERSION = 2

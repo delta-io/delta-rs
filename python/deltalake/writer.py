@@ -17,9 +17,10 @@ from typing import (
     Tuple,
     Union,
 )
-from urllib.parse import unquote, quote
+from urllib.parse import unquote
 
 from deltalake.fs import DeltaStorageHandler
+
 from ._util import encode_partition_value
 
 if TYPE_CHECKING:
