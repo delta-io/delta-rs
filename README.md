@@ -130,6 +130,7 @@ and [operations](#supported-operations) that can be performed against tables. Th
 of features outlined in the Delta [protocol][protocol] is also [tracked](#protocol-support-level).
 
 ### Cloud Integrations
+![done]
 
 | Storage              |         Rust          |        Python         | Comment                             |
 | -------------------- | :-------------------: | :-------------------: | ----------------------------------- |
@@ -139,7 +140,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | S3 - R2              |        ![done]        |        ![done]        | requires lock for concurrent writes |
 | Azure Blob           |        ![done]        |        ![done]        |                                     |
 | Azure ADLS Gen2      |        ![done]        |        ![done]        |                                     |
-| Micorosft OneLake    | [![open]][onelake-rs] | [![open]][onelake-rs] |                                     |
+| Microsoft OneLake    | [![open]][onelake-rs] | [![open]][onelake-rs] |                                     |
 | Google Cloud Storage |        ![done]        |        ![done]        |                                     |
 
 ### Supported Operations
@@ -153,7 +154,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Delete - predicates   |       ![done]       |                     | Delete data based on a predicate      |
 | Optimize - compaction |       ![done]       |       ![done]       | Harmonize the size of data file       |
 | Optimize - Z-order    |       ![done]       |       ![done]       | Place similar data into the same file |
-| Merge                 | [![open]][merge-rs] | [![open]][merge-py] |                                       |
+| Merge                 | [![semi-done]][merge-rs]| [![open]][merge-py] |    Merge two tables (limited to full re-write)                                   |
 | FS check              |       ![done]       |                     | Remove corrupted files from table     |
 
 ### Protocol Support Level
@@ -173,13 +174,14 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 
 | Reader Version | Requirement                         | Status |
 | -------------- | ----------------------------------- | ------ |
-| Version 2      | Collumn Mapping                     |        |
+| Version 2      | Column Mapping                     |        |
 | Version 3      | Table Features (requires reader V7) |        |
 
 [datafusion]: https://github.com/apache/arrow-datafusion
 [ballista]: https://github.com/apache/arrow-ballista
 [polars]: https://github.com/pola-rs/polars
 [open]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueNeutral.svg
+[semi-done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChangesGrey.svg
 [done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChanges.svg
 [roadmap]: https://github.com/delta-io/delta-rs/issues/1128
 [merge-py]: https://github.com/delta-io/delta-rs/issues/1357
