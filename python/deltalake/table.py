@@ -35,6 +35,7 @@ from .data_catalog import DataCatalog
 from .exceptions import DeltaProtocolError
 from .fs import DeltaStorageHandler
 from .schema import Schema
+from ._util import encode_partition_value
 
 MAX_SUPPORTED_READER_VERSION = 1
 MAX_SUPPORTED_WRITER_VERSION = 2
@@ -620,9 +621,9 @@ given filters.
         for field, op, value in partition_filters:
             str_value: Union[str, List[str]]
             if isinstance(value, (list, tuple)):
-                str_value = [str(val) for val in value]
+                str_value = [encode_partition_value(val) for val in value]
             else:
-                str_value = str(value)
+                str_value = encode_partition_value(value)
             out.append((field, op, str_value))
         return out
 
