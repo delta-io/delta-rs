@@ -168,6 +168,7 @@ def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
         "bool",
         "binary",
         "date32",
+        "timestamp",
     ],
 )
 def test_roundtrip_partitioned(
