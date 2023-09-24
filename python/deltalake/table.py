@@ -412,6 +412,11 @@ given filters.
         return self._metadata
 
     def protocol(self) -> ProtocolVersions:
+        """
+        Get the reader and writer protocol versions of the DeltaTable.
+
+        :return: the current ProtocolVersions registered in the transaction log
+        """
         return ProtocolVersions(*self._table.protocol_versions())
 
     def history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
