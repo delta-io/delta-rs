@@ -8,6 +8,7 @@ pub mod checkpoints;
 pub mod parquet2_read;
 #[cfg(feature = "parquet")]
 mod parquet_read;
+mod serde_path;
 
 #[cfg(feature = "arrow")]
 use arrow_schema::ArrowError;
@@ -15,7 +16,6 @@ use futures::StreamExt;
 use lazy_static::lazy_static;
 use log::*;
 use object_store::{path::Path, Error as ObjectStoreError, ObjectStore};
-use percent_encoding::percent_decode;
 use regex::Regex;
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -103,13 +103,6 @@ pub enum ProtocolError {
         #[from]
         source: std::io::Error,
     },
-}
-
-fn decode_path(raw_path: &str) -> Result<String, ProtocolError> {
-    percent_decode(raw_path.as_bytes())
-        .decode_utf8()
-        .map(|c| c.to_string())
-        .map_err(|e| ProtocolError::InvalidField(format!("Decode path failed for action: {e}")))
 }
 
 /// Struct used to represent minValues and maxValues in add action statistics.
@@ -255,6 +248,7 @@ pub struct StatsParsed {
 pub struct AddCDCFile {
     /// A relative path, from the root of the table, or an
     /// absolute path to a CDC file
+    #[serde(with = "serde_path")]
     pub path: String,
     /// The size of this file in bytes
     pub size: i64,
@@ -351,6 +345,7 @@ impl Eq for DeletionVector {}
 #[serde(rename_all = "camelCase")]
 pub struct Add {
     /// A relative path, from the root of the table, to a file that should be added to the table
+    #[serde(with = "serde_path")]
     pub path: String,
     /// The size of this file in bytes
     pub size: i64,
@@ -403,9 +398,11 @@ pub struct Add {
     #[serde(skip_serializing, skip_deserializing)]
     pub stats_parsed: Option<String>,
     /// Map containing metadata about this file
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, Option<String>>>,
 
-    ///Metadata about deletion vector
+    /// Metadata about deletion vector
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion_vector: Option<DeletionVector>,
 }
 
@@ -431,11 +428,6 @@ impl PartialEq for Add {
 impl Eq for Add {}
 
 impl Add {
-    /// Returns the Add action with path decoded.
-    pub fn path_decoded(self) -> Result<Self, ProtocolError> {
-        decode_path(&self.path).map(|path| Self { path, ..self })
-    }
-
     /// Get whatever stats are available. Uses (parquet struct) parsed_stats if present falling back to json stats.
     #[cfg(any(feature = "parquet", feature = "parquet2"))]
     pub fn get_stats(&self) -> Result<Option<Stats>, serde_json::error::Error> {
@@ -569,6 +561,7 @@ impl TryFrom<DeltaTableMetaData> for MetaData {
 #[serde(rename_all = "camelCase")]
 pub struct Remove {
     /// The path of the file that is removed from the table.
+    #[serde(with = "serde_path")]
     pub path: String,
     /// The timestamp when the remove was added to table state.
     pub deletion_timestamp: Option<i64>,
@@ -581,12 +574,16 @@ pub struct Remove {
     /// it's still nullable so we keep it as Option<> for compatibly.
     pub extended_file_metadata: Option<bool>,
     /// A map from partition column to value for this file.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub partition_values: Option<HashMap<String, Option<String>>>,
     /// Size of this file in bytes
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub size: Option<i64>,
     /// Map containing metadata about this file
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub tags: Option<HashMap<String, Option<String>>>,
-    ///Metadata about deletion vector
+    /// Metadata about deletion vector
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub deletion_vector: Option<DeletionVector>,
 }
 
@@ -614,13 +611,6 @@ impl PartialEq for Remove {
             && self.size == other.size
             && self.tags == other.tags
             && self.deletion_vector == other.deletion_vector
-    }
-}
-
-impl Remove {
-    /// Returns the Remove action with path decoded.
-    pub fn path_decoded(self) -> Result<Self, ProtocolError> {
-        decode_path(&self.path).map(|path| Self { path, ..self })
     }
 }
 

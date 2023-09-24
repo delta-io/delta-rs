@@ -27,3 +27,4 @@ Cargo.lock
 !/delta-inspect/Cargo.lock
 !/proofs/Cargo.lock
 
+justfile

@@ -36,7 +36,7 @@ async fn main() -> Result<(), DeltaTableError> {
     })?;
     info!("Using the location of: {:?}", table_uri);
 
-    let table_path = Path::from(table_uri.as_ref());
+    let table_path = Path::parse(&table_uri)?;
 
     let maybe_table = deltalake::open_table(&table_path).await;
     let mut table = match maybe_table {
