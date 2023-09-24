@@ -15,11 +15,13 @@ use arrow::datatypes::{
 };
 use arrow::json::ReaderBuilder;
 use arrow::record_batch::*;
-use object_store::path::{Path, PathPart};
+use object_store::path::Path;
+use object_store::path::DELIMITER_BYTE;
 use parking_lot::RwLock;
 use parquet::basic::Compression;
 use parquet::file::properties::WriterProperties;
 use parquet::schema::types::ColumnPath;
+use percent_encoding::{percent_encode, AsciiSet, CONTROLS};
 use serde_json::Value;
 use uuid::Uuid;
 
@@ -46,8 +48,7 @@ impl PartitionPath {
                 .get(k)
                 .ok_or_else(|| DeltaWriterError::MissingPartitionColumn(k.to_string()))?;
             let path_part = if let Some(val) = partition_value.as_deref() {
-                let part = PathPart::from(val);
-                let encoded = part.as_ref();
+                let encoded = percent_encode(val.as_bytes(), INVALID).to_string();
                 format!("{k}={encoded}")
             } else {
                 format!("{k}={NULL_PARTITION_VALUE_DATA_PATH}")
@@ -60,6 +61,30 @@ impl PartitionPath {
         })
     }
 }
+
+const INVALID: &AsciiSet = &CONTROLS
+    // everything object store needs encoded ...
+    .add(DELIMITER_BYTE)
+    .add(b'\\')
+    .add(b'{')
+    .add(b'^')
+    .add(b'}')
+    .add(b'%')
+    .add(b'`')
+    .add(b']')
+    .add(b'"')
+    .add(b'>')
+    .add(b'[')
+    .add(b'~')
+    .add(b'<')
+    .add(b'#')
+    .add(b'|')
+    .add(b'\r')
+    .add(b'\n')
+    .add(b'*')
+    .add(b'?')
+    //... and some more chars illegal on windows
+    .add(b':');
 
 impl From<PartitionPath> for String {
     fn from(path: PartitionPath) -> String {

@@ -877,12 +877,15 @@ mod tests {
             .await
             .unwrap();
 
-        let table = ops
+        let _table = ops
             .write([batch.clone()])
             .with_partition_columns(["string"])
             .await
             .unwrap();
 
+        let table = crate::open_table(tmp_path.as_os_str().to_str().unwrap())
+            .await
+            .unwrap();
         let (_table, stream) = DeltaOps(table).load().await.unwrap();
         let data: Vec<RecordBatch> = collect_sendable_stream(stream).await.unwrap();
 
