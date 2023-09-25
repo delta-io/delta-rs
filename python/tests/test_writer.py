@@ -168,6 +168,7 @@ def test_roundtrip_metadata(tmp_path: pathlib.Path, sample_data: pa.Table):
         "bool",
         "binary",
         "date32",
+        "timestamp",
     ],
 )
 def test_roundtrip_partitioned(
@@ -888,3 +889,19 @@ def test_concurrency(existing_table: DeltaTable, sample_data: pa.Table):
         "a concurrent transaction deleted the same data your transaction deletes"
         in str(exception)
     )
+
+
+def test_issue_1651_roundtrip_timestamp(tmp_path: pathlib.Path):
+    data = pa.table(
+        {
+            "id": pa.array([425], type=pa.int32()),
+            "data": pa.array(["python-module-test-write"]),
+            "t": pa.array([datetime(2023, 9, 15)]),
+        }
+    )
+
+    write_deltalake(table_or_uri=tmp_path, mode="append", data=data, partition_by=["t"])
+    dt = DeltaTable(table_uri=tmp_path)
+    dataset = dt.to_pyarrow_dataset()
+
+    assert dataset.count_rows() == 1

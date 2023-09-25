@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     import pandas
 
 from ._internal import RawDeltaTable
+from ._util import encode_partition_value
 from .data_catalog import DataCatalog
 from .exceptions import DeltaProtocolError
 from .fs import DeltaStorageHandler
@@ -625,9 +626,9 @@ given filters.
         for field, op, value in partition_filters:
             str_value: Union[str, List[str]]
             if isinstance(value, (list, tuple)):
-                str_value = [str(val) for val in value]
+                str_value = [encode_partition_value(val) for val in value]
             else:
-                str_value = str(value)
+                str_value = encode_partition_value(value)
             out.append((field, op, str_value))
         return out
 

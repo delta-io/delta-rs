@@ -552,7 +552,8 @@ fn cast_record_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operations::DeltaOps;
+    use crate::action::SaveMode;
+    use crate::operations::{collect_sendable_stream, DeltaOps};
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::{
         get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
@@ -562,7 +563,7 @@ mod tests {
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, TimeUnit};
-    use datafusion::assert_batches_sorted_eq;
+    use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
     use serde_json::{json, Value};
 
     #[tokio::test]
@@ -854,5 +855,48 @@ mod tests {
             actual[0].column_by_name("nested").unwrap().data_type(),
             &expected
         );
+    }
+
+    #[tokio::test]
+    async fn test_special_characters_write_read() {
+        let tmp_dir = tempdir::TempDir::new("test").unwrap();
+        let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("string", DataType::Utf8, true),
+            Field::new("data", DataType::Utf8, true),
+        ]));
+
+        let str_values = StringArray::from(vec![r#"$%&/()=^"[]#*?.:_- {=}|`<>~/\r\n+"#]);
+        let data_values = StringArray::from(vec!["test"]);
+
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(str_values), Arc::new(data_values)])
+            .unwrap();
+
+        let ops = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap())
+            .await
+            .unwrap();
+
+        let _table = ops
+            .write([batch.clone()])
+            .with_partition_columns(["string"])
+            .await
+            .unwrap();
+
+        let table = crate::open_table(tmp_path.as_os_str().to_str().unwrap())
+            .await
+            .unwrap();
+        let (_table, stream) = DeltaOps(table).load().await.unwrap();
+        let data: Vec<RecordBatch> = collect_sendable_stream(stream).await.unwrap();
+
+        let expected = vec![
+            "+------+-----------------------------------+",
+            "| data | string                            |",
+            "+------+-----------------------------------+",
+            r#"| test | $%&/()=^"[]#*?.:_- {=}|`<>~/\r\n+ |"#,
+            "+------+-----------------------------------+",
+        ];
+
+        assert_batches_eq!(&expected, &data);
     }
 }
