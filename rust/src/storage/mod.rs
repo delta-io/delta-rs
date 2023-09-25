@@ -91,8 +91,8 @@ impl DeltaObjectStore {
     /// * `location` - A url pointing to the root of the delta table.
     /// * `options` - Options passed to underlying builders. See [`with_storage_options`](crate::table::builder::DeltaTableBuilder::with_storage_options)
     pub fn try_new(location: Url, options: impl Into<StorageOptions> + Clone) -> DeltaResult<Self> {
-        let options = options.into();
-        let storage = config::configure_store(&location, &options)?;
+        let mut options = options.into();
+        let storage = config::configure_store(&location, &mut options)?;
         Ok(Self {
             storage,
             location,

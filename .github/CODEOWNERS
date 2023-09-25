@@ -1,4 +1,6 @@
-* @houqp @xianwill @wjones127 @fvaleye @roeap @rtyler @mosyp
+rust/ @wjones127 @roeap @rtyler
 proofs/ @houqp
-python/ @wjones127 @fvaleye @rtyler @roeap @houqp
+python/ @wjones127 @fvaleye @roeap
 tlaplus/ @houqp
+.github/ @wjones127 @rtyler
+docs/ @MrPowers

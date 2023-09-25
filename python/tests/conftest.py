@@ -103,7 +103,7 @@ def s3_localstack_creds():
 
 @pytest.fixture()
 def s3_localstack(monkeypatch, s3_localstack_creds):
-    monkeypatch.setenv("AWS_STORAGE_ALLOW_HTTP", "TRUE")
+    monkeypatch.setenv("AWS_ALLOW_HTTP", "TRUE")
     for key, value in s3_localstack_creds.items():
         monkeypatch.setenv(key, value)
 

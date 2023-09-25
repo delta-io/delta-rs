@@ -252,7 +252,7 @@ async fn check_files_available(
     files: &Vec<Add>,
 ) -> DeltaResult<()> {
     for file in files {
-        let file_path = Path::from(file.path.clone());
+        let file_path = Path::parse(file.path.clone())?;
         match object_store.head(&file_path).await {
             Ok(_) => {}
             Err(ObjectStoreError::NotFound { .. }) => {

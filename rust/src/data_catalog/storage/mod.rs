@@ -47,9 +47,9 @@ impl ListingSchemaProvider {
         storage_options: Option<HashMap<String, String>>,
     ) -> DeltaResult<Self> {
         let uri = ensure_table_uri(root_uri)?;
-        let storage_options = storage_options.unwrap_or_default().into();
+        let mut storage_options = storage_options.unwrap_or_default().into();
         // We already parsed the url, so unwrapping is safe.
-        let store = configure_store(&uri, &storage_options)?;
+        let store = configure_store(&uri, &mut storage_options)?;
         Ok(Self {
             authority: uri.to_string(),
             store,

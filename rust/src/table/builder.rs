@@ -341,8 +341,7 @@ pub mod s3_storage_options {
     /// See also <https://docs.rs/rusoto_sts/0.47.0/rusoto_sts/struct.WebIdentityProvider.html#method.from_k8s_env>.
     pub const AWS_ROLE_SESSION_NAME: &str = "AWS_ROLE_SESSION_NAME";
     /// Allow http connections - mainly useful for integration tests
-    #[allow(dead_code)]
-    pub const AWS_STORAGE_ALLOW_HTTP: &str = "AWS_STORAGE_ALLOW_HTTP";
+    pub const AWS_ALLOW_HTTP: &str = "AWS_ALLOW_HTTP";
 
     /// If set to "true", allows creating commits without concurrent writer protection.
     /// Only safe if there is one writer to a given table.
