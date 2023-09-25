@@ -22,7 +22,6 @@ pub mod datafusion;
 pub mod hdfs;
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
 pub mod s3;
-pub mod schemas;
 
 #[derive(Default)]
 pub struct TestContext {
