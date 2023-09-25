@@ -45,7 +45,7 @@ async fn main() -> Result<(), DeltaTableError> {
             info!("It doesn't look like our delta table has been created");
             create_initialized_table(&table_path).await
         }
-        Err(err) => Err(err).unwrap(),
+        Err(err) => panic!("{:?}", err),
     };
 
     let writer_properties = WriterProperties::builder()
