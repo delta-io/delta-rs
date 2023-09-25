@@ -648,3 +648,49 @@ def test_filter_nulls(tmp_path: Path):
     assert_num_fragments(table, predicate, 2)
     expected = pa.table({"part": ["a", "a", "b", "b"], "value": [1, 1, None, None]})
     assert_scan_equals(table, predicate, expected)
+
+
+def test_issue_1653_filter_bool_partition(tmp_path: Path):
+    ta = pa.Table.from_pydict(
+        {
+            "bool_col": [True, False, True, False],
+            "int_col": [0, 1, 2, 3],
+            "str_col": ["a", "b", "c", "d"],
+        }
+    )
+    write_deltalake(
+        tmp_path, ta, partition_by=["bool_col", "int_col"], mode="overwrite"
+    )
+    dt = DeltaTable(tmp_path)
+
+    assert (
+        dt.to_pyarrow_table(
+            filters=[
+                ("int_col", "=", 0),
+                ("bool_col", "=", True),
+            ]
+        ).num_rows
+        == 1
+    )
+    assert (
+        len(
+            dt.file_uris(
+                partition_filters=[
+                    ("int_col", "=", 0),
+                    ("bool_col", "=", "true"),
+                ]
+            )
+        )
+        == 1
+    )
+    assert (
+        len(
+            dt.file_uris(
+                partition_filters=[
+                    ("int_col", "=", 0),
+                    ("bool_col", "=", True),
+                ]
+            )
+        )
+        == 1
+    )

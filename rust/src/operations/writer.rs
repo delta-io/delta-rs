@@ -247,7 +247,7 @@ impl PartitionWriterConfig {
             .map_err(|err| WriteError::FileName {
                 source: Box::new(err),
             })?;
-        let prefix = Path::from(part_path.as_ref());
+        let prefix = Path::parse(part_path.as_ref())?;
         let writer_properties = writer_properties.unwrap_or_else(|| {
             WriterProperties::builder()
                 .set_created_by(format!("delta-rs version {}", crate_version()))

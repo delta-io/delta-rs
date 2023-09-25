@@ -327,12 +327,11 @@ impl DeltaTableState {
             action::Action::cdc(_v) => {}
             action::Action::add(v) => {
                 if require_files {
-                    self.files.push(v.path_decoded()?);
+                    self.files.push(v);
                 }
             }
             action::Action::remove(v) => {
                 if require_tombstones && require_files {
-                    let v = v.path_decoded()?;
                     self.tombstones.insert(v);
                 }
             }
