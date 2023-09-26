@@ -142,6 +142,7 @@ def write_deltalake(
     :param overwrite_schema: If True, allows updating the schema of the table.
     :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
     :param partition_filters: the partition filters that will be used for partition overwrite.
+    :param large_dtypes: If True, the table schema is checked against large_dtypes
     """
     if _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
