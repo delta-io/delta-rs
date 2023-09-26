@@ -75,6 +75,7 @@ For Databricks Unity Catalog authentication, use environment variables:
   * DATABRICKS_ACCESS_TOKEN
 
 .. code-block:: python
+    
     >>> import os
     >>> from deltalake import DataCatalog, DeltaTable
     >>> os.environ['DATABRICKS_WORKSPACE_URL'] = "https://adb-62800498333851.30.azuredatabricks.net"
