@@ -206,8 +206,26 @@ def write_deltalake(
     else:  # creating a new table
         current_version = -1
 
+    dtype_map = {
+        pa.large_string(): pa.string(),
+    }
+
+    def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
+        try:
+            return dtype_map[dtype]
+        except KeyError:
+            return dtype
+
     if partition_by:
-        partition_schema = pa.schema([schema.field(name) for name in partition_by])
+        if PYARROW_MAJOR_VERSION < 12:
+            partition_schema = pa.schema(
+                [
+                    pa.field(name, _large_to_normal_dtype(schema.field(name).type))
+                    for name in partition_by
+                ]
+            )
+        else:
+            partition_schema = pa.schema([schema.field(name) for name in partition_by])
         partitioning = ds.partitioning(partition_schema, flavor="hive")
     else:
         partitioning = None
