@@ -66,8 +66,7 @@ The `deltalake` library aims to adopt patterns from other libraries in data proc
 so getting started should look familiar.
 
 ```py3
-from deltalake import DeltaTable
-from deltalake.write import write_deltalake
+from deltalake import DeltaTable, write_deltalake
 import pandas as pd
 
 # write some data into a delta table
@@ -139,7 +138,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | S3 - R2              |        ![done]        |        ![done]        | requires lock for concurrent writes |
 | Azure Blob           |        ![done]        |        ![done]        |                                     |
 | Azure ADLS Gen2      |        ![done]        |        ![done]        |                                     |
-| Microsoft OneLake    | [![open]][onelake-rs] | [![open]][onelake-rs] |                                     |
+| Microsoft OneLake    | ![done] | ![done] |                                     |
 | Google Cloud Storage |        ![done]        |        ![done]        |                                     |
 
 ### Supported Operations
