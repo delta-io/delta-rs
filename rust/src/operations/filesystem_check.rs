@@ -24,11 +24,11 @@ pub use object_store::path::Path;
 use object_store::ObjectStore;
 use url::{ParseError, Url};
 
-use crate::action::{Action, Add, DeltaOperation, Remove};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::operations::transaction::commit;
+use crate::protocol::{Action, Add, DeltaOperation, Remove};
 use crate::storage::DeltaObjectStore;
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 /// Audit the Delta Table's active files with the underlying file system.

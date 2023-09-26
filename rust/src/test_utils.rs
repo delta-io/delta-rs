@@ -385,7 +385,7 @@ pub mod az_cli {
 /// small wrapper around s3 cli
 pub mod s3_cli {
     use super::set_env_if_not_set;
-    use crate::builder::s3_storage_options;
+    use crate::table::builder::s3_storage_options;
     use std::process::{Command, ExitStatus, Stdio};
 
     /// Create a new bucket

@@ -1,7 +1,5 @@
 //! Delta Table read and write implementation
 
-// Reference: https://github.com/delta-io/delta/blob/master/PROTOCOL.md
-//
 use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::fmt;
@@ -21,17 +19,20 @@ use serde::ser::SerializeSeq;
 use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use uuid::Uuid;
 
-use super::action;
-use super::action::{find_latest_check_point_for_version, get_last_checkpoint, Action};
-use super::partitions::PartitionFilter;
-use super::schema::*;
-use super::table_state::DeltaTableState;
-use crate::action::{Add, ProtocolError, Stats};
+use self::builder::DeltaTableConfig;
+use self::state::DeltaTableState;
 use crate::errors::DeltaTableError;
+use crate::partitions::PartitionFilter;
+use crate::protocol::{self, find_latest_check_point_for_version, get_last_checkpoint, Action};
+use crate::protocol::{Add, ProtocolError, Stats};
+use crate::schema::*;
 use crate::storage::{commit_uri_from_version, ObjectStoreRef};
 
-// TODO re-exports only for transition
-pub use crate::builder::{DeltaTableBuilder, DeltaTableConfig, DeltaVersion};
+pub mod builder;
+pub mod config;
+pub mod state;
+#[cfg(feature = "arrow")]
+pub mod state_arrow;
 
 /// Metadata for a checkpoint file
 #[derive(Serialize, Deserialize, Debug, Default, Clone, Copy)]
@@ -136,7 +137,7 @@ pub struct DeltaTableMetaData {
     /// User-provided description for this table
     pub description: Option<String>,
     /// Specification of the encoding for the files stored in the table
-    pub format: action::Format,
+    pub format: protocol::Format,
     /// Schema of the table
     pub schema: Schema,
     /// An array containing the names of columns by which the data should be partitioned
@@ -152,7 +153,7 @@ impl DeltaTableMetaData {
     pub fn new(
         name: Option<String>,
         description: Option<String>,
-        format: Option<action::Format>,
+        format: Option<protocol::Format>,
         schema: Schema,
         partition_columns: Vec<String>,
         configuration: HashMap<String, Option<String>>,
@@ -208,10 +209,10 @@ impl fmt::Display for DeltaTableMetaData {
     }
 }
 
-impl TryFrom<action::MetaData> for DeltaTableMetaData {
+impl TryFrom<protocol::MetaData> for DeltaTableMetaData {
     type Error = ProtocolError;
 
-    fn try_from(action_metadata: action::MetaData) -> Result<Self, Self::Error> {
+    fn try_from(action_metadata: protocol::MetaData) -> Result<Self, Self::Error> {
         let schema = action_metadata.get_schema()?;
         Ok(Self {
             id: action_metadata.id,
@@ -663,7 +664,7 @@ impl DeltaTable {
     pub async fn history(
         &mut self,
         limit: Option<usize>,
-    ) -> Result<Vec<action::CommitInfo>, DeltaTableError> {
+    ) -> Result<Vec<protocol::CommitInfo>, DeltaTableError> {
         let mut version = match limit {
             Some(l) => max(self.version() - l as i64 + 1, 0),
             None => self.get_earliest_delta_log_version().await?,
@@ -796,7 +797,7 @@ impl DeltaTable {
     }
 
     /// Returns a vector of active tombstones (i.e. `Remove` actions present in the current delta log).
-    pub fn get_tombstones(&self) -> impl Iterator<Item = &action::Remove> {
+    pub fn get_tombstones(&self) -> impl Iterator<Item = &protocol::Remove> {
         self.state.unexpired_tombstones()
     }
 
@@ -907,64 +908,12 @@ impl std::fmt::Debug for DeltaTable {
     }
 }
 
-/// Creates and loads a DeltaTable from the given path with current metadata.
-/// Infers the storage backend to use from the scheme in the given table path.
-pub async fn open_table(table_uri: impl AsRef<str>) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri).load().await?;
-    Ok(table)
-}
-
-/// Same as `open_table`, but also accepts storage options to aid in building the table for a deduced
-/// `StorageService`.
-pub async fn open_table_with_storage_options(
-    table_uri: impl AsRef<str>,
-    storage_options: HashMap<String, String>,
-) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)
-        .with_storage_options(storage_options)
-        .load()
-        .await?;
-    Ok(table)
-}
-
-/// Creates a DeltaTable from the given path and loads it with the metadata from the given version.
-/// Infers the storage backend to use from the scheme in the given table path.
-pub async fn open_table_with_version(
-    table_uri: impl AsRef<str>,
-    version: i64,
-) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)
-        .with_version(version)
-        .load()
-        .await?;
-    Ok(table)
-}
-
-/// Creates a DeltaTable from the given path.
-/// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
-/// Infers the storage backend to use from the scheme in the given table path.
-pub async fn open_table_with_ds(
-    table_uri: impl AsRef<str>,
-    ds: impl AsRef<str>,
-) -> Result<DeltaTable, DeltaTableError> {
-    let table = DeltaTableBuilder::from_uri(table_uri)
-        .with_datestring(ds)?
-        .load()
-        .await?;
-    Ok(table)
-}
-
-/// Returns rust crate version, can be use used in language bindings to expose Rust core version
-pub fn crate_version() -> &'static str {
-    env!("CARGO_PKG_VERSION")
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-    use crate::builder::DeltaTableBuilder;
     use crate::operations::create::CreateBuilder;
+    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+    use crate::table::builder::DeltaTableBuilder;
     use pretty_assertions::assert_eq;
     use std::collections::HashMap;
     use tempdir::TempDir;

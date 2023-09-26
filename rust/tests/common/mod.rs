@@ -1,9 +1,9 @@
 #![allow(dead_code, unused_variables)]
 
 use bytes::Bytes;
-use deltalake::action::{self, Add, DeltaOperation, Remove, SaveMode};
 use deltalake::operations::create::CreateBuilder;
 use deltalake::operations::transaction::commit;
+use deltalake::protocol::{self, Add, DeltaOperation, Remove, SaveMode};
 use deltalake::storage::DeltaObjectStore;
 use deltalake::DeltaTableBuilder;
 use deltalake::{DeltaTable, Schema};
@@ -140,7 +140,7 @@ pub async fn add_file(
             partition_by: None,
             predicate: None,
         };
-        let actions = vec![action::Action::add(add)];
+        let actions = vec![protocol::Action::add(add)];
         commit(
             table.object_store().as_ref(),
             &actions,
@@ -173,7 +173,7 @@ pub async fn remove_file(
         ..Default::default()
     };
     let operation = DeltaOperation::Delete { predicate: None };
-    let actions = vec![action::Action::remove(remove)];
+    let actions = vec![protocol::Action::remove(remove)];
     commit(
         table.object_store().as_ref(),
         &actions,

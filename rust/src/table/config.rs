@@ -387,7 +387,7 @@ fn parse_int(value: &str) -> Result<i64, DeltaConfigError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::DeltaTableMetaData;
+    use crate::table::DeltaTableMetaData;
     use crate::Schema;
     use std::collections::HashMap;
 

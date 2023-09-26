@@ -1,6 +1,6 @@
 //! Methods to get Delta Table state in Arrow structures
 //!
-//! See [crate::table_state::DeltaTableState].
+//! See [crate::table::DeltaTableState].
 
 use std::borrow::Cow;
 use std::collections::{HashMap, HashSet, VecDeque};
@@ -16,9 +16,9 @@ use arrow_array::{
 use arrow_schema::{DataType, Field, Fields, TimeUnit};
 use itertools::Itertools;
 
-use crate::action::{ColumnCountStat, ColumnValueStat, Stats};
+use super::state::DeltaTableState;
 use crate::errors::DeltaTableError;
-use crate::table_state::DeltaTableState;
+use crate::protocol::{ColumnCountStat, ColumnValueStat, Stats};
 use crate::SchemaDataType;
 use crate::SchemaTypeStruct;
 

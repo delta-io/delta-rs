@@ -32,15 +32,15 @@ use serde_json::Map;
 use super::writer::{DeltaWriter, WriterConfig};
 use super::MAX_SUPPORTED_WRITER_VERSION;
 use super::{transaction::commit, CreateBuilder};
-use crate::action::{Action, Add, DeltaOperation, Remove, SaveMode};
-use crate::delta::DeltaTable;
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::{Action, Add, DeltaOperation, Remove, SaveMode};
 use crate::schema::Schema;
 use crate::storage::{DeltaObjectStore, ObjectStoreRef};
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::writer::record_batch::divide_by_partition_values;
 use crate::writer::utils::PartitionPath;
+use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
 enum WriteError {
@@ -552,8 +552,8 @@ fn cast_record_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::action::SaveMode;
     use crate::operations::{collect_sendable_stream, DeltaOps};
+    use crate::protocol::SaveMode;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::{
         get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
