@@ -338,9 +338,20 @@ impl RawDeltaTable {
     ))]
     pub fn merge_execute(
         &mut self,
-        source: str,
+        source,
         predicate,
     ) -> PyResult<String>  {
+        let ctx = SessionContext::new();
+        let batch = RecordBatch::try_new(
+            Arc::clone(&schema),
+            vec![
+                Arc::new(arrow::array::?::from(vec))
+            ]
+        )
+
+        let source = ctx.read_batch(batch).unwrap();
+
+        let mut cmd = MergeBuilder::new(self._table.object_store(), self._table.snapshot(), predicate, source)
 
 
 
