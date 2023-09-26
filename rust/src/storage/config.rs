@@ -225,7 +225,8 @@ impl From<HashMap<String, String>> for StorageOptions {
     }
 }
 
-pub(crate) fn configure_store(
+/// Create store from url and options
+pub fn configure_store(
     url: &Url,
     options: &mut StorageOptions,
 ) -> DeltaResult<Arc<DynObjectStore>> {

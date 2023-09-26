@@ -59,7 +59,7 @@ pub type ObjectStoreRef = Arc<DeltaObjectStore>;
 #[derive(Debug, Clone)]
 pub struct DeltaObjectStore {
     storage: Arc<dyn ObjectStore>,
-    location: Url,
+    pub(crate) location: Url,
     options: StorageOptions,
 }
 

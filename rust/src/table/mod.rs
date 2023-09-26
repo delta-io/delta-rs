@@ -592,7 +592,7 @@ impl DeltaTable {
             };
 
             debug!("merging table state with version: {new_version}");
-            let s = DeltaTableState::from_actions(actions, new_version)?;
+            let s = DeltaTableState::from_actions_with_base(actions, new_version, self.storage.location.to_string())?;
             self.state
                 .merge(s, self.config.require_tombstones, self.config.require_files);
             if self.version() == max_version {

@@ -48,6 +48,7 @@ pub struct DeltaTableState {
     // retention period for log entries in milli-seconds
     log_retention_millis: i64,
     enable_expired_log_cleanup: bool,
+    table_base: Option<String>,
 }
 
 impl DeltaTableState {
@@ -55,6 +56,15 @@ impl DeltaTableState {
     pub fn with_version(version: i64) -> Self {
         Self {
             version,
+            ..Self::default()
+        }
+    }
+
+    /// Create Table state with specified version
+    pub fn with_version_and_base(version: i64, base: String) -> Self {
+        Self {
+            version,
+            table_base: Some(base),
             ..Self::default()
         }
     }
@@ -90,6 +100,15 @@ impl DeltaTableState {
     /// Construct a delta table state object from a list of actions
     pub fn from_actions(actions: Vec<Action>, version: i64) -> Result<Self, ProtocolError> {
         let mut new_state = DeltaTableState::with_version(version);
+        for action in actions {
+            new_state.process_action(action, true, true)?;
+        }
+        Ok(new_state)
+    }
+
+    /// Construct a delta table state object from a list of actions and table base location
+    pub fn from_actions_with_base(actions: Vec<Action>, version: i64, base: String) -> Result<Self, ProtocolError> {
+        let mut new_state = DeltaTableState::with_version_and_base(version, base);
         for action in actions {
             new_state.process_action(action, true, true)?;
         }
@@ -326,13 +345,19 @@ impl DeltaTableState {
         match action {
             // TODO: optionally load CDC into TableState
             protocol::Action::cdc(_v) => {}
-            protocol::Action::add(v) => {
+            protocol::Action::add(mut v) => {
                 if require_files {
+                    if let Some(base) = &self.table_base {
+                        v.path = v.path.strip_prefix(base).unwrap().to_string();
+                    }
                     self.files.push(v);
                 }
             }
-            protocol::Action::remove(v) => {
+            protocol::Action::remove(mut v) => {
                 if require_tombstones && require_files {
+                    if let Some(base) = &self.table_base {
+                        v.path = v.path.strip_prefix(base).unwrap().to_string();
+                    }
                     self.tombstones.insert(v);
                 }
             }
