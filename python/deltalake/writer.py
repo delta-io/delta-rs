@@ -92,6 +92,7 @@ def write_deltalake(
     overwrite_schema: bool = False,
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+    large_dtypes: bool = False,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -177,12 +178,12 @@ def write_deltalake(
         partition_by = [partition_by]
 
     if table:  # already exists
-        if schema != table.schema().to_pyarrow() and not (
+        if schema != table.schema().to_pyarrow(as_large_types=large_dtypes) and not (
             mode == "overwrite" and overwrite_schema
         ):
             raise ValueError(
                 "Schema of data does not match table schema\n"
-                f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow()}"
+                f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow(as_large_types=large_dtypes)}"
             )
 
         if mode == "error":
