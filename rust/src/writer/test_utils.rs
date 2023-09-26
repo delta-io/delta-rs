@@ -1,3 +1,5 @@
+//! Utilities for writing unit tests
+
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -5,10 +7,10 @@ use arrow::compute::take;
 use arrow_array::{Int32Array, Int64Array, RecordBatch, StringArray, StructArray, UInt32Array};
 use arrow_schema::{DataType, Field, Schema as ArrowSchema};
 
-use crate::delta::DeltaTableMetaData;
 use crate::operations::create::CreateBuilder;
-use crate::schema::Schema;
-use crate::{DeltaTable, DeltaTableBuilder, SchemaDataType, SchemaField, SchemaTypeStruct};
+use crate::schema::{Schema, SchemaTypeStruct};
+use crate::table::DeltaTableMetaData;
+use crate::{DeltaTable, DeltaTableBuilder, SchemaDataType, SchemaField};
 
 pub type TestResult = Result<(), Box<dyn std::error::Error + 'static>>;
 

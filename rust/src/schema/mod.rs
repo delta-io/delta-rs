@@ -8,6 +8,10 @@ use std::collections::HashMap;
 
 use crate::errors::DeltaTableError;
 
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub mod arrow_convert;
+pub mod partitions;
+
 /// Type alias for a string expected to match a GUID/UUID format
 pub type Guid = String;
 

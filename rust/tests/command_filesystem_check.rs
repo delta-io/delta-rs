@@ -12,7 +12,7 @@ mod common;
 #[tokio::test]
 #[serial]
 async fn test_filesystem_check_local() -> TestResult {
-    Ok(test_filesystem_check(StorageIntegration::Local).await?)
+    test_filesystem_check(StorageIntegration::Local).await
 }
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
@@ -21,21 +21,21 @@ async fn test_filesystem_check_local() -> TestResult {
 async fn test_filesystem_check_aws() -> TestResult {
     set_env_if_not_set("AWS_S3_ALLOW_UNSAFE_RENAME", "true");
     set_env_if_not_set("AWS_S3_LOCKING_PROVIDER", "none");
-    Ok(test_filesystem_check(StorageIntegration::Amazon).await?)
+    test_filesystem_check(StorageIntegration::Amazon).await
 }
 
 #[cfg(feature = "azure")]
 #[tokio::test]
 #[serial]
 async fn test_filesystem_check_azure() -> TestResult {
-    Ok(test_filesystem_check(StorageIntegration::Microsoft).await?)
+    test_filesystem_check(StorageIntegration::Microsoft).await
 }
 
 #[cfg(feature = "gcs")]
 #[tokio::test]
 #[serial]
 async fn test_filesystem_check_gcp() -> TestResult {
-    Ok(test_filesystem_check(StorageIntegration::Google).await?)
+    test_filesystem_check(StorageIntegration::Google).await
 }
 
 #[cfg(feature = "hdfs")]
@@ -73,7 +73,7 @@ async fn test_filesystem_check(storage: StorageIntegration) -> TestResult {
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     let remove = table.state.all_tombstones().get(file).unwrap();
-    assert_eq!(remove.data_change, true);
+    assert!(remove.data_change);
 
     // An additonal run should return an empty list of orphaned actions
     let op = DeltaOps::from(table);
@@ -114,7 +114,7 @@ async fn test_filesystem_check_partitioned() -> TestResult {
     assert_eq!(vec![file.to_string()], metrics.files_removed);
 
     let remove = table.state.all_tombstones().get(file).unwrap();
-    assert_eq!(remove.data_change, true);
+    assert!(remove.data_change);
     Ok(())
 }
 
@@ -170,7 +170,7 @@ async fn test_filesystem_check_outdated() -> TestResult {
     if let Err(DeltaTableError::VersionAlreadyExists(version)) = res {
         assert!(version == 3);
     } else {
-        assert!(false);
+        panic!();
     }
 
     Ok(())

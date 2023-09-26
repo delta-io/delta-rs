@@ -101,7 +101,7 @@ async fn read_write_test_onelake(integration: StorageIntegration, path: &Path) -
 
 async fn test_object_store(integration: StorageIntegration, skip_copy: bool) -> TestResult {
     let context = IntegrationContext::new(integration)?;
-    let delta_store = DeltaTableBuilder::from_uri(&context.root_uri())
+    let delta_store = DeltaTableBuilder::from_uri(context.root_uri())
         .with_allow_http(true)
         .build_storage()?;
 
@@ -463,7 +463,7 @@ async fn delete_fixtures(storage: &DynObjectStore) -> TestResult {
     let paths = flatten_list_stream(storage, None).await?;
 
     for f in &paths {
-        let _ = storage.delete(f).await?;
+        storage.delete(f).await?;
     }
     Ok(())
 }

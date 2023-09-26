@@ -17,8 +17,11 @@ from typing import (
     Tuple,
     Union,
 )
+from urllib.parse import unquote
 
 from deltalake.fs import DeltaStorageHandler
+
+from ._util import encode_partition_value
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -179,7 +182,7 @@ def write_deltalake(
         ):
             raise ValueError(
                 "Schema of data does not match table schema\n"
-                f"Table schema:\n{schema}\nData Schema:\n{table.schema().to_pyarrow()}"
+                f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow()}"
             )
 
         if mode == "error":
@@ -262,7 +265,7 @@ def write_deltalake(
             for i in range(partition_values.num_rows):
                 # Map will maintain order of partition_columns
                 partition_map = {
-                    column_name: __encode_partition_value(
+                    column_name: encode_partition_value(
                         batch.column(column_name)[i].as_py()
                     )
                     for column_name in table.metadata().partition_columns
@@ -422,7 +425,7 @@ def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
         if value == "__HIVE_DEFAULT_PARTITION__":
             out[key] = None
         else:
-            out[key] = value
+            out[key] = unquote(value)
     return path, out
 
 
@@ -489,21 +492,3 @@ def get_file_stats_from_metadata(
                     maximum for maximum in maximums if maximum is not None
                 )
     return stats
-
-
-def __encode_partition_value(val: Any) -> str:
-    # Rules based on: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
-    if isinstance(val, bool):
-        return str(val).lower()
-    if isinstance(val, str):
-        return val
-    elif isinstance(val, (int, float)):
-        return str(val)
-    elif isinstance(val, date):
-        return val.isoformat()
-    elif isinstance(val, datetime):
-        return val.isoformat(sep=" ")
-    elif isinstance(val, bytes):
-        return val.decode("unicode_escape", "backslashreplace")
-    else:
-        raise ValueError(f"Could not encode partition value for type: {val}")

@@ -1,7 +1,7 @@
 use chrono::Utc;
-use deltalake::action::{Action, Add, DeltaOperation, Remove, SaveMode};
 use deltalake::operations::create::CreateBuilder;
 use deltalake::operations::transaction::commit;
+use deltalake::protocol::{Action, Add, DeltaOperation, Remove, SaveMode};
 use deltalake::storage::{DeltaObjectStore, GetResult, ObjectStoreResult};
 use deltalake::{DeltaTable, Schema, SchemaDataType, SchemaField};
 use object_store::path::Path as StorePath;

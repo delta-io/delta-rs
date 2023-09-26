@@ -2,7 +2,7 @@ import json
 import operator
 import warnings
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from functools import reduce
 from pathlib import Path
 from typing import (
@@ -31,6 +31,7 @@ if TYPE_CHECKING:
     import pandas
 
 from ._internal import RawDeltaTable
+from ._util import encode_partition_value
 from .data_catalog import DataCatalog
 from .exceptions import DeltaProtocolError
 from .fs import DeltaStorageHandler
@@ -411,6 +412,11 @@ given filters.
         return self._metadata
 
     def protocol(self) -> ProtocolVersions:
+        """
+        Get the reader and writer protocol versions of the DeltaTable.
+
+        :return: the current ProtocolVersions registered in the transaction log
+        """
         return ProtocolVersions(*self._table.protocol_versions())
 
     def history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -626,9 +632,9 @@ given filters.
         for field, op, value in partition_filters:
             str_value: Union[str, List[str]]
             if isinstance(value, (list, tuple)):
-                str_value = [str(val) for val in value]
+                str_value = [encode_partition_value(val) for val in value]
             else:
-                str_value = str(value)
+                str_value = encode_partition_value(value)
             out.append((field, op, str_value))
         return out
 
@@ -942,6 +948,7 @@ class TableOptimizer:
         partition_filters: Optional[FilterType] = None,
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
+        min_commit_interval: Optional[Union[int, timedelta]] = None,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -959,10 +966,25 @@ class TableOptimizer:
         :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
             file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
             faster, but will also use more memory.
+        :param min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
+            created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
+            want a commit per partition.
         :return: the metrics from optimize
+
+        Examples:
+
+        Use a timedelta object to specify the seconds, minutes or hours of the interval.
+        >>> from deltalake import DeltaTable
+        >>> from datetime import timedelta
+        >>> dt = DeltaTable("tmp")
+        >>> time_delta = timedelta(minutes=10)
+        >>> dt.optimize.z_order(["timestamp"], min_commit_interval=time_delta)
         """
+        if isinstance(min_commit_interval, timedelta):
+            min_commit_interval = int(min_commit_interval.total_seconds())
+
         metrics = self.table._table.compact_optimize(
-            partition_filters, target_size, max_concurrent_tasks
+            partition_filters, target_size, max_concurrent_tasks, min_commit_interval
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -974,6 +996,7 @@ class TableOptimizer:
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
         max_spill_size: int = 20 * 1024 * 1024 * 1024,
+        min_commit_interval: Optional[Union[int, timedelta]] = None,
     ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
@@ -989,14 +1012,30 @@ class TableOptimizer:
             file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
             faster, but will also use more memory.
         :param max_spill_size: the maximum number of bytes to spill to disk. Defaults to 20GB.
+        :param min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
+            created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
+            want a commit per partition.
         :return: the metrics from optimize
+
+        Examples:
+
+        Use a timedelta object to specify the seconds, minutes or hours of the interval.
+        >>> from deltalake import DeltaTable
+        >>> from datetime import timedelta
+        >>> dt = DeltaTable("tmp")
+        >>> time_delta = timedelta(minutes=10)
+        >>> dt.optimize.compact(min_commit_interval=time_delta)
         """
+        if isinstance(min_commit_interval, timedelta):
+            min_commit_interval = int(min_commit_interval.total_seconds())
+
         metrics = self.table._table.z_order_optimize(
             list(columns),
             partition_filters,
             target_size,
             max_concurrent_tasks,
             max_spill_size,
+            min_commit_interval,
         )
         self.table.update_incremental()
         return json.loads(metrics)
