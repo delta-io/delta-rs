@@ -33,7 +33,7 @@
             delta-rs
           </a>
               <div class="version">
-                0.10.1
+                0.11.0
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -86,7 +86,7 @@
 <span id="deltatable"></span><h2>DeltaTable<a class="headerlink" href="#module-deltalake.table" title="Permalink to this headline"></a></h2>
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.table.</span></span><span class="sig-name descname"><span class="pre">DeltaTable</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">storage_options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">without_files</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.table.</span></span><span class="sig-name descname"><span class="pre">DeltaTable</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">storage_options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">without_files</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">log_buffer_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable" title="Permalink to this definition"></a></dt>
 <dd><p>Create a DeltaTable instance.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -95,6 +95,7 @@
 <li><p><strong>version</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – </p></li>
 <li><p><strong>storage_options</strong> (<em>Optional</em><em>[</em><em>Dict</em><em>[</em><em>str</em><em>, </em><em>str</em><em>]</em><em>]</em>) – </p></li>
 <li><p><strong>without_files</strong> (<em>bool</em>) – </p></li>
+<li><p><strong>log_buffer_size</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – </p></li>
 </ul>
 </dd>
 </dl>
@@ -202,7 +203,7 @@ The supported type for value is str. Use empty string <cite>‘’</cite> for Nu
 
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.from_data_catalog">
-<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_data_catalog</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_catalog</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">database_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">table_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data_catalog_id</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.from_data_catalog" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">classmethod</span><span class="w"> </span></em><span class="sig-name descname"><span class="pre">from_data_catalog</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">data_catalog</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">database_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">table_name</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">data_catalog_id</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">version</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">log_buffer_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.from_data_catalog" title="Permalink to this definition"></a></dt>
 <dd><p>Create the Delta Table from a Data Catalog.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
@@ -212,6 +213,11 @@ The supported type for value is str. Use empty string <cite>‘’</cite> for Nu
 <li><p><strong>table_name</strong> (<em>str</em>) – the table name inside the Data Catalog</p></li>
 <li><p><strong>data_catalog_id</strong> (<em>Optional</em><em>[</em><em>str</em><em>]</em>) – the identifier of the Data Catalog</p></li>
 <li><p><strong>version</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – version of the DeltaTable</p></li>
+<li><p><strong>log_buffer_size</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – Number of files to buffer when reading the commit log. A positive integer.
+Setting a value greater than 1 results in concurrent calls to the storage api.
+This can decrease latency if there are many files in the log since the last checkpoint,
+but will also increase memory usage. Possible rate limits of the storage backend should
+also be considered for optimal performance. Defaults to 4 * number of cpus.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type</dt>
@@ -237,7 +243,7 @@ prefix <cite>tags.</cite>. Nested field names are concatenated with <cite>.</cit
 <dd class="field-even"><p>a PyArrow RecordBatch containing the add action data.</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v12.0.1)">pyarrow.lib.RecordBatch</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v13.0.0)">pyarrow.lib.RecordBatch</a></p>
 </dd>
 </dl>
 <p>Examples:</p>
@@ -326,6 +332,20 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 </dd></dl>
 
 <dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.DeltaTable.protocol">
+<span class="sig-name descname"><span class="pre">protocol</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.protocol" title="Permalink to this definition"></a></dt>
+<dd><p>Get the reader and writer protocol versions of the DeltaTable.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Returns</dt>
+<dd class="field-odd"><p>the current ProtocolVersions registered in the transaction log</p>
+</dd>
+<dt class="field-even">Return type</dt>
+<dd class="field-even"><p><a class="reference internal" href="#deltalake.table.ProtocolVersions" title="deltalake.table.ProtocolVersions">deltalake.table.ProtocolVersions</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.DeltaTable.pyarrow_schema">
 <span class="sig-name descname"><span class="pre">pyarrow_schema</span></span><span class="sig-paren">(</span><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.pyarrow_schema" title="Permalink to this definition"></a></dt>
 <dd><p>Get the current schema of the DeltaTable with the Parquet PyArrow format.</p>
@@ -335,7 +355,28 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 <dd class="field-odd"><p>the current Schema with the Parquet PyArrow format</p>
 </dd>
 <dt class="field-even">Return type</dt>
-<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v12.0.1)">pyarrow.lib.Schema</a></p>
+<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v13.0.0)">pyarrow.lib.Schema</a></p>
+</dd>
+</dl>
+</dd></dl>
+
+<dl class="py method">
+<dt class="sig sig-object py" id="deltalake.table.DeltaTable.restore">
+<span class="sig-name descname"><span class="pre">restore</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">target</span></span></em>, <em class="sig-param"><span class="o"><span class="pre">*</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">ignore_missing_files</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">protocol_downgrade_allowed</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">False</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.DeltaTable.restore" title="Permalink to this definition"></a></dt>
+<dd><p>Run the Restore command on the Delta Table: restore table to a given version or datetime.</p>
+<dl class="field-list simple">
+<dt class="field-odd">Parameters</dt>
+<dd class="field-odd"><ul class="simple">
+<li><p><strong>target</strong> (<em>Union</em><em>[</em><em>int</em><em>, </em><em>datetime.datetime</em><em>, </em><em>str</em><em>]</em>) – the expected version will restore, which represented by int, date str or datetime.</p></li>
+<li><p><strong>ignore_missing_files</strong> (<em>bool</em>) – whether the operation carry on when some data files missing.</p></li>
+<li><p><strong>protocol_downgrade_allowed</strong> (<em>bool</em>) – whether the operation when protocol version upgraded.</p></li>
+</ul>
+</dd>
+<dt class="field-even">Returns</dt>
+<dd class="field-even"><p>the metrics from restore.</p>
+</dd>
+<dt class="field-odd">Return type</dt>
+<dd class="field-odd"><p><em>Dict</em>[str, <em>Any</em>]</p>
 </dd>
 </dl>
 </dd></dl>
@@ -363,12 +404,12 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p></li>
 <li><p><strong>columns</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>]</em>) – The columns to project. This can be a list of column names to include (order and duplicates will be preserved)</p></li>
-<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v12.0.1)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
+<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v13.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
 <li><p><strong>filters</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>, </em><em>List</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em><em>]</em><em>]</em>) – A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass <code class="docutils literal notranslate"><span class="pre">partitions</span></code></p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type</dt>
-<dd class="field-even"><p><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.0.3)">pandas.DataFrame</a></p>
+<dd class="field-even"><p><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.1.1)">pandas.DataFrame</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -381,8 +422,8 @@ The <cite>datetime_string</cite> argument should be an RFC 3339 and ISO 8601 dat
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p></li>
-<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v12.0.1)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
-<li><p><strong>parquet_read_options</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html#pyarrow.dataset.ParquetReadOptions" title="(in Apache Arrow v12.0.1)"><em>pyarrow._dataset_parquet.ParquetReadOptions</em></a><em>]</em>) – Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
+<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v13.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
+<li><p><strong>parquet_read_options</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html#pyarrow.dataset.ParquetReadOptions" title="(in Apache Arrow v13.0.0)"><em>pyarrow._dataset_parquet.ParquetReadOptions</em></a><em>]</em>) – Optional read options for Parquet. Use this to handle INT96 to timestamp conversion for edge cases like 0001-01-01 or 9999-12-31
 More info: <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html">https://arrow.apache.org/docs/python/generated/pyarrow.dataset.ParquetReadOptions.html</a></p></li>
 </ul>
 </dd>
@@ -390,7 +431,7 @@ More info: <a class="reference external" href="https://arrow.apache.org/docs/pyt
 <dd class="field-even"><p>the PyArrow dataset in PyArrow</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.Dataset.html#pyarrow.dataset.Dataset" title="(in Apache Arrow v12.0.1)">pyarrow._dataset.Dataset</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.dataset.Dataset.html#pyarrow.dataset.Dataset" title="(in Apache Arrow v13.0.0)">pyarrow._dataset.Dataset</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -404,12 +445,12 @@ More info: <a class="reference external" href="https://arrow.apache.org/docs/pyt
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>partitions</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em>) – A list of partition filters, see help(DeltaTable.files_by_partitions) for filter syntax</p></li>
 <li><p><strong>columns</strong> (<em>Optional</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>]</em>) – The columns to project. This can be a list of column names to include (order and duplicates will be preserved)</p></li>
-<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v12.0.1)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
+<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>str</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v13.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em><em>]</em>) – A concrete implementation of the Pyarrow FileSystem or a fsspec-compatible interface. If None, the first file path will be used to determine the right FileSystem</p></li>
 <li><p><strong>filters</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>, </em><em>List</em><em>[</em><em>List</em><em>[</em><em>Tuple</em><em>[</em><em>str</em><em>, </em><em>str</em><em>, </em><em>Any</em><em>]</em><em>]</em><em>]</em><em>]</em><em>]</em>) – A disjunctive normal form (DNF) predicate for filtering rows. If you pass a filter you do not need to pass <code class="docutils literal notranslate"><span class="pre">partitions</span></code></p></li>
 </ul>
 </dd>
 <dt class="field-even">Return type</dt>
-<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v12.0.1)">pyarrow.lib.Table</a></p>
+<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v13.0.0)">pyarrow.lib.Table</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -546,7 +587,7 @@ newer versions.</p>
 </dl>
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.TableOptimizer.compact">
-<span class="sig-name descname"><span class="pre">compact</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_concurrent_tasks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableOptimizer.compact" title="Permalink to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">compact</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_concurrent_tasks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_commit_interval</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableOptimizer.compact" title="Permalink to this definition"></a></dt>
 <dd><p>Compacts small files to reduce the total number of files in the table.</p>
 <p>This operation is idempotent; if run twice on the same table (assuming it has
 not been updated) it will do nothing the second time.</p>
@@ -562,6 +603,9 @@ If that value isn’t set, will use default value of 256MB.</p></li>
 <li><p><strong>max_concurrent_tasks</strong> (<em>Optional</em><em>[</em><em>int</em><em>]</em>) – the maximum number of concurrent tasks to use for
 file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
 faster, but will also use more memory.</p></li>
+<li><p><strong>min_commit_interval</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>int</em><em>, </em><em>datetime.timedelta</em><em>]</em><em>]</em>) – minimum interval in seconds or as timedeltas before a new commit is
+created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
+want a commit per partition.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
@@ -571,11 +615,18 @@ faster, but will also use more memory.</p></li>
 <dd class="field-odd"><p><em>Dict</em>[str, <em>Any</em>]</p>
 </dd>
 </dl>
+<p>Examples:</p>
+<p>Use a timedelta object to specify the seconds, minutes or hours of the interval.
+&gt;&gt;&gt; from deltalake import DeltaTable
+&gt;&gt;&gt; from datetime import timedelta
+&gt;&gt;&gt; dt = DeltaTable(“tmp”)
+&gt;&gt;&gt; time_delta = timedelta(minutes=10)
+&gt;&gt;&gt; dt.optimize.z_order([“timestamp”], min_commit_interval=time_delta)</p>
 </dd></dl>
 
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.table.TableOptimizer.z_order">
-<span class="sig-name descname"><span class="pre">z_order</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">columns</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_concurrent_tasks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_spill_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">21474836480</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableOptimizer.z_order" title="Permalink to this definition"></a></dt>
+<span class="sig-name descname"><span class="pre">z_order</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">columns</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">partition_filters</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">target_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_concurrent_tasks</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">max_spill_size</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">21474836480</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">min_commit_interval</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.table.TableOptimizer.z_order" title="Permalink to this definition"></a></dt>
 <dd><p>Reorders the data using a Z-order curve to improve data skipping.</p>
 <p>This also performs compaction, so the same parameters as compact() apply.</p>
 <dl class="field-list simple">
@@ -590,6 +641,9 @@ If that value isn’t set, will use default value of 256MB.</p></li>
 file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
 faster, but will also use more memory.</p></li>
 <li><p><strong>max_spill_size</strong> (<em>int</em>) – the maximum number of bytes to spill to disk. Defaults to 20GB.</p></li>
+<li><p><strong>min_commit_interval</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>int</em><em>, </em><em>datetime.timedelta</em><em>]</em><em>]</em>) – minimum interval in seconds or as timedeltas before a new commit is
+created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
+want a commit per partition.</p></li>
 </ul>
 </dd>
 <dt class="field-even">Returns</dt>
@@ -599,6 +653,13 @@ faster, but will also use more memory.</p></li>
 <dd class="field-odd"><p><em>Dict</em>[str, <em>Any</em>]</p>
 </dd>
 </dl>
+<p>Examples:</p>
+<p>Use a timedelta object to specify the seconds, minutes or hours of the interval.
+&gt;&gt;&gt; from deltalake import DeltaTable
+&gt;&gt;&gt; from datetime import timedelta
+&gt;&gt;&gt; dt = DeltaTable(“tmp”)
+&gt;&gt;&gt; time_delta = timedelta(minutes=10)
+&gt;&gt;&gt; dt.optimize.compact(min_commit_interval=time_delta)</p>
 </dd></dl>
 
 </dd></dl>
@@ -619,11 +680,11 @@ this function will throw DeltaProtocolError.</p>
 <dt class="field-odd">Parameters</dt>
 <dd class="field-odd"><ul class="simple">
 <li><p><strong>table_or_uri</strong> (<em>Union</em><em>[</em><em>str</em><em>, </em><em>pathlib.Path</em><em>, </em><a class="reference internal" href="#deltalake.table.DeltaTable" title="deltalake.table.DeltaTable"><em>deltalake.table.DeltaTable</em></a><em>]</em>) – URI of a table or a DeltaTable object.</p></li>
-<li><p><strong>data</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.0.3)"><em>pandas.core.frame.DataFrame</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v12.0.1)"><em>pyarrow.lib.Table</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v12.0.1)"><em>pyarrow.lib.RecordBatch</em></a><em>, </em><em>Iterable</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v12.0.1)"><em>pyarrow.lib.RecordBatch</em></a><em>]</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader" title="(in Apache Arrow v12.0.1)"><em>pyarrow.lib.RecordBatchReader</em></a><em>]</em>) – Data to write. If passing iterable, the schema must also be given.</p></li>
-<li><p><strong>schema</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v12.0.1)"><em>pyarrow.lib.Schema</em></a><em>]</em>) – Optional schema to write.</p></li>
+<li><p><strong>data</strong> (<em>Union</em><em>[</em><a class="reference external" href="https://pandas.pydata.org/docs/reference/api/pandas.DataFrame.html#pandas.DataFrame" title="(in pandas v2.1.1)"><em>pandas.core.frame.DataFrame</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Table.html#pyarrow.Table" title="(in Apache Arrow v13.0.0)"><em>pyarrow.lib.Table</em></a><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v13.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>, </em><em>Iterable</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatch.html#pyarrow.RecordBatch" title="(in Apache Arrow v13.0.0)"><em>pyarrow.lib.RecordBatch</em></a><em>]</em><em>, </em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.RecordBatchReader.html#pyarrow.RecordBatchReader" title="(in Apache Arrow v13.0.0)"><em>pyarrow.lib.RecordBatchReader</em></a><em>]</em>) – Data to write. If passing iterable, the schema must also be given.</p></li>
+<li><p><strong>schema</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v13.0.0)"><em>pyarrow.lib.Schema</em></a><em>]</em>) – Optional schema to write.</p></li>
 <li><p><strong>partition_by</strong> (<em>Optional</em><em>[</em><em>Union</em><em>[</em><em>List</em><em>[</em><em>str</em><em>]</em><em>, </em><em>str</em><em>]</em><em>]</em>) – List of columns to partition the table by. Only required
 when creating a new table.</p></li>
-<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v12.0.1)"><em>pyarrow._fs.FileSystem</em></a><em>]</em>) – Optional filesystem to pass to PyArrow. If not provided will
+<li><p><strong>filesystem</strong> (<em>Optional</em><em>[</em><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v13.0.0)"><em>pyarrow._fs.FileSystem</em></a><em>]</em>) – Optional filesystem to pass to PyArrow. If not provided will
 be inferred from uri. The file system has to be rooted in the table root.
 Use the pyarrow.fs.SubTreeFileSystem, to adopt the root of pyarrow file systems.</p></li>
 <li><p><strong>mode</strong> (<em>Literal</em><em>[</em><em>'error'</em><em>, </em><em>'append'</em><em>, </em><em>'overwrite'</em><em>, </em><em>'ignore'</em><em>]</em>) – How to handle existing data. Default is to error if table already exists.
@@ -711,7 +772,7 @@ If this value is set, then min_rows_per_group should also be set.</p></li>
 <dd><p>Create from a PyArrow schema</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>data_type</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v12.0.1)"><em>pyarrow.Schema</em></a>) – a PyArrow schema</p>
+<dd class="field-odd"><p><strong>data_type</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v13.0.0)"><em>pyarrow.Schema</em></a>) – a PyArrow schema</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><a class="reference internal" href="#deltalake.schema.Schema" title="deltalake.schema.Schema">Schema</a></p>
@@ -768,7 +829,7 @@ compatibility with systems like Polars that only support the large
 versions of Arrow types.</p>
 </dd>
 <dt class="field-even">Return type</dt>
-<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v12.0.1)">pyarrow.Schema</a></p>
+<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Schema.html#pyarrow.Schema" title="(in Apache Arrow v13.0.0)">pyarrow.Schema</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -832,7 +893,7 @@ versions of Arrow types.</p>
 <p>Will raise <code class="docutils literal notranslate"><span class="pre">TypeError</span></code> if the PyArrow type is not a primitive type.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>data_type</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.DataType.html#pyarrow.DataType" title="(in Apache Arrow v12.0.1)"><em>pyarrow.DataType</em></a>) – A PyArrow DataType</p>
+<dd class="field-odd"><p><strong>data_type</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.DataType.html#pyarrow.DataType" title="(in Apache Arrow v13.0.0)"><em>pyarrow.DataType</em></a>) – A PyArrow DataType</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><a class="reference internal" href="#deltalake.schema.PrimitiveType" title="deltalake.schema.PrimitiveType">PrimitiveType</a></p>
@@ -857,7 +918,7 @@ versions of Arrow types.</p>
 <dd><p>Get the equivalent PyArrow type.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.DataType.html#pyarrow.DataType" title="(in Apache Arrow v12.0.1)">pyarrow.DataType</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.DataType.html#pyarrow.DataType" title="(in Apache Arrow v13.0.0)">pyarrow.DataType</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -940,7 +1001,7 @@ if it is a primitive type:</p>
 <p>Will raise <code class="docutils literal notranslate"><span class="pre">TypeError</span></code> if a different PyArrow DataType is provided.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>data_type</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.ListType.html#pyarrow.ListType" title="(in Apache Arrow v12.0.1)"><em>pyarrow.ListType</em></a>) – The PyArrow datatype</p>
+<dd class="field-odd"><p><strong>data_type</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.ListType.html#pyarrow.ListType" title="(in Apache Arrow v13.0.0)"><em>pyarrow.ListType</em></a>) – The PyArrow datatype</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><a class="reference internal" href="#deltalake.schema.ArrayType" title="deltalake.schema.ArrayType">ArrayType</a></p>
@@ -965,7 +1026,7 @@ if it is a primitive type:</p>
 <dd><p>Get the equivalent PyArrow type.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.DataType.html#pyarrow.DataType" title="(in Apache Arrow v12.0.1)">pyarrow.DataType</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.DataType.html#pyarrow.DataType" title="(in Apache Arrow v13.0.0)">pyarrow.DataType</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1028,7 +1089,7 @@ parsed as a primitive type:</p>
 <p>Will raise <code class="docutils literal notranslate"><span class="pre">TypeError</span></code> if passed a different type.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>data_type</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.MapType.html#pyarrow.MapType" title="(in Apache Arrow v12.0.1)"><em>pyarrow.MapType</em></a>) – the PyArrow MapType</p>
+<dd class="field-odd"><p><strong>data_type</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.MapType.html#pyarrow.MapType" title="(in Apache Arrow v13.0.0)"><em>pyarrow.MapType</em></a>) – the PyArrow MapType</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><a class="reference internal" href="#deltalake.schema.MapType" title="deltalake.schema.MapType">MapType</a></p>
@@ -1064,7 +1125,7 @@ parsed as a primitive type:</p>
 <dd><p>Get the equivalent PyArrow data type.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.MapType.html#pyarrow.MapType" title="(in Apache Arrow v12.0.1)">pyarrow.MapType</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.MapType.html#pyarrow.MapType" title="(in Apache Arrow v13.0.0)">pyarrow.MapType</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1152,7 +1213,7 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 <dd class="field-odd"><p><strong>field</strong> – a field</p>
 </dd>
 <dt class="field-even">Type</dt>
-<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Field.html#pyarrow.Field" title="(in Apache Arrow v12.0.1)">pyarrow.Field</a></p>
+<dd class="field-even"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Field.html#pyarrow.Field" title="(in Apache Arrow v13.0.0)">pyarrow.Field</a></p>
 </dd>
 <dt class="field-odd">Return type</dt>
 <dd class="field-odd"><p><a class="reference internal" href="#deltalake.schema.Field" title="deltalake.schema.Field">Field</a></p>
@@ -1215,7 +1276,7 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 <p>Note: This currently doesn’t preserve field metadata.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Field.html#pyarrow.Field" title="(in Apache Arrow v12.0.1)">pyarrow.Field</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.Field.html#pyarrow.Field" title="(in Apache Arrow v13.0.0)">pyarrow.Field</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1281,7 +1342,7 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 <p>Will raise <code class="docutils literal notranslate"><span class="pre">TypeError</span></code> if a different data type is provided.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>data_type</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.StructType.html#pyarrow.StructType" title="(in Apache Arrow v12.0.1)"><em>pyarrow.StructType</em></a>) – a PyArrow struct type.</p>
+<dd class="field-odd"><p><strong>data_type</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.StructType.html#pyarrow.StructType" title="(in Apache Arrow v13.0.0)"><em>pyarrow.StructType</em></a>) – a PyArrow struct type.</p>
 </dd>
 <dt class="field-even">Return type</dt>
 <dd class="field-even"><p><a class="reference internal" href="#deltalake.schema.StructType" title="deltalake.schema.StructType">StructType</a></p>
@@ -1310,7 +1371,7 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 <dd><p>Get the equivalent PyArrow StructType</p>
 <dl class="field-list simple">
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.StructType.html#pyarrow.StructType" title="(in Apache Arrow v12.0.1)">pyarrow.StructType</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.StructType.html#pyarrow.StructType" title="(in Apache Arrow v13.0.0)">pyarrow.StructType</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1351,7 +1412,7 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 <span id="deltastoragehandler"></span><h2>DeltaStorageHandler<a class="headerlink" href="#module-deltalake.fs" title="Permalink to this headline"></a></h2>
 <dl class="py class">
 <dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler">
-<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.fs.</span></span><span class="sig-name descname"><span class="pre">DeltaStorageHandler</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler" title="Permalink to this definition"></a></dt>
+<em class="property"><span class="pre">class</span><span class="w"> </span></em><span class="sig-prename descclassname"><span class="pre">deltalake.fs.</span></span><span class="sig-name descname"><span class="pre">DeltaStorageHandler</span></span><span class="sig-paren">(</span><em class="sig-param"><span class="n"><span class="pre">table_uri</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">options</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em>, <em class="sig-param"><span class="n"><span class="pre">known_sizes</span></span><span class="o"><span class="pre">=</span></span><span class="default_value"><span class="pre">None</span></span></em><span class="sig-paren">)</span><a class="headerlink" href="#deltalake.fs.DeltaStorageHandler" title="Permalink to this definition"></a></dt>
 <dd><p>DeltaStorageHandler is a concrete implementations of a PyArrow FileSystemHandler.</p>
 <dl class="py method">
 <dt class="sig sig-object py" id="deltalake.fs.DeltaStorageHandler.get_file_info_selector">
@@ -1359,13 +1420,13 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 <dd><p>Get info for the files defined by FileSelector.</p>
 <dl class="field-list simple">
 <dt class="field-odd">Parameters</dt>
-<dd class="field-odd"><p><strong>selector</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSelector.html#pyarrow.fs.FileSelector" title="(in Apache Arrow v12.0.1)"><em>pyarrow._fs.FileSelector</em></a>) – FileSelector object</p>
+<dd class="field-odd"><p><strong>selector</strong> (<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSelector.html#pyarrow.fs.FileSelector" title="(in Apache Arrow v13.0.0)"><em>pyarrow._fs.FileSelector</em></a>) – FileSelector object</p>
 </dd>
 <dt class="field-even">Returns</dt>
 <dd class="field-even"><p>list of file info objects</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><em>List</em>[<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileInfo.html#pyarrow.fs.FileInfo" title="(in Apache Arrow v12.0.1)">pyarrow._fs.FileInfo</a>]</p>
+<dd class="field-odd"><p><em>List</em>[<a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileInfo.html#pyarrow.fs.FileInfo" title="(in Apache Arrow v13.0.0)">pyarrow._fs.FileInfo</a>]</p>
 </dd>
 </dl>
 </dd></dl>
@@ -1385,7 +1446,7 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 <dd class="field-even"><p>NativeFile</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile" title="(in Apache Arrow v12.0.1)">pyarrow.lib.PythonFile</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile" title="(in Apache Arrow v13.0.0)">pyarrow.lib.PythonFile</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1405,7 +1466,7 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 <dd class="field-even"><p>NativeFile</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile" title="(in Apache Arrow v12.0.1)">pyarrow.lib.PythonFile</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile" title="(in Apache Arrow v13.0.0)">pyarrow.lib.PythonFile</a></p>
 </dd>
 </dl>
 </dd></dl>
@@ -1426,7 +1487,7 @@ string keys and JSON-serializable values (str, list, int, float, dict):</p>
 <dd class="field-even"><p>NativeFile</p>
 </dd>
 <dt class="field-odd">Return type</dt>
-<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile" title="(in Apache Arrow v12.0.1)">pyarrow.lib.PythonFile</a></p>
+<dd class="field-odd"><p><a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.PythonFile.html#pyarrow.PythonFile" title="(in Apache Arrow v13.0.0)">pyarrow.lib.PythonFile</a></p>
 </dd>
 </dl>
 </dd></dl>

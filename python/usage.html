@@ -34,7 +34,7 @@
             delta-rs
           </a>
               <div class="version">
-                0.10.1
+                0.11.0
               </div>
 <div role="search">
   <form id="rtd-search-form" class="wy-form" action="search.html" method="get">
@@ -67,6 +67,7 @@
 </li>
 <li class="toctree-l2"><a class="reference internal" href="#writing-delta-tables">Writing Delta Tables</a><ul>
 <li class="toctree-l3"><a class="reference internal" href="#overwriting-a-partition">Overwriting a partition</a></li>
+<li class="toctree-l3"><a class="reference internal" href="#restoring-tables">Restoring tables</a></li>
 </ul>
 </li>
 </ul>
@@ -181,9 +182,9 @@ database and table name. Currently supported are AWS Glue and Databricks Unity C
 <p>While delta always needs its internal storage backend to work and be properly configured, in order to manage the delta log,
 it may sometime be advantageous - and is common practice in the arrow world - to customize the storage interface used for
 reading the bulk data.</p>
-<p><code class="docutils literal notranslate"><span class="pre">deltalake</span></code> will work with any storage compliant with <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v12.0.1)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.FileSystem</span></code></a>, however the root of the filesystem has
+<p><code class="docutils literal notranslate"><span class="pre">deltalake</span></code> will work with any storage compliant with <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.FileSystem.html#pyarrow.fs.FileSystem" title="(in Apache Arrow v13.0.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.FileSystem</span></code></a>, however the root of the filesystem has
 to be adjusted to point at the root of the Delta table. We can achieve this by wrapping the custom filesystem into
-a <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.SubTreeFileSystem.html#pyarrow.fs.SubTreeFileSystem" title="(in Apache Arrow v12.0.1)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.SubTreeFileSystem</span></code></a>.</p>
+a <a class="reference external" href="https://arrow.apache.org/docs/python/generated/pyarrow.fs.SubTreeFileSystem.html#pyarrow.fs.SubTreeFileSystem" title="(in Apache Arrow v13.0.0)"><code class="xref py py-class docutils literal notranslate"><span class="pre">pyarrow.fs.SubTreeFileSystem</span></code></a>.</p>
 <div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="kn">import</span> <span class="nn">pyarrow.fs</span> <span class="k">as</span> <span class="nn">fs</span>
 <span class="kn">from</span> <span class="nn">deltalake</span> <span class="kn">import</span> <span class="n">DeltaTable</span>
 
@@ -499,7 +500,7 @@ DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.</p>
 <div class="admonition note">
 <p class="admonition-title">Note</p>
 <p><a class="reference internal" href="api_reference.html#deltalake.write_deltalake" title="deltalake.write_deltalake"><code class="xref py py-func docutils literal notranslate"><span class="pre">write_deltalake()</span></code></a> accepts a Pandas DataFrame, but will convert it to
-a Arrow table before writing. See caveats in <a class="reference external" href="https://arrow.apache.org/docs/python/pandas.html" title="(in Apache Arrow v12.0.1)"><span>Pandas Integration</span></a>.</p>
+a Arrow table before writing. See caveats in <a class="reference external" href="https://arrow.apache.org/docs/python/pandas.html" title="(in Apache Arrow v13.0.0)"><span>Pandas Integration</span></a>.</p>
 </div>
 <p>By default, writes create a new table and error if it already exists. This is
 controlled by the <code class="docutils literal notranslate"><span class="pre">mode</span></code> parameter, which mirrors the behavior of Spark’s
@@ -536,6 +537,20 @@ the method will raise an error.</p>
 </div>
 <p>This method could also be used to insert a new partition if one doesn’t already
 exist, making this operation idempotent.</p>
+</section>
+<section id="restoring-tables">
+<h3>Restoring tables<a class="headerlink" href="#restoring-tables" title="Permalink to this headline"></a></h3>
+<p>Restoring a table will restore delta table to a specified version or datetime. This
+operation compares the current state of the delta table with the state to be restored.
+And add those missing files into the AddFile actions and add redundant files into
+RemoveFile actions. Then commit into a new version.</p>
+<p>Use <a class="reference internal" href="api_reference.html#deltalake.table.DeltaTable.restore" title="deltalake.table.DeltaTable.restore"><code class="xref py py-meth docutils literal notranslate"><span class="pre">DeltaTable.restore()</span></code></a> to perform the restore operation. Note that if any other
+concurrent operation was performed on the table, restore will fail.</p>
+<div class="highlight-python notranslate"><div class="highlight"><pre><span></span><span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span> <span class="o">=</span> <span class="n">DeltaTable</span><span class="p">(</span><span class="s2">&quot;../rust/tests/data/simple_table&quot;</span><span class="p">)</span>
+<span class="gp">&gt;&gt;&gt; </span><span class="n">dt</span><span class="o">.</span><span class="n">restore</span><span class="p">(</span><span class="mi">1</span><span class="p">)</span>
+<span class="go">{&#39;numRemovedFile&#39;: 5, &#39;numRestoredFile&#39;: 22}</span>
+</pre></div>
+</div>
 </section>
 </section>
 </section>
