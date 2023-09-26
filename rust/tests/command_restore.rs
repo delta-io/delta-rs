@@ -4,7 +4,7 @@ use arrow::datatypes::Schema as ArrowSchema;
 use arrow_array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field};
 use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
-use deltalake::action::SaveMode;
+use deltalake::protocol::SaveMode;
 use deltalake::{DeltaOps, DeltaTable, SchemaDataType, SchemaField};
 use rand::Rng;
 use std::collections::HashMap;

@@ -1,4 +1,4 @@
-use crate::action::{Add, ProtocolError, Stats};
+use crate::protocol::{Add, ProtocolError, Stats};
 
 impl Add {
     /// Returns the composite HashMap representation of stats contained in the action if present.

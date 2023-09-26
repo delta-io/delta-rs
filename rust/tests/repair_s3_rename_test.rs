@@ -82,11 +82,7 @@ async fn run_repair_test_case(path: &str, pause_copy: bool) -> Result<(), Object
     assert_eq!(get_text(&s3, &dst2).await, "test2");
 
     async fn not_exists(s3: &Arc<DynObjectStore>, path: &Path) -> bool {
-        if let Err(ObjectStoreError::NotFound { .. }) = s3.head(path).await {
-            true
-        } else {
-            false
-        }
+        matches!(s3.head(path).await, Err(ObjectStoreError::NotFound { .. }))
     }
 
     assert!(not_exists(&s3, &src1).await);
@@ -117,7 +113,7 @@ fn create_s3_backend(
     pause_del: Option<Path>,
 ) -> (Arc<S3StorageBackend>, Arc<Mutex<bool>>) {
     let pause_until_true = Arc::new(Mutex::new(false));
-    let store = DeltaTableBuilder::from_uri(&context.root_uri())
+    let store = DeltaTableBuilder::from_uri(context.root_uri())
         .with_allow_http(true)
         .build_storage()
         .unwrap()

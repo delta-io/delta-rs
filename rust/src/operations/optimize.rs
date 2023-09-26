@@ -41,10 +41,10 @@ use serde_json::Map;
 
 use super::transaction::commit;
 use super::writer::{PartitionWriter, PartitionWriterConfig};
-use crate::action::{self, Action, DeltaOperation};
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::{self, Action, DeltaOperation};
 use crate::storage::ObjectStoreRef;
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::writer::utils::arrow_schema_without_partitions;
 use crate::{crate_version, DeltaTable, ObjectMeta, PartitionFilter};
 
@@ -311,7 +311,7 @@ fn create_remove(
     let deletion_time = SystemTime::now().duration_since(UNIX_EPOCH).unwrap();
     let deletion_time = deletion_time.as_millis() as i64;
 
-    Ok(Action::remove(action::Remove {
+    Ok(Action::remove(protocol::Remove {
         path: path.to_string(),
         deletion_timestamp: Some(deletion_time),
         data_change: false,

@@ -299,7 +299,7 @@ fn url_prefix_handler<T: ObjectStore>(store: T, prefix: Path) -> DeltaResult<Arc
 
 #[cfg(test)]
 mod test {
-    use crate::ensure_table_uri;
+    use crate::table::builder::ensure_table_uri;
 
     use super::*;
 

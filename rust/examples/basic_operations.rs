@@ -4,7 +4,7 @@ use arrow::{
     record_batch::RecordBatch,
 };
 use deltalake::operations::collect_sendable_stream;
-use deltalake::{action::SaveMode, DeltaOps, SchemaDataType, SchemaField};
+use deltalake::{protocol::SaveMode, DeltaOps, SchemaDataType, SchemaField};
 use parquet::{
     basic::{Compression, ZstdLevel},
     file::properties::WriterProperties,

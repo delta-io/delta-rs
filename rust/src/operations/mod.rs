@@ -10,8 +10,8 @@
 use self::create::CreateBuilder;
 use self::filesystem_check::FileSystemCheckBuilder;
 use self::vacuum::VacuumBuilder;
-use crate::builder::DeltaTableBuilder;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 
 pub mod create;
@@ -213,7 +213,7 @@ mod datafusion_utils {
     use datafusion_expr::Expr;
     use futures::{Stream, StreamExt};
 
-    use crate::{table_state::DeltaTableState, DeltaResult};
+    use crate::{table::state::DeltaTableState, DeltaResult};
 
     /// Used to represent user input of either a Datafusion expression or string expression
     pub enum Expression {

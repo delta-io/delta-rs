@@ -9,6 +9,7 @@ pub mod parquet2_read;
 #[cfg(feature = "parquet")]
 mod parquet_read;
 mod serde_path;
+mod time_utils;
 
 #[cfg(feature = "arrow")]
 use arrow_schema::ArrowError;
@@ -25,10 +26,11 @@ use std::hash::{Hash, Hasher};
 use std::mem::take;
 use std::str::FromStr;
 
-use crate::delta_config::IsolationLevel;
 use crate::errors::DeltaResult;
 use crate::storage::ObjectStoreRef;
-use crate::{delta::CheckPoint, schema::*, DeltaTableMetaData};
+use crate::table::config::IsolationLevel;
+use crate::table::DeltaTableMetaData;
+use crate::{schema::*, table::CheckPoint};
 
 /// Error returned when an invalid Delta log action is encountered.
 #[allow(missing_docs)]
