@@ -15,6 +15,11 @@ use arrow::datatypes::{
 };
 use arrow::json::ReaderBuilder;
 use arrow::record_batch::*;
+use arrow_array::types::{ArrowDictionaryKeyType, ArrowPrimitiveType};
+use arrow_array::{
+    downcast_dictionary_array, ArrayAccessor, BooleanArray, DictionaryArray, GenericBinaryArray,
+    GenericStringArray, OffsetSizeTrait, PrimitiveArray,
+};
 use object_store::path::Path;
 use object_store::path::DELIMITER_BYTE;
 use parking_lot::RwLock;
@@ -175,7 +180,11 @@ pub(crate) fn stringified_partition_value(
         return Ok(None);
     }
 
-    let s = match data_type {
+    Ok(Some(partition_value_from_array_and_type(data_type, arr)))
+}
+
+fn partition_value_from_array_and_type(data_type: &DataType, arr: &dyn Array) -> String {
+    match data_type {
         DataType::Int8 => as_primitive_array::<Int8Type>(arr).value(0).to_string(),
         DataType::Int16 => as_primitive_array::<Int16Type>(arr).value(0).to_string(),
         DataType::Int32 => as_primitive_array::<Int32Type>(arr).value(0).to_string(),
@@ -230,13 +239,68 @@ pub(crate) fn stringified_partition_value(
             .value(0)
             .escape_ascii()
             .to_string(),
+        DataType::Dictionary(_, value_type) => {
+            downcast_dictionary_array!(
+                arr => match value_type.as_ref() {
+                    DataType::Int8 => partition_value_from_dict_primitive_array::<_, Int8Type>(value_type, arr),
+                    DataType::Int16 => partition_value_from_dict_primitive_array::<_, Int16Type>(value_type, arr),
+                    DataType::Int32 => partition_value_from_dict_primitive_array::<_, Int32Type>(value_type, arr),
+                    DataType::Int64 => partition_value_from_dict_primitive_array::<_, Int64Type>(value_type, arr),
+                    DataType::UInt8 => partition_value_from_dict_primitive_array::<_, UInt8Type>(value_type, arr),
+                    DataType::UInt16 => partition_value_from_dict_primitive_array::<_, UInt16Type>(value_type, arr),
+                    DataType::UInt32 => partition_value_from_dict_primitive_array::<_, UInt32Type>(value_type, arr),
+                    DataType::UInt64 => partition_value_from_dict_primitive_array::<_, UInt64Type>(value_type, arr),
+                    DataType::Utf8 => partition_value_from_dict_string_array::<_, i32>(value_type, arr),
+                    DataType::Boolean => {
+                        let typed = arr.downcast_dict::<BooleanArray>().unwrap();
+                        let arr = BooleanArray::from(vec![typed.value(0)]);
+                        partition_value_from_array_and_type(value_type, &arr)
+                    },
+                    DataType::Date32 => partition_value_from_dict_primitive_array::<_, Date32Type>(value_type, arr),
+                    DataType::Date64 => partition_value_from_dict_primitive_array::<_, Date64Type>(value_type, arr),
+                    DataType::Timestamp(TimeUnit::Second, _) => partition_value_from_dict_primitive_array::<_, TimestampSecondType>(value_type, arr),
+                    DataType::Timestamp(TimeUnit::Millisecond, _) => partition_value_from_dict_primitive_array::<_, TimestampMillisecondType>(value_type, arr),
+                    DataType::Timestamp(TimeUnit::Microsecond, _) => partition_value_from_dict_primitive_array::<_, TimestampMicrosecondType>(value_type, arr),
+                    DataType::Timestamp(TimeUnit::Nanosecond, _) => partition_value_from_dict_primitive_array::<_, TimestampNanosecondType>(value_type, arr),
+                    DataType::Binary => partition_value_from_dict_bin_array::<_, i32>(value_type, arr),
+                    DataType::LargeBinary => partition_value_from_dict_bin_array::<_, i64>(value_type, arr),
+                    t => unimplemented!("Unimplmeneted dictionary value type: {:?}", t),
+                },
+                _ => unreachable!(),
+            )
+        }
         // TODO: handle more types
         _ => {
             unimplemented!("Unimplemented data type: {:?}", data_type);
         }
-    };
+    }
+}
 
-    Ok(Some(s))
+fn partition_value_from_dict_bin_array<K: ArrowDictionaryKeyType, O: OffsetSizeTrait>(
+    value_type: &DataType,
+    dict_array: &DictionaryArray<K>,
+) -> String {
+    let typed = dict_array.downcast_dict::<GenericBinaryArray<O>>().unwrap();
+    let arr = GenericBinaryArray::<O>::from(vec![typed.value(0)]);
+    partition_value_from_array_and_type(value_type, &arr)
+}
+
+fn partition_value_from_dict_string_array<K: ArrowDictionaryKeyType, O: OffsetSizeTrait>(
+    value_type: &DataType,
+    dict_array: &DictionaryArray<K>,
+) -> String {
+    let typed = dict_array.downcast_dict::<GenericStringArray<O>>().unwrap();
+    let arr = GenericStringArray::<O>::from(vec![typed.value(0)]);
+    partition_value_from_array_and_type(value_type, &arr)
+}
+
+fn partition_value_from_dict_primitive_array<K: ArrowDictionaryKeyType, T: ArrowPrimitiveType>(
+    value_type: &DataType,
+    dict_array: &DictionaryArray<K>,
+) -> String {
+    let typed = dict_array.downcast_dict::<PrimitiveArray<T>>().unwrap();
+    let arr = PrimitiveArray::<T>::from_value(typed.value(0), 1);
+    partition_value_from_array_and_type(value_type, &arr)
 }
 
 /// Remove any partition related columns from the record batch
@@ -333,6 +397,7 @@ mod tests {
         TimestampMillisecondArray, TimestampNanosecondArray, TimestampSecondArray, UInt16Array,
         UInt32Array, UInt64Array, UInt8Array,
     };
+    use arrow_array::DictionaryArray;
     use parquet::basic::{BrotliLevel, GzipLevel, ZstdLevel};
 
     #[test]
@@ -381,6 +446,34 @@ mod tests {
             (
                 Arc::new(LargeBinaryArray::from_vec(vec![b"\x00\\"])),
                 Some("\\x00\\\\"),
+            ),
+            (
+                Arc::new(DictionaryArray::<UInt16Type>::new(
+                    UInt16Array::from_iter(vec![1, 0, 0]),
+                    Arc::new(Int32Array::from_iter(vec![1, 2])),
+                )),
+                Some("2"),
+            ),
+            (
+                Arc::new(DictionaryArray::<UInt8Type>::new(
+                    UInt8Array::from_iter(vec![0, 1, 0]),
+                    Arc::new(StringArray::from(vec!["one", "two"])),
+                )),
+                Some("one"),
+            ),
+            (
+                Arc::new(DictionaryArray::<UInt8Type>::new(
+                    UInt8Array::from_iter(vec![0]),
+                    Arc::new(BooleanArray::from(vec![false, true])),
+                )),
+                Some("false"),
+            ),
+            (
+                Arc::new(DictionaryArray::<UInt8Type>::new(
+                    UInt8Array::from_iter(vec![0]),
+                    Arc::new(BinaryArray::from_vec(vec![b"binary"])),
+                )),
+                Some("binary"),
             ),
         ];
         for (vals, result) in reference_pairs {

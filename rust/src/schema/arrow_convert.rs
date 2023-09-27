@@ -8,6 +8,7 @@ use arrow::datatypes::{
 use arrow::error::ArrowError;
 use lazy_static::lazy_static;
 use regex::Regex;
+use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
@@ -29,21 +30,26 @@ impl TryFrom<&schema::SchemaField> for ArrowField {
     type Error = ArrowError;
 
     fn try_from(f: &schema::SchemaField) -> Result<Self, ArrowError> {
-        let metadata = f
+        let mut metadata: HashMap<String, String> = f
             .get_metadata()
             .iter()
             .map(|(key, val)| Ok((key.clone(), serde_json::to_string(val)?)))
             .collect::<Result<_, serde_json::Error>>()
             .map_err(|err| ArrowError::JsonError(err.to_string()))?;
 
-        let field = ArrowField::new(
-            f.get_name(),
-            ArrowDataType::try_from(f.get_type())?,
-            f.is_nullable(),
-        )
-        .with_metadata(metadata);
+        // TODOALEX - don't like back and forth serde but could improve with filter/for loop above
+        let arrow_type = if let Some(json_arrow_type) = metadata.remove("ARROW_TYPE") {
+            match serde_json::from_str::<ArrowDataType>(&json_arrow_type) {
+                Ok(dt) => dt,
+                Err(_) => ArrowDataType::try_from(f.get_type())?,
+            }
+        } else {
+            ArrowDataType::try_from(f.get_type())?
+        };
 
-        Ok(field)
+        let field = ArrowField::new(f.get_name(), arrow_type, f.is_nullable());
+
+        Ok(field.with_metadata(metadata))
     }
 }
 
@@ -195,15 +201,27 @@ impl TryFrom<ArrowSchemaRef> for schema::Schema {
 impl TryFrom<&ArrowField> for schema::SchemaField {
     type Error = ArrowError;
     fn try_from(arrow_field: &ArrowField) -> Result<Self, ArrowError> {
+        let arrow_type = arrow_field.data_type();
+        let arrow_type_metadata = serde_json::to_value(arrow_type).map_err(|e| {
+            ArrowError::JsonError(format!("Could not serialize Arrow type: {:?}", e))
+        })?;
+
+        let metadata: HashMap<String, serde_json::Value> = arrow_field
+            .metadata()
+            .iter()
+            .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
+            // TODOALEX
+            .chain(std::iter::once((
+                "ARROW_TYPE".to_string(),
+                arrow_type_metadata,
+            )))
+            .collect();
+
         Ok(schema::SchemaField::new(
             arrow_field.name().clone(),
-            arrow_field.data_type().try_into()?,
+            arrow_type.try_into()?,
             arrow_field.is_nullable(),
-            arrow_field
-                .metadata()
-                .iter()
-                .map(|(k, v)| (k.clone(), serde_json::Value::String(v.clone())))
-                .collect(),
+            metadata,
         ))
     }
 }
@@ -289,6 +307,7 @@ impl TryFrom<&ArrowDataType> for schema::SchemaDataType {
                     panic!("DataType::Map should contain a struct field child");
                 }
             }
+            ArrowDataType::Dictionary(_, value_type) => Ok(value_type.as_ref().try_into()?),
             s => Err(ArrowError::SchemaError(format!(
                 "Invalid data type for Delta Lake: {s}"
             ))),
