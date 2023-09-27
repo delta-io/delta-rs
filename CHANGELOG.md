@@ -2,18 +2,6 @@
 
 ## [rust-v0.16.0](https://github.com/delta-io/delta-rs/tree/rust-v0.16.0) (2023-09-27)
 
-[Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.16.0...rust-v0.16.0)
-
-**Fixed bugs:**
-
-- min & max values are wrong when writing `Date32` dtype [\#1670](https://github.com/delta-io/delta-rs/issues/1670)
-
-**Merged pull requests:**
-
-- fix: use epoch instead of ce for date stats [\#1672](https://github.com/delta-io/delta-rs/pull/1672) ([universalmind303](https://github.com/universalmind303))
-
-## [rust-v0.16.0](https://github.com/delta-io/delta-rs/tree/rust-v0.16.0) (2023-09-27)
-
 [Full Changelog](https://github.com/delta-io/delta-rs/compare/rust-v0.15.0...rust-v0.16.0)
 
 **Implemented enhancements:**
