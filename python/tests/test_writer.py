@@ -841,6 +841,25 @@ def test_large_arrow_types(tmp_path: pathlib.Path):
     assert table.schema == dt.schema().to_pyarrow(as_large_types=True)
 
 
+def test_partition_large_arrow_types(tmp_path: pathlib.Path):
+    table = pa.table(
+        {
+            "foo": pa.array(["1", "1", "2", "2"], pa.large_string()),
+            "bar": pa.array([1, 2, 1, 2], pa.int64()),
+            "baz": pa.array([1, 1, 1, 1], pa.int64()),
+        }
+    )
+
+    write_deltalake(tmp_path, table, partition_by=["foo"])
+
+    dt = DeltaTable(tmp_path)
+    files = dt.files()
+    expected = ["foo=1", "foo=2"]
+
+    result = sorted([file.split("/")[0] for file in files])
+    assert expected == result
+
+
 def test_uint_arrow_types(tmp_path: pathlib.Path):
     pylist = [
         {"num1": 3, "num2": 3, "num3": 3, "num4": 5},
