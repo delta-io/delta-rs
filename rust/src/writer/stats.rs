@@ -11,7 +11,7 @@ use parquet::{
 };
 
 use super::*;
-use crate::action::{Add, ColumnValueStat, Stats};
+use crate::protocol::{Add, ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.
 pub fn create_add(
@@ -475,9 +475,9 @@ mod tests {
     use super::utils::record_batch_from_message;
     use super::*;
     use crate::{
-        action::{ColumnCountStat, ColumnValueStat},
-        builder::DeltaTableBuilder,
         errors::DeltaTableError,
+        protocol::{ColumnCountStat, ColumnValueStat},
+        table::builder::DeltaTableBuilder,
         DeltaTable,
     };
     use lazy_static::lazy_static;

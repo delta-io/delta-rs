@@ -1,7 +1,7 @@
 //! AWS S3 storage backend.
 
 use super::utils::str_is_truthy;
-use crate::builder::{s3_storage_options, str_option};
+use crate::table::builder::{s3_storage_options, str_option};
 use bytes::Bytes;
 use dynamodb_lock::{DynamoError, LockClient, LockItem, DEFAULT_MAX_RETRY_ACQUIRE_LOCK_ATTEMPTS};
 use futures::stream::BoxStream;
@@ -472,6 +472,14 @@ impl ObjectStore for S3StorageBackend {
         prefix: Option<&Path>,
     ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
         self.inner.list(prefix).await
+    }
+
+    async fn list_with_offset(
+        &self,
+        prefix: Option<&Path>,
+        offset: &Path,
+    ) -> ObjectStoreResult<BoxStream<'_, ObjectStoreResult<ObjectMeta>>> {
+        self.inner.list_with_offset(prefix, offset).await
     }
 
     async fn list_with_delimiter(&self, prefix: Option<&Path>) -> ObjectStoreResult<ListResult> {

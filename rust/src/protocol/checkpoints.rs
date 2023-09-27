@@ -19,12 +19,13 @@ use parquet::errors::ParquetError;
 use regex::Regex;
 use serde_json::Value;
 
-use super::{Action, Add as AddAction, MetaData, Protocol, ProtocolError, Txn};
-use crate::delta_arrow::delta_log_schema_for_table;
+use super::{time_utils, Action, Add as AddAction, MetaData, Protocol, ProtocolError, Txn};
+use crate::arrow_convert::delta_log_schema_for_table;
+use crate::schema::*;
 use crate::storage::DeltaObjectStore;
-use crate::table_state::DeltaTableState;
-use crate::{open_table_with_version, time_utils, CheckPoint, DeltaTable};
-use crate::{schema::*, CheckPointBuilder};
+use crate::table::state::DeltaTableState;
+use crate::table::{CheckPoint, CheckPointBuilder};
+use crate::{open_table_with_version, DeltaTable};
 
 type SchemaPath = Vec<String>;
 

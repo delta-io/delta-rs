@@ -1,0 +1,3 @@
+{"commitInfo":{"timestamp":1681798578373,"operation":"DLT REFRESH","operationParameters":{"pipelineId":"5c7b47e9-12d6-4986-a601-6716734281ce","updateId":"adf780f9-789f-4857-8d41-e4d9938b61d5"},"isolationLevel":"WriteSerializable","isBlindAppend":false,"operationMetrics":{},"engineInfo":"Databricks-Runtime/dlt:11.3-delta-pipelines-801d604-ff1aff6-f0f113d-custom-local","txnId":"a2ad05c8-4559-41bc-b7b1-a94773bd2286"}}
+{"protocol":{"minReaderVersion":1,"minWriterVersion":2}}
+{"metaData":{"id":"ac0a0120-970e-4d8c-ae92-b5244b055d6e","format":{"provider":"parquet","options":{}},"partitionColumns":[],"configuration":{},"createdTime":1681798577757}}
