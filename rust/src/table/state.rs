@@ -107,7 +107,11 @@ impl DeltaTableState {
     }
 
     /// Construct a delta table state object from a list of actions and table base location
-    pub fn from_actions_with_base(actions: Vec<Action>, version: i64, base: String) -> Result<Self, ProtocolError> {
+    pub fn from_actions_with_base(
+        actions: Vec<Action>,
+        version: i64,
+        base: String,
+    ) -> Result<Self, ProtocolError> {
         let mut new_state = DeltaTableState::with_version_and_base(version, base);
         for action in actions {
             new_state.process_action(action, true, true)?;
@@ -348,7 +352,10 @@ impl DeltaTableState {
             protocol::Action::add(mut v) => {
                 if require_files {
                     if let Some(base) = &self.table_base {
-                        v.path = v.path.strip_prefix(base).unwrap().to_string();
+                        match v.path.strip_prefix(base) {
+                            Some(stripped) => v.path = stripped.to_string(),
+                            None => {}
+                        }
                     }
                     self.files.push(v);
                 }
@@ -356,7 +363,10 @@ impl DeltaTableState {
             protocol::Action::remove(mut v) => {
                 if require_tombstones && require_files {
                     if let Some(base) = &self.table_base {
-                        v.path = v.path.strip_prefix(base).unwrap().to_string();
+                        match v.path.strip_prefix(base) {
+                            Some(stripped) => v.path = stripped.to_string(),
+                            None => {}
+                        }
                     }
                     self.tombstones.insert(v);
                 }

@@ -592,7 +592,8 @@ impl DeltaTable {
             };
 
             debug!("merging table state with version: {new_version}");
-            let s = DeltaTableState::from_actions_with_base(actions, new_version, self.storage.location.to_string())?;
+            let s =
+                DeltaTableState::from_actions_with_base(actions, new_version, self.base_path())?;
             self.state
                 .merge(s, self.config.require_tombstones, self.config.require_files);
             if self.version() == max_version {
@@ -605,6 +606,18 @@ impl DeltaTable {
         }
 
         Ok(())
+    }
+
+    fn base_path(&self) -> String {
+        // if url is a file path, convert it to absolute path
+        // else return the url as is (e.g. s3://bucket/path)
+        let url = &self.storage.location;
+        if url.scheme() == "file" {
+            let path = url.to_file_path().unwrap();
+            path.to_str().unwrap().to_string()
+        } else {
+            url.to_string()
+        }
     }
 
     /// Loads the DeltaTable state for the given version.
