@@ -207,7 +207,7 @@ def write_deltalake(
         current_version = -1
 
     dtype_map = {
-        pa.large_string(): pa.string(),
+        pa.large_string(): pa.string(), # type: ignore
     }
 
     def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
