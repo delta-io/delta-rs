@@ -13,7 +13,6 @@ import ray
 from deltalake import DeltaTable, write_deltalake, write_table
 
 
-
 def test_input_invalid_datatype(tmp_path: pathlib.Path, sample_data: pa.Table):
     # Check we can create the subdirectory
     tmp_path = tmp_path / "path" / "to" / "table"

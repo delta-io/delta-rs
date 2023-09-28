@@ -37,6 +37,13 @@ from .exceptions import DeltaProtocolError
 from .fs import DeltaStorageHandler
 from .schema import Schema
 
+try:
+    import ray
+except ModuleNotFoundError:
+    _has_ray = False
+else:
+    _has_ray = True
+
 MAX_SUPPORTED_READER_VERSION = 1
 MAX_SUPPORTED_WRITER_VERSION = 2
 
@@ -606,6 +613,35 @@ given filters.
             filesystem=filesystem,
             filters=filters,
         ).to_pandas()
+
+    def to_ray(
+        self,
+        filesystem: Optional["pyarrow.fs.FileSystem"] = None,
+        columns: Optional[List[str]] = None,
+        parallelism: int = -1,
+    ) -> "ray.data.dataset.Dataset":
+        from ray.data import read_parquet
+        from ray.data.datasource import DefaultParquetMetadataProvider
+
+        meta_provider = DefaultParquetMetadataProvider()
+        """Create an Arrow dataset from a Delta Table using Ray
+
+        Args:
+            filesystem: filesystem implementation to read from
+            columns: list of columns to read
+            parallelism: requested parallelism of read, may be limited by number of files
+
+        Returns:
+            Dataset holding Arrow records read from the Delta Lake Table
+        """
+
+        return read_parquet(
+            paths=self.file_uris(),
+            filesystem=filesystem,
+            columns=columns,
+            parallelism=parallelism,
+            meta_provider=meta_provider,
+        )
 
     def update_incremental(self) -> None:
         """
