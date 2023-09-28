@@ -1,3 +1,4 @@
+use chrono::Duration;
 use clap::{App, AppSettings, Arg};
 
 #[tokio::main(flavor = "current_thread")]
@@ -79,21 +80,21 @@ async fn main() -> anyhow::Result<()> {
         Some(("vacuum", vacuum_matches)) => {
             let dry_run = !vacuum_matches.is_present("no_dry_run");
             let table_uri = vacuum_matches.value_of("uri").unwrap();
-            let mut table = deltalake::open_table(table_uri).await?;
-            let files = table
-                .vacuum(
-                    vacuum_matches.value_of("retention_hours").map(|s| {
-                        s.parse::<u64>()
-                            .expect("retention hour should be an unsigned integer")
-                    }),
-                    dry_run,
-                    true
-                )
+            let table = deltalake::open_table(table_uri).await?;
+            let retention = vacuum_matches
+                .value_of("retention_hours")
+                .map(|s| s.parse::<i64>().unwrap())
+                .unwrap();
+            let (_table, metrics) = deltalake::operations::DeltaOps(table)
+                .vacuum()
+                .with_retention_period(Duration::hours(retention))
+                .with_dry_run(dry_run)
                 .await?;
+
             if dry_run {
-                println!("Files to deleted: {files:#?}");
+                println!("Files to deleted: {metrics:#?}");
             } else {
-                println!("Files deleted: {files:#?}");
+                println!("Files deleted: {metrics:#?}");
             }
         }
         _ => unreachable!(),

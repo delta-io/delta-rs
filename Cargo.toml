@@ -1,6 +1,6 @@
 [workspace]
-members = ["rust", "python"]
-exclude = ["proofs", "delta-inspect"]
+members = ["delta-inspect", "rust", "python"]
+exclude = ["proofs"]
 resolver = "2"
 
 [profile.release-with-debug]
