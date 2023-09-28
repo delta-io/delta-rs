@@ -39,7 +39,8 @@ devel = [
     "toml",
     "wheel",
     "pytest-benchmark",
-    "ray"
+    "ray",
+    "pandas"
 ]
 pyspark = [
     "pyspark",
