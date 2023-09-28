@@ -7,9 +7,9 @@ use object_store::Error as ObjectStoreError;
 use parquet::errors::ParquetError;
 use serde_json::Value;
 
-use crate::action::{Action, Add, ColumnCountStat, DeltaOperation, SaveMode};
 use crate::errors::DeltaTableError;
 use crate::operations::transaction::commit;
+use crate::protocol::{Action, Add, ColumnCountStat, DeltaOperation, SaveMode};
 use crate::DeltaTable;
 
 pub use json::JsonWriter;

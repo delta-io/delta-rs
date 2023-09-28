@@ -3,16 +3,6 @@ use std::collections::HashMap;
 use std::convert::TryFrom;
 use std::sync::Arc;
 
-use super::stats::create_add;
-use super::utils::{
-    arrow_schema_without_partitions, next_data_path, record_batch_from_message,
-    record_batch_without_partitions, stringified_partition_value, PartitionPath,
-};
-use super::{DeltaWriter, DeltaWriterError};
-use crate::builder::DeltaTableBuilder;
-use crate::{action::Add, DeltaTable, DeltaTableError, DeltaTableMetaData, Schema};
-use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
-
 use arrow::datatypes::{Schema as ArrowSchema, SchemaRef as ArrowSchemaRef};
 use arrow::record_batch::*;
 use bytes::Bytes;
@@ -25,6 +15,18 @@ use parquet::{
 };
 use serde_json::Value;
 use uuid::Uuid;
+
+use super::stats::create_add;
+use super::utils::{
+    arrow_schema_without_partitions, next_data_path, record_batch_from_message,
+    record_batch_without_partitions, stringified_partition_value,
+};
+use super::{utils::PartitionPath, DeltaWriter, DeltaWriterError};
+use crate::errors::DeltaTableError;
+use crate::table::builder::DeltaTableBuilder;
+use crate::table::DeltaTableMetaData;
+use crate::{protocol::Add, DeltaTable, Schema};
+use crate::{storage::DeltaObjectStore, writer::utils::ShareableBuffer};
 
 type BadValue = (Value, ParquetError);
 

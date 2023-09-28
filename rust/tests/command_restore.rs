@@ -3,8 +3,8 @@
 use arrow::datatypes::Schema as ArrowSchema;
 use arrow_array::{Int32Array, RecordBatch};
 use arrow_schema::{DataType, Field};
-use chrono::{DateTime, NaiveDateTime, Utc};
-use deltalake::action::SaveMode;
+use chrono::{DateTime, NaiveDateTime, TimeZone, Utc};
+use deltalake::protocol::SaveMode;
 use deltalake::{DeltaOps, DeltaTable, SchemaDataType, SchemaField};
 use rand::Rng;
 use std::collections::HashMap;
@@ -119,7 +119,7 @@ async fn test_restore_by_datetime() -> Result<(), Box<dyn Error>> {
     let history = table.history(Some(10)).await?;
     let timestamp = history.get(1).unwrap().timestamp.unwrap();
     let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
-    let datetime: DateTime<Utc> = DateTime::from_utc(naive, Utc);
+    let datetime: DateTime<Utc> = Utc.from_utc_datetime(&naive);
 
     let result = DeltaOps(table)
         .restore()
@@ -138,7 +138,7 @@ async fn test_restore_with_error_params() -> Result<(), Box<dyn Error>> {
     let history = table.history(Some(10)).await?;
     let timestamp = history.get(1).unwrap().timestamp.unwrap();
     let naive = NaiveDateTime::from_timestamp_millis(timestamp).unwrap();
-    let datetime: DateTime<Utc> = DateTime::from_utc(naive, Utc);
+    let datetime: DateTime<Utc> = Utc.from_utc_datetime(&naive);
 
     // datetime and version both set
     let result = DeltaOps(table)
@@ -194,7 +194,7 @@ async fn test_restore_allow_file_missing() -> Result<(), Box<dyn Error>> {
 
     let result = DeltaOps(context.table)
         .restore()
-        .ignore_missing_files(true)
+        .with_ignore_missing_files(true)
         .with_version_to_restore(1)
         .await;
     assert!(result.is_ok());

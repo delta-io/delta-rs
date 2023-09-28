@@ -82,42 +82,34 @@ compile_error!(
     "Features s3 and s3-native-tls are mutually exclusive and cannot be enabled together"
 );
 
-pub mod action;
-pub mod builder;
 pub mod data_catalog;
-pub mod delta;
-pub mod delta_config;
 pub mod errors;
 pub mod operations;
-pub mod partitions;
+pub mod protocol;
 pub mod schema;
 pub mod storage;
-pub mod table_state;
-pub mod time_utils;
+pub mod table;
 
-#[cfg(feature = "arrow")]
-pub mod table_state_arrow;
-
-#[cfg(all(feature = "arrow", feature = "parquet"))]
-pub mod delta_arrow;
 #[cfg(feature = "datafusion")]
 pub mod delta_datafusion;
 #[cfg(all(feature = "arrow", feature = "parquet"))]
 pub mod writer;
 
-pub use self::builder::*;
+use std::collections::HashMap;
+
 pub use self::data_catalog::{get_data_catalog, DataCatalog, DataCatalogError};
-pub use self::delta::*;
-pub use self::delta_config::*;
-pub use self::partitions::*;
+pub use self::errors::*;
+pub use self::schema::partitions::*;
 pub use self::schema::*;
-pub use errors::*;
+pub use self::table::builder::{
+    DeltaTableBuilder, DeltaTableConfig, DeltaTableLoadOptions, DeltaVersion,
+};
+pub use self::table::config::DeltaConfigKey;
+pub use self::table::DeltaTable;
 pub use object_store::{path::Path, Error as ObjectStoreError, ObjectMeta, ObjectStore};
 pub use operations::DeltaOps;
 
 // convenience exports for consumers to avoid aligning crate versions
-#[cfg(all(feature = "arrow", feature = "parquet"))]
-pub use action::checkpoints;
 #[cfg(feature = "arrow")]
 pub use arrow;
 #[cfg(feature = "datafusion")]
@@ -126,15 +118,70 @@ pub use datafusion;
 pub use parquet;
 #[cfg(feature = "parquet2")]
 pub use parquet2;
+#[cfg(all(feature = "arrow", feature = "parquet"))]
+pub use protocol::checkpoints;
 
 // needed only for integration tests
 // TODO can / should we move this into the test crate?
 #[cfg(feature = "integration_test")]
 pub mod test_utils;
 
+/// Creates and loads a DeltaTable from the given path with current metadata.
+/// Infers the storage backend to use from the scheme in the given table path.
+pub async fn open_table(table_uri: impl AsRef<str>) -> Result<DeltaTable, DeltaTableError> {
+    let table = DeltaTableBuilder::from_uri(table_uri).load().await?;
+    Ok(table)
+}
+
+/// Same as `open_table`, but also accepts storage options to aid in building the table for a deduced
+/// `StorageService`.
+pub async fn open_table_with_storage_options(
+    table_uri: impl AsRef<str>,
+    storage_options: HashMap<String, String>,
+) -> Result<DeltaTable, DeltaTableError> {
+    let table = DeltaTableBuilder::from_uri(table_uri)
+        .with_storage_options(storage_options)
+        .load()
+        .await?;
+    Ok(table)
+}
+
+/// Creates a DeltaTable from the given path and loads it with the metadata from the given version.
+/// Infers the storage backend to use from the scheme in the given table path.
+pub async fn open_table_with_version(
+    table_uri: impl AsRef<str>,
+    version: i64,
+) -> Result<DeltaTable, DeltaTableError> {
+    let table = DeltaTableBuilder::from_uri(table_uri)
+        .with_version(version)
+        .load()
+        .await?;
+    Ok(table)
+}
+
+/// Creates a DeltaTable from the given path.
+/// Loads metadata from the version appropriate based on the given ISO-8601/RFC-3339 timestamp.
+/// Infers the storage backend to use from the scheme in the given table path.
+pub async fn open_table_with_ds(
+    table_uri: impl AsRef<str>,
+    ds: impl AsRef<str>,
+) -> Result<DeltaTable, DeltaTableError> {
+    let table = DeltaTableBuilder::from_uri(table_uri)
+        .with_datestring(ds)?
+        .load()
+        .await?;
+    Ok(table)
+}
+
+/// Returns rust crate version, can be use used in language bindings to expose Rust core version
+pub fn crate_version() -> &'static str {
+    env!("CARGO_PKG_VERSION")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::table::PeekCommit;
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -153,7 +200,7 @@ mod tests {
         );
         let tombstones = table.get_state().all_tombstones();
         assert_eq!(tombstones.len(), 4);
-        assert!(tombstones.contains(&crate::action::Remove {
+        assert!(tombstones.contains(&crate::protocol::Remove {
             path: "part-00000-512e1537-8aaa-4193-b8b4-bef3de0de409-c000.snappy.parquet".to_string(),
             deletion_timestamp: Some(1564524298213),
             data_change: false,
@@ -255,7 +302,7 @@ mod tests {
         );
         let tombstones = table.get_state().all_tombstones();
         assert_eq!(tombstones.len(), 1);
-        assert!(tombstones.contains(&crate::action::Remove {
+        assert!(tombstones.contains(&crate::protocol::Remove {
             path: "part-00001-911a94a2-43f6-4acb-8620-5e68c2654989-c000.snappy.parquet".to_string(),
             deletion_timestamp: Some(1615043776198),
             data_change: true,
@@ -414,12 +461,14 @@ mod tests {
         assert_eq!(
             table.get_files(),
             vec![
-                Path::from(
+                Path::parse(
                     "x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
-                ),
-                Path::from(
+                )
+                .unwrap(),
+                Path::parse(
                     "x=B%20B/part-00015-e9abbc6f-85e9-457b-be8e-e9f5b8a22890.c000.snappy.parquet"
                 )
+                .unwrap()
             ]
         );
 
@@ -429,9 +478,10 @@ mod tests {
         }];
         assert_eq!(
             table.get_files_by_partitions(&filters).unwrap(),
-            vec![Path::from(
+            vec![Path::parse(
                 "x=A%2FA/part-00007-b350e235-2832-45df-9918-6cab4f7578f7.c000.snappy.parquet"
-            )]
+            )
+            .unwrap()]
         );
     }
 
@@ -472,7 +522,10 @@ mod tests {
         let table_from_struct_stats = crate::open_table(table_uri).await.unwrap();
         let table_from_json_stats = crate::open_table_with_version(table_uri, 1).await.unwrap();
 
-        fn get_stats_for_file(table: &crate::DeltaTable, file_name: &str) -> crate::action::Stats {
+        fn get_stats_for_file(
+            table: &crate::DeltaTable,
+            file_name: &str,
+        ) -> crate::protocol::Stats {
             table
                 .get_file_uris()
                 .zip(table.get_stats())

@@ -5,11 +5,11 @@ use object_store::path::Path;
 use object_store::{Error as ObjectStoreError, ObjectStore};
 use serde_json::{Map, Value};
 
-use crate::action::{Action, CommitInfo, DeltaOperation};
 use crate::crate_version;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::{Action, CommitInfo, DeltaOperation};
 use crate::storage::commit_uri_from_version;
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 
 mod conflict_checker;
 #[cfg(feature = "datafusion")]
@@ -151,7 +151,7 @@ pub(crate) async fn try_commit_transaction(
     Ok(version)
 }
 
-/// Commit a transaction, with up to 5 retries. This is low-level transaction API.
+/// Commit a transaction, with up to 15 retries. This is higher-level transaction API.
 ///
 /// Will error early if the a concurrent transaction has already been committed
 /// and conflicts with this transaction.
@@ -162,13 +162,27 @@ pub async fn commit(
     read_snapshot: &DeltaTableState,
     app_metadata: Option<Map<String, Value>>,
 ) -> DeltaResult<i64> {
+    commit_with_retries(storage, actions, operation, read_snapshot, app_metadata, 15).await
+}
+
+/// Commit a transaction, with up configurable number of retries. This is higher-level transaction API.
+///
+/// The function will error early if the a concurrent transaction has already been committed
+/// and conflicts with this transaction.
+pub async fn commit_with_retries(
+    storage: &dyn ObjectStore,
+    actions: &Vec<Action>,
+    operation: DeltaOperation,
+    read_snapshot: &DeltaTableState,
+    app_metadata: Option<Map<String, Value>>,
+    max_retries: usize,
+) -> DeltaResult<i64> {
     let tmp_commit = prepare_commit(storage, &operation, actions, app_metadata).await?;
 
-    let max_attempts = 15;
     let mut attempt_number = 1;
 
-    while attempt_number <= max_attempts {
-        let version = read_snapshot.version() + attempt_number;
+    while attempt_number <= max_retries {
+        let version = read_snapshot.version() + attempt_number as i64;
         match try_commit_transaction(storage, &tmp_commit, version).await {
             Ok(version) => return Ok(version),
             Err(TransactionError::VersionAlreadyExists(version)) => {
@@ -199,7 +213,7 @@ pub async fn commit(
         }
     }
 
-    Err(TransactionError::MaxCommitAttempts(max_attempts as i32).into())
+    Err(TransactionError::MaxCommitAttempts(max_retries as i32).into())
 }
 
 #[cfg(all(test, feature = "parquet"))]

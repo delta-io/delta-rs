@@ -19,12 +19,12 @@ use sqlparser::dialect::GenericDialect;
 use sqlparser::parser::Parser;
 use sqlparser::tokenizer::Tokenizer;
 
-use crate::action::Add;
 use crate::delta_datafusion::{
     get_null_of_arrow_type, logical_expr_to_physical_expr, to_correct_scalar_value,
 };
 use crate::errors::{DeltaResult, DeltaTableError};
-use crate::table_state::DeltaTableState;
+use crate::protocol::Add;
+use crate::table::state::DeltaTableState;
 
 impl DeltaTableState {
     /// Get the table schema as an [`ArrowSchemaRef`]
@@ -49,10 +49,15 @@ impl DeltaTableState {
                         let field = ArrowField::try_from(f)?;
                         let corrected = if wrap_partitions {
                             match field.data_type() {
-                                // Dictionary encoding boolean types does not yield benefits
-                                // https://github.com/apache/arrow-datafusion/pull/5545#issuecomment-1526917997
-                                DataType::Boolean => field.data_type().clone(),
-                                _ => wrap_partition_type_in_dict(field.data_type().clone()),
+                                // Only dictionary-encode types that may be large
+                                // // https://github.com/apache/arrow-datafusion/pull/5545
+                                DataType::Utf8
+                                | DataType::LargeUtf8
+                                | DataType::Binary
+                                | DataType::LargeBinary => {
+                                    wrap_partition_type_in_dict(field.data_type().clone())
+                                }
+                                _ => field.data_type().clone(),
                             }
                         } else {
                             field.data_type().clone()
@@ -82,7 +87,7 @@ impl DeltaTableState {
             Ok(Either::Left(
                 self.files()
                     .iter()
-                    .zip(pruning_predicate.prune(self)?.into_iter())
+                    .zip(pruning_predicate.prune(self)?)
                     .filter_map(
                         |(action, keep_file)| {
                             if keep_file {
@@ -234,7 +239,7 @@ impl<'a> AddContainer<'a> {
         Ok(self
             .inner
             .iter()
-            .zip(pruning_predicate.prune(self)?.into_iter())
+            .zip(pruning_predicate.prune(self)?)
             .filter_map(
                 |(action, keep_file)| {
                     if keep_file {

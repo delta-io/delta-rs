@@ -9,13 +9,14 @@ use serde_json::{Map, Value};
 
 use super::transaction::commit;
 use super::{MAX_SUPPORTED_READER_VERSION, MAX_SUPPORTED_WRITER_VERSION};
-use crate::action::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
-use crate::builder::ensure_table_uri;
-use crate::delta_config::DeltaConfigKey;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::{Action, DeltaOperation, MetaData, Protocol, SaveMode};
 use crate::schema::{SchemaDataType, SchemaField, SchemaTypeStruct};
 use crate::storage::DeltaObjectStore;
-use crate::{DeltaTable, DeltaTableBuilder, DeltaTableMetaData};
+use crate::table::builder::ensure_table_uri;
+use crate::table::config::DeltaConfigKey;
+use crate::table::DeltaTableMetaData;
+use crate::{DeltaTable, DeltaTableBuilder};
 
 #[derive(thiserror::Error, Debug)]
 enum CreateError {
@@ -148,7 +149,7 @@ impl CreateBuilder {
     ///
     /// Options may be passed in the HashMap or set as environment variables.
     ///
-    /// [crate::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
+    /// [crate::table::builder::s3_storage_options] describes the available options for the AWS or S3-compliant backend.
     /// [dynamodb_lock::DynamoDbLockClient] describes additional options for the AWS atomic rename client.
     ///
     /// If an object store is also passed using `with_object_store()` these options will be ignored.
@@ -322,8 +323,8 @@ impl std::future::IntoFuture for CreateBuilder {
 #[cfg(all(test, feature = "parquet"))]
 mod tests {
     use super::*;
-    use crate::delta_config::DeltaConfigKey;
     use crate::operations::DeltaOps;
+    use crate::table::config::DeltaConfigKey;
     use crate::writer::test_utils::get_delta_schema;
     use tempdir::TempDir;
 

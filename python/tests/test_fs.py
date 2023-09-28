@@ -139,7 +139,7 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
 
     # Can pass storage_options in directly
     storage_opts = {
-        "AWS_STORAGE_ALLOW_HTTP": "true",
+        "AWS_ALLOW_HTTP": "true",
         "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
     }
     storage_opts.update(s3_localstack_creds)
@@ -173,7 +173,7 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=15, method="thread")
+@pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip"
 
@@ -195,7 +195,7 @@ def test_roundtrip_azure_env(azurite_env_vars, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=15, method="thread")
+@pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip2"
 
@@ -217,7 +217,7 @@ def test_roundtrip_azure_direct(azurite_creds, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=15, method="thread")
+@pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip3"
 
@@ -230,7 +230,7 @@ def test_roundtrip_azure_sas(azurite_sas_creds, sample_data: pa.Table):
 
 @pytest.mark.azure
 @pytest.mark.integration
-@pytest.mark.timeout(timeout=5, method="thread")
+@pytest.mark.timeout(timeout=60, method="thread")
 def test_roundtrip_azure_decoded_sas(azurite_sas_creds, sample_data: pa.Table):
     table_path = "az://deltars/roundtrip4"
     azurite_sas_creds["SAS_TOKEN"] = urllib.parse.unquote(

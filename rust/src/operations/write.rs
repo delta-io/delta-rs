@@ -27,19 +27,20 @@ use datafusion::physical_plan::{memory::MemoryExec, ExecutionPlan};
 use futures::future::BoxFuture;
 use futures::StreamExt;
 use parquet::file::properties::WriterProperties;
+use serde_json::Map;
 
 use super::writer::{DeltaWriter, WriterConfig};
 use super::MAX_SUPPORTED_WRITER_VERSION;
 use super::{transaction::commit, CreateBuilder};
-use crate::action::{Action, Add, DeltaOperation, Remove, SaveMode};
-use crate::delta::DeltaTable;
 use crate::delta_datafusion::DeltaDataChecker;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::{Action, Add, DeltaOperation, Remove, SaveMode};
 use crate::schema::Schema;
 use crate::storage::{DeltaObjectStore, ObjectStoreRef};
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::writer::record_batch::divide_by_partition_values;
 use crate::writer::utils::PartitionPath;
+use crate::DeltaTable;
 
 #[derive(thiserror::Error, Debug)]
 enum WriteError {
@@ -101,6 +102,8 @@ pub struct WriteBuilder {
     safe_cast: bool,
     /// Parquet writer properties
     writer_properties: Option<WriterProperties>,
+    /// Additional metadata to be added to commit
+    app_metadata: Option<Map<String, serde_json::Value>>,
 }
 
 impl WriteBuilder {
@@ -119,6 +122,7 @@ impl WriteBuilder {
             batches: None,
             safe_cast: false,
             writer_properties: None,
+            app_metadata: None,
         }
     }
 
@@ -184,6 +188,15 @@ impl WriteBuilder {
     /// Specify the writer properties to use when writing a parquet file
     pub fn with_writer_properties(mut self, writer_properties: WriterProperties) -> Self {
         self.writer_properties = Some(writer_properties);
+        self
+    }
+
+    /// Additional metadata to be added to commit info
+    pub fn with_metadata(
+        mut self,
+        metadata: impl IntoIterator<Item = (String, serde_json::Value)>,
+    ) -> Self {
+        self.app_metadata = Some(Map::from_iter(metadata));
         self
     }
 
@@ -423,6 +436,7 @@ impl std::future::IntoFuture for WriteBuilder {
                         size: Some(add.size),
                         // TODO add file metadata to remove action (tags missing)
                         tags: None,
+                        deletion_vector: add.deletion_vector.clone(),
                     })
                 };
 
@@ -455,8 +469,7 @@ impl std::future::IntoFuture for WriteBuilder {
                     predicate: this.predicate,
                 },
                 &this.snapshot,
-                // TODO pass through metadata
-                None,
+                this.app_metadata,
             )
             .await?;
 
@@ -539,7 +552,8 @@ fn cast_record_batch(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::operations::DeltaOps;
+    use crate::operations::{collect_sendable_stream, DeltaOps};
+    use crate::protocol::SaveMode;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::{
         get_delta_schema, get_delta_schema_with_nested_struct, get_record_batch,
@@ -549,8 +563,8 @@ mod tests {
     use arrow::datatypes::Schema as ArrowSchema;
     use arrow_array::{Int32Array, StringArray, TimestampMicrosecondArray};
     use arrow_schema::{DataType, TimeUnit};
-    use datafusion::assert_batches_sorted_eq;
-    use serde_json::json;
+    use datafusion::{assert_batches_eq, assert_batches_sorted_eq};
+    use serde_json::{json, Value};
 
     #[tokio::test]
     async fn test_create_write() {
@@ -563,33 +577,73 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(table.version(), 0);
+        assert_eq!(table.state.commit_infos().len(), 1);
 
         // write some data
-        let table = DeltaOps(table)
+        let metadata = Map::from_iter(vec![("k1".to_string(), json!("v1.1"))]);
+        let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
+            .with_metadata(metadata.clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 1);
         assert_eq!(table.get_file_uris().count(), 1);
+        table.load().await.unwrap();
+        assert_eq!(table.state.commit_infos().len(), 2);
+        assert_eq!(
+            table.state.commit_infos()[1]
+                .info
+                .clone()
+                .into_iter()
+                .filter(|(k, _)| k != "clientVersion")
+                .collect::<Map<String, Value>>(),
+            metadata
+        );
 
         // append some data
-        let table = DeltaOps(table)
+        let metadata: Map<String, Value> = Map::from_iter(vec![("k1".to_string(), json!("v1.2"))]);
+        let mut table = DeltaOps(table)
             .write(vec![batch.clone()])
             .with_save_mode(SaveMode::Append)
+            .with_metadata(metadata.clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 2);
         assert_eq!(table.get_file_uris().count(), 2);
+        table.load().await.unwrap();
+        assert_eq!(table.state.commit_infos().len(), 3);
+        assert_eq!(
+            table.state.commit_infos()[2]
+                .info
+                .clone()
+                .into_iter()
+                .filter(|(k, _)| k != "clientVersion")
+                .collect::<Map<String, Value>>(),
+            metadata
+        );
 
         // overwrite table
-        let table = DeltaOps(table)
+        let metadata: Map<String, Value> = Map::from_iter(vec![("k2".to_string(), json!("v2.1"))]);
+        let mut table = DeltaOps(table)
             .write(vec![batch])
             .with_save_mode(SaveMode::Overwrite)
+            .with_metadata(metadata.clone())
             .await
             .unwrap();
         assert_eq!(table.version(), 3);
-        assert_eq!(table.get_file_uris().count(), 1)
+        assert_eq!(table.get_file_uris().count(), 1);
+        table.load().await.unwrap();
+        assert_eq!(table.state.commit_infos().len(), 4);
+        assert_eq!(
+            table.state.commit_infos()[3]
+                .info
+                .clone()
+                .into_iter()
+                .filter(|(k, _)| k != "clientVersion")
+                .collect::<Map<String, Value>>(),
+            metadata
+        );
     }
 
     #[tokio::test]
@@ -801,5 +855,48 @@ mod tests {
             actual[0].column_by_name("nested").unwrap().data_type(),
             &expected
         );
+    }
+
+    #[tokio::test]
+    async fn test_special_characters_write_read() {
+        let tmp_dir = tempdir::TempDir::new("test").unwrap();
+        let tmp_path = std::fs::canonicalize(tmp_dir.path()).unwrap();
+
+        let schema = Arc::new(ArrowSchema::new(vec![
+            Field::new("string", DataType::Utf8, true),
+            Field::new("data", DataType::Utf8, true),
+        ]));
+
+        let str_values = StringArray::from(vec![r#"$%&/()=^"[]#*?.:_- {=}|`<>~/\r\n+"#]);
+        let data_values = StringArray::from(vec!["test"]);
+
+        let batch = RecordBatch::try_new(schema, vec![Arc::new(str_values), Arc::new(data_values)])
+            .unwrap();
+
+        let ops = DeltaOps::try_from_uri(tmp_path.as_os_str().to_str().unwrap())
+            .await
+            .unwrap();
+
+        let _table = ops
+            .write([batch.clone()])
+            .with_partition_columns(["string"])
+            .await
+            .unwrap();
+
+        let table = crate::open_table(tmp_path.as_os_str().to_str().unwrap())
+            .await
+            .unwrap();
+        let (_table, stream) = DeltaOps(table).load().await.unwrap();
+        let data: Vec<RecordBatch> = collect_sendable_stream(stream).await.unwrap();
+
+        let expected = vec![
+            "+------+-----------------------------------+",
+            "| data | string                            |",
+            "+------+-----------------------------------+",
+            r#"| test | $%&/()=^"[]#*?.:_- {=}|`<>~/\r\n+ |"#,
+            "+------+-----------------------------------+",
+        ];
+
+        assert_batches_eq!(&expected, &data);
     }
 }

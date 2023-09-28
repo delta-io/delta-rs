@@ -2,6 +2,7 @@ import json
 import operator
 import warnings
 from dataclasses import dataclass
+from datetime import datetime, timedelta
 from functools import reduce
 from pathlib import Path
 from typing import (
@@ -30,6 +31,7 @@ if TYPE_CHECKING:
     import pandas
 
 from ._internal import RawDeltaTable
+from ._util import encode_partition_value
 from .data_catalog import DataCatalog
 from .exceptions import DeltaProtocolError
 from .fs import DeltaStorageHandler
@@ -221,6 +223,7 @@ class DeltaTable:
         version: Optional[int] = None,
         storage_options: Optional[Dict[str, str]] = None,
         without_files: bool = False,
+        log_buffer_size: Optional[int] = None,
     ):
         """
         Create the Delta Table from a path with an optional version.
@@ -233,6 +236,12 @@ class DeltaTable:
         :param without_files: If True, will load table without tracking files.
                               Some append-only applications might have no need of tracking any files. So, the
                               DeltaTable will be loaded with a significant memory reduction.
+        :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
+                                Setting a value greater than 1 results in concurrent calls to the storage api.
+                                This can decrease latency if there are many files in the log since the last checkpoint,
+                                but will also increase memory usage. Possible rate limits of the storage backend should
+                                also be considered for optimal performance. Defaults to 4 * number of cpus.
+
         """
         self._storage_options = storage_options
         self._table = RawDeltaTable(
@@ -240,6 +249,7 @@ class DeltaTable:
             version=version,
             storage_options=storage_options,
             without_files=without_files,
+            log_buffer_size=log_buffer_size,
         )
         self._metadata = Metadata(self._table)
 
@@ -251,6 +261,7 @@ class DeltaTable:
         table_name: str,
         data_catalog_id: Optional[str] = None,
         version: Optional[int] = None,
+        log_buffer_size: Optional[int] = None,
     ) -> "DeltaTable":
         """
         Create the Delta Table from a Data Catalog.
@@ -260,6 +271,11 @@ class DeltaTable:
         :param table_name: the table name inside the Data Catalog
         :param data_catalog_id: the identifier of the Data Catalog
         :param version: version of the DeltaTable
+        :param log_buffer_size: Number of files to buffer when reading the commit log. A positive integer.
+                                Setting a value greater than 1 results in concurrent calls to the storage api.
+                                This can decrease latency if there are many files in the log since the last checkpoint,
+                                but will also increase memory usage. Possible rate limits of the storage backend should
+                                also be considered for optimal performance. Defaults to 4 * number of cpus.
         """
         table_uri = RawDeltaTable.get_table_uri_from_data_catalog(
             data_catalog=data_catalog.value,
@@ -267,7 +283,9 @@ class DeltaTable:
             database_name=database_name,
             table_name=table_name,
         )
-        return cls(table_uri=table_uri, version=version)
+        return cls(
+            table_uri=table_uri, version=version, log_buffer_size=log_buffer_size
+        )
 
     def version(self) -> int:
         """
@@ -394,6 +412,11 @@ given filters.
         return self._metadata
 
     def protocol(self) -> ProtocolVersions:
+        """
+        Get the reader and writer protocol versions of the DeltaTable.
+
+        :return: the current ProtocolVersions registered in the transaction log
+        """
         return ProtocolVersions(*self._table.protocol_versions())
 
     def history(self, limit: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -454,6 +477,35 @@ given filters.
         )
         return self.schema().to_pyarrow()
 
+    def restore(
+        self,
+        target: Union[int, datetime, str],
+        *,
+        ignore_missing_files: bool = False,
+        protocol_downgrade_allowed: bool = False,
+    ) -> Dict[str, Any]:
+        """
+        Run the Restore command on the Delta Table: restore table to a given version or datetime.
+
+        :param target: the expected version will restore, which represented by int, date str or datetime.
+        :param ignore_missing_files: whether the operation carry on when some data files missing.
+        :param protocol_downgrade_allowed: whether the operation when protocol version upgraded.
+        :return: the metrics from restore.
+        """
+        if isinstance(target, datetime):
+            metrics = self._table.restore(
+                target.isoformat(),
+                ignore_missing_files=ignore_missing_files,
+                protocol_downgrade_allowed=protocol_downgrade_allowed,
+            )
+        else:
+            metrics = self._table.restore(
+                target,
+                ignore_missing_files=ignore_missing_files,
+                protocol_downgrade_allowed=protocol_downgrade_allowed,
+            )
+        return json.loads(metrics)
+
     def to_pyarrow_dataset(
         self,
         partitions: Optional[List[Tuple[str, str, Any]]] = None,
@@ -471,15 +523,18 @@ given filters.
         """
         if self.protocol().min_reader_version > MAX_SUPPORTED_READER_VERSION:
             raise DeltaProtocolError(
-                f"The table's minimum reader version is {self.protocol().min_reader_version}"
+                f"The table's minimum reader version is {self.protocol().min_reader_version} "
                 f"but deltalake only supports up to version {MAX_SUPPORTED_READER_VERSION}."
             )
 
         if not filesystem:
+            file_sizes = self.get_add_actions().to_pydict()
+            file_sizes = {
+                x: y for x, y in zip(file_sizes["path"], file_sizes["size_bytes"])
+            }
             filesystem = pa_fs.PyFileSystem(
                 DeltaStorageHandler(
-                    self._table.table_uri(),
-                    self._storage_options,
+                    self._table.table_uri(), self._storage_options, file_sizes
                 )
             )
 
@@ -571,9 +626,9 @@ given filters.
         for field, op, value in partition_filters:
             str_value: Union[str, List[str]]
             if isinstance(value, (list, tuple)):
-                str_value = [str(val) for val in value]
+                str_value = [encode_partition_value(val) for val in value]
             else:
-                str_value = str(value)
+                str_value = encode_partition_value(value)
             out.append((field, op, str_value))
         return out
 
@@ -642,6 +697,7 @@ class TableOptimizer:
         partition_filters: Optional[FilterType] = None,
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
+        min_commit_interval: Optional[Union[int, timedelta]] = None,
     ) -> Dict[str, Any]:
         """
         Compacts small files to reduce the total number of files in the table.
@@ -659,10 +715,25 @@ class TableOptimizer:
         :param max_concurrent_tasks: the maximum number of concurrent tasks to use for
             file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
             faster, but will also use more memory.
+        :param min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
+            created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
+            want a commit per partition.
         :return: the metrics from optimize
+
+        Examples:
+
+        Use a timedelta object to specify the seconds, minutes or hours of the interval.
+        >>> from deltalake import DeltaTable
+        >>> from datetime import timedelta
+        >>> dt = DeltaTable("tmp")
+        >>> time_delta = timedelta(minutes=10)
+        >>> dt.optimize.z_order(["timestamp"], min_commit_interval=time_delta)
         """
+        if isinstance(min_commit_interval, timedelta):
+            min_commit_interval = int(min_commit_interval.total_seconds())
+
         metrics = self.table._table.compact_optimize(
-            partition_filters, target_size, max_concurrent_tasks
+            partition_filters, target_size, max_concurrent_tasks, min_commit_interval
         )
         self.table.update_incremental()
         return json.loads(metrics)
@@ -674,6 +745,7 @@ class TableOptimizer:
         target_size: Optional[int] = None,
         max_concurrent_tasks: Optional[int] = None,
         max_spill_size: int = 20 * 1024 * 1024 * 1024,
+        min_commit_interval: Optional[Union[int, timedelta]] = None,
     ) -> Dict[str, Any]:
         """
         Reorders the data using a Z-order curve to improve data skipping.
@@ -689,14 +761,30 @@ class TableOptimizer:
             file compaction. Defaults to number of CPUs. More concurrent tasks can make compaction
             faster, but will also use more memory.
         :param max_spill_size: the maximum number of bytes to spill to disk. Defaults to 20GB.
+        :param min_commit_interval: minimum interval in seconds or as timedeltas before a new commit is
+            created. Interval is useful for long running executions. Set to 0 or timedelta(0), if you
+            want a commit per partition.
         :return: the metrics from optimize
+
+        Examples:
+
+        Use a timedelta object to specify the seconds, minutes or hours of the interval.
+        >>> from deltalake import DeltaTable
+        >>> from datetime import timedelta
+        >>> dt = DeltaTable("tmp")
+        >>> time_delta = timedelta(minutes=10)
+        >>> dt.optimize.compact(min_commit_interval=time_delta)
         """
+        if isinstance(min_commit_interval, timedelta):
+            min_commit_interval = int(min_commit_interval.total_seconds())
+
         metrics = self.table._table.z_order_optimize(
             list(columns),
             partition_filters,
             target_size,
             max_concurrent_tasks,
             max_spill_size,
+            min_commit_interval,
         )
         self.table.update_incremental()
         return json.loads(metrics)

@@ -10,8 +10,8 @@
 use self::create::CreateBuilder;
 use self::filesystem_check::FileSystemCheckBuilder;
 use self::vacuum::VacuumBuilder;
-use crate::builder::DeltaTableBuilder;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::table::builder::DeltaTableBuilder;
 use crate::DeltaTable;
 
 pub mod create;
@@ -23,7 +23,10 @@ pub mod transaction;
 pub mod vacuum;
 
 #[cfg(feature = "datafusion")]
-use self::{delete::DeleteBuilder, load::LoadBuilder, update::UpdateBuilder, write::WriteBuilder};
+use self::{
+    datafusion_utils::Expression, delete::DeleteBuilder, load::LoadBuilder, merge::MergeBuilder,
+    update::UpdateBuilder, write::WriteBuilder,
+};
 #[cfg(feature = "datafusion")]
 pub use ::datafusion::physical_plan::common::collect as collect_sendable_stream;
 #[cfg(feature = "datafusion")]
@@ -36,6 +39,8 @@ use restore::RestoreBuilder;
 pub mod delete;
 #[cfg(feature = "datafusion")]
 mod load;
+#[cfg(feature = "datafusion")]
+pub mod merge;
 #[cfg(feature = "datafusion")]
 pub mod update;
 #[cfg(feature = "datafusion")]
@@ -157,6 +162,22 @@ impl DeltaOps {
     pub fn restore(self) -> RestoreBuilder {
         RestoreBuilder::new(self.0.object_store(), self.0.state)
     }
+
+    /// Update data from Delta table
+    #[cfg(feature = "datafusion")]
+    #[must_use]
+    pub fn merge<E: Into<Expression>>(
+        self,
+        source: datafusion::prelude::DataFrame,
+        predicate: E,
+    ) -> MergeBuilder {
+        MergeBuilder::new(
+            self.0.object_store(),
+            self.0.state,
+            predicate.into(),
+            source,
+        )
+    }
 }
 
 impl From<DeltaTable> for DeltaOps {
@@ -179,7 +200,20 @@ impl AsRef<DeltaTable> for DeltaOps {
 
 #[cfg(feature = "datafusion")]
 mod datafusion_utils {
+    use std::sync::Arc;
+
+    use arrow_schema::SchemaRef;
+    use datafusion::arrow::record_batch::RecordBatch;
+    use datafusion::error::Result as DataFusionResult;
+    use datafusion::physical_plan::DisplayAs;
+    use datafusion::physical_plan::{
+        metrics::{ExecutionPlanMetricsSet, MetricsSet},
+        ExecutionPlan, RecordBatchStream, SendableRecordBatchStream,
+    };
     use datafusion_expr::Expr;
+    use futures::{Stream, StreamExt};
+
+    use crate::{table::state::DeltaTableState, DeltaResult};
 
     /// Used to represent user input of either a Datafusion expression or string expression
     pub enum Expression {
@@ -203,6 +237,146 @@ mod datafusion_utils {
     impl From<String> for Expression {
         fn from(val: String) -> Self {
             Expression::String(val)
+        }
+    }
+
+    pub(crate) fn into_expr(expr: Expression, snapshot: &DeltaTableState) -> DeltaResult<Expr> {
+        match expr {
+            Expression::DataFusion(expr) => Ok(expr),
+            Expression::String(s) => snapshot.parse_predicate_expression(s),
+        }
+    }
+
+    pub(crate) fn maybe_into_expr(
+        expr: Option<Expression>,
+        snapshot: &DeltaTableState,
+    ) -> DeltaResult<Option<Expr>> {
+        Ok(match expr {
+            Some(predicate) => Some(into_expr(predicate, snapshot)?),
+            None => None,
+        })
+    }
+
+    pub(crate) type MetricObserverFunction = fn(&RecordBatch, &ExecutionPlanMetricsSet) -> ();
+
+    pub(crate) struct MetricObserverExec {
+        parent: Arc<dyn ExecutionPlan>,
+        metrics: ExecutionPlanMetricsSet,
+        update: MetricObserverFunction,
+    }
+
+    impl MetricObserverExec {
+        pub fn new(parent: Arc<dyn ExecutionPlan>, f: MetricObserverFunction) -> Self {
+            MetricObserverExec {
+                parent,
+                metrics: ExecutionPlanMetricsSet::new(),
+                update: f,
+            }
+        }
+    }
+
+    impl std::fmt::Debug for MetricObserverExec {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.debug_struct("MergeStatsExec")
+                .field("parent", &self.parent)
+                .field("metrics", &self.metrics)
+                .finish()
+        }
+    }
+
+    impl DisplayAs for MetricObserverExec {
+        fn fmt_as(
+            &self,
+            _: datafusion::physical_plan::DisplayFormatType,
+            f: &mut std::fmt::Formatter,
+        ) -> std::fmt::Result {
+            write!(f, "MetricObserverExec")
+        }
+    }
+
+    impl ExecutionPlan for MetricObserverExec {
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+
+        fn schema(&self) -> arrow_schema::SchemaRef {
+            self.parent.schema()
+        }
+
+        fn output_partitioning(&self) -> datafusion::physical_plan::Partitioning {
+            self.parent.output_partitioning()
+        }
+
+        fn output_ordering(&self) -> Option<&[datafusion_physical_expr::PhysicalSortExpr]> {
+            self.parent.output_ordering()
+        }
+
+        fn children(&self) -> Vec<Arc<dyn ExecutionPlan>> {
+            vec![self.parent.clone()]
+        }
+
+        fn execute(
+            &self,
+            partition: usize,
+            context: Arc<datafusion::execution::context::TaskContext>,
+        ) -> datafusion_common::Result<datafusion::physical_plan::SendableRecordBatchStream>
+        {
+            let res = self.parent.execute(partition, context)?;
+            Ok(Box::pin(MetricObserverStream {
+                schema: self.schema(),
+                input: res,
+                metrics: self.metrics.clone(),
+                update: self.update,
+            }))
+        }
+
+        fn statistics(&self) -> datafusion_common::Statistics {
+            self.parent.statistics()
+        }
+
+        fn with_new_children(
+            self: Arc<Self>,
+            children: Vec<Arc<dyn ExecutionPlan>>,
+        ) -> datafusion_common::Result<Arc<dyn ExecutionPlan>> {
+            ExecutionPlan::with_new_children(self.parent.clone(), children)
+        }
+
+        fn metrics(&self) -> Option<MetricsSet> {
+            Some(self.metrics.clone_inner())
+        }
+    }
+
+    struct MetricObserverStream {
+        schema: SchemaRef,
+        input: SendableRecordBatchStream,
+        metrics: ExecutionPlanMetricsSet,
+        update: MetricObserverFunction,
+    }
+
+    impl Stream for MetricObserverStream {
+        type Item = DataFusionResult<RecordBatch>;
+
+        fn poll_next(
+            mut self: std::pin::Pin<&mut Self>,
+            cx: &mut std::task::Context<'_>,
+        ) -> std::task::Poll<Option<Self::Item>> {
+            self.input.poll_next_unpin(cx).map(|x| match x {
+                Some(Ok(batch)) => {
+                    (self.update)(&batch, &self.metrics);
+                    Some(Ok(batch))
+                }
+                other => other,
+            })
+        }
+
+        fn size_hint(&self) -> (usize, Option<usize>) {
+            self.input.size_hint()
+        }
+    }
+
+    impl RecordBatchStream for MetricObserverStream {
+        fn schema(&self) -> SchemaRef {
+            self.schema.clone()
         }
     }
 }

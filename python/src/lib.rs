@@ -9,25 +9,27 @@ use std::collections::{HashMap, HashSet};
 use std::convert::TryFrom;
 use std::future::IntoFuture;
 use std::sync::Arc;
+use std::time;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use arrow::pyarrow::PyArrowType;
 use chrono::{DateTime, Duration, FixedOffset, Utc};
-use deltalake::action::{
-    self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
-};
 use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
-use deltalake::builder::DeltaTableBuilder;
 use deltalake::checkpoints::create_checkpoint;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
+use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
 use deltalake::partitions::PartitionFilter;
+use deltalake::protocol::{
+    self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
+};
+use deltalake::DeltaTableBuilder;
 use deltalake::{DeltaOps, Invariant, Schema};
 use pyo3::exceptions::{PyIOError, PyRuntimeError, PyValueError};
 use pyo3::prelude::*;
@@ -75,12 +77,13 @@ struct RawDeltaTableMetaData {
 #[pymethods]
 impl RawDeltaTable {
     #[new]
-    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false))]
+    #[pyo3(signature = (table_uri, version = None, storage_options = None, without_files = false, log_buffer_size = None))]
     fn new(
         table_uri: &str,
         version: Option<i64>,
         storage_options: Option<HashMap<String, String>>,
         without_files: bool,
+        log_buffer_size: Option<usize>,
     ) -> PyResult<Self> {
         let mut builder = deltalake::DeltaTableBuilder::from_uri(table_uri);
         let options = storage_options.clone().unwrap_or_default();
@@ -90,9 +93,13 @@ impl RawDeltaTable {
         if let Some(version) = version {
             builder = builder.with_version(version)
         }
-
         if without_files {
             builder = builder.without_files()
+        }
+        if let Some(buf_size) = log_buffer_size {
+            builder = builder
+                .with_log_buffer_size(buf_size)
+                .map_err(PythonError::from)?;
         }
 
         let table = rt()?.block_on(builder.load()).map_err(PythonError::from)?;
@@ -106,15 +113,17 @@ impl RawDeltaTable {
     }
 
     #[classmethod]
+    #[pyo3(signature = (data_catalog, database_name, table_name, data_catalog_id, catalog_options = None))]
     fn get_table_uri_from_data_catalog(
         _cls: &PyType,
         data_catalog: &str,
         database_name: &str,
         table_name: &str,
         data_catalog_id: Option<String>,
+        catalog_options: Option<HashMap<String, String>>,
     ) -> PyResult<String> {
-        let data_catalog =
-            deltalake::data_catalog::get_data_catalog(data_catalog).map_err(|_| {
+        let data_catalog = deltalake::data_catalog::get_data_catalog(data_catalog, catalog_options)
+            .map_err(|_| {
                 PyValueError::new_err(format!("Catalog '{}' not available.", data_catalog))
             })?;
         let table_uri = rt()?
@@ -265,17 +274,21 @@ impl RawDeltaTable {
     }
 
     /// Run the optimize command on the Delta Table: merge small files into a large file by bin-packing.
-    #[pyo3(signature = (partition_filters = None, target_size = None, max_concurrent_tasks = None))]
+    #[pyo3(signature = (partition_filters = None, target_size = None, max_concurrent_tasks = None, min_commit_interval = None))]
     pub fn compact_optimize(
         &mut self,
         partition_filters: Option<Vec<(&str, &str, PartitionFilterValue)>>,
         target_size: Option<i64>,
         max_concurrent_tasks: Option<usize>,
+        min_commit_interval: Option<u64>,
     ) -> PyResult<String> {
         let mut cmd = OptimizeBuilder::new(self._table.object_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get));
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
+        }
+        if let Some(commit_interval) = min_commit_interval {
+            cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
         }
         let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
             .map_err(PythonError::from)?;
@@ -289,7 +302,7 @@ impl RawDeltaTable {
     }
 
     /// Run z-order variation of optimize
-    #[pyo3(signature = (z_order_columns, partition_filters = None, target_size = None, max_concurrent_tasks = None, max_spill_size = 20 * 1024 * 1024 * 1024))]
+    #[pyo3(signature = (z_order_columns, partition_filters = None, target_size = None, max_concurrent_tasks = None, max_spill_size = 20 * 1024 * 1024 * 1024, min_commit_interval = None))]
     pub fn z_order_optimize(
         &mut self,
         z_order_columns: Vec<String>,
@@ -297,6 +310,7 @@ impl RawDeltaTable {
         target_size: Option<i64>,
         max_concurrent_tasks: Option<usize>,
         max_spill_size: usize,
+        min_commit_interval: Option<u64>,
     ) -> PyResult<String> {
         let mut cmd = OptimizeBuilder::new(self._table.object_store(), self._table.state.clone())
             .with_max_concurrent_tasks(max_concurrent_tasks.unwrap_or_else(num_cpus::get))
@@ -305,10 +319,45 @@ impl RawDeltaTable {
         if let Some(size) = target_size {
             cmd = cmd.with_target_size(size);
         }
+        if let Some(commit_interval) = min_commit_interval {
+            cmd = cmd.with_min_commit_interval(time::Duration::from_secs(commit_interval));
+        }
+
         let converted_filters = convert_partition_filters(partition_filters.unwrap_or_default())
             .map_err(PythonError::from)?;
         cmd = cmd.with_filters(&converted_filters);
 
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
+    }
+
+    // Run the restore command on the Delta Table: restore table to a given version or datetime
+    #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false))]
+    pub fn restore(
+        &mut self,
+        target: Option<&PyAny>,
+        ignore_missing_files: bool,
+        protocol_downgrade_allowed: bool,
+    ) -> PyResult<String> {
+        let mut cmd = RestoreBuilder::new(self._table.object_store(), self._table.state.clone());
+        if let Some(val) = target {
+            if let Ok(version) = val.extract::<i64>() {
+                cmd = cmd.with_version_to_restore(version)
+            }
+            if let Ok(ds) = val.extract::<&str>() {
+                let datetime = DateTime::<Utc>::from(
+                    DateTime::<FixedOffset>::parse_from_rfc3339(ds).map_err(|err| {
+                        PyValueError::new_err(format!("Failed to parse datetime string: {err}"))
+                    })?,
+                );
+                cmd = cmd.with_datetime_to_restore(datetime)
+            }
+        }
+        cmd = cmd.with_ignore_missing_files(ignore_missing_files);
+        cmd = cmd.with_protocol_downgrade_allowed(protocol_downgrade_allowed);
         let (table, metrics) = rt()?
             .block_on(cmd.into_future())
             .map_err(PythonError::from)?;
@@ -432,7 +481,7 @@ impl RawDeltaTable {
             .into_iter()
             .map(|part| PyFrozenSet::new(py, part.iter()))
             .collect::<Result<_, PyErr>>()?;
-        PyFrozenSet::new(py, active_partitions.into_iter())
+        PyFrozenSet::new(py, active_partitions)
     }
 
     fn create_write_transaction(
@@ -448,7 +497,7 @@ impl RawDeltaTable {
 
         let existing_schema = self._table.get_schema().map_err(PythonError::from)?;
 
-        let mut actions: Vec<action::Action> = add_actions
+        let mut actions: Vec<protocol::Action> = add_actions
             .iter()
             .map(|add| Action::add(add.into()))
             .collect();
@@ -466,13 +515,14 @@ impl RawDeltaTable {
                     .map_err(PythonError::from)?;
 
                 for old_add in add_actions {
-                    let remove_action = Action::remove(action::Remove {
+                    let remove_action = Action::remove(protocol::Remove {
                         path: old_add.path.clone(),
                         deletion_timestamp: Some(current_timestamp()),
                         data_change: true,
                         extended_file_metadata: Some(old_add.tags.is_some()),
                         partition_values: Some(old_add.partition_values.clone()),
                         size: Some(old_add.size),
+                        deletion_vector: old_add.deletion_vector.clone(),
                         tags: old_add.tags.clone(),
                     });
                     actions.push(remove_action);
@@ -486,7 +536,7 @@ impl RawDeltaTable {
                         .map_err(PythonError::from)?
                         .clone();
                     metadata.schema = schema;
-                    let metadata_action = action::MetaData::try_from(metadata)
+                    let metadata_action = protocol::MetaData::try_from(metadata)
                         .map_err(|_| PyValueError::new_err("Failed to reparse metadata"))?;
                     actions.push(Action::metaData(metadata_action));
                 }
@@ -524,6 +574,7 @@ impl RawDeltaTable {
             inner: self._table.object_store(),
             rt: Arc::new(rt()?),
             config: self._config.clone(),
+            known_sizes: None,
         })
     }
 
@@ -744,9 +795,9 @@ pub struct PyAddAction {
     stats: Option<String>,
 }
 
-impl From<&PyAddAction> for action::Add {
+impl From<&PyAddAction> for protocol::Add {
     fn from(action: &PyAddAction) -> Self {
-        action::Add {
+        protocol::Add {
             path: action.path.clone(),
             size: action.size,
             partition_values: action.partition_values.clone(),
@@ -756,6 +807,7 @@ impl From<&PyAddAction> for action::Add {
             stats: action.stats.clone(),
             stats_parsed: None,
             tags: None,
+            deletion_vector: None,
         }
     }
 }

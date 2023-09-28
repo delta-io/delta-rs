@@ -17,8 +17,11 @@ from typing import (
     Tuple,
     Union,
 )
+from urllib.parse import unquote
 
 from deltalake.fs import DeltaStorageHandler
+
+from ._util import encode_partition_value
 
 if TYPE_CHECKING:
     import pandas as pd
@@ -89,6 +92,7 @@ def write_deltalake(
     overwrite_schema: bool = False,
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+    large_dtypes: bool = False,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -138,6 +142,7 @@ def write_deltalake(
     :param overwrite_schema: If True, allows updating the schema of the table.
     :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
     :param partition_filters: the partition filters that will be used for partition overwrite.
+    :param large_dtypes: If True, the table schema is checked against large_dtypes
     """
     if _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
@@ -162,25 +167,24 @@ def write_deltalake(
     if filesystem is not None:
         raise NotImplementedError("Filesystem support is not yet implemented.  #570")
 
+    if table is not None:
+        storage_options = table._storage_options or {}
+        storage_options.update(storage_options or {})
+
+    filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
+
     __enforce_append_only(table=table, configuration=configuration, mode=mode)
-
-    if filesystem is None:
-        if table is not None:
-            storage_options = table._storage_options or {}
-            storage_options.update(storage_options or {})
-
-        filesystem = pa_fs.PyFileSystem(DeltaStorageHandler(table_uri, storage_options))
 
     if isinstance(partition_by, str):
         partition_by = [partition_by]
 
     if table:  # already exists
-        if schema != table.schema().to_pyarrow() and not (
+        if schema != table.schema().to_pyarrow(as_large_types=large_dtypes) and not (
             mode == "overwrite" and overwrite_schema
         ):
             raise ValueError(
                 "Schema of data does not match table schema\n"
-                f"Table schema:\n{schema}\nData Schema:\n{table.schema().to_pyarrow()}"
+                f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow(as_large_types=large_dtypes)}"
             )
 
         if mode == "error":
@@ -204,8 +208,26 @@ def write_deltalake(
     else:  # creating a new table
         current_version = -1
 
+    dtype_map = {
+        pa.large_string(): pa.string(),  # type: ignore
+    }
+
+    def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
+        try:
+            return dtype_map[dtype]
+        except KeyError:
+            return dtype
+
     if partition_by:
-        partition_schema = pa.schema([schema.field(name) for name in partition_by])
+        if PYARROW_MAJOR_VERSION < 12:
+            partition_schema = pa.schema(
+                [
+                    pa.field(name, _large_to_normal_dtype(schema.field(name).type))
+                    for name in partition_by
+                ]
+            )
+        else:
+            partition_schema = pa.schema([schema.field(name) for name in partition_by])
         partitioning = ds.partitioning(partition_schema, flavor="hive")
     else:
         partitioning = None
@@ -219,8 +241,10 @@ def write_deltalake(
         # PyArrow added support for written_file.size in 9.0.0
         if PYARROW_MAJOR_VERSION >= 9:
             size = written_file.size
-        else:
+        elif filesystem is not None:
             size = filesystem.get_file_info([path])[0].size
+        else:
+            size = 0
 
         add_actions.append(
             AddAction(
@@ -261,7 +285,7 @@ def write_deltalake(
             for i in range(partition_values.num_rows):
                 # Map will maintain order of partition_columns
                 partition_map = {
-                    column_name: __encode_partition_value(
+                    column_name: encode_partition_value(
                         batch.column(column_name)[i].as_py()
                     )
                     for column_name in table.metadata().partition_columns
@@ -421,7 +445,7 @@ def get_partitions_from_path(path: str) -> Tuple[str, Dict[str, Optional[str]]]:
         if value == "__HIVE_DEFAULT_PARTITION__":
             out[key] = None
         else:
-            out[key] = value
+            out[key] = unquote(value)
     return path, out
 
 
@@ -488,21 +512,3 @@ def get_file_stats_from_metadata(
                     maximum for maximum in maximums if maximum is not None
                 )
     return stats
-
-
-def __encode_partition_value(val: Any) -> str:
-    # Rules based on: https://github.com/delta-io/delta/blob/master/PROTOCOL.md#partition-value-serialization
-    if isinstance(val, bool):
-        return str(val).lower()
-    if isinstance(val, str):
-        return val
-    elif isinstance(val, (int, float)):
-        return str(val)
-    elif isinstance(val, date):
-        return val.isoformat()
-    elif isinstance(val, datetime):
-        return val.isoformat(sep=" ")
-    elif isinstance(val, bytes):
-        return val.decode("unicode_escape", "backslashreplace")
-    else:
-        raise ValueError(f"Could not encode partition value for type: {val}")

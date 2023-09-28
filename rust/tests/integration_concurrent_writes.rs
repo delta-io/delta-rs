@@ -1,8 +1,8 @@
 #![cfg(feature = "integration_test")]
 
-use deltalake::action::{Action, Add, DeltaOperation, SaveMode};
 use deltalake::operations::transaction::commit;
 use deltalake::operations::DeltaOps;
+use deltalake::protocol::{Action, Add, DeltaOperation, SaveMode};
 use deltalake::test_utils::{IntegrationContext, StorageIntegration, TestResult, TestTables};
 use deltalake::{DeltaTable, DeltaTableBuilder, Schema, SchemaDataType, SchemaField};
 use std::collections::HashMap;
@@ -103,12 +103,12 @@ where
     assert_eq!(map.len() as i64, WORKERS * COMMITS);
 
     // check that we have unique and ascending versions committed
-    let mut versions = Vec::from_iter(map.keys().map(|x| x.clone()));
+    let mut versions = Vec::from_iter(map.keys().copied());
     versions.sort();
     assert_eq!(versions, Vec::from_iter(1i64..=WORKERS * COMMITS));
 
     // check that each file for each worker is committed as expected
-    let mut files = Vec::from_iter(map.values().map(|x| x.clone()));
+    let mut files = Vec::from_iter(map.values().cloned());
     files.sort();
     let mut expected = Vec::new();
     for w in 0..WORKERS {
@@ -163,6 +163,7 @@ impl Worker {
             stats: None,
             stats_parsed: None,
             tags: None,
+            deletion_vector: None,
         })];
         let version = commit(
             self.table.object_store().as_ref(),

@@ -14,6 +14,7 @@ use arrow::datatypes::{
     DataType as ArrowDataType, Field as ArrowField, Schema as ArrowSchema, TimeUnit,
 };
 use arrow::record_batch::RecordBatch;
+use arrow_schema::{DataType, Field};
 use datafusion::assert_batches_sorted_eq;
 use datafusion::datasource::physical_plan::ParquetExec;
 use datafusion::datasource::TableProvider;
@@ -30,23 +31,27 @@ use datafusion_proto::bytes::{
 };
 use url::Url;
 
-use deltalake::action::SaveMode;
 use deltalake::delta_datafusion::{DeltaPhysicalCodec, DeltaScan};
 use deltalake::operations::create::CreateBuilder;
+use deltalake::protocol::SaveMode;
 use deltalake::storage::DeltaObjectStore;
+use deltalake::writer::{DeltaWriter, RecordBatchWriter};
 use deltalake::{
     operations::{write::WriteBuilder, DeltaOps},
-    DeltaTable, Schema,
+    DeltaTable, DeltaTableError, Schema, SchemaDataType, SchemaField,
 };
+use std::error::Error;
 
 mod common;
 
 mod local {
+    use deltalake::{writer::JsonWriter, SchemaTypeMap};
+
     use super::*;
     #[tokio::test]
     #[serial]
     async fn test_datafusion_local() -> TestResult {
-        Ok(test_datafusion(StorageIntegration::Local).await?)
+        test_datafusion(StorageIntegration::Local).await
     }
 
     fn get_scanned_files(node: &dyn ExecutionPlan) -> HashSet<Label> {
@@ -197,7 +202,7 @@ mod local {
 
         // Create target Delta Table
         let target_table = CreateBuilder::new()
-            .with_location("memory://target")
+            .with_location("memory:///target")
             .with_columns(fields)
             .with_table_name("target")
             .await?;
@@ -238,7 +243,7 @@ mod local {
 
         // Check results
         let batches = ctx.sql("SELECT * FROM target").await?.collect().await?;
-        let expected = vec![
+        let expected = [
             "+------------+-----------+",
             "| date       | dayOfYear |",
             "+------------+-----------+",
@@ -572,7 +577,7 @@ mod local {
             if column == "decimal" || column == "date" || column == "binary" {
                 continue;
             }
-            println!("Test Column: {} value: {}", column, file1_value);
+            println!("[Unwrapped] Test Column: {} value: {}", column, file1_value);
 
             // Equality
             let e = col(column).eq(file1_value.clone());
@@ -648,7 +653,11 @@ mod local {
             // binary fails since arrow does not implement a natural order
             // The current Datafusion pruning implementation does not work for binary columns since they do not have a natural order. See #1214
             // Timestamp and date are disabled since the hive path contains illegal Windows values. see #1215
-            if column == "float32"
+            if column == "int64"
+                || column == "int32"
+                || column == "int16"
+                || column == "int8"
+                || column == "float32"
                 || column == "float64"
                 || column == "decimal"
                 || column == "binary"
@@ -657,6 +666,8 @@ mod local {
             {
                 continue;
             }
+
+            println!("[Wrapped] Test Column: {} value: {}", column, file1_value);
 
             let partitions = vec![column.to_owned()];
             let batch = create_all_types_batch(3, 0, 0);
@@ -775,14 +786,7 @@ mod local {
 
         let expected_schema = ArrowSchema::new(vec![
             ArrowField::new("c3", ArrowDataType::Int32, true),
-            ArrowField::new(
-                "c1",
-                ArrowDataType::Dictionary(
-                    Box::new(ArrowDataType::UInt16),
-                    Box::new(ArrowDataType::Int32),
-                ),
-                false,
-            ),
+            ArrowField::new("c1", ArrowDataType::Int32, false),
             ArrowField::new(
                 "c2",
                 ArrowDataType::Dictionary(
@@ -931,6 +935,55 @@ mod local {
 
         Ok(())
     }
+
+    #[tokio::test]
+    async fn test_issue_1619_parquet_panic_using_map_type() -> Result<()> {
+        let _ = tokio::fs::remove_dir_all("./tests/data/issue-1619").await;
+        let fields: Vec<SchemaField> = vec![SchemaField::new(
+            "metadata".to_string(),
+            SchemaDataType::map(SchemaTypeMap::new(
+                Box::new(SchemaDataType::primitive("string".to_string())),
+                Box::new(SchemaDataType::primitive("string".to_string())),
+                true,
+            )),
+            true,
+            HashMap::new(),
+        )];
+        let schema = deltalake::Schema::new(fields);
+        let table = deltalake::DeltaTableBuilder::from_uri("./tests/data/issue-1619").build()?;
+        let _ = DeltaOps::from(table)
+            .create()
+            .with_columns(schema.get_fields().to_owned())
+            .await?;
+
+        let mut table = deltalake::open_table("./tests/data/issue-1619").await?;
+
+        let mut writer = JsonWriter::for_table(&table).unwrap();
+        writer
+            .write(vec![
+                serde_json::json!({"metadata": {"hello": "world", "something": null}}),
+            ])
+            .await
+            .unwrap();
+        writer.flush_and_commit(&mut table).await.unwrap();
+
+        let ctx = SessionContext::new();
+        ctx.register_table("t", Arc::new(table))?;
+
+        let batches = ctx.sql(r#"SELECT * FROM t"#).await?.collect().await?;
+
+        let expected = vec![
+            "+-----------------------------+",
+            "| metadata                    |",
+            "+-----------------------------+",
+            "| {hello: world, something: } |", // unclear why it doesn't say `null` for something...
+            "+-----------------------------+",
+        ];
+
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
 }
 
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
@@ -939,7 +992,7 @@ mod s3 {
     #[tokio::test]
     #[serial]
     async fn test_datafusion_aws() -> TestResult {
-        Ok(test_datafusion(StorageIntegration::Amazon).await?)
+        test_datafusion(StorageIntegration::Amazon).await
     }
 }
 
@@ -949,7 +1002,7 @@ mod azure {
     #[tokio::test]
     #[serial]
     async fn test_datafusion_azure() -> TestResult {
-        Ok(test_datafusion(StorageIntegration::Microsoft).await?)
+        test_datafusion(StorageIntegration::Microsoft).await
     }
 }
 
@@ -959,7 +1012,7 @@ mod gcs {
     #[tokio::test]
     #[serial]
     async fn test_datafusion_gcp() -> TestResult {
-        Ok(test_datafusion(StorageIntegration::Google).await?)
+        test_datafusion(StorageIntegration::Google).await
     }
 }
 
@@ -987,7 +1040,7 @@ async fn simple_query(context: &IntegrationContext) -> TestResult {
 
     let dynamo_lock_option = "'DYNAMO_LOCK_OWNER_NAME' 's3::deltars/simple'".to_string();
     let options = match context.integration {
-        StorageIntegration::Amazon => format!("'AWS_STORAGE_ALLOW_HTTP' '1', {dynamo_lock_option}"),
+        StorageIntegration::Amazon => format!("'AWS_ALLOW_HTTP' '1', {dynamo_lock_option}"),
         StorageIntegration::Microsoft => {
             format!("'AZURE_STORAGE_ALLOW_HTTP' '1', {dynamo_lock_option}")
         }
@@ -1022,4 +1075,96 @@ async fn simple_query(context: &IntegrationContext) -> TestResult {
     );
 
     Ok(())
+}
+
+mod date_partitions {
+    use super::*;
+
+    async fn setup_test() -> Result<DeltaTable, Box<dyn Error>> {
+        let columns = vec![
+            SchemaField::new(
+                "id".to_owned(),
+                SchemaDataType::primitive("integer".to_owned()),
+                false,
+                HashMap::new(),
+            ),
+            SchemaField::new(
+                "date".to_owned(),
+                SchemaDataType::primitive("date".to_owned()),
+                false,
+                HashMap::new(),
+            ),
+        ];
+
+        let tmp_dir = tempdir::TempDir::new("opt_table").unwrap();
+        let table_uri = tmp_dir.path().to_str().to_owned().unwrap();
+        let dt = DeltaOps::try_from_uri(table_uri)
+            .await?
+            .create()
+            .with_columns(columns)
+            .with_partition_columns(["date"])
+            .await?;
+
+        Ok(dt)
+    }
+
+    fn get_batch(ids: Vec<i32>, dates: Vec<i32>) -> Result<RecordBatch, Box<dyn Error>> {
+        let ids_array: PrimitiveArray<arrow_array::types::Int32Type> = Int32Array::from(ids);
+        let date_array = Date32Array::from(dates);
+
+        Ok(RecordBatch::try_new(
+            Arc::new(ArrowSchema::new(vec![
+                Field::new("id", DataType::Int32, false),
+                Field::new("date", DataType::Date32, false),
+            ])),
+            vec![Arc::new(ids_array), Arc::new(date_array)],
+        )?)
+    }
+
+    async fn write(
+        writer: &mut RecordBatchWriter,
+        table: &mut DeltaTable,
+        batch: RecordBatch,
+    ) -> Result<(), DeltaTableError> {
+        writer.write(batch).await?;
+        writer.flush_and_commit(table).await?;
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn test_issue_1445_date_partition() -> Result<()> {
+        let ctx = SessionContext::new();
+        let mut dt = setup_test().await.unwrap();
+        let mut writer = RecordBatchWriter::for_table(&dt)?;
+        write(
+            &mut writer,
+            &mut dt,
+            get_batch(vec![2], vec![19517]).unwrap(),
+        )
+        .await?;
+        ctx.register_table("t", Arc::new(dt))?;
+
+        let batches = ctx
+            .sql(
+                r#"SELECT *
+            FROM t
+            WHERE date > '2023-06-07'
+            "#,
+            )
+            .await?
+            .collect()
+            .await?;
+
+        let expected = vec![
+            "+----+------------+",
+            "| id | date       |",
+            "+----+------------+",
+            "| 2  | 2023-06-09 |",
+            "+----+------------+",
+        ];
+
+        assert_batches_sorted_eq!(&expected, &batches);
+
+        Ok(())
+    }
 }

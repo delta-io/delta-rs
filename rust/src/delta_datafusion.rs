@@ -35,7 +35,7 @@ use arrow::record_batch::RecordBatch;
 use arrow_array::StringArray;
 use arrow_schema::Field;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDateTime, Utc};
+use chrono::{NaiveDateTime, TimeZone, Utc};
 use datafusion::datasource::file_format::{parquet::ParquetFormat, FileFormat};
 use datafusion::datasource::physical_plan::FileScanConfig;
 use datafusion::datasource::provider::TableProviderFactory;
@@ -67,11 +67,11 @@ use datafusion_proto::physical_plan::PhysicalExtensionCodec;
 use object_store::ObjectMeta;
 use url::Url;
 
-use crate::action::{self, Add};
-use crate::builder::ensure_table_uri;
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::{self, Add};
 use crate::storage::ObjectStoreRef;
-use crate::table_state::DeltaTableState;
+use crate::table::builder::ensure_table_uri;
+use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options, DeltaTable, Invariant, SchemaDataType};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
@@ -106,8 +106,8 @@ impl DeltaTableState {
         let stats = self
             .files()
             .iter()
-            .fold(
-                Some(Statistics {
+            .try_fold(
+                Statistics {
                     num_rows: Some(0),
                     total_byte_size: Some(0),
                     column_statistics: Some(vec![
@@ -120,12 +120,11 @@ impl DeltaTableState {
                         self.schema().unwrap().get_fields().len()
                     ]),
                     is_exact: true,
-                }),
+                },
                 |acc, action| {
-                    let acc = acc?;
                     let new_stats = action
                         .get_stats()
-                        .unwrap_or_else(|_| Some(action::Stats::default()))?;
+                        .unwrap_or_else(|_| Some(protocol::Stats::default()))?;
                     Some(Statistics {
                         num_rows: acc
                             .num_rows
@@ -468,7 +467,7 @@ impl TableProvider for DeltaTable {
             self.get_state()
                 .files()
                 .iter()
-                .zip(files_to_prune.into_iter())
+                .zip(files_to_prune)
                 .filter_map(
                     |(action, keep)| {
                         if keep {
@@ -632,7 +631,7 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
 }
 
 pub(crate) fn partitioned_file_from_action(
-    action: &action::Add,
+    action: &protocol::Add,
     schema: &ArrowSchema,
 ) -> PartitionedFile {
     let partition_values = schema
@@ -652,10 +651,8 @@ pub(crate) fn partitioned_file_from_action(
 
     let ts_secs = action.modification_time / 1000;
     let ts_ns = (action.modification_time % 1000) * 1_000_000;
-    let last_modified = DateTime::<Utc>::from_utc(
-        NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap(),
-        Utc,
-    );
+    let last_modified =
+        Utc.from_utc_datetime(&NaiveDateTime::from_timestamp_opt(ts_secs, ts_ns as u32).unwrap());
     PartitionedFile {
         object_meta: ObjectMeta {
             last_modified,
@@ -1544,7 +1541,7 @@ mod tests {
         let mut partition_values = std::collections::HashMap::new();
         partition_values.insert("month".to_string(), Some("1".to_string()));
         partition_values.insert("year".to_string(), Some("2015".to_string()));
-        let action = action::Add {
+        let action = protocol::Add {
             path: "year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string(),
             size: 10644,
             partition_values,
@@ -1552,6 +1549,7 @@ mod tests {
             partition_values_parsed: None,
             data_change: true,
             stats: None,
+            deletion_vector: None,
             stats_parsed: None,
             tags: None,
         };

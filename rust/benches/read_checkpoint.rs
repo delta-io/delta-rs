@@ -1,6 +1,6 @@
 use criterion::{criterion_group, criterion_main, Criterion};
-use deltalake::delta::DeltaTableConfig;
-use deltalake::table_state::DeltaTableState;
+use deltalake::table::state::DeltaTableState;
+use deltalake::DeltaTableConfig;
 use std::fs::File;
 use std::io::Read;
 
@@ -13,6 +13,7 @@ fn read_null_partitions_checkpoint(c: &mut Criterion) {
     let config = DeltaTableConfig {
         require_tombstones: true,
         require_files: true,
+        log_buffer_size: num_cpus::get() * 4,
     };
 
     c.bench_function("process checkpoint for table state", |b| {

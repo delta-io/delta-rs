@@ -11,7 +11,7 @@ use parquet::{
 };
 
 use super::*;
-use crate::action::{Add, ColumnValueStat, Stats};
+use crate::protocol::{Add, ColumnValueStat, Stats};
 
 /// Creates an [`Add`] log action struct.
 pub fn create_add(
@@ -38,6 +38,7 @@ pub fn create_add(
         stats: Some(stats_string),
         stats_parsed: None,
         tags: None,
+        deletion_vector: None,
     })
 }
 
@@ -146,12 +147,8 @@ impl StatsScalar {
             (Statistics::Boolean(v), _) => Ok(Self::Boolean(get_stat!(v))),
             // Int32 can be date, decimal, or just int32
             (Statistics::Int32(v), Some(LogicalType::Date)) => {
-                let date = chrono::NaiveDate::from_num_days_from_ce_opt(get_stat!(v)).ok_or(
-                    DeltaWriterError::StatsParsingFailed {
-                        debug_value: v.to_string(),
-                        logical_type: Some(LogicalType::Date),
-                    },
-                )?;
+                let epoch_start = chrono::NaiveDate::from_ymd_opt(1970, 1, 1).unwrap(); // creating from epoch should be infallible
+                let date = epoch_start + chrono::Duration::days(get_stat!(v) as i64);
                 Ok(Self::Date(date))
             }
             (Statistics::Int32(v), Some(LogicalType::Decimal { scale, .. })) => {
@@ -478,9 +475,9 @@ mod tests {
     use super::utils::record_batch_from_message;
     use super::*;
     use crate::{
-        action::{ColumnCountStat, ColumnValueStat},
-        builder::DeltaTableBuilder,
         errors::DeltaTableError,
+        protocol::{ColumnCountStat, ColumnValueStat},
+        table::builder::DeltaTableBuilder,
         DeltaTable,
     };
     use lazy_static::lazy_static;
@@ -539,9 +536,9 @@ mod tests {
                 Value::from(12340.0),
             ),
             (
-                simple_parquet_stat!(Statistics::Int32, 737821),
+                simple_parquet_stat!(Statistics::Int32, 10561),
                 Some(LogicalType::Date),
-                Value::from("2021-01-31"),
+                Value::from("1998-12-01"),
             ),
             (
                 simple_parquet_stat!(Statistics::Int64, 1641040496789123456),

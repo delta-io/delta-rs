@@ -22,6 +22,32 @@ async fn test_object_store_azure() -> TestResult {
     Ok(())
 }
 
+// NOTE: This test is ignored based on [this
+// comment](https://github.com/delta-io/delta-rs/pull/1564#issuecomment-1721048753) and we should
+// figure out a way to re-enable this test at least in the GitHub Actions CI environment
+#[ignore]
+#[cfg(feature = "azure")]
+#[tokio::test]
+#[serial]
+async fn test_object_store_onelake() -> TestResult {
+    let path = Path::from("17d3977c-d46e-4bae-8fed-ff467e674aed/Files/SampleCustomerList.csv");
+    read_write_test_onelake(StorageIntegration::Onelake, &path).await?;
+    Ok(())
+}
+
+// NOTE: This test is ignored based on [this
+// comment](https://github.com/delta-io/delta-rs/pull/1564#issuecomment-1721048753) and we should
+// figure out a way to re-enable this test at least in the GitHub Actions CI environment
+#[ignore]
+#[cfg(feature = "azure")]
+#[tokio::test]
+#[serial]
+async fn test_object_store_onelake_abfs() -> TestResult {
+    let path = Path::from("17d3977c-d46e-4bae-8fed-ff467e674aed/Files/SampleCustomerList.csv");
+    read_write_test_onelake(StorageIntegration::OnelakeAbfs, &path).await?;
+    Ok(())
+}
+
 #[cfg(feature = "s3")]
 #[tokio::test]
 #[serial]
@@ -48,9 +74,34 @@ async fn test_object_store_hdfs() -> TestResult {
     Ok(())
 }
 
+async fn read_write_test_onelake(integration: StorageIntegration, path: &Path) -> TestResult {
+    let context = IntegrationContext::new(integration)?;
+
+    //println!("line 102-{:#?}",context.root_uri());
+
+    let delta_store = DeltaTableBuilder::from_uri(&context.root_uri())
+        .with_allow_http(true)
+        .build_storage()?;
+
+    //println!("{:#?}",delta_store);
+
+    let expected = Bytes::from_static(b"test world from delta-rs on friday");
+
+    delta_store.put(path, expected.clone()).await.unwrap();
+    let fetched = delta_store.get(path).await.unwrap().bytes().await.unwrap();
+    assert_eq!(expected, fetched);
+
+    for range in [0..10, 3..5, 0..expected.len()] {
+        let data = delta_store.get_range(path, range.clone()).await.unwrap();
+        assert_eq!(&data[..], &expected[range])
+    }
+
+    Ok(())
+}
+
 async fn test_object_store(integration: StorageIntegration, skip_copy: bool) -> TestResult {
     let context = IntegrationContext::new(integration)?;
-    let delta_store = DeltaTableBuilder::from_uri(&context.root_uri())
+    let delta_store = DeltaTableBuilder::from_uri(context.root_uri())
         .with_allow_http(true)
         .build_storage()?;
 
@@ -412,7 +463,7 @@ async fn delete_fixtures(storage: &DynObjectStore) -> TestResult {
     let paths = flatten_list_stream(storage, None).await?;
 
     for f in &paths {
-        let _ = storage.delete(f).await?;
+        storage.delete(f).await?;
     }
     Ok(())
 }

@@ -75,13 +75,16 @@ For Databricks Unity Catalog authentication, use environment variables:
   * DATABRICKS_ACCESS_TOKEN
 
 .. code-block:: python
-
-   >>> from deltalake import DataCatalog, DeltaTable
-   >>> catalog_name = 'main'
-   >>> schema_name = 'db_schema'
-   >>> table_name = 'db_table'
-   >>> data_catalog = DataCatalog.UNITY
-   >>> dt = DeltaTable.from_data_catalog(data_catalog=data_catalog, data_catalog_id=catalog_name, database_name=schema_name, table_name=table_name)
+    
+    >>> import os
+    >>> from deltalake import DataCatalog, DeltaTable
+    >>> os.environ['DATABRICKS_WORKSPACE_URL'] = "https://adb-62800498333851.30.azuredatabricks.net"
+    >>> os.environ['DATABRICKS_ACCESS_TOKEN'] = "<DBAT>"
+    >>> catalog_name = 'main'
+    >>> schema_name = 'db_schema'
+    >>> table_name = 'db_table'
+    >>> data_catalog = DataCatalog.UNITY
+    >>> dt = DeltaTable.from_data_catalog(data_catalog=data_catalog, data_catalog_id=catalog_name, database_name=schema_name, table_name=table_name)
 
 .. _`s3 options`: https://docs.rs/object_store/latest/object_store/aws/enum.AmazonS3ConfigKey.html#variants
 .. _`azure options`: https://docs.rs/object_store/latest/object_store/azure/enum.AzureConfigKey.html#variants
@@ -458,7 +461,7 @@ DataFrame, a PyArrow Table, or an iterator of PyArrow Record Batches.
 
 .. code-block:: python
 
-    >>> from deltalake.writer import write_deltalake
+    >>> from deltalake import write_deltalake
     >>> df = pd.DataFrame({'x': [1, 2, 3]})
     >>> write_deltalake('path/to/table', df)
 
@@ -492,7 +495,7 @@ the method will raise an error.
 
 .. code-block:: python
 
-    >>> from deltalake.writer import write_deltalake
+    >>> from deltalake import write_deltalake
     >>> df = pd.DataFrame({'x': [1, 2, 3], 'y': ['a', 'a', 'b']})
     >>> write_deltalake('path/to/table', df, partition_by=['y'])
 
@@ -508,3 +511,24 @@ the method will raise an error.
 
 This method could also be used to insert a new partition if one doesn't already
 exist, making this operation idempotent.
+
+
+Restoring tables
+~~~~~~~~~~~~~~~~
+
+.. py:currentmodule:: deltalake.table
+
+Restoring a table will restore delta table to a specified version or datetime. This
+operation compares the current state of the delta table with the state to be restored.
+And add those missing files into the AddFile actions and add redundant files into
+RemoveFile actions. Then commit into a new version.
+
+
+Use :meth:`DeltaTable.restore` to perform the restore operation. Note that if any other
+concurrent operation was performed on the table, restore will fail.
+
+.. code-block:: python
+
+    >>> dt = DeltaTable("../rust/tests/data/simple_table")
+    >>> dt.restore(1)
+    {'numRemovedFile': 5, 'numRestoredFile': 22}

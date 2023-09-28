@@ -1,5 +1,5 @@
 use arrow_schema::ArrowError;
-use deltalake::action::ProtocolError;
+use deltalake::protocol::ProtocolError;
 use deltalake::{errors::DeltaTableError, ObjectStoreError};
 use pyo3::exceptions::{
     PyException, PyFileNotFoundError, PyIOError, PyNotImplementedError, PyValueError,
@@ -68,6 +68,7 @@ fn checkpoint_to_py(err: ProtocolError) -> PyErr {
         ProtocolError::CheckpointNotFound => DeltaProtocolError::new_err(err.to_string()),
         ProtocolError::InvalidField(err) => PyValueError::new_err(err),
         ProtocolError::InvalidRow(err) => PyValueError::new_err(err),
+        ProtocolError::InvalidDeletionVectorStorageType(err) => PyValueError::new_err(err),
         ProtocolError::SerializeOperation { source } => PyValueError::new_err(source.to_string()),
         ProtocolError::ParquetParseError { source } => PyIOError::new_err(source.to_string()),
         ProtocolError::IO { source } => PyIOError::new_err(source.to_string()),

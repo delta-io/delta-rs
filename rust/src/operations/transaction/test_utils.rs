@@ -1,11 +1,11 @@
 #![allow(unused)]
-use super::{prepare_commit, try_commit_transaction, CommitInfo};
-use crate::action::{Action, Add, DeltaOperation, MetaData, Protocol, Remove, SaveMode};
-use crate::table_state::DeltaTableState;
-use crate::{
-    DeltaTable, DeltaTableBuilder, DeltaTableMetaData, Schema, SchemaDataType, SchemaField,
-};
 use std::collections::HashMap;
+
+use super::{prepare_commit, try_commit_transaction, CommitInfo};
+use crate::protocol::{Action, Add, DeltaOperation, MetaData, Protocol, Remove, SaveMode};
+use crate::table::state::DeltaTableState;
+use crate::table::DeltaTableMetaData;
+use crate::{DeltaTable, DeltaTableBuilder, Schema, SchemaDataType, SchemaField};
 
 pub fn create_add_action(
     path: impl Into<String>,

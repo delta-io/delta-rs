@@ -19,37 +19,58 @@ const STORE_NAME: &str = "DeltaLocalObjectStore";
 /// Error raised by storage lock client
 #[derive(thiserror::Error, Debug)]
 #[allow(dead_code)]
-pub(self) enum LocalFileSystemError {
+pub enum LocalFileSystemError {
+    /// Object exists already at path
     #[error("Object exists already at path: {} ({:?})", path, source)]
     AlreadyExists {
+        /// Path of the already existing file
         path: String,
+        /// Originating error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    /// Object not found at the given path
     #[error("Object not found at path: {} ({:?})", path, source)]
     NotFound {
+        /// Provided path which does not exist
         path: String,
+        /// Originating error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    /// Invalid argument sent to OS call
     #[error("Invalid argument in OS call for path: {} ({:?})", path, source)]
-    InvalidArgument { path: String, source: errno::Errno },
+    InvalidArgument {
+        /// Provided path
+        path: String,
+        /// Originating error
+        source: errno::Errno,
+    },
 
+    /// Null error for path for FFI
     #[error("Null error in FFI for path: {} ({:?})", path, source)]
     NullError {
+        /// Given path
         path: String,
+        /// Originating error
         source: std::ffi::NulError,
     },
 
+    /// Generic catch-all error for this store
     #[error("Generic error in store: {} ({:?})", store, source)]
     Generic {
+        /// String name of the object store
         store: &'static str,
+        /// Originating error
         source: Box<dyn std::error::Error + Send + Sync + 'static>,
     },
 
+    /// Errors from the Tokio runtime
     #[error("Error executing async task for path: {} ({:?})", path, source)]
     Tokio {
+        /// Path
         path: String,
+        /// Originating error
         source: tokio::task::JoinError,
     },
 }
