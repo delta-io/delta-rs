@@ -16,6 +16,8 @@ println!("{}", table.get_files());
 
 ### CLI
 
+Navigate into the `delta-inspect` directory first and run the following command
+
 ```bash
 ❯ cargo run --bin delta-inspect files ./tests/data/delta-0.2.0
 part-00000-cb6b150b-30b8-4662-ad28-ff32ddab96d2-c000.snappy.parquet
@@ -33,7 +35,7 @@ DeltaTable(./tests/data/delta-0.2.0)
 
 The examples folder shows how to use Rust API to manipulate Delta tables.
 
-Examples can be run using the `cargo run --example` command. For example:
+Navigate into the `rust` directory first and examples can be run using the `cargo run --example` command. For example:
 
 ```bash
 cargo run --example read_delta_table
