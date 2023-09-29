@@ -335,60 +335,56 @@ impl RawDeltaTable {
         Ok(serde_json::to_string(&metrics).unwrap())
     }
     
-    #[py03(signature)= (data)]
-    pub fn convert_pyarrow(
-        &mut self,
-        schema: PyArrowType<ArrowSchema>,
-        data: HashMap()
-    ) -> PyResult<Int> {
-        let ctx = SessionContext::new();
-        let schema: Schema = (&schema.0).try_into().map_err(PythonError::from)?;
-
-        let batch = RecordBatch::try_new(
-
-        )
-
-        let arrow_data = 
-    }
+    // #[py03(signature)= (record_batch)]
+    // pub fn convert_pyarrow(
+    //     &mut self,
+    //     record_batch: PyArrowType<RecordBatch>,
+    //     // record_batch: Vec<PyArrowType<Vec<RecordBatch>>>,
+    // ) -> PyResult<Int> {
+    //     let ctx = SessionContext::new();
+    //     let df = ctx.read_batch(record_batch).unwrap();
+    //     let count = df.count().await?;
+    //     count
+    // }
 
 
-    #[pyo3(signature = (source, predicate, source_alias, strict_cast, writer_properties,
-        mached_update_updates, 
-        matched_update_predicate, 
-        matched_delete_predicate, 
-        not_matched_insert_updates,
-        not_matched_insert_predicate,
-        not_matched_by_source_update_updates,
-        not_matched_by_source_update_predicate,
-        not_matched_by_source_delete_predicate,
-    ))]
-    pub fn merge_execute(
-        &mut self,
-        source,
-        predicate,
-    ) -> PyResult<String>  {
-        let ctx = SessionContext::new();
-        let batch = RecordBatch::try_new(
-            Arc::clone(&schema),
-            vec![
-                Arc::new(arrow::array::?::from(vec))
-            ]
-        )
+    // #[pyo3(signature = (source, predicate, source_alias, strict_cast, writer_properties,
+    //     mached_update_updates, 
+    //     matched_update_predicate, 
+    //     matched_delete_predicate, 
+    //     not_matched_insert_updates,
+    //     not_matched_insert_predicate,
+    //     not_matched_by_source_update_updates,
+    //     not_matched_by_source_update_predicate,
+    //     not_matched_by_source_delete_predicate,
+    // ))]
+    // pub fn merge_execute(
+    //     &mut self,
+    //     source,
+    //     predicate,
+    // ) -> PyResult<String>  {
+    //     let ctx = SessionContext::new();
+    //     let batch = RecordBatch::try_new(
+    //         Arc::clone(&schema),
+    //         vec![
+    //             Arc::new(arrow::array::?::from(vec))
+    //         ]
+    //     )
 
-        let source = ctx.read_batch(batch).unwrap();
+    //     let source = ctx.read_batch(batch).unwrap();
 
-        let mut cmd = MergeBuilder::new(self._table.object_store(), self._table.snapshot(), predicate, source)
+    //     let mut cmd = MergeBuilder::new(self._table.object_store(), self._table.snapshot(), predicate, source)
 
 
 
 
 
-        let (table, metrics) = rt()?
-            .block_on(cmd.into_future())
-            .map_err(PythonError::from)?;
-        self._table.state = table.state;
-        Ok(serde_json::to_string(&metrics).unwrap())
-    }
+    //     let (table, metrics) = rt()?
+    //         .block_on(cmd.into_future())
+    //         .map_err(PythonError::from)?;
+    //     self._table.state = table.state;
+    //     Ok(serde_json::to_string(&metrics).unwrap())
+    // }
 
     // Run the restore command on the Delta Table: restore table to a given version or datetime
     #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false))]
