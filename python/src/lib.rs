@@ -334,6 +334,22 @@ impl RawDeltaTable {
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
     }
+    
+    #[py03(signature)= (data)]
+    pub fn convert_pyarrow(
+        &mut self,
+        schema: PyArrowType<ArrowSchema>,
+        data: HashMap()
+    ) -> PyResult<Int> {
+        let ctx = SessionContext::new();
+        let schema: Schema = (&schema.0).try_into().map_err(PythonError::from)?;
+
+        let batch = RecordBatch::try_new(
+
+        )
+
+        let arrow_data = 
+    }
 
 
     #[pyo3(signature = (source, predicate, source_alias, strict_cast, writer_properties,
