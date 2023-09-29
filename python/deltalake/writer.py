@@ -92,6 +92,7 @@ def write_deltalake(
     overwrite_schema: bool = False,
     storage_options: Optional[Dict[str, str]] = None,
     partition_filters: Optional[List[Tuple[str, str, Any]]] = None,
+    large_dtypes: bool = False,
 ) -> None:
     """Write to a Delta Lake table
 
@@ -141,6 +142,7 @@ def write_deltalake(
     :param overwrite_schema: If True, allows updating the schema of the table.
     :param storage_options: options passed to the native delta filesystem. Unused if 'filesystem' is defined.
     :param partition_filters: the partition filters that will be used for partition overwrite.
+    :param large_dtypes: If True, the table schema is checked against large_dtypes
     """
     if _has_pandas and isinstance(data, pd.DataFrame):
         if schema is not None:
@@ -177,12 +179,12 @@ def write_deltalake(
         partition_by = [partition_by]
 
     if table:  # already exists
-        if schema != table.schema().to_pyarrow() and not (
+        if schema != table.schema().to_pyarrow(as_large_types=large_dtypes) and not (
             mode == "overwrite" and overwrite_schema
         ):
             raise ValueError(
                 "Schema of data does not match table schema\n"
-                f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow()}"
+                f"Data schema:\n{schema}\nTable Schema:\n{table.schema().to_pyarrow(as_large_types=large_dtypes)}"
             )
 
         if mode == "error":
@@ -206,8 +208,26 @@ def write_deltalake(
     else:  # creating a new table
         current_version = -1
 
+    dtype_map = {
+        pa.large_string(): pa.string(),  # type: ignore
+    }
+
+    def _large_to_normal_dtype(dtype: pa.DataType) -> pa.DataType:
+        try:
+            return dtype_map[dtype]
+        except KeyError:
+            return dtype
+
     if partition_by:
-        partition_schema = pa.schema([schema.field(name) for name in partition_by])
+        if PYARROW_MAJOR_VERSION < 12:
+            partition_schema = pa.schema(
+                [
+                    pa.field(name, _large_to_normal_dtype(schema.field(name).type))
+                    for name in partition_by
+                ]
+            )
+        else:
+            partition_schema = pa.schema([schema.field(name) for name in partition_by])
         partitioning = ds.partitioning(partition_schema, flavor="hive")
     else:
         partitioning = None
