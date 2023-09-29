@@ -40,7 +40,6 @@ devel = [
     "wheel",
     "pytest-benchmark",
     "ray",
-    "pandas"
 ]
 pyspark = [
     "pyspark",
@@ -100,4 +99,5 @@ markers = [
     "azure: marks tests as integration tests with Azure Blob Store",
     "pandas: marks tests that require pandas",
     "pyspark: marks tests that require pyspark",
+    "ray: marks tests that require ray",
 ]

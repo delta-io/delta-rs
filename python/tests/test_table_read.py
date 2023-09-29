@@ -429,6 +429,12 @@ def test_delta_table_to_pandas():
     assert dt.to_pandas().equals(pd.DataFrame({"id": [5, 7, 9]}))
 
 
+@pytest.mark.ray
+def test_delta_table_to_ray():
+    table_path = "../rust/tests/data/table_with_edge_timestamps"
+    dt = DeltaTable(table_path)
+    assert dt.to_ray().count() == 2
+
 @pytest.mark.pandas
 def test_delta_table_with_filesystem():
     table_path = "../rust/tests/data/simple_table"

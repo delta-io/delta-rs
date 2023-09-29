@@ -620,10 +620,6 @@ given filters.
         columns: Optional[List[str]] = None,
         parallelism: int = -1,
     ) -> "ray.data.dataset.Dataset":
-        from ray.data import read_parquet
-        from ray.data.datasource import DefaultParquetMetadataProvider
-
-        meta_provider = DefaultParquetMetadataProvider()
         """Create an Arrow dataset from a Delta Table using Ray
 
         Args:
@@ -634,6 +630,15 @@ given filters.
         Returns:
             Dataset holding Arrow records read from the Delta Lake Table
         """
+        if self.protocol().min_reader_version == MAX_SUPPORTED_READER_VERSION:
+            raise DeltaProtocolError(
+                f"The table's minimum reader version is {self.protocol().min_reader_version} "
+                f"but deltalake only supports up to version {MAX_SUPPORTED_READER_VERSION}."
+            )
+        from ray.data import read_parquet
+        from ray.data.datasource import DefaultParquetMetadataProvider
+
+        meta_provider = DefaultParquetMetadataProvider()
 
         return read_parquet(
             paths=self.file_uris(),
