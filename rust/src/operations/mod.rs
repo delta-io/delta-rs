@@ -199,7 +199,7 @@ impl AsRef<DeltaTable> for DeltaOps {
 }
 
 #[cfg(feature = "datafusion")]
-mod datafusion_utils {
+pub mod datafusion_utils {
     use std::sync::Arc;
 
     use arrow_schema::SchemaRef;
