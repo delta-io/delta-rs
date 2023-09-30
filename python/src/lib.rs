@@ -21,11 +21,13 @@ use deltalake::checkpoints::create_checkpoint;
 use deltalake::datafusion::prelude::SessionContext;
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
+use deltalake::operations::datafusion_utils::Expression;
 use deltalake::operations::merge::MergeBuilder;
 use deltalake::operations::optimize::{OptimizeBuilder, OptimizeType};
 use deltalake::operations::restore::RestoreBuilder;
 use deltalake::operations::transaction::commit;
 use deltalake::operations::vacuum::VacuumBuilder;
+use deltalake::parquet::file::properties::WriterProperties;
 use deltalake::partitions::PartitionFilter;
 use deltalake::protocol::{
     self, Action, ColumnCountStat, ColumnValueStat, DeltaOperation, SaveMode, Stats,
@@ -334,57 +336,196 @@ impl RawDeltaTable {
         self._table.state = table.state;
         Ok(serde_json::to_string(&metrics).unwrap())
     }
-    
-    // #[py03(signature)= (record_batch)]
-    // pub fn convert_pyarrow(
-    //     &mut self,
-    //     record_batch: PyArrowType<RecordBatch>,
-    //     // record_batch: Vec<PyArrowType<Vec<RecordBatch>>>,
-    // ) -> PyResult<Int> {
-    //     let ctx = SessionContext::new();
-    //     let df = ctx.read_batch(record_batch).unwrap();
-    //     let count = df.count().await?;
-    //     count
-    // }
 
+    #[pyo3(signature = (source,
+        predicate,
+        source_alias,
+        strict_cast,
+        writer_properties,
+        matched_update_updates,
+        matched_update_predicate,
+        matched_update_all,
+        matched_delete_predicate,
+        matched_delete_all,
+        not_matched_insert_updates,
+        not_matched_insert_predicate,
+        not_matched_insert_all,
+        not_matched_by_source_update_updates,
+        not_matched_by_source_update_predicate,
+        not_matched_by_source_delete_predicate,
+        not_matched_by_source_delete_all,
+    ))]
+    pub fn merge_execute(
+        &mut self,
+        source: PyArrowType<RecordBatch>,
+        predicate: String,
+        source_alias: String,
+        strict_cast: bool,
+        writer_properties: Option<HashMap<String, usize>>,
+        matched_update_updates: Option<HashMap<String, String>>,
+        matched_update_predicate: Option<String>,
+        matched_update_all: Option<bool>,
+        matched_delete_predicate: Option<String>,
+        matched_delete_all: Option<bool>,
+        not_matched_insert_updates: Option<HashMap<String, u64>>,
+        not_matched_insert_predicate: Option<String>,
+        not_matched_insert_all: Option<bool>,
+        not_matched_by_source_update_updates: Option<HashMap<String, u64>>,
+        not_matched_by_source_update_predicate: Option<String>,
+        not_matched_by_source_delete_predicate: Option<String>,
+        not_matched_by_source_delete_all: Option<bool>,
+    ) -> PyResult<String> {
+        let ctx = SessionContext::new();
+        let source_df = ctx.read_batch(source.0).unwrap();
 
-    // #[pyo3(signature = (source, predicate, source_alias, strict_cast, writer_properties,
-    //     mached_update_updates, 
-    //     matched_update_predicate, 
-    //     matched_delete_predicate, 
-    //     not_matched_insert_updates,
-    //     not_matched_insert_predicate,
-    //     not_matched_by_source_update_updates,
-    //     not_matched_by_source_update_predicate,
-    //     not_matched_by_source_delete_predicate,
-    // ))]
-    // pub fn merge_execute(
-    //     &mut self,
-    //     source,
-    //     predicate,
-    // ) -> PyResult<String>  {
-    //     let ctx = SessionContext::new();
-    //     let batch = RecordBatch::try_new(
-    //         Arc::clone(&schema),
-    //         vec![
-    //             Arc::new(arrow::array::?::from(vec))
-    //         ]
-    //     )
+        let mut cmd = MergeBuilder::new(
+            self._table.object_store(),
+            self._table.state.clone(),
+            Expression::String(predicate),
+            source_df,
+        )
+        .with_source_alias(source_alias)
+        .with_safe_cast(strict_cast);
 
-    //     let source = ctx.read_batch(batch).unwrap();
+        if let Some(writer_props) = writer_properties {
+            let mut properties = WriterProperties::builder();
+            let data_page_size_limit = writer_props.get("data_page_size_limit");
+            let dictionary_page_size_limit = writer_props.get("dictionary_page_size_limit");
+            let data_page_row_count_limit = writer_props.get("data_page_row_count_limit");
+            let write_batch_size = writer_props.get("write_batch_size");
+            let max_row_group_size = writer_props.get("max_row_group_size");
 
-    //     let mut cmd = MergeBuilder::new(self._table.object_store(), self._table.snapshot(), predicate, source)
+            if let Some(data_page_size) = data_page_size_limit {
+                properties = properties.set_data_page_size_limit(data_page_size.clone());
+            }
+            if let Some(dictionary_page_size) = dictionary_page_size_limit {
+                properties =
+                    properties.set_dictionary_page_size_limit(dictionary_page_size.clone());
+            }
+            if let Some(data_page_row_count) = data_page_row_count_limit {
+                properties = properties.set_data_page_row_count_limit(data_page_row_count.clone());
+            }
+            if let Some(batch_size) = write_batch_size {
+                properties = properties.set_write_batch_size(batch_size.clone());
+            }
+            if let Some(row_group_size) = max_row_group_size {
+                properties = properties.set_max_row_group_size(row_group_size.clone());
+            }
+            cmd = cmd.with_writer_properties(properties.build());
+        }
 
+        // MATCHED UPDATE  ALL OPTION
+        // if let Some(mu_update_all) = matched_update_all {
+        //     if let Some(mu_predicate) = matched_update_predicate {
+        //         cmd = cmd.when_matched_update(|update| {
+        //                     update
+        //                         .predicate(Expression::String(mu_predicate))
+        //         }).map_err(PythonError::from)?;
+        //     }
+        //     else {
+        //         cmd = cmd.when_matched_update(|update| update).map_err(PythonError::from)?;
+        //     }
+        // }
+        // else {
+        //     if let Some(mu_updates) = matched_update_updates {
+        //         if let Some(mu_predicate) = matched_update_predicate {
+        //             cmd = cmd.when_matched_update(|update| {
+        //                         update
+        //                             .predicate(Expression::String(mu_predicate))
+        //                             .update(mu_updates)
+        //             }).map_err(PythonError::from)?;
+        //         }
+        //         else {
+        //             cmd = cmd.when_matched_update(|update| {
+        //                         update
+        //                             .update(mu_updates)
+        //             }).map_err(PythonError::from)?;
+        //         }
+        //     }
+        // }
 
+        if let Some(mu_updates) = matched_update_updates {
+            if let Some(mu_predicate) = matched_update_predicate {
+                cmd = cmd
+                    .when_matched_update(|update| {
+                        update
+                            .predicate(Expression::String(mu_predicate))
+                            .update(mu_updates)
+                    })
+                    .map_err(PythonError::from)?;
+            } else {
+                cmd = cmd
+                    .when_matched_update(|update| update.update(mu_updates))
+                    .map_err(PythonError::from)?;
+            }
+        }
 
+        if let Some(md_delete_all) = matched_delete_all {
+            cmd = cmd
+                .when_matched_delete(|delete| delete)
+                .map_err(PythonError::from)?;
+        } else {
+            if let Some(md_predicate) = matched_delete_predicate {
+                cmd = cmd
+                    .when_matched_delete(|delete| {
+                        delete.predicate(Expression::String(md_predicate))
+                    })
+                    .map_err(PythonError::from)?;
+            }
+        }
 
+        if let Some(nmi_updates) = not_matched_insert_updates {
+            if let Some(nmi_predicate) = not_matched_insert_predicate {
+                cmd = cmd
+                    .when_not_matched_insert(|insert| {
+                        insert
+                            .predicate(Expression::String(nmi_predicate))
+                            .set(nmi_updates)
+                    })
+                    .map_err(PythonError::from)?;
+            } else {
+                cmd = cmd
+                    .when_not_matched_insert(|insert| insert.set(nmi_updates))
+                    .map_err(PythonError::from)?;
+            }
+        }
 
-    //     let (table, metrics) = rt()?
-    //         .block_on(cmd.into_future())
-    //         .map_err(PythonError::from)?;
-    //     self._table.state = table.state;
-    //     Ok(serde_json::to_string(&metrics).unwrap())
-    // }
+        if let Some(nmbsu_updates) = not_matched_by_source_update_updates {
+            if let Some(nmbsu_predicate) = not_matched_by_source_update_predicate {
+                cmd = cmd
+                    .when_not_matched_by_source_update(|update| {
+                        update
+                            .predicate(Expression::String(nmbsu_updates))
+                            .updates(nmbsu_predicate)
+                    })
+                    .map_err(PythonError::from)?;
+            } else {
+                cmd = cmd
+                    .when_not_matched_by_source_update(|update| update.updates(nmbsu_updates))
+                    .map_err(PythonError::from)?;
+            }
+        }
+
+        if let Some(nmbs_delete_all) = not_matched_by_source_delete_all {
+            cmd = cmd
+                .when_not_matched_by_source_delete(|delete| delete)
+                .map_err(PythonError::from)?;
+        } else {
+            if let Some(nmbs_predicate) = not_matched_by_source_delete_predicate {
+                cmd = cmd
+                    .when_not_matched_by_source_delete(|delete| {
+                        delete.predicate(Expression::String(nmbs_predicate))
+                    })
+                    .map_err(PythonError::from)?;
+            }
+        }
+
+        let (table, metrics) = rt()?
+            .block_on(cmd.into_future())
+            .map_err(PythonError::from)?;
+        self._table.state = table.state;
+        Ok(serde_json::to_string(&metrics).unwrap())
+    }
 
     // Run the restore command on the Delta Table: restore table to a given version or datetime
     #[pyo3(signature = (target, *, ignore_missing_files = false, protocol_downgrade_allowed = false))]
