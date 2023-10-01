@@ -72,6 +72,7 @@ use url::Url;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::protocol::{self, Add};
 use crate::storage::ObjectStoreRef;
+use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options, DeltaTable, Invariant, SchemaDataType};
 
@@ -602,7 +603,9 @@ impl<'a> DeltaScanBuilder<'a> {
             .await?;
 
         Ok(DeltaScan {
-            table_uri: self.object_store.object_store_url().to_string(),
+            table_uri: ensure_table_uri(self.object_store.root_uri())?
+                .as_str()
+                .into(),
             parquet_scan: scan,
             config,
             logical_schema,
