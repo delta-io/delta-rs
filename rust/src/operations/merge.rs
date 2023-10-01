@@ -32,6 +32,10 @@
 //!     .await?
 //! ````
 
+use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::{Instant, SystemTime, UNIX_EPOCH};
+
 use arrow_schema::SchemaRef;
 use datafusion::error::Result as DataFusionResult;
 use datafusion::physical_plan::coalesce_partitions::CoalescePartitionsExec;
@@ -55,12 +59,8 @@ use datafusion_physical_expr::{create_physical_expr, expressions, PhysicalExpr};
 use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
-use std::{
-    collections::HashMap,
-    sync::Arc,
-    time::{Instant, SystemTime, UNIX_EPOCH},
-};
 
+<<<<<<< HEAD
 use crate::action::MergePredicate;
 use crate::delta_datafusion::DeltaScanBuilder;
 use crate::operations::datafusion_utils::MetricObserverExec;
@@ -77,6 +77,17 @@ use super::{
     datafusion_utils::{into_expr, maybe_into_expr, Expression},
     transaction::commit,
 };
+=======
+use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
+use super::transaction::commit;
+use crate::delta_datafusion::{parquet_scan_from_actions, register_store};
+use crate::operations::datafusion_utils::MetricObserverExec;
+use crate::operations::write::write_execution_plan;
+use crate::protocol::{Action, DeltaOperation, MergePredicate, Remove};
+use crate::storage::{DeltaObjectStore, ObjectStoreRef};
+use crate::table::state::DeltaTableState;
+use crate::{DeltaResult, DeltaTable, DeltaTableError};
+>>>>>>> origin/main
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
@@ -1098,8 +1109,8 @@ impl std::future::IntoFuture for MergeBuilder {
 #[cfg(test)]
 mod tests {
 
-    use crate::action::*;
     use crate::operations::DeltaOps;
+    use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::get_arrow_schema;
     use crate::writer::test_utils::get_delta_schema;

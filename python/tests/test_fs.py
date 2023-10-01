@@ -139,7 +139,7 @@ def test_roundtrip_s3_direct(s3_localstack_creds, sample_data: pa.Table):
 
     # Can pass storage_options in directly
     storage_opts = {
-        "AWS_STORAGE_ALLOW_HTTP": "true",
+        "AWS_ALLOW_HTTP": "true",
         "AWS_S3_ALLOW_UNSAFE_RENAME": "true",
     }
     storage_opts.update(s3_localstack_creds)

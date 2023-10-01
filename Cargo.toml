@@ -1,6 +1,6 @@
 [workspace]
-members = ["rust", "python"]
-exclude = ["proofs", "delta-inspect"]
+members = ["delta-inspect", "rust", "python"]
+exclude = ["proofs"]
 resolver = "2"
 
 [profile.release-with-debug]
@@ -39,7 +39,7 @@ serde_json = "1"
 
 # "stdlib"
 bytes = { version = "1" }
-chrono = { version = "0.4", default-features = false, features = ["clock"] }
+chrono = { version = "0.4.31", default-features = false, features = ["clock"] }
 regex = { version = "1" }
 thiserror = { version = "1" }
 url = { version = "2" }

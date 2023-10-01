@@ -69,10 +69,11 @@ use object_store::ObjectMeta;
 use serde::{Deserialize, Serialize};
 use url::Url;
 
-use crate::action::{self, Add};
 use crate::errors::{DeltaResult, DeltaTableError};
+use crate::protocol::{self, Add};
 use crate::storage::ObjectStoreRef;
-use crate::table_state::DeltaTableState;
+use crate::table::builder::ensure_table_uri;
+use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options, DeltaTable, Invariant, SchemaDataType};
 
 const PATH_COLUMN: &str = "__delta_rs_path";
@@ -125,7 +126,7 @@ impl DeltaTableState {
                 |acc, action| {
                     let new_stats = action
                         .get_stats()
-                        .unwrap_or_else(|_| Some(action::Stats::default()))?;
+                        .unwrap_or_else(|_| Some(protocol::Stats::default()))?;
                     Some(Statistics {
                         num_rows: acc
                             .num_rows
@@ -780,7 +781,7 @@ pub(crate) fn get_null_of_arrow_type(t: &ArrowDataType) -> DeltaResult<ScalarVal
 }
 
 pub(crate) fn partitioned_file_from_action(
-    action: &action::Add,
+    action: &protocol::Add,
     schema: &ArrowSchema,
 ) -> PartitionedFile {
     let partition_values = schema
@@ -1636,7 +1637,7 @@ mod tests {
         let mut partition_values = std::collections::HashMap::new();
         partition_values.insert("month".to_string(), Some("1".to_string()));
         partition_values.insert("year".to_string(), Some("2015".to_string()));
-        let action = action::Add {
+        let action = protocol::Add {
             path: "year=2015/month=1/part-00000-4dcb50d3-d017-450c-9df7-a7257dbd3c5d-c000.snappy.parquet".to_string(),
             size: 10644,
             partition_values,

@@ -46,7 +46,7 @@ use crate::{
     action::{Action, DeltaOperation, Remove},
     delta_datafusion::{find_files, register_store, DeltaScanBuilder},
     storage::{DeltaObjectStore, ObjectStoreRef},
-    table_state::DeltaTableState,
+    table::state::DeltaTableState,
     DeltaResult, DeltaTable, DeltaTableError,
 };
 
@@ -461,7 +461,7 @@ mod tests {
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::{get_arrow_schema, get_delta_schema};
     use crate::DeltaTable;
-    use crate::{action::*, DeltaResult};
+    use crate::{protocol::SaveMode, DeltaResult};
     use arrow::datatypes::{Field, Schema};
     use arrow::record_batch::RecordBatch;
     use arrow_array::Int32Array;

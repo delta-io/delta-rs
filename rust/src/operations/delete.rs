@@ -20,7 +20,7 @@
 use std::sync::Arc;
 use std::time::{Instant, SystemTime, UNIX_EPOCH};
 
-use crate::action::{Action, Add, Remove};
+use crate::protocol::{Action, Add, Remove};
 use datafusion::execution::context::{SessionContext, SessionState};
 use datafusion::physical_expr::create_physical_expr;
 use datafusion::physical_plan::filter::FilterExec;
@@ -38,8 +38,9 @@ use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::operations::transaction::commit;
 use crate::operations::write::write_execution_plan;
+use crate::protocol::DeltaOperation;
 use crate::storage::{DeltaObjectStore, ObjectStoreRef};
-use crate::table_state::DeltaTableState;
+use crate::table::state::DeltaTableState;
 use crate::DeltaTable;
 
 use super::datafusion_utils::Expression;
@@ -309,8 +310,8 @@ impl std::future::IntoFuture for DeleteBuilder {
 #[cfg(test)]
 mod tests {
 
-    use crate::action::*;
     use crate::operations::DeltaOps;
+    use crate::protocol::*;
     use crate::writer::test_utils::datafusion::get_data;
     use crate::writer::test_utils::{get_arrow_schema, get_delta_schema};
     use crate::DeltaTable;

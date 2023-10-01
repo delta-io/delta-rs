@@ -5,7 +5,7 @@ use std::sync::Arc;
 use object_store::memory::InMemory;
 use object_store::path::Path;
 use object_store::prefix::PrefixStore;
-use object_store::{DynObjectStore, ObjectStore};
+use object_store::{parse_url_opts, DynObjectStore, Error as ObjectStoreError, ObjectStore};
 use serde::{Deserialize, Serialize};
 use url::Url;
 
@@ -18,11 +18,11 @@ use super::s3::{S3StorageBackend, S3StorageOptions};
 #[cfg(feature = "hdfs")]
 use datafusion_objectstore_hdfs::object_store::hdfs::HadoopFileSystem;
 #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-use object_store::aws::{AmazonS3Builder, AmazonS3ConfigKey};
+use object_store::aws::AmazonS3ConfigKey;
 #[cfg(feature = "azure")]
-use object_store::azure::{AzureConfigKey, MicrosoftAzureBuilder};
+use object_store::azure::AzureConfigKey;
 #[cfg(feature = "gcs")]
-use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
+use object_store::gcp::GoogleConfigKey;
 #[cfg(any(
     feature = "s3",
     feature = "s3-native-tls",
@@ -30,6 +30,85 @@ use object_store::gcp::{GoogleCloudStorageBuilder, GoogleConfigKey};
     feature = "azure"
 ))]
 use std::str::FromStr;
+
+#[cfg(feature = "azure")]
+mod azure;
+
+/// Recognises various URL formats, identifying the relevant [`ObjectStore`](crate::ObjectStore)
+#[derive(Debug, Eq, PartialEq)]
+enum ObjectStoreScheme {
+    /// Url corresponding to LocalFileSystem
+    Local,
+    /// Url corresponding to InMemory
+    Memory,
+    /// Url corresponding to S3
+    AmazonS3,
+    /// Url corresponding to GoogleCloudStorage
+    GoogleCloudStorage,
+    /// Url corresponding to MicrosoftAzure
+    MicrosoftAzure,
+    /// Url corresponding to HttpStore
+    Http,
+    /// Url corresponding to Hdfs
+    Hdfs,
+}
+
+impl ObjectStoreScheme {
+    /// Create an [`ObjectStoreScheme`] from the provided [`Url`]
+    ///
+    /// Returns the [`ObjectStoreScheme`] and the remaining [`Path`]
+    fn parse(
+        url: &Url,
+        #[allow(unused)] options: &mut StorageOptions,
+    ) -> Result<(Self, Path), ObjectStoreError> {
+        let strip_bucket = || Some(url.path().strip_prefix('/')?.split_once('/')?.1);
+
+        let (scheme, path) = match (url.scheme(), url.host_str()) {
+            ("file", None) => (Self::Local, url.path()),
+            ("memory", None) => (Self::Memory, url.path()),
+            ("s3" | "s3a", Some(_)) => (Self::AmazonS3, url.path()),
+            ("gs", Some(_)) => (Self::GoogleCloudStorage, url.path()),
+            ("az" | "adl" | "azure" | "abfs" | "abfss", Some(_)) => {
+                (Self::MicrosoftAzure, url.path())
+            }
+            ("http", Some(_)) => (Self::Http, url.path()),
+            ("hdfs", Some(_)) => (Self::Hdfs, url.path()),
+            ("https", Some(host)) => {
+                if host.ends_with("dfs.core.windows.net") || host.ends_with("blob.core.windows.net")
+                {
+                    (Self::MicrosoftAzure, url.path())
+                } else if host.contains("dfs.fabric.microsoft.com")
+                    || host.contains("blob.fabric.microsoft.com")
+                {
+                    #[cfg(feature = "azure")]
+                    if !options
+                        .as_azure_options()
+                        .contains_key(&AzureConfigKey::UseFabricEndpoint)
+                    {
+                        options.0.insert(
+                            AzureConfigKey::UseFabricEndpoint.as_ref().to_string(),
+                            "true".to_string(),
+                        );
+                    }
+                    (Self::MicrosoftAzure, url.path())
+                } else if host.ends_with("amazonaws.com") {
+                    match host.starts_with("s3") {
+                        true => (Self::AmazonS3, strip_bucket().unwrap_or_default()),
+                        false => (Self::AmazonS3, url.path()),
+                    }
+                } else if host.ends_with("r2.cloudflarestorage.com") {
+                    (Self::AmazonS3, strip_bucket().unwrap_or_default())
+                } else {
+                    (Self::Http, url.path())
+                }
+            }
+            _ => return Err(ObjectStoreError::NotImplemented),
+        };
+
+        let path = Path::parse(path)?;
+        Ok((scheme, path))
+    }
+}
 
 /// Options used for configuring backend storage
 #[derive(Clone, Debug, Serialize, Deserialize, Default)]
@@ -45,10 +124,55 @@ impl StorageOptions {
         if let Ok(value) = std::env::var("AZURE_STORAGE_USE_HTTP") {
             options.insert("allow_http".into(), value);
         }
-        if let Ok(value) = std::env::var("AWS_STORAGE_ALLOW_HTTP") {
+        if let Ok(value) = std::env::var("AWS_ALLOW_HTTP") {
             options.insert("allow_http".into(), value);
         }
         Self(options)
+    }
+
+    /// Add values from the environment to storage options
+    #[cfg(feature = "azure")]
+    pub fn with_env_azure(&mut self) {
+        for (os_key, os_value) in std::env::vars_os() {
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
+                if let Ok(config_key) = AzureConfigKey::from_str(&key.to_ascii_lowercase()) {
+                    if !self.0.contains_key(config_key.as_ref()) {
+                        self.0
+                            .insert(config_key.as_ref().to_string(), value.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Add values from the environment to storage options
+    #[cfg(feature = "gcs")]
+    pub fn with_env_gcs(&mut self) {
+        for (os_key, os_value) in std::env::vars_os() {
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
+                if let Ok(config_key) = GoogleConfigKey::from_str(&key.to_ascii_lowercase()) {
+                    if !self.0.contains_key(config_key.as_ref()) {
+                        self.0
+                            .insert(config_key.as_ref().to_string(), value.to_string());
+                    }
+                }
+            }
+        }
+    }
+
+    /// Add values from the environment to storage options
+    #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+    pub fn with_env_s3(&mut self) {
+        for (os_key, os_value) in std::env::vars_os() {
+            if let (Some(key), Some(value)) = (os_key.to_str(), os_value.to_str()) {
+                if let Ok(config_key) = AmazonS3ConfigKey::from_str(&key.to_ascii_lowercase()) {
+                    if !self.0.contains_key(config_key.as_ref()) {
+                        self.0
+                            .insert(config_key.as_ref().to_string(), value.to_string());
+                    }
+                }
+            }
+        }
     }
 
     /// Denotes if unsecure connections via http are allowed
@@ -100,160 +224,72 @@ impl From<HashMap<String, String>> for StorageOptions {
         Self::new(value)
     }
 }
+
 pub(crate) fn configure_store(
     url: &Url,
-    options: &StorageOptions,
+    options: &mut StorageOptions,
 ) -> DeltaResult<Arc<DynObjectStore>> {
-    match url.scheme() {
-        "file" => try_configure_local(
-            url.to_file_path()
-                .map_err(|_| DeltaTableError::InvalidTableLocation(url.to_string()))?
-                .to_str()
-                .ok_or_else(|| DeltaTableError::InvalidTableLocation(url.to_string()))?,
-        ),
-        "memory" => try_configure_memory(url),
-        "az" | "abfs" | "abfss" | "azure" | "wasb" | "wasbs" | "adl" => {
-            try_configure_azure(url, options)
+    let (scheme, _prefix) = ObjectStoreScheme::parse(url, options)?;
+    match scheme {
+        ObjectStoreScheme::Local => {
+            let path = url
+                .to_file_path()
+                .map_err(|_| DeltaTableError::InvalidTableLocation(url.to_string()))?;
+            Ok(Arc::new(FileStorageBackend::try_new(path)?))
         }
-        "s3" | "s3a" => try_configure_s3(url, options),
-        "gs" => try_configure_gcs(url, options),
-        "hdfs" => try_configure_hdfs(url, options),
-        "https" => {
-            let host = url.host_str().unwrap_or_default();
-            if host.contains("amazonaws.com") {
-                try_configure_s3(url, options)
-            } else if host.contains("dfs.core.windows.net")
-                || host.contains("blob.core.windows.net")
+        ObjectStoreScheme::Memory => url_prefix_handler(InMemory::new(), Path::parse(url.path())?),
+        #[cfg(any(feature = "s3", feature = "s3-native-tls"))]
+        ObjectStoreScheme::AmazonS3 => {
+            options.with_env_s3();
+            let (store, prefix) = parse_url_opts(url, options.as_s3_options())?;
+            if options
+                .as_s3_options()
+                .contains_key(&AmazonS3ConfigKey::CopyIfNotExists)
             {
-                try_configure_azure(url, options)
+                url_prefix_handler(store, prefix)
             } else {
-                Err(DeltaTableError::Generic(format!(
-                    "unsupported url: {}",
-                    url.as_str()
-                )))
+                let store = S3StorageBackend::try_new(
+                    Arc::new(store),
+                    S3StorageOptions::from_map(&options.0),
+                )?;
+                url_prefix_handler(store, prefix)
             }
         }
-        _ => Err(DeltaTableError::Generic(format!(
-            "unsupported url: {}",
-            url.as_str()
-        ))),
+        #[cfg(feature = "azure")]
+        ObjectStoreScheme::MicrosoftAzure => {
+            let config = azure::AzureConfigHelper::try_new(options.as_azure_options())?.build()?;
+            let (store, prefix) = parse_url_opts(url, config)?;
+            url_prefix_handler(store, prefix)
+        }
+        #[cfg(feature = "gcs")]
+        ObjectStoreScheme::GoogleCloudStorage => {
+            options.with_env_gcs();
+            let (store, prefix) = parse_url_opts(url, options.as_gcs_options())?;
+            url_prefix_handler(store, prefix)
+        }
+        #[cfg(feature = "hdfs")]
+        ObjectStoreScheme::Hdfs => {
+            let store = HadoopFileSystem::new(url.as_ref()).ok_or_else(|| {
+                DeltaTableError::Generic(format!(
+                    "failed to create HadoopFileSystem for {}",
+                    url.as_ref()
+                ))
+            })?;
+            url_prefix_handler(store, _prefix)
+        }
+        #[cfg(not(feature = "hdfs"))]
+        ObjectStoreScheme::Hdfs => Err(DeltaTableError::MissingFeature {
+            feature: "hdfs",
+            url: url.as_ref().into(),
+        }),
+        _ => {
+            let (store, prefix) = parse_url_opts(url, options.0.clone())?;
+            url_prefix_handler(store, prefix)
+        }
     }
 }
 
-fn try_configure_local<P: AsRef<str>>(path: P) -> DeltaResult<Arc<DynObjectStore>> {
-    Ok(Arc::new(FileStorageBackend::try_new(path.as_ref())?))
-}
-
-fn try_configure_memory(storage_url: &Url) -> DeltaResult<Arc<DynObjectStore>> {
-    url_prefix_handler(InMemory::new(), storage_url)
-}
-
-#[cfg(feature = "gcs")]
-#[allow(deprecated)]
-fn try_configure_gcs(
-    storage_url: &Url,
-    options: &StorageOptions,
-) -> DeltaResult<Arc<DynObjectStore>> {
-    let store = GoogleCloudStorageBuilder::from_env()
-        .with_url(storage_url.as_ref())
-        .try_with_options(&options.as_gcs_options())?
-        .build()?;
-    url_prefix_handler(store, storage_url)
-}
-
-#[cfg(not(feature = "gcs"))]
-fn try_configure_gcs(
-    storage_url: &Url,
-    _options: &StorageOptions,
-) -> DeltaResult<Arc<DynObjectStore>> {
-    Err(DeltaTableError::MissingFeature {
-        feature: "gcs",
-        url: storage_url.as_ref().into(),
-    })
-}
-
-#[cfg(feature = "azure")]
-#[allow(deprecated)]
-fn try_configure_azure(
-    storage_url: &Url,
-    options: &StorageOptions,
-) -> DeltaResult<Arc<DynObjectStore>> {
-    let store = MicrosoftAzureBuilder::from_env()
-        .with_url(storage_url.as_ref())
-        .try_with_options(&options.as_azure_options())?
-        .with_allow_http(options.allow_http())
-        .build()?;
-    url_prefix_handler(store, storage_url)
-}
-
-#[cfg(not(feature = "azure"))]
-fn try_configure_azure(
-    storage_url: &Url,
-    _options: &StorageOptions,
-) -> DeltaResult<Arc<DynObjectStore>> {
-    Err(DeltaTableError::MissingFeature {
-        feature: "azure",
-        url: storage_url.as_ref().into(),
-    })
-}
-
-#[cfg(any(feature = "s3", feature = "s3-native-tls"))]
-#[allow(deprecated)]
-fn try_configure_s3(
-    storage_url: &Url,
-    options: &StorageOptions,
-) -> DeltaResult<Arc<DynObjectStore>> {
-    let amazon_s3 = AmazonS3Builder::from_env()
-        .with_url(storage_url.as_ref())
-        .try_with_options(&options.as_s3_options())?
-        .with_allow_http(options.allow_http())
-        .build()?;
-    let store =
-        S3StorageBackend::try_new(Arc::new(amazon_s3), S3StorageOptions::from_map(&options.0))?;
-    url_prefix_handler(store, storage_url)
-}
-
-#[cfg(not(any(feature = "s3", feature = "s3-native-tls")))]
-fn try_configure_s3(
-    storage_url: &Url,
-    _options: &StorageOptions,
-) -> DeltaResult<Arc<DynObjectStore>> {
-    Err(DeltaTableError::MissingFeature {
-        feature: "s3",
-        url: storage_url.as_ref().into(),
-    })
-}
-
-#[cfg(feature = "hdfs")]
-fn try_configure_hdfs(
-    storage_url: &Url,
-    _options: &StorageOptions,
-) -> DeltaResult<Arc<DynObjectStore>> {
-    let store = HadoopFileSystem::new(storage_url.as_ref()).ok_or_else(|| {
-        DeltaTableError::Generic(format!(
-            "failed to create HadoopFileSystem for {}",
-            storage_url.as_ref()
-        ))
-    })?;
-    url_prefix_handler(store, storage_url)
-}
-
-#[cfg(not(feature = "hdfs"))]
-fn try_configure_hdfs(
-    storage_url: &Url,
-    _options: &StorageOptions,
-) -> DeltaResult<Arc<DynObjectStore>> {
-    Err(DeltaTableError::MissingFeature {
-        feature: "hdfs",
-        url: storage_url.as_ref().into(),
-    })
-}
-
-fn url_prefix_handler<T: ObjectStore>(
-    store: T,
-    storage_url: &Url,
-) -> DeltaResult<Arc<DynObjectStore>> {
-    let prefix = Path::parse(storage_url.path())?;
+fn url_prefix_handler<T: ObjectStore>(store: T, prefix: Path) -> DeltaResult<Arc<DynObjectStore>> {
     if prefix != Path::from("/") {
         Ok(Arc::new(PrefixStore::new(store, prefix)))
     } else {
@@ -263,7 +299,7 @@ fn url_prefix_handler<T: ObjectStore>(
 
 #[cfg(test)]
 mod test {
-    use crate::ensure_table_uri;
+    use crate::table::builder::ensure_table_uri;
 
     use super::*;
 
@@ -275,7 +311,7 @@ mod test {
 
         let table_uri = ensure_table_uri(path.as_os_str().to_str().unwrap()).unwrap();
 
-        let store = configure_store(&table_uri, &StorageOptions::default()).unwrap();
+        let store = configure_store(&table_uri, &mut StorageOptions::default()).unwrap();
 
         let contents = b"test";
         let key = "test.txt";

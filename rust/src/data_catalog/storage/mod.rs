@@ -13,8 +13,9 @@ use futures::TryStreamExt;
 use object_store::ObjectStore;
 
 use crate::errors::DeltaResult;
+use crate::open_table_with_storage_options;
 use crate::storage::config::{configure_store, StorageOptions};
-use crate::{ensure_table_uri, open_table_with_storage_options};
+use crate::table::builder::ensure_table_uri;
 
 const DELTA_LOG_FOLDER: &str = "_delta_log";
 
@@ -46,9 +47,9 @@ impl ListingSchemaProvider {
         storage_options: Option<HashMap<String, String>>,
     ) -> DeltaResult<Self> {
         let uri = ensure_table_uri(root_uri)?;
-        let storage_options = storage_options.unwrap_or_default().into();
+        let mut storage_options = storage_options.unwrap_or_default().into();
         // We already parsed the url, so unwrapping is safe.
-        let store = configure_store(&uri, &storage_options)?;
+        let store = configure_store(&uri, &mut storage_options)?;
         Ok(Self {
             authority: uri.to_string(),
             store,

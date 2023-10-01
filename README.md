@@ -32,7 +32,7 @@
   <a href="https://pypi.python.org/pypi/deltalake">
     <img alt="Deltalake" src="https://img.shields.io/pypi/pyversions/deltalake.svg?style=flat-square&color=00ADD4&logo=python">
   </a>
-  <a target="_blank" href="https://go.delta.io/slack">
+  <a target="_blank" href="https://join.slack.com/t/delta-users/shared_invite/zt-23h0xwez7-wDTm43ZVEW2ZcbKn6Bc8Fg">
     <img alt="#delta-rs in the Delta Lake Slack workspace" src="https://img.shields.io/badge/slack-delta-blue.svg?logo=slack&style=flat-square&color=F75101">
   </a>
 </p>
@@ -66,8 +66,7 @@ The `deltalake` library aims to adopt patterns from other libraries in data proc
 so getting started should look familiar.
 
 ```py3
-from deltalake import DeltaTable
-from deltalake.write import write_deltalake
+from deltalake import DeltaTable, write_deltalake
 import pandas as pd
 
 # write some data into a delta table
@@ -106,7 +105,7 @@ You can also try Delta Lake docker at [DockerHub](https://go.delta.io/dockerhub)
 We encourage you to reach out, and are [commited](https://github.com/delta-io/delta-rs/blob/main/CODE_OF_CONDUCT.md)
 to provide a welcoming community.
 
-- [Join us in our Slack workspace](https://go.delta.io/slack)
+- [Join us in our Slack workspace](https://join.slack.com/t/delta-users/shared_invite/zt-23h0xwez7-wDTm43ZVEW2ZcbKn6Bc8Fg)
 - [Report an issue](https://github.com/delta-io/delta-rs/issues/new?template=bug_report.md)
 - Looking to contribute? See our [good first issues](https://github.com/delta-io/delta-rs/contribute).
 
@@ -139,7 +138,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | S3 - R2              |        ![done]        |        ![done]        | requires lock for concurrent writes |
 | Azure Blob           |        ![done]        |        ![done]        |                                     |
 | Azure ADLS Gen2      |        ![done]        |        ![done]        |                                     |
-| Micorosft OneLake    | [![open]][onelake-rs] | [![open]][onelake-rs] |                                     |
+| Microsoft OneLake    | ![done] | ![done] |                                     |
 | Google Cloud Storage |        ![done]        |        ![done]        |                                     |
 
 ### Supported Operations
@@ -153,7 +152,7 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 | Delete - predicates   |       ![done]       |                     | Delete data based on a predicate      |
 | Optimize - compaction |       ![done]       |       ![done]       | Harmonize the size of data file       |
 | Optimize - Z-order    |       ![done]       |       ![done]       | Place similar data into the same file |
-| Merge                 | [![open]][merge-rs] | [![open]][merge-py] |                                       |
+| Merge                 | [![semi-done]][merge-rs]| [![open]][merge-py] |    Merge two tables (limited to full re-write)                                   |
 | FS check              |       ![done]       |                     | Remove corrupted files from table     |
 
 ### Protocol Support Level
@@ -173,13 +172,14 @@ of features outlined in the Delta [protocol][protocol] is also [tracked](#protoc
 
 | Reader Version | Requirement                         | Status |
 | -------------- | ----------------------------------- | ------ |
-| Version 2      | Collumn Mapping                     |        |
+| Version 2      | Column Mapping                     |        |
 | Version 3      | Table Features (requires reader V7) |        |
 
 [datafusion]: https://github.com/apache/arrow-datafusion
 [ballista]: https://github.com/apache/arrow-ballista
 [polars]: https://github.com/pola-rs/polars
 [open]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/IssueNeutral.svg
+[semi-done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChangesGrey.svg
 [done]: https://cdn.jsdelivr.net/gh/Readme-Workflows/Readme-Icons@main/icons/octicons/ApprovedChanges.svg
 [roadmap]: https://github.com/delta-io/delta-rs/issues/1128
 [merge-py]: https://github.com/delta-io/delta-rs/issues/1357
