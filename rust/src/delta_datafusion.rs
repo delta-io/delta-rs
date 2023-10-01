@@ -72,7 +72,6 @@ use url::Url;
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::protocol::{self, Add};
 use crate::storage::ObjectStoreRef;
-use crate::table::builder::ensure_table_uri;
 use crate::table::state::DeltaTableState;
 use crate::{open_table, open_table_with_storage_options, DeltaTable, Invariant, SchemaDataType};
 

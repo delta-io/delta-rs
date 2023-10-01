@@ -33,7 +33,6 @@ use parquet::file::properties::WriterProperties;
 use serde_json::Map;
 use serde_json::Value;
 
-use crate::action::DeltaOperation;
 use crate::delta_datafusion::{find_files, register_store, DeltaScanBuilder};
 use crate::errors::{DeltaResult, DeltaTableError};
 use crate::operations::transaction::commit;

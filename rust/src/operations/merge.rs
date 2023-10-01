@@ -60,16 +60,12 @@ use futures::future::BoxFuture;
 use parquet::file::properties::WriterProperties;
 use serde_json::{Map, Value};
 
-<<<<<<< HEAD
-use crate::action::MergePredicate;
 use crate::delta_datafusion::DeltaScanBuilder;
 use crate::operations::datafusion_utils::MetricObserverExec;
 use crate::{
-    action::{Action, DeltaOperation, Remove},
     delta_datafusion::register_store,
     operations::write::write_execution_plan,
     storage::{DeltaObjectStore, ObjectStoreRef},
-    table_state::DeltaTableState,
     DeltaResult, DeltaTable, DeltaTableError,
 };
 
@@ -77,17 +73,8 @@ use super::{
     datafusion_utils::{into_expr, maybe_into_expr, Expression},
     transaction::commit,
 };
-=======
-use super::datafusion_utils::{into_expr, maybe_into_expr, Expression};
-use super::transaction::commit;
-use crate::delta_datafusion::{parquet_scan_from_actions, register_store};
-use crate::operations::datafusion_utils::MetricObserverExec;
-use crate::operations::write::write_execution_plan;
 use crate::protocol::{Action, DeltaOperation, MergePredicate, Remove};
-use crate::storage::{DeltaObjectStore, ObjectStoreRef};
 use crate::table::state::DeltaTableState;
-use crate::{DeltaResult, DeltaTable, DeltaTableError};
->>>>>>> origin/main
 
 const OPERATION_COLUMN: &str = "__delta_rs_operation";
 const DELETE_COLUMN: &str = "__delta_rs_delete";
