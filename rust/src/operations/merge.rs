@@ -389,6 +389,15 @@ impl UpdateBuilder {
         self.updates.insert(column.into(), expression.into());
         self
     }
+
+    /// Update multiple at ones
+    pub fn update_multiple<M: Into<HashMap<Column, Expression>>>(
+        mut self,
+        mapping: M,
+    ) -> Self {
+        self.updates = mapping.into();
+        self
+    }
 }
 
 /// Builder for insert clauses
@@ -411,6 +420,15 @@ impl InsertBuilder {
     /// specified then null is inserted.
     pub fn set<C: Into<Column>, E: Into<Expression>>(mut self, column: C, expression: E) -> Self {
         self.set.insert(column.into(), expression.into());
+        self
+    }
+
+    /// Set multiple at ones
+    pub fn set_multiple<M: Into<HashMap<Column, Expression>>>(
+        mut self,
+        mapping: M,
+    ) -> Self {
+        self.set = mapping.into();
         self
     }
 }
@@ -556,12 +574,22 @@ async fn execute(
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     let source_schema = source_count.schema();
 
+
+    if let Some(_alias) = source_alias.clone() {
+        println!("(inside merge operation){}", _alias);
+
+    }
+    
     let source_prefix = source_alias
         .map(|mut s| {
             s.push('.');
             s
         })
         .unwrap_or_default();
+    
+    
+    println!("(inside merge operation) prefix: {}", source_prefix.clone());
+
     for (i, field) in source_schema.fields().into_iter().enumerate() {
         expressions.push((
             Arc::new(expressions::Column::new(field.name(), i)),

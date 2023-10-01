@@ -18,7 +18,7 @@ use deltalake::arrow::compute::concat_batches;
 use deltalake::arrow::record_batch::RecordBatch;
 use deltalake::arrow::{self, datatypes::Schema as ArrowSchema};
 use deltalake::checkpoints::create_checkpoint;
-use deltalake::datafusion::prelude::SessionContext;
+use deltalake::datafusion::prelude::{Column, SessionContext};
 use deltalake::delta_datafusion::DeltaDataChecker;
 use deltalake::errors::DeltaTableError;
 use deltalake::operations::datafusion_utils::Expression;
@@ -344,12 +344,12 @@ impl RawDeltaTable {
         writer_properties,
         matched_update_updates,
         matched_update_predicate,
-        matched_update_all,
+        // matched_update_all,
         matched_delete_predicate,
         matched_delete_all,
         not_matched_insert_updates,
         not_matched_insert_predicate,
-        not_matched_insert_all,
+        // not_matched_insert_all,
         not_matched_by_source_update_updates,
         not_matched_by_source_update_predicate,
         not_matched_by_source_delete_predicate,
@@ -359,25 +359,25 @@ impl RawDeltaTable {
         &mut self,
         source: PyArrowType<RecordBatch>,
         predicate: String,
-        source_alias: String,
+        source_alias: &str,
         strict_cast: bool,
         writer_properties: Option<HashMap<String, usize>>,
         matched_update_updates: Option<HashMap<String, String>>,
         matched_update_predicate: Option<String>,
-        matched_update_all: Option<bool>,
+        // matched_update_all: Option<bool>,
         matched_delete_predicate: Option<String>,
         matched_delete_all: Option<bool>,
-        not_matched_insert_updates: Option<HashMap<String, u64>>,
+        not_matched_insert_updates: Option<HashMap<String, String>>,
         not_matched_insert_predicate: Option<String>,
-        not_matched_insert_all: Option<bool>,
-        not_matched_by_source_update_updates: Option<HashMap<String, u64>>,
+        // not_matched_insert_all: Option<bool>,
+        not_matched_by_source_update_updates: Option<HashMap<String, String>>,
         not_matched_by_source_update_predicate: Option<String>,
         not_matched_by_source_delete_predicate: Option<String>,
         not_matched_by_source_delete_all: Option<bool>,
     ) -> PyResult<String> {
         let ctx = SessionContext::new();
         let source_df = ctx.read_batch(source.0).unwrap();
-
+        println!("{}", source_alias);
         let mut cmd = MergeBuilder::new(
             self._table.object_store(),
             self._table.state.clone(),
@@ -445,22 +445,31 @@ impl RawDeltaTable {
         // }
 
         if let Some(mu_updates) = matched_update_updates {
+            let mut mu_updates_mapping: HashMap<Column, Expression> = HashMap::new();
+
+            for (col_name, expression) in &mu_updates {
+                mu_updates_mapping.insert(
+                    Column::from_name(col_name),
+                    Expression::String(expression.clone()),
+                );
+            }
+
             if let Some(mu_predicate) = matched_update_predicate {
                 cmd = cmd
                     .when_matched_update(|update| {
-                        update
+                        update // Add  iteration over the updates col(key), Expression::String
                             .predicate(Expression::String(mu_predicate))
-                            .update(mu_updates)
+                            .update_multiple(mu_updates_mapping)
                     })
                     .map_err(PythonError::from)?;
             } else {
                 cmd = cmd
-                    .when_matched_update(|update| update.update(mu_updates))
+                    .when_matched_update(|update| update.update_multiple(mu_updates_mapping))
                     .map_err(PythonError::from)?;
             }
         }
 
-        if let Some(md_delete_all) = matched_delete_all {
+        if let Some(_md_delete_all) = matched_delete_all {
             cmd = cmd
                 .when_matched_delete(|delete| delete)
                 .map_err(PythonError::from)?;
@@ -475,38 +484,58 @@ impl RawDeltaTable {
         }
 
         if let Some(nmi_updates) = not_matched_insert_updates {
+            let mut nmi_updates_mapping: HashMap<Column, Expression> = HashMap::new();
+
+            for (col_name, expression) in &nmi_updates {
+                nmi_updates_mapping.insert(
+                    Column::from_name(col_name),
+                    Expression::String(expression.clone()),
+                );
+            }
+
             if let Some(nmi_predicate) = not_matched_insert_predicate {
                 cmd = cmd
                     .when_not_matched_insert(|insert| {
                         insert
                             .predicate(Expression::String(nmi_predicate))
-                            .set(nmi_updates)
+                            .set_multiple(nmi_updates_mapping)
                     })
                     .map_err(PythonError::from)?;
             } else {
                 cmd = cmd
-                    .when_not_matched_insert(|insert| insert.set(nmi_updates))
+                    .when_not_matched_insert(|insert| insert.set_multiple(nmi_updates_mapping))
                     .map_err(PythonError::from)?;
             }
         }
 
         if let Some(nmbsu_updates) = not_matched_by_source_update_updates {
+            let mut nmbsu_updates_mapping: HashMap<Column, Expression> = HashMap::new();
+
+            for (col_name, expression) in &nmbsu_updates {
+                nmbsu_updates_mapping.insert(
+                    Column::from_name(col_name),
+                    Expression::String(expression.clone()),
+                );
+            }
+
             if let Some(nmbsu_predicate) = not_matched_by_source_update_predicate {
                 cmd = cmd
                     .when_not_matched_by_source_update(|update| {
                         update
-                            .predicate(Expression::String(nmbsu_updates))
-                            .updates(nmbsu_predicate)
+                            .predicate(Expression::String(nmbsu_predicate))
+                            .update_multiple(nmbsu_updates_mapping)
                     })
                     .map_err(PythonError::from)?;
             } else {
                 cmd = cmd
-                    .when_not_matched_by_source_update(|update| update.updates(nmbsu_updates))
+                    .when_not_matched_by_source_update(|update| {
+                        update.update_multiple(nmbsu_updates_mapping)
+                    })
                     .map_err(PythonError::from)?;
             }
         }
 
-        if let Some(nmbs_delete_all) = not_matched_by_source_delete_all {
+        if let Some(_nmbs_delete_all) = not_matched_by_source_delete_all {
             cmd = cmd
                 .when_not_matched_by_source_delete(|delete| delete)
                 .map_err(PythonError::from)?;
