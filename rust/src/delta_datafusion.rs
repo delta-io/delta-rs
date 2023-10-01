@@ -475,7 +475,7 @@ impl<'a> DeltaScanBuilder<'a> {
 
     pub async fn build(self) -> DeltaResult<DeltaScan> {
         let mut config = self.config;
-        let schema = self.snapshot.arrow_schema()?;
+        let schema = self.snapshot.input_schema()?;
         let logical_schema = logical_schema(self.snapshot, &mut config)?;
 
         let logical_schema = if let Some(used_columns) = self.projection {
