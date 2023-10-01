@@ -428,6 +428,7 @@ pub(crate) struct DeltaScanBuilder<'a> {
     limit: Option<usize>,
     files: Option<&'a [Add]>,
     config: DeltaScanConfig,
+    schema: Option<SchemaRef>,
 }
 
 impl<'a> DeltaScanBuilder<'a> {
@@ -445,6 +446,7 @@ impl<'a> DeltaScanBuilder<'a> {
             projection: None,
             limit: None,
             config: DeltaScanConfig::default(),
+            schema: None,
         }
     }
 
@@ -473,9 +475,21 @@ impl<'a> DeltaScanBuilder<'a> {
         self
     }
 
+    pub fn with_schema(mut self, schema: SchemaRef) -> Self {
+        self.schema = Some(schema);
+        self
+    }
+
     pub async fn build(self) -> DeltaResult<DeltaScan> {
         let mut config = self.config;
-        let schema = self.snapshot.input_schema()?;
+        let schema = match self.schema {
+            Some(schema) => schema,
+            None => {
+                self.snapshot
+                    .physical_arrow_schema(self.object_store.clone())
+                    .await?
+            }
+        };
         let logical_schema = logical_schema(self.snapshot, &mut config)?;
 
         let logical_schema = if let Some(used_columns) = self.projection {
