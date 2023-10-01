@@ -377,7 +377,7 @@ impl RawDeltaTable {
     ) -> PyResult<String> {
         let ctx = SessionContext::new();
         let source_df = ctx.read_batch(source.0).unwrap();
-        println!("{}", source_alias);
+
         let mut cmd = MergeBuilder::new(
             self._table.object_store(),
             self._table.state.clone(),

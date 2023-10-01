@@ -573,12 +573,6 @@ async fn execute(
 
     let mut expressions: Vec<(Arc<dyn PhysicalExpr>, String)> = Vec::new();
     let source_schema = source_count.schema();
-
-
-    if let Some(_alias) = source_alias.clone() {
-        println!("(inside merge operation){}", _alias);
-
-    }
     
     let source_prefix = source_alias
         .map(|mut s| {
@@ -586,9 +580,6 @@ async fn execute(
             s
         })
         .unwrap_or_default();
-    
-    
-    println!("(inside merge operation) prefix: {}", source_prefix.clone());
 
     for (i, field) in source_schema.fields().into_iter().enumerate() {
         expressions.push((
